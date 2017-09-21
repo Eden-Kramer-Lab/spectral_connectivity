@@ -1,0 +1,13 @@
+name: spectral
+dependencies:
+- python=3.5
+- numpy
+- matplotlib
+- scipy
+- xarray
+- nitime
+- pytest
+- pytest-cov
+- coveralls
+- setuptools
+- jupyter
