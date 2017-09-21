@@ -1,5 +1,6 @@
 # spectral
 [![Coverage Status](https://coveralls.io/repos/github/UriEdenLab/spectral/badge.svg?branch=master)](https://coveralls.io/github/UriEdenLab/spectral?branch=master)
+
 `spectral` is a python software package that computes frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index. Although there are other python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), spectral has several differences:
 
 + it is designed to handle multiple time series at once
