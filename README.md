@@ -11,6 +11,8 @@
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
 
+See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
+
 ### Implemented Measures ###
 Functional
 1. coherency
