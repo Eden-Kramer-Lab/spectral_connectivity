@@ -21,6 +21,7 @@ Functional
 9. pairwise_phase_consistency
 
 Directed
+
 10. directed_transfer_function
 11. directed_coherence
 12. partial_directed_coherence
