@@ -59,7 +59,7 @@ python setup.py develop
 ```python
 from spectral import Multitaper, Connectivity
 
-m = Multitaper(signal,
+m = Multitaper(time_series=signals,
                sampling_frequency=sampling_frequency,
                time_halfbandwidth_product=time_halfbandwidth_product,
                time_window_duration=0.060,
