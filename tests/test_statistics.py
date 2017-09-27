@@ -1,7 +1,7 @@
 import numpy as np
 from pytest import mark
 
-from spectral.statistics import (Benjamini_Hochberg_procedure,
+from spectral_connectivity.statistics import (Benjamini_Hochberg_procedure,
                                  Bonferroni_correction,
                                  fisher_z_transform,
                                  get_normal_distribution_p_values,

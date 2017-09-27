@@ -2,7 +2,7 @@ import numpy as np
 from scipy.fftpack import fft, ifft
 from scipy.signal import freqz_zpk
 
-from spectral.minimum_phase_decomposition import (_check_convergence,
+from spectral_connectivity.minimum_phase_decomposition import (_check_convergence,
                                                   _conjugate_transpose,
                                                   _get_causal_signal,
                                                   _get_intial_conditions,

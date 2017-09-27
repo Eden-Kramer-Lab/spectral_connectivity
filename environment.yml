@@ -1,4 +1,4 @@
-name: spectral
+name: spectral_connectivity
 channels:
 - conda-forge
 - defaults

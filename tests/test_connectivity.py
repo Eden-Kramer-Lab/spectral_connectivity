@@ -2,7 +2,7 @@ import numpy as np
 from pytest import mark
 from unittest.mock import PropertyMock
 
-from spectral.connectivity import (Connectivity, _bandpass,
+from spectral_connectivity.connectivity import (Connectivity, _bandpass,
                                    _complex_inner_product,
                                    _conjugate_transpose,
                                    _find_largest_independent_group,

@@ -3,7 +3,7 @@ from pytest import mark
 from scipy.signal import correlate
 
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
-from spectral.transforms import (Multitaper, _add_axes,
+from spectral_connectivity.transforms import (Multitaper, _add_axes,
                                  _auto_correlation, _fix_taper_sign,
                                  _get_low_bias_tapers,
                                  _get_taper_eigenvalues,

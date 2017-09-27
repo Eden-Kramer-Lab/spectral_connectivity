@@ -13,8 +13,8 @@ install:
   - conda update -q conda
   - conda info -a
   - conda env create -f environment.yml
-  - source activate spectral
+  - source activate spectral_connectivity
   - python setup.py develop
-script: pytest --cov=spectral tests/
+script: pytest --cov=spectral_connectivity tests/
 after_success:
     - coveralls
