@@ -3,7 +3,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='spectral',
+    name='spectral-connectivity',
     version='0.1.0.dev0',
     license='GPL-3.0',
     description=('Frequency domain functional and directed'
