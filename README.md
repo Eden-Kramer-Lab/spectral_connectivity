@@ -37,7 +37,7 @@ Directed
 17. pairwise_spectral_granger_prediction
 
 ### Package Dependencies ###
-`spectral` requires:
+`spectral_connectivity` requires:
 - python=3.5
 - numpy
 - matplotlib
