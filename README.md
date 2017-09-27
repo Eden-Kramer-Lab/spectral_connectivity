@@ -36,7 +36,23 @@ Directed
 16. phase_lag_index
 17. pairwise_spectral_granger_prediction
 
+### Package Dependencies ###
+`spectral` requires:
+- python=3.5
+- numpy
+- matplotlib
+- scipy
+- xarray
+
+See [environment.yml](environment.yml) for the most current list of dependencies.
+
 ### Installation ###
+```python
+pip install spectral
+```
+
+### Developer Installation ###
+If you want to make contributions to this library, please use this installation.
 
 1. Install miniconda (or anaconda) if it isn't already installed. Type into bash (or install from the anaconda website):
 ```bash
