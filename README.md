@@ -13,6 +13,9 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
 
+### Documentation ###
+See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
+
 ### Implemented Measures ###
 Functional
 1. coherency
