@@ -70,7 +70,7 @@ hash -r
 conda update -q conda
 conda info -a
 conda env create -f environment.yml
-source activate spectral
+source activate spectral_connectivity
 python setup.py develop
 ```
 
