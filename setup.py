@@ -11,6 +11,6 @@ setup(
                  'data'),
     author='Eric Denovellis',
     author_email='edeno@bu.edu',
-    url='https://github.com/UriEdenLab/spectral_connectivity',
+    url='https://github.com/Eden-Kramer-Lab/spectral_connectivity',
     packages=find_packages(),
 )
