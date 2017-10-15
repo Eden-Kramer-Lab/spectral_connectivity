@@ -15,5 +15,4 @@ dependencies:
 - setuptools
 - jupyter
 - numpydoc
-- sphinx_rtd_theme
 - sphinx
