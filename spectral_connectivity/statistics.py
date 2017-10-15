@@ -152,7 +152,7 @@ def coherence_rate_adjustment(firing_rate_condition1,
 
     Returns
     -------
-    rate_adjustment_factor : ndarray, shape (n_frequencies)
+    rate_adjustment_factor : ndarray, shape (n_frequencies,)
 
     References
     ----------
