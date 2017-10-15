@@ -65,7 +65,7 @@ export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
-2. Go to the local repository (`.../spectral`) and install the anaconda environment for the repository. Type into bash:
+2. Go to the local repository (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
 ```bash
 conda update -q conda
 conda info -a
@@ -76,7 +76,7 @@ python setup.py develop
 
 ### Usage Example ###
 ```python
-from spectral import Multitaper, Connectivity
+from spectral_connectivity import Multitaper, Connectivity
 
 m = Multitaper(time_series=signals,
                sampling_frequency=sampling_frequency,
