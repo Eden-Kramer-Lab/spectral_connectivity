@@ -65,7 +65,7 @@ export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
-2. Go to the local repository (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
+2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
 ```bash
 conda update -q conda
 conda info -a
