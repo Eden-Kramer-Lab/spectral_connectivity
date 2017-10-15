@@ -53,6 +53,10 @@ See [environment.yml](environment.yml) for the most current list of dependencies
 ```python
 pip install spectral_connectivity
 ```
+or
+```python
+conda install -c edeno spectral_connectivity
+```
 
 ### Developer Installation ###
 If you want to make contributions to this library, please use this installation.
