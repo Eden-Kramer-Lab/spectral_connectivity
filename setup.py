@@ -2,6 +2,10 @@
 
 from setuptools import setup, find_packages
 
+INSTALL_REQUIRES = ['numpy >= 1.11', 'pandas >= 0.18.0', 'scipy', 'xarray',
+                    'matplotlib']
+TESTS_REQUIRE = ['pytest >= 2.7.1', 'nitime']
+
 setup(
     name='spectral_connectivity',
     version='0.1.0.dev0',
@@ -13,4 +17,6 @@ setup(
     author_email='edeno@bu.edu',
     url='https://github.com/Eden-Kramer-Lab/spectral_connectivity',
     packages=find_packages(),
+    install_requires=INSTALL_REQUIRES,
+    tests_require=TESTS_REQUIRE,
 )
