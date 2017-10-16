@@ -21,14 +21,33 @@ class Multitaper(object):
     sampling_frequency : float, optional
         Number of samples per time unit the signal(s) are recorded at.
     time_halfbandwidth_product : float, optional
+        Specifies the time-frequency tradeoff of the tapers and also the number
+        of tapers if `n_tapers` is not set.
     detrend_type : string, optional
+        Subtracting a constant or a linear trend from each time window
     start_time : float, optional
+        Start time of time series.
     time_window_duration : float, optional
+        Duration of sliding window in which to compute the fft. Defaults to
+        the entire time if not set.
     time_window_step : float, optional
+        Duration of time to skip when moving the window forward. By default,
+        this equals the duration of the time window.
     tapers : array, optional
+        Pass in a pre-computed set of tapers. If `None`, then the tapers are
+        automically calulated based on the `time_halfbandwidth_product`,
+        `n_tapers`
     n_tapers : int, optional
+        Set the number of tapers. If `None`, the number of tapers is computed
+        by 2 * `time_halfbandwidth_product` - 1.
     n_time_samples_per_window : int, optional
+        Number of samples in each sliding window. If `time_window_duration` is
+        set, then this is calculated automically.
     n_time_samples_per_step : int, optional
+        Number of samples to skip when moving the window forward. If
+        `time_window_step` is set, then this is calculated automically.
+    is_low_bias : bool, optional
+        If `True`, excludes tapers with eigenvalues < 0.9
 
     '''
 
