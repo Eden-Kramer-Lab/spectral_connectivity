@@ -36,7 +36,7 @@ class Multitaper(object):
     tapers : array, optional, shape (n_time_samples_per_window, n_tapers)
         Pass in a pre-computed set of tapers. If `None`, then the tapers are
         automically calulated based on the `time_halfbandwidth_product`,
-        `n_tapers`
+        `n_tapers`, and `n_time_samples_per_window`.
     n_tapers : int, optional
         Set the number of tapers. If `None`, the number of tapers is computed
         by 2 * `time_halfbandwidth_product` - 1.
