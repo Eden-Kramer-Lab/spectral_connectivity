@@ -33,7 +33,7 @@ class Multitaper(object):
     time_window_step : float, optional
         Duration of time to skip when moving the window forward. By default,
         this equals the duration of the time window.
-    tapers : array, optional
+    tapers : array, optional, shape (n_time_samples_per_window, n_tapers)
         Pass in a pre-computed set of tapers. If `None`, then the tapers are
         automically calulated based on the `time_halfbandwidth_product`,
         `n_tapers`
