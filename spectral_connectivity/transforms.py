@@ -77,10 +77,10 @@ class Multitaper(object):
         return (
             'Multitaper('
             'sampling_frequency={0.sampling_frequency!r}, '
-            'time_halfbandwidth_product={0.time_halfbandwidth_product!r}, '
-            'time_window_duration={0.time_window_duration!r}, '
-            'time_window_step={0.time_window_step!r}, '
-            'detrend_type={0.detrend_type!r}, '
+            'time_halfbandwidth_product={0.time_halfbandwidth_product!r},\n'
+            '           time_window_duration={0.time_window_duration!r}, '
+            'time_window_step={0.time_window_step!r},\n'
+            '           detrend_type={0.detrend_type!r}, '
             'start_time={0.start_time}, '
             'n_tapers={0.n_tapers}'
             ')'.format(self))
