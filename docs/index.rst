@@ -3,8 +3,9 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Frequency domain functional and directed connectivity analysis tools for electrophysiological data
-==================================================================================================
+=====================
+spectral_connectivity
+=====================
 
 **spectral_connectivity** is a python software package that computes frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other python packages that do this (see nitime and MNE-Python), spectral has several differences:
 
@@ -22,4 +23,4 @@ Documentation
 .. toctree::
    :maxdepth: 1
 
-* :ref:`modindex`
+   api
