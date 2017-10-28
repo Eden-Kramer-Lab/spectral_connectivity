@@ -8,7 +8,7 @@ TESTS_REQUIRE = ['pytest >= 2.7.1', 'nitime']
 
 setup(
     name='spectral_connectivity',
-    version='0.2.0.dev0',
+    version='0.2.1.dev0',
     license='GPL-3.0',
     description=('Frequency domain functional and directed'
                  'connectivity analysis tools for electrophysiological'
@@ -16,6 +16,7 @@ setup(
     author='Eric Denovellis',
     author_email='edeno@bu.edu',
     url='https://github.com/Eden-Kramer-Lab/spectral_connectivity',
+    python_requires='>=3',
     packages=find_packages(),
     install_requires=INSTALL_REQUIRES,
     tests_require=TESTS_REQUIRE,
