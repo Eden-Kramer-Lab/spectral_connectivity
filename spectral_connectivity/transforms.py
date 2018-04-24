@@ -23,8 +23,9 @@ class Multitaper(object):
     time_halfbandwidth_product : float, optional
         Specifies the time-frequency tradeoff of the tapers and also the number
         of tapers if `n_tapers` is not set.
-    detrend_type : string, optional
-        Subtracting a constant or a linear trend from each time window
+    detrend_type : string or None, optional
+        Subtracting a constant or a linear trend from each time window. If None
+        then no detrending is done.
     start_time : float, optional
         Start time of time series.
     time_window_duration : float, optional
@@ -202,7 +203,8 @@ class Multitaper(object):
         time_series = _sliding_window(
             time_series, window_size=self.n_time_samples_per_window,
             step_size=self.n_time_samples_per_step, axis=0)
-        time_series = detrend(time_series, type=self.detrend_type)
+        if self.detrend_type is not None:
+            time_series = detrend(time_series, type=self.detrend_type)
 
         logger.info(self)
 
