@@ -122,6 +122,9 @@ class Connectivity(object):
         self._frequencies = frequencies
         self.time = time
 
+    def __dir__(self):
+        return self.keys()
+
     @classmethod
     def from_multitaper(cls, multitaper_instance,
                         expectation_type='trials_tapers'):
