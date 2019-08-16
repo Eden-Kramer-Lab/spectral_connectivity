@@ -170,7 +170,7 @@ class Connectivity:
                        self.power[..., np.newaxis, :])
         norm[norm == 0] = np.nan
         complex_coherencey = (
-            self._expectation(self._cross_spectral_matrix) / norm)
+                self._expectation(self._cross_spectral_matrix) / norm)
         n_signals = self.fourier_coefficients.shape[-1]
         diagonal_ind = np.arange(0, n_signals)
         complex_coherencey[..., diagonal_ind, diagonal_ind] = np.nan
@@ -255,13 +255,9 @@ class Connectivity:
 
         '''
         labels = np.unique(group_labels)
-        n_frequencies = self.fourier_coefficients.shape[-2]
-        non_negative_frequencies = np.arange(0, (n_frequencies + 1) // 2)
-        fourier_coefficients = self.fourier_coefficients[
-            ..., non_negative_frequencies, :]
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
-                fourier_coefficients[..., np.in1d(group_labels, label)])
+                self.fourier_coefficients[..., np.in1d(group_labels, label)])
             for label in labels]
 
         n_groups = len(labels)
@@ -455,11 +451,7 @@ class Connectivity:
         cross_spectral_matrix = self._expectation(
             self._cross_spectral_matrix)
         n_signals = cross_spectral_matrix.shape[-1]
-        n_frequencies = cross_spectral_matrix.shape[-3]
-        non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
-        new_shape = list(cross_spectral_matrix.shape)
-        new_shape[-3] = non_neg_index.size
-        predictive_power = np.empty(new_shape)
+        predictive_power = np.empty_like(cross_spectral_matrix)
 
         for pair_indices in combinations(range(n_signals), 2):
             pair_indices = np.array(pair_indices)[:, np.newaxis]
@@ -469,7 +461,7 @@ class Connectivity:
                         cross_spectral_matrix[
                             ..., pair_indices, pair_indices.T]))
                 transfer_function = _estimate_transfer_function(
-                    minimum_phase_factor)[..., non_neg_index, :, :]
+                    minimum_phase_factor)
                 rotated_covariance = _remove_instantaneous_causality(
                     _estimate_noise_covariance(minimum_phase_factor))
                 predictive_power[..., pair_indices, pair_indices.T] = (
@@ -592,7 +584,7 @@ class Connectivity:
         return _squared_magnitude(
             self._MVAR_Fourier_coefficients /
             np.sqrt(noise_variance) / _total_outflow(
-                    self._MVAR_Fourier_coefficients, noise_variance))
+                self._MVAR_Fourier_coefficients, noise_variance))
 
     def direct_directed_transfer_function(self):
         '''A combination of the directed transfer function estimate of
@@ -615,8 +607,8 @@ class Connectivity:
 
         '''
         full_frequency_DTF = (
-            self._transfer_function /
-            _total_inflow(self._transfer_function, axis=(-1, -3)))
+                self._transfer_function /
+                _total_inflow(self._transfer_function, axis=(-1, -3)))
         return (np.abs(full_frequency_DTF) *
                 np.sqrt(self.partial_directed_coherence()))
 
@@ -677,20 +669,20 @@ class Connectivity:
         slope = np.full(new_shape, np.nan)
         slope[..., signal_combination_ind[:, 0],
               signal_combination_ind[:, 1]] = np.array(
-              regression_results[..., 0, :], dtype=np.float)
+            regression_results[..., 0, :], dtype=np.float)
         slope[..., signal_combination_ind[:, 1],
               signal_combination_ind[:, 0]] = -1 * np.array(
-              regression_results[..., 0, :], dtype=np.float)
+            regression_results[..., 0, :], dtype=np.float)
 
         delay = slope / (2 * np.pi)
 
         r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0],
                 signal_combination_ind[:, 1]] = np.array(
-                regression_results[..., 2, :], dtype=np.float)
+            regression_results[..., 2, :], dtype=np.float)
         r_value[..., signal_combination_ind[:, 1],
                 signal_combination_ind[:, 0]] = np.array(
-                regression_results[..., 2, :], dtype=np.float)
+            regression_results[..., 2, :], dtype=np.float)
         return delay, slope, r_value
 
     def delay(self, frequencies_of_interest=None,
@@ -739,8 +731,9 @@ class Connectivity:
             mask=~is_significant)
         possible_range = 2 * np.pi * np.arange(-n_range, n_range + 1)
         delays = np.rollaxis((
-            possible_range + coherence_phase[..., np.newaxis]) /
-            (2 * np.pi), -1, -2)
+                                     possible_range + coherence_phase[
+                                 ..., np.newaxis]) /
+                             (2 * np.pi), -1, -2)
         new_shape = (
             *bandpassed_coherency.shape[:-1], len(possible_range),
             n_signals, n_signals)
@@ -790,7 +783,7 @@ class Connectivity:
         frequency_index = np.arange(0, bandpassed_frequencies.shape[0],
                                     independent_frequency_step)
         bandpassed_coherency = bandpassed_coherency[
-            ..., frequency_index, :, :]
+                               ..., frequency_index, :, :]
 
         return _inner_combination(bandpassed_coherency).imag
 
@@ -927,7 +920,7 @@ def _total_inflow(transfer_function, noise_variance=1.0, axis=-1):
 def _get_noise_variance(noise_covariance):
     '''Extracts the noise variance from the noise covariance matrix.'''
     return np.diagonal(noise_covariance, axis1=-1, axis2=-2)[
-        ..., np.newaxis, :, np.newaxis]
+           ..., np.newaxis, :, np.newaxis]
 
 
 def _total_outflow(MVAR_Fourier_coefficients, noise_variance=1.0):
@@ -1128,9 +1121,8 @@ def _find_largest_independent_group(is_significant, frequency_step,
 
 
 def _find_significant_frequencies(
-    coherency, bias, frequency_step=1, significance_threshold=0.05,
-    min_group_size=3,
-        multiple_comparisons_method='Benjamini_Hochberg_procedure'):
+        coherency, bias, frequency_step=1, significance_threshold=0.05,
+        min_group_size=3):
     '''Determines the largest significant cluster along the frequency axis.
 
     This function uses the fisher z-transform to determine the p-values and
@@ -1153,8 +1145,6 @@ def _find_significant_frequencies(
         The threshold for a p-value to be considered signficant.
     min_group_size : int
         The minimum number of independent frequency points for
-    multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
-                                  'Bonferroni_correction'
         Procedure used to correct for multiple comparisons.
 
     Returns
