@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import numpy as np
-from scipy.fftpack import fft, ifft
+from numpy.fft import rfft, irfft
 
 logger = getLogger(__name__)
 
@@ -28,7 +28,7 @@ def _get_intial_conditions(cross_spectral_matrix):
     '''
     try:
         return np.linalg.cholesky(
-            ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
+            irfft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
         ).swapaxes(-1, -2)
     except np.linalg.linalg.LinAlgError:
         logger.warn(
@@ -68,7 +68,7 @@ def _get_causal_signal(linear_predictor):
     '''
     n_signals = linear_predictor.shape[-1]
     n_fft_samples = linear_predictor.shape[-3]
-    linear_predictor_coefficients = ifft(linear_predictor, axis=-3)
+    linear_predictor_coefficients = irfft(linear_predictor, axis=-3)
 
     # Take half of the roots on the unit circle
     linear_predictor_coefficients[..., 0, :, :] *= 0.5
@@ -80,7 +80,7 @@ def _get_causal_signal(linear_predictor):
 
     # Take only the roots inside the unit circle (positive lags)
     linear_predictor_coefficients[..., (n_fft_samples + 1) // 2:, :, :] = 0
-    return fft(linear_predictor_coefficients, axis=-3)
+    return rfft(linear_predictor_coefficients, axis=-3)
 
 
 def _check_convergence(current, old, tolerance=1E-8):
@@ -173,9 +173,8 @@ def minimum_phase_decomposition(cross_spectral_matrix, tolerance=1E-8,
         cross_spectral_matrix)
 
     for iteration in range(max_iterations):
-        logger.debug(
-            'iteration: {0}, {1} of {2} converged'.format(
-                iteration, is_converged.sum(), len(is_converged)))
+        logger.debug(f'iteration: {iteration}, {is_converged.sum()} of'
+                     f'{len(is_converged)} converged')
         old_minimum_phase_factor = minimum_phase_factor.copy()
         linear_predictor = _get_linear_predictor(
             minimum_phase_factor, cross_spectral_matrix, I)
@@ -191,6 +190,6 @@ def minimum_phase_decomposition(cross_spectral_matrix, tolerance=1E-8,
             return minimum_phase_factor
     else:
         logger.warning(
-            'Maximum iterations reached. {} of {} converged'.format(
-                is_converged.sum(), len(is_converged)))
+            f'Maximum iterations reached. {is_converged.sum()} of'
+            f'{len(is_converged)} converged')
         return minimum_phase_factor

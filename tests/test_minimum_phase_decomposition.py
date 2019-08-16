@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.fftpack import fft, ifft
+from numpy.fft import rfft, irfft
 from scipy.signal import freqz_zpk
 
 from spectral_connectivity.minimum_phase_decomposition import (_check_convergence,
@@ -76,12 +76,12 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     linear_predictor[0, :, 0, 0] = transfer_function
 
     _, expected_transfer_function = freqz_zpk(0.25, 0.5, 1.00, whole=True)
-    linear_coef = ifft(expected_transfer_function)
+    linear_coef = irfft(expected_transfer_function)
     linear_coef[0] *= 0.5
 
     expected_causal_signal = np.zeros(
         (1, n_fft_samples, n_signals, n_signals), dtype=np.complex)
-    expected_causal_signal[0, :, 0, 0] = fft(linear_coef)
+    expected_causal_signal[0, :, 0, 0] = rfft(linear_coef)
 
     causal_signal = _get_causal_signal(linear_predictor)
 

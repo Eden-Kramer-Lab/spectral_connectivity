@@ -5,7 +5,7 @@ from itertools import combinations
 import numpy as np
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
-from scipy.fftpack import ifft
+from numpy.fft import irfft
 
 from .minimum_phase_decomposition import minimum_phase_decomposition
 from .statistics import (adjust_for_multiple_comparisons,
@@ -39,24 +39,7 @@ class lazyproperty:
             return value
 
 
-def non_negative_frequencies(axis):
-    '''Decorator that removes the negative frequencies.'''
-    def decorator(connectivity_measure):
-        @wraps(connectivity_measure)
-        def wrapper(*args, **kwargs):
-            measure = connectivity_measure(*args, **kwargs)
-            if measure is not None:
-                n_frequencies = measure.shape[axis]
-                non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
-                return np.take(measure, indices=non_neg_index, axis=axis)
-            else:
-                return None
-        return wrapper
-        wrapper.__docstring__ = connectivity_measure.__docstring__
-    return decorator
-
-
-class Connectivity(object):
+class Connectivity:
     '''Computes brain connectivity measures based on the cross spectral
     matrix.
 
@@ -122,9 +105,6 @@ class Connectivity(object):
         self._frequencies = frequencies
         self.time = time
 
-    def __dir__(self):
-        return self.keys()
-
     @classmethod
     def from_multitaper(cls, multitaper_instance,
                         expectation_type='trials_tapers'):
@@ -137,7 +117,6 @@ class Connectivity(object):
         )
 
     @property
-    @non_negative_frequencies(axis=0)
     def frequencies(self):
         if self._frequencies is not None:
             return self._frequencies
@@ -176,7 +155,6 @@ class Connectivity(object):
             self._expectation(self._cross_spectral_matrix))
 
     @lazyproperty
-    @non_negative_frequencies(axis=-3)
     def _transfer_function(self):
         return _estimate_transfer_function(self._minimum_phase_factor)
 
@@ -202,11 +180,9 @@ class Connectivity(object):
                 [self.fourier_coefficients.shape[axis]
                  for axis in axes])
 
-    @non_negative_frequencies(axis=-2)
     def power(self):
         return self._power
 
-    @non_negative_frequencies(axis=-3)
     def coherency(self):
         '''The complex-valued linear association between time series in the
          frequency domain.
@@ -249,7 +225,6 @@ class Connectivity(object):
         '''
         return _squared_magnitude(self.coherency())
 
-    @non_negative_frequencies(axis=-3)
     def imaginary_coherence(self):
         '''The normalized imaginary component of the cross-spectrum.
 
@@ -338,7 +313,6 @@ class Connectivity(object):
 
         return canonical_coherence_magnitude, labels
 
-    @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
         '''The cross-spectrum with the power for each signal scaled to
         a magnitude of 1.
@@ -365,7 +339,6 @@ class Connectivity(object):
             self._cross_spectral_matrix /
             np.abs(self._cross_spectral_matrix))
 
-    @non_negative_frequencies(axis=-3)
     def phase_lag_index(self):
         '''A non-parametric synchrony measure designed to mitigate power
         differences between realizations (tapers, trials) and
@@ -391,7 +364,6 @@ class Connectivity(object):
         '''
         return self._expectation(np.sign(self._cross_spectral_matrix.imag))
 
-    @non_negative_frequencies(-3)
     def weighted_phase_lag_index(self):
         '''Weighted average of the phase lag index using the imaginary
         coherency magnitudes as weights.
@@ -438,7 +410,6 @@ class Connectivity(object):
         return ((n_observations * self.phase_lag_index() ** 2 - 1.0) /
                 (n_observations - 1.0))
 
-    @non_negative_frequencies(-3)
     def debiased_squared_weighted_phase_lag_index(self):
         '''The square of the weighted phase lag index corrected for the
         positive bias induced by using the magnitude of the complex
@@ -543,10 +514,10 @@ class Connectivity(object):
 
         return np.log(predictive_power)
 
-    def conditional_spectral_granger_prediction():
+    def conditional_spectral_granger_prediction(self):
         raise NotImplementedError
 
-    def blockwise_spectral_granger_prediction():
+    def blockwise_spectral_granger_prediction(self):
         raise NotImplementedError
 
     def directed_transfer_function(self):
@@ -887,7 +858,7 @@ def _estimate_noise_covariance(minimum_phase):
            causality. NeuroImage 41, 354-362.
 
     '''
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
+    inverse_fourier_coefficients = irfft(minimum_phase, axis=-3).real
     return _complex_inner_product(
         inverse_fourier_coefficients[..., 0, :, :],
         inverse_fourier_coefficients[..., 0, :, :]).real
@@ -917,7 +888,7 @@ def _estimate_transfer_function(minimum_phase):
            causality. NeuroImage 41, 354-362.
 
     '''
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
+    inverse_fourier_coefficients = irfft(minimum_phase, axis=-3).real
     return np.matmul(
         minimum_phase,
         np.linalg.inv(inverse_fourier_coefficients[..., 0:1, :, :]))

@@ -1,9 +1,10 @@
 from logging import getLogger
 
 import numpy as np
-from numpy.fft import fftfreq
+from numpy.fft import rfftfreq
 from scipy import interpolate
-from scipy.fftpack import fft, ifft, next_fast_len
+from scipy.fftpack import next_fast_len
+from numpy.fft import rfft, irfft
 from scipy.linalg import eigvals_banded
 from scipy.signal import detrend
 
@@ -76,26 +77,30 @@ class Multitaper(object):
 
     def __repr__(self):
         return (
-            'Multitaper('
-            'sampling_frequency={0.sampling_frequency!r}, '
-            'time_halfbandwidth_product={0.time_halfbandwidth_product!r},\n'
-            '           time_window_duration={0.time_window_duration!r}, '
-            'time_window_step={0.time_window_step!r},\n'
-            '           detrend_type={0.detrend_type!r}, '
-            'start_time={0.start_time}, '
-            'n_tapers={0.n_tapers}'
-            ')'.format(self))
-
-    def __dir__(self):
-        return self.keys()
+            f'{self.__class__.__name__}'
+            f'sampling_frequency={self.sampling_frequency},'
+            f'time_halfbandwidth_product={self.time_halfbandwidth_product},\n'
+            f'           time_window_duration={self.time_window_duration}, '
+            f'time_window_step={self.time_window_step},\n'
+            f'           detrend_type={self.detrend_type}, '
+            f'start_time={self.start_time}, '
+            f'n_tapers={self.n_tapers}'
+            ')')
 
     @property
     def tapers(self):
+        """
+        Returns
+        -------
+        tapers : array_like, shape (n_time_samples_per_window, n_tapers)
+        """
         if self._tapers is None:
-            self._tapers = _make_tapers(
-                self.n_time_samples_per_window, self.sampling_frequency,
-                self.time_halfbandwidth_product, self.n_tapers,
+            tapers, _ = dpss_windows(
+                self.n_time_samples_per_window,
+                self.time_halfbandwidth_product,
+                self.n_tapers,
                 is_low_bias=self.is_low_bias)
+            self._tapers = tapers.T * np.sqrt(self.sampling_frequency)
         return self._tapers
 
     @property
@@ -144,7 +149,7 @@ class Multitaper(object):
 
     @property
     def frequencies(self):
-        return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
+        return rfftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
     @property
     def n_time_samples_per_step(self):
@@ -309,33 +314,11 @@ def _multitaper_fft(tapers, time_series, n_fft_samples,
     '''
     projected_time_series = (time_series[..., np.newaxis] *
                              tapers[np.newaxis, np.newaxis, ...])
-    return (fft(projected_time_series, n=n_fft_samples, axis=axis) /
-            sampling_frequency)
-
-
-def _make_tapers(n_time_samples_per_window, sampling_frequency,
-                 time_halfbandwidth_product, n_tapers, is_low_bias=True):
-    '''Returns the Discrete prolate spheroidal sequences (tapers) for
-    multi-taper spectral analysis.
-
-    Parameters
-    ----------
-    n_time_samples_per_window : int
-    sampling_frequency : int
-    time_halfbandwidth_product : float
-    n_tapers : int
-    is_low_bias : bool
-        Keep only tapers with eigenvalues > 0.9
-
-    Returns
-    -------
-    tapers : array_like, shape (n_time_samples_per_window, n_tapers)
-
-    '''
-    tapers, _ = dpss_windows(
-        n_time_samples_per_window, time_halfbandwidth_product, n_tapers,
-        is_low_bias=is_low_bias)
-    return tapers.T * np.sqrt(sampling_frequency)
+    fourier_coefficients = rfft(projected_time_series,
+                                n=n_fft_samples,
+                                axis=axis)
+    fourier_coefficients /= sampling_frequency
+    return fourier_coefficients
 
 
 def tridisolve(d, e, b, overwrite_b=True):
@@ -586,9 +569,9 @@ def _fix_taper_sign(tapers, n_time_samples_per_window):
 def _auto_correlation(data, axis=-1):
     n_time_samples_per_window = data.shape[axis]
     n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
-    dpss_fft = fft(data, n_fft_samples, axis=axis)
+    dpss_fft = rfft(data, n_fft_samples, axis=axis)
     power = dpss_fft * dpss_fft.conj()
-    return np.real(ifft(power, axis=axis))
+    return np.real(irfft(power, axis=axis))
 
 
 def _get_low_bias_tapers(tapers, eigenvalues):
