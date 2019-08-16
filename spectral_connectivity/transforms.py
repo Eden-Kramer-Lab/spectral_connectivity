@@ -1,10 +1,10 @@
 from logging import getLogger
 
 import numpy as np
+from numpy.fft import rfft, irfft
 from numpy.fft import rfftfreq
 from scipy import interpolate
 from scipy.fftpack import next_fast_len
-from numpy.fft import rfft, irfft
 from scipy.linalg import eigvals_banded
 from scipy.signal import detrend
 
@@ -56,7 +56,7 @@ class Multitaper(object):
     def __init__(self, time_series, sampling_frequency=1000,
                  time_halfbandwidth_product=3,
                  detrend_type='constant', time_window_duration=None,
-                 time_window_step=None, n_tapers=None,  tapers=None,
+                 time_window_step=None, n_tapers=None, tapers=None,
                  start_time=0, n_fft_samples=None,
                  n_time_samples_per_window=None,
                  n_time_samples_per_step=None, is_low_bias=True):
@@ -65,15 +65,49 @@ class Multitaper(object):
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
-        self._time_window_duration = time_window_duration
-        self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
         self.start_time = start_time
-        self._n_fft_samples = n_fft_samples
-        self._tapers = tapers
-        self._n_tapers = n_tapers
-        self._n_time_samples_per_window = n_time_samples_per_window
-        self._n_samples_per_time_step = n_time_samples_per_step
+
+        if n_time_samples_per_window is None:
+            if time_window_duration is None:
+                n_time_samples_per_window = self.time_series.shape[0]
+            else:
+                n_time_samples_per_window = int(
+                    time_window_duration * self.sampling_frequency)
+        self.n_time_samples_per_window = n_time_samples_per_window
+
+        if n_time_samples_per_step is None:
+            if time_window_step is None:
+                n_time_samples_per_step = self.n_time_samples_per_window
+            else:
+                n_time_samples_per_step = int(
+                    time_window_step * self.sampling_frequency)
+        self.n_time_samples_per_step = n_time_samples_per_step
+
+        if time_window_duration is None:
+            time_window_duration = self.n_time_samples_per_window / \
+                                   self.sampling_frequency
+        self.time_window_duration = time_window_duration
+
+        if time_window_step is None:
+            time_window_step = self.n_time_samples_per_step / \
+                               self.sampling_frequency
+        self.time_window_step = time_window_step
+
+        if n_fft_samples is None:
+            n_fft_samples = next_fast_len(self.n_time_samples_per_window)
+        self.n_fft_samples = n_fft_samples
+
+        if n_tapers is None:
+            # Number of desired tapers.
+            # Note that the number of tapers may be less than this number if
+            # the bias of the tapers is too high (eigenvalues > 0.9)
+            n_tapers = int(2 * self.time_halfbandwidth_product - 1)
+        self.n_tapers = n_tapers
+
+        if tapers is None:
+            tapers = self._get_tapers()
+        self.tapers = tapers
 
     def __repr__(self):
         return (
@@ -87,84 +121,23 @@ class Multitaper(object):
             f'n_tapers={self.n_tapers}'
             ')')
 
-    @property
-    def tapers(self):
+    def _get_tapers(self):
         """
         Returns
         -------
         tapers : array_like, shape (n_time_samples_per_window, n_tapers)
         """
-        if self._tapers is None:
-            tapers, _ = dpss_windows(
-                self.n_time_samples_per_window,
-                self.time_halfbandwidth_product,
-                self.n_tapers,
-                is_low_bias=self.is_low_bias)
-            self._tapers = tapers.T * np.sqrt(self.sampling_frequency)
-        return self._tapers
-
-    @property
-    def time_window_duration(self):
-        if self._time_window_duration is None:
-            self._time_window_duration = (self.n_time_samples_per_window /
-                                          self.sampling_frequency)
-        return self._time_window_duration
-
-    @property
-    def time_window_step(self):
-        if self._time_window_step is None:
-            self._time_window_step = (self.n_time_samples_per_step /
-                                      self.sampling_frequency)
-        return self._time_window_step
-
-    @property
-    def n_tapers(self):
-        '''Number of desired tapers.
-
-        Note that the number of tapers may be less than this number if
-        the bias of the tapers is too high (eigenvalues > 0.9)
-
-        '''
-        if self._n_tapers is None:
-            return int(np.floor(
-                2 * self.time_halfbandwidth_product - 1))
-        return self._n_tapers
-
-    @property
-    def n_time_samples_per_window(self):
-        if (self._n_time_samples_per_window is None and
-                self._time_window_duration is None):
-            self._n_time_samples_per_window = self.time_series.shape[0]
-        elif self._time_window_duration is not None:
-            self._n_time_samples_per_window = int(np.round(
-                self.time_window_duration * self.sampling_frequency))
-        return self._n_time_samples_per_window
-
-    @property
-    def n_fft_samples(self):
-        if self._n_fft_samples is None:
-            self._n_fft_samples = next_fast_len(
-                self.n_time_samples_per_window)
-        return self._n_fft_samples
+        tapers, _ = dpss_windows(
+            self.n_time_samples_per_window,
+            self.time_halfbandwidth_product,
+            self.n_tapers,
+            is_low_bias=self.is_low_bias)
+        tapers *= np.sqrt(self.sampling_frequency)
+        return tapers.T
 
     @property
     def frequencies(self):
         return rfftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
-
-    @property
-    def n_time_samples_per_step(self):
-        '''If `time_window_step` is set, then calculate the
-        `n_time_samples_per_step` based on the time window duration. If
-        `time_window_step` and `n_time_samples_per_step` are both not set,
-        default the window step size to the same size as the window.
-        '''
-        if (self._n_samples_per_time_step is None and
-                self._time_window_step is None):
-            self._n_samples_per_time_step = self.n_time_samples_per_window
-        elif self._time_window_step is not None:
-            self._n_samples_per_time_step = int(
-                self.time_window_step * self.sampling_frequency)
-        return self._n_samples_per_time_step
 
     @property
     def time(self):
@@ -468,7 +441,7 @@ def dpss_windows(n_time_samples_per_window, time_halfbandwidth_product,
 
 
 def _find_tapers_from_interpolation(
-    interp_from, time_halfbandwidth_product, n_tapers,
+        interp_from, time_halfbandwidth_product, n_tapers,
         n_time_samples_per_window, interp_kind):
     '''Create the tapers of the smaller size `interp_from` and then
     interpolate to the larger size `n_time_samples_per_window`.'''
@@ -478,7 +451,7 @@ def _find_tapers_from_interpolation(
 
     return [_interpolate_taper(
         taper, interp_kind, n_time_samples_per_window)
-            for taper in smaller_tapers]
+        for taper in smaller_tapers]
 
 
 def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):
@@ -513,11 +486,11 @@ def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
     t(n_time_samples_per_window-t)/2, t=[1,2,...,
     n_time_samples_per_window-1] [see Percival and Walden, 1993]'''
     diagonal = (
-        ((n_time_samples_per_window - 1 - 2 * time_index) / 2.) ** 2
-        * np.cos(2 * np.pi * half_bandwidth))
+            ((n_time_samples_per_window - 1 - 2 * time_index) / 2.) ** 2
+            * np.cos(2 * np.pi * half_bandwidth))
     off_diag = np.zeros_like(time_index)
     off_diag[:-1] = (
-        time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.)
+            time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.)
     # put the diagonals in LAPACK 'packed' storage
     ab = np.zeros((2, n_time_samples_per_window), dtype='d')
     ab[1] = diagonal
