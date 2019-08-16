@@ -1,11 +1,12 @@
-from functools import partial, wraps
+from functools import lru_cache
+from functools import partial
 from inspect import signature
 from itertools import combinations
 
 import numpy as np
+from numpy.fft import irfft
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
-from numpy.fft import irfft
 
 from .minimum_phase_decomposition import minimum_phase_decomposition
 from .statistics import (adjust_for_multiple_comparisons,
@@ -17,26 +18,6 @@ EXPECTATION = {
     'tapers': partial(np.mean, axis=2),
     'trials_tapers': partial(np.mean, axis=(1, 2))
 }
-
-
-class lazyproperty:
-    '''Computes property if it hasn't been computed, otherwise stores the
-    answer and returns the answer.
-
-    Useful if property computation is expensive. To use, simply use as a
-    decorator as one would use `property`.
-
-    '''
-    def __init__(self, func):
-        self.func = func
-
-    def __get__(self, instance, cls):
-        if instance is None:
-            return self
-        else:
-            value = self.func(instance)
-            setattr(instance, self.func.__name__, value)
-            return value
 
 
 class Connectivity:
@@ -102,7 +83,7 @@ class Connectivity:
                  time=None):
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
-        self._frequencies = frequencies
+        self.frequencies = frequencies
         self.time = time
 
     @classmethod
@@ -117,26 +98,17 @@ class Connectivity:
         )
 
     @property
-    def frequencies(self):
-        if self._frequencies is not None:
-            return self._frequencies
-
-    @lazyproperty
-    def _power(self):
+    @lru_cache(maxsize=1)
+    def power(self):
         return self._expectation(
             self.fourier_coefficients *
             self.fourier_coefficients.conjugate()).real
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _cross_spectral_matrix(self):
         '''The complex-valued linear association between fourier
         coefficients at each frequency.
-
-        Parameters
-        ----------
-        fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                             n_tapers, n_fft_samples,
-                                             n_signals)
 
         Returns
         -------
@@ -149,20 +121,24 @@ class Connectivity:
         return _complex_inner_product(fourier_coefficients,
                                       fourier_coefficients)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _minimum_phase_factor(self):
         return minimum_phase_decomposition(
             self._expectation(self._cross_spectral_matrix))
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _transfer_function(self):
         return _estimate_transfer_function(self._minimum_phase_factor)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _noise_covariance(self):
         return _estimate_noise_covariance(self._minimum_phase_factor)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _MVAR_Fourier_coefficients(self):
         return np.linalg.inv(self._transfer_function)
 
@@ -180,9 +156,6 @@ class Connectivity:
                 [self.fourier_coefficients.shape[axis]
                  for axis in axes])
 
-    def power(self):
-        return self._power
-
     def coherency(self):
         '''The complex-valued linear association between time series in the
          frequency domain.
@@ -193,8 +166,8 @@ class Connectivity:
                                            n_signals)
 
          '''
-        norm = np.sqrt(self._power[..., :, np.newaxis] *
-                       self._power[..., np.newaxis, :])
+        norm = np.sqrt(self.power[..., :, np.newaxis] *
+                       self.power[..., np.newaxis, :])
         norm[norm == 0] = np.nan
         complex_coherencey = (
             self._expectation(self._cross_spectral_matrix) / norm)
@@ -251,8 +224,8 @@ class Connectivity:
         '''
         return np.abs(
             self._expectation(self._cross_spectral_matrix).imag /
-            np.sqrt(self._power[..., :, np.newaxis] *
-                    self._power[..., np.newaxis, :]))
+            np.sqrt(self.power[..., :, np.newaxis] *
+                    self.power[..., np.newaxis, :]))
 
     def canonical_coherence(self, group_labels):
         '''Finds the maximal coherence between each combination of groups.
@@ -482,8 +455,6 @@ class Connectivity:
         cross_spectral_matrix = self._expectation(
             self._cross_spectral_matrix)
         n_signals = cross_spectral_matrix.shape[-1]
-        transfer_function = np.empty_like(cross_spectral_matrix)
-        total_power = self.power()
         n_frequencies = cross_spectral_matrix.shape[-3]
         non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
         new_shape = list(cross_spectral_matrix.shape)
@@ -503,7 +474,7 @@ class Connectivity:
                     _estimate_noise_covariance(minimum_phase_factor))
                 predictive_power[..., pair_indices, pair_indices.T] = (
                     _estimate_predictive_power(
-                        total_power[..., pair_indices[:, 0]],
+                        self.power[..., pair_indices[:, 0]],
                         rotated_covariance, transfer_function))
             except np.linalg.LinAlgError:
                 predictive_power[
