@@ -16,7 +16,7 @@ setup(
     author='Eric Denovellis',
     author_email='edeno@bu.edu',
     url='https://github.com/Eden-Kramer-Lab/spectral_connectivity',
-    python_requires='>=3',
+    python_requires='>=3.6',
     packages=find_packages(),
     install_requires=INSTALL_REQUIRES,
     tests_require=TESTS_REQUIRE,
