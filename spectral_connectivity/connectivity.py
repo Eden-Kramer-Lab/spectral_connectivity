@@ -451,7 +451,8 @@ class Connectivity:
         cross_spectral_matrix = self._expectation(
             self._cross_spectral_matrix)
         n_signals = cross_spectral_matrix.shape[-1]
-        predictive_power = np.empty_like(cross_spectral_matrix)
+        predictive_power = np.empty_like(cross_spectral_matrix,
+                                         dtype=np.float32)
 
         for pair_indices in combinations(range(n_signals), 2):
             pair_indices = np.array(pair_indices)[:, np.newaxis]
