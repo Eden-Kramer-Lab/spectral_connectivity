@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import numpy as np
-from numpy.fft import rfft, irfft
+from numpy.fft import rfft, fft, ifft
 from numpy.fft import rfftfreq
 from scipy import interpolate
 from scipy.fftpack import next_fast_len
@@ -136,6 +136,10 @@ class Multitaper(object):
         return tapers.T
 
     @property
+    def n_rfft_samples(self):
+        return self.n_fft_samples // 2 + 1
+
+    @property
     def frequencies(self):
         return rfftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
@@ -173,7 +177,7 @@ class Multitaper(object):
         Returns
         -------
         fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                             n_tapers, n_fft_samples,
+                                             n_tapers, n_rfft_samples,
                                              n_signals)
 
         '''
@@ -186,7 +190,7 @@ class Multitaper(object):
 
         logger.info(self)
 
-        return _multitaper_fft(
+        return _multitaper_rfft(
             self.tapers, time_series, self.n_fft_samples,
             self.sampling_frequency).swapaxes(2, -1)
 
@@ -266,10 +270,10 @@ def _sliding_window(data, window_size, step_size=1,
     return strided.copy() if is_copy else strided
 
 
-def _multitaper_fft(tapers, time_series, n_fft_samples,
-                    sampling_frequency, axis=-2):
+def _multitaper_rfft(tapers, time_series, n_fft_samples,
+                     sampling_frequency, axis=-2):
     '''Projects the data on the tapers and returns the discrete Fourier
-    transform
+    transform (real part).
 
     Parameters
     ----------
@@ -282,7 +286,8 @@ def _multitaper_fft(tapers, time_series, n_fft_samples,
     Returns
     -------
     fourier_coefficients : array_like, shape (n_windows, n_trials, n_tapers
-                                              n_fft_samples, n_signals)
+                                              n_fft_samples // 2 + 1,
+                                              n_signals)
 
     '''
     projected_time_series = (time_series[..., np.newaxis] *
@@ -540,11 +545,26 @@ def _fix_taper_sign(tapers, n_time_samples_per_window):
 
 
 def _auto_correlation(data, axis=-1):
+    """
+    Vectorized autocorrelation function.
+    Input data is in time domain.
+
+    Parameters
+    ----------
+    data: np.array of shape (n_tapers, n_time_samples_per_window)
+    axis: time axis
+
+    Returns
+    -------
+    autocorr: np.array of shape (n_tapers, n_time_samples_per_window)
+    """
     n_time_samples_per_window = data.shape[axis]
     n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
-    dpss_fft = rfft(data, n_fft_samples, axis=axis)
+    dpss_fft = fft(data, n=n_fft_samples, axis=axis)
     power = dpss_fft * dpss_fft.conj()
-    return np.real(irfft(power, axis=axis))
+    autocorr = ifft(power, axis=axis).real
+    autocorr = autocorr[:, :n_time_samples_per_window]
+    return autocorr
 
 
 def _get_low_bias_tapers(tapers, eigenvalues):
@@ -576,7 +596,4 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
     ideal_filter = 4 * half_bandwidth * np.sinc(
         2 * half_bandwidth * time_index)
     ideal_filter[0] = 2 * half_bandwidth
-    n_time_samples_per_window = len(time_index)
-    return np.dot(
-        _auto_correlation(tapers)[:, :n_time_samples_per_window],
-        ideal_filter)
+    return np.dot(_auto_correlation(tapers), ideal_filter)

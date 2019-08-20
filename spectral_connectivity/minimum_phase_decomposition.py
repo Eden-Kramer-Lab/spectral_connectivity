@@ -1,7 +1,7 @@
 from logging import getLogger
 
 import numpy as np
-from numpy.fft import rfft, irfft
+from numpy.fft import fft, irfft
 
 logger = getLogger(__name__)
 
@@ -26,9 +26,10 @@ def _get_intial_conditions(cross_spectral_matrix):
     minimum_phase_factor : array, shape (n_time_samples, ..., 1, n_signals,
                                          n_signals)
     '''
+    fft_axis = -3
     try:
         return np.linalg.cholesky(
-            irfft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
+            irfft(cross_spectral_matrix, axis=fft_axis)[..., 0:1, :, :]
         ).swapaxes(-1, -2)
     except np.linalg.linalg.LinAlgError:
         logger.warn(
@@ -37,13 +38,13 @@ def _get_intial_conditions(cross_spectral_matrix):
 
         new_shape = list(cross_spectral_matrix.shape)
         N_RAND = 1000
-        new_shape[-3] = N_RAND
+        new_shape[fft_axis] = N_RAND
         random_start = np.random.standard_normal(
             size=new_shape)
 
         random_start = np.matmul(
             random_start, _conjugate_transpose(random_start)).mean(
-                axis=-3, keepdims=True)
+                axis=fft_axis, keepdims=True)
 
         return np.linalg.cholesky(random_start)
 
@@ -67,8 +68,11 @@ def _get_causal_signal(linear_predictor):
 
     '''
     n_signals = linear_predictor.shape[-1]
-    n_fft_samples = linear_predictor.shape[-3]
-    linear_predictor_coefficients = irfft(linear_predictor, axis=-3)
+    fft_axis = -3
+    n_fft_samples = linear_predictor.shape[fft_axis]
+    linear_predictor_coefficients = irfft(linear_predictor,
+                                          n=n_fft_samples,
+                                          axis=fft_axis)
 
     # Take half of the roots on the unit circle
     linear_predictor_coefficients[..., 0, :, :] *= 0.5
@@ -80,7 +84,7 @@ def _get_causal_signal(linear_predictor):
 
     # Take only the roots inside the unit circle (positive lags)
     linear_predictor_coefficients[..., (n_fft_samples + 1) // 2:, :, :] = 0
-    return rfft(linear_predictor_coefficients, axis=-3)
+    return fft(linear_predictor_coefficients, axis=fft_axis)
 
 
 def _check_convergence(current, old, tolerance=1E-8):

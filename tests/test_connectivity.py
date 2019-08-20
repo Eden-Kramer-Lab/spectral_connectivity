@@ -63,8 +63,7 @@ def test_power():
     expected_power[..., :] = [4, 9]
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
-    assert np.allclose(
-        expected_power, this_Conn.power())
+    assert np.allclose(expected_power, this_Conn.power)
 
 
 @mark.parametrize(

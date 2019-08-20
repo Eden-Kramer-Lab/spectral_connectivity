@@ -823,10 +823,13 @@ def _estimate_noise_covariance(minimum_phase):
            causality. NeuroImage 41, 354-362.
 
     '''
-    inverse_fourier_coefficients = irfft(minimum_phase, axis=-3).real
-    return _complex_inner_product(
-        inverse_fourier_coefficients[..., 0, :, :],
-        inverse_fourier_coefficients[..., 0, :, :]).real
+    fft_axis = -3
+    inverse_fourier_coefficients = irfft(minimum_phase,
+                                         n=minimum_phase.shape[fft_axis],
+                                         axis=fft_axis)
+    inverse_fourier_coefficients = inverse_fourier_coefficients[..., 0, :, :]
+    return _complex_inner_product(inverse_fourier_coefficients,
+                                  inverse_fourier_coefficients)
 
 
 def _estimate_transfer_function(minimum_phase):
@@ -853,7 +856,10 @@ def _estimate_transfer_function(minimum_phase):
            causality. NeuroImage 41, 354-362.
 
     '''
-    inverse_fourier_coefficients = irfft(minimum_phase, axis=-3).real
+    fft_axis = -3
+    inverse_fourier_coefficients = irfft(minimum_phase,
+                                         n=minimum_phase.shape[fft_axis],
+                                         axis=fft_axis)
     return np.matmul(
         minimum_phase,
         np.linalg.inv(inverse_fourier_coefficients[..., 0:1, :, :]))

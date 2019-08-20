@@ -4,11 +4,11 @@ from scipy.signal import correlate
 
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from spectral_connectivity.transforms import (Multitaper, _add_axes,
-                                 _auto_correlation, _fix_taper_sign,
-                                 _get_low_bias_tapers,
-                                 _get_taper_eigenvalues,
-                                 _multitaper_fft, _sliding_window,
-                                 dpss_windows)
+                                              _auto_correlation, _fix_taper_sign,
+                                              _get_low_bias_tapers,
+                                              _get_taper_eigenvalues,
+                                              _multitaper_rfft, _sliding_window,
+                                              dpss_windows)
 
 
 def test__add_axes():
@@ -133,7 +133,7 @@ def test_frequencies():
         time_series=time_series,
         sampling_frequency=sampling_frequency,
         n_fft_samples=n_fft_samples)
-    expected_frequencies = np.array([0, 250, -500, -250])
+    expected_frequencies = np.array([0, 250, 500])
     assert np.allclose(m.frequencies, expected_frequencies)
 
 
@@ -277,7 +277,7 @@ def test__get_taper_eigenvalues(
 def test__auto_correlation():
     n_time_samples, n_tapers = 100, 3
     test_data = np.random.rand(n_tapers, n_time_samples)
-    rxx = _auto_correlation(test_data)[:, :n_time_samples]
+    rxx = _auto_correlation(test_data)
 
     for taper_ind in np.arange(n_tapers):
         expected_correlation = correlate(
@@ -293,11 +293,11 @@ def test__multitaper_fft():
     time_series = np.ones((n_windows, n_trials, n_time_samples))
     tapers = np.ones((n_time_samples, n_tapers))
 
-    fourier_coefficients = _multitaper_fft(
+    fourier_coefficients = _multitaper_rfft(
         tapers, time_series, n_fft_samples, sampling_frequency)
     assert np.allclose(
         fourier_coefficients.shape,
-        (n_windows, n_trials, n_fft_samples, n_tapers))
+        (n_windows, n_trials, n_fft_samples // 2 + 1, n_tapers))
 
 
 def test_fft():
@@ -306,5 +306,5 @@ def test_fft():
     m = Multitaper(time_series=time_series)
     assert np.allclose(
         m.fft().shape,
-        (n_windows, n_trials, m.tapers.shape[1], m.n_fft_samples,
+        (n_windows, n_trials, m.tapers.shape[1], m.n_rfft_samples,
          n_signals))
