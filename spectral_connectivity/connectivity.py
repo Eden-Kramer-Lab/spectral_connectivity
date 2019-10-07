@@ -1,4 +1,4 @@
-from functools import partial, wraps
+from functools import partial, wraps, lru_cache
 from inspect import signature
 from itertools import combinations
 
@@ -19,26 +19,6 @@ EXPECTATION = {
 }
 
 
-class lazyproperty:
-    '''Computes property if it hasn't been computed, otherwise stores the
-    answer and returns the answer.
-
-    Useful if property computation is expensive. To use, simply use as a
-    decorator as one would use `property`.
-
-    '''
-    def __init__(self, func):
-        self.func = func
-
-    def __get__(self, instance, cls):
-        if instance is None:
-            return self
-        else:
-            value = self.func(instance)
-            setattr(instance, self.func.__name__, value)
-            return value
-
-
 def non_negative_frequencies(axis):
     '''Decorator that removes the negative frequencies.'''
     def decorator(connectivity_measure):
@@ -52,7 +32,6 @@ def non_negative_frequencies(axis):
             else:
                 return None
         return wrapper
-        wrapper.__docstring__ = connectivity_measure.__docstring__
     return decorator
 
 
@@ -122,9 +101,6 @@ class Connectivity(object):
         self._frequencies = frequencies
         self.time = time
 
-    def __dir__(self):
-        return self.keys()
-
     @classmethod
     def from_multitaper(cls, multitaper_instance,
                         expectation_type='trials_tapers'):
@@ -142,22 +118,18 @@ class Connectivity(object):
         if self._frequencies is not None:
             return self._frequencies
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _power(self):
         return self._expectation(
             self.fourier_coefficients *
             self.fourier_coefficients.conjugate()).real
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _cross_spectral_matrix(self):
         '''The complex-valued linear association between fourier
         coefficients at each frequency.
-
-        Parameters
-        ----------
-        fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                             n_tapers, n_fft_samples,
-                                             n_signals)
 
         Returns
         -------
@@ -170,21 +142,25 @@ class Connectivity(object):
         return _complex_inner_product(fourier_coefficients,
                                       fourier_coefficients)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _minimum_phase_factor(self):
         return minimum_phase_decomposition(
             self._expectation(self._cross_spectral_matrix))
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     @non_negative_frequencies(axis=-3)
     def _transfer_function(self):
         return _estimate_transfer_function(self._minimum_phase_factor)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _noise_covariance(self):
         return _estimate_noise_covariance(self._minimum_phase_factor)
 
-    @lazyproperty
+    @property
+    @lru_cache(maxsize=1)
     def _MVAR_Fourier_coefficients(self):
         return np.linalg.inv(self._transfer_function)
 
@@ -511,7 +487,6 @@ class Connectivity(object):
         cross_spectral_matrix = self._expectation(
             self._cross_spectral_matrix)
         n_signals = cross_spectral_matrix.shape[-1]
-        transfer_function = np.empty_like(cross_spectral_matrix)
         total_power = self.power()
         n_frequencies = cross_spectral_matrix.shape[-3]
         non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
@@ -543,10 +518,10 @@ class Connectivity(object):
 
         return np.log(predictive_power)
 
-    def conditional_spectral_granger_prediction():
+    def conditional_spectral_granger_prediction(self):
         raise NotImplementedError
 
-    def blockwise_spectral_granger_prediction():
+    def blockwise_spectral_granger_prediction(self):
         raise NotImplementedError
 
     def directed_transfer_function(self):
