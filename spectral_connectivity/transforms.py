@@ -86,9 +86,6 @@ class Multitaper(object):
             'n_tapers={0.n_tapers}'
             ')'.format(self))
 
-    def __dir__(self):
-        return self.keys()
-
     @property
     def tapers(self):
         if self._tapers is None:
