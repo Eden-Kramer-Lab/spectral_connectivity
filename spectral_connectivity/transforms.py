@@ -492,7 +492,7 @@ def _find_tapers_from_interpolation(
 
     return [_interpolate_taper(
         taper, interp_kind, n_time_samples_per_window)
-            for taper in smaller_tapers]
+        for taper in smaller_tapers]
 
 
 def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):

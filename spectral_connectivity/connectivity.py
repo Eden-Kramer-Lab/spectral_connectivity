@@ -1,16 +1,15 @@
-from functools import partial, wraps, lru_cache
+from functools import lru_cache, partial, wraps
 from inspect import signature
 from itertools import combinations
 
 import numpy as np
+from scipy.fftpack import ifft
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
-from scipy.fftpack import ifft
 
 from .minimum_phase_decomposition import minimum_phase_decomposition
-from .statistics import (adjust_for_multiple_comparisons,
-                         fisher_z_transform,
-                         get_normal_distribution_p_values, coherence_bias)
+from .statistics import (adjust_for_multiple_comparisons, coherence_bias,
+                         fisher_z_transform, get_normal_distribution_p_values)
 
 EXPECTATION = {
     'trials': partial(np.mean, axis=1),
@@ -625,7 +624,7 @@ class Connectivity(object):
         return _squared_magnitude(
             self._MVAR_Fourier_coefficients /
             np.sqrt(noise_variance) / _total_outflow(
-                    self._MVAR_Fourier_coefficients, noise_variance))
+                self._MVAR_Fourier_coefficients, noise_variance))
 
     def direct_directed_transfer_function(self):
         '''A combination of the directed transfer function estimate of
@@ -710,20 +709,20 @@ class Connectivity(object):
         slope = np.full(new_shape, np.nan)
         slope[..., signal_combination_ind[:, 0],
               signal_combination_ind[:, 1]] = np.array(
-              regression_results[..., 0, :], dtype=np.float)
+            regression_results[..., 0, :], dtype=np.float)
         slope[..., signal_combination_ind[:, 1],
               signal_combination_ind[:, 0]] = -1 * np.array(
-              regression_results[..., 0, :], dtype=np.float)
+            regression_results[..., 0, :], dtype=np.float)
 
         delay = slope / (2 * np.pi)
 
         r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0],
                 signal_combination_ind[:, 1]] = np.array(
-                regression_results[..., 2, :], dtype=np.float)
+            regression_results[..., 2, :], dtype=np.float)
         r_value[..., signal_combination_ind[:, 1],
                 signal_combination_ind[:, 0]] = np.array(
-                regression_results[..., 2, :], dtype=np.float)
+            regression_results[..., 2, :], dtype=np.float)
         return delay, slope, r_value
 
     def delay(self, frequencies_of_interest=None,
