@@ -88,6 +88,13 @@ class Multitaper(object):
 
     @property
     def tapers(self):
+        '''
+
+        Returns
+        -------
+        tapers : array_like, shape (n_time_samples_per_window, n_tapers)
+
+        '''
         if self._tapers is None:
             self._tapers = _make_tapers(
                 self.n_time_samples_per_window, self.sampling_frequency,
