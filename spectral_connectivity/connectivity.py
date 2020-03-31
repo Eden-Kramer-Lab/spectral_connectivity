@@ -313,6 +313,41 @@ class Connectivity(object):
 
         return canonical_coherence_magnitude, labels
 
+    def estimate_global_coherence(X, max_rank, blnComputePxy):
+        """Estimate global coherence
+
+        Parameters
+        ----------
+        fft : ndarray, (n_signals, n_estimates)
+            The fourier coefficients for a given frequency, across all channels/sources
+        max_rank : the maximum number of singular values to keep
+
+        Returns
+        -------
+        S : ndarray (max_rank)
+            The vector of global coherences (square of the singular values)
+        U : ndarray (n_signals,max_rank)
+            The (unnormalized) global coherence vectors
+        Pxy : (only if blnComputePxY) ndarray (n_signals,n_signals)
+            The cross spectral matrix
+
+        """
+        N, k = X.shape
+
+        if max_rank >= N - 1:
+            U, S, _ = np.linalg.svd(X, full_matrices=False)
+            S = S[:max_rank]**2 / k
+            U = U[:, :max_rank]
+        else:
+            U, S, _ = scipy.sparse.linalg.svds(X, max_rank)
+            S = S**2 / k
+
+        if blnComputePxy:
+            Pxy = np.dot(U, np.dot(np.diag(S), U.getH))
+            return S, U, Pxy
+        else:
+            return S, U
+
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
         '''The cross-spectrum with the power for each signal scaled to
