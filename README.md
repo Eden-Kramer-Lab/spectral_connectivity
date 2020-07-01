@@ -28,6 +28,7 @@ Functional
 7. debiased_squared_phase_lag_index
 8. debiased_squared_weighted_phase_lag_index
 9. pairwise_phase_consistency
+10. global coherence
 
 Directed
 
@@ -42,7 +43,7 @@ Directed
 
 ### Package Dependencies ###
 `spectral_connectivity` requires:
-- python=3.5
+- python>3.6
 - numpy
 - matplotlib
 - scipy
