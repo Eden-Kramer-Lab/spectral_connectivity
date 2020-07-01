@@ -314,6 +314,35 @@ class Connectivity:
 
         return canonical_coherence_magnitude, labels
 
+    def global_coherence(self, max_rank=1):
+        '''The ratio of the largest eigenvalue to the sum of the eigenvalues of
+         the cross-spectral matrix at a given frequency and time. Characterizes
+         the extent of coordinated activity over all signals.
+
+        Parameters
+        ----------
+        max_rank : int, optional
+            The maximum number of singular values to keep
+
+        Returns
+        -------
+        global_coherence : ndarray, shape (max_rank,)
+            The vector of global coherences (square of the singular values)
+        unnormalized_global_coherence : ndarray, shape (n_signals, max_rank)
+            The (unnormalized) global coherence vectors
+
+        References
+        ----------
+        .. [1] Cimenser, A., Purdon, P.L., Pierce, E.T., Walsh, J.L.,
+               Salazar-Gomez, A.F., Harrell, P.G., Tavares-Stoeckel, C.,
+               Habeeb, K., and Brown, E.N. (2011). Tracking brain states under
+               general anesthesia by using global coherence analysis.
+               Proceedings of the National Academy of Sciences 108, 8832–8837.
+
+        '''
+        return _estimate_global_coherence(
+            self.fourier_coefficients, max_rank=1)
+
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
         '''The cross-spectrum with the power for each signal scaled to
