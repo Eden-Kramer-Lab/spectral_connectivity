@@ -5,6 +5,7 @@ from itertools import combinations
 import numpy as np
 from scipy.fftpack import ifft
 from scipy.ndimage import label
+from scipy.sparse.linalg import svds
 from scipy.stats.mstats import linregress
 
 from .minimum_phase_decomposition import minimum_phase_decomposition
@@ -34,7 +35,7 @@ def non_negative_frequencies(axis):
     return decorator
 
 
-class Connectivity(object):
+class Connectivity:
     '''Computes brain connectivity measures based on the cross spectral
     matrix.
 
@@ -312,41 +313,6 @@ class Connectivity(object):
             group_combination_ind[:, 0]] = magnitude
 
         return canonical_coherence_magnitude, labels
-
-    def estimate_global_coherence(X, max_rank, blnComputePxy):
-        """Estimate global coherence
-
-        Parameters
-        ----------
-        fft : ndarray, (n_signals, n_estimates)
-            The fourier coefficients for a given frequency, across all channels/sources
-        max_rank : the maximum number of singular values to keep
-
-        Returns
-        -------
-        S : ndarray (max_rank)
-            The vector of global coherences (square of the singular values)
-        U : ndarray (n_signals,max_rank)
-            The (unnormalized) global coherence vectors
-        Pxy : (only if blnComputePxY) ndarray (n_signals,n_signals)
-            The cross spectral matrix
-
-        """
-        N, k = X.shape
-
-        if max_rank >= N - 1:
-            U, S, _ = np.linalg.svd(X, full_matrices=False)
-            S = S[:max_rank]**2 / k
-            U = U[:, :max_rank]
-        else:
-            U, S, _ = scipy.sparse.linalg.svds(X, max_rank)
-            S = S**2 / k
-
-        if blnComputePxy:
-            Pxy = np.dot(U, np.dot(np.diag(S), U.getH))
-            return S, U, Pxy
-        else:
-            return S, U
 
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
@@ -1242,3 +1208,37 @@ def _find_significant_frequencies(
 def _conjugate_transpose(x):
     '''Conjugate transpose of the last two dimensions of array x'''
     return x.swapaxes(-1, -2).conjugate()
+
+
+def _estimate_global_coherence(fourier_coefficients, max_rank=1,
+                               blnComputePxy=False):
+    """Estimate global coherence
+
+    Parameters
+    ----------
+    fourier_coefficients : ndarray, shape (n_signals, n_estimates)
+        The fourier coefficients for a given frequency across all channels
+    max_rank : float, optional
+        The maximum number of singular values to keep
+    blnComputePxy: bool, optional
+        Block compute cross spectrum?
+
+    Returns
+    -------
+    S : ndarray, shape (max_rank,)
+        The vector of global coherences (square of the singular values)
+    U : ndarray, shape (n_signals, max_rank)
+        The (unnormalized) global coherence vectors
+
+    """
+    n_signals, n_estimates = fourier_coefficients.shape
+
+    if max_rank >= n_signals - 1:
+        U, S, _ = np.linalg.svd(fourier_coefficients, full_matrices=False)
+        S = S[:max_rank]**2 / n_estimates
+        U = U[:, :max_rank]
+    else:
+        U, S, _ = svds(fourier_coefficients, max_rank)
+        S = S**2 / n_estimates
+
+    return S, U
