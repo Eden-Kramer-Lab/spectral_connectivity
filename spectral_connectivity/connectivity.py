@@ -1210,8 +1210,7 @@ def _conjugate_transpose(x):
     return x.swapaxes(-1, -2).conjugate()
 
 
-def _estimate_global_coherence(fourier_coefficients, max_rank=1,
-                               blnComputePxy=False):
+def _estimate_global_coherence(fourier_coefficients, max_rank=1):
     """Estimate global coherence
 
     Parameters
@@ -1220,8 +1219,6 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1,
         The fourier coefficients for a given frequency across all channels
     max_rank : float, optional
         The maximum number of singular values to keep
-    blnComputePxy: bool, optional
-        Block compute cross spectrum?
 
     Returns
     -------
