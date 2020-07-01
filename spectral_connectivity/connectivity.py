@@ -381,6 +381,11 @@ class Connectivity:
         in-phase or anti-phase signals to zero and the sign scales it to
         have the same magnitude regardless of phase.
 
+
+        Note that this is the signed version of the phase lag index. In order
+        to obtain the unsigned version, as in [1], take the absolute value
+        of this quantity.
+
         Returns
         -------
         phase_lag_index : array, shape (..., n_fft_samples, n_signals,
