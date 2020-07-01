@@ -316,8 +316,11 @@ class Connectivity:
 
     def global_coherence(self, max_rank=1):
         '''The ratio of the largest eigenvalue to the sum of the eigenvalues of
-         the cross-spectral matrix at a given frequency and time. Characterizes
-         the extent of coordinated activity over all signals.
+        the cross-spectral matrix at a given frequency and time. Decomposes
+        the cross spectrum into components that capture the most coherent
+        power.
+
+        This is a frequency domain analog of PCA.
 
         Parameters
         ----------
