@@ -343,8 +343,22 @@ class Connectivity:
                Proceedings of the National Academy of Sciences 108, 8832–8837.
 
         '''
-        return _estimate_global_coherence(
-            self.fourier_coefficients, max_rank=1)
+        (n_time_windows, n_trials, n_tapers,
+         n_fft_samples, n_signals) = self.fourier_coefficients.shape
+
+        global_coherence = np.zeros((n_time_windows, n_fft_samples, max_rank))
+        unnormalized_global_coherence = np.zeros(
+            (n_time_windows, n_fft_samples, n_signals, max_rank))
+
+        for time_ind in range(n_time_windows):
+            for freq_ind in range(n_fft_samples):
+                (global_coherence[time_ind, freq_ind],
+                 unnormalized_global_coherence[time_ind, freq_ind]
+                 ) = _estimate_global_coherence(
+                    self.fourier_coefficients.reshape(
+                        (n_time_windows, n_trials * n_tapers,
+                         n_fft_samples, n_signals))[time_ind, :, freq_ind].T,
+                    max_rank=max_rank)
 
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
@@ -1252,7 +1266,7 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1):
 
     Parameters
     ----------
-    fourier_coefficients : ndarray, shape (n_signals, n_estimates)
+    fourier_coefficients : ndarray, shape (n_signals, n_trials * n_tapers)
         The fourier coefficients for a given frequency across all channels
     max_rank : float, optional
         The maximum number of singular values to keep
