@@ -329,9 +329,12 @@ class Connectivity:
 
         Returns
         -------
-        global_coherence : ndarray, shape (max_rank,)
+        global_coherence : ndarray, shape (n_time_windows, n_fft_samples,
+                                           max_rank)
             The vector of global coherences (square of the singular values)
-        unnormalized_global_coherence : ndarray, shape (n_signals, max_rank)
+        unnormalized_global_coherence : ndarray, shape (n_time_windows,
+                                                        n_fft_samples,
+                                                        n_signals, max_rank)
             The (unnormalized) global coherence vectors
 
         References
@@ -359,6 +362,8 @@ class Connectivity:
                         (n_time_windows, n_trials * n_tapers,
                          n_fft_samples, n_signals))[time_ind, :, freq_ind].T,
                     max_rank=max_rank)
+
+        return global_coherence, unnormalized_global_coherence
 
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
