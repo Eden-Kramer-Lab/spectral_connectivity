@@ -1222,20 +1222,22 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1):
 
     Returns
     -------
-    S : ndarray, shape (max_rank,)
+    global_coherence : ndarray, shape (max_rank,)
         The vector of global coherences (square of the singular values)
-    U : ndarray, shape (n_signals, max_rank)
+    unnormalized_global_coherence : ndarray, shape (n_signals, max_rank)
         The (unnormalized) global coherence vectors
 
     """
     n_signals, n_estimates = fourier_coefficients.shape
 
     if max_rank >= n_signals - 1:
-        U, S, _ = np.linalg.svd(fourier_coefficients, full_matrices=False)
-        S = S[:max_rank]**2 / n_estimates
-        U = U[:, :max_rank]
+        unnormalized_global_coherence, global_coherence, _ = np.linalg.svd(
+            fourier_coefficients, full_matrices=False)
+        global_coherence = global_coherence[:max_rank]**2 / n_estimates
+        unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]  # noqa
     else:
-        U, S, _ = svds(fourier_coefficients, max_rank)
-        S = S**2 / n_estimates
+        unnormalized_global_coherence, global_coherence, _ = svds(
+            fourier_coefficients, max_rank)
+        global_coherence = global_coherence**2 / n_estimates
 
-    return S, U
+    return global_coherence, unnormalized_global_coherence
