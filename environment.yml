@@ -15,3 +15,6 @@ dependencies:
 - jupyter
 - numpydoc
 - sphinx
+- jupyter
+- jupyterlab
+- nb_conda
