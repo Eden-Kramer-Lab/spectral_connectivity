@@ -39,12 +39,12 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
     xar.name = method
 
     for attr in dir(m):
-        if attr[0]=='_':
+        if attr[0] == '_':
             continue
         # If we don't add 'mt_', get:
         # TypeError: '.dt' accessor only available for DataArray with datetime64 timedelta64 dtype
         # or for arrays containing cftime datetime objects.
-        xar.attrs['mt_'+ attr] = getattr(m, attr)
+        xar.attrs['mt_' + attr] = getattr(m, attr)
 
     return xar
 
@@ -92,4 +92,3 @@ def multitaper_connectivity(time_series, sampling_frequency, time_window_duratio
                    time_window_duration=time_window_duration,
                    **kwargs)
     return connectivity_to_xarray(m, method, signal_names, squeeze, **connectivity_kwargs)
-
