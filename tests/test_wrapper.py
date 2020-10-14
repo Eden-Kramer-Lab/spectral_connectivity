@@ -39,7 +39,6 @@ def test_multitaper_connectivity():
                    'coherency',
                    'coherence_magnitude',
                    'coherence_phase',
-                   # 'canonical_coherence',
                    'imaginary_coherence',
                    'phase_locking_value',
                    'phase_lag_index',
@@ -52,9 +51,11 @@ def test_multitaper_connectivity():
                    'partial_directed_coherence',
                    'generalized_partial_directed_coherence',
                    'direct_directed_transfer_function',
-                   # 'group_delay',
                    'phase_lag_index',
                    'pairwise_spectral_granger_prediction',
+                   # 'canonical_coherence',
+                   # 'group_delay',
+                   # 'power'
                    ]:
         m = multitaper_connectivity(time_series,
                                     method=method,
