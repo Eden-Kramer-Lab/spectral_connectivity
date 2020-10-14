@@ -31,7 +31,7 @@ def _get_intial_conditions(cross_spectral_matrix):
             ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
         ).swapaxes(-1, -2)
     except np.linalg.linalg.LinAlgError:
-        logger.warn(
+        logger.warning(
             'Computing the initial conditions using the Cholesky failed. '
             'Using a random initial condition.')
 
