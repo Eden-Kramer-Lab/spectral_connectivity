@@ -13,6 +13,8 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
     with dimensions of ['Time', 'Frequency', 'Source', 'Target']
     or ['Time', 'Frequency'] if squeeze=True
 
+    Parameters
+    -----------
     signal_names : iterable of strings
         Sames of time series used to name the 'Source' and 'Target' axes of xarray
     squeeze : bool
@@ -20,8 +22,12 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
         one pair of signals and symmetrical measures
 
     """
-    connectivity = Connectivity.from_multitaper(m, **kwargs)
-    connectivity_mat = getattr(connectivity, method)()
+    assert method not in ['group_delay', 'canonical_coherence'], f'{method} is not supported by xarray interface'
+    connectivity = Connectivity.from_multitaper(m)
+    if method == 'canonical_coherence':
+        connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
+    else:
+        connectivity_mat = getattr(connectivity, method)(**kwargs)
     if (m.time_series.shape[-1] == 2) and squeeze:  # Only one couple (only makes sense for symmetrical metrics)
         logger.warning(f'Squeeze is on, but there are {m.time_series.shape[-1]} pairs!')
         connectivity_mat = connectivity_mat[:, :, 0, -1]
@@ -32,6 +38,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
     else:  # Name the source and target axes
         if signal_names is None:
             signal_names = np.arange(m.time_series.shape[-1])
+
         xar = xr.DataArray(connectivity_mat,
                            coords=[connectivity.time, connectivity.frequencies, signal_names, signal_names],
                            dims=['Time', 'Frequency', 'Source', 'Target'])
@@ -39,7 +46,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
     xar.name = method
 
     for attr in dir(m):
-        if attr[0] == '_':
+        if (attr[0] == '_') or (attr == 'time_series'):
             continue
         # If we don't add 'mt_', get:
         # TypeError: '.dt' accessor only available for DataArray with datetime64 timedelta64 dtype
@@ -51,15 +58,16 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
 
 def multitaper_connectivity(time_series, sampling_frequency, time_window_duration=None,
                             method='coherence_magnitude', signal_names=None, squeeze=False,
-                            connectivity_kwargs={},
+                            connectivity_kwargs=None,
                             **kwargs):
     """
     Transform time series to multitaper and
-    calculate connectivity using `method`. Returns an xarray
+    calculate connectivity using `method`. Returns an xarray.DataArray
     with dimensions of ['Time', 'Frequency', 'Source', 'Target']
     or ['Time', 'Frequency'] if squeeze=True
-    TODO connectivity_kwargs is a mutable argument (dict), which I think is not great practice
 
+    Parameters
+    -----------
     signal_names : iterable of strings
         Sames of time series used to name the 'Source' and 'Target' axes of xarray
     squeeze : bool
@@ -87,6 +95,8 @@ def multitaper_connectivity(time_series, sampling_frequency, time_window_duratio
 
 
     """
+    if connectivity_kwargs is None:
+        connectivity_kwargs = {}
     m = Multitaper(time_series=time_series,
                    sampling_frequency=sampling_frequency,
                    time_window_duration=time_window_duration,
