@@ -1,13 +1,15 @@
+from logging import getLogger
+
+import numpy as np
+import xarray as xr
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
-import xarray as xr
-import numpy as np
-from logging import getLogger
 
 logger = getLogger(__name__)
 
 
-def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, squeeze=False, **kwargs):
+def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
+                           squeeze=False, **kwargs):
     """
     calculate connectivity using `method`. Returns an xarray
     with dimensions of ['Time', 'Frequency', 'Source', 'Target']
@@ -16,10 +18,11 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
     Parameters
     -----------
     signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of xarray
+        Sames of time series used to name the 'Source' and 'Target' axes of
+        xarray.
     squeeze : bool
-        Whether to only take the first and last source and target time series. Only makes sense for
-        one pair of signals and symmetrical measures
+        Whether to only take the first and last source and target time series.
+        Only makes sense for one pair of signals and symmetrical measures
 
     """
     assert method not in ['power', 'group_delay', 'canonical_coherence'], \
@@ -29,11 +32,14 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
         connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
     else:
         connectivity_mat = getattr(connectivity, method)(**kwargs)
-    if (m.time_series.shape[-1] == 2) and squeeze:  # Only one couple (only makes sense for symmetrical metrics)
-        logger.warning(f'Squeeze is on, but there are {m.time_series.shape[-1]} pairs!')
+    # Only one couple (only makes sense for symmetrical metrics)
+    if (m.time_series.shape[-1] == 2) and squeeze:
+        logger.warning(
+            f'Squeeze is on, but there are {m.time_series.shape[-1]} pairs!')
         connectivity_mat = connectivity_mat[:, :, 0, -1]
         xar = xr.DataArray(connectivity_mat,
-                           coords=[connectivity.time, connectivity.frequencies],
+                           coords=[connectivity.time,
+                                   connectivity.frequencies],
                            dims=['Time', 'Frequency'])
 
     else:  # Name the source and target axes
@@ -41,7 +47,8 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
             signal_names = np.arange(m.time_series.shape[-1])
 
         xar = xr.DataArray(connectivity_mat,
-                           coords=[connectivity.time, connectivity.frequencies, signal_names, signal_names],
+                           coords=[connectivity.time, connectivity.frequencies,
+                                   signal_names, signal_names],
                            dims=['Time', 'Frequency', 'Source', 'Target'])
 
     xar.name = method
@@ -50,17 +57,18 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
         if (attr[0] == '_') or (attr == 'time_series'):
             continue
         # If we don't add 'mt_', get:
-        # TypeError: '.dt' accessor only available for DataArray with datetime64 timedelta64 dtype
+        # TypeError: '.dt' accessor only available for DataArray with
+        # datetime64 timedelta64 dtype
         # or for arrays containing cftime datetime objects.
         xar.attrs['mt_' + attr] = getattr(m, attr)
 
     return xar
 
 
-def multitaper_connectivity(time_series, sampling_frequency, time_window_duration=None,
-                            method='coherence_magnitude', signal_names=None, squeeze=False,
-                            connectivity_kwargs=None,
-                            **kwargs):
+def multitaper_connectivity(time_series, sampling_frequency,
+                            time_window_duration=None,
+                            method='coherence_magnitude', signal_names=None,
+                            squeeze=False, connectivity_kwargs=None, **kwargs):
     """
     Transform time series to multitaper and
     calculate connectivity using `method`. Returns an xarray.DataArray
@@ -70,10 +78,11 @@ def multitaper_connectivity(time_series, sampling_frequency, time_window_duratio
     Parameters
     -----------
     signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of xarray
+        Sames of time series used to name the 'Source' and 'Target' axes of
+        xarray.
     squeeze : bool
-        Whether to only take the first and last source and target time series. Only makes sense for
-        one pair of signals and symmetrical measures
+        Whether to only take the first and last source and target time series.
+        Only makes sense for one pair of signals and symmetrical measures.
 
     Attributes
     ----------
@@ -87,10 +96,11 @@ def multitaper_connectivity(time_series, sampling_frequency, time_window_duratio
         Duration of sliding window in which to compute the fft. Defaults to
         the entire time if not set.
     signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of xarray
+        Sames of time series used to name the 'Source' and 'Target' axes of
+        xarray.
     squeeze : bool
-        Whether to only take the first and last source and target time series. Only makes sense for
-        one pair of signals and symmetrical measures
+        Whether to only take the first and last source and target time series.
+        Only makes sense for one pair of signals and symmetrical measures.
     connectivity_kwargs : dict
         Arguments to pass to connectivity calculation
 
@@ -102,4 +112,5 @@ def multitaper_connectivity(time_series, sampling_frequency, time_window_duratio
                    sampling_frequency=sampling_frequency,
                    time_window_duration=time_window_duration,
                    **kwargs)
-    return connectivity_to_xarray(m, method, signal_names, squeeze, **connectivity_kwargs)
+    return connectivity_to_xarray(m, method, signal_names, squeeze,
+                                  **connectivity_kwargs)

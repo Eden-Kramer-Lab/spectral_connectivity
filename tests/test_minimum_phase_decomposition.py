@@ -1,12 +1,9 @@
 import numpy as np
 from scipy.fftpack import fft, ifft
 from scipy.signal import freqz_zpk
-
-from spectral_connectivity.minimum_phase_decomposition import (_check_convergence,
-                                                  _conjugate_transpose,
-                                                  _get_causal_signal,
-                                                  _get_intial_conditions,
-                                                  minimum_phase_decomposition)
+from spectral_connectivity.minimum_phase_decomposition import (
+    _check_convergence, _conjugate_transpose, _get_causal_signal,
+    _get_intial_conditions, minimum_phase_decomposition)
 
 
 def test__check_convergence():
