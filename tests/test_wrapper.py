@@ -60,15 +60,16 @@ def test_multitaper_connectivity():
                    ]:
         try:
             m = multitaper_connectivity(time_series,
-                                    method=method,
-                                    sampling_frequency=sampling_frequency,
-                                    time_window_duration=time_window_duration,
-                                    )
+                                        method=method,
+                                        sampling_frequency=sampling_frequency,
+                                        time_window_duration=time_window_duration,
+                                        )
         except NotImplementedError:
             pass
 
         assert not (m.values == 0).all()
         assert not (np.isnan(m.values)).all()
+
 
 @mark.parametrize('n_signals', range(2, 5))
 def test_multitaper_n_signals(n_signals):
