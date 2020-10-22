@@ -14,6 +14,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
     calculate connectivity using `method`. Returns an xarray
     with dimensions of ['Time', 'Frequency', 'Source', 'Target']
     or ['Time', 'Frequency'] if squeeze=True
+
     Parameters
     -----------
     signal_names : iterable of strings
@@ -22,6 +23,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
     squeeze : bool
         Whether to only take the first and last source and target time series.
         Only makes sense for one pair of signals and symmetrical measures
+
     """
     if ((method in ['power', 'group_delay', 'canonical_coherence']) or ('directed' in method)):
         raise NotImplementedError(f'{method} is not supported by xarray interface')
@@ -72,6 +74,7 @@ def multitaper_connectivity(time_series, sampling_frequency,
     calculate connectivity using `method`. Returns an xarray.DataArray
     with dimensions of ['Time', 'Frequency', 'Source', 'Target']
     or ['Time', 'Frequency'] if squeeze=True
+
     Parameters
     -----------
     signal_names : iterable of strings
@@ -80,6 +83,7 @@ def multitaper_connectivity(time_series, sampling_frequency,
     squeeze : bool
         Whether to only take the first and last source and target time series.
         Only makes sense for one pair of signals and symmetrical measures.
+
     Attributes
     ----------
     time_series : array, shape (n_time_samples, n_trials, n_signals) or
@@ -99,6 +103,8 @@ def multitaper_connectivity(time_series, sampling_frequency,
         Only makes sense for one pair of signals and symmetrical measures.
     connectivity_kwargs : dict
         Arguments to pass to connectivity calculation
+
+
     """
     if connectivity_kwargs is None:
         connectivity_kwargs = {}
