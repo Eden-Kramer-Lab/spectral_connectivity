@@ -1,19 +1,13 @@
-import numpy as np
-from pytest import mark
 from unittest.mock import PropertyMock
 
-from spectral_connectivity.connectivity import (Connectivity, _bandpass,
-                                   _complex_inner_product,
-                                   _conjugate_transpose,
-                                   _find_largest_independent_group,
-                                   _find_largest_significant_group,
-                                   _get_independent_frequencies,
-                                   _get_independent_frequency_step,
-                                   _inner_combination,
-                                   _remove_instantaneous_causality,
-                                   _reshape, _set_diagonal_to_zero,
-                                   _squared_magnitude, _total_inflow,
-                                   _total_outflow)
+import numpy as np
+from pytest import mark
+from spectral_connectivity.connectivity import (
+    Connectivity, _bandpass, _complex_inner_product, _conjugate_transpose,
+    _find_largest_independent_group, _find_largest_significant_group,
+    _get_independent_frequencies, _get_independent_frequency_step,
+    _inner_combination, _remove_instantaneous_causality, _reshape,
+    _set_diagonal_to_zero, _squared_magnitude, _total_inflow, _total_outflow)
 
 
 @mark.parametrize('axis', [(0), (1), (2), (3)])

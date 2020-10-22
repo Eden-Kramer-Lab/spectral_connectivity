@@ -66,53 +66,9 @@ def test_multitaper_connectivity():
                                     )
         except NotImplementedError:
             pass
+
         assert not (m.values == 0).all()
         assert not (np.isnan(m.values)).all()
-
-
-# def test_multitaper_canonical_coherence():
-#     time_window_duration = .2
-#     time_halfbandwidth_product = 2
-#     frequency_of_interest = 200
-#     sampling_frequency = 1500
-#     time_extent = (0, 2.400)
-#     n_trials = 100
-#     n_signals = 6
-#     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-#     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
-#
-#     signal = np.zeros((n_time_samples, n_trials, n_signals))
-#     signal[:, :, 0:2] = (
-#             np.sin(2 * np.pi * time * frequency_of_interest)[:, np.newaxis, np.newaxis] *
-#             np.ones((1, n_trials, 2)))
-#
-#     expected_time = np.arange(time_extent[0], time_extent[-1], time_window_duration)
-#
-#     if not np.allclose(expected_time[-1] + time_window_duration, time_extent[-1]):
-#         expected_time = expected_time[:-1]
-#
-#     other_signals = (n_signals + 1) // 2
-#     n_other_signals = n_signals - other_signals
-#     phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, n_trials, n_other_signals))
-#     phase_offset[np.where(time > 1.5), :] = np.pi / 2
-#     signal[:, :, other_signals:] = np.sin(
-#         (2 * np.pi * time[:, np.newaxis, np.newaxis] * frequency_of_interest) + phase_offset)
-#     noise = np.random.normal(10, 7, signal.shape)
-#     group_labels = (['a'] * (n_signals - n_other_signals)) + (['b'] * n_other_signals)
-#
-#     m = multitaper_connectivity(signal + noise,
-#                                 sampling_frequency=sampling_frequency,
-#                                 time_halfbandwidth_product=time_halfbandwidth_product,
-#                                 time_window_duration=time_window_duration,
-#                                 time_window_step=0.080,
-#                                 method='canonical_coherence',
-#                                 connectivity_kwargs={"group_labels": group_labels}
-#                                 )
-#
-#     assert np.allclose(m.Time.values, expected_time)
-#     assert not (m.values == 0).all()
-#     assert not (np.isnan(m.values)).all()
-
 
 @mark.parametrize('n_signals', range(2, 5))
 def test_multitaper_n_signals(n_signals):
