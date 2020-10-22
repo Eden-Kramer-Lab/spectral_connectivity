@@ -22,8 +22,8 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None, s
         one pair of signals and symmetrical measures
 
     """
-    assert method not in ['power', 'group_delay', 'canonical_coherence'], \
-        f'{method} is not supported by xarray interface'
+    if ((method in ['power', 'group_delay', 'canonical_coherence']) or ('directed' in method)):
+        raise NotImplementedError(f'{method} is not supported by xarray interface')
     connectivity = Connectivity.from_multitaper(m)
     if method == 'canonical_coherence':
         connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
