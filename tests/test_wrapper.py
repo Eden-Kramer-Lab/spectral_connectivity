@@ -1,6 +1,6 @@
 import numpy as np
 from pytest import mark
-from spectral_connectivity.wrapper import multitaper_connectivity
+from spectral_connectivity.wrapper import multitaper_connectivity, multitaper_connectivities
 
 
 @mark.parametrize('time_window_duration', [0.1, 0.2, 2.4, 0.16])
@@ -93,6 +93,39 @@ def test_multitaper_n_signals(n_signals):
     assert np.allclose(m.Time.values, expected_time)
     assert not (m.values == 0).all()
     assert not (np.isnan(m.values)).all()
+
+
+@mark.parametrize('n_signals', range(2, 5))
+def test_multitaper_connectivities_n_signals(n_signals):
+    time_window_duration = .1
+    sampling_frequency = 1500
+    start_time, end_time = 0, 4.8
+    n_trials, n_signals = 10, n_signals
+    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
+    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+    expected_time = np.arange(start_time, end_time, time_window_duration)
+
+    if not np.allclose(expected_time[-1] + time_window_duration, end_time):
+        expected_time = expected_time[:-1]
+
+    cons = multitaper_connectivities(time_series,
+                                     sampling_frequency=sampling_frequency,
+                                     time_window_duration=time_window_duration
+                                     )
+    for mea in cons.data_vars:
+        assert np.allclose(cons[mea].Time.values, expected_time)
+        assert not (cons[mea].values == 0).all()
+        assert not (np.isnan(cons[mea].values)).all()
+
+    cons = multitaper_connectivities(time_series,
+                                     methods=['coherence_magnitude'],
+                                     sampling_frequency=sampling_frequency,
+                                     time_window_duration=time_window_duration
+                                     )
+    for mea in cons.data_vars:
+        assert np.allclose(cons[mea].Time.values, expected_time)
+        assert not (cons[mea].values == 0).all()
+        assert not (np.isnan(cons[mea].values)).all()
 
 
 def test_frequencies():
