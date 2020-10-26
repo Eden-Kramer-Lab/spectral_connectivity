@@ -25,7 +25,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
         Only makes sense for one pair of signals and symmetrical measures
 
     """
-    if ((method in ['power', 'group_delay', 'canonical_coherence']) or ('directed' in method)):
+    if (method in ['power', 'group_delay', 'canonical_coherence']) or ('directed' in method):
         raise NotImplementedError(f'{method} is not supported by xarray interface')
     connectivity = Connectivity.from_multitaper(m)
     if method == 'canonical_coherence':
@@ -54,7 +54,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
     xar.name = method
 
     for attr in dir(m):
-        if (attr[0] == '_') or (attr == 'time_series'):
+        if (attr[0] == '_') or (attr in ['time_series', 'fft', 'tapers', 'frequencies', 'time']):
             continue
         # If we don't add 'mt_', get:
         # TypeError: '.dt' accessor only available for DataArray with
