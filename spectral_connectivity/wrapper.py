@@ -33,7 +33,7 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
     else:
         connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
-    if (m.time_series.shape[-1] == 2) and squeeze:
+    if (m.time_series.shape[-1] > 2) and squeeze:
         logger.warning(
             f'Squeeze is on, but there are {m.time_series.shape[-1]} pairs!')
         connectivity_mat = connectivity_mat[:, :, 0, -1]
