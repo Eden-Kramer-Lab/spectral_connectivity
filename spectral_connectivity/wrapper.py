@@ -25,26 +25,37 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
         Only makes sense for one pair of signals and symmetrical measures
 
     """
-    if (method in ['power', 'group_delay', 'canonical_coherence']) or ('directed' in method):
+    if (method in ['group_delay', 'canonical_coherence']) or ('directed' in method):
         raise NotImplementedError(f'{method} is not supported by xarray interface')
+    # Name the source and target axes
+    if signal_names is None:
+        signal_names = np.arange(m.time_series.shape[-1])
     connectivity = Connectivity.from_multitaper(m)
     if method == 'canonical_coherence':
         connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
+
     else:
         connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
     if (m.time_series.shape[-1] > 2) and squeeze:
         logger.warning(
             f'Squeeze is on, but there are {m.time_series.shape[-1]} pairs!')
-        connectivity_mat = connectivity_mat[:, :, 0, -1]
+
+    if method == 'power':
+        xar = xr.DataArray(connectivity_mat,
+                           coords=[connectivity.time,
+                                   connectivity.frequencies,
+                                   signal_names],
+                               dims=['Time', 'Frequency', 'Source'])
+
+    elif (m.time_series.shape[-1] == 2) and squeeze:
+        connectivity_mat = connectivity_mat[..., 0, -1]
         xar = xr.DataArray(connectivity_mat,
                            coords=[connectivity.time,
                                    connectivity.frequencies],
-                           dims=['Time', 'Frequency'])
+                               dims=['Time', 'Frequency'])
 
-    else:  # Name the source and target axes
-        if signal_names is None:
-            signal_names = np.arange(m.time_series.shape[-1])
+    else:
 
         xar = xr.DataArray(connectivity_mat,
                            coords=[connectivity.time, connectivity.frequencies,
