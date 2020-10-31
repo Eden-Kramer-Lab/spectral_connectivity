@@ -46,14 +46,14 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
                            coords=[connectivity.time,
                                    connectivity.frequencies,
                                    signal_names],
-                               dims=['Time', 'Frequency', 'Source'])
+                           dims=['Time', 'Frequency', 'Source'])
 
     elif (m.time_series.shape[-1] == 2) and squeeze:
         connectivity_mat = connectivity_mat[..., 0, -1]
         xar = xr.DataArray(connectivity_mat,
                            coords=[connectivity.time,
                                    connectivity.frequencies],
-                               dims=['Time', 'Frequency'])
+                           dims=['Time', 'Frequency'])
 
     else:
 
@@ -78,63 +78,8 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
 
 def multitaper_connectivity(time_series, sampling_frequency,
                             time_window_duration=None,
-                            method='coherence_magnitude', signal_names=None,
+                            method=None, signal_names=None,
                             squeeze=False, connectivity_kwargs=None, **kwargs):
-    """
-    Transform time series to multitaper and
-    calculate connectivity using `method`. Returns an xarray.DataArray
-    with dimensions of ['Time', 'Frequency', 'Source', 'Target']
-    or ['Time', 'Frequency'] if squeeze=True
-
-    Parameters
-    -----------
-    signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of
-        xarray.
-    squeeze : bool
-        Whether to only take the first and last source and target time series.
-        Only makes sense for one pair of signals and symmetrical measures.
-
-    Attributes
-    ----------
-    time_series : array, shape (n_time_samples, n_trials, n_signals) or
-                               (n_time_samples, n_signals)
-    sampling_frequency : float
-        Number of samples per time unit the signal(s) are recorded at.
-    method : str
-        Method used for connectivity calculation
-    time_window_duration : float, optional
-        Duration of sliding window in which to compute the fft. Defaults to
-        the entire time if not set.
-    signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of
-        xarray.
-    squeeze : bool
-        Whether to only take the first and last source and target time series.
-        Only makes sense for one pair of signals and symmetrical measures.
-    connectivity_kwargs : dict
-        Arguments to pass to connectivity calculation
-
-    Returns:
-    -------
-    connectivity : Xarray with requested method
-
-
-    """
-    if connectivity_kwargs is None:
-        connectivity_kwargs = {}
-    m = Multitaper(time_series=time_series,
-                   sampling_frequency=sampling_frequency,
-                   time_window_duration=time_window_duration,
-                   **kwargs)
-    return connectivity_to_xarray(m, method, signal_names, squeeze,
-                                  **connectivity_kwargs)
-
-
-def multitaper_connectivities(time_series, sampling_frequency,
-                              time_window_duration=None,
-                              methods=None, signal_names=None,
-                              squeeze=False, connectivity_kwargs=None, **kwargs):
     """
     Transform time series to multitaper and
     calculate connectivity using `method`. Returns an xarray.DataSet
@@ -157,7 +102,7 @@ def multitaper_connectivities(time_series, sampling_frequency,
                                (n_time_samples, n_signals)
     sampling_frequency : float
         Number of samples per time unit the signal(s) are recorded at.
-    methods : iterable of strings, optional
+    method : iterable of strings, optional
         Method used for connectivity calculation. If None, all available
         measures are calculated
     time_window_duration : float, optional
@@ -181,23 +126,32 @@ def multitaper_connectivities(time_series, sampling_frequency,
     """
     if connectivity_kwargs is None:
         connectivity_kwargs = {}
-    if methods is None:
+    return_dataarray = False  # Default: return dataset
+    if method is None:
         # All implemented methods except internal
         # TODO is there a better way to get all Connectivity methods?
         bad_methods = ['delay', 'n_observations', 'frequencies', 'from_multitaper', 'phase_slope_index']
-        methods = [x for x in dir(Connectivity) if not x.startswith('_') and x not in bad_methods]
-
+        method = [x for x in dir(Connectivity) if not x.startswith('_') and x not in bad_methods]
+    elif type(method) == str:
+        method = [method]  # Convert to list
+        return_dataarray = True  # Return dataarray if methods was not an iterable
     m = Multitaper(time_series=time_series,
                    sampling_frequency=sampling_frequency,
                    time_window_duration=time_window_duration,
                    **kwargs)
     cons = xr.Dataset()  # Initialize
-    for method in methods:
+    for this_method in method:
         try:
-            con = connectivity_to_xarray(m, method, signal_names, squeeze,
+            con = connectivity_to_xarray(m, this_method, signal_names, squeeze,
                                          **connectivity_kwargs)
-            cons[method] = con  # Add data variable
-        except NotImplementedError:
-            pass
-
-    return cons
+            cons[this_method] = con  # Add data variable
+        except NotImplementedError as e:
+            if len(method) == 1:
+                raise e  # If that was the only method requested
+            else:
+                # If one measure among many, just warn
+                logger.warning(f'{this_method} is not implemented in xarray')
+    if return_dataarray and method[0] in cons:
+        return cons[method[0]]
+    else:
+        return cons
