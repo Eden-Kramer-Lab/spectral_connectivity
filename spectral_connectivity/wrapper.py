@@ -25,17 +25,14 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
         Only makes sense for one pair of signals and symmetrical measures
 
     """
-    if (method in ['group_delay', ]) or ('directed' in method):
+    if (method in ['group_delay', 'canonical_coherence']) or ('directed' in method):
         raise NotImplementedError(f'{method} is not supported by xarray interface')
     # Name the source and target axes
     if signal_names is None:
         signal_names = np.arange(m.time_series.shape[-1])
     connectivity = Connectivity.from_multitaper(m)
     if method == 'canonical_coherence':
-        if 'group_labels' not in kwargs:
-            connectivity_mat, labels = getattr(connectivity, method)(group_labels=signal_names,**kwargs)
-        else:
-            connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
+        connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
     else:
         connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
