@@ -14,6 +14,23 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
 
+### Usage Example ###
+```python
+from spectral_connectivity import Multitaper, Connectivity
+
+m = Multitaper(time_series=signals,
+               sampling_frequency=sampling_frequency,
+               time_halfbandwidth_product=time_halfbandwidth_product,
+               time_window_duration=0.060,
+               time_window_step=0.060,
+               start_time=time[0])
+c = Connectivity.from_multitaper(m)
+
+coherence = c.coherence_magnitude()
+weighted_phase_lag_index = c.weighted_phase_lag_index()
+canonical_coherence = c.canonical_coherence(brain_area_labels)
+```
+
 ### Documentation ###
 See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
 
@@ -78,24 +95,3 @@ conda env create -f environment.yml
 source activate spectral_connectivity
 python setup.py develop
 ```
-
-### Usage Example ###
-```python
-from spectral_connectivity import Multitaper, Connectivity
-
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
-c = Connectivity.from_multitaper(m)
-
-coherence = c.coherence_magnitude()
-weighted_phase_lag_index = c.weighted_phase_lag_index()
-canonical_coherence = c.canonical_coherence(brain_area_labels)
-```
-
-### Future Directions ###
-
-We hope to take advantage of the labeled data of the `xarray` package.
