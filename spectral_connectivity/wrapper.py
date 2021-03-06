@@ -25,8 +25,10 @@ def connectivity_to_xarray(m, method='coherence_magnitude', signal_names=None,
         Only makes sense for one pair of signals and symmetrical measures
 
     """
-    if (method in ['group_delay', 'canonical_coherence']) or ('directed' in method):
-        raise NotImplementedError(f'{method} is not supported by xarray interface')
+    if ((method in ['group_delay', 'canonical_coherence']) or
+            ('directed' in method)):
+        raise NotImplementedError(
+            f'{method} is not supported by xarray interface')
     # Name the source and target axes
     if signal_names is None:
         signal_names = np.arange(m.time_series.shape[-1])
@@ -129,8 +131,10 @@ def multitaper_connectivity(time_series, sampling_frequency,
     if method is None:
         # All implemented methods except internal
         # TODO is there a better way to get all Connectivity methods?
-        bad_methods = ['delay', 'n_observations', 'frequencies', 'from_multitaper', 'phase_slope_index']
-        method = [x for x in dir(Connectivity) if not x.startswith('_') and x not in bad_methods]
+        bad_methods = ['delay', 'n_observations', 'frequencies',
+                       'from_multitaper', 'phase_slope_index']
+        method = [x for x in dir(Connectivity) if not x.startswith(
+            '_') and x not in bad_methods]
     elif type(method) == str:
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
