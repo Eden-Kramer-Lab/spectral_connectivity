@@ -59,7 +59,7 @@ Directed
 
 ### Package Dependencies ###
 `spectral_connectivity` requires:
-- python=3.5
+- python
 - numpy
 - matplotlib
 - scipy
