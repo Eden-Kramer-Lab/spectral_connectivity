@@ -572,7 +572,7 @@ class Connectivity:
         diagonal_ind = np.diag_indices(n_signals)
         predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = np.nan
 
-        return np.log(predictive_power)
+        return predictive_power
 
     def conditional_spectral_granger_prediction(self):
         raise NotImplementedError
@@ -960,7 +960,8 @@ def _estimate_predictive_power(total_power, rotated_covariance,
                        rotated_covariance[..., np.newaxis, :, :] *
                        _squared_magnitude(transfer_function))
     intrinsic_power[intrinsic_power == 0] = np.finfo(float).eps
-    predictive_power = total_power[..., np.newaxis] / intrinsic_power
+    predictive_power = (
+        np.log(total_power[..., np.newaxis]) - np.log(intrinsic_power))
     predictive_power[predictive_power <= 0] = np.nan
     return predictive_power
 

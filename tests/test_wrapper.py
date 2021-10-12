@@ -1,5 +1,6 @@
 import numpy as np
 from pytest import mark
+from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import multitaper_connectivity
 
 
@@ -59,11 +60,12 @@ def test_multitaper_connectivity():
                    'power'
                    ]:
         try:
-            m = multitaper_connectivity(time_series,
-                                        method=method,
-                                        sampling_frequency=sampling_frequency,
-                                        time_window_duration=time_window_duration,
-                                        )
+            m = multitaper_connectivity(
+                time_series,
+                method=method,
+                sampling_frequency=sampling_frequency,
+                time_window_duration=time_window_duration,
+            )
         except NotImplementedError:
             pass
 
@@ -73,6 +75,9 @@ def test_multitaper_connectivity():
 
 @mark.parametrize('n_signals', range(2, 5))
 def test_multitaper_n_signals(n_signals):
+    """
+    Test dataarray interface
+    """
     time_window_duration = .1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -84,15 +89,58 @@ def test_multitaper_n_signals(n_signals):
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    bad_methods = ['delay', 'n_observations', 'frequencies',
+                   'from_multitaper', 'phase_slope_index']
+    methods = [x for x in dir(Connectivity) if not x.startswith(
+        '_') and x not in bad_methods]
 
-    m = multitaper_connectivity(time_series,
-                                sampling_frequency=sampling_frequency,
-                                time_window_duration=time_window_duration
-                                )
+    for method in methods:
+        try:
+            m = multitaper_connectivity(
+                time_series,
+                method=method,
+                sampling_frequency=sampling_frequency,
+                time_window_duration=time_window_duration
+            )
+            assert np.allclose(m.Time.values, expected_time)
+            assert not (m.values == 0).all()
+            assert not (np.isnan(m.values)).all()
 
-    assert np.allclose(m.Time.values, expected_time)
-    assert not (m.values == 0).all()
-    assert not (np.isnan(m.values)).all()
+        except NotImplementedError:
+            pass
+
+
+@mark.parametrize('n_signals', range(2, 5))
+def test_multitaper_connectivities_n_signals(n_signals):
+    time_window_duration = .1
+    sampling_frequency = 1500
+    start_time, end_time = 0, 4.8
+    n_trials, n_signals = 10, n_signals
+    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
+    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+    expected_time = np.arange(start_time, end_time, time_window_duration)
+
+    if not np.allclose(expected_time[-1] + time_window_duration, end_time):
+        expected_time = expected_time[:-1]
+
+    cons = multitaper_connectivity(time_series,
+                                   sampling_frequency=sampling_frequency,
+                                   time_window_duration=time_window_duration
+                                   )
+    for mea in cons.data_vars:
+        assert np.allclose(cons[mea].Time.values, expected_time)
+        assert not (cons[mea].values == 0).all()
+        assert not (np.isnan(cons[mea].values)).all()
+
+    cons = multitaper_connectivity(time_series,
+                                   method=['coherence_magnitude'],
+                                   sampling_frequency=sampling_frequency,
+                                   time_window_duration=time_window_duration
+                                   )
+    mea = 'coherence_magnitude'
+    assert np.allclose(cons[mea].Time.values, expected_time)
+    assert not (cons[mea].values == 0).all()
+    assert not (np.isnan(cons[mea].values)).all()
 
 
 def test_frequencies():
@@ -102,15 +150,15 @@ def test_frequencies():
     n_fft_samples = 4
     sampling_frequency = 1000
 
-    m = multitaper_connectivity(time_series,
-                                sampling_frequency=sampling_frequency,
-                                time_window_duration=None,
-                                n_fft_samples=n_fft_samples
-                                )
+    cons = multitaper_connectivity(time_series,
+                                   sampling_frequency=sampling_frequency,
+                                   time_window_duration=None,
+                                   n_fft_samples=n_fft_samples
+                                   )
 
-    assert not (m.values == 0).all()
-    assert not (np.isnan(m.values)).all()
+    for mea in cons.data_vars:
+        assert not (cons[mea].values == 0).all()
+        assert not (np.isnan(cons[mea].values)).all()
 
-    expected_frequencies = np.array([0, 250])
-    print(expected_frequencies)
-    assert np.allclose(m.Frequency, expected_frequencies)
+        expected_frequencies = np.array([0, 250])
+        assert np.allclose(cons[mea].Frequency, expected_frequencies)

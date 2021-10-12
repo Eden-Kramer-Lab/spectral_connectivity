@@ -2,7 +2,7 @@
 ![Build](https://travis-ci.org/Eden-Kramer-Lab/spectral_connectivity.svg?branch=master)[![Coverage Status](https://coveralls.io/repos/github/Eden-Kramer-Lab/spectral_connectivity/badge.svg?branch=master)](https://coveralls.io/github/Eden-Kramer-Lab/spectral_connectivity?branch=master) [![DOI](https://zenodo.org/badge/104382538.svg)](https://zenodo.org/badge/latestdoi/104382538)
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/Eden-Kramer-Lab/spectral_connectivity/master)
 
-`spectral_connectivity` is a python software package that computes frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), spectral has several differences:
+`spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), spectral has several differences:
 
 + it is designed to handle multiple time series at once
 + it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
@@ -13,6 +13,23 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 + easier user interface for the multitaper fourier transform
 
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
+
+### Usage Example ###
+```python
+from spectral_connectivity import Multitaper, Connectivity
+
+m = Multitaper(time_series=signals,
+               sampling_frequency=sampling_frequency,
+               time_halfbandwidth_product=time_halfbandwidth_product,
+               time_window_duration=0.060,
+               time_window_step=0.060,
+               start_time=time[0])
+c = Connectivity.from_multitaper(m)
+
+coherence = c.coherence_magnitude()
+weighted_phase_lag_index = c.weighted_phase_lag_index()
+canonical_coherence = c.canonical_coherence(brain_area_labels)
+```
 
 ### Documentation ###
 See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
@@ -43,7 +60,7 @@ Directed
 
 ### Package Dependencies ###
 `spectral_connectivity` requires:
-- python>3.6
+- python
 - numpy
 - matplotlib
 - scipy
@@ -79,24 +96,3 @@ conda env create -f environment.yml
 source activate spectral_connectivity
 python setup.py develop
 ```
-
-### Usage Example ###
-```python
-from spectral_connectivity import Multitaper, Connectivity
-
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
-c = Connectivity.from_multitaper(m)
-
-coherence = c.coherence_magnitude()
-weighted_phase_lag_index = c.weighted_phase_lag_index()
-canonical_coherence = c.canonical_coherence(brain_area_labels)
-```
-
-### Future Directions ###
-
-We hope to take advantage of the labeled data of the `xarray` package.
