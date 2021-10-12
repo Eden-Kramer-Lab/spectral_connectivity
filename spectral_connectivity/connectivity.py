@@ -349,7 +349,9 @@ class Connectivity:
         (n_time_windows, n_trials, n_tapers,
          n_fft_samples, n_signals) = self.fourier_coefficients.shape
 
+        # S - singular values
         global_coherence = np.zeros((n_time_windows, n_fft_samples, max_rank))
+        # U - rotation
         unnormalized_global_coherence = np.zeros(
             (n_time_windows, n_fft_samples, n_signals, max_rank),
             dtype=np.complex64)
@@ -365,11 +367,8 @@ class Connectivity:
 
                 (global_coherence[time_ind, freq_ind],
                  unnormalized_global_coherence[time_ind, freq_ind]
-                 ) = _estimate_global_coherence(
-                    self.fourier_coefficients.reshape(
-                        (n_time_windows, n_trials * n_tapers,
-                         n_fft_samples, n_signals))[time_ind, :, freq_ind].T,
-                    max_rank=max_rank)
+                 ) = _estimate_global_coherence(fourier_coefficients,
+                                                max_rank=max_rank)
 
         return global_coherence, unnormalized_global_coherence
 
