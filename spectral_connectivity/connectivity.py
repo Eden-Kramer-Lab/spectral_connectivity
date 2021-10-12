@@ -351,7 +351,8 @@ class Connectivity:
 
         global_coherence = np.zeros((n_time_windows, n_fft_samples, max_rank))
         unnormalized_global_coherence = np.zeros(
-            (n_time_windows, n_fft_samples, n_signals, max_rank))
+            (n_time_windows, n_fft_samples, n_signals, max_rank),
+            dtype=np.complex64)
 
         for time_ind in range(n_time_windows):
             for freq_ind in range(n_fft_samples):
