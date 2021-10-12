@@ -356,6 +356,13 @@ class Connectivity:
 
         for time_ind in range(n_time_windows):
             for freq_ind in range(n_fft_samples):
+                # reshape to (n_signals, n_trials * n_tapers)
+                fourier_coefficients = (
+                    self.fourier_coefficients[time_ind, :, :, freq_ind]
+                    .reshape((n_trials * n_tapers, n_signals))
+                    .T
+                )
+
                 (global_coherence[time_ind, freq_ind],
                  unnormalized_global_coherence[time_ind, freq_ind]
                  ) = _estimate_global_coherence(
