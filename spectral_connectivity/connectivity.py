@@ -360,7 +360,7 @@ class Connectivity:
             for freq_ind in range(n_fft_samples):
                 # reshape to (n_signals, n_trials * n_tapers)
                 fourier_coefficients = (
-                    self.fourier_coefficients[time_ind, :, :, freq_ind]
+                    self.fourier_coefficients[time_ind, :, :, freq_ind, :]
                     .reshape((n_trials * n_tapers, n_signals))
                     .T
                 )
