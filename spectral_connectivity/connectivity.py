@@ -324,16 +324,18 @@ class Connectivity:
         Parameters
         ----------
         max_rank : int, optional
-            The maximum number of singular values to keep
+            The number of components to keep (like the number of PC dimensions)
 
         Returns
         -------
-        global_coherence : ndarray, shape (n_time_windows, n_fft_samples,
-                                           max_rank)
+        global_coherence : ndarray, shape (n_time_windows,
+                                           n_fft_samples,
+                                           n_components)
             The vector of global coherences (square of the singular values)
         unnormalized_global_coherence : ndarray, shape (n_time_windows,
                                                         n_fft_samples,
-                                                        n_signals, max_rank)
+                                                        n_signals,
+                                                        n_components)
             The (unnormalized) global coherence vectors
 
         References
