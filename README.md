@@ -18,14 +18,19 @@ See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](e
 ```python
 from spectral_connectivity import Multitaper, Connectivity
 
+# Compute multitaper spectral estimate
 m = Multitaper(time_series=signals,
                sampling_frequency=sampling_frequency,
                time_halfbandwidth_product=time_halfbandwidth_product,
                time_window_duration=0.060,
                time_window_step=0.060,
                start_time=time[0])
+               
+# Sets up computing connectivity measures/power from multitaper spectral estimate
 c = Connectivity.from_multitaper(m)
 
+# Here are a couple of examples
+power = c.power() # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
