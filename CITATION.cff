@@ -3,7 +3,7 @@
 cff-version: 1.0.3
 message: If you use this software, please cite it using these metadata.
 # FIXME title as repository name might not be the best name, please make human readable
-title: 'Eden-Kramer-Lab/spectral_connectivity: v0.2.5.dev0'
+title: 'Eden-Kramer-Lab/spectral_connectivity: v0.2.6.dev0'
 doi: 10.5281/zenodo.4088934
 # FIXME splitting of full names is error prone, please check if given/family name are correct
 authors:
@@ -16,7 +16,7 @@ authors:
 - given-names: Danylo
   family-names: Ulianych
   affiliation: KyivAIGroup
-version: 0.2.5.dev0
+version: 0.2.6.dev0
 date-released: 2020-10-14
 repository-code: https://github.com/Eden-Kramer-Lab/spectral_connectivity
 license: other-open
