@@ -315,12 +315,11 @@ class Connectivity:
         return canonical_coherence_magnitude, labels
 
     def global_coherence(self, max_rank=1):
-        '''The ratio of the largest eigenvalue to the sum of the eigenvalues of
-        the cross-spectral matrix at a given frequency and time. Decomposes
-        the cross spectrum into components that capture the most coherent
-        power.
+        '''The linear combinations of signals that capture the most coherent
+        power at each frequency and time window.
 
-        This is a frequency domain analog of PCA.
+        This is a frequency domain analog of PCA over signals at a given
+        frequency/time window.
 
         Parameters
         ----------
