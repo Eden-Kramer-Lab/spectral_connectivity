@@ -13,9 +13,13 @@ from .statistics import (adjust_for_multiple_comparisons, coherence_bias,
                          fisher_z_transform, get_normal_distribution_p_values)
 
 EXPECTATION = {
+    'time': partial(np.mean, axis=0),
     'trials': partial(np.mean, axis=1),
     'tapers': partial(np.mean, axis=2),
-    'trials_tapers': partial(np.mean, axis=(1, 2))
+    'time_trials': partial(np.mean, axis=(0, 1)),
+    'time_tapers': partial(np.mean, axis=(0, 2)),
+    'trials_tapers': partial(np.mean, axis=(1, 2)),
+    'time_trials_tapers': partial(np.mean, axis=(1, 2, 3)),
 }
 
 
