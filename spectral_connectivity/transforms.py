@@ -186,7 +186,7 @@ class Multitaper(object):
 
     @property
     def frequency_resolution(self):
-        return (self.time_halfbandwidth_product /
+        return (2.0 * self.time_halfbandwidth_product /
                 self.time_window_duration)
 
     @property
