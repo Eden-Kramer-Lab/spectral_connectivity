@@ -31,3 +31,7 @@ jobs:
       shell: bash -l {0}
       run: |
         pip install -e .
+    - name: Run tests
+      shell: bash -l {0}
+      run: |
+        pytest --cov=spectral_connectivity tests/
