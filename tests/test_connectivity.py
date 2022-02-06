@@ -17,7 +17,7 @@ def test_cross_spectrum(axis):
         2, 2, 2, 2, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     signal_fourier_coefficient = [2 * np.exp(1j * np.pi / 2),
                                   3 * np.exp(1j * -np.pi / 2)]
@@ -28,9 +28,9 @@ def test_cross_spectrum(axis):
 
     expected_cross_spectral_matrix = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals,
-         n_signals), dtype=np.complex)
+         n_signals), dtype=complex)
 
-    expected_slice = np.array([[4, -6], [-6, 9]], dtype=np.complex)
+    expected_slice = np.array([[4, -6], [-6, 9]], dtype=complex)
     expected_ind = [slice(0, 5)] * 6
     expected_ind[-1] = slice(None)
     expected_ind[-2] = slice(None)
@@ -47,7 +47,7 @@ def test_power():
         1, 1, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [2 * np.exp(1j * np.pi / 2),
                                     3 * np.exp(1j * -np.pi / 2)]
@@ -71,7 +71,7 @@ def test_expectation(expectation_type, expected_shape):
         1, 2, 3, 4, 5)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     this_Conn = Connectivity(
         fourier_coefficients=fourier_coefficients,
@@ -92,7 +92,7 @@ def test_n_observations(expectation_type, expected_n_observations):
         1, 2, 3, 4, 5)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     this_Conn = Connectivity(
         fourier_coefficients=fourier_coefficients,
@@ -106,7 +106,7 @@ def test_coherency():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [2 * np.exp(1j * np.pi / 2),
                                     3 * np.exp(1j * -np.pi / 2)]
@@ -131,7 +131,7 @@ def test_imaginary_coherence():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
                                     3 * np.exp(1j * 0)]
@@ -170,7 +170,7 @@ def test_phase_lag_index_sets_zero_phase_signals_to_zero():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
                                     3 * np.exp(1j * 0)]
@@ -187,7 +187,7 @@ def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
     fourier_coefficients[..., 0] = (np.random.uniform(
         0.1, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples)) *
         np.exp(1j * np.pi / 2))
@@ -211,7 +211,7 @@ def test_weighted_phase_lag_index_sets_zero_phase_signals_to_zero():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
                                     3 * np.exp(1j * 0)]
@@ -228,7 +228,7 @@ def test_weighted_phase_lag_index_is_same_as_phase_lag_index():
         1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     fourier_coefficients[..., :] = [1 * np.exp(1j * 3 * np.pi / 4),
                                     1 * np.exp(1j * 5 * np.pi / 4)]
@@ -246,7 +246,7 @@ def test_debiased_squared_phase_lag_index():
         1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     angles1 = np.random.uniform(
         0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
@@ -269,7 +269,7 @@ def test_debiased_squared_weighted_phase_lag_index():
         1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     angles1 = np.random.uniform(
         0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
@@ -296,7 +296,7 @@ def test_pairwise_phase_consistency():
         1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
 
     magnitude1 = np.random.uniform(
         0.5, 3, (n_time_samples, n_trials, n_tapers, n_fft_samples))
@@ -325,7 +325,7 @@ def test__reshape():
         20, 100, 3, 10, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=np.complex)
+        dtype=complex)
     expected_shape = (n_time_samples, n_fft_samples, n_signals,
                       n_trials * n_tapers)
     assert np.allclose(
@@ -339,10 +339,10 @@ def test__squared_magnitude():
 
 
 def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=np.complex)
+    test_array = np.zeros((2, 2, 4), dtype=complex)
     test_array[1, ...] = [[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
                           [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j]]
-    expected_array = np.zeros((2, 4, 2), dtype=np.complex)
+    expected_array = np.zeros((2, 4, 2), dtype=complex)
     expected_array[1, ...] = test_array[1, ...].conj().transpose()
     assert np.allclose(_conjugate_transpose(test_array), expected_array)
 
@@ -350,8 +350,8 @@ def test__conjugate_transpose():
 def test__complex_inner_product():
     '''Test that the complex inner product is taken over the last two
     dimensions.'''
-    test_array1 = np.zeros((3, 2, 4), dtype=np.complex)
-    test_array2 = np.zeros((3, 2, 4), dtype=np.complex)
+    test_array1 = np.zeros((3, 2, 4), dtype=complex)
+    test_array2 = np.zeros((3, 2, 4), dtype=complex)
 
     x1 = np.ones((2, 4)) * np.exp(1j * np.pi / 2)
     x2 = np.ones((2, 4)) * np.exp(1j * 0)
@@ -362,7 +362,7 @@ def test__complex_inner_product():
     test_array1[2, :, :] = x1
     test_array2[2, :, :] = x1
 
-    expected_inner_product = np.zeros((3, 2, 2), dtype=np.complex)
+    expected_inner_product = np.zeros((3, 2, 2), dtype=complex)
     expected_inner_product[1, ...] = x1.dot(x2.T.conj())
     expected_inner_product[2, ...] = x1.dot(x1.T.conj())
 

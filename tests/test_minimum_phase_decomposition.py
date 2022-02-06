@@ -25,10 +25,10 @@ def test__check_convergence():
 
 
 def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=np.complex)
+    test_array = np.zeros((2, 2, 4), dtype=complex)
     test_array[1, ...] = [[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
                           [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j]]
-    expected_array = np.zeros((2, 4, 2), dtype=np.complex)
+    expected_array = np.zeros((2, 4, 2), dtype=complex)
     expected_array[1, ...] = test_array[1, ...].conj().transpose()
     assert np.allclose(_conjugate_transpose(test_array), expected_array)
 
@@ -37,12 +37,12 @@ def test__get_initial_conditions():
     n_time_samples, n_fft_samples, n_signals = 3, 11, 2
     cross_spectral_matrix = np.ones(
         (n_time_samples, n_fft_samples, n_signals, n_signals),
-        dtype=np.complex) * 4
+        dtype=complex) * 4
     cross_spectral_matrix[..., 1, 0] = 0
     minimum_phase_factor = _get_intial_conditions(cross_spectral_matrix)
     expected_cross_spectral_matrix = np.zeros(
         (n_time_samples, 1, n_signals, n_signals),
-        dtype=np.complex)
+        dtype=complex)
     expected_cross_spectral_matrix[..., :, :] = np.eye(n_signals) * 2
     assert np.allclose(
         minimum_phase_factor, expected_cross_spectral_matrix)
@@ -53,11 +53,11 @@ def test__get_causal_signal_removes_roots_outside_unit_circle():
     _, transfer_function = freqz_zpk(4, 2, 1.00, whole=True)
     n_fft_samples = transfer_function.shape[0]
     linear_predictor = np.zeros(
-        (1, n_fft_samples, n_signals, n_signals), dtype=np.complex)
+        (1, n_fft_samples, n_signals, n_signals), dtype=complex)
     linear_predictor[0, :, 0, 0] = transfer_function
 
     expected_causal_signal = np.ones(
-        (1, n_fft_samples, n_signals, n_signals), dtype=np.complex)
+        (1, n_fft_samples, n_signals, n_signals), dtype=complex)
 
     causal_signal = _get_causal_signal(linear_predictor)
 
@@ -69,7 +69,7 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     _, transfer_function = freqz_zpk(0.25, 0.5, 1.00, whole=True)
     n_fft_samples = transfer_function.shape[0]
     linear_predictor = np.zeros(
-        (1, n_fft_samples, n_signals, n_signals), dtype=np.complex)
+        (1, n_fft_samples, n_signals, n_signals), dtype=complex)
     linear_predictor[0, :, 0, 0] = transfer_function
 
     _, expected_transfer_function = freqz_zpk(0.25, 0.5, 1.00, whole=True)
@@ -77,7 +77,7 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     linear_coef[0] *= 0.5
 
     expected_causal_signal = np.zeros(
-        (1, n_fft_samples, n_signals, n_signals), dtype=np.complex)
+        (1, n_fft_samples, n_signals, n_signals), dtype=complex)
     expected_causal_signal[0, :, 0, 0] = fft(linear_coef)
 
     causal_signal = _get_causal_signal(linear_predictor)
@@ -91,7 +91,7 @@ def test_minimum_phase_decomposition():
     _, transfer_function = freqz_zpk(0.25, 0.50, 1.00, whole=True)
     n_fft_samples = transfer_function.shape[0]
     expected_minimum_phase_factor = np.zeros(
-        (2, n_fft_samples, n_signals, n_signals), dtype=np.complex)
+        (2, n_fft_samples, n_signals, n_signals), dtype=complex)
     expected_minimum_phase_factor[0, :, 0, 0] = transfer_function
 
     _, transfer_function2 = freqz_zpk(0.125, 0.25, 1.00, whole=True)
