@@ -158,7 +158,7 @@ def test_n_trials():
 @mark.parametrize(
     ('time_halfbandwidth_product, time_window_duration, '
      'expected_frequency_resolution'),
-    [(3, .10, 30), (1, 0.02, 50), (5, 1, 5)])
+    [(3, .10, 60), (1, 0.02, 100), (5, 1, 10)])
 def test_frequency_resolution(
         time_halfbandwidth_product, time_window_duration,
         expected_frequency_resolution):
