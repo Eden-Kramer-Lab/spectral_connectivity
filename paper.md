@@ -37,7 +37,8 @@ Characterizing oscillatory dynamics in brain is critical to understand functiona
 
 `spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. There are other python packages that have been already developed to do these analysis; however, spectral has several differences: (1) it is designed to handle multiple time series at once, (2) it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed,
 (4) it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead, (5) it implements the non-parametric version of the spectral granger causality in Python, (6) it implements the canonical coherence, which can efficiently summarize brain-area level coherences from multielectrode recordings, and (7) easier user interface for the multitaper fourier transform
-This software is developed based on methodologies that represented in a number scientific publications [@dhamala2008analyzing, @nolte2004identifying, @stephen2015characterizing]
+This software is developed based on methodologies that represented in a number scientific publications ([@dhamala2008analyzing], [@nolte2004identifying], [@stephen2015characterizing], [@cimenser2011tracking], [@lachaux1999measuring], [@stam2007phase], [@vinck2011improved], [@vinck2010pairwise], [@geweke1982measurement], [@kaminski1991new], [@baccala1998studying], [@baccala2001partial], [@baccala2007generalized], [@korzeniewska2003determination], [@gotman1983measurement], [@nolte2008robustly], [@aoi2015rate]).
+
 
 
 # Acknowledgements
