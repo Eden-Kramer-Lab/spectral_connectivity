@@ -1,7 +1,11 @@
 from logging import getLogger
 
-import numpy as np
-from scipy.fftpack import fft, ifft
+try:
+    import cupy as xp
+    from cupyx.scipy.fft import fft, ifft
+except ImportError:
+    import numpy as xp
+    from scipy.fft import fft, ifft
 
 logger = getLogger(__name__)
 
@@ -27,10 +31,10 @@ def _get_intial_conditions(cross_spectral_matrix):
                                          n_signals)
     '''
     try:
-        return np.linalg.cholesky(
+        return xp.linalg.cholesky(
             ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
         ).swapaxes(-1, -2)
-    except np.linalg.linalg.LinAlgError:
+    except xp.linalg.linalg.LinAlgError:
         logger.warning(
             'Computing the initial conditions using the Cholesky failed. '
             'Using a random initial condition.')
@@ -38,14 +42,14 @@ def _get_intial_conditions(cross_spectral_matrix):
         new_shape = list(cross_spectral_matrix.shape)
         N_RAND = 1000
         new_shape[-3] = N_RAND
-        random_start = np.random.standard_normal(
+        random_start = xp.random.standard_normal(
             size=new_shape)
 
-        random_start = np.matmul(
+        random_start = xp.matmul(
             random_start, _conjugate_transpose(random_start)).mean(
                 axis=-3, keepdims=True)
 
-        return np.linalg.cholesky(random_start)
+        return xp.linalg.cholesky(random_start)
 
 
 def _get_causal_signal(linear_predictor):
@@ -74,7 +78,7 @@ def _get_causal_signal(linear_predictor):
     linear_predictor_coefficients[..., 0, :, :] *= 0.5
 
     # Make the unit circle roots upper triangular
-    lower_triangular_ind = np.tril_indices(n_signals, k=-1)
+    lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
     linear_predictor_coefficients[
         ..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
@@ -103,8 +107,8 @@ def _check_convergence(current, old, tolerance=1E-8):
         each time point.
     '''
     n_time_points = current.shape[0]
-    error = np.linalg.norm(
-        np.reshape(current - old, (n_time_points, -1)), ord=np.inf, axis=1)
+    error = xp.linalg.norm(
+        xp.reshape(current - old, (n_time_points, -1)), ord=xp.inf, axis=1)
     return error < tolerance
 
 
@@ -132,9 +136,9 @@ def _get_linear_predictor(minimum_phase_factor, cross_spectral_matrix, I):
         How much to adjust for the next guess for minimum phase factor.
 
     '''
-    covariance_sandwich_estimator = np.linalg.solve(
+    covariance_sandwich_estimator = xp.linalg.solve(
         minimum_phase_factor, cross_spectral_matrix)
-    covariance_sandwich_estimator = np.linalg.solve(
+    covariance_sandwich_estimator = xp.linalg.solve(
         minimum_phase_factor,
         _conjugate_transpose(covariance_sandwich_estimator))
     return covariance_sandwich_estimator + I
@@ -166,9 +170,9 @@ def minimum_phase_decomposition(cross_spectral_matrix, tolerance=1E-8,
     '''
     n_time_points = cross_spectral_matrix.shape[0]
     n_signals = cross_spectral_matrix.shape[-1]
-    I = np.eye(n_signals)
-    is_converged = np.zeros(n_time_points, dtype=bool)
-    minimum_phase_factor = np.zeros(cross_spectral_matrix.shape)
+    I = xp.eye(n_signals)
+    is_converged = xp.zeros(n_time_points, dtype=bool)
+    minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
     minimum_phase_factor[..., :, :, :] = _get_intial_conditions(
         cross_spectral_matrix)
 
@@ -179,7 +183,7 @@ def minimum_phase_decomposition(cross_spectral_matrix, tolerance=1E-8,
         old_minimum_phase_factor = minimum_phase_factor.copy()
         linear_predictor = _get_linear_predictor(
             minimum_phase_factor, cross_spectral_matrix, I)
-        minimum_phase_factor = np.matmul(
+        minimum_phase_factor = xp.matmul(
             minimum_phase_factor, _get_causal_signal(linear_predictor))
 
         # If already converged at a time point, don't change.
@@ -187,7 +191,7 @@ def minimum_phase_decomposition(cross_spectral_matrix, tolerance=1E-8,
             is_converged, ...]
         is_converged = _check_convergence(
             minimum_phase_factor, old_minimum_phase_factor, tolerance)
-        if np.all(is_converged):
+        if xp.all(is_converged):
             return minimum_phase_factor
     else:
         logger.warning(

@@ -1,9 +1,14 @@
 from logging import getLogger
 
-import numpy as np
-from numpy.fft import fftfreq
 from scipy import interpolate
-from scipy.fftpack import fft, ifft, next_fast_len
+
+try:
+    import cupy as xp
+    from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
+except ImportError:
+    import numpy as xp
+    from scipy.fftpack import fft, ifft, next_fast_len, fftfreq
+
 from scipy.linalg import eigvals_banded
 from scipy.signal import detrend
 
@@ -125,7 +130,7 @@ class Multitaper(object):
 
         '''
         if self._n_tapers is None:
-            return int(np.floor(
+            return int(xp.floor(
                 2 * self.time_halfbandwidth_product - 1))
         return self._n_tapers
 
@@ -135,7 +140,7 @@ class Multitaper(object):
                 self._time_window_duration is None):
             self._n_time_samples_per_window = self.time_series.shape[0]
         elif self._time_window_duration is not None:
-            self._n_time_samples_per_window = int(np.round(
+            self._n_time_samples_per_window = int(xp.round(
                 self.time_window_duration * self.sampling_frequency))
         return self._n_time_samples_per_window
 
@@ -167,7 +172,7 @@ class Multitaper(object):
 
     @property
     def time(self):
-        original_time = (np.arange(0, self.time_series.shape[0]) /
+        original_time = (xp.arange(0, self.time_series.shape[0]) /
                          self.sampling_frequency)
         window_start_time = _sliding_window(
             original_time, self.n_time_samples_per_window,
@@ -222,9 +227,9 @@ def _add_axes(time_series):
     '''
     n_axes = len(time_series.shape)
     if n_axes == 1:  # add trials and signals axes
-        return time_series[:, np.newaxis, np.newaxis]
+        return time_series[:, xp.newaxis, xp.newaxis]
     elif n_axes == 2:  # add trials axis
-        return time_series[:, np.newaxis, ...]
+        return time_series[:, xp.newaxis, ...]
     else:
         return time_series
 
@@ -277,7 +282,7 @@ def _sliding_window(data, window_size, step_size=1,
 
     '''
     shape = list(data.shape)
-    shape[axis] = np.floor(
+    shape[axis] = xp.floor(
         (data.shape[axis] / step_size) - (window_size / step_size) + 1
     ).astype(int)
     shape.append(window_size)
@@ -286,7 +291,7 @@ def _sliding_window(data, window_size, step_size=1,
     strides[axis] *= step_size
     strides.append(data.strides[axis])
 
-    strided = np.lib.stride_tricks.as_strided(
+    strided = xp.lib.stride_tricks.as_strided(
         data, shape=shape, strides=strides)
 
     return strided.copy() if is_copy else strided
@@ -311,8 +316,8 @@ def _multitaper_fft(tapers, time_series, n_fft_samples,
                                               n_fft_samples, n_signals)
 
     '''
-    projected_time_series = (time_series[..., np.newaxis] *
-                             tapers[np.newaxis, np.newaxis, ...])
+    projected_time_series = (time_series[..., xp.newaxis] *
+                             tapers[xp.newaxis, xp.newaxis, ...])
     return (fft(projected_time_series, n=n_fft_samples, axis=axis) /
             sampling_frequency)
 
@@ -339,7 +344,7 @@ def _make_tapers(n_time_samples_per_window, sampling_frequency,
     tapers, _ = dpss_windows(
         n_time_samples_per_window, time_halfbandwidth_product, n_tapers,
         is_low_bias=is_low_bias)
-    return tapers.T * np.sqrt(sampling_frequency)
+    return tapers.T * xp.sqrt(sampling_frequency)
 
 
 def tridisolve(d, e, b, overwrite_b=True):
@@ -407,16 +412,16 @@ def tridi_inverse_iteration(d, e, w, x0=None, rtol=1e-8):
     '''
     eig_diag = d - w
     if x0 is None:
-        x0 = np.random.randn(len(d))
-    x_prev = np.zeros_like(x0)
-    norm_x = np.linalg.norm(x0)
+        x0 = xp.random.randn(len(d))
+    x_prev = xp.zeros_like(x0)
+    norm_x = xp.linalg.norm(x0)
     # the eigenvector is unique up to sign change, so iterate
     # until || |x^(n)| - |x^(n-1)| ||^2 < rtol
     x0 /= norm_x
-    while np.linalg.norm(np.abs(x0) - np.abs(x_prev)) > rtol:
+    while xp.linalg.norm(xp.abs(x0) - xp.abs(x_prev)) > rtol:
         x_prev = x0.copy()
         tridisolve(eig_diag, e, x0)
-        norm_x = np.linalg.norm(x0)
+        norm_x = xp.linalg.norm(x0)
         x0 /= norm_x
     return x0
 
@@ -448,7 +453,7 @@ def dpss_windows(n_time_samples_per_window, time_halfbandwidth_product,
         n_time_samples_per_window.
         This is the length of the shorter set of tapers.
     interp_kind : str (optional)
-        This input variable is passed to scipy.interpolate.interp1d and
+        This ixput variable is passed to scipy.interpolate.interp1d and
         specifies the kind of interpolation as a string ('linear',
         'nearest', 'zero', 'slinear', 'quadratic, 'cubic') or as an integer
         specifying the order of the spline interpolator to use.
@@ -469,7 +474,7 @@ def dpss_windows(n_time_samples_per_window, time_halfbandwidth_product,
     n_tapers = int(n_tapers)
     half_bandwidth = (float(time_halfbandwidth_product) /
                       n_time_samples_per_window)
-    time_index = np.arange(n_time_samples_per_window, dtype='d')
+    time_index = xp.arange(n_time_samples_per_window, dtype='d')
 
     if interp_from is not None:
         tapers = _find_tapers_from_interpolation(
@@ -504,11 +509,11 @@ def _find_tapers_from_interpolation(
 
 def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):
     interpolation_function = interpolate.interp1d(
-        np.arange(taper.shape[-1]), taper, kind=interp_kind)
+        xp.arange(taper.shape[-1]), taper, kind=interp_kind)
     interpolated_taper = interpolation_function(
-        np.linspace(0, taper.shape[-1] - 1, n_time_samples_per_window,
+        xp.linspace(0, taper.shape[-1] - 1, n_time_samples_per_window,
                     endpoint=False))
-    return interpolated_taper / np.sqrt(np.sum(interpolated_taper ** 2))
+    return interpolated_taper / xp.sqrt(xp.sum(interpolated_taper ** 2))
 
 
 def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
@@ -535,12 +540,12 @@ def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
     n_time_samples_per_window-1] [see Percival and Walden, 1993]'''
     diagonal = (
         ((n_time_samples_per_window - 1 - 2 * time_index) / 2.) ** 2
-        * np.cos(2 * np.pi * half_bandwidth))
-    off_diag = np.zeros_like(time_index)
+        * xp.cos(2 * xp.pi * half_bandwidth))
+    off_diag = xp.zeros_like(time_index)
     off_diag[:-1] = (
         time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.)
     # put the diagonals in LAPACK 'packed' storage
-    ab = np.zeros((2, n_time_samples_per_window), dtype='d')
+    ab = xp.zeros((2, n_time_samples_per_window), dtype='d')
     ab[1] = diagonal
     ab[0, 1:] = off_diag[:-1]
     # only calculate the highest n_tapers eigenvalues
@@ -551,12 +556,12 @@ def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
     w = w[::-1]
 
     # find the corresponding eigenvectors via inverse iteration
-    t = np.linspace(0, np.pi, n_time_samples_per_window)
-    tapers = np.zeros((n_tapers, n_time_samples_per_window), dtype='d')
+    t = xp.linspace(0, xp.pi, n_time_samples_per_window)
+    tapers = xp.zeros((n_tapers, n_time_samples_per_window), dtype='d')
     for taper_ind in range(n_tapers):
         tapers[taper_ind, :] = tridi_inverse_iteration(
             diagonal, off_diag, w[taper_ind],
-            x0=np.sin((taper_ind + 1) * t))
+            x0=xp.sin((taper_ind + 1) * t))
     return tapers
 
 
@@ -574,15 +579,15 @@ def _fix_taper_sign(tapers, n_time_samples_per_window):
     is_not_symmetric = tapers[::2, :].sum(axis=1) < 0
     fix_sign = is_not_symmetric * -1
     fix_sign[fix_sign == 0] = 1
-    tapers[::2, :] *= fix_sign[:, np.newaxis]
+    tapers[::2, :] *= fix_sign[:, xp.newaxis]
 
     # Fix sign of antisymmetric tapers.
     # rather than test the sign of one point, test the sign of the
     # linear slope up to the first (largest) peak
-    largest_peak_ind = np.argmax(
-        np.abs(tapers[1::2, :n_time_samples_per_window // 2]), axis=1)
+    largest_peak_ind = xp.argmax(
+        xp.abs(tapers[1::2, :n_time_samples_per_window // 2]), axis=1)
     for taper_ind, peak_ind in enumerate(largest_peak_ind):
-        if np.sum(tapers[2 * taper_ind + 1, :peak_ind]) < 0:
+        if xp.sum(tapers[2 * taper_ind + 1, :peak_ind]) < 0:
             tapers[2 * taper_ind + 1, :] *= -1
     return tapers
 
@@ -592,15 +597,15 @@ def _auto_correlation(data, axis=-1):
     n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
     dpss_fft = fft(data, n_fft_samples, axis=axis)
     power = dpss_fft * dpss_fft.conj()
-    return np.real(ifft(power, axis=axis))
+    return xp.real(ifft(power, axis=axis))
 
 
 def _get_low_bias_tapers(tapers, eigenvalues):
     is_low_bias = eigenvalues > 0.9
-    if not np.any(is_low_bias):
+    if not xp.any(is_low_bias):
         logger.warning('Could not properly use low_bias, '
                        'keeping lowest-bias taper')
-        is_low_bias = [np.argmax(eigenvalues)]
+        is_low_bias = [xp.argmax(eigenvalues)]
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
 
@@ -621,10 +626,10 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
 
     '''
 
-    ideal_filter = 4 * half_bandwidth * np.sinc(
+    ideal_filter = 4 * half_bandwidth * xp.sinc(
         2 * half_bandwidth * time_index)
     ideal_filter[0] = 2 * half_bandwidth
     n_time_samples_per_window = len(time_index)
-    return np.dot(
+    return xp.dot(
         _auto_correlation(tapers)[:, :n_time_samples_per_window],
         ideal_filter)
