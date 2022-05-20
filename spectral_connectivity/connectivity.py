@@ -1,4 +1,4 @@
-from functools import lru_cache, partial, wraps
+from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 
@@ -129,14 +129,12 @@ class Connectivity:
             return self._frequencies
 
     @property
-    @lru_cache(maxsize=1)
     def _power(self):
         return self._expectation(
             self.fourier_coefficients *
             self.fourier_coefficients.conjugate()).real
 
     @property
-    @lru_cache(maxsize=1)
     def _cross_spectral_matrix(self):
         '''The complex-valued linear association between fourier
         coefficients at each frequency.
@@ -153,24 +151,20 @@ class Connectivity:
                                       fourier_coefficients)
 
     @property
-    @lru_cache(maxsize=1)
     def _minimum_phase_factor(self):
         return minimum_phase_decomposition(
             self._expectation(self._cross_spectral_matrix))
 
     @property
-    @lru_cache(maxsize=1)
     @non_negative_frequencies(axis=-3)
     def _transfer_function(self):
         return _estimate_transfer_function(self._minimum_phase_factor)
 
     @property
-    @lru_cache(maxsize=1)
     def _noise_covariance(self):
         return _estimate_noise_covariance(self._minimum_phase_factor)
 
     @property
-    @lru_cache(maxsize=1)
     def _MVAR_Fourier_coefficients(self):
         return xp.linalg.inv(self._transfer_function)
 
