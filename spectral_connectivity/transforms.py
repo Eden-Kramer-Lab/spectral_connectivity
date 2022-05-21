@@ -4,16 +4,15 @@ from scipy import interpolate
 
 try:
     import cupy as xp
-    from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
     from cupy.linalg import lstsq
+    from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
 except ImportError:
     import numpy as xp
     from scipy.fftpack import fft, ifft, next_fast_len, fftfreq
     from scipy.linalg import lstsq
 
-from scipy.linalg import eigvals_banded
-
 import numpy as np
+from scipy.linalg import eigvals_banded
 
 logger = getLogger(__name__)
 
@@ -645,7 +644,7 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
 def detrend(data, axis=-1, type='linear', bp=0, overwrite_data=False):
     """
     Remove linear trend along axis from data.
-    
+
     Copied from scipy and now uses cupy or numpy functions.
 
     Parameters
