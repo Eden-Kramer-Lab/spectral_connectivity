@@ -10,6 +10,8 @@ except ImportError:
     import numpy as xp
     from scipy.fft import ifft
     from scipy.sparse.linalg import svds
+    
+import numpy as np
 
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
@@ -27,6 +29,20 @@ EXPECTATION = {
     'trials_tapers': partial(xp.mean, axis=(1, 2)),
     'time_trials_tapers': partial(xp.mean, axis=(1, 2, 3)),
 }
+
+def asnumpy(connectivity_measure):
+    """If cupy array, then return as numpy. Else return numpy array"""
+    @wraps(connectivity_measure)
+    def wrapper(*args, **kwargs):
+        measure = connectivity_measure(*args, **kwargs)
+        if measure is not None:
+            try:
+                return xp.asnumpy(measure)
+            except AttributeError:
+                return measure
+        else:
+            return None
+    return wrapper
 
 
 def non_negative_frequencies(axis):
@@ -109,7 +125,10 @@ class Connectivity:
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         self._frequencies = frequencies
-        self.time = time
+        try:
+            self.time = xp.asnumpy(time)
+        except AttributeError:
+            self.time = time
 
     @classmethod
     def from_multitaper(cls, multitaper_instance,
@@ -123,8 +142,15 @@ class Connectivity:
         )
 
     @property
+    @asnumpy
     @non_negative_frequencies(axis=0)
     def frequencies(self):
+        if self._frequencies is not None:
+            return self._frequencies
+    
+    @property
+    @asnumpy
+    def all_frequencies(self):
         if self._frequencies is not None:
             return self._frequencies
 
@@ -178,14 +204,15 @@ class Connectivity:
         if isinstance(axes, int):
             return self.fourier_coefficients.shape[axes]
         else:
-            return xp.prod(
+            return np.prod(
                 [self.fourier_coefficients.shape[axis]
                  for axis in axes])
-
+    
+    @asnumpy
     @non_negative_frequencies(axis=-2)
     def power(self):
         return self._power
-
+    
     @non_negative_frequencies(axis=-3)
     def coherency(self):
         '''The complex-valued linear association between time series in the
@@ -206,7 +233,8 @@ class Connectivity:
         diagonal_ind = xp.arange(0, n_signals)
         complex_coherencey[..., diagonal_ind, diagonal_ind] = xp.nan
         return complex_coherencey
-
+        
+    @asnumpy
     def coherence_phase(self):
         '''The phase angle of the complex coherency.
 
@@ -217,6 +245,7 @@ class Connectivity:
         '''
         return xp.angle(self.coherency())
 
+    @asnumpy
     def coherence_magnitude(self):
         '''The magnitude of the complex coherency.
 
@@ -228,7 +257,8 @@ class Connectivity:
 
         '''
         return _squared_magnitude(self.coherency())
-
+    
+    @asnumpy
     @non_negative_frequencies(axis=-3)
     def imaginary_coherence(self):
         '''The normalized imaginary component of the cross-spectrum.
@@ -286,14 +316,14 @@ class Connectivity:
                Boston University.
 
         '''
-        labels = xp.unique(group_labels)
+        labels = np.unique(group_labels)
         n_frequencies = self.fourier_coefficients.shape[-2]
         non_negative_frequencies = xp.arange(0, (n_frequencies + 1) // 2)
         fourier_coefficients = self.fourier_coefficients[
             ..., non_negative_frequencies, :]
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
-                fourier_coefficients[..., xp.in1d(group_labels, label)])
+                fourier_coefficients[..., np.in1d(group_labels, label)])
             for label in labels]
 
         n_groups = len(labels)
@@ -315,8 +345,11 @@ class Connectivity:
         canonical_coherence_magnitude[
             ..., group_combination_ind[:, 1],
             group_combination_ind[:, 0]] = magnitude
-
-        return canonical_coherence_magnitude, labels
+        
+        try:
+            return xp.asnumpy(canonical_coherence_magnitude), xp.asnumpy(labels)
+        except AttributeError:
+            return canonical_coherence_magnitude, labels
 
     def global_coherence(self, max_rank=1):
         '''The linear combinations of signals that capture the most coherent
@@ -374,9 +407,13 @@ class Connectivity:
                  unnormalized_global_coherence[time_ind, freq_ind]
                  ) = _estimate_global_coherence(fourier_coefficients,
                                                 max_rank=max_rank)
+        
+        try:
+            return xp.asnumpy(global_coherence), xp.asnumpy(unnormalized_global_coherence)
+        except AttributeError:
+            return global_coherence, unnormalized_global_coherence
 
-        return global_coherence, unnormalized_global_coherence
-
+    @asnumpy
     @non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
         '''The cross-spectrum with the power for each signal scaled to
@@ -403,7 +440,8 @@ class Connectivity:
         return self._expectation(
             self._cross_spectral_matrix /
             xp.abs(self._cross_spectral_matrix))
-
+    
+    @asnumpy
     @non_negative_frequencies(axis=-3)
     def phase_lag_index(self):
         '''A non-parametric synchrony measure designed to mitigate power
@@ -434,7 +472,8 @@ class Connectivity:
 
         '''
         return self._expectation(xp.sign(self._cross_spectral_matrix.imag))
-
+    
+    @asnumpy
     @non_negative_frequencies(-3)
     def weighted_phase_lag_index(self):
         '''Weighted average of the phase lag index using the imaginary
@@ -459,7 +498,8 @@ class Connectivity:
         weights[weights < xp.finfo(float).eps] = 1
         return self._expectation(
             self._cross_spectral_matrix.imag) / weights
-
+    
+    @asnumpy
     def debiased_squared_phase_lag_index(self):
         '''The square of the phase lag index corrected for the positive
         bias induced by using the magnitude of the complex cross-spectrum.
@@ -481,7 +521,8 @@ class Connectivity:
         n_observations = self.n_observations
         return ((n_observations * self.phase_lag_index() ** 2 - 1.0) /
                 (n_observations - 1.0))
-
+    
+    @asnumpy
     @non_negative_frequencies(-3)
     def debiased_squared_weighted_phase_lag_index(self):
         '''The square of the weighted phase lag index corrected for the
@@ -514,7 +555,8 @@ class Connectivity:
         weights[weights == 0] = xp.nan
         return (imaginary_cross_spectral_matrix_sum ** 2 -
                 squared_imaginary_cross_spectral_matrix_sum) / weights
-
+    
+    @asnumpy
     def pairwise_phase_consistency(self):
         '''The square of the phase locking value corrected for the
         positive bias induced by using the magnitude of the complex
@@ -538,7 +580,8 @@ class Connectivity:
         ppc = ((plv_sum * plv_sum.conjugate() - n_observations) /
                (n_observations ** 2 - n_observations))
         return ppc.real
-
+    
+    @asnumpy
     def pairwise_spectral_granger_prediction(self):
         '''The amount of power at a node in a frequency explained by (is
         predictive of) the power at other nodes.
@@ -555,9 +598,12 @@ class Connectivity:
         cross_spectral_matrix = self._expectation(
             self._cross_spectral_matrix)
         n_signals = cross_spectral_matrix.shape[-1]
-        total_power = self.power()
-        n_frequencies = cross_spectral_matrix.shape[-3]
+        total_power = self._power
+        n_frequencies = total_power.shape[-2]
         non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
+        total_power = xp.take(total_power, indices=non_neg_index, axis=-2)
+        
+        n_frequencies = cross_spectral_matrix.shape[-3]
         new_shape = list(cross_spectral_matrix.shape)
         new_shape[-3] = non_neg_index.size
         predictive_power = xp.empty(new_shape)
@@ -577,7 +623,7 @@ class Connectivity:
                     _estimate_predictive_power(
                         total_power[..., pair_indices[:, 0]],
                         rotated_covariance, transfer_function))
-            except xp.linalg.LinAlgError:
+            except np.linalg.LinAlgError:
                 predictive_power[
                     ..., pair_indices, pair_indices.T] = xp.nan
 
@@ -591,7 +637,8 @@ class Connectivity:
 
     def blockwise_spectral_granger_prediction(self):
         raise NotImplementedError
-
+    
+    @asnumpy
     def directed_transfer_function(self):
         '''The transfer function coupling strength normalized by the total
         influence of other signals on that signal (inflow).
@@ -613,7 +660,8 @@ class Connectivity:
         return _squared_magnitude(
             self._transfer_function /
             _total_inflow(self._transfer_function))
-
+    
+    @asnumpy
     def directed_coherence(self):
         '''The transfer function coupling strength normalized by the total
         influence of other signals on that signal (inflow).
@@ -638,8 +686,8 @@ class Connectivity:
         return (xp.sqrt(noise_variance) *
                 _squared_magnitude(self._transfer_function) /
                 _total_inflow(self._transfer_function, noise_variance))
-
-    def partial_directed_coherence(self):
+    
+    def partial_directed_coherence(self, keep_cupy=False):
         '''The transfer function coupling strength normalized by its
         strength of coupling to other signals (outflow).
 
@@ -659,10 +707,21 @@ class Connectivity:
                Biological Cybernetics 84, 463-474.
 
         '''
-        return _squared_magnitude(
-            self._MVAR_Fourier_coefficients /
-            _total_outflow(self._MVAR_Fourier_coefficients))
-
+        if keep_cupy:
+            return _squared_magnitude(
+                self._MVAR_Fourier_coefficients /
+                _total_outflow(self._MVAR_Fourier_coefficients))
+        else:
+            try:
+                return xp.asnumpy(_squared_magnitude(
+                    self._MVAR_Fourier_coefficients /
+                _total_outflow(self._MVAR_Fourier_coefficients)))
+            except AttributeError:
+                return _squared_magnitude(
+                    self._MVAR_Fourier_coefficients /
+                _total_outflow(self._MVAR_Fourier_coefficients))      
+        
+    @asnumpy
     def generalized_partial_directed_coherence(self):
         '''The transfer function coupling strength normalized by its
         strength of coupling to other signals (outflow).
@@ -694,7 +753,8 @@ class Connectivity:
             self._MVAR_Fourier_coefficients /
             xp.sqrt(noise_variance) / _total_outflow(
                 self._MVAR_Fourier_coefficients, noise_variance))
-
+    
+    @asnumpy
     def direct_directed_transfer_function(self):
         '''A combination of the directed transfer function estimate of
         directional influence between signals and the partial coherence's
@@ -719,8 +779,8 @@ class Connectivity:
             self._transfer_function /
             _total_inflow(self._transfer_function, axis=(-1, -3)))
         return (xp.abs(full_frequency_DTF) *
-                xp.sqrt(self.partial_directed_coherence()))
-
+                xp.sqrt(self.partial_directed_coherence(keep_cupy=True)))
+    
     def group_delay(self, frequencies_of_interest=None,
                     frequency_resolution=None,
                     significance_threshold=0.05):
@@ -755,8 +815,8 @@ class Connectivity:
         bias = coherence_bias(self.n_observations)
 
         n_signals = bandpassed_coherency.shape[-1]
-        signal_combination_ind = xp.array(
-            list(combinations(xp.arange(n_signals), 2)))
+        signal_combination_ind = np.asarray(
+            list(combinations(np.arange(n_signals), 2)))
         bandpassed_coherency = bandpassed_coherency[
             ..., signal_combination_ind[:, 0],
             signal_combination_ind[:, 1]]
@@ -764,36 +824,43 @@ class Connectivity:
         is_significant = _find_significant_frequencies(
             bandpassed_coherency, bias, independent_frequency_step,
             significance_threshold=significance_threshold)
-        coherence_phase = xp.ma.masked_array(
-            xp.unwrap(xp.angle(bandpassed_coherency), axis=-2),
-            mask=~is_significant)
+        try:
+            coherence_phase = np.ma.masked_array(
+                xp.asnumpy(xp.unwrap(xp.angle(bandpassed_coherency), axis=-2)),
+                mask=~is_significant)
+        except AttributeError:
+            coherence_phase = np.ma.masked_array(
+                xp.unwrap(xp.angle(bandpassed_coherency), axis=-2),
+                mask=~is_significant)
 
         def _linear_regression(response):
             return linregress(bandpassed_frequencies, y=response)
 
-        regression_results = xp.ma.apply_along_axis(
+        regression_results = np.ma.apply_along_axis(
             _linear_regression, -2, coherence_phase)
         new_shape = (
             *bandpassed_coherency.shape[:-2], n_signals, n_signals)
-        slope = xp.full(new_shape, xp.nan)
+        slope = np.full(new_shape, np.nan)
         slope[..., signal_combination_ind[:, 0],
-              signal_combination_ind[:, 1]] = xp.array(
-            regression_results[..., 0, :], dtype=xp.float)
+              signal_combination_ind[:, 1]] = np.asarray(
+            regression_results[..., 0, :], dtype=float)
         slope[..., signal_combination_ind[:, 1],
-              signal_combination_ind[:, 0]] = -1 * xp.array(
-            regression_results[..., 0, :], dtype=xp.float)
+              signal_combination_ind[:, 0]] = -1 * np.asarray(
+            regression_results[..., 0, :], dtype=float)
 
-        delay = slope / (2 * xp.pi)
+        delay = slope / (2 * np.pi)
 
-        r_value = xp.ones(new_shape)
+        r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0],
-                signal_combination_ind[:, 1]] = xp.array(
-            regression_results[..., 2, :], dtype=xp.float)
+                signal_combination_ind[:, 1]] = np.asarray(
+            regression_results[..., 2, :], dtype=float)
         r_value[..., signal_combination_ind[:, 1],
-                signal_combination_ind[:, 0]] = xp.array(
-            regression_results[..., 2, :], dtype=xp.float)
-        return delay, slope, r_value
+                signal_combination_ind[:, 0]] = np.asarray(
+            regression_results[..., 2, :], dtype=float)
 
+        return delay, slope, r_value
+    
+    @asnumpy
     def delay(self, frequencies_of_interest=None,
               frequency_resolution=None,
               significance_threshold=0.05, n_range=3):
@@ -852,7 +919,8 @@ class Connectivity:
                         signal_combination_ind[:, 0]] = -delays
 
         return possible_delays
-
+    
+    @asnumpy
     def phase_slope_index(self, frequencies_of_interest=None,
                           frequency_resolution=None):
         '''The weighted average of slopes of a broadband signal projected
@@ -1175,14 +1243,14 @@ def _find_largest_significant_group(is_significant):
 
     '''
     labeled, _ = label(is_significant)
-    label_groups, label_counts = xp.unique(labeled, return_counts=True)
+    label_groups, label_counts = np.unique(labeled, return_counts=True)
 
-    if not xp.all(label_groups == 0):
+    if not np.all(label_groups == 0):
         label_counts[0] = 0
-        max_group = label_groups[xp.argmax(label_counts)]
+        max_group = label_groups[np.argmax(label_counts)]
         return labeled == max_group
     else:
-        return xp.zeros(is_significant.shape, dtype=bool)
+        return np.zeros(is_significant.shape, dtype=bool)
 
 
 def _get_independent_frequencies(is_significant, frequency_step):
@@ -1200,7 +1268,7 @@ def _get_independent_frequencies(is_significant, frequency_step):
     '''
     index = is_significant.nonzero()[0]
     independent_index = index[0:len(index):frequency_step]
-    return xp.in1d(xp.arange(0, len(is_significant)), independent_index)
+    return np.in1d(np.arange(0, len(is_significant)), independent_index)
 
 
 def _find_largest_independent_group(is_significant, frequency_step,
@@ -1269,7 +1337,7 @@ def _find_significant_frequencies(
     p_values = get_normal_distribution_p_values(z_coherence)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold)
-    return xp.apply_along_axis(_find_largest_independent_group, -2,
+    return np.apply_along_axis(_find_largest_independent_group, -2,
                                is_significant, frequency_step,
                                min_group_size)
 

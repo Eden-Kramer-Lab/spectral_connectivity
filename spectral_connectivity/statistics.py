@@ -111,7 +111,10 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
     '''Given data, returns the probability the data was generated from
     a normal distribution with `mean` and `std_deviation`
     '''
-    return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
+    try:
+        return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
+    except TypeError:
+        return 1 - norm.cdf(data.get(), loc=mean, scale=std_deviation)
 
 
 def coherence_bias(n_observations):

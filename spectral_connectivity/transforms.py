@@ -5,12 +5,15 @@ from scipy import interpolate
 try:
     import cupy as xp
     from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
+    from cupy.linalg import lstsq
 except ImportError:
     import numpy as xp
     from scipy.fftpack import fft, ifft, next_fast_len, fftfreq
+    from scipy.linalg import lstsq
 
 from scipy.linalg import eigvals_banded
-from scipy.signal import detrend
+
+import numpy as np
 
 logger = getLogger(__name__)
 
@@ -65,14 +68,14 @@ class Multitaper(object):
                  n_time_samples_per_window=None,
                  n_time_samples_per_step=None, is_low_bias=True):
 
-        self.time_series = time_series
+        self.time_series = xp.asarray(time_series)
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
         self._time_window_duration = time_window_duration
         self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
-        self.start_time = start_time
+        self.start_time = xp.asarray(start_time)
         self._n_fft_samples = n_fft_samples
         self._tapers = tapers
         self._n_tapers = n_tapers
@@ -282,7 +285,7 @@ def _sliding_window(data, window_size, step_size=1,
 
     '''
     shape = list(data.shape)
-    shape[axis] = xp.floor(
+    shape[axis] = np.floor(
         (data.shape[axis] / step_size) - (window_size / step_size) + 1
     ).astype(int)
     shape.append(window_size)
@@ -412,16 +415,16 @@ def tridi_inverse_iteration(d, e, w, x0=None, rtol=1e-8):
     '''
     eig_diag = d - w
     if x0 is None:
-        x0 = xp.random.randn(len(d))
-    x_prev = xp.zeros_like(x0)
-    norm_x = xp.linalg.norm(x0)
+        x0 = np.random.randn(len(d))
+    x_prev = np.zeros_like(x0)
+    norm_x = np.linalg.norm(x0)
     # the eigenvector is unique up to sign change, so iterate
     # until || |x^(n)| - |x^(n-1)| ||^2 < rtol
     x0 /= norm_x
-    while xp.linalg.norm(xp.abs(x0) - xp.abs(x_prev)) > rtol:
+    while np.linalg.norm(np.abs(x0) - np.abs(x_prev)) > rtol:
         x_prev = x0.copy()
         tridisolve(eig_diag, e, x0)
-        norm_x = xp.linalg.norm(x0)
+        norm_x = np.linalg.norm(x0)
         x0 /= norm_x
     return x0
 
@@ -538,14 +541,18 @@ def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
     t=[0,1,2,...,n_time_samples_per_window-1] and the first off-diagonal =
     t(n_time_samples_per_window-t)/2, t=[1,2,...,
     n_time_samples_per_window-1] [see Percival and Walden, 1993]'''
+    try:
+        time_index = xp.asnumpy(time_index)
+    except AttributeError:
+        pass
     diagonal = (
-        ((n_time_samples_per_window - 1 - 2 * time_index) / 2.) ** 2
-        * xp.cos(2 * xp.pi * half_bandwidth))
-    off_diag = xp.zeros_like(time_index)
+        ((n_time_samples_per_window - 1 - 2 * time_index) / 2.0) ** 2
+        * np.cos(2 * np.pi * half_bandwidth))
+    off_diag = np.zeros_like(time_index)
     off_diag[:-1] = (
-        time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.)
+        time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.0)
     # put the diagonals in LAPACK 'packed' storage
-    ab = xp.zeros((2, n_time_samples_per_window), dtype='d')
+    ab = np.zeros((2, n_time_samples_per_window), dtype=float)
     ab[1] = diagonal
     ab[0, 1:] = off_diag[:-1]
     # only calculate the highest n_tapers eigenvalues
@@ -556,13 +563,13 @@ def _find_tapers_from_optimization(n_time_samples_per_window, time_index,
     w = w[::-1]
 
     # find the corresponding eigenvectors via inverse iteration
-    t = xp.linspace(0, xp.pi, n_time_samples_per_window)
-    tapers = xp.zeros((n_tapers, n_time_samples_per_window), dtype='d')
+    t = np.linspace(0, np.pi, n_time_samples_per_window)
+    tapers = np.zeros((n_tapers, n_time_samples_per_window), dtype=float)
     for taper_ind in range(n_tapers):
         tapers[taper_ind, :] = tridi_inverse_iteration(
             diagonal, off_diag, w[taper_ind],
-            x0=xp.sin((taper_ind + 1) * t))
-    return tapers
+            x0=np.sin((taper_ind + 1) * t))
+    return xp.asarray(tapers)
 
 
 def _fix_taper_sign(tapers, n_time_samples_per_window):
@@ -633,3 +640,87 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
     return xp.dot(
         _auto_correlation(tapers)[:, :n_time_samples_per_window],
         ideal_filter)
+
+
+def detrend(data, axis=-1, type='linear', bp=0, overwrite_data=False):
+    """
+    Remove linear trend along axis from data.
+    
+    Copied from scipy and now uses cupy or numpy functions.
+
+    Parameters
+    ----------
+    data : array_like
+        The input data.
+    axis : int, optional
+        The axis along which to detrend the data. By default this is the
+        last axis (-1).
+    type : {'linear', 'constant'}, optional
+        The type of detrending. If ``type == 'linear'`` (default),
+        the result of a linear least-squares fit to `data` is subtracted
+        from `data`.
+        If ``type == 'constant'``, only the mean of `data` is subtracted.
+    bp : array_like of ints, optional
+        A sequence of break points. If given, an individual linear fit is
+        performed for each part of `data` between two break points.
+        Break points are specified as indices into `data`. This parameter
+        only has an effect when ``type == 'linear'``.
+    overwrite_data : bool, optional
+        If True, perform in place detrending and avoid a copy. Default is False
+    Returns
+    -------
+    ret : ndarray
+        The detrended input data.
+    Examples
+    --------
+    >>> from scipy import signal
+    >>> from numpy.random import default_rng
+    >>> rng = default_rng()
+    >>> npoints = 1000
+    >>> noise = rng.standard_normal(npoints)
+    >>> x = 3 + 2*np.linspace(0, 1, npoints) + noise
+    >>> (signal.detrend(x) - noise).max()
+    0.06  # random
+    """
+    if type not in ['linear', 'l', 'constant', 'c']:
+        raise ValueError("Trend type must be 'linear' or 'constant'.")
+    data = xp.asarray(data)
+    dtype = data.dtype.char
+    if dtype not in 'dfDF':
+        dtype = 'd'
+    if type in ['constant', 'c']:
+        return data - xp.mean(data, axis, keepdims=True)
+    else:
+        dshape = data.shape
+        N = dshape[axis]
+        bp = xp.sort(xp.unique(xp.r_[0, bp, N]))
+        if xp.any(bp > N):
+            raise ValueError("Breakpoints must be less than length "
+                             "of data along given axis.")
+        Nreg = len(bp) - 1
+        # Restructure data so that axis is along first dimension and
+        #  all other dimensions are collapsed into second dimension
+        rnk = len(dshape)
+        if axis < 0:
+            axis = axis + rnk
+        newdims = xp.r_[axis, 0:axis, axis + 1:rnk]
+        newdata = xp.reshape(xp.transpose(data, tuple(newdims)),
+                             (N, _prod(dshape) // N))
+        if not overwrite_data:
+            newdata = newdata.copy()  # make sure we have a copy
+        if newdata.dtype.char not in 'dfDF':
+            newdata = newdata.astype(dtype)
+        # Find leastsq fit and remove it for each piece
+        for m in range(Nreg):
+            Npts = bp[m + 1] - bp[m]
+            A = xp.ones((Npts, 2), dtype)
+            A[:, 0] = xp.cast[dtype](np.arange(1, Npts + 1) * 1.0 / Npts)
+            sl = slice(bp[m], bp[m + 1])
+            coef, resids, rank, s = lstsq(A, newdata[sl])
+            newdata[sl] = newdata[sl] - A @ coef
+        # Put data back in original shape.
+        tdshape = xp.take(dshape, newdims, 0)
+        ret = xp.reshape(newdata, tuple(tdshape))
+        vals = list(range(1, rnk))
+        olddims = vals[:axis] + [0] + vals[axis:]
+        return xp.transpose(ret, tuple(olddims))

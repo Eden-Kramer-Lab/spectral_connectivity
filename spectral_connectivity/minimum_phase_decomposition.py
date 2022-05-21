@@ -7,6 +7,8 @@ except ImportError:
     import numpy as xp
     from scipy.fft import fft, ifft
 
+import numpy as np
+
 logger = getLogger(__name__)
 
 
@@ -78,7 +80,7 @@ def _get_causal_signal(linear_predictor):
     linear_predictor_coefficients[..., 0, :, :] *= 0.5
 
     # Make the unit circle roots upper triangular
-    lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
+    lower_triangular_ind = np.tril_indices(n_signals, k=-1)
     linear_predictor_coefficients[
         ..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
