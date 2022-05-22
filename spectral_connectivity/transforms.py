@@ -1,20 +1,28 @@
+import os
 from logging import getLogger
 
-from scipy import interpolate
-
-try:
-    import cupy as xp
-    from cupy.linalg import lstsq
-    from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-except ImportError:
-    import numpy as xp
-    from scipy.fftpack import fft, ifft, next_fast_len, fftfreq
-    from scipy.linalg import lstsq
-
 import numpy as np
+from scipy import interpolate
 from scipy.linalg import eigvals_banded
 
 logger = getLogger(__name__)
+
+if os.environ.get('SPECTRAL_CONNECTIVITY_ENABLE_GPU') == 'true':
+    try:
+        logger.info('Using GPU for spectral_connectivity...')
+        import cupy as xp
+        from cupy.linalg import lstsq
+        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
+    except ImportError:
+        print('Cupy not installed. Cupy is needed to use GPU for '
+              'spectral_connectivity.')
+        import numpy as xp
+        from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+        from scipy.linalg import lstsq
+else:
+    import numpy as xp
+    from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+    from scipy.linalg import lstsq
 
 
 class Multitaper(object):

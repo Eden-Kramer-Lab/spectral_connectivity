@@ -12,6 +12,7 @@
 + it implements the canonical coherence, which can
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
++ all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
 
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
 
@@ -26,7 +27,7 @@ m = Multitaper(time_series=signals,
                time_window_duration=0.060,
                time_window_step=0.060,
                start_time=time[0])
-               
+
 # Sets up computing connectivity measures/power from multitaper spectral estimate
 c = Connectivity.from_multitaper(m)
 

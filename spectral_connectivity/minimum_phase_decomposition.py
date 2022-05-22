@@ -1,13 +1,19 @@
+import os
 from logging import getLogger
 
-try:
-    import cupy as xp
-    from cupyx.scipy.fft import fft, ifft
-except ImportError:
+import numpy as np
+
+if os.environ.get('SPECTRAL_CONNECTIVITY_ENABLE_GPU') == 'true':
+    try:
+        import cupy as xp
+        from cupyx.scipy.fft import fft, ifft
+    except ImportError:
+        import numpy as xp
+        from scipy.fft import fft, ifft
+else:
     import numpy as xp
     from scipy.fft import fft, ifft
 
-import numpy as np
 
 logger = getLogger(__name__)
 

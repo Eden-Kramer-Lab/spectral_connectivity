@@ -1,23 +1,31 @@
+import os
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 
-try:
-    import cupy as xp
-    from cupyx.scipy.fft import ifft
-    from cupyx.scipy.sparse.linalg import svds
-except ImportError:
-    import numpy as xp
-    from scipy.fft import ifft
-    from scipy.sparse.linalg import svds
-
 import numpy as np
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
+from spectral_connectivity.minimum_phase_decomposition import \
+    minimum_phase_decomposition
+from spectral_connectivity.statistics import (adjust_for_multiple_comparisons,
+                                              coherence_bias,
+                                              fisher_z_transform,
+                                              get_normal_distribution_p_values)
 
-from .minimum_phase_decomposition import minimum_phase_decomposition
-from .statistics import (adjust_for_multiple_comparisons, coherence_bias,
-                         fisher_z_transform, get_normal_distribution_p_values)
+if os.environ.get('SPEC_CON_ENABLE_GPU') == 'true':
+    try:
+        import cupy as xp
+        from cupyx.scipy.fft import ifft
+        from cupyx.scipy.sparse.linalg import svds
+    except ImportError:
+        import numpy as xp
+        from scipy.fft import ifft
+        from scipy.sparse.linalg import svds
+else:
+    import numpy as xp
+    from scipy.fft import ifft
+    from scipy.sparse.linalg import svds
 
 EXPECTATION = {
     'time': partial(xp.mean, axis=0),
