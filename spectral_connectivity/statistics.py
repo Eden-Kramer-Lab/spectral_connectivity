@@ -170,3 +170,18 @@ def coherence_rate_adjustment(firing_rate_condition1,
         (1 / firing_rate_ratio - 1) * firing_rate_condition1 +
         homogeneous_poisson_noise / firing_rate_ratio ** 2) * dt ** 2
     return 1 / np.sqrt(1 + (adjusted_firing_rate / spike_power_spectrum))
+
+def chi2conf(n_tapers, power=1, ci=.95):  # Define a short function to compute confidence bounds.
+    '''
+    Returns confidence bounds computed using chi-square 
+    distribution.
+    Input: 
+        n_tapers (int): Number of tapers
+        power (array): Multitaper spectrum (optional)
+        ci ([0.5, 1]): Confidence level (optional)
+    Output:
+        lower_bound, upper_bound: lower and upper bounds
+    '''
+    upper_bound = 2 * n_tapers / chi2.ppf(1 - ci, 2 * n_tapers) * power
+    lower_bound = 2 * n_tapers / chi2.ppf(ci, 2 * n_tapers) * power
+    return lower_bound, upper_bound
