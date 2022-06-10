@@ -8,7 +8,7 @@ TESTS_REQUIRE = ['pytest >= 2.7.1', 'nitime']
 
 setup(
     name='spectral_connectivity',
-    version='1.0.1',
+    version='1.0.2',
     license='GPL-3.0',
     description=('Frequency domain functional and directed'
                  'connectivity analysis tools for electrophysiological'
