@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import chi2, norm
 
 np.seterr(invalid='ignore')
 
@@ -171,17 +171,31 @@ def coherence_rate_adjustment(firing_rate_condition1,
         homogeneous_poisson_noise / firing_rate_ratio ** 2) * dt ** 2
     return 1 / np.sqrt(1 + (adjusted_firing_rate / spike_power_spectrum))
 
-def chi2conf(n_tapers, power=1, ci=.95):  # Define a short function to compute confidence bounds.
-    '''
-    Returns confidence bounds computed using chi-square 
-    distribution.
-    Input: 
-        n_tapers (int): Number of tapers
-        power (array): Multitaper spectrum (optional)
-        ci ([0.5, 1]): Confidence level (optional)
-    Output:
-        lower_bound, upper_bound: lower and upper bounds
+
+def power_confidence_intervals(n_tapers, power=1, ci=0.95):
+    '''Confidence intervals for the power spectrum.
+
+    Parameters
+    ----------
+    n_tapers : int
+        Number of tapers
+    power : np.ndarray, optional
+        Multitaper spectrum
+    ci : float
+        Confidence level. Range [0.5, 1]
+
+    Returns
+    -------
+    lower_bound, upper_bound : float
+
+
+    References
+    ----------
+    .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
+           data analysis: a guide for the practicing neuroscientist (MIT Press).
+
     '''
     upper_bound = 2 * n_tapers / chi2.ppf(1 - ci, 2 * n_tapers) * power
     lower_bound = 2 * n_tapers / chi2.ppf(ci, 2 * n_tapers) * power
+
     return lower_bound, upper_bound
