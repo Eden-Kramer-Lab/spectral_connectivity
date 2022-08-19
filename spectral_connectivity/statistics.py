@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import chi2, norm
 
 np.seterr(invalid='ignore')
 
@@ -111,7 +111,10 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
     '''Given data, returns the probability the data was generated from
     a normal distribution with `mean` and `std_deviation`
     '''
-    return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
+    try:
+        return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
+    except TypeError:
+        return 1 - norm.cdf(data.get(), loc=mean, scale=std_deviation)
 
 
 def coherence_bias(n_observations):
@@ -167,3 +170,32 @@ def coherence_rate_adjustment(firing_rate_condition1,
         (1 / firing_rate_ratio - 1) * firing_rate_condition1 +
         homogeneous_poisson_noise / firing_rate_ratio ** 2) * dt ** 2
     return 1 / np.sqrt(1 + (adjusted_firing_rate / spike_power_spectrum))
+
+
+def power_confidence_intervals(n_tapers, power=1, ci=0.95):
+    '''Confidence intervals for the power spectrum.
+
+    Parameters
+    ----------
+    n_tapers : int
+        Number of tapers
+    power : np.ndarray, optional
+        Multitaper spectrum
+    ci : float
+        Confidence level. Range [0.5, 1]
+
+    Returns
+    -------
+    lower_bound, upper_bound : float
+
+
+    References
+    ----------
+    .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
+           data analysis: a guide for the practicing neuroscientist (MIT Press).
+
+    '''
+    upper_bound = 2 * n_tapers / chi2.ppf(1 - ci, 2 * n_tapers) * power
+    lower_bound = 2 * n_tapers / chi2.ppf(ci, 2 * n_tapers) * power
+
+    return lower_bound, upper_bound

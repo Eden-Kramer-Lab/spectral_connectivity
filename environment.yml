@@ -15,6 +15,8 @@ dependencies:
 - jupyter
 - numpydoc
 - sphinx
+- sphinx-copybutton
+- sphinx-autoapi
 - jupyter
 - jupyterlab
 - nb_conda

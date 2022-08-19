@@ -1,22 +1,27 @@
-# YAML 1.2
-# Metadata for citation of this software according to the CFF format (https://citation-file-format.github.io/)
-cff-version: 1.0.3
-message: If you use this software, please cite it using these metadata.
-# FIXME title as repository name might not be the best name, please make human readable
-title: 'Eden-Kramer-Lab/spectral_connectivity: v0.2.6.dev0'
+cff-version: 1.1.0
+message: "If you use this software, please cite it as below."
+title: 'Eden-Kramer-Lab/spectral_connectivity'
 doi: 10.5281/zenodo.4088934
-# FIXME splitting of full names is error prone, please check if given/family name are correct
 authors:
-- given-names: Eric
-  family-names: Denovellis
-  affiliation: UCSF
-- given-names: Max
-  family-names: Myroshnychenko
-  affiliation: NINDS
-- given-names: Danylo
-  family-names: Ulianych
-  affiliation: KyivAIGroup
-version: 0.2.6.dev0
-date-released: 2020-10-14
+  - family-names: Eric
+    given-names: Denovellis
+    orcid: https://orcid.org/0000-0003-4606-087X
+    affiliation: UCSF, HHMI
+  - family-names: Max
+    given-names: Myroshnychenko
+    affiliation: NINDS
+  - family-names: Danylo
+    given-names: Ulianych
+    affiliation: KyivAIGroup
+  - family-names: Mehrad
+    given-names: Sarmashghi
+    orcid: https://orcid.org/0000-0002-7976-6636
+  - family-names: Emily
+    given-names: Stephen
+    orcid: https://orcid.org/0000-0003-1978-9622
+
+title: Eden-Kramer-Lab/spectral_connectivity
+version: v1.0.2
+date-released: 2022-06-10
 repository-code: https://github.com/Eden-Kramer-Lab/spectral_connectivity
 license: other-open
