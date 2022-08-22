@@ -49,9 +49,6 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 ### Documentation ###
 See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
 
-### Spectral Estimation ###
-1. Multitaper
-
 ### Implemented Measures ###
 Functional
 1. coherency
