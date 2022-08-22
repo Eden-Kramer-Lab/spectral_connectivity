@@ -4,6 +4,7 @@
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/Eden-Kramer-Lab/spectral_connectivity/master)
 
 [**Tutorials**](#tutorials)
+| [**Documentation**](#documentation)
 | [**Installation**](#installation)
 | [**Developer Installation**](#developer-installation)
 
