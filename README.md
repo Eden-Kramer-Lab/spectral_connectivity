@@ -5,7 +5,6 @@
 
 [**Tutorials**](#tutorials)
 | [**Installation**](#installation)
-| [**References**](#references)
 | [**Developer Installation**](#developer-installation)
 
 ## What is spectral_connectivity? ##
@@ -105,6 +104,15 @@ export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
+2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
+```bash
+conda update -q conda
+conda info -a
+conda env create -f environment.yml
+source activate spectral_connectivity
+python setup.py develop
+```
+
 ### Recent publications and pre-prints that used this software ###
 
 + Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality https://doi.org/10.1007/978-3-662-58485-9_11
@@ -115,12 +123,3 @@ https://doi.org/10.1523/JNEUROSCI.0854-21.2021
 + Phencyclidine-induced psychosis causes hypersynchronization and
 disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs https://doi.org/10.1101/2021.02.03.429582
-
-2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
-```bash
-conda update -q conda
-conda info -a
-conda env create -f environment.yml
-source activate spectral_connectivity
-python setup.py develop
-```
