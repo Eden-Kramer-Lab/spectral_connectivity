@@ -5,10 +5,11 @@
 
 [**Tutorials**](#tutorials)
 | [**Documentation**](#documentation)
+| [**Usage Example**](#usage-example)
 | [**Installation**](#installation)
 | [**Developer Installation**](#developer-installation)
 
-## What is spectral_connectivity? ##
+### What is spectral_connectivity? ###
 `spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), spectral has several differences:
 
 + it is designed to handle multiple time series at once
@@ -20,7 +21,7 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 + easier user interface for the multitaper fourier transform
 + all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
 
-## Tutorials ##
+### Tutorials ###
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
 
 ### Usage Example ###
