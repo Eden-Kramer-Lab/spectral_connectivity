@@ -3,6 +3,13 @@
 [![DOI](https://zenodo.org/badge/104382538.svg)](https://zenodo.org/badge/latestdoi/104382538)
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/Eden-Kramer-Lab/spectral_connectivity/master)
 
+[**Tutorials**](#tutorials)
+| [**Documentation**](#documentation)
+| [**Usage Example**](#usage-example)
+| [**Installation**](#installation)
+| [**Developer Installation**](#developer-installation)
+
+### What is spectral_connectivity? ###
 `spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), spectral has several differences:
 
 + it is designed to handle multiple time series at once
@@ -12,7 +19,9 @@
 + it implements the canonical coherence, which can
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
++ all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
 
+### Tutorials ###
 See the notebooks ([\#1](examples/Tutorial_On_Simulated_Examples.ipynb), [\#2](examples/Tutorial_Using_Paper_Examples.ipynb)) for more information on how to use the package.
 
 ### Usage Example ###
@@ -26,7 +35,7 @@ m = Multitaper(time_series=signals,
                time_window_duration=0.060,
                time_window_step=0.060,
                start_time=time[0])
-               
+
 # Sets up computing connectivity measures/power from multitaper spectral estimate
 c = Connectivity.from_multitaper(m)
 
@@ -39,9 +48,6 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 
 ### Documentation ###
 See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
-
-### Spectral Estimation ###
-1. Multitaper
 
 ### Implemented Measures ###
 Functional
@@ -105,3 +111,14 @@ conda env create -f environment.yml
 source activate spectral_connectivity
 python setup.py develop
 ```
+
+### Recent publications and pre-prints that used this software ###
+
++ Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality https://doi.org/10.1007/978-3-662-58485-9_11
++ Network Path Convergence Shapes Low-Level Processing in the Visual Cortex https://doi.org/10.3389/fnsys.2021.645709
++ Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
+https://doi.org/10.1523/JNEUROSCI.0854-21.2021
++ Unifying Pairwise Interactions in Complex Dynamics https://doi.org/10.48550/arXiv.2201.11941
++ Phencyclidine-induced psychosis causes hypersynchronization and
+disruption of connectivity within prefrontal-hippocampal circuits
+that is rescued by antipsychotic drugs https://doi.org/10.1101/2021.02.03.429582
