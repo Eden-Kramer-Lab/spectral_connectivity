@@ -69,6 +69,13 @@ def non_negative_frequencies(axis):
     return decorator
 
 
+def nonsorted_unique(x):
+    """Non-sorted and unique list of elements."""
+    x = np.asarray(x)
+    _, u_idx = np.unique(x, return_index=True)
+    return x[np.sort(u_idx)]
+
+
 class Connectivity:
     '''Computes brain connectivity measures based on the cross spectral
     matrix.
@@ -129,24 +136,28 @@ class Connectivity:
 
     def __init__(self, fourier_coefficients,
                  expectation_type='trials_tapers', frequencies=None,
-                 time=None):
+                 time=None, blocks=None, dtype=xp.complex128):
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         self._frequencies = frequencies
+        self._blocks = blocks
+        self._dtype = dtype
         try:
             self.time = xp.asnumpy(time)
         except AttributeError:
             self.time = time
 
     @classmethod
-    def from_multitaper(cls, multitaper_instance,
-                        expectation_type='trials_tapers'):
+    def from_multitaper(
+            cls, multitaper_instance, expectation_type='trials_tapers',
+            blocks=None, dtype=xp.complex128):
         '''Construct connectivity class using a multitaper instance'''
         return cls(
             fourier_coefficients=multitaper_instance.fft(),
             expectation_type=expectation_type,
             time=multitaper_instance.time,
-            frequencies=multitaper_instance.frequencies
+            frequencies=multitaper_instance.frequencies,
+            blocks=blocks, dtype=dtype
         )
 
     @property
@@ -181,13 +192,59 @@ class Connectivity:
 
         '''
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
-        return _complex_inner_product(fourier_coefficients,
-                                      fourier_coefficients)
+        return _complex_inner_product(
+            fourier_coefficients, fourier_coefficients, dtype=self._dtype)
+
+    def _expectation_cross_spectral_matrix(self, fcn=None, dtype=None):
+        """Full or block wise CSM computation."""
+        # define identity function
+        if fcn is None:
+            def fcn(x): return x
+
+        if not isinstance(self._blocks, int) or (self._blocks < 1):
+            # compute all connections at once
+            return self._expectation(fcn(self._cross_spectral_matrix))
+        else:  # compute blocks of connections
+            # get fourier coefficients
+            fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+            fourier_coefficients = fourier_coefficients.astype(self._dtype)
+
+            # define sections
+            n_signals = fourier_coefficients.shape[-2]
+            _is, _it = xp.triu_indices(n_signals, k=1)
+            sections = xp.array_split(xp.c_[_is, _it], self._blocks)
+
+            # prepare final output
+            csm_shape = list(self._power.shape)
+            csm_shape += [csm_shape[-1]]
+            dtype = self._dtype if dtype is None else dtype
+            csm = np.zeros(csm_shape, dtype=dtype)
+
+            for sec in sections:
+                # get unique indices
+                _sxu = nonsorted_unique(sec[:, 0])
+                _syu = nonsorted_unique(sec[:, 1])
+
+                # computes block of connections
+                _out = self._expectation(
+                    fcn(
+                        _complex_inner_product(
+                            fourier_coefficients[..., _sxu, :],
+                            fourier_coefficients[..., _syu, :],
+                            dtype=self._dtype)
+                    )
+                )
+
+                # fill the output array (symmetric filling)
+                csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
+                csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
+
+        return csm
 
     @property
     def _minimum_phase_factor(self):
         return minimum_phase_decomposition(
-            self._expectation(self._cross_spectral_matrix))
+            self._expectation_cross_spectral_matrix())
 
     @property
     @non_negative_frequencies(axis=-3)
@@ -235,8 +292,7 @@ class Connectivity:
         norm = xp.sqrt(self._power[..., :, xp.newaxis] *
                        self._power[..., xp.newaxis, :])
         norm[norm == 0] = xp.nan
-        complex_coherencey = (
-            self._expectation(self._cross_spectral_matrix) / norm)
+        complex_coherencey = self._expectation_cross_spectral_matrix() / norm
         n_signals = self.fourier_coefficients.shape[-1]
         diagonal_ind = xp.arange(0, n_signals)
         complex_coherencey[..., diagonal_ind, diagonal_ind] = xp.nan
@@ -293,7 +349,7 @@ class Connectivity:
 
         '''
         return xp.abs(
-            self._expectation(self._cross_spectral_matrix).imag /
+            self._expectation_cross_spectral_matrix().imag /
             xp.sqrt(self._power[..., :, xp.newaxis] *
                     self._power[..., xp.newaxis, :]))
 
@@ -445,9 +501,8 @@ class Connectivity:
                signals. Human Brain Mapping 8, 194-208.
 
         '''
-        return self._expectation(
-            self._cross_spectral_matrix /
-            xp.abs(self._cross_spectral_matrix))
+        def fcn(x): return x / xp.abs(x)
+        return self._expectation_cross_spectral_matrix(fcn=fcn)
 
     @asnumpy
     @non_negative_frequencies(axis=-3)
@@ -479,7 +534,8 @@ class Connectivity:
                sources. Human Brain Mapping 28, 1178-1193.
 
         '''
-        return self._expectation(xp.sign(self._cross_spectral_matrix.imag))
+        def fcn(x): return xp.sign(x.imag)
+        return self._expectation_cross_spectral_matrix(fcn=fcn)
 
     @asnumpy
     @non_negative_frequencies(-3)
@@ -501,11 +557,11 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         '''
-        weights = self._expectation(
-            xp.abs(self._cross_spectral_matrix.imag))
+        def fcn(x): return xp.abs(x.imag)
+        weights = self._expectation_cross_spectral_matrix(fcn=fcn)
         weights[weights < xp.finfo(float).eps] = 1
-        return self._expectation(
-            self._cross_spectral_matrix.imag) / weights
+        return (self._expectation_cross_spectral_matrix(
+            fcn=lambda x: x.imag) / weights)
 
     @asnumpy
     def debiased_squared_phase_lag_index(self):
@@ -551,18 +607,26 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         '''
+        # define functions
+        def fcn_imag(x): return x.imag
+        def fcn_imag_sq(x): return x.imag ** 2
+        def fcn_abs_imag(x): return xp.abs(x.imag)
+
         n_observations = self.n_observations
-        imaginary_cross_spectral_matrix_sum = self._expectation(
-            self._cross_spectral_matrix.imag) * n_observations
-        squared_imaginary_cross_spectral_matrix_sum = self._expectation(
-            self._cross_spectral_matrix.imag ** 2) * n_observations
-        imaginary_cross_spectral_matrix_magnitude_sum = self._expectation(
-            xp.abs(self._cross_spectral_matrix.imag)) * n_observations
-        weights = (imaginary_cross_spectral_matrix_magnitude_sum ** 2 -
-                   squared_imaginary_cross_spectral_matrix_sum)
+        imaginary_csm_sum = self._expectation_cross_spectral_matrix(
+            fcn=fcn_imag
+        ) * n_observations
+        squared_imaginary_csm_sum = self._expectation_cross_spectral_matrix(
+            fcn=fcn_imag_sq
+        ) * n_observations
+        imaginary_csm_magnitude_sum = self._expectation_cross_spectral_matrix(
+            fcn=fcn_abs_imag
+        ) * n_observations
+        weights = (imaginary_csm_magnitude_sum ** 2 -
+                   squared_imaginary_csm_sum)
         weights[weights == 0] = xp.nan
-        return (imaginary_cross_spectral_matrix_sum ** 2 -
-                squared_imaginary_cross_spectral_matrix_sum) / weights
+        return (imaginary_csm_sum ** 2 -
+                squared_imaginary_csm_sum) / weights
 
     @asnumpy
     def pairwise_phase_consistency(self):
@@ -603,8 +667,7 @@ class Connectivity:
                American Statistical Association 77, 304.
 
         '''
-        cross_spectral_matrix = self._expectation(
-            self._cross_spectral_matrix)
+        cross_spectral_matrix = self._expectation_cross_spectral_matrix()
         n_signals = cross_spectral_matrix.shape[-1]
         total_power = self._power
         n_frequencies = total_power.shape[-2]
@@ -1058,10 +1121,10 @@ def _squared_magnitude(x):
     return xp.abs(x) ** 2
 
 
-def _complex_inner_product(a, b):
+def _complex_inner_product(a, b, dtype=xp.complex128):
     '''Measures the orthogonality (similarity) of complex arrays in
     the last two dimensions.'''
-    return xp.matmul(a, _conjugate_transpose(b))
+    return xp.matmul(a, _conjugate_transpose(b), dtype=dtype)
 
 
 def _remove_instantaneous_causality(noise_covariance):
