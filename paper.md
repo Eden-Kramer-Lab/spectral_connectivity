@@ -2,46 +2,52 @@
 title: 'Spectral Connectivity'
 tags:
   - Python
-  - neuroscience
-  - multitaper analysis
-  - spectral estimates
-  - brain connectivity measures
-  - fourier transform
+  - Neuroscience
+  - Multitaper analysis
+  - Spectral estimation
+  - Brain connectivity measures
+  - Fourier transform
 authors:
-  - name: Eric Denovellis
+  - name: Eric L. Denovellis
     orcid: 0000-0003-4606-087X
-    affiliation: 1
-  - name: Max Myroshnychenko
-    affiliation: 2
-  - name: Danylo Ulianych
-    affiliation: 3
+    affiliation: 1, 2, 3
   - name: Mehrad Sarmashghi
     orcid: 0000-0002-7976-6636
     affiliation: 4
+  - name: Maxym Myroshnychenko
+    affiliation: 5
+    orcid: 0000-0001-7790-257X
+  - name: Emily P. Stephen
+    orcid: 0000-0003-1978-9622
+    affiliation: 6
 affiliations:
- - name: University of California, San Francisco
+ - name: Howard Hughes Medical Institute, University of California, San Francisco, San Francisco, California
    index: 1
- - name:  University of California, San Francisco
+ - name: Departments of Physiology and Psychiatry, University of California, San Francisco, San Francisco, California
    index: 2
- - name:  University of California, San Francisco
+ - name: Kavli Institute for Fundamental Neuroscience, University of California, San Francisco, San Francisco, California
    index: 3
- - name: Boston University 
+ - name: Division of Systems Engineering, Boston University
    index: 4
-date: 10 March 2022
+ - name: National Institutes of Health
+   index: 5
+ - name: Department of Mathematics and Statistics, Boston University
+   index: 6
+date: 10 September 2022
 bibliography: paper.bib
 ---
 
 # Summary
 
-Characterizing oscillatory dynamics in brain is critical to understand functional connectivity among brain areas in system neuroscience. Spectral analysis techniques are widely used for analyzing the oscillatory behaviors and allow for understanding of brain functions. There are many spectral analysis methods such as wavelet, multitaper and P<sub>episods</sub> . Here, we focused on multitaper spectra technique which provides a smooth estimation of spectral density function of recorded time series signals based on their Fourier transform using multiple tapers with different shapes. Multitaper is a non-parametric estimation that allows for reducing the bias and variance of the estimation simultaneously [@dhamala2008analyzing]. 
-
-`spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. There are other python packages that have been already developed to do these analysis; however, spectral has several differences: (1) it is designed to handle multiple time series at once, (2) it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed,
-(4) it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead, (5) it implements the non-parametric version of the spectral granger causality in Python, (6) it implements the canonical coherence, which can efficiently summarize brain-area level coherences from multielectrode recordings, and (7) easier user interface for the multitaper fourier transform
-This software is developed based on methodologies that represented in a number scientific publications ([@dhamala2008analyzing], [@nolte2004identifying], [@stephen2015characterizing], [@cimenser2011tracking], [@lachaux1999measuring], [@stam2007phase], [@vinck2011improved], [@vinck2010pairwise], [@geweke1982measurement], [@kaminski1991new], [@baccala1998studying], [@baccala2001partial], [@baccala2007generalized], [@korzeniewska2003determination], [@gotman1983measurement], [@nolte2008robustly], [@aoi2015rate]).
+In neuroscience, characterizing the oscillatory dynamics of the brain is critical to understanding how brain areas interact and function. Neurons tend to fluctuate rhythmically in excitation – both through intrinsic currents at the cellular level and as groups. Brain oscillations and their relationships can indicate the difference between normal and pathological states such as in Alzheimer's and epilepsy. Spectral analysis techniques such as multitaper and wavelet analysis are widely used for decomposing signals into oscillatory components and connectivity measures are used to determine the relationships between those oscillatory components, indicating possible communication between brain areas. Because these analyses are so central to neuroscience, it is important to have a well-tested, standardized, and lightweight software package to compute these brain connectivity measures at scale.
 
 
+# Statement of Need
+
+`spectral_connectivity` is a python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures. Python is a programming language increasingly being used in the neurosciences, but there are relatively few software packages written in python. For computing spectral estimates and frequency-domain brain connectivity measures, there are two main packages: `nitime` and `mne-python`. `spectral_connectivity` has several differences. The neurosciences are also undergoing period of great technological development; more and more signals are being collected simultaneously and the duration of these signals is becoming longer as chronic recordings become possible. `spectral_connectivity` is designed to handle multiple time series, it can exploit GPUs for faster and more efficient computation. In addition, it can block compute important quantities such as the cross-spectral matrix in order to reduce memory burdens caused by large datasets. `spectral_connectivity` also implements several connectivity measures that have not previously been implemented in python such as the non-parametric version of the spectral granger causality and canonical coherence. Finally, `spectral_connectivity` is designed to be a lightweight package that has a simple API and can be easily be incorporated with other packages.
+
+`spectral_connectivity` has already contributed to a number of publications and pre-prints in neuroscience ([@KuhnertDetectionDirectedConnectivities2019], [@VargaNetworkPathConvergence2021], [@LauroSubthalamicCorticalNetwork2021],
+  , [@Delgado-SallentPhencyclidineinducedpsychosiscauses2021]) and one in physics [@CliffUnifyingPairwiseInteractions2022].
 
 # Acknowledgements
-
-
-# References
+We thank Uri T. Eden for support.
