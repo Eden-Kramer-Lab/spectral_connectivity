@@ -1,4 +1,5 @@
-on: [push]
+name: Paper Test
+on: push
 
 jobs:
   paper:
