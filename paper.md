@@ -51,3 +51,5 @@ In neuroscience, characterizing the oscillatory dynamics of the brain is critica
 
 # Acknowledgements
 We thank Uri T. Eden for support and mentorship during the creation of this package.
+
+# Citations
