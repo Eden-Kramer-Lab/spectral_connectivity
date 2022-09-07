@@ -15,11 +15,11 @@ authors:
     orcid: 0000-0002-7976-6636
     affiliation: 4
   - name: Maxym Myroshnychenko
-    affiliation: 5
+    affiliation: 5, 6
     orcid: 0000-0001-7790-257X
   - name: Emily P. Stephen
     orcid: 0000-0003-1978-9622
-    affiliation: 6
+    affiliation: 7, 8
 affiliations:
  - name: Howard Hughes Medical Institute, University of California, San Francisco, San Francisco, California
    index: 1
@@ -27,12 +27,16 @@ affiliations:
    index: 2
  - name: Kavli Institute for Fundamental Neuroscience, University of California, San Francisco, San Francisco, California
    index: 3
- - name: Division of Systems Engineering, Boston University
+ - name: Division of Systems Engineering, Boston University, Boston, Massachusetts
    index: 4
- - name: National Institutes of Health
+ - name: National Institutes of Health, Bethesda, Maryland
    index: 5
- - name: Department of Mathematics and Statistics, Boston University
+ - name: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland
    index: 6
+ - name: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts
+   index: 7
+ - name: Center for Systems Neuroscience, Boston University, Boston, Massachusetts
+   index: 8
 date: 10 September 2022
 bibliography: paper.bib
 ---
