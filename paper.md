@@ -11,12 +11,12 @@ authors:
   - name: Eric L. Denovellis
     orcid: 0000-0003-4606-087X
     affiliation: 1, 2, 3
+  - name: Maxym Myroshnychenko
+    affiliation: 4
+    orcid: 0000-0001-7790-257
   - name: Mehrad Sarmashghi
     orcid: 0000-0002-7976-6636
-    affiliation: 4
-  - name: Maxym Myroshnychenko
     affiliation: 5
-    orcid: 0000-0001-7790-257
   - name: Emily P. Stephen
     orcid: 0000-0003-1978-9622
     affiliation: 6, 7
@@ -27,9 +27,9 @@ affiliations:
    index: 2
  - name: Kavli Institute for Fundamental Neuroscience, University of California, San Francisco, San Francisco, California
    index: 3
- - name: Division of Systems Engineering, Boston University, Boston, Massachusetts
-   index: 4
  - name: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland
+   index: 4
+ - name: Division of Systems Engineering, Boston University, Boston, Massachusetts
    index: 5
  - name: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts
    index: 6
