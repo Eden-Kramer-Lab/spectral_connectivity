@@ -13,7 +13,7 @@ authors:
     affiliation: 1, 2, 3
   - name: Maxym Myroshnychenko
     affiliation: 4
-    orcid: 0000-0001-7790-257
+    orcid: 0000-0001-7790-257X
   - name: Mehrad Sarmashghi
     orcid: 0000-0002-7976-6636
     affiliation: 5
