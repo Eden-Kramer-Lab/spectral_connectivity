@@ -7,12 +7,10 @@ authors:
     given-names: Denovellis
     orcid: https://orcid.org/0000-0003-4606-087X
     affiliation: UCSF, HHMI
-  - family-names: Max
+  - family-names: Maxym
     given-names: Myroshnychenko
     affiliation: NINDS
-  - family-names: Danylo
-    given-names: Ulianych
-    affiliation: KyivAIGroup
+    orcid: https://orcid.org/0000-0001-7790-257X
   - family-names: Mehrad
     given-names: Sarmashghi
     orcid: https://orcid.org/0000-0002-7976-6636
@@ -21,7 +19,7 @@ authors:
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
-version: v1.0.2
-date-released: 2022-06-10
+version: v1.0.3
+date-released: 2022-09-14
 repository-code: https://github.com/Eden-Kramer-Lab/spectral_connectivity
 license: other-open
