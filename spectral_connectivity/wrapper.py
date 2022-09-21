@@ -131,8 +131,8 @@ def multitaper_connectivity(time_series, sampling_frequency,
     if method is None:
         # All implemented methods except internal
         # TODO is there a better way to get all Connectivity methods?
-        bad_methods = ['delay', 'n_observations', 'frequencies',
-                       'from_multitaper', 'phase_slope_index']
+        bad_methods = ['delay', 'n_observations', 'frequencies', 'all_frequencies',
+                       'global_coherence', 'from_multitaper', 'phase_slope_index']
         method = [x for x in dir(Connectivity) if not x.startswith(
             '_') and x not in bad_methods]
     elif type(method) == str:
