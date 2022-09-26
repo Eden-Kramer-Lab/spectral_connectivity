@@ -1,11 +1,11 @@
 import numpy as np
 from scipy.stats import chi2, norm
 
-np.seterr(invalid='ignore')
+np.seterr(invalid="ignore")
 
 
 def Benjamini_Hochberg_procedure(p_values, alpha=0.05):
-    '''Corrects for multiple comparisons and returns the significant
+    """Corrects for multiple comparisons and returns the significant
     p-values by controlling the false discovery rate at level `alpha`
     using the Benjamani-Hochberg procedure.
 
@@ -20,14 +20,12 @@ def Benjamini_Hochberg_procedure(p_values, alpha=0.05):
         A boolean array the same shape as `p_values` indicating whether the
         null hypothesis has been rejected (True) or failed to reject
         (False).
-    '''
+    """
     p_values = np.array(p_values)
-    threshold_line = np.linspace(0, alpha, num=p_values.size + 1,
-                                 endpoint=True)[1:]
+    threshold_line = np.linspace(0, alpha, num=p_values.size + 1, endpoint=True)[1:]
     sorted_p_values = np.sort(p_values.flatten())
     try:
-        threshold_ind = np.max(
-            np.where(sorted_p_values <= threshold_line)[0])
+        threshold_ind = np.max(np.where(sorted_p_values <= threshold_line)[0])
         threshold = sorted_p_values[threshold_ind]
     except ValueError:  # There are no values below threshold
         threshold = -1
@@ -41,13 +39,14 @@ def Bonferroni_correction(p_values, alpha=0.05):
 
 MULTIPLE_COMPARISONS = dict(
     Benjamini_Hochberg_procedure=Benjamini_Hochberg_procedure,
-    Bonferroni_correction=Bonferroni_correction
+    Bonferroni_correction=Bonferroni_correction,
 )
 
 
-def adjust_for_multiple_comparisons(p_values, alpha=0.05,
-                                    method='Benjamini_Hochberg_procedure'):
-    '''Corrects for multiple comparisons and returns the significant
+def adjust_for_multiple_comparisons(
+    p_values, alpha=0.05, method="Benjamini_Hochberg_procedure"
+):
+    """Corrects for multiple comparisons and returns the significant
     p-values.
 
     Parameters
@@ -65,13 +64,13 @@ def adjust_for_multiple_comparisons(p_values, alpha=0.05,
         null hypothesis has been rejected (True) or failed to reject
         (False).
 
-    '''
+    """
     # TODO: add axis keyword?
     return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
 
 
 def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
-    '''Transform the coherence magnitude to an approximately normal
+    """Transform the coherence magnitude to an approximately normal
     distribution.
 
     If two coherencies are provided, then the function returns the
@@ -94,14 +93,12 @@ def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
         Either the difference from 0 mean or, if another coherency is
         provided, the difference from that coherency.
 
-    '''
+    """
     coherence_magnitude1 = np.abs(coherency1)
-    coherence_magnitude1[coherence_magnitude1 >= 1] = (
-        1 - np.finfo(float).eps)
+    coherence_magnitude1[coherence_magnitude1 >= 1] = 1 - np.finfo(float).eps
 
     coherence_magnitude2 = np.array(np.abs(coherency2))
-    coherence_magnitude2[coherence_magnitude2 >= 1] = (
-        1 - np.finfo(float).eps)
+    coherence_magnitude2[coherence_magnitude2 >= 1] = 1 - np.finfo(float).eps
 
     z1 = np.arctanh(coherence_magnitude1) - bias1
     z2 = np.arctanh(coherence_magnitude2) - bias2
@@ -109,9 +106,9 @@ def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
 
 
 def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
-    '''Given data, returns the probability the data was generated from
+    """Given data, returns the probability the data was generated from
     a normal distribution with `mean` and `std_deviation`
-    '''
+    """
     try:
         return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
     except TypeError:
@@ -119,17 +116,21 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
 
 
 def coherence_bias(n_observations):
-    ''' Enochson and Goodman (1965)
-        Bokil et al. (2007)
-    '''
+    """Enochson and Goodman (1965)
+    Bokil et al. (2007)
+    """
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)
 
 
-def coherence_rate_adjustment(firing_rate_condition1,
-                              firing_rate_condition2, spike_power_spectrum,
-                              homogeneous_poisson_noise=0, dt=1):
-    '''Correction for the spike-field or spike-spike coherence when the
+def coherence_rate_adjustment(
+    firing_rate_condition1,
+    firing_rate_condition2,
+    spike_power_spectrum,
+    homogeneous_poisson_noise=0,
+    dt=1,
+):
+    """Correction for the spike-field or spike-spike coherence when the
     conditions have different firing rates.
 
     When comparing the coherence of two conditions, a change in firing rate
@@ -164,17 +165,18 @@ def coherence_rate_adjustment(firing_rate_condition1,
            Rate-adjusted spike-LFP coherence comparisons from spike-train
            statistics. Journal of Neuroscience Methods 240, 141-153.
 
-    '''
+    """
     # alpha in [1]
     firing_rate_ratio = firing_rate_condition2 / firing_rate_condition1
     adjusted_firing_rate = (
-        (1 / firing_rate_ratio - 1) * firing_rate_condition1 +
-        homogeneous_poisson_noise / firing_rate_ratio ** 2) * dt ** 2
+        (1 / firing_rate_ratio - 1) * firing_rate_condition1
+        + homogeneous_poisson_noise / firing_rate_ratio**2
+    ) * dt**2
     return 1 / np.sqrt(1 + (adjusted_firing_rate / spike_power_spectrum))
 
 
 def power_confidence_intervals(n_tapers, power=1, ci=0.95):
-    '''Confidence intervals for the power spectrum.
+    """Confidence intervals for the power spectrum.
 
     Parameters
     ----------
@@ -195,7 +197,7 @@ def power_confidence_intervals(n_tapers, power=1, ci=0.95):
     .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
            data analysis: a guide for the practicing neuroscientist (MIT Press).
 
-    '''
+    """
     upper_bound = 2 * n_tapers / chi2.ppf(1 - ci, 2 * n_tapers) * power
     lower_bound = 2 * n_tapers / chi2.ppf(ci, 2 * n_tapers) * power
 
