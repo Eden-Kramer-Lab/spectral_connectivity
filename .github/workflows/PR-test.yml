@@ -35,3 +35,8 @@ jobs:
       shell: bash -l {0}
       run: |
         pytest --cov=spectral_connectivity tests/
+    - name: Test notebooks
+      shell: bash -l {0}
+      run: |
+        jupyter nbconvert --to notebook --ExecutePreprocessor.kernel_name=python3 --execute examples/Tutorial_On_Simulated_Examples.ipynb
+        jupyter nbconvert --to notebook --ExecutePreprocessor.kernel_name=python3 --execute examples/Tutorial_Using_Paper_Examples.ipynb
