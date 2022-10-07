@@ -12,6 +12,8 @@ dependencies:
 - pytest-cov
 - coveralls
 - setuptools
+- black
+- flake8
 - jupyter
 - numpydoc
 - sphinx

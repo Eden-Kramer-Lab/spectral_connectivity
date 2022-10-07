@@ -84,6 +84,7 @@ Directed
 ### Package Dependencies ###
 
 `spectral_connectivity` requires:
+
 + python
 + numpy
 + matplotlib
@@ -120,11 +121,9 @@ hash -r
 2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
 
 ```bash
-conda update -q conda
-conda info -a
 conda env create -f environment.yml
-source activate spectral_connectivity
-python setup.py develop
+conda activate spectral_connectivity
+pip install -e .
 ```
 
 ### Recent publications and pre-prints that used this software ###
