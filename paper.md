@@ -1,5 +1,5 @@
 ---
-title: 'Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU'
+title: 'Spectral Connectivity: A Python Package for Computing Multitaper Spectral Estimates and Frequency-Domain Brain Connectivity Measures on the CPU and GPU'
 tags:
   - Python
   - Neuroscience
@@ -42,7 +42,6 @@ bibliography: paper.bib
 # Summary
 
 In neuroscience, characterizing the oscillatory dynamics of the brain is critical to understanding how brain areas interact and function. Neuronal activity tends to fluctuate rhythmically – both through intrinsic currents at the cellular level and through groups of neurons. Brain oscillations and their relationships can indicate the difference between normal and pathological brain states such as Alzheimer's and epilepsy. Spectral analysis techniques such as multitaper and wavelet analysis are widely used for decomposing signals into oscillatory components. Connectivity measures are used to determine the relationships between those oscillatory components, indicating possible communication between brain areas. Because these analyses are central to neuroscience and technological advances in recording are increasing the amount of simultaneously recorded signals, it is important to have a well-tested, standardized, and lightweight software package to compute these brain connectivity measures at scale.
-
 
 # Statement of Need
 
