@@ -38,12 +38,11 @@ jobs:
     - name: Run tests
       shell: bash -l {0}
       run: |
-        pytest --cov=spectral_connectivity tests/ --cov-report xml
+        pytest --cov=spectral_connectivity tests/ --cov-report lcov
     - name: Coveralls
       uses: coverallsapp/github-action@master
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        path-to-lcov: coverage.xml
     - name: Test notebooks
       shell: bash -l {0}
       run: |
