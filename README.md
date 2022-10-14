@@ -79,14 +79,14 @@ Functional
 
 Directed
 
-10. directed_transfer_function
-11. directed_coherence
-12. partial_directed_coherence
-13. generalized_partial_directed_coherence
-14. direct_directed_transfer_function
-15. group_delay
-16. phase_lag_index
-17. pairwise_spectral_granger_prediction
+11. directed_transfer_function
+12. directed_coherence
+13. partial_directed_coherence
+14. generalized_partial_directed_coherence
+15. direct_directed_transfer_function
+16. group_delay
+17. phase_lag_index
+18. pairwise_spectral_granger_prediction
 
 ### Package Dependencies ###
 
