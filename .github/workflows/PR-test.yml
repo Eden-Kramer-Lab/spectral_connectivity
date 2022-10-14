@@ -39,6 +39,10 @@ jobs:
       shell: bash -l {0}
       run: |
         pytest --cov=spectral_connectivity tests/
+    - name: Coveralls
+      uses: coverallsapp/github-action@master
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
     - name: Test notebooks
       shell: bash -l {0}
       run: |
