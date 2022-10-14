@@ -41,7 +41,7 @@ bibliography: paper.bib
 
 # Summary
 
-In neuroscience, characterizing the oscillatory dynamics of the brain is critical to understanding how brain areas interact and function. Neuronal activity tends to fluctuate rhythmically – both through intrinsic currents at the cellular level and as groups. Brain oscillations and their relationships can indicate the difference between normal and pathological brain states such as Alzheimer's and epilepsy. Spectral analysis techniques such as multitaper and wavelet analysis are widely used for decomposing signals into oscillatory components and connectivity measures are used to determine the relationships between those oscillatory components, indicating possible communication between brain areas. Because these analyses are central to neuroscience and technological advances in recording are increasing the amount of simultaneously recorded signals, it is important to have a well-tested, standardized, and lightweight software package to compute these brain connectivity measures at scale.
+In neuroscience, characterizing the oscillatory dynamics of the brain is critical to understanding how brain areas interact and function. Neuronal activity tends to fluctuate rhythmically – both through intrinsic currents at the cellular level and through groups of neurons. Brain oscillations and their relationships can indicate the difference between normal and pathological brain states such as Alzheimer's and epilepsy. Spectral analysis techniques such as multitaper and wavelet analysis are widely used for decomposing signals into oscillatory components. Connectivity measures are used to determine the relationships between those oscillatory components, indicating possible communication between brain areas. Because these analyses are central to neuroscience and technological advances in recording are increasing the amount of simultaneously recorded signals, it is important to have a well-tested, standardized, and lightweight software package to compute these brain connectivity measures at scale.
 
 
 # Statement of Need
@@ -52,6 +52,7 @@ In neuroscience, characterizing the oscillatory dynamics of the brain is critica
   , @Delgado-SallentPhencyclidineinducedpsychosiscauses2021]. Interestingly, it has also contributed to a publication in physics [@CliffUnifyingPairwiseInteractions2022], showing its versatility and easy of use. We hope this package will continue to be useful to the neuroscience community, particularly for non-human electrophysiology data.
 
 # Acknowledgements
+
 We thank Uri T. Eden for support and mentorship during the creation of this package.
 
 # Citations
