@@ -22,3 +22,38 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 If you are fixing a known issue, please add the issue number to the PR message.
 
 If you are fixing a new issue, file an issue and then reference it in the PR.
+
+### How to build the documenation
+
+1. Change directory to `spectral_connectivity/docs`
+2. Run `make html` to preview the docs.
+3. A commit to the master branch will automatically build the docs on readthedocs.
+
+### How to make a release
+
+1. Bump the version number and tag the commit
+2. Upload to pypi
+
+```bash
+git clean -xfd
+python setup.py sdist bdist_wheel
+twine upload dist/*
+```
+
+3. Upload to conda. This requires anaconda and conda-build.
+
+```bash
+CONDA_DIR=~/miniconda3
+USER=edeno
+
+conda skeleton pypi spectral_connectivity --noarch-python --python-version 3.6
+
+conda build spectral_connectivity --no-anaconda-upload --python 3.6
+
+anaconda upload $CONDA_DIR/conda-bld/*/spectral_connectivity-*.tar.bz2 -u $USER --skip
+
+rm -r spectral_connectivity
+conda build purge-all
+```
+
+4. Release on github.
