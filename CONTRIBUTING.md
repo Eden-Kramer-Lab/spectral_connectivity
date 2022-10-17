@@ -57,3 +57,7 @@ conda build purge-all
 ```
 
 4. Release on github.
+
+## Authorship on manuscripts
+
+Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not soley determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).
