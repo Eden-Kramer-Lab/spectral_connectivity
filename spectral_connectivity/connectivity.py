@@ -78,7 +78,7 @@ def _non_negative_frequencies(axis):
     return decorator
 
 
-def nonsorted_unique(x):
+def _nonsorted_unique(x):
     """Non-sorted and unique list of elements."""
     x = np.asarray(x)
     _, u_idx = np.unique(x, return_index=True)
@@ -221,8 +221,8 @@ class Connectivity:
 
             for sec in sections:
                 # get unique indices
-                _sxu = nonsorted_unique(sec[:, 0])
-                _syu = nonsorted_unique(sec[:, 1])
+                _sxu = _nonsorted_unique(sec[:, 0])
+                _syu = _nonsorted_unique(sec[:, 1])
 
                 # computes block of connections
                 _out = self._expectation(
