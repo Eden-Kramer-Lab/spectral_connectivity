@@ -38,3 +38,12 @@ spectral_connectivity.transforms module
     :members:
     :undoc-members:
     :show-inheritance:
+
+
+spectral_connectivity.wrapper module
+---------------------------------------
+
+.. automodule:: spectral_connectivity.wrapper
+    :members:
+    :undoc-members:
+    :show-inheritance:
