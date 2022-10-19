@@ -13,9 +13,9 @@ def connectivity_to_xarray(
     m, method="coherence_magnitude", signal_names=None, squeeze=False, **kwargs
 ):
     """
-    calculate connectivity using `method`. Returns an xarray
-    with dimensions of ['Time', 'Frequency', 'Source', 'Target']
-    or ['Time', 'Frequency'] if squeeze=True
+    Calculate connectivity using `method`. Returns an xarray
+    with dimensions of ['time', 'frequency', 'source', 'target']
+    or ['time', 'frequency'] if squeeze=True
 
     Parameters
     -----------
@@ -53,7 +53,7 @@ def connectivity_to_xarray(
         xar = xr.DataArray(
             connectivity_mat,
             coords=[connectivity.time, connectivity.frequencies],
-            dims=["Time", "Frequency"],
+            dims=["time", "frequency"],
         )
 
     else:
@@ -66,7 +66,7 @@ def connectivity_to_xarray(
                 signal_names,
                 signal_names,
             ],
-            dims=["Time", "Frequency", "Source", "Target"],
+            dims=["time", "frequency", "source", "target"],
         )
 
     xar.name = method
