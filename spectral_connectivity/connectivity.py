@@ -111,30 +111,6 @@ class Connectivity:
     frequencies : array, shape (n_fft_samples,)
     time : array, shape (n_time_windows,)
 
-    Methods
-    -------
-    coherency
-    coherence_magnitude
-    coherence_phase
-    canonical_coherence
-    imaginary_coherence
-    phase_locking_value
-    phase_lag_index
-    weighted_phase_lag_index
-    debiased_squared_phase_lag_index
-    debiased_squared_weighted_phase_lag_index
-    pairwise_phase_consistency
-    directed_transfer_function
-    directed_coherence
-    partial_directed_coherence
-    generalized_partial_directed_coherence
-    direct_directed_transfer_function
-    group_delay
-    phase_lag_index
-    pairwise_spectral_granger_prediction
-    conditional_spectral_granger_prediction (Not implemented)
-    blockwise_spectral_granger_prediction (Not implemented)
-
     References
     ----------
     .. [1] Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing
