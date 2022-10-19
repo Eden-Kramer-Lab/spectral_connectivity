@@ -42,8 +42,8 @@ EXPECTATION = {
 }
 
 
-def asnumpy(connectivity_measure):
-    """If cupy array, then return as numpy. Else return numpy array"""
+def _asnumpy(connectivity_measure):
+    """Decorator that transforms cupy array to numpy array. If cupy is not installed, then return original."""
 
     @wraps(connectivity_measure)
     def wrapper(*args, **kwargs):
@@ -59,7 +59,7 @@ def asnumpy(connectivity_measure):
     return wrapper
 
 
-def non_negative_frequencies(axis):
+def _non_negative_frequencies(axis):
     """Decorator that removes the negative frequencies."""
 
     def decorator(connectivity_measure):
@@ -157,14 +157,14 @@ class Connectivity:
         )
 
     @property
-    @asnumpy
-    @non_negative_frequencies(axis=0)
+    @_asnumpy
+    @_non_negative_frequencies(axis=0)
     def frequencies(self):
         if self._frequencies is not None:
             return self._frequencies
 
     @property
-    @asnumpy
+    @_asnumpy
     def all_frequencies(self):
         if self._frequencies is not None:
             return self._frequencies
@@ -246,7 +246,7 @@ class Connectivity:
         return minimum_phase_decomposition(self._expectation_cross_spectral_matrix())
 
     @property
-    @non_negative_frequencies(axis=-3)
+    @_non_negative_frequencies(axis=-3)
     def _transfer_function(self):
         return _estimate_transfer_function(self._minimum_phase_factor)
 
@@ -270,12 +270,12 @@ class Connectivity:
         else:
             return np.prod([self.fourier_coefficients.shape[axis] for axis in axes])
 
-    @asnumpy
-    @non_negative_frequencies(axis=-2)
+    @_asnumpy
+    @_non_negative_frequencies(axis=-2)
     def power(self):
         return self._power
 
-    @non_negative_frequencies(axis=-3)
+    @_non_negative_frequencies(axis=-3)
     def coherency(self):
         """The complex-valued linear association between time series in the
         frequency domain.
@@ -296,7 +296,7 @@ class Connectivity:
         complex_coherencey[..., diagonal_ind, diagonal_ind] = xp.nan
         return complex_coherencey
 
-    @asnumpy
+    @_asnumpy
     def coherence_phase(self):
         """The phase angle of the complex coherency.
 
@@ -307,7 +307,7 @@ class Connectivity:
         """
         return xp.angle(self.coherency())
 
-    @asnumpy
+    @_asnumpy
     def coherence_magnitude(self):
         """The magnitude of the complex coherency.
 
@@ -320,8 +320,8 @@ class Connectivity:
         """
         return _squared_magnitude(self.coherency())
 
-    @asnumpy
-    @non_negative_frequencies(axis=-3)
+    @_asnumpy
+    @_non_negative_frequencies(axis=-3)
     def imaginary_coherence(self):
         """The normalized imaginary component of the cross-spectrum.
 
@@ -490,8 +490,8 @@ class Connectivity:
         except AttributeError:
             return global_coherence, unnormalized_global_coherence
 
-    @asnumpy
-    @non_negative_frequencies(axis=-3)
+    @_asnumpy
+    @_non_negative_frequencies(axis=-3)
     def phase_locking_value(self):
         """The cross-spectrum with the power for each signal scaled to
         a magnitude of 1.
@@ -520,8 +520,8 @@ class Connectivity:
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
 
-    @asnumpy
-    @non_negative_frequencies(axis=-3)
+    @_asnumpy
+    @_non_negative_frequencies(axis=-3)
     def phase_lag_index(self):
         """A non-parametric synchrony measure designed to mitigate power
         differences between realizations (tapers, trials) and
@@ -556,8 +556,8 @@ class Connectivity:
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
 
-    @asnumpy
-    @non_negative_frequencies(-3)
+    @_asnumpy
+    @_non_negative_frequencies(-3)
     def weighted_phase_lag_index(self):
         """Weighted average of the phase lag index using the imaginary
         coherency magnitudes as weights.
@@ -584,7 +584,7 @@ class Connectivity:
         weights[weights < xp.finfo(float).eps] = 1
         return self._expectation_cross_spectral_matrix(fcn=lambda x: x.imag) / weights
 
-    @asnumpy
+    @_asnumpy
     def debiased_squared_phase_lag_index(self):
         """The square of the phase lag index corrected for the positive
         bias induced by using the magnitude of the complex cross-spectrum.
@@ -608,8 +608,8 @@ class Connectivity:
             n_observations - 1.0
         )
 
-    @asnumpy
-    @non_negative_frequencies(-3)
+    @_asnumpy
+    @_non_negative_frequencies(-3)
     def debiased_squared_weighted_phase_lag_index(self):
         """The square of the weighted phase lag index corrected for the
         positive bias induced by using the magnitude of the complex
@@ -653,7 +653,7 @@ class Connectivity:
         weights[weights == 0] = xp.nan
         return (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights
 
-    @asnumpy
+    @_asnumpy
     def pairwise_phase_consistency(self):
         """The square of the phase locking value corrected for the
         positive bias induced by using the magnitude of the complex
@@ -679,7 +679,7 @@ class Connectivity:
         )
         return ppc.real
 
-    @asnumpy
+    @_asnumpy
     def pairwise_spectral_granger_prediction(self):
         """The amount of power at a node in a frequency explained by (is
         predictive of) the power at other nodes.
@@ -738,7 +738,7 @@ class Connectivity:
     def blockwise_spectral_granger_prediction(self):
         raise NotImplementedError
 
-    @asnumpy
+    @_asnumpy
     def directed_transfer_function(self):
         """The transfer function coupling strength normalized by the total
         influence of other signals on that signal (inflow).
@@ -761,7 +761,7 @@ class Connectivity:
             self._transfer_function / _total_inflow(self._transfer_function)
         )
 
-    @asnumpy
+    @_asnumpy
     def directed_coherence(self):
         """The transfer function coupling strength normalized by the total
         influence of other signals on that signal (inflow).
@@ -828,7 +828,7 @@ class Connectivity:
                     / _total_outflow(self._MVAR_Fourier_coefficients)
                 )
 
-    @asnumpy
+    @_asnumpy
     def generalized_partial_directed_coherence(self):
         """The transfer function coupling strength normalized by its
         strength of coupling to other signals (outflow).
@@ -862,7 +862,7 @@ class Connectivity:
             / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
         )
 
-    @asnumpy
+    @_asnumpy
     def direct_directed_transfer_function(self):
         """A combination of the directed transfer function estimate of
         directional influence between signals and the partial coherence's
@@ -977,7 +977,7 @@ class Connectivity:
 
         return delay, slope, r_value
 
-    @asnumpy
+    @_asnumpy
     def delay(
         self,
         frequencies_of_interest=None,
@@ -1050,7 +1050,7 @@ class Connectivity:
 
         return possible_delays
 
-    @asnumpy
+    @_asnumpy
     def phase_slope_index(
         self, frequencies_of_interest=None, frequency_resolution=None
     ):
