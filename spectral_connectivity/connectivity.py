@@ -89,7 +89,7 @@ class Connectivity:
     """Computes brain connectivity measures based on the cross spectral
     matrix.
 
-    Spectral granger methods that require estimation of transfer function
+    Note that spectral granger methods that require estimation of transfer function
     and noise covariance use minimum phase decomposition [1] to decompose
     the cross spectral matrix into square roots, which then can be used to
     non-parametrically estimate the transfer function and noise covariance.
