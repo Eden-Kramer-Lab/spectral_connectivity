@@ -15,7 +15,7 @@
 | [**Installation**](#installation)
 | [**Developer Installation**](#developer-installation)
 
-### What is spectral_connectivity? ###
+### What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
@@ -28,14 +28,14 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 + easier user interface for the multitaper fourier transform
 + all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
 
-### Tutorials ###
+### Tutorials
 
 See the following notebooks for more information on how to use the package:
 
 + [Tutorial on simulated examples](examples/Tutorial_On_Simulated_Examples.ipynb)
 + [Tutorial using paper examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
-### Usage Example ###
+### Usage Example
 
 ```python
 from spectral_connectivity import Multitaper, Connectivity
@@ -58,11 +58,11 @@ weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 ```
 
-### Documentation ###
+### Documentation
 
 See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
 
-### Implemented Measures ###
+### Implemented Measures
 
 Functional
 
@@ -79,16 +79,16 @@ Functional
 
 Directed
 
-11. directed_transfer_function
-12. directed_coherence
-13. partial_directed_coherence
-14. generalized_partial_directed_coherence
-15. direct_directed_transfer_function
-16. group_delay
-17. phase_lag_index
-18. pairwise_spectral_granger_prediction
+1. directed_transfer_function
+2. directed_coherence
+3. partial_directed_coherence
+4. generalized_partial_directed_coherence
+5. direct_directed_transfer_function
+6. group_delay
+7. phase_lag_index
+8. pairwise_spectral_granger_prediction
 
-### Package Dependencies ###
+### Package Dependencies
 
 `spectral_connectivity` requires:
 
@@ -100,7 +100,7 @@ Directed
 
 See [environment.yml](environment.yml) for the most current list of dependencies.
 
-### Installation ###
+### Installation
 
 ```bash
 pip install spectral_connectivity
@@ -112,7 +112,7 @@ or
 conda install -c edeno spectral_connectivity
 ```
 
-### Developer Installation ###
+### Developer Installation
 
 If you want to make contributions to this library, please use this installation.
 
@@ -133,7 +133,7 @@ conda activate spectral_connectivity
 pip install -e .
 ```
 
-### Recent publications and pre-prints that used this software ###
+### Recent publications and pre-prints that used this software
 
 + Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
 + Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
