@@ -1,7 +1,9 @@
-.. spectral_connectivity documentation master file, created by
-   sphinx-quickstart on Tue Oct 10 09:59:28 2017.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. toctree::
+   :hidden:
+
+   Home page <self>
+   Jupyter tutorials <examples>
+   API reference <_autosummary/spectral_connectivity>
 
 =====================
 spectral_connectivity
@@ -15,13 +17,3 @@ spectral_connectivity
 *  it implements the non-parametric version of the spectral granger causality in Python.
 *  it implements the canonical coherence, which can efficiently summarize brain-area level coherences from multielectrode recordings.
 *  easier user interface for the multitaper fourier transform
-
-
-Documentation
--------------
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Contents
-
-   api
