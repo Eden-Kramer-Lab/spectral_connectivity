@@ -23,7 +23,7 @@ def test_multitaper_coherence_magnitude(time_window_duration):
                                 time_window_duration=time_window_duration
                                 )
 
-    assert np.allclose(m.Time.values, expected_time)
+    assert np.allclose(m.time.values, expected_time)
     assert not (m.values == 0).all()
     assert not (np.isnan(m.values)).all()
 
@@ -103,7 +103,7 @@ def test_multitaper_n_signals(n_signals):
                 sampling_frequency=sampling_frequency,
                 time_window_duration=time_window_duration
             )
-            assert np.allclose(m.Time.values, expected_time)
+            assert np.allclose(m.time.values, expected_time)
             assert not (m.values == 0).all()
             assert not (np.isnan(m.values)).all()
 
@@ -129,7 +129,7 @@ def test_multitaper_connectivities_n_signals(n_signals):
                                    time_window_duration=time_window_duration
                                    )
     for mea in cons.data_vars:
-        assert np.allclose(cons[mea].Time.values, expected_time)
+        assert np.allclose(cons[mea].time.values, expected_time)
         assert not (cons[mea].values == 0).all()
         assert not (np.isnan(cons[mea].values)).all()
 
@@ -139,7 +139,7 @@ def test_multitaper_connectivities_n_signals(n_signals):
                                    time_window_duration=time_window_duration
                                    )
     mea = 'coherence_magnitude'
-    assert np.allclose(cons[mea].Time.values, expected_time)
+    assert np.allclose(cons[mea].time.values, expected_time)
     assert not (cons[mea].values == 0).all()
     assert not (np.isnan(cons[mea].values)).all()
 
@@ -162,4 +162,4 @@ def test_frequencies():
         assert not (np.isnan(cons[mea].values)).all()
 
         expected_frequencies = np.array([0, 250])
-        assert np.allclose(cons[mea].Frequency, expected_frequencies)
+        assert np.allclose(cons[mea].frequency, expected_frequencies)
