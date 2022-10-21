@@ -60,7 +60,7 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 
 ### Documentation
 
-See the documentation [here](http://spectral-connectivity.readthedocs.io/en/latest/index.html).
+See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
 
 ### Implemented Measures
 
