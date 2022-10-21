@@ -38,7 +38,7 @@ EXPECTATION = {
     "time_trials": partial(xp.mean, axis=(0, 1)),
     "time_tapers": partial(xp.mean, axis=(0, 2)),
     "trials_tapers": partial(xp.mean, axis=(1, 2)),
-    "time_trials_tapers": partial(xp.mean, axis=(1, 2, 3)),
+    "time_trials_tapers": partial(xp.mean, axis=(0, 1, 2)),
 }
 
 
