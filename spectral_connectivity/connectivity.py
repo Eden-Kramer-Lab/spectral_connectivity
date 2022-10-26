@@ -492,7 +492,7 @@ class Connectivity:
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
-    def phase_locking_value(self):
+    def _phase_locking_value(self):
         """The cross-spectrum with the power for each signal scaled to
         a magnitude of 1.
 
@@ -519,6 +519,9 @@ class Connectivity:
             return x / xp.abs(x)
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
+
+    def phase_locking_value(self):
+        return xp.abs(self._phase_locking_value())
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -673,7 +676,7 @@ class Connectivity:
 
         """
         n_observations = self.n_observations
-        plv_sum = self.phase_locking_value() * n_observations
+        plv_sum = self._phase_locking_value() * n_observations
         ppc = (plv_sum * plv_sum.conjugate() - n_observations) / (
             n_observations**2 - n_observations
         )
