@@ -45,7 +45,7 @@ def connectivity_to_xarray(
         xar = xr.DataArray(
             connectivity_mat,
             coords=[connectivity.time, connectivity.frequencies, signal_names],
-            dims=["Time", "Frequency", "Source"],
+            dims=["time", "frequency", "source"],
         )
 
     elif (m.time_series.shape[-1] == 2) and squeeze:
