@@ -53,7 +53,7 @@ class Multitaper(object):
         this equals the duration of the time window.
     tapers : array, optional, shape (n_time_samples_per_window, n_tapers)
         Pass in a pre-computed set of tapers. If `None`, then the tapers are
-        automically calulated based on the `time_halfbandwidth_product`,
+        automically calculated based on the `time_halfbandwidth_product`,
         `n_tapers`, and `n_time_samples_per_window`.
     n_tapers : int, optional
         Set the number of tapers. If `None`, the number of tapers is computed
@@ -289,7 +289,7 @@ def _sliding_window(data, window_size, step_size=1, axis=-1, is_copy=True):
     Notes
     -----
     - Be wary of setting `copy` to `False` as undesired sideffects with the
-      output values may occurr.
+      output values may occur.
 
     Examples
     --------
