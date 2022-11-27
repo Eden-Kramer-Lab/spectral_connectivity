@@ -1372,11 +1372,11 @@ def _get_independent_frequency_step(frequency_difference, frequency_resolution):
 def _find_largest_significant_group(is_significant):
     """Finds the largest cluster of significant values over frequencies.
 
-    If frequency value is signficant and its neighbor in the next frequency
-    is also a signficant value, then they are part of the same cluster.
+    If frequency value is significant and its neighbor in the next frequency
+    is also a significant value, then they are part of the same cluster.
 
     If there are two clusters of the same size, the first one encountered
-    is the signficant cluster. All other signficant values are set to
+    is the significant cluster. All other significant values are set to
     false.
 
     Parameters
@@ -1401,7 +1401,7 @@ def _find_largest_significant_group(is_significant):
 
 def _get_independent_frequencies(is_significant, frequency_step):
     """Given a `frequency_step` that determines the distance to the next
-    signficant point, sets non-distinguishable points to false.
+    significant point, sets non-distinguishable points to false.
 
     Parameters
     ----------
@@ -1418,8 +1418,8 @@ def _get_independent_frequencies(is_significant, frequency_step):
 
 
 def _find_largest_independent_group(is_significant, frequency_step, min_group_size=3):
-    """Finds the largest signficant cluster of frequency points and
-    returns the indpendent frequency points of that cluster
+    """Finds the largest significant cluster of frequency points and
+    returns the independent frequency points of that cluster
 
     Parameters
     ----------
@@ -1463,12 +1463,12 @@ def _find_significant_frequencies(
     coherency : array, shape (..., n_frequencies, n_signals, n_signals)
         The complex coherency between signals.
     bias : float
-        Bias from the number of indpendent estimates of the frequency
+        Bias from the number of independent estimates of the frequency
         transform.
     frequency_step : int
         The number of points between each independent frequency step
     significance_threshold : float
-        The threshold for a p-value to be considered signficant.
+        The threshold for a p-value to be considered significant.
     min_group_size : int
         The minimum number of independent frequency points for
     multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
