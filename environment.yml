@@ -9,7 +9,7 @@ dependencies:
 - scipy
 - xarray
 - nitime
-- pytest
+- "pytest >= 2.7.1"
 - pytest-cov
 - coveralls
 - setuptools
