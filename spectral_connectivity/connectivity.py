@@ -135,7 +135,7 @@ class Connectivity:
         blocks: int=None,
         dtype: np.dtype=xp.complex128,
     ):
-        """_summary_
+        """
 
         Parameters
         ----------
