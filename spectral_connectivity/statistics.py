@@ -35,7 +35,9 @@ def Benjamini_Hochberg_procedure(p_values, alpha=0.05):
 
 
 def Bonferroni_correction(p_values: np.ndarray, alpha: float = 0.05):
-    """Bonferroni correction for multiple comparisons.
+    """Corrects for multiple comparisons and returns the significant
+    p-values by controlling the false discovery rate at level `alpha`
+    using the Bonferroni procedure.
 
     Parameters
     ----------
@@ -46,6 +48,7 @@ def Bonferroni_correction(p_values: np.ndarray, alpha: float = 0.05):
     Returns
     -------
     is_significant : np.ndarray, shape (n_p_values,)
+
     """
     p_values = np.asarray(p_values)
     return p_values <= alpha / p_values.size
