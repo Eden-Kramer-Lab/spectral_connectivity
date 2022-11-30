@@ -2,33 +2,47 @@ from unittest.mock import PropertyMock
 
 import numpy as np
 from pytest import mark
+
 from spectral_connectivity.connectivity import (
-    Connectivity, _bandpass, _complex_inner_product, _conjugate_transpose,
-    _find_largest_independent_group, _find_largest_significant_group,
-    _get_independent_frequencies, _get_independent_frequency_step,
-    _inner_combination, _remove_instantaneous_causality, _reshape,
-    _set_diagonal_to_zero, _squared_magnitude, _total_inflow, _total_outflow)
+    Connectivity,
+    _bandpass,
+    _complex_inner_product,
+    _conjugate_transpose,
+    _find_largest_independent_group,
+    _find_largest_significant_group,
+    _get_independent_frequencies,
+    _get_independent_frequency_step,
+    _inner_combination,
+    _remove_instantaneous_causality,
+    _reshape,
+    _set_diagonal_to_zero,
+    _squared_magnitude,
+    _total_inflow,
+    _total_outflow,
+)
 
 
-@mark.parametrize('axis', [(0), (1), (2), (3)])
+@mark.parametrize("axis", [(0), (1), (2), (3)])
 def test_cross_spectrum(axis):
-    '''Test that the cross spectrum is correct for each dimension.'''
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        2, 2, 2, 2, 2)
+    """Test that the cross spectrum is correct for each dimension."""
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (2, 2, 2, 2, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    signal_fourier_coefficient = [2 * np.exp(1j * np.pi / 2),
-                                  3 * np.exp(1j * -np.pi / 2)]
+    signal_fourier_coefficient = [
+        2 * np.exp(1j * np.pi / 2),
+        3 * np.exp(1j * -np.pi / 2),
+    ]
     fourier_ind = [slice(0, 4)] * 5
     fourier_ind[-1] = slice(None)
     fourier_ind[axis] = slice(1, 2)
     fourier_coefficients[tuple(fourier_ind)] = signal_fourier_coefficient
 
     expected_cross_spectral_matrix = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals,
-         n_signals), dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals, n_signals),
+        dtype=complex,
+    )
 
     expected_slice = np.array([[4, -6], [-6, 9]], dtype=complex)
     expected_ind = [slice(0, 5)] * 6
@@ -38,61 +52,55 @@ def test_cross_spectrum(axis):
     expected_cross_spectral_matrix[tuple(expected_ind)] = expected_slice
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
-    assert np.allclose(
-        expected_cross_spectral_matrix, this_Conn._cross_spectral_matrix)
+    assert np.allclose(expected_cross_spectral_matrix, this_Conn._cross_spectral_matrix)
 
 
 def test_power():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 1, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [2 * np.exp(1j * np.pi / 2),
-                                    3 * np.exp(1j * -np.pi / 2)]
+    fourier_coefficients[..., :] = [
+        2 * np.exp(1j * np.pi / 2),
+        3 * np.exp(1j * -np.pi / 2),
+    ]
 
     expected_power = np.zeros((n_time_samples, n_fft_samples, n_signals))
 
     expected_power[..., :] = [4, 9]
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
-    assert np.allclose(
-        expected_power, this_Conn.power())
+    assert np.allclose(expected_power, this_Conn.power())
 
 
 @mark.parametrize(
-    'expectation_type, expected_shape',
-    [('trials_tapers', (1, 4, 5)),
-     ('trials', (1, 3, 4, 5)),
-     ('tapers', (1, 2, 4, 5))])
+    "expectation_type, expected_shape",
+    [("trials_tapers", (1, 4, 5)), ("trials", (1, 3, 4, 5)), ("tapers", (1, 2, 4, 5))],
+)
 def test_expectation(expectation_type, expected_shape):
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 2, 3, 4, 5)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 4, 5)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
     this_Conn = Connectivity(
         fourier_coefficients=fourier_coefficients,
         expectation_type=expectation_type,
     )
     expectation_function = this_Conn._expectation
-    assert np.allclose(
-        expected_shape, expectation_function(fourier_coefficients).shape)
+    assert np.allclose(expected_shape, expectation_function(fourier_coefficients).shape)
 
 
 @mark.parametrize(
-    'expectation_type, expected_n_observations',
-    [('trials_tapers', 6),
-     ('trials', 2),
-     ('tapers', 3)])
+    "expectation_type, expected_n_observations",
+    [("trials_tapers", 6), ("trials", 2), ("tapers", 3)],
+)
 def test_n_observations(expectation_type, expected_n_observations):
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 2, 3, 4, 5)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 4, 5)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
     this_Conn = Connectivity(
         fourier_coefficients=fourier_coefficients,
@@ -102,14 +110,15 @@ def test_n_observations(expectation_type, expected_n_observations):
 
 
 def test_coherency():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [2 * np.exp(1j * np.pi / 2),
-                                    3 * np.exp(1j * -np.pi / 2)]
+    fourier_coefficients[..., :] = [
+        2 * np.exp(1j * np.pi / 2),
+        3 * np.exp(1j * -np.pi / 2),
+    ]
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     expected_coherence_magnitude = np.array([[np.nan, 1], [1, np.nan]])
     expected_phase = np.zeros((2, 2)) * np.nan
@@ -118,82 +127,73 @@ def test_coherency():
 
     assert np.allclose(
         np.abs(this_Conn.coherency().squeeze()),
-        expected_coherence_magnitude, equal_nan=True)
+        expected_coherence_magnitude,
+        equal_nan=True,
+    )
     assert np.allclose(
-        np.angle(this_Conn.coherency().squeeze()),
-        expected_phase, equal_nan=True)
+        np.angle(this_Conn.coherency().squeeze()), expected_phase, equal_nan=True
+    )
 
 
 def test_imaginary_coherence():
-    '''Test that imaginary coherence sets signals with the same phase
-    to zero.'''
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    """Test that imaginary coherence sets signals with the same phase
+    to zero."""
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
-                                    3 * np.exp(1j * 0)]
+    fourier_coefficients[..., :] = [2 * np.exp(1j * 0), 3 * np.exp(1j * 0)]
     expected_imaginary_coherence = np.zeros((2, 2))
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     assert np.allclose(
-        this_Conn.imaginary_coherence().squeeze(),
-        expected_imaginary_coherence)
+        this_Conn.imaginary_coherence().squeeze(), expected_imaginary_coherence
+    )
 
 
 def test_phase_locking_value():
-    '''Make sure phase locking value ignores magnitudes.'''
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
-    fourier_coefficients = (
-        np.random.uniform(0, 2, (n_time_samples, n_trials, n_tapers,
-                                 n_fft_samples, n_signals)) *
-        np.exp(1j * np.pi / 2))
-    expected_phase_locking_value_magnitude = np.ones(
-        fourier_coefficients.shape)
-    expected_phase_locking_value_angle = np.zeros(
-        fourier_coefficients.shape)
+    """Make sure phase locking value ignores magnitudes."""
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
+    fourier_coefficients = np.random.uniform(
+        0, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+    ) * np.exp(1j * np.pi / 2)
+    expected_phase_locking_value_magnitude = np.ones(fourier_coefficients.shape)
+    expected_phase_locking_value_angle = np.zeros(fourier_coefficients.shape)
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
     assert np.allclose(
-        np.abs(this_Conn.phase_locking_value()),
-        expected_phase_locking_value_magnitude)
+        np.abs(this_Conn.phase_locking_value()), expected_phase_locking_value_magnitude
+    )
     assert np.allclose(
-        np.angle(this_Conn.phase_locking_value()),
-        expected_phase_locking_value_angle)
+        np.angle(this_Conn.phase_locking_value()), expected_phase_locking_value_angle
+    )
 
 
 def test_phase_lag_index_sets_zero_phase_signals_to_zero():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
-                                    3 * np.exp(1j * 0)]
+    fourier_coefficients[..., :] = [2 * np.exp(1j * 0), 3 * np.exp(1j * 0)]
     expected_phase_lag_index = np.zeros((2, 2))
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
-    assert np.allclose(
-        this_Conn.phase_lag_index().squeeze(),
-        expected_phase_lag_index)
+    assert np.allclose(this_Conn.phase_lag_index().squeeze(), expected_phase_lag_index)
 
 
 def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
-    fourier_coefficients[..., 0] = (np.random.uniform(
-        0.1, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples)) *
-        np.exp(1j * np.pi / 2))
-    fourier_coefficients[..., 1] = (np.random.uniform(
-        0.1, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples)) *
-        np.exp(1j * np.pi / 4))
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
+    fourier_coefficients[..., 0] = np.random.uniform(
+        0.1, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    ) * np.exp(1j * np.pi / 2)
+    fourier_coefficients[..., 1] = np.random.uniform(
+        0.1, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    ) * np.exp(1j * np.pi / 4)
 
     expected_phase_lag_index = np.zeros((2, 2))
     expected_phase_lag_index[0, 1] = 1
@@ -201,80 +201,78 @@ def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    assert np.allclose(
-        this_Conn.phase_lag_index().squeeze(),
-        expected_phase_lag_index)
+    assert np.allclose(this_Conn.phase_lag_index().squeeze(), expected_phase_lag_index)
 
 
 def test_weighted_phase_lag_index_sets_zero_phase_signals_to_zero():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [2 * np.exp(1j * 0),
-                                    3 * np.exp(1j * 0)]
+    fourier_coefficients[..., :] = [2 * np.exp(1j * 0), 3 * np.exp(1j * 0)]
     expected_phase_lag_index = np.zeros((2, 2))
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     assert np.allclose(
-        this_Conn.weighted_phase_lag_index().squeeze(),
-        expected_phase_lag_index)
+        this_Conn.weighted_phase_lag_index().squeeze(), expected_phase_lag_index
+    )
 
 
 def test_weighted_phase_lag_index_is_same_as_phase_lag_index():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 30, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
-    fourier_coefficients[..., :] = [1 * np.exp(1j * 3 * np.pi / 4),
-                                    1 * np.exp(1j * 5 * np.pi / 4)]
+    fourier_coefficients[..., :] = [
+        1 * np.exp(1j * 3 * np.pi / 4),
+        1 * np.exp(1j * 5 * np.pi / 4),
+    ]
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     assert np.allclose(
-        this_Conn.phase_lag_index(),
-        this_Conn.weighted_phase_lag_index())
+        this_Conn.phase_lag_index(), this_Conn.weighted_phase_lag_index()
+    )
 
 
 def test_debiased_squared_phase_lag_index():
-    '''Test that incoherent signals are set to zero or below.'''
+    """Test that incoherent signals are set to zero or below."""
     np.random.seed(0)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 200, 5, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
     angles1 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
     angles2 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
 
     fourier_coefficients[..., 0] = np.exp(1j * angles1)
     fourier_coefficients[..., 1] = np.exp(1j * angles2)
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    assert np.all(
-        this_Conn.debiased_squared_phase_lag_index() < np.finfo(float).eps)
+    assert np.all(this_Conn.debiased_squared_phase_lag_index() < np.finfo(float).eps)
 
 
 def test_debiased_squared_weighted_phase_lag_index():
-    '''Test that incoherent signals are set to zero or below.'''
+    """Test that incoherent signals are set to zero or below."""
     np.random.seed(0)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 200, 5, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
     angles1 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
     angles2 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
 
     fourier_coefficients[..., 0] = np.exp(1j * angles1)
     fourier_coefficients[..., 1] = np.exp(1j * angles2)
@@ -289,23 +287,26 @@ def test_debiased_squared_weighted_phase_lag_index():
 
 
 def test_pairwise_phase_consistency():
-    '''Test that incoherent signals are set to zero or below
-    and that differences in power are ignored.'''
+    """Test that incoherent signals are set to zero or below
+    and that differences in power are ignored."""
     np.random.seed(0)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 200, 5, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 200, 5, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
 
     magnitude1 = np.random.uniform(
-        0.5, 3, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0.5, 3, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
     angles1 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
     magnitude2 = np.random.uniform(
-        0.5, 3, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0.5, 3, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
     angles2 = np.random.uniform(
-        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples))
+        0, 2 * np.pi, (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
 
     fourier_coefficients[..., 0] = magnitude1 * np.exp(1j * angles1)
     fourier_coefficients[..., 1] = magnitude2 * np.exp(1j * angles2)
@@ -321,15 +322,12 @@ def test_pairwise_phase_consistency():
 
 
 def test__reshape():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        20, 100, 3, 10, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (20, 100, 3, 10, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex)
-    expected_shape = (n_time_samples, n_fft_samples, n_signals,
-                      n_trials * n_tapers)
-    assert np.allclose(
-        _reshape(fourier_coefficients).shape, expected_shape)
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+    )
+    expected_shape = (n_time_samples, n_fft_samples, n_signals, n_trials * n_tapers)
+    assert np.allclose(_reshape(fourier_coefficients).shape, expected_shape)
 
 
 def test__squared_magnitude():
@@ -340,16 +338,18 @@ def test__squared_magnitude():
 
 def test__conjugate_transpose():
     test_array = np.zeros((2, 2, 4), dtype=complex)
-    test_array[1, ...] = [[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
-                          [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j]]
+    test_array[1, ...] = [
+        [1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
+        [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j],
+    ]
     expected_array = np.zeros((2, 4, 2), dtype=complex)
     expected_array[1, ...] = test_array[1, ...].conj().transpose()
     assert np.allclose(_conjugate_transpose(test_array), expected_array)
 
 
 def test__complex_inner_product():
-    '''Test that the complex inner product is taken over the last two
-    dimensions.'''
+    """Test that the complex inner product is taken over the last two
+    dimensions."""
     test_array1 = np.zeros((3, 2, 4), dtype=complex)
     test_array2 = np.zeros((3, 2, 4), dtype=complex)
 
@@ -367,8 +367,8 @@ def test__complex_inner_product():
     expected_inner_product[2, ...] = x1.dot(x1.T.conj())
 
     assert np.allclose(
-        _complex_inner_product(test_array1, test_array2),
-        expected_inner_product)
+        _complex_inner_product(test_array1, test_array2), expected_inner_product
+    )
 
 
 def test__set_diagonal_to_zero():
@@ -390,36 +390,40 @@ def test__bandpass():
     expected_data = np.array([[1, 2], [6, 7]])
 
     filtered_data, filtered_labels = _bandpass(
-        test_data, labels, labels_of_interest, axis=-1)
+        test_data, labels, labels_of_interest, axis=-1
+    )
 
-    assert (np.allclose(expected_data, filtered_data) &
-            np.allclose(expected_labels, filtered_labels))
+    assert np.allclose(expected_data, filtered_data) & np.allclose(
+        expected_labels, filtered_labels
+    )
 
 
 @mark.parametrize(
-    'frequency_difference, frequency_resolution, expected_step',
-    [(2.0, 5.0, 3),
-     (5.0, 2.0, 1),
-     (2.0, 2.0, 1)])
+    "frequency_difference, frequency_resolution, expected_step",
+    [(2.0, 5.0, 3), (5.0, 2.0, 1), (2.0, 2.0, 1)],
+)
 def test__get_independent_frequency_step(
-        frequency_difference, frequency_resolution, expected_step):
-    step = _get_independent_frequency_step(
-        frequency_difference, frequency_resolution)
+    frequency_difference, frequency_resolution, expected_step
+):
+    step = _get_independent_frequency_step(frequency_difference, frequency_resolution)
     assert step == expected_step
 
 
 @mark.parametrize(
-    'is_significant, expected_is_significant',
-    [(np.array([False, True, True, False, True, True, True, False]),
-      np.array([False, False, False, False, True, True, True, False])),
-     (np.ones((10,), dtype=bool), np.ones((10,), dtype=bool))
-     ])
-def test__find_largest_significant_group(
-        is_significant, expected_is_significant):
+    "is_significant, expected_is_significant",
+    [
+        (
+            np.array([False, True, True, False, True, True, True, False]),
+            np.array([False, False, False, False, True, True, True, False]),
+        ),
+        (np.ones((10,), dtype=bool), np.ones((10,), dtype=bool)),
+    ],
+)
+def test__find_largest_significant_group(is_significant, expected_is_significant):
 
     assert np.allclose(
-        _find_largest_significant_group(is_significant),
-        expected_is_significant)
+        _find_largest_significant_group(is_significant), expected_is_significant
+    )
 
 
 def test__find_largest_significant_group_with_no_significant():
@@ -427,8 +431,8 @@ def test__find_largest_significant_group_with_no_significant():
     expected_is_significant = np.zeros((10,), dtype=bool)
 
     assert np.allclose(
-        _find_largest_significant_group(is_significant),
-        expected_is_significant)
+        _find_largest_significant_group(is_significant), expected_is_significant
+    )
 
 
 def test__get_independent_frequencies():
@@ -441,17 +445,24 @@ def test__get_independent_frequencies():
 
     assert np.allclose(
         _get_independent_frequencies(is_significant, frequency_step),
-        expected_is_significant)
+        expected_is_significant,
+    )
 
 
 @mark.parametrize(
-    'min_group_size, expected_is_significant',
-    [(3, np.zeros((10,), dtype=bool)),
-     (1, np.array(
-         [False, False, False, False, True, False,  True, False,
-          False, False], dtype=bool))])
-def test__find_largest_independent_group(
-        min_group_size, expected_is_significant):
+    "min_group_size, expected_is_significant",
+    [
+        (3, np.zeros((10,), dtype=bool)),
+        (
+            1,
+            np.array(
+                [False, False, False, False, True, False, True, False, False, False],
+                dtype=bool,
+            ),
+        ),
+    ],
+)
+def test__find_largest_independent_group(min_group_size, expected_is_significant):
     is_significant = np.zeros((10,), dtype=bool)
     is_significant[1:3] = True
     is_significant[4:7] = True
@@ -459,9 +470,11 @@ def test__find_largest_independent_group(
     frequency_step = 2
 
     assert np.allclose(
-        _find_largest_independent_group(is_significant, frequency_step,
-                                        min_group_size=min_group_size),
-        expected_is_significant)
+        _find_largest_independent_group(
+            is_significant, frequency_step, min_group_size=min_group_size
+        ),
+        expected_is_significant,
+    )
 
 
 def test__total_inflow():
@@ -470,19 +483,19 @@ def test__total_inflow():
     expected_total_inflow = 3 * np.ones((2, 3, 1))
 
     assert np.allclose(
-        _total_inflow(transfer_function, noise_variance),
-        expected_total_inflow)
+        _total_inflow(transfer_function, noise_variance), expected_total_inflow
+    )
 
 
 def test__total_outflow():
     MVAR_Fourier_coefficients = np.ones((2, 3, 3))
     noise_variance = np.array([0.25, 0.5, 1 / 3])
-    expected_total_outflow = (np.ones((2, 1, 3)) *
-                              np.sqrt(1.0 / noise_variance * 3))
+    expected_total_outflow = np.ones((2, 1, 3)) * np.sqrt(1.0 / noise_variance * 3)
 
     assert np.allclose(
         _total_outflow(MVAR_Fourier_coefficients, noise_variance),
-        expected_total_outflow)
+        expected_total_outflow,
+    )
 
 
 def test__remove_instantaneous_causality():
@@ -496,37 +509,34 @@ def test__remove_instantaneous_causality():
     # y -> x: var(y) - (cov(x,y) ** 2 / var(x))
     expected_rotated_noise_covariance = np.zeros((2, 2, 2))
 
-    expected_rotated_noise_covariance[0, 0, 1] = (
-        x1[1, 1] - (x1[0, 1] ** 2 / x1[0, 0]))
-    expected_rotated_noise_covariance[0, 1, 0] = (
-        x1[0, 0] - (x1[1, 0] ** 2 / x1[1, 1]))
+    expected_rotated_noise_covariance[0, 0, 1] = x1[1, 1] - (x1[0, 1] ** 2 / x1[0, 0])
+    expected_rotated_noise_covariance[0, 1, 0] = x1[0, 0] - (x1[1, 0] ** 2 / x1[1, 1])
 
-    expected_rotated_noise_covariance[1, 0, 1] = (
-        x2[1, 1] - (x2[0, 1] ** 2 / x2[0, 0]))
-    expected_rotated_noise_covariance[1, 1, 0] = (
-        x2[0, 0] - (x2[1, 0] ** 2 / x2[1, 1]))
+    expected_rotated_noise_covariance[1, 0, 1] = x2[1, 1] - (x2[0, 1] ** 2 / x2[0, 0])
+    expected_rotated_noise_covariance[1, 1, 0] = x2[0, 0] - (x2[1, 0] ** 2 / x2[1, 1])
 
     assert np.allclose(
         _remove_instantaneous_causality(noise_covariance),
-        expected_rotated_noise_covariance)
+        expected_rotated_noise_covariance,
+    )
 
 
 def test__inner_combination():
     n_time_samples, n_fft_samples, n_signals = (2, 3, 2)
-    test_data = np.arange(
-        0, n_time_samples * n_fft_samples * n_signals).reshape(
-        (n_time_samples, n_fft_samples, n_signals))
+    test_data = np.arange(0, n_time_samples * n_fft_samples * n_signals).reshape(
+        (n_time_samples, n_fft_samples, n_signals)
+    )
 
     expected_combination = np.array([[8, 23], [188, 239]])
 
-    assert np.allclose(
-        _inner_combination(test_data, axis=-2), expected_combination)
+    assert np.allclose(_inner_combination(test_data, axis=-2), expected_combination)
 
 
 def test_directed_transfer_function():
     c = Connectivity(fourier_coefficients=np.empty((1,)))
     type(c)._transfer_function = PropertyMock(
-        return_value=np.arange(1, 5).reshape((2, 2)))
+        return_value=np.arange(1, 5).reshape((2, 2))
+    )
     dtf = c.directed_transfer_function()
     assert np.allclose(dtf.sum(axis=-1), 1.0)
     assert np.all((dtf >= 0.0) & (dtf <= 1.0))
@@ -535,7 +545,8 @@ def test_directed_transfer_function():
 def test_partial_directed_coherence():
     c = Connectivity(fourier_coefficients=np.empty((1,)))
     type(c)._MVAR_Fourier_coefficients = PropertyMock(
-        return_value=np.arange(1, 5).reshape((2, 2)))
+        return_value=np.arange(1, 5).reshape((2, 2))
+    )
     pdc = c.partial_directed_coherence()
     assert np.allclose(pdc.sum(axis=-2), 1.0)
     assert np.all((pdc >= 0.0) & (pdc <= 1.0))

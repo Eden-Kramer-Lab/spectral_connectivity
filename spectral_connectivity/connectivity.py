@@ -129,11 +129,11 @@ class Connectivity:
     def __init__(
         self,
         fourier_coefficients: np.ndarray,
-        expectation_type: str="trials_tapers",
-        frequencies: np.ndarray=None,
-        time: np.ndarray=None,
-        blocks: int=None,
-        dtype: np.dtype=xp.complex128,
+        expectation_type: str = "trials_tapers",
+        frequencies: np.ndarray = None,
+        time: np.ndarray = None,
+        blocks: int = None,
+        dtype: np.dtype = xp.complex128,
     ):
         """
 

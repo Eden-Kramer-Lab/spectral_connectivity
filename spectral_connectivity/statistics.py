@@ -34,7 +34,7 @@ def Benjamini_Hochberg_procedure(p_values, alpha=0.05):
     return p_values <= threshold
 
 
-def Bonferroni_correction(p_values: np.ndarray, alpha: float=0.05):
+def Bonferroni_correction(p_values: np.ndarray, alpha: float = 0.05):
     """Bonferroni correction for multiple comparisons.
 
     Parameters
