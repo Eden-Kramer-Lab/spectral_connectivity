@@ -1,3 +1,5 @@
+"""Compute metrics for relating signals in the frequency domain."""
+
 import os
 from functools import partial, wraps
 from inspect import signature
@@ -103,13 +105,18 @@ class Connectivity:
         this is expected to be the two-sided fourier coefficients
         (both the positive and negative lags). This is needed for the
         Granger-based methods to work.
-    expectation_type : ('trials_tapers' | 'trials' | 'tapers')
+    expectation_type : ('trials_tapers' | 'trials' | 'tapers'), optional
         How to average the cross spectral matrix. 'trials_tapers' averages
         over the trials and tapers dimensions. 'trials' only averages over
         the trials dimensions (leaving tapers) and 'tapers' only averages
         over tapers (leaving trials).
-    frequencies : array, shape (n_fft_samples,)
-    time : array, shape (n_time_windows,)
+    frequencies : array, shape (n_fft_samples,), optional
+    time : np.ndarray, shape (n_time_windows,) optional
+        time of the transform, by default None
+    blocks : int, optional
+        Number of blocks to split up input arrays to do block computation, by default None
+    dtype : np.dtype, optional
+        dtype of the fourier coefficients, by default xp.complex128
 
     References
     ----------
@@ -121,13 +128,38 @@ class Connectivity:
 
     def __init__(
         self,
-        fourier_coefficients,
-        expectation_type="trials_tapers",
-        frequencies=None,
-        time=None,
-        blocks=None,
-        dtype=xp.complex128,
+        fourier_coefficients: np.ndarray,
+        expectation_type: str="trials_tapers",
+        frequencies: np.ndarray=None,
+        time: np.ndarray=None,
+        blocks: int=None,
+        dtype: np.dtype=xp.complex128,
     ):
+        """_summary_
+
+        Parameters
+        ----------
+        fourier_coefficients : np.ndarray, shape (n_time_windows, n_trials,
+                                         n_tapers, n_fft_samples,
+                                         n_signals)
+            The compex-valued coefficients from a fourier transform. Note that
+            this is expected to be the two-sided fourier coefficients
+            (both the positive and negative lags). This is needed for the
+            Granger-based methods to work.
+        expectation_type : str, optional
+            How to average the cross spectral matrix. 'trials_tapers' averages
+            over the trials and tapers dimensions. 'trials' only averages over
+            the trials dimensions (leaving tapers) and 'tapers' only averages
+            over tapers (leaving trials).
+        frequencies : np.ndarray, shape (n_fft_samples,), optional
+            frequencies of the transform, by default None
+        time : np.ndarray, shape (n_time_windows,) optional
+            time of the transform, by default None
+        blocks : int, optional
+            Number of blocks to split up input arrays to do block computation, by default None
+        dtype : np.dtype, optional
+            dtype of the fourier coefficients, by default xp.complex128
+        """
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         self._frequencies = frequencies
@@ -160,12 +192,14 @@ class Connectivity:
     @_asnumpy
     @_non_negative_frequencies(axis=0)
     def frequencies(self):
+        """Non-negative frequencies of the transform"""
         if self._frequencies is not None:
             return self._frequencies
 
     @property
     @_asnumpy
     def all_frequencies(self):
+        """Positive and negative frequencies of the transform"""
         if self._frequencies is not None:
             return self._frequencies
 
@@ -264,6 +298,7 @@ class Connectivity:
 
     @property
     def n_observations(self):
+        """Number of observations"""
         axes = signature(self._expectation).parameters["axis"].default
         if isinstance(axes, int):
             return self.fourier_coefficients.shape[axes]
@@ -273,6 +308,7 @@ class Connectivity:
     @_asnumpy
     @_non_negative_frequencies(axis=-2)
     def power(self):
+        """Power of the signal. Only returns the non-negative frequencies"""
         return self._power
 
     @_non_negative_frequencies(axis=-3)
@@ -736,9 +772,11 @@ class Connectivity:
         return predictive_power
 
     def conditional_spectral_granger_prediction(self):
+        """Not implemented"""
         raise NotImplementedError
 
     def blockwise_spectral_granger_prediction(self):
+        """Not implemented"""
         raise NotImplementedError
 
     @_asnumpy

@@ -30,7 +30,6 @@ API documentation
 
 .. toctree::
    :maxdepth: 3
-   :caption: API Documentation
 
    _autosummary/spectral_connectivity
 

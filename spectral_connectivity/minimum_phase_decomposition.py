@@ -1,3 +1,6 @@
+"""A spectral density matrix can be decomposed into minimum phase functions. This is used in computing the
+pairwise spectral granger prediction."""
+
 import os
 from logging import getLogger
 

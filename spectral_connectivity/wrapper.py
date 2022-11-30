@@ -1,3 +1,4 @@
+"""Functions for getting connectivity measures in a labeled array format."""
 from logging import getLogger
 
 import numpy as np

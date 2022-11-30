@@ -1,3 +1,5 @@
+"""Common statistical procedures used with frequency domain measures."""
+
 import numpy as np
 from scipy.stats import chi2, norm
 
@@ -32,7 +34,19 @@ def Benjamini_Hochberg_procedure(p_values, alpha=0.05):
     return p_values <= threshold
 
 
-def Bonferroni_correction(p_values, alpha=0.05):
+def Bonferroni_correction(p_values: np.ndarray, alpha: float=0.05):
+    """Bonferroni correction for multiple comparisons.
+
+    Parameters
+    ----------
+    p_values : np.ndarray, shape (n_p_values,)
+    alpha : float, optional
+        critical threshold, by default 0.05
+
+    Returns
+    -------
+    is_significant : np.ndarray, shape (n_p_values,)
+    """
     p_values = np.asarray(p_values)
     return p_values <= alpha / p_values.size
 

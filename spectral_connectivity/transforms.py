@@ -1,3 +1,5 @@
+"""Transforms time domain signals to the frequency domain."""
+
 import os
 from logging import getLogger
 
@@ -85,6 +87,45 @@ class Multitaper(object):
         n_time_samples_per_step=None,
         is_low_bias=True,
     ):
+        """_summary_
+
+        Parameters
+        ----------
+        time_series : array, shape (n_time_samples, n_trials, n_signals) or
+                                (n_time_samples, n_signals)
+        sampling_frequency : float, optional
+            Number of samples per time unit the signal(s) are recorded at.
+        time_halfbandwidth_product : float, optional
+            Specifies the time-frequency tradeoff of the tapers and also the number
+            of tapers if `n_tapers` is not set.
+        detrend_type : string or None, optional
+            Subtracting a constant or a linear trend from each time window. If None
+            then no detrending is done.
+        start_time : float, optional
+            Start time of time series.
+        time_window_duration : float, optional
+            Duration of sliding window in which to compute the fft. Defaults to
+            the entire time if not set.
+        time_window_step : float, optional
+            Duration of time to skip when moving the window forward. By default,
+            this equals the duration of the time window.
+        tapers : array, optional, shape (n_time_samples_per_window, n_tapers)
+            Pass in a pre-computed set of tapers. If `None`, then the tapers are
+            automically calculated based on the `time_halfbandwidth_product`,
+            `n_tapers`, and `n_time_samples_per_window`.
+        n_tapers : int, optional
+            Set the number of tapers. If `None`, the number of tapers is computed
+            by 2 * `time_halfbandwidth_product` - 1.
+        n_time_samples_per_window : int, optional
+            Number of samples in each sliding window. If `time_window_duration` is
+            set, then this is calculated automically.
+        n_time_samples_per_step : int, optional
+            Number of samples to skip when moving the window forward. If
+            `time_window_step` is set, then this is calculated automically.
+        is_low_bias : bool, optional
+            If `True`, excludes tapers with eigenvalues < 0.9
+
+        """
 
         self.time_series = xp.asarray(time_series)
         self.sampling_frequency = sampling_frequency
@@ -115,7 +156,7 @@ class Multitaper(object):
 
     @property
     def tapers(self):
-        """
+        """Returns the tapers used for the multitpaer function. Tapers are the windowing function.
 
         Returns
         -------
@@ -134,6 +175,7 @@ class Multitaper(object):
 
     @property
     def time_window_duration(self):
+        """Duration of each time bin."""
         if self._time_window_duration is None:
             self._time_window_duration = (
                 self.n_time_samples_per_window / self.sampling_frequency
@@ -142,6 +184,7 @@ class Multitaper(object):
 
     @property
     def time_window_step(self):
+        """How much to each time window slides."""
         if self._time_window_step is None:
             self._time_window_step = (
                 self.n_time_samples_per_step / self.sampling_frequency
@@ -162,6 +205,7 @@ class Multitaper(object):
 
     @property
     def n_time_samples_per_window(self):
+        """Number of samples per time bin."""
         if (
             self._n_time_samples_per_window is None
             and self._time_window_duration is None
@@ -175,12 +219,14 @@ class Multitaper(object):
 
     @property
     def n_fft_samples(self):
+        """Number of frequency bins."""
         if self._n_fft_samples is None:
             self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
         return self._n_fft_samples
 
     @property
     def frequencies(self):
+        """Frequency of each frequency bin."""
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
     @property
@@ -200,6 +246,7 @@ class Multitaper(object):
 
     @property
     def time(self):
+        """Time of each time bin."""
         original_time = (
             xp.arange(0, self.time_series.shape[0]) / self.sampling_frequency
         )
@@ -210,18 +257,22 @@ class Multitaper(object):
 
     @property
     def n_signals(self):
+        """Number of signals computed."""
         return 1 if len(self.time_series.shape) < 2 else self.time_series.shape[-1]
 
     @property
     def n_trials(self):
+        """Number of trials computed."""
         return 1 if len(self.time_series.shape) < 3 else self.time_series.shape[1]
 
     @property
     def frequency_resolution(self):
+        """Range of frequencies the transform is able to resolve given the time-frequency tradeoff."""
         return 2.0 * self.time_halfbandwidth_product / self.time_window_duration
 
     @property
     def nyquist_frequency(self):
+        """Maximum resolvable frequency."""
         return self.sampling_frequency / 2
 
     def fft(self):
