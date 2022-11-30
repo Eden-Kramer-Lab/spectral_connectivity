@@ -1,10 +1,3 @@
-.. toctree::
-   :hidden:
-
-   Home page <self>
-   Jupyter tutorials <tutorials>
-   API reference <_autosummary/spectral_connectivity>
-
 =====================
 spectral_connectivity
 =====================
@@ -18,3 +11,32 @@ spectral_connectivity
 * it implements the canonical coherence, which can efficiently summarize brain-area level coherences from multielectrode recordings.
 * easier user interface for the multitaper fourier transform.
 * all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
+
+Installation
+------------
+
+
+
+
+Tutorials
+=========
+.. toctree::
+   :maxdepth: 1
+   ../examples/Tutorial_On_Simulated_Examples.ipynb
+
+
+API documentation
+==================
+
+.. toctree::
+   :maxdepth: 3
+   :caption: API Documentation
+
+   _autosummary/spectral_connectivity
+
+
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`search`
