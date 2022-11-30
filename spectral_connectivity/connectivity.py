@@ -111,12 +111,13 @@ class Connectivity:
         the trials dimensions (leaving tapers) and 'tapers' only averages
         over tapers (leaving trials).
     frequencies : array, shape (n_fft_samples,), optional
+        Frequency of each sample, by default None
     time : np.ndarray, shape (n_time_windows,) optional
-        time of the transform, by default None
+        Time of each window, by default None
     blocks : int, optional
         Number of blocks to split up input arrays to do block computation, by default None
     dtype : np.dtype, optional
-        dtype of the fourier coefficients, by default xp.complex128
+        Data type of the fourier coefficients, by default xp.complex128
 
     References
     ----------
@@ -152,13 +153,14 @@ class Connectivity:
             the trials dimensions (leaving tapers) and 'tapers' only averages
             over tapers (leaving trials).
         frequencies : np.ndarray, shape (n_fft_samples,), optional
-            frequencies of the transform, by default None
+            Frequency of each sample, by default None
         time : np.ndarray, shape (n_time_windows,) optional
-            time of the transform, by default None
+            Time of each window, by default None
         blocks : int, optional
             Number of blocks to split up input arrays to do block computation, by default None
         dtype : np.dtype, optional
-            dtype of the fourier coefficients, by default xp.complex128
+            Data type of the fourier coefficients, by default xp.complex128
+
         """
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
