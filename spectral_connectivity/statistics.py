@@ -130,8 +130,27 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
 
 
 def coherence_bias(n_observations):
-    """Enochson and Goodman (1965)
-    Bokil et al. (2007)
+    """Estimates of coherence are biased by sample size [1,2]. This estimates the degree of bias
+    so that estimates can be corrected.
+
+    Parameters
+    ----------
+    n_observations : int
+        Number of observations.
+
+    Returns
+    -------
+    bias : float
+
+    References
+    ---------
+    .. [1] Enochson, L.D., and Goodman, N.R. (1965). Gaussian approximations to the distribution
+           of sample coherence (Measurement analysis corp Los Angeles CA).
+    .. [2] Bokil, H., Purpura, K., Schoffelen, J.-M., Thomson, D., and Mitra, P. (2007). Comparing
+           spectra and coherences for groups of unequal size. Journal of Neuroscience Methods 159,
+           337–345. 10.1016/j.jneumeth.2006.07.011.
+
+
     """
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)
