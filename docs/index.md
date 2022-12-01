@@ -135,9 +135,7 @@ disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
 
 ```{toctree}
----
-:caption: API:
 :maxdepth: 2
----
+tutorials
 api
 ```
