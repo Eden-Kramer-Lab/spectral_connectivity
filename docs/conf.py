@@ -317,3 +317,15 @@ intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("http://docs.scipy.org/doc/numpy", None),
 }
+
+# -- MyST and MyST-NB ---------------------------------------------------
+
+# MyST
+myst_enable_extensions = [
+    "colon_fence",
+    "deflist",
+    "html_image",
+]
+
+# MyST-NB
+nb_execution_mode = "cache"
