@@ -14,5 +14,7 @@ nbsphinx
 ipython
 jupytext
 jupyter
+jupyterlab
 matplotlib
 numpy
+nb_conda
