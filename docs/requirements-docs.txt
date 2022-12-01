@@ -10,9 +10,11 @@ sphinx-copybutton
 sphinx-design
 sphinx-examples
 sphinx-autodoc-typehints
+nbsphinx
 ipython
 jupytext
 jupyter
+jupyterlab
 matplotlib
 numpy
 ipykernel
