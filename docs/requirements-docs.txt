@@ -17,4 +17,4 @@ jupyter
 jupyterlab
 matplotlib
 numpy
-nb_conda
+ipykernel
