@@ -23,7 +23,7 @@ setup(
     author="Eric Denovellis",
     author_email="edeno@bu.edu",
     url="https://github.com/Eden-Kramer-Lab/spectral_connectivity",
-    long_description=open("README.md").read(),
+    # long_description=open("README.md").read(),
     long_description_content_type="text/x-rst",
     classifiers=[
         "Intended Audience :: Science/Research",
