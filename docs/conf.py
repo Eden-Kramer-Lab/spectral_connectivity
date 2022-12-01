@@ -169,15 +169,16 @@ myst_enable_extensions = [
 
 # MyST-NB
 nb_execution_mode = "cache"
+nb_execution_mode = "off"
 
 # -- Get Jupyter Notebooks ---------------------------------------------------
-# def copy_tree(src, tar):
-#     """Copies over notebooks into the documentation folder, so get around an issue where nbsphinx
-#     requires notebooks to be in the same folder as the documentation folder
-#     """
-#     if os.path.exists(tar):
-#         shutil.rmtree(tar)
-#     shutil.copytree(src, tar)
+def copy_tree(src, tar):
+    """Copies over notebooks into the documentation folder, so get around an issue where nbsphinx
+    requires notebooks to be in the same folder as the documentation folder
+    """
+    if os.path.exists(tar):
+        shutil.rmtree(tar)
+    shutil.copytree(src, tar)
 
 
-# copy_tree("../examples", "./examples")
+copy_tree("../examples", "./examples")
