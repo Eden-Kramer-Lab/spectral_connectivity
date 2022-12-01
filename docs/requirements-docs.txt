@@ -18,4 +18,3 @@ jupyterlab
 matplotlib
 numpy
 ipykernel
-nb_conda
