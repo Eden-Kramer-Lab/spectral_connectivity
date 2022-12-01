@@ -10,3 +10,5 @@ jupytext
 jupyter
 matplotlib
 numpy
+myst_parser
+myst_nb
