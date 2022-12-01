@@ -40,7 +40,6 @@ extensions = [
     "nbsphinx",  # Integrate Jupyter Notebooks and Sphinx
     "numpydoc",
     "myst_nb",
-    "myst_parser",
 ]
 autosummary_generate = True
 
