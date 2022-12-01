@@ -9,12 +9,6 @@
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
 [![Coverage Status](https://coveralls.io/repos/github/Eden-Kramer-Lab/spectral_connectivity/badge.svg?branch=master)](https://coveralls.io/github/Eden-Kramer-Lab/spectral_connectivity?branch=master)
 
-[**Tutorials**](#tutorials)
-| [**Documentation**](#documentation)
-| [**Usage Example**](#usage-example)
-| [**Installation**](#installation)
-| [**Developer Installation**](#developer-installation)
-
 ### What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
@@ -57,10 +51,6 @@ coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 ```
-
-### Documentation
-
-See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
 
 ### Implemented Measures
 
