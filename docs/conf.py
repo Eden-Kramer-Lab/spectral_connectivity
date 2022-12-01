@@ -14,6 +14,7 @@
 # serve to show the default.
 
 import os
+import shutil
 import sys
 
 # If extensions (or modules to document with autodoc) are in another directory,
@@ -329,3 +330,15 @@ myst_enable_extensions = [
 
 # MyST-NB
 nb_execution_mode = "cache"
+
+# -- Get Jupyter Notebooks ---------------------------------------------------
+def copy_tree(src, tar):
+    """Copies over notebooks into the documentation folder, so get around an issue where nbsphinx
+    requires notebooks to be in the same folder as the documentation folder
+    """
+    if os.path.exists(tar):
+        shutil.rmtree(tar)
+    shutil.copytree(src, tar)
+
+
+copy_tree("../examples", "./examples")
