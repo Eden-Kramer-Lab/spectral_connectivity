@@ -3,4 +3,4 @@
    :template: custom-module-template.rst
    :recursive:
 
-   spectral_connectivity
+   API Documentation
