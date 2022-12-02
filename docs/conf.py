@@ -158,7 +158,11 @@ texinfo_documents = [
 
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "numpy": ("http://docs.scipy.org/doc/numpy", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
+    "xarray": ("https://docs.xarray.dev/en/stable/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
+    "cupy": ("https://docs.cupy.dev/en/stable/", None),
 }
 
 # -- MyST and MyST-NB ---------------------------------------------------
