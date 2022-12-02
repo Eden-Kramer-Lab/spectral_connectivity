@@ -1,6 +1,5 @@
 Tutorials
 =========
-
 .. toctree::
    :caption: Introductory tutorial
    :maxdepth: 1
