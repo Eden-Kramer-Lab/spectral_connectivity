@@ -98,9 +98,7 @@ class Connectivity:
 
     Attributes
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                         n_tapers, n_fft_samples,
-                                         n_signals)
+    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
         The compex-valued coefficients from a fourier transform. Note that
         this is expected to be the two-sided fourier coefficients
         (both the positive and negative lags). This is needed for the
@@ -140,9 +138,7 @@ class Connectivity:
 
         Parameters
         ----------
-        fourier_coefficients : np.ndarray, shape (n_time_windows, n_trials,
-                                         n_tapers, n_fft_samples,
-                                         n_signals)
+        fourier_coefficients : np.ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
             The compex-valued coefficients from a fourier transform. Note that
             this is expected to be the two-sided fourier coefficients
             (both the positive and negative lags). This is needed for the
@@ -218,9 +214,7 @@ class Connectivity:
 
         Returns
         -------
-        cross_spectral_matrix : array, shape (n_time_windows, n_trials,
-                                              n_tapers, n_fft_samples,
-                                              n_signals, n_signals)
+        cross_spectral_matrix : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals, n_signals)
 
         """
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
@@ -320,8 +314,7 @@ class Connectivity:
 
         Returns
         -------
-        complex_coherency : array, shape (..., n_fft_samples, n_signals,
-                                          n_signals)
+        complex_coherency : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         """
         norm = xp.sqrt(
@@ -373,8 +366,7 @@ class Connectivity:
 
         Returns
         -------
-        imaginary_coherence_magnitude : array, shape (..., n_fft_samples,
-                                                      n_signals, n_signals)
+        imaginary_coherence_magnitude : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -403,8 +395,7 @@ class Connectivity:
 
         Returns
         -------
-        canonical_coherence : array, shape (n_time_samples, n_fft_samples,
-                                            n_groups, n_groups)
+        canonical_coherence : array, shape (n_time_samples, n_fft_samples, n_groups, n_groups)
             The maximimal coherence for each group pair
         labels : array, shape (n_groups,)
             The sorted unique group labels that correspond to `n_groups`
@@ -477,10 +468,7 @@ class Connectivity:
                                            n_fft_samples,
                                            n_components)
             The vector of global coherences (square of the singular values)
-        unnormalized_global_coherence : ndarray, shape (n_time_windows,
-                                                        n_fft_samples,
-                                                        n_signals,
-                                                        n_components)
+        unnormalized_global_coherence : ndarray, shape (n_time_windows, n_fft_samples, n_signals, n_components)
             The (unnormalized) global coherence vectors
 
         References
@@ -542,8 +530,7 @@ class Connectivity:
 
         Returns
         -------
-        phase_locking_value : array, shape (..., n_fft_samples, n_signals,
-                                            n_signals)
+        phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -580,8 +567,7 @@ class Connectivity:
 
         Returns
         -------
-        phase_lag_index : array, shape (..., n_fft_samples, n_signals,
-                                        n_signals)
+        phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -605,8 +591,7 @@ class Connectivity:
 
         Returns
         -------
-        weighted_phase_lag_index : array, shape (..., n_fft_samples,
-                                                 n_signals, n_signals)
+        weighted_phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -632,8 +617,7 @@ class Connectivity:
 
         Returns
         -------
-        phase_lag_index : array, shape (..., n_fft_samples, n_signals,
-                                        n_signals)
+        phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -658,8 +642,7 @@ class Connectivity:
 
         Returns
         -------
-        weighted_phase_lag_index : array, shape (..., n_fft_samples,
-                                                 n_signals, n_signals)
+        weighted_phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -702,8 +685,7 @@ class Connectivity:
 
         Returns
         -------
-        phase_locking_value : array, shape (..., n_fft_samples, n_signals,
-                                            n_signals)
+        phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -790,8 +772,7 @@ class Connectivity:
 
         Returns
         -------
-        directed_transfer_function : array, shape (..., n_fft_samples,
-                                                   n_signals, n_signals)
+        directed_transfer_function : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -814,8 +795,7 @@ class Connectivity:
 
         Returns
         -------
-        directed_coherence : array, shape (..., n_fft_samples,
-                                           n_signals, n_signals)
+        directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -842,8 +822,7 @@ class Connectivity:
 
         Returns
         -------
-        partial_directed_coherence : array, shape (..., n_fft_samples,
-                                                   n_signals, n_signals)
+        partial_directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -885,10 +864,7 @@ class Connectivity:
 
         Returns
         -------
-        generalized_partial_directed_coherence : array,
-                                                 shape (..., n_fft_samples,
-                                                        n_signals,
-                                                        n_signals)
+        generalized_partial_directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -913,9 +889,7 @@ class Connectivity:
 
         Returns
         -------
-        direct_directed_transfer_function : array, shape
-                                            (..., n_fft_samples,
-                                             n_signals, n_signals)
+        direct_directed_transfer_function : array, shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -1044,9 +1018,7 @@ class Connectivity:
 
         Returns
         -------
-        possible_delays : array, shape (..., n_frequencies,
-                                        (n_range * 2) + 1, n_signals,
-                                        n_signals)
+        possible_delays : array, shape (..., n_frequencies, (n_range * 2) + 1, n_signals,  n_signals)
 
         """
         frequencies = self.frequencies
@@ -1156,8 +1128,7 @@ def _estimate_noise_covariance(minimum_phase):
 
     Parameters
     ----------
-    minimum_phase : array, shape (n_time_windows, n_fft_samples,
-                                  n_signals, n_signals)
+    minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
 
     Returns
@@ -1186,14 +1157,12 @@ def _estimate_transfer_function(minimum_phase):
 
     Parameters
     ----------
-    minimum_phase : array, shape (n_time_windows, n_fft_samples,
-                                  n_signals, n_signals)
+    minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
 
     Returns
     -------
-    transfer_function : array, shape (n_time_windows, n_fft_samples,
-                                      n_signals, n_signals)
+    transfer_function : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The transfer function of a MVAR model.
 
     References
@@ -1295,14 +1264,11 @@ def _reshape(fourier_coefficients):
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                         n_tapers, n_fft_samples,
-                                         n_signals)
+    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
 
     Returns
     -------
-    fourier_coefficients : array, shape (n_time_windows, n_fft_samples,
-                                         n_signals, n_trials * n_tapers)
+    fourier_coefficients : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
 
     """
     (n_time_windows, _, _, n_fft_samples, n_signals) = fourier_coefficients.shape
@@ -1315,16 +1281,12 @@ def _normalize_fourier_coefficients(fourier_coefficients):
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials,
-                                         n_tapers, n_fft_samples,
-                                         n_signals)
+    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
 
     Returns
     -------
-    normalized_fourier_coefficients : array, shape (n_time_windows,
-                                                    n_fft_samples,
-                                                    n_signals,
-                                                    n_trials * n_tapers)
+    normalized_fourier_coefficients : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+
     """
     U, _, V_transpose = xp.linalg.svd(
         _reshape(fourier_coefficients), full_matrices=False
@@ -1340,14 +1302,8 @@ def _estimate_canonical_coherence(
 
     Parameters
     ----------
-    normalized_fourier_coefficients1 : array, shape (n_time_windows,
-                                                     n_fft_samples,
-                                                     n_signals,
-                                                     n_trials * n_tapers)
-    normalized_fourier_coefficients2 : array, shape (n_time_windows,
-                                                     n_fft_samples,
-                                                     n_signals,
-                                                     n_trials * n_tapers)
+    normalized_fourier_coefficients1 : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+    normalized_fourier_coefficients2 : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
 
     Returns
     -------
@@ -1511,8 +1467,7 @@ def _find_significant_frequencies(
         The threshold for a p-value to be considered significant.
     min_group_size : int
         The minimum number of independent frequency points for
-    multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
-                                  'Bonferroni_correction'
+    multiple_comparisons_method : 'Benjamini_Hochberg_procedure' | 'Bonferroni_correction'
         Procedure used to correct for multiple comparisons.
 
     Returns
