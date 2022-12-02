@@ -114,7 +114,7 @@ latex_documents = [
     (
         master_doc,
         "spectral_connectivity.tex",
-        "spectral\\_connectivity Documentation",
+        "spectral\\_connectivity",
         "Eric Denovellis",
         "manual",
     ),
@@ -129,7 +129,7 @@ man_pages = [
     (
         master_doc,
         "spectral_connectivity",
-        "spectral_connectivity Documentation",
+        "spectral_connectivity",
         [author],
         1,
     )
@@ -148,7 +148,7 @@ texinfo_documents = [
     (
         master_doc,
         "spectral_connectivity",
-        "spectral_connectivity Documentation",
+        "spectral_connectivity",
         author,
         "spectral_connectivity",
         "One line description of project.",
