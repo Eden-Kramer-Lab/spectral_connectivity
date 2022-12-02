@@ -138,7 +138,24 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 :hidden:
 :maxdepth: 2
 
-tutorials
+```
+
+```{toctree}
+:caption: Tutorials
+:hidden:
+:maxdepth: 2
+
+examples/Tutorial_On_Simulated_Examples
+examples/Tutorial_Using_Paper_Examples
+
+```
+
+```{toctree}
+:caption: Reference
+:hidden:
+:titlesonly:
+:maxdepth: 1
+
 api
 contributing
 ```
