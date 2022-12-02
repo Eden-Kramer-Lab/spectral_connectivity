@@ -1,6 +1,7 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import os
+from logging import getLogger
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
@@ -19,16 +20,24 @@ from spectral_connectivity.statistics import (
     get_normal_distribution_p_values,
 )
 
+logger = getLogger(__name__)
+
 if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
     try:
+        logger.info("Using GPU for spectral_connectivity...")
         import cupy as xp
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
     except ImportError:
+        print(
+            "Cupy not installed. Cupy is needed to use GPU for "
+            "spectral_connectivity."
+        )
         import numpy as xp
         from scipy.fft import ifft
         from scipy.sparse.linalg import svds
 else:
+    logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
     from scipy.fft import ifft
     from scipy.sparse.linalg import svds
