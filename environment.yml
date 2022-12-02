@@ -4,7 +4,6 @@ channels:
 - defaults
 dependencies:
 - numpy >= 1.11
-- pandas >= 0.18.0
 - matplotlib
 - scipy
 - xarray

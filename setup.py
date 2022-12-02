@@ -4,7 +4,6 @@ from setuptools import find_packages, setup
 
 INSTALL_REQUIRES = [
     "numpy >= 1.11",
-    "pandas >= 0.18.0",
     "scipy",
     "xarray",
     "matplotlib",
