@@ -1,5 +1,5 @@
-API Reference
-=============
+API
+===
 
 .. automodule:: spectral_connectivity
 

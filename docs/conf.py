@@ -91,8 +91,6 @@ html_static_path = ["_static"]
 htmlhelp_basename = "spectral_connectivitydoc"
 
 html_sidebars = {"**": ["sidebar-nav-bs"]}
-html_theme_options = {"navigation_depth": 2}
-
 
 # -- Options for LaTeX output ---------------------------------------------
 
