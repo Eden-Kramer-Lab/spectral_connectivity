@@ -363,7 +363,7 @@ class Connectivity:
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
     def imaginary_coherence(self):
-        """The normalized imaginary component of the cross-spectrum.
+        """The normalized imaginary component of the cross-spectrum [1].
 
         Projects the cross-spectrum onto the imaginary axis to mitigate the
         effect of volume-conducted dependencies. Assumes volume-conducted
@@ -391,7 +391,7 @@ class Connectivity:
         )
 
     def canonical_coherence(self, group_labels):
-        """Finds the maximal coherence between each combination of groups.
+        """Finds the maximal coherence between each combination of groups [1].
 
         The canonical coherence finds two sets of weights such that the
         coherence between the linear combination of group1 and the linear
@@ -461,7 +461,7 @@ class Connectivity:
 
     def global_coherence(self, max_rank=1):
         """The linear combinations of signals that capture the most coherent
-        power at each frequency and time window.
+        power at each frequency and time window [1].
 
         This is a frequency domain analog of PCA over signals at a given
         frequency/time window.
@@ -529,7 +529,7 @@ class Connectivity:
     @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self):
         """The cross-spectrum with the power for each signal scaled to
-        a magnitude of 1.
+        a magnitude of 1 [1].
 
         The phase locking value attempts to mitigate power differences
         between realizations (tapers or trials) by treating all values of
@@ -562,7 +562,7 @@ class Connectivity:
     def phase_lag_index(self):
         """A non-parametric synchrony measure designed to mitigate power
         differences between realizations (tapers, trials) and
-        volume-conduction.
+        volume-conduction [1].
 
         The phase lag index is the average sign of the imaginary
         component of the cross-spectrum. The imaginary component sets
@@ -596,7 +596,7 @@ class Connectivity:
     @_non_negative_frequencies(-3)
     def weighted_phase_lag_index(self):
         """Weighted average of the phase lag index using the imaginary
-        coherency magnitudes as weights.
+        coherency magnitudes as weights [1].
 
         Returns
         -------
@@ -622,7 +622,7 @@ class Connectivity:
     @_asnumpy
     def debiased_squared_phase_lag_index(self):
         """The square of the phase lag index corrected for the positive
-        bias induced by using the magnitude of the complex cross-spectrum.
+        bias induced by using the magnitude of the complex cross-spectrum [1].
 
         Returns
         -------
@@ -647,7 +647,7 @@ class Connectivity:
     def debiased_squared_weighted_phase_lag_index(self):
         """The square of the weighted phase lag index corrected for the
         positive bias induced by using the magnitude of the complex
-        cross-spectrum.
+        cross-spectrum [1].
 
         Returns
         -------
@@ -690,7 +690,7 @@ class Connectivity:
     def pairwise_phase_consistency(self):
         """The square of the phase locking value corrected for the
         positive bias induced by using the magnitude of the complex
-        cross-spectrum.
+        cross-spectrum [1].
 
         Returns
         -------
@@ -714,7 +714,7 @@ class Connectivity:
     @_asnumpy
     def pairwise_spectral_granger_prediction(self):
         """The amount of power at a node in a frequency explained by (is
-        predictive of) the power at other nodes.
+        predictive of) the power at other nodes [1].
 
         Also known as spectral granger causality.
 
@@ -797,7 +797,7 @@ class Connectivity:
     @_asnumpy
     def directed_coherence(self):
         """The transfer function coupling strength normalized by the total
-        influence of other signals on that signal (inflow).
+        influence of other signals on that signal (inflow) [1].
 
         This measure is the same as the directed transfer function but the
         signal inflow is scaled by the noise variance.
@@ -823,7 +823,7 @@ class Connectivity:
 
     def partial_directed_coherence(self, keep_cupy=False):
         """The transfer function coupling strength normalized by its
-        strength of coupling to other signals (outflow).
+        strength of coupling to other signals (outflow) [1].
 
         The partial directed coherence tries to regress out the influence
         of other observed signals, leaving only the direct coupling between
@@ -862,7 +862,7 @@ class Connectivity:
     @_asnumpy
     def generalized_partial_directed_coherence(self):
         """The transfer function coupling strength normalized by its
-        strength of coupling to other signals (outflow).
+        strength of coupling to other signals (outflow) [1].
 
         The partial directed coherence tries to regress out the influence
         of other observed signals, leaving only the direct coupling between
@@ -894,7 +894,7 @@ class Connectivity:
     def direct_directed_transfer_function(self):
         """A combination of the directed transfer function estimate of
         directional influence between signals and the partial coherence's
-        accounting for the influence of other signals.
+        accounting for the influence of other signals [1].
 
         Returns
         -------
@@ -922,7 +922,7 @@ class Connectivity:
         frequency_resolution=None,
         significance_threshold=0.05,
     ):
-        """The average time-delay of a broadband signal.
+        """The average time-delay of a broadband signal [1].
 
         Parameters
         ----------
@@ -1079,7 +1079,7 @@ class Connectivity:
         self, frequencies_of_interest=None, frequency_resolution=None
     ):
         """The weighted average of slopes of a broadband signal projected
-        onto the imaginary axis.
+        onto the imaginary axis [1].
 
         The phase slope index finds the complex weighted average of the
         coherency between frequencies where the weights correspond to the
@@ -1133,7 +1133,7 @@ def _inner_combination(data, axis=-3):
 def _estimate_noise_covariance(minimum_phase):
     """Given a matrix square root of the cross spectral matrix (
     minimum phase factor), non-parametrically estimate the noise covariance
-    of a multivariate autoregressive model (MVAR).
+    of a multivariate autoregressive model (MVAR) [1].
 
     Parameters
     ----------
@@ -1162,7 +1162,7 @@ def _estimate_noise_covariance(minimum_phase):
 def _estimate_transfer_function(minimum_phase):
     """Given a matrix square root of the cross spectral matrix (
     minimum phase factor), non-parametrically estimate the transfer
-    function of a multivariate autoregressive model (MVAR).
+    function of a multivariate autoregressive model (MVAR) [1].
 
     Parameters
     ----------
