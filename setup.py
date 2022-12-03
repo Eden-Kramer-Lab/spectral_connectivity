@@ -12,7 +12,7 @@ TESTS_REQUIRE = ["pytest >= 2.7.1", "nitime"]
 
 setup(
     name="spectral_connectivity",
-    version="1.0.3",
+    version="1.0.4",
     license="GPL-3.0",
     description=(
         "Frequency domain functional and directed"
