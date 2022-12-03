@@ -134,7 +134,7 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
 
 def coherence_bias(n_observations):
     """Estimates of coherence are biased by sample size [1,2]. This estimates the degree of bias
-    so that estimates can be corrected.
+    so that estimates can be corrected  [1, 2].
 
     Parameters
     ----------
@@ -167,7 +167,7 @@ def coherence_rate_adjustment(
     dt=1,
 ):
     """Correction for the spike-field or spike-spike coherence when the
-    conditions have different firing rates.
+    conditions have different firing rates [1].
 
     When comparing the coherence of two conditions, a change in firing rate
     results in a change in coherence without an increase in coupling.
@@ -212,7 +212,7 @@ def coherence_rate_adjustment(
 
 
 def power_confidence_intervals(n_tapers, power=1, ci=0.95):
-    """Confidence intervals for the power spectrum.
+    """Confidence intervals for the power spectrum [1].
 
     Parameters
     ----------
