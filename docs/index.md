@@ -26,8 +26,9 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 
 See the following notebooks for more information on how to use the package:
 
-+ [Tutorial on simulated examples](examples/Tutorial_On_Simulated_Examples.ipynb)
-+ [Tutorial using paper examples](examples/Tutorial_Using_Paper_Examples.ipynb)
++ [Tutorial](examples/Intro_tutorial.ipynb)
++ [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
++ [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
 ### Usage Example
 
