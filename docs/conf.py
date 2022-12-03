@@ -35,6 +35,7 @@ extensions = [
     "nbsphinx",  # Integrate Jupyter Notebooks and Sphinx
     "numpydoc",
     "myst_nb",
+    "IPython.sphinxext.ipython_console_highlighting",  # syntax highlighting
 ]
 autosummary_generate = True
 
