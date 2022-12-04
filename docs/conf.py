@@ -20,7 +20,7 @@ author = "Eric L. Denovellis"
 # The short X.Y version.
 version = "1..0"
 # The full version, including alpha/beta/rc tags.
-release = "1.0.3"
+release = "1.0.4"
 
 # -- General configuration ------------------------------------------------
 
@@ -38,7 +38,6 @@ extensions = [
     "IPython.sphinxext.ipython_console_highlighting",  # syntax highlighting
 ]
 autosummary_generate = True
-
 add_module_names = False
 
 # Add any paths that contain templates here, relative to this directory.
