@@ -36,8 +36,7 @@ class Multitaper(object):
 
     Attributes
     ----------
-    time_series : array, shape (n_time_samples, n_trials, n_signals) or
-                               (n_time_samples, n_signals)
+    time_series : array, shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
     sampling_frequency : float, optional
         Number of samples per time unit the signal(s) are recorded at.
     time_halfbandwidth_product : float, optional
