@@ -143,30 +143,6 @@ class Connectivity:
         blocks: int = None,
         dtype: np.dtype = xp.complex128,
     ):
-        """
-
-        Parameters
-        ----------
-        fourier_coefficients : np.ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
-            The compex-valued coefficients from a fourier transform. Note that
-            this is expected to be the two-sided fourier coefficients
-            (both the positive and negative lags). This is needed for the
-            Granger-based methods to work.
-        expectation_type : str, optional
-            How to average the cross spectral matrix. 'trials_tapers' averages
-            over the trials and tapers dimensions. 'trials' only averages over
-            the trials dimensions (leaving tapers) and 'tapers' only averages
-            over tapers (leaving trials).
-        frequencies : np.ndarray, shape (n_fft_samples,), optional
-            Frequency of each sample, by default None
-        time : np.ndarray, shape (n_time_windows,) optional
-            Time of each window, by default None
-        blocks : int, optional
-            Number of blocks to split up input arrays to do block computation, by default None
-        dtype : np.dtype, optional
-            Data type of the fourier coefficients, by default xp.complex128
-
-        """
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         self._frequencies = frequencies
