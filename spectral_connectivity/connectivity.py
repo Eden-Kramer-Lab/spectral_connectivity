@@ -504,6 +504,12 @@ class Connectivity:
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self):
+        def fcn(x):
+            return x / xp.abs(x)
+
+        return self._expectation_cross_spectral_matrix(fcn=fcn)
+
+    def phase_locking_value(self):
         """The cross-spectrum with the power for each signal scaled to
         a magnitude of 1.
 
@@ -524,13 +530,6 @@ class Connectivity:
                signals. Human Brain Mapping 8, 194-208.
 
         """
-
-        def fcn(x):
-            return x / xp.abs(x)
-
-        return self._expectation_cross_spectral_matrix(fcn=fcn)
-
-    def phase_locking_value(self):
         return xp.abs(self._phase_locking_value())
 
     @_asnumpy
@@ -660,6 +659,7 @@ class Connectivity:
         )
         weights = imaginary_csm_magnitude_sum**2 - squared_imaginary_csm_sum
         weights[weights == 0] = xp.nan
+
         return (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights
 
     @_asnumpy
