@@ -105,7 +105,7 @@ class Connectivity:
     the cross spectral matrix into square roots, which then can be used to
     non-parametrically estimate the transfer function and noise covariance.
 
-    Attributes
+    Parameters
     ----------
     fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
         The compex-valued coefficients from a fourier transform. Note that

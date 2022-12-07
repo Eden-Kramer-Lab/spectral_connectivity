@@ -34,7 +34,7 @@ class Multitaper(object):
     """Transform time-domain signal(s) to the frequency domain by using
     multiple tapering windows.
 
-    Attributes
+    Parameters
     ----------
     time_series : array, shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
     sampling_frequency : float, optional
