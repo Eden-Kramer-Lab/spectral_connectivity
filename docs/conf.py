@@ -66,6 +66,17 @@ pygments_style = "sphinx"
 # a list of builtin themes.
 html_theme = "pydata_sphinx_theme"
 
+html_theme_options = {
+    "search_bar_text": "Search this site...",
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/Eden-Kramer-Lab/spectral_connectivity/",
+            "icon": "fa-brands fa-github",
+        },
+    ],
+}
+
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
