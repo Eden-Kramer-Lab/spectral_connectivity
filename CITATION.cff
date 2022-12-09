@@ -13,9 +13,11 @@ authors:
     orcid: https://orcid.org/0000-0001-7790-257X
   - family-names: Sarmashghi
     given-names: Mehrad
+    affiliation: Boston University
     orcid: https://orcid.org/0000-0002-7976-6636
   - family-names: Stephen
     given-names: Emily
+    affiliation: Department of Mathematics and Statistics, Boston University
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
