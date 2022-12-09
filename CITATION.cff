@@ -1,7 +1,7 @@
 cff-version: 1.1.0
 message: "If you use this software, please cite it as below."
 title: 'Eden-Kramer-Lab/spectral_connectivity'
-doi: 10.5281/zenodo.4088934
+doi: 10.5281/zenodo.1011052
 authors:
   - family-names: Eric
     given-names: Denovellis
@@ -19,7 +19,7 @@ authors:
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
-version: v1.0.3
-date-released: 2022-09-14
+version: v1.1.0
+date-released: 2022-12-08
 repository-code: https://github.com/Eden-Kramer-Lab/spectral_connectivity
 license: GPL-3.0

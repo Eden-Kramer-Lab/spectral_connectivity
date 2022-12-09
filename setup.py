@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import codecs
+import os.path
+
 from setuptools import find_packages, setup
 
 INSTALL_REQUIRES = [
@@ -10,9 +13,25 @@ INSTALL_REQUIRES = [
 ]
 TESTS_REQUIRE = ["pytest >= 2.7.1", "nitime"]
 
+
+def read(rel_path):
+    here = os.path.abspath(os.path.dirname(__file__))
+    with codecs.open(os.path.join(here, rel_path), "r") as fp:
+        return fp.read()
+
+
+def get_version(rel_path):
+    for line in read(rel_path).splitlines():
+        if line.startswith("__version__"):
+            delim = '"' if '"' in line else "'"
+            return line.split(delim)[1]
+    else:
+        raise RuntimeError("Unable to find version string.")
+
+
 setup(
     name="spectral_connectivity",
-    version="1.0.4",
+    version=get_version("spectral_connectivity/__init__.py"),
     license="GPL-3.0",
     description=(
         "Frequency domain functional and directed"
@@ -20,7 +39,7 @@ setup(
         "data"
     ),
     author="Eric Denovellis",
-    author_email="edeno@bu.edu",
+    author_email="eric.denovellis@ucsf.edu",
     url="https://github.com/Eden-Kramer-Lab/spectral_connectivity",
     # long_description=open("README.md").read(),
     long_description_content_type="text/x-rst",

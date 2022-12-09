@@ -3,6 +3,8 @@
 
 import os
 import shutil
+import re
+import spectral_connectivity
 
 
 # -- Project information -----------------------------------------------------
@@ -13,10 +15,14 @@ project = "spectral_connectivity"
 copyright = "2022, Eric L. Denovellis"
 author = "Eric L. Denovellis"
 
-# The short X.Y version.
-version = "1..0"
+# The full version, including alpha/beta/rc tags
+
+# The short X.Y version (including .devXXXX, rcX, b1 suffixes if present)
+version = re.sub(r"(\d+\.\d+)\.\d+(.*)", r"\1\2", spectral_connectivity.__version__)
+version = re.sub(r"(\.dev\d+).*?$", r"\1", version)
 # The full version, including alpha/beta/rc tags.
-release = "1.0.4"
+release = spectral_connectivity.__version__
+print("%s %s" % (version, release))
 
 # -- General configuration ------------------------------------------------
 
