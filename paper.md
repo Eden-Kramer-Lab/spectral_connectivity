@@ -1,5 +1,5 @@
 ---
-title: 'Spectral Connectivity: A Python Package for Computing Multitaper Spectral Estimates and Frequency-Domain Brain Connectivity Measures on the CPU and GPU'
+title: 'Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU'
 tags:
   - Python
   - Neuroscience

@@ -3,19 +3,19 @@ message: "If you use this software, please cite it as below."
 title: 'Eden-Kramer-Lab/spectral_connectivity'
 doi: 10.5281/zenodo.1011052
 authors:
-  - family-names: Eric
-    given-names: Denovellis
+  - family-names: Denovellis
+    given-names: Eric
     orcid: https://orcid.org/0000-0003-4606-087X
     affiliation: UCSF, HHMI
-  - family-names: Maxym
-    given-names: Myroshnychenko
+  - family-names: Myroshnychenko
+    given-names: Maxym
     affiliation: NINDS
     orcid: https://orcid.org/0000-0001-7790-257X
-  - family-names: Mehrad
-    given-names: Sarmashghi
+  - family-names: Sarmashghi
+    given-names: Mehrad
     orcid: https://orcid.org/0000-0002-7976-6636
-  - family-names: Emily
-    given-names: Stephen
+  - family-names: Stephen
+    given-names: Emily
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
