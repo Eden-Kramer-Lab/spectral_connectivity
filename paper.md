@@ -50,7 +50,7 @@ In neuroscience, characterizing the oscillatory dynamics of the brain is critica
 `spectral_connectivity` has already shown its utility to the neuroscience field. The package has already been used in a number of publications and pre-prints in neuroscience [@KuhnertDetectionDirectedConnectivities2019; @VargaNetworkPathConvergence2021; @LauroSubthalamicCorticalNetwork2021;
   , @Delgado-SallentPhencyclidineinducedpsychosiscauses2021]. Interestingly, it has also contributed to a publication in physics [@CliffUnifyingPairwiseInteractions2022], showing its versatility and easy of use. We hope this package will continue to be useful to the neuroscience community, particularly for non-human electrophysiology data.
 
-[^1]: for example, the `expectation_type` parameter of the `Connectivity` class gives the user the option to average over trials, tapers, or both, allowing the same module to yield single-trial or summarized estimates.
+[^1]: For example, the `expectation_type` parameter of the `Connectivity` class gives the user the option to average over trials, tapers, or both, allowing the same module to yield single-trial or summarized estimates.
 
 # Acknowledgements
 
