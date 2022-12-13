@@ -6,18 +6,18 @@ authors:
   - family-names: Denovellis
     given-names: Eric
     orcid: https://orcid.org/0000-0003-4606-087X
-    affiliation: UCSF, HHMI
+    affiliation: Howard Hughes Medical Institute - University of California, San Francisco, California, United States of America
   - family-names: Myroshnychenko
     given-names: Maxym
-    affiliation: NINDS
+    affiliation: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland, United States of America
     orcid: https://orcid.org/0000-0001-7790-257X
   - family-names: Sarmashghi
     given-names: Mehrad
-    affiliation: Boston University
+    affiliation: Division of Systems Engineering, Boston University, Boston, Massachusetts, United States of America
     orcid: https://orcid.org/0000-0002-7976-6636
   - family-names: Stephen
     given-names: Emily
-    affiliation: Department of Mathematics and Statistics, Boston University
+    affiliation: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts, United States of America
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
