@@ -762,7 +762,7 @@ def detrend(data, axis=-1, type="linear", bp=0, overwrite_data=False):
             axis = axis + rnk
         newdims = xp.r_[axis, 0:axis, axis + 1 : rnk]
         newdata = xp.reshape(
-            xp.transpose(data, tuple(newdims)), (N, _prod(dshape) // N)
+            xp.transpose(data, tuple(newdims)), (N, np.prod(dshape) // N)
         )
         if not overwrite_data:
             newdata = newdata.copy()  # make sure we have a copy
