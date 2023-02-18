@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import os
-import shutil
 import re
-import spectral_connectivity
+import shutil
 
+import spectral_connectivity
 
 # -- Project information -----------------------------------------------------
 
@@ -114,6 +114,7 @@ myst_enable_extensions = [
 # MyST-NB
 nb_execution_mode = "cache"
 nb_execution_mode = "off"
+
 
 # -- Get Jupyter Notebooks ---------------------------------------------------
 def copy_tree(src, tar):

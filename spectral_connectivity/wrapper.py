@@ -58,7 +58,6 @@ def connectivity_to_xarray(
         )
 
     else:
-
         xar = xr.DataArray(
             connectivity_mat,
             coords=[

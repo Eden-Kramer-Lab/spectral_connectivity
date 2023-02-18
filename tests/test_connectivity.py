@@ -420,7 +420,6 @@ def test__get_independent_frequency_step(
     ],
 )
 def test__find_largest_significant_group(is_significant, expected_is_significant):
-
     assert np.allclose(
         _find_largest_significant_group(is_significant), expected_is_significant
     )

@@ -1,10 +1,10 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import os
-from logging import getLogger
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
+from logging import getLogger
 
 import numpy as np
 from scipy.ndimage import label
@@ -637,6 +637,7 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
+
         # define functions
         def fcn_imag(x):
             return x.imag
