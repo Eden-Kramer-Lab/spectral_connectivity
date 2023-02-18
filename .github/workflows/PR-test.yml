@@ -31,6 +31,8 @@ jobs:
       with:
         activate-environment: spectral_connectivity
         environment-file: environment.yml
+        miniforge-variant: Mambaforge
+        miniforge-version: latest
     - name: Install spectral_connectivity
       shell: bash -l {0}
       run: |
