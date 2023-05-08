@@ -325,14 +325,14 @@ class Connectivity:
 
     @_asnumpy
     def coherence_magnitude(self):
-        """The magnitude squared of the complex coherency. Note that the 
-        squared modulus of coherency (originally a complex quantity) is the 
-        magnitude-squared coherence (i.e., the normalized, real component of coherency). 
+        """The magnitude squared of the complex coherency. Note that the
+        squared modulus of coherency (originally a complex quantity) is the
+        magnitude-squared coherence (i.e., the normalized, real component of coherency).
         This value should bounded by 0 and 1.
 
-        Hansson-Sandsten M (2011) Cross-spectrum and coherence function 
-        estimation using time-delayed Thomson multitapers. In: 2011 IEEE 
-        International Conference on Acoustics, Speech and Signal 
+        Hansson-Sandsten M (2011) Cross-spectrum and coherence function
+        estimation using time-delayed Thomson multitapers. In: 2011 IEEE
+        International Conference on Acoustics, Speech and Signal
         Processing (ICASSP), pp 4240–4243.
 
         Returns
