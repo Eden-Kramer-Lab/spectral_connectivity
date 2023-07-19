@@ -173,7 +173,7 @@ class Multitaper(object):
             self._n_time_samples_per_window = self.time_series.shape[0]
         elif self._time_window_duration is not None:
             self._n_time_samples_per_window = int(
-                xp.round(self.time_window_duration * self.sampling_frequency)
+                xp.around(self.time_window_duration * self.sampling_frequency)
             )
         return self._n_time_samples_per_window
 
