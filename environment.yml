@@ -21,4 +21,3 @@ dependencies:
 - sphinx-autoapi
 - jupyter
 - jupyterlab
-- nb_conda
