@@ -144,3 +144,4 @@ pip install -e .
 + Phencyclidine-induced psychosis causes hypersynchronization and
 disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
++ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
