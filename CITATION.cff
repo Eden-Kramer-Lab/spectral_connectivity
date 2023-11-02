@@ -1,7 +1,7 @@
 cff-version: 1.1.0
 message: "If you use this software, please cite it as below."
 title: 'Eden-Kramer-Lab/spectral_connectivity'
-doi: 10.5281/zenodo.1011052
+doi: 10.5281/zenodo.10023078
 authors:
   - family-names: Denovellis
     given-names: Eric
@@ -21,7 +21,34 @@ authors:
     orcid: https://orcid.org/0000-0003-1978-9622
 
 title: Eden-Kramer-Lab/spectral_connectivity
-version: v1.1.0
-date-released: 2022-12-08
+version: v1.1.2
+date-released: 2023-10-17
 repository-code: https://github.com/Eden-Kramer-Lab/spectral_connectivity
 license: GPL-3.0
+
+preferred-citation:
+  type: article
+  authors:
+  - family-names: Denovellis
+    given-names: Eric
+    orcid: https://orcid.org/0000-0003-4606-087X
+    affiliation: Howard Hughes Medical Institute - University of California, San Francisco, San Francisco, California, United States of America
+  - family-names: Myroshnychenko
+    given-names: Maxym
+    affiliation: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland, United States of America
+    orcid: https://orcid.org/0000-0001-7790-257X
+  - family-names: Sarmashghi
+    given-names: Mehrad
+    affiliation: Division of Systems Engineering, Boston University, Boston, Massachusetts, United States of America
+    orcid: https://orcid.org/0000-0002-7976-6636
+  - family-names: Stephen
+    given-names: Emily
+    affiliation: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts, United States of America
+    orcid: https://orcid.org/0000-0003-1978-9622
+  doi: "10.21105/joss.04840"
+  journal: "Journal of Open Source Software"
+  month: 12
+  title: "Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU"
+  issue: 80
+  volume: 7
+  year: 2022
