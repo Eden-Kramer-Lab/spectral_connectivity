@@ -53,6 +53,12 @@ weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 ```
 
+### Citation
+
+For citation, please use the following:
+
+> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
+
 ### Implemented Measures
 
 Functional
@@ -134,6 +140,7 @@ pip install -e .
 + Phencyclidine-induced psychosis causes hypersynchronization and
 disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
++ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
 
 ```{toctree}
 :hidden:
