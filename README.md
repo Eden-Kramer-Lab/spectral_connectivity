@@ -13,6 +13,7 @@
 | [**Documentation**](#documentation)
 | [**Usage Example**](#usage-example)
 | [**Installation**](#installation)
+| [**Citation**](#citation)
 | [**Developer Installation**](#developer-installation)
 
 ### What is spectral_connectivity?
@@ -62,6 +63,12 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 ### Documentation
 
 See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
+
+### Citation
+
+For citation, please use the following:
+
+> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
 
 ### Implemented Measures
 
