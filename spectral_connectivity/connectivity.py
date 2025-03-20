@@ -255,6 +255,65 @@ class Connectivity:
                 csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
 
         return csm
+    
+    def _subset_cross_spectral_matrix(self, pairs):
+        """Subset CSM computation for pairs of channels."""
+
+        pairs = np.array(pairs)
+        
+        fourier_coefficients = self.fourier_coefficients[..., np.newaxis]
+        fourier_coefficients = fourier_coefficients.astype(self._dtype)
+
+         # get unique indices
+        _sxu = _nonsorted_unique(pairs[:, 0])
+        _syu = _nonsorted_unique(pairs[:, 1])
+
+        csm_shape = list(self._power.shape)
+        csm_shape += [csm_shape[-1]]
+        dtype = self._dtype
+        csm = np.zeros(csm_shape, dtype=dtype)
+
+        # compute forward pairs
+        _out = self._expectation(
+            _complex_inner_product(
+                fourier_coefficients[..., _sxu, :],
+                fourier_coefficients[..., _syu, :],
+                dtype=self._dtype,
+            )
+        )
+        csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
+
+        # compute backward pairs
+        _out = self._expectation(
+            _complex_inner_product(
+                fourier_coefficients[..., _syu, :],
+                fourier_coefficients[..., _sxu, :],
+                dtype=self._dtype,
+            )
+        )
+        csm[..., _syu.reshape(-1, 1), _sxu.reshape(1, -1)] = _out
+
+        # compute diagonals
+        for x in _syu:
+            diag_out = self._expectation(
+                _complex_inner_product(
+                    fourier_coefficients[..., [x], :],
+                    fourier_coefficients[..., [x], :],
+                    dtype=self._dtype,
+                )
+            )
+            csm[..., [x], [x]] = diag_out[..., 0]
+        for x in _sxu:
+            diag_out = self._expectation(
+                _complex_inner_product(
+                    fourier_coefficients[..., [x], :],
+                    fourier_coefficients[..., [x], :],
+                    dtype=self._dtype,
+                )
+            )
+            csm[..., [x], [x]] = diag_out[..., 0]
+
+        return csm
 
     @property
     def _minimum_phase_factor(self):
@@ -744,6 +803,53 @@ class Connectivity:
 
         diagonal_ind = xp.diag_indices(n_signals)
         predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
+
+        return predictive_power
+
+    def subset_pairwise_spectral_granger_prediction(self, pairs):
+        """Predictive power for a subset of pairs of signals."""
+        pairs = np.array(pairs)
+        
+        fourier_coefficients = self.fourier_coefficients[..., np.newaxis]
+        fourier_coefficients = fourier_coefficients.astype(c._dtype)
+
+        csm = self._subset_cross_spectral_matrix(pairs)
+        
+        total_power = self._power
+        n_frequencies = total_power.shape[-2]
+        non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
+        total_power = np.take(total_power, indices=non_neg_index, axis=-2)
+
+        n_frequencies = csm.shape[-3]
+        new_shape = list(csm.shape)
+        new_shape[-3] = non_neg_index.size
+        predictive_power = np.empty(new_shape)
+
+        for pair_indices in pairs:
+            pair_indices = np.array(pair_indices)[:, np.newaxis]
+            try:
+                minimum_phase_factor = minimum_phase_decomposition(
+                    csm[..., pair_indices, pair_indices.T]
+                )
+                transfer_function = _estimate_transfer_function(minimum_phase_factor)[
+                    ..., non_neg_index, :, :
+                ]
+                rotated_covariance = _remove_instantaneous_causality(
+                    _estimate_noise_covariance(minimum_phase_factor)
+                )
+                predictive_power[
+                    ..., pair_indices, pair_indices.T
+                ] = _estimate_predictive_power(
+                    total_power[..., pair_indices[:, 0]],
+                    rotated_covariance,
+                    transfer_function,
+                )
+            except np.linalg.LinAlgError:
+                predictive_power[..., pair_indices, pair_indices.T] = np.nan
+
+        n_signals = csm.shape[-1]
+        diagonal_ind = np.diag_indices(n_signals)
+        predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = np.nan
 
         return predictive_power
 
