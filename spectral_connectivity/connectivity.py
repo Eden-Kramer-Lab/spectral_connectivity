@@ -261,7 +261,7 @@ class Connectivity:
 
         pairs = np.array(pairs)
         
-        fourier_coefficients = self.fourier_coefficients[..., np.newaxis]
+        fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
         fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
          # get unique indices
@@ -271,7 +271,7 @@ class Connectivity:
         csm_shape = list(self._power.shape)
         csm_shape += [csm_shape[-1]]
         dtype = self._dtype
-        csm = np.zeros(csm_shape, dtype=dtype)
+        csm = xp.zeros(csm_shape, dtype=dtype)
 
         # compute forward pairs
         _out = self._expectation(
@@ -810,8 +810,8 @@ class Connectivity:
         """Predictive power for a subset of pairs of signals."""
         pairs = np.array(pairs)
         
-        fourier_coefficients = self.fourier_coefficients[..., np.newaxis]
-        fourier_coefficients = fourier_coefficients.astype(c._dtype)
+        fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+        fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
         csm = self._subset_cross_spectral_matrix(pairs)
         
