@@ -199,8 +199,8 @@ class Connectivity:
 
         Returns
         -------
-        cross_spectral_matrix : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals, n_signals)
-
+        cross_spectral_matrix : array, shape (n_time_windows, n_trials, 
+            n_tapers, n_fft_samples, n_signals, n_signals)
         """
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
         return _complex_inner_product(
@@ -255,63 +255,30 @@ class Connectivity:
                 csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
 
         return csm
-    
+
     def _subset_cross_spectral_matrix(self, pairs):
         """Subset CSM computation for pairs of channels."""
 
         pairs = np.array(pairs)
-        
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
         fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
-         # get unique indices
-        _sxu = _nonsorted_unique(pairs[:, 0])
-        _syu = _nonsorted_unique(pairs[:, 1])
-
-        csm_shape = list(self._power.shape)
+        csm_shape = list(self.fourier_coefficients.shape)
         csm_shape += [csm_shape[-1]]
         dtype = self._dtype
-        csm = xp.zeros(csm_shape, dtype=dtype)
+        csm = xp.full(csm_shape, xp.nan, dtype=dtype)
 
-        # compute forward pairs
-        _out = self._expectation(
-            _complex_inner_product(
-                fourier_coefficients[..., _sxu, :],
-                fourier_coefficients[..., _syu, :],
-                dtype=self._dtype,
-            )
-        )
-        csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
+        for i, j in pairs:
+            a = fourier_coefficients[..., [i], :]
+            b = fourier_coefficients[..., [j], :]
 
-        # compute backward pairs
-        _out = self._expectation(
-            _complex_inner_product(
-                fourier_coefficients[..., _syu, :],
-                fourier_coefficients[..., _sxu, :],
-                dtype=self._dtype,
-            )
-        )
-        csm[..., _syu.reshape(-1, 1), _sxu.reshape(1, -1)] = _out
+            # compute the cross terms (off-diagonal)
+            csm[..., i, j] = _complex_inner_product(a, b)[..., 0, 0]
+            csm[..., j, i] = _complex_inner_product(b, a)[..., 0, 0]
 
-        # compute diagonals
-        for x in _syu:
-            diag_out = self._expectation(
-                _complex_inner_product(
-                    fourier_coefficients[..., [x], :],
-                    fourier_coefficients[..., [x], :],
-                    dtype=self._dtype,
-                )
-            )
-            csm[..., [x], [x]] = diag_out[..., 0]
-        for x in _sxu:
-            diag_out = self._expectation(
-                _complex_inner_product(
-                    fourier_coefficients[..., [x], :],
-                    fourier_coefficients[..., [x], :],
-                    dtype=self._dtype,
-                )
-            )
-            csm[..., [x], [x]] = diag_out[..., 0]
+            # compute the diagonal terms (auto-correlation)
+            csm[..., i, i] = _complex_inner_product(a, a)[..., 0, 0]
+            csm[..., j, j] = _complex_inner_product(b, b)[..., 0, 0]
 
         return csm
 
@@ -767,91 +734,18 @@ class Connectivity:
                American Statistical Association 77, 304.
 
         """
-        cross_spectral_matrix = self._expectation_cross_spectral_matrix()
-        n_signals = cross_spectral_matrix.shape[-1]
+        csm = self._expectation_cross_spectral_matrix()
+        n_signals = csm.shape[-1]
+        pairs = combinations(range(n_signals), 2)
         total_power = self._power
-        n_frequencies = total_power.shape[-2]
-        non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
-        total_power = xp.take(total_power, indices=non_neg_index, axis=-2)
-
-        n_frequencies = cross_spectral_matrix.shape[-3]
-        new_shape = list(cross_spectral_matrix.shape)
-        new_shape[-3] = non_neg_index.size
-        predictive_power = xp.empty(new_shape)
-
-        for pair_indices in combinations(range(n_signals), 2):
-            pair_indices = xp.array(pair_indices)[:, xp.newaxis]
-            try:
-                minimum_phase_factor = minimum_phase_decomposition(
-                    cross_spectral_matrix[..., pair_indices, pair_indices.T]
-                )
-                transfer_function = _estimate_transfer_function(minimum_phase_factor)[
-                    ..., non_neg_index, :, :
-                ]
-                rotated_covariance = _remove_instantaneous_causality(
-                    _estimate_noise_covariance(minimum_phase_factor)
-                )
-                predictive_power[
-                    ..., pair_indices, pair_indices.T
-                ] = _estimate_predictive_power(
-                    total_power[..., pair_indices[:, 0]],
-                    rotated_covariance,
-                    transfer_function,
-                )
-            except np.linalg.LinAlgError:
-                predictive_power[..., pair_indices, pair_indices.T] = xp.nan
-
-        diagonal_ind = xp.diag_indices(n_signals)
-        predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
-
-        return predictive_power
+        return _estimate_spectral_granger_prediction(total_power, csm, pairs)
 
     def subset_pairwise_spectral_granger_prediction(self, pairs):
         """Predictive power for a subset of pairs of signals."""
         pairs = np.array(pairs)
-        
-        fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
-        fourier_coefficients = fourier_coefficients.astype(self._dtype)
-
-        csm = self._subset_cross_spectral_matrix(pairs)
-        
+        csm = self._expectation(self._subset_cross_spectral_matrix(pairs))
         total_power = self._power
-        n_frequencies = total_power.shape[-2]
-        non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
-        total_power = np.take(total_power, indices=non_neg_index, axis=-2)
-
-        n_frequencies = csm.shape[-3]
-        new_shape = list(csm.shape)
-        new_shape[-3] = non_neg_index.size
-        predictive_power = np.empty(new_shape)
-
-        for pair_indices in pairs:
-            pair_indices = np.array(pair_indices)[:, np.newaxis]
-            try:
-                minimum_phase_factor = minimum_phase_decomposition(
-                    csm[..., pair_indices, pair_indices.T]
-                )
-                transfer_function = _estimate_transfer_function(minimum_phase_factor)[
-                    ..., non_neg_index, :, :
-                ]
-                rotated_covariance = _remove_instantaneous_causality(
-                    _estimate_noise_covariance(minimum_phase_factor)
-                )
-                predictive_power[
-                    ..., pair_indices, pair_indices.T
-                ] = _estimate_predictive_power(
-                    total_power[..., pair_indices[:, 0]],
-                    rotated_covariance,
-                    transfer_function,
-                )
-            except np.linalg.LinAlgError:
-                predictive_power[..., pair_indices, pair_indices.T] = np.nan
-
-        n_signals = csm.shape[-1]
-        diagonal_ind = np.diag_indices(n_signals)
-        predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = np.nan
-
-        return predictive_power
+        return _estimate_spectral_granger_prediction(total_power, csm, pairs)
 
     def conditional_spectral_granger_prediction(self):
         """Not implemented"""
@@ -1628,3 +1522,59 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1):
         global_coherence = global_coherence**2 / n_estimates
 
     return global_coherence, unnormalized_global_coherence
+
+def _estimate_spectral_granger_prediction(total_power, csm, pairs):
+    """
+    Estimate spectral granger causality.
+
+    Parameters
+    ----------
+    total_power : ndarray, shape (..., n_frequencies, n_signals)
+        The total power of the signals.
+    csm : ndarray, shape (..., n_frequencies, n_signals, n_signals)
+        The cross spectral matrix of the signals.
+    pairs : list of tuples
+        The pairs of signals to estimate the spectral granger
+        causality for.
+
+    Returns
+    -------
+    predictive_power : ndarray, shape (..., n_frequencies, n_signals, n_signals)
+        The spectral granger causality of the signals.
+    """
+    n_frequencies = total_power.shape[-2]
+    non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
+    total_power = np.take(total_power, indices=non_neg_index, axis=-2)
+
+    n_frequencies = csm.shape[-3]
+    new_shape = list(csm.shape)
+    new_shape[-3] = non_neg_index.size
+    predictive_power = np.full(new_shape, xp.nan)
+
+    for pair_indices in pairs:
+        pair_indices = np.array(pair_indices)[:, np.newaxis]
+        try:
+            minimum_phase_factor = minimum_phase_decomposition(
+                csm[..., pair_indices, pair_indices.T]
+            )
+            transfer_function = _estimate_transfer_function(minimum_phase_factor)[
+                ..., non_neg_index, :, :
+            ]
+            rotated_covariance = _remove_instantaneous_causality(
+                _estimate_noise_covariance(minimum_phase_factor)
+            )
+            predictive_power[
+                ..., pair_indices, pair_indices.T
+            ] = _estimate_predictive_power(
+                total_power[..., pair_indices[:, 0]],
+                rotated_covariance,
+                transfer_function,
+            )
+        except np.linalg.LinAlgError:
+            predictive_power[..., pair_indices, pair_indices.T] = np.nan
+
+    n_signals = csm.shape[-1]
+    diagonal_ind = np.diag_indices(n_signals)
+    predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = np.nan
+
+    return predictive_power
