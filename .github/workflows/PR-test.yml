@@ -32,7 +32,7 @@ jobs:
         python-version: '3.9'
         activate-environment: spectral_connectivity
         environment-file: environment.yml
-        miniforge-variant: Mambaforge
+        miniforge-variant: Miniforge3
         miniforge-version: latest
     - name: Install spectral_connectivity
       shell: bash -l {0}
