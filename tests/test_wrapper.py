@@ -101,6 +101,7 @@ def test_multitaper_n_signals(n_signals):
         "global_coherence",
         "from_multitaper",
         "phase_slope_index",
+        "subset_pairwise_spectral_granger_prediction"
     ]
     methods = [
         x for x in dir(Connectivity) if not x.startswith("_") and x not in bad_methods
