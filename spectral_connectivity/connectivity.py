@@ -266,7 +266,7 @@ class Connectivity:
         csm_shape = list(self.fourier_coefficients.shape)
         csm_shape += [csm_shape[-1]]
         dtype = self._dtype
-        csm = xp.full(csm_shape, xp.nan, dtype=dtype)
+        csm = xp.empty(csm_shape, dtype=dtype)
 
         for i, j in pairs:
             a = fourier_coefficients[..., [i], :]
@@ -740,6 +740,7 @@ class Connectivity:
         total_power = self._power
         return _estimate_spectral_granger_prediction(total_power, csm, pairs)
 
+    @_asnumpy
     def subset_pairwise_spectral_granger_prediction(self, pairs):
         """Predictive power for a subset of pairs of signals."""
         pairs = np.array(pairs)
@@ -1543,16 +1544,16 @@ def _estimate_spectral_granger_prediction(total_power, csm, pairs):
         The spectral granger causality of the signals.
     """
     n_frequencies = total_power.shape[-2]
-    non_neg_index = np.arange(0, (n_frequencies + 1) // 2)
-    total_power = np.take(total_power, indices=non_neg_index, axis=-2)
+    non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
+    total_power = xp.take(total_power, indices=non_neg_index, axis=-2)
 
     n_frequencies = csm.shape[-3]
     new_shape = list(csm.shape)
     new_shape[-3] = non_neg_index.size
-    predictive_power = np.full(new_shape, xp.nan)
+    predictive_power = xp.full(new_shape, xp.nan)
 
     for pair_indices in pairs:
-        pair_indices = np.array(pair_indices)[:, np.newaxis]
+        pair_indices = xp.array(pair_indices)[:, xp.newaxis]
         try:
             minimum_phase_factor = minimum_phase_decomposition(
                 csm[..., pair_indices, pair_indices.T]
@@ -1571,10 +1572,10 @@ def _estimate_spectral_granger_prediction(total_power, csm, pairs):
                 transfer_function,
             )
         except np.linalg.LinAlgError:
-            predictive_power[..., pair_indices, pair_indices.T] = np.nan
+            predictive_power[..., pair_indices, pair_indices.T] = xp.nan
 
     n_signals = csm.shape[-1]
-    diagonal_ind = np.diag_indices(n_signals)
-    predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = np.nan
+    diagonal_ind = xp.diag_indices(n_signals)
+    predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
     return predictive_power
