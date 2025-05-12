@@ -199,7 +199,7 @@ class Connectivity:
 
         Returns
         -------
-        cross_spectral_matrix : array, shape (n_time_windows, n_trials, 
+        cross_spectral_matrix : array, shape (n_time_windows, n_trials,
             n_tapers, n_fft_samples, n_signals, n_signals)
         """
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
@@ -968,22 +968,22 @@ class Connectivity:
         )
         new_shape = (*bandpassed_coherency.shape[:-2], n_signals, n_signals)
         slope = np.full(new_shape, np.nan)
-        slope[
-            ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
-        ] = np.asarray(regression_results[..., 0, :], dtype=float)
-        slope[
-            ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
-        ] = -1 * np.asarray(regression_results[..., 0, :], dtype=float)
+        slope[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
+            np.asarray(regression_results[..., 0, :], dtype=float)
+        )
+        slope[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = (
+            -1 * np.asarray(regression_results[..., 0, :], dtype=float)
+        )
 
         delay = slope / (2 * np.pi)
 
         r_value = np.ones(new_shape)
-        r_value[
-            ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
-        ] = np.asarray(regression_results[..., 2, :], dtype=float)
-        r_value[
-            ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
-        ] = np.asarray(regression_results[..., 2, :], dtype=float)
+        r_value[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
+            np.asarray(regression_results[..., 2, :], dtype=float)
+        )
+        r_value[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = (
+            np.asarray(regression_results[..., 2, :], dtype=float)
+        )
 
         return delay, slope, r_value
 
@@ -1524,6 +1524,7 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1):
 
     return global_coherence, unnormalized_global_coherence
 
+
 def _estimate_spectral_granger_prediction(total_power, csm, pairs):
     """
     Estimate spectral granger causality.
@@ -1564,12 +1565,12 @@ def _estimate_spectral_granger_prediction(total_power, csm, pairs):
             rotated_covariance = _remove_instantaneous_causality(
                 _estimate_noise_covariance(minimum_phase_factor)
             )
-            predictive_power[
-                ..., pair_indices, pair_indices.T
-            ] = _estimate_predictive_power(
-                total_power[..., pair_indices[:, 0]],
-                rotated_covariance,
-                transfer_function,
+            predictive_power[..., pair_indices, pair_indices.T] = (
+                _estimate_predictive_power(
+                    total_power[..., pair_indices[:, 0]],
+                    rotated_covariance,
+                    transfer_function,
+                )
             )
         except np.linalg.LinAlgError:
             predictive_power[..., pair_indices, pair_indices.T] = xp.nan

@@ -54,6 +54,7 @@ def test_cross_spectrum(axis):
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     assert np.allclose(expected_cross_spectral_matrix, this_Conn._cross_spectral_matrix)
 
+
 def test_subset_cross_spectrum():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (2, 2, 2, 2, 2)
     fourier_coefficients = np.zeros(
@@ -68,11 +69,14 @@ def test_subset_cross_spectrum():
     full_csm = this_Conn._cross_spectral_matrix
     subset_csm = this_Conn._subset_cross_spectral_matrix(pairs)
     assert np.allclose(
-        subset_csm[..., pairs[:, 0], pairs[:, 1]], full_csm[..., pairs[:, 0], pairs[:, 1]]
+        subset_csm[..., pairs[:, 0], pairs[:, 1]],
+        full_csm[..., pairs[:, 0], pairs[:, 1]],
     )
     assert np.allclose(
-        subset_csm[..., pairs[:, 1], pairs[:, 0]], full_csm[..., pairs[:, 1], pairs[:, 0]]
+        subset_csm[..., pairs[:, 1], pairs[:, 0]],
+        full_csm[..., pairs[:, 1], pairs[:, 0]],
     )
+
 
 def test_power():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
@@ -569,6 +573,7 @@ def test_partial_directed_coherence():
     assert np.allclose(pdc.sum(axis=-2), 1.0)
     assert np.all((pdc >= 0.0) & (pdc <= 1.0))
 
+
 def test_subset_pairwise_granger_prediction():
     np.random.seed(0)
     T = 64
@@ -589,6 +594,6 @@ def test_subset_pairwise_granger_prediction():
     gp_subset = c.subset_pairwise_spectral_granger_prediction(pairs)
     gp_all = c.pairwise_spectral_granger_prediction()
     assert gp_subset.shape == gp_all.shape
-    for (i, j) in pairs:
+    for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)
         assert np.allclose(gp_subset[..., j, i], gp_all[..., j, i], equal_nan=True)
