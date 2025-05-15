@@ -1,4 +1,5 @@
 """Functions for getting connectivity measures in a labeled array format."""
+
 from logging import getLogger
 
 import numpy as np
@@ -153,6 +154,7 @@ def multitaper_connectivity(
             "global_coherence",
             "from_multitaper",
             "phase_slope_index",
+            "subset_pairwise_spectral_granger_prediction",
         ]
         method = [
             x
