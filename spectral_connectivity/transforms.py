@@ -21,12 +21,12 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
             "spectral_connectivity."
         )
         import numpy as xp
-        from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+        from scipy.fft import fft, fftfreq, ifft, next_fast_len
         from scipy.linalg import lstsq
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
-    from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+    from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.linalg import lstsq
 
 
