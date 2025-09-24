@@ -147,7 +147,7 @@ class Connectivity:
 
         # Validate expectation_type early
         if expectation_type not in EXPECTATION:
-            allowed_values = ', '.join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
+            allowed_values = ", ".join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
             raise ValueError(
                 f"Invalid expectation_type '{expectation_type}'. "
                 f"Allowed values are: {allowed_values}"
