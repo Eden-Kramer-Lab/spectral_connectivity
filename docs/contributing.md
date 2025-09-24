@@ -36,7 +36,7 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ```bash
 git clean -xfd
-python setup.py sdist bdist_wheel
+python -m build
 twine upload dist/*
 ```
 
