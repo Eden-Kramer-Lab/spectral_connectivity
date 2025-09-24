@@ -156,6 +156,14 @@ class Multitaper(object):
         self._n_samples_per_time_step = n_time_samples_per_step
 
     def __repr__(self):
+        """Return string representation of Multitaper object.
+
+        Returns
+        -------
+        str
+            String representation of the Multitaper object.
+
+        """
         return (
             "Multitaper("
             "sampling_frequency={0.sampling_frequency!r}, "
@@ -170,14 +178,14 @@ class Multitaper(object):
 
     @property
     def tapers(self):
-        """
-        Returns the tapers used for the multitpaer function.
+        """Return the tapers used for the multitaper function.
 
         Tapers are the windowing function.
 
         Returns
         -------
         tapers : array_like, shape (n_time_samples_per_window, n_tapers)
+            The tapers used for windowing.
 
         """
         if self._tapers is None:
@@ -192,7 +200,14 @@ class Multitaper(object):
 
     @property
     def time_window_duration(self):
-        """Duration of each time bin."""
+        """Return duration of each time bin.
+
+        Returns
+        -------
+        float
+            Duration in seconds of each time window.
+
+        """
         if self._time_window_duration is None:
             self._time_window_duration = (
                 self.n_time_samples_per_window / self.sampling_frequency
@@ -201,7 +216,14 @@ class Multitaper(object):
 
     @property
     def time_window_step(self):
-        """How much to each time window slides."""
+        """Return how much each time window slides.
+
+        Returns
+        -------
+        float
+            Step size in seconds between consecutive time windows.
+
+        """
         if self._time_window_step is None:
             self._time_window_step = (
                 self.n_time_samples_per_step / self.sampling_frequency
@@ -210,10 +232,15 @@ class Multitaper(object):
 
     @property
     def n_tapers(self):
-        """Number of desired tapers.
+        """Return number of desired tapers.
 
         Note that the number of tapers may be less than this number if
-        the bias of the tapers is too high (eigenvalues > 0.9)
+        the bias of the tapers is too high (eigenvalues > 0.9).
+
+        Returns
+        -------
+        int
+            Number of tapers to use.
 
         """
         if self._n_tapers is None:
@@ -222,7 +249,14 @@ class Multitaper(object):
 
     @property
     def n_time_samples_per_window(self):
-        """Number of samples per time bin."""
+        """Return number of samples per time bin.
+
+        Returns
+        -------
+        int
+            Number of time samples in each window.
+
+        """
         if (
             self._n_time_samples_per_window is None
             and self._time_window_duration is None
@@ -236,22 +270,44 @@ class Multitaper(object):
 
     @property
     def n_fft_samples(self):
-        """Number of frequency bins."""
+        """Return number of frequency bins.
+
+        Returns
+        -------
+        int
+            Number of FFT samples.
+
+        """
         if self._n_fft_samples is None:
             self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
         return self._n_fft_samples
 
     @property
     def frequencies(self):
-        """Frequency of each frequency bin."""
+        """Return frequency of each frequency bin.
+
+        Returns
+        -------
+        NDArray[float64], shape (n_frequencies,)
+            Frequency values in Hz corresponding to FFT bins.
+
+        """
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
     @property
     def n_time_samples_per_step(self):
-        """If `time_window_step` is set, then calculate the
+        """Return number of samples to step between windows.
+
+        If `time_window_step` is set, then calculate the
         `n_time_samples_per_step` based on the time window duration. If
         `time_window_step` and `n_time_samples_per_step` are both not set,
         default the window step size to the same size as the window.
+
+        Returns
+        -------
+        int
+            Number of samples to advance between windows.
+
         """
         if self._n_samples_per_time_step is None and self._time_window_step is None:
             self._n_samples_per_time_step = self.n_time_samples_per_window
@@ -263,7 +319,14 @@ class Multitaper(object):
 
     @property
     def time(self):
-        """Time of each time bin."""
+        """Return time of each time bin.
+
+        Returns
+        -------
+        NDArray[float64], shape (n_time_windows,)
+            Time values in seconds for center of each time window.
+
+        """
         original_time = (
             xp.arange(0, self.time_series.shape[0]) / self.sampling_frequency
         )
@@ -274,26 +337,52 @@ class Multitaper(object):
 
     @property
     def n_signals(self):
-        """Number of signals computed."""
+        """Return number of signals computed.
+
+        Returns
+        -------
+        int
+            Number of signals in the time series.
+
+        """
         return 1 if len(self.time_series.shape) < 2 else self.time_series.shape[-1]
 
     @property
     def n_trials(self):
-        """Number of trials computed."""
+        """Return number of trials computed.
+
+        Returns
+        -------
+        int
+            Number of trials in the time series.
+
+        """
         return 1 if len(self.time_series.shape) < 3 else self.time_series.shape[1]
 
     @property
     def frequency_resolution(self):
-        """
-        Range of frequencies the transform is able to resolve.
+        """Return range of frequencies the transform is able to resolve.
 
         Given the time-frequency tradeoff.
+
+        Returns
+        -------
+        float
+            Frequency resolution in Hz.
+
         """
         return 2.0 * self.time_halfbandwidth_product / self.time_window_duration
 
     @property
     def nyquist_frequency(self):
-        """Maximum resolvable frequency."""
+        """Return maximum resolvable frequency.
+
+        Returns
+        -------
+        float
+            Nyquist frequency in Hz.
+
+        """
         return self.sampling_frequency / 2
 
     def fft(self):
@@ -301,8 +390,9 @@ class Multitaper(object):
 
         Returns
         -------
-        fourier_coefficients : array,
-            shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+        fourier_coefficients : array
+            Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+            Complex-valued Fourier coefficients.
 
         """
         time_series = _add_axes(self.time_series)
