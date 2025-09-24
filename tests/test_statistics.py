@@ -5,7 +5,7 @@ from spectral_connectivity.statistics import (
     Benjamini_Hochberg_procedure,
     Bonferroni_correction,
     coherence_bias,
-    fisher_z_transform,
+    coherence_fisher_z_transform,
     get_normal_distribution_p_values,
 )
 
@@ -21,7 +21,7 @@ def test_fisher_z_transform():
     bias1, bias2 = 3, 6
     expected_difference_z = np.ones((2, 2))
     assert np.allclose(
-        fisher_z_transform(coherency, bias1, coherency2=coherency, bias2=bias2),
+        coherence_fisher_z_transform(coherency, bias1, coherency2=coherency, n_obs2=bias2),
         expected_difference_z,
     )
 
