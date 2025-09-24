@@ -1,9 +1,11 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
 from logging import getLogger
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 import xarray as xr
+from numpy.typing import NDArray
 
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
@@ -12,22 +14,57 @@ logger = getLogger(__name__)
 
 
 def connectivity_to_xarray(
-    m, method="coherence_magnitude", signal_names=None, squeeze=False, **kwargs
-):
+    m: Multitaper,
+    method: str = "coherence_magnitude",
+    signal_names: Optional[Sequence[str]] = None,
+    squeeze: bool = False,
+    **kwargs: Any,
+) -> xr.DataArray:
     """
-    Calculate connectivity using `method`. Returns an xarray
-    with dimensions of ['time', 'frequency', 'source', 'target']
-    or ['time', 'frequency'] if squeeze=True
+    Calculate connectivity measures and return as labeled xarray.
+
+    Computes the specified connectivity measure from multitaper spectral analysis
+    and returns results in an xarray.DataArray with properly labeled dimensions.
 
     Parameters
-    -----------
-    signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of
-        xarray.
-    squeeze : bool
-        Whether to only take the first and last source and target time series.
-        Only makes sense for one pair of signals and symmetrical measures
+    ----------
+    m : Multitaper
+        Multitaper object containing spectral transform results.
+    method : str, default="coherence_magnitude"
+        Name of connectivity method to compute (e.g., "coherence_magnitude",
+        "imaginary_coherence", "phase_locking_value").
+    signal_names : sequence of str, optional
+        Names for signal channels used to label 'source' and 'target' dimensions.
+        If None, uses integer indices.
+    squeeze : bool, default=False
+        If True and only 2 signals, return connectivity between first and last
+        signal only. Only meaningful for symmetric measures.
+    **kwargs : dict
+        Additional keyword arguments passed to connectivity method.
 
+    Returns
+    -------
+    connectivity : xarray.DataArray
+        Connectivity results with dimensions:
+        - ['time', 'frequency', 'source', 'target'] for pairwise measures
+        - ['time', 'frequency', 'source'] for power spectral density
+        - ['time', 'frequency'] if squeeze=True and n_signals=2
+
+    Raises
+    ------
+    NotImplementedError
+        If the requested method is not supported by xarray interface.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from spectral_connectivity.transforms import Multitaper
+    >>> # Simulate data: (100 time points, 5 trials, 3 channels)
+    >>> data = np.random.randn(100, 5, 3)
+    >>> mt = Multitaper(data, sampling_frequency=1000)
+    >>> coherence = connectivity_to_xarray(mt, method="coherence_magnitude")
+    >>> coherence.dims
+    ('time', 'frequency', 'source', 'target')
     """
     if (method in ["group_delay", "canonical_coherence"]) or ("directed" in method):
         raise ValueError(
@@ -93,58 +130,92 @@ def connectivity_to_xarray(
 
 
 def multitaper_connectivity(
-    time_series,
-    sampling_frequency,
-    time_window_duration=None,
-    method=None,
-    signal_names=None,
-    squeeze=False,
-    connectivity_kwargs=None,
-    **kwargs,
-):
+    time_series: NDArray[np.floating],
+    sampling_frequency: float,
+    time_window_duration: Optional[float] = None,
+    method: Optional[Union[str, List[str]]] = None,
+    signal_names: Optional[Sequence[str]] = None,
+    squeeze: bool = False,
+    connectivity_kwargs: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> Union[xr.DataArray, xr.Dataset]:
     """
-    Transform time series to multitaper and
-    calculate connectivity using `method`. Returns an xarray.DataSet
-    with dimensions of ['Time', 'Frequency', 'Source', 'Target']
-    or ['Time', 'Frequency'] if squeeze=True.
-    Its Data variables are measures
+    Compute connectivity measures with multitaper spectral estimation.
+
+    This is the main high-level function for connectivity analysis. It performs
+    multitaper spectral analysis on the input time series and computes the
+    requested connectivity measures, returning results as labeled xarray objects.
 
     Parameters
-    -----------
-    signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of
-        xarray.
-    squeeze : bool
-        Whether to only take the first and last source and target time series.
-        Only makes sense for one pair of signals and symmetrical measures.
-
-    Attributes
     ----------
-    time_series : array, shape (n_time_samples, n_trials, n_signals) or
-                               (n_time_samples, n_signals)
+    time_series : NDArray[floating],
+        shape (n_times, n_trials, n_channels) or (n_times, n_channels)
+        Time series data. For multiple trials, trials are averaged in spectral domain.
     sampling_frequency : float
-        Number of samples per time unit the signal(s) are recorded at.
-    method : iterable of strings, optional
-        Method used for connectivity calculation. If None, all available
-        measures are calculated
+        Sampling rate in Hz of the time series data.
     time_window_duration : float, optional
-        Duration of sliding window in which to compute the fft. Defaults to
-        the entire time if not set.
-    signal_names : iterable of strings
-        Sames of time series used to name the 'Source' and 'Target' axes of
-        xarray.
-    squeeze : bool
-        Whether to only take the first and last source and target time series.
-        Only makes sense for one pair of signals and symmetrical measures.
-    connectivity_kwargs : dict
-        Arguments to pass to connectivity calculation
+        Duration of sliding window in seconds for time-resolved analysis.
+        If None, analyzes entire time series (no time resolution).
+    method : str or list of str, optional
+        Connectivity method(s) to compute. If None, computes all available methods.
+        Examples: "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
+    signal_names : sequence of str, optional
+        Names for signal channels used to label dimensions. If None, uses indices.
+    squeeze : bool, default=False
+        If True and n_channels=2, return connectivity between first and last
+        channel only for symmetric measures.
+    connectivity_kwargs : dict, optional
+        Additional keyword arguments passed to connectivity methods.
+    **kwargs : dict
+        Additional arguments passed to Multitaper constructor
+        (e.g., time_bandwidth_product,
+        n_tapers, n_fft_samples).
 
     Returns
+    -------
+    result : xarray.DataArray or xarray.Dataset
+        - DataArray if single method requested: connectivity values with dimensions
+          ['time', 'frequency', 'source', 'target'] or ['time', 'frequency'] if squeezed
+        - Dataset if multiple methods: collection of DataArrays, one per method
+
+    Examples
     --------
-    connectivities : Xarray.Dataset with connectivity measure(s) as data variables
+    >>> import numpy as np
+    >>> # Generate coupled oscillator data
+    >>> t = np.arange(0, 1, 1/500)  # 500 Hz, 1 second
+    >>> sig1 = np.sin(2*np.pi*10*t) + 0.1*np.random.randn(len(t))
+    >>> sig2 = np.sin(2*np.pi*10*t + np.pi/4) + 0.1*np.random.randn(len(t))
+    >>> data = np.column_stack([sig1, sig2])  # Shape: (500, 2)
+    >>>
+    >>> # Compute coherence
+    >>> coherence = multitaper_connectivity(
+    ...     data, sampling_frequency=500,
+    ...     method="coherence_magnitude",
+    ...     signal_names=["Signal_1", "Signal_2"]
+    ... )
+    >>> coherence.dims
+    ('time', 'frequency', 'source', 'target')
 
+    >>> # Compute multiple measures
+    >>> measures = multitaper_connectivity(
+    ...     data, sampling_frequency=500,
+    ...     method=["coherence_magnitude", "imaginary_coherence"]
+    ... )
+    >>> list(measures.data_vars)
+    ['coherence_magnitude', 'imaginary_coherence']
 
+    Notes
+    -----
+    Uses multitaper spectral estimation for robust power spectral density
+    estimation before computing connectivity measures. This provides better
+    spectral estimates than single-taper methods, especially for short time series.
 
+    References
+    ----------
+    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
+           Proceedings of the IEEE, 70(9), 1055-1096.
+    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
+           Applications: Multitaper and Conventional Univariate Techniques.
     """
     if connectivity_kwargs is None:
         connectivity_kwargs = {}

@@ -16,7 +16,7 @@
 | [**Citation**](#citation)
 | [**Developer Installation**](#developer-installation)
 
-### What is spectral_connectivity?
+## What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
@@ -62,7 +62,9 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 
 ### Documentation
 
-See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
+See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
+
+For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
 
 ### Citation
 
@@ -133,7 +135,7 @@ export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
-2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
+1. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
 
 ```bash
 conda env create -f environment.yml
