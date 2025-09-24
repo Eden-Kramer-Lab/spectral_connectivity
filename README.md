@@ -13,8 +13,10 @@
 | [**Documentation**](#documentation)
 | [**Usage Example**](#usage-example)
 | [**Installation**](#installation)
-| [**Citation**](#citation)
 | [**Developer Installation**](#developer-installation)
+| [**Contributing**](#contributing)
+| [**License**](#license)
+| [**Citation**](#citation)
 
 ## What is spectral_connectivity?
 
@@ -65,12 +67,6 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
 
 For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
-
-### Citation
-
-For citation, please use the following:
-
-> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
 
 ### Implemented Measures
 
@@ -129,7 +125,7 @@ If you want to make contributions to this library, please use this installation.
 1. Install miniconda (or anaconda) if it isn't already installed. Type into bash (or install from the anaconda website):
 
 ```bash
-wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
 bash miniconda.sh -b -p $HOME/miniconda
 export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
@@ -165,6 +161,27 @@ twine upload dist/*
 ```
 
 The version number is automatically extracted from the git tag (without the 'v' prefix).
+
+## Contributing
+
+We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+
++ How to report bugs and request features
++ Development workflow and coding standards
++ Testing requirements
++ Code review process
+
+For questions or discussions, please open an issue on GitHub.
+
+## License
+
+This project is licensed under the **GPL-3.0** License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+For citation, please use the following:
+
+> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
 
 ### Recent publications and pre-prints that used this software
 
