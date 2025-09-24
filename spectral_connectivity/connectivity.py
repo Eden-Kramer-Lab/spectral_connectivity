@@ -469,7 +469,9 @@ class Connectivity:
         if isinstance(axes, int):
             return self.fourier_coefficients.shape[axes]
         else:
-            return int(np.prod([self.fourier_coefficients.shape[axis] for axis in axes]))
+            return int(
+                np.prod([self.fourier_coefficients.shape[axis] for axis in axes])
+            )
 
     @_asnumpy
     @_non_negative_frequencies(axis=-2)
@@ -922,6 +924,7 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
+
         # define functions
         def fcn_imag(x):
             return x.imag
