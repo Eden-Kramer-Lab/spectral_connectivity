@@ -856,6 +856,7 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
+
         # define functions
         def fcn_imag(x):
             return x.imag
