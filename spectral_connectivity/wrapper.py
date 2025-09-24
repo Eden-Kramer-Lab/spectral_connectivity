@@ -30,7 +30,13 @@ def connectivity_to_xarray(
 
     """
     if (method in ["group_delay", "canonical_coherence"]) or ("directed" in method):
-        raise NotImplementedError(f"{method} is not supported by xarray interface")
+        raise ValueError(
+            f"The method '{method}' is not supported by the xarray interface. "
+            f"Please use the Connectivity class directly instead:\n\n"
+            f"from spectral_connectivity import Connectivity\n"
+            f"conn = Connectivity.from_multitaper(m)\n"
+            f"result = conn.{method}()\n"
+        )
     # Name the source and target axes
     if signal_names is None:
         signal_names = np.arange(m.time_series.shape[-1])
@@ -155,13 +161,22 @@ def multitaper_connectivity(
             "from_multitaper",
             "phase_slope_index",
             "subset_pairwise_spectral_granger_prediction",
+            # Methods not supported by xarray interface
+            "group_delay",
+            "canonical_coherence",
+            "directed_transfer_function",
+            "directed_coherence",
+            "partial_directed_coherence",
+            "generalized_partial_directed_coherence",
+            "direct_directed_transfer_function",
+            "blockwise_spectral_granger_prediction",
         ]
         method = [
             x
             for x in dir(Connectivity)
             if not x.startswith("_") and x not in bad_methods
         ]
-    elif type(method) == str:
+    elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
     m = Multitaper(
