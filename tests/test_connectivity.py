@@ -23,11 +23,12 @@ from spectral_connectivity.connectivity import (
 
 
 @mark.parametrize("axis", [(0), (1), (2), (3)])
-def test_cross_spectrum(axis):
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_cross_spectrum(axis, dtype):
     """Test that the cross spectrum is correct for each dimension."""
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (2, 2, 2, 2, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=dtype
     )
 
     signal_fourier_coefficient = [
@@ -41,10 +42,10 @@ def test_cross_spectrum(axis):
 
     expected_cross_spectral_matrix = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals, n_signals),
-        dtype=complex,
+        dtype=dtype,
     )
 
-    expected_slice = np.array([[4, -6], [-6, 9]], dtype=complex)
+    expected_slice = np.array([[4, -6], [-6, 9]], dtype=dtype)
     expected_ind = [slice(0, 5)] * 6
     expected_ind[-1] = slice(None)
     expected_ind[-2] = slice(None)
@@ -78,10 +79,11 @@ def test_subset_cross_spectrum():
     )
 
 
-def test_power():
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=dtype
     )
 
     fourier_coefficients[..., :] = [
@@ -132,10 +134,11 @@ def test_n_observations(expectation_type, expected_n_observations):
     assert this_Conn.n_observations == expected_n_observations
 
 
-def test_coherency():
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_coherency(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=dtype
     )
 
     fourier_coefficients[..., :] = [
@@ -177,6 +180,7 @@ def test_imaginary_coherence():
 
 def test_phase_locking_value():
     """Make sure phase locking value ignores magnitudes."""
+    np.random.seed(42)
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.random.uniform(
         0, 2, (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
@@ -207,6 +211,7 @@ def test_phase_lag_index_sets_zero_phase_signals_to_zero():
 
 
 def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
+    np.random.seed(42)
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
