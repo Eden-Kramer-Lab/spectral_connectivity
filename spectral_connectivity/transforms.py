@@ -271,11 +271,8 @@ class Multitaper(object):
             self._n_time_samples_per_window = int(
                 xp.around(self.time_window_duration * self.sampling_frequency)
             )
-        else:
-            raise ValueError(
-                "n_time_samples_per_window could not be determined. "
-                "Please set either n_time_samples_per_window or time_window_duration."
-            )
+        # If _n_time_samples_per_window is already set, just use it
+        assert self._n_time_samples_per_window is not None
         return self._n_time_samples_per_window
 
     @property
