@@ -144,6 +144,15 @@ class Connectivity:
         dtype: np.dtype = xp.complex128,
     ):
         self.fourier_coefficients = fourier_coefficients
+
+        # Validate expectation_type early
+        if expectation_type not in EXPECTATION:
+            allowed_values = ', '.join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
+            raise ValueError(
+                f"Invalid expectation_type '{expectation_type}'. "
+                f"Allowed values are: {allowed_values}"
+            )
+
         self.expectation_type = expectation_type
         self._frequencies = frequencies
         self._blocks = blocks
