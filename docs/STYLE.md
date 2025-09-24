@@ -21,6 +21,7 @@ All public functions and classes should use NumPy-style docstrings with the foll
 ### Array Documentation
 
 For all array parameters and returns, specify:
+
 - **Shape**: Use descriptive dimension names (e.g., `(n_times, n_channels)`)
 - **Dtype**: Specify NumPy dtypes (e.g., `float64`, `complex128`)
 
