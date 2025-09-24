@@ -424,7 +424,7 @@ class Connectivity:
         Projects the cross-spectrum onto the imaginary axis to mitigate the
         effect of volume-conducted dependencies. Assumes volume-conducted
         sources arrive at sensors at the same time, resulting in
-        a cross-spectrum with phase angle of 0 (perfectly in-phase) or \pi
+        a cross-spectrum with phase angle of 0 (perfectly in-phase) or π
         (anti-phase) if the sensors are on opposite sides of a dipole
         source. With the imaginary coherence, in-phase and anti-phase
         associations are set to zero.
@@ -1045,7 +1045,7 @@ class Connectivity:
         """Find a range of possible delays from the coherence phase.
 
         The delay (and phase) at each frequency is indistinguishable from
-        2 \pi phase jumps, but we can look at a range of possible delays
+        2π phase jumps, but we can look at a range of possible delays
         and see which one is most likely.
 
         Parameters
