@@ -176,7 +176,7 @@ def multitaper_connectivity(
             for x in dir(Connectivity)
             if not x.startswith("_") and x not in bad_methods
         ]
-    elif type(method) == str:
+    elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
     m = Multitaper(
