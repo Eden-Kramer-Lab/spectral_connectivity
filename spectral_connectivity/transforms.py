@@ -828,7 +828,7 @@ def _find_tapers_from_optimization(
 
 def _fix_taper_sign(
     tapers: NDArray[np.floating], n_time_samples_per_window: int
-) -> None:
+) -> NDArray[np.floating]:
     """Fix taper signs according to convention.
 
     By convention (Percival and Walden, 1993 pg 379)
