@@ -497,6 +497,11 @@ class Connectivity:
         complex_coherency : array, shape (..., n_fft_samples, n_signals, n_signals)
             Complex coherency between all signal pairs.
 
+        Notes
+        -----
+        **Range**: Magnitude |C_{xy}(f)| ∈ [0, 1]; phase ∈ [−π, π].
+        Values lie in the unit disk of the complex plane.
+
         """
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
@@ -533,6 +538,11 @@ class Connectivity:
         magnitude : array, shape (..., n_fft_samples, n_signals, n_signals)
             Magnitude-squared coherence values.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Implementation may produce tiny numerical excursions
+        beyond bounds due to floating-point precision.
+
         References
         ----------
         .. [1] Hansson-Sandsten M (2011) Cross-spectrum and coherence function
@@ -561,6 +571,11 @@ class Connectivity:
         imaginary_coherence_magnitude : array
             Shape (..., n_fft_samples, n_signals, n_signals).
             Imaginary coherence magnitudes.
+
+        Notes
+        -----
+        **Range**: [0, 1]. Magnitude version of imaginary part of coherency.
+        Raw imaginary component ranges in [-1, 1].
 
         References
         ----------
@@ -739,6 +754,11 @@ class Connectivity:
         phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
             Phase locking values between all signal pairs.
 
+        Notes
+        -----
+        **Range**: [0, 1]. 0 indicates random phases; 1 indicates
+        constant phase difference.
+
         References
         ----------
         .. [1] Lachaux, J.-P., Rodriguez, E., Martinerie, J., Varela, F.J.,
@@ -770,6 +790,11 @@ class Connectivity:
         -------
         phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
             Phase lag index values for all signal pairs.
+
+        Notes
+        -----
+        **Range**: [-1, 1] (signed version). For unsigned version (as in [1]),
+        take absolute value to get range [0, 1].
 
         References
         ----------
@@ -933,6 +958,11 @@ class Connectivity:
         array
             Spectral Granger prediction values.
 
+        Notes
+        -----
+        **Range**: [0, ∞). Non-negative values with no finite upper bound.
+        Output [i,j] corresponds to causal influence j → i.
+
         References
         ----------
         .. [1] Geweke, J. (1982). Measurement of Linear Dependence and
@@ -1004,6 +1034,11 @@ class Connectivity:
         directed_transfer_function : array
             Shape (..., n_fft_samples, n_signals, n_signals).
             Directed transfer function values.
+
+        Notes
+        -----
+        **Range**: [0, 1] (normalized). Represents proportion of inflow
+        via transfer function.
 
         References
         ----------

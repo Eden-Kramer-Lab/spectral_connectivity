@@ -64,6 +64,8 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 
 See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
 
+For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
+
 ### Citation
 
 For citation, please use the following:
