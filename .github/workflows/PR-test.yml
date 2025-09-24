@@ -91,6 +91,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           file: coverage.lcov
+          coverage-reporter-version: v0.6.15  # Pin to working version (v0.6.16+ has 500 error bug)
 
       # Execute example/tutorial notebooks to ensure they run end-to-end
       - name: Execute notebooks
