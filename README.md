@@ -155,12 +155,28 @@ To create a new release:
 git tag v1.2.0
 git push origin v1.2.0
 
-# 2. Build and publish
+# 2. Build and publish to PyPI
 hatch build
 twine upload dist/*
+
+# 3. Build and publish to conda
+conda build conda-recipe/ --output-folder ./conda-builds
+anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
 ```
 
 The version number is automatically extracted from the git tag (without the 'v' prefix).
+
+### Conda Package
+
+This package is also available on conda via the `edeno` channel:
+
+```bash
+conda install -c edeno spectral_connectivity
+```
+
+**Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
+- 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
+- Or volunteer to help maintain the conda-forge feedstock
 
 ## Contributing
 

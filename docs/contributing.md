@@ -40,21 +40,38 @@ python -m build
 twine upload dist/*
 ```
 
-3. Upload to conda. This requires anaconda and conda-build.
+3. Upload to conda. This requires anaconda-client and conda-build.
 
 ```bash
-CONDA_DIR=~/miniconda3
-USER=edeno
+# Build conda package using recipe
+conda build conda-recipe/ --output-folder ./conda-builds
 
-conda skeleton pypi spectral_connectivity --noarch-python --python-version 3.6
+# Upload to your personal conda channel
+anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
 
-conda build spectral_connectivity --no-anaconda-upload --python 3.6
-
-anaconda upload $CONDA_DIR/conda-bld/*/spectral_connectivity-*.tar.bz2 -u $USER --skip
-
-rm -r spectral_connectivity
-conda build purge-all
+# Clean up build artifacts
+rm -rf ./conda-builds
+conda build purge
 ```
+
+**For conda-forge submission (future enhancement):**
+
+This package is not currently on conda-forge. To add it:
+
+1. **Prepare for submission:**
+   - Ensure package has stable releases and good maintenance
+   - Recipe should be well-tested with the conda-recipe/ directory
+
+2. **Submit to conda-forge:**
+   - Fork https://github.com/conda-forge/staged-recipes
+   - Copy `conda-recipe/meta.yaml` to `recipes/spectral_connectivity/meta.yaml`
+   - Submit PR to conda-forge staged-recipes
+   - Respond to reviewer feedback
+
+3. **After acceptance:**
+   - conda-forge creates automated feedstock
+   - Maintainers get notifications for new releases
+   - Users can install with: `conda install -c conda-forge spectral_connectivity`
 
 4. Release on github.
 
