@@ -1,7 +1,8 @@
 """Common statistical procedures used with frequency domain measures."""
 
 import numpy as np
-from scipy.stats import chi2, norm
+import scipy.special
+import scipy.stats
 
 np.seterr(invalid="ignore")
 
@@ -86,7 +87,7 @@ def adjust_for_multiple_comparisons(
     return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
 
 
-def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
+def coherence_fisher_z_transform(coherency1, n_obs1, coherency2=0, n_obs2=0):
     """Transform the coherence magnitude to an approximately normal
     distribution.
 
@@ -98,11 +99,11 @@ def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
     ----------
     coherency1 : complex array
         The complex coherency between signals
-    bias1 : float
-        The bias from independent estimates of the frequency domain.
+    n_obs1 : int
+        Number of observations is n_tapers * n_trials
     coherency2 : complex array, optional
-    bias2 : float, optional
-        The bias from independent estimates of the frequency domain.
+    n_obs2 : int
+        Number of observations is n_tapers * n_trials
 
     Returns
     -------
@@ -117,6 +118,8 @@ def fisher_z_transform(coherency1, bias1, coherency2=0, bias2=0):
     coherence_magnitude2 = np.array(np.abs(coherency2))
     coherence_magnitude2[coherence_magnitude2 >= 1] = 1 - np.finfo(float).eps
 
+    bias1, bias2 = coherence_bias(n_obs1), coherence_bias(n_obs2)
+
     z1 = np.arctanh(coherence_magnitude1) - bias1
     z2 = np.arctanh(coherence_magnitude2) - bias2
     return (z1 - z2) / np.sqrt(bias1 + bias2)
@@ -127,9 +130,9 @@ def get_normal_distribution_p_values(data, mean=0, std_deviation=1):
     a normal distribution with `mean` and `std_deviation`
     """
     try:
-        return 1 - norm.cdf(data, loc=mean, scale=std_deviation)
+        return 1 - scipy.stats.norm.cdf(data, loc=mean, scale=std_deviation)
     except TypeError:
-        return 1 - norm.cdf(data.get(), loc=mean, scale=std_deviation)
+        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)
 
 
 def coherence_bias(n_observations):
@@ -234,7 +237,56 @@ def power_confidence_intervals(n_tapers, power=1, ci=0.95):
            data analysis: a guide for the practicing neuroscientist (MIT Press).
 
     """
-    upper_bound = 2 * n_tapers / chi2.ppf(1 - ci, 2 * n_tapers) * power
-    lower_bound = 2 * n_tapers / chi2.ppf(ci, 2 * n_tapers) * power
+    upper_bound = 2 * n_tapers / scipy.stats.chi2.ppf(1 - ci, 2 * n_tapers) * power
+    lower_bound = 2 * n_tapers / scipy.stats.chi2.ppf(ci, 2 * n_tapers) * power
 
     return lower_bound, upper_bound
+
+
+def power_bias(n_observations: int) -> float:
+    """Bias of the power spectrum.
+
+    Parameters
+    ----------
+    n_observations : int
+        n_observations is n_tapers * n_trials
+
+    Returns
+    -------
+    bias : float
+    """
+    degrees_of_freedom = 2 * n_observations
+    return scipy.special.psi(degrees_of_freedom) - np.log(degrees_of_freedom)
+
+
+def power_variance(n_observations: int) -> float:
+    """_summary_
+
+    Parameters
+    ----------
+    n_observations : int
+        n_observations is n_tapers * n_trials
+
+    Returns
+    -------
+    variance : float
+    """
+    degrees_of_freedom = 2 * n_observations
+    return scipy.special.polygamma(1, degrees_of_freedom)
+
+
+def power_fisher_z_transform(
+    spectrum1: np.ndarray,
+    n_obs1: int,
+    spectrum2=0,
+    n_obs2: int = 0,
+):
+
+    bias1, bias2 = power_bias(n_obs1), power_bias(n_obs2)
+    variance1, variance2 = power_variance(n_obs1), power_variance(n_obs2)
+
+    # Bias correction
+    z1 = np.log(spectrum1) - bias1
+    z2 = np.log(spectrum2) - bias2
+
+    return (z1 - z2) / np.sqrt(variance1 + variance2)
