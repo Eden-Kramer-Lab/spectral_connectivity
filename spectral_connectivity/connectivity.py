@@ -394,7 +394,9 @@ class Connectivity:
                Neurophysiology 115, 2292-2307.
 
         """
-        denominator = xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
+        denominator = xp.sqrt(
+            self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
+        )
         denominator = xp.maximum(denominator, xp.finfo(denominator.dtype).eps)
         imaginary_coh = xp.abs(
             self._expectation_cross_spectral_matrix().imag / denominator
