@@ -266,6 +266,8 @@ class Multitaper(object):
             self._n_time_samples_per_window = int(
                 xp.around(self.time_window_duration * self.sampling_frequency)
             )
+        # Ensure we always return an int
+        assert self._n_time_samples_per_window is not None
         return self._n_time_samples_per_window
 
     @property
@@ -315,6 +317,8 @@ class Multitaper(object):
             self._n_samples_per_time_step = int(
                 self.time_window_step * self.sampling_frequency
             )
+        # Ensure we always return an int
+        assert self._n_samples_per_time_step is not None
         return self._n_samples_per_time_step
 
     @property
