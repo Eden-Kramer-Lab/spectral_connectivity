@@ -103,3 +103,4 @@ ENV/
 # mypy
 .mypy_cache/
 .DS_Store
+spectral_connectivity/_version.py
