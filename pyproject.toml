@@ -43,6 +43,9 @@ dev = [
     "pytest-cov",
     "black",
     "flake8",
+    "mypy>=1.0",
+    "pydocstyle",
+    "numpydoc",
 ]
 gpu = [
     "cupy-cuda12x",
@@ -64,6 +67,25 @@ addopts = "-q"
 [tool.black]
 target-version = ["py39"]
 line-length = 88
+
+[tool.pydocstyle]
+convention = "numpy"
+add-ignore = ["D105", "D107", "D200", "D213", "D413"]  # Common exceptions for scientific code
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+strict_optional = true
+disallow_untyped_defs = false  # Start lenient, can tighten later
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+warn_return_any = false
+warn_unreachable = true
+show_error_codes = true
+plugins = ["numpy.typing.mypy_plugin"]
 
 [tool.setuptools]
 # Dynamic version reading from __init__.py (if needed for future versions)

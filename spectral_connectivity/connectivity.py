@@ -5,8 +5,10 @@ from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
+from typing import Optional, Tuple, Union
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.ndimage import label
 from scipy.stats.mstats import linregress
 
@@ -97,52 +99,89 @@ def _nonsorted_unique(x):
 
 
 class Connectivity:
-    """Computes brain connectivity measures based on the cross spectral
-    matrix.
+    """
+    Compute functional and directed connectivity measures from spectral data.
 
-    Note that spectral granger methods that require estimation of transfer function
-    and noise covariance use minimum phase decomposition [1] to decompose
-    the cross spectral matrix into square roots, which then can be used to
-    non-parametrically estimate the transfer function and noise covariance.
+    This class provides a comprehensive suite of connectivity analysis methods
+    based on cross-spectral matrices derived from Fourier-transformed time series.
+    Methods range from basic coherence to advanced Granger causality measures.
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
-        The compex-valued coefficients from a fourier transform. Note that
-        this is expected to be the two-sided fourier coefficients
-        (both the positive and negative lags). This is needed for the
-        Granger-based methods to work.
-    expectation_type : ('trials_tapers' | 'trials' | 'tapers'), optional
-        How to average the cross spectral matrix. 'trials_tapers' averages
-        over the trials and tapers dimensions. 'trials' only averages over
-        the trials dimensions (leaving tapers) and 'tapers' only averages
-        over tapers (leaving trials).
-    frequencies : array, shape (n_fft_samples,), optional
-        Frequency of each sample, by default None
-    time : np.ndarray, shape (n_time_windows,) optional
-        Time of each window, by default None
+    fourier_coefficients : NDArray[complexfloating], shape (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+        Complex-valued Fourier coefficients from spectral analysis. Must be
+        two-sided (positive and negative frequencies) for Granger methods.
+        Usually obtained from multitaper or other spectral estimation methods.
+    expectation_type : {"trials_tapers", "trials", "tapers", "time", "time_trials", "time_tapers", "time_trials_tapers"}, default="trials_tapers"
+        Specifies how to average the cross-spectral matrix:
+        - "trials_tapers": average over trials and tapers (most common)
+        - "trials": average over trials only (keep taper dimension)
+        - "tapers": average over tapers only (keep trial dimension)
+        - "time": average over time windows
+        - combinations: average over multiple dimensions
+    frequencies : NDArray[floating], shape (n_frequencies,), optional
+        Frequency values in Hz corresponding to FFT bins. If None, uses
+        normalized frequencies.
+    time : NDArray[floating], shape (n_time_windows,), optional
+        Time values in seconds for each time window. If None, uses indices.
     blocks : int, optional
-        Number of blocks to split up input arrays to do block computation, by default None
-    dtype : np.dtype, optional
-        Data type of the fourier coefficients, by default xp.complex128
+        Number of blocks for memory-efficient computation of large arrays.
+        Useful for high-resolution spectrograms.
+    dtype : np.dtype, default=complex128
+        Data type for internal computations. Should match input precision.
+
+    Attributes
+    ----------
+    n_observations : int
+        Effective number of independent observations after averaging,
+        used for statistical inference.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from spectral_connectivity import Connectivity
+    >>> # Simulate coherent signals
+    >>> n_times, n_trials, n_tapers, n_freqs, n_signals = 50, 10, 5, 100, 2
+    >>> # Create complex coefficients with some coherence
+    >>> phase_diff = np.pi/4  # 45 degree phase difference
+    >>> coeffs = np.random.randn(n_times, n_trials, n_tapers, n_freqs, n_signals) + \
+    ...          1j * np.random.randn(n_times, n_trials, n_tapers, n_freqs, n_signals)
+    >>> # Add coherence at specific frequencies
+    >>> coeffs[:, :, :, 10, 1] = coeffs[:, :, :, 10, 0] * np.exp(1j * phase_diff)
+    >>>
+    >>> # Compute connectivity
+    >>> conn = Connectivity(coeffs, expectation_type="trials_tapers")
+    >>> coherence = conn.coherence_magnitude()  # Shape: (n_times, n_freqs, 2, 2)
+    >>> phase_lag = conn.coherence_phase()
+    >>> print(f"Coherence shape: {coherence.shape}")
+    >>> print(f"Peak coherence: {np.max(coherence[:, 10, 0, 1]):.3f}")
+
+    Notes
+    -----
+    The class supports both CPU (NumPy) and GPU (CuPy) computation depending
+    on the SPECTRAL_CONNECTIVITY_ENABLE_GPU environment variable. For Granger
+    causality measures, minimum phase decomposition [1]_ is used to estimate
+    transfer functions and noise covariances non-parametrically.
 
     References
     ----------
     .. [1] Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage 41, 354-362.
-
+    .. [2] Bastos, A. M., & Schoffelen, J. M. (2016). A tutorial review of
+           functional connectivity analysis methods and their interpretational
+           pitfalls. Frontiers in systems neuroscience, 9, 175.
     """
 
     def __init__(
         self,
-        fourier_coefficients: np.ndarray,
+        fourier_coefficients: NDArray[np.complexfloating],
         expectation_type: str = "trials_tapers",
-        frequencies: np.ndarray = None,
-        time: np.ndarray = None,
-        blocks: int = None,
+        frequencies: Optional[NDArray[np.floating]] = None,
+        time: Optional[NDArray[np.floating]] = None,
+        blocks: Optional[int] = None,
         dtype: np.dtype = xp.complex128,
-    ):
+    ) -> None:
         self.fourier_coefficients = fourier_coefficients
 
         # Validate expectation_type early

@@ -2,8 +2,10 @@
 
 import os
 from logging import getLogger
+from typing import Optional, Union
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy import interpolate
 from scipy.linalg import eigvals_banded
 
@@ -31,62 +33,110 @@ else:
 
 
 class Multitaper(object):
-    """Transform time-domain signal(s) to the frequency domain by using
-    multiple tapering windows.
+    """
+    Multitaper spectral analysis for robust power spectral density estimation.
+
+    Transforms time-domain signals to frequency domain using multiple orthogonal
+    tapering windows (Slepian sequences). This approach reduces spectral leakage
+    and provides better spectral estimates than single-taper methods.
 
     Parameters
     ----------
-    time_series : array, shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
-    sampling_frequency : float, optional
-        Number of samples per time unit the signal(s) are recorded at.
-    time_halfbandwidth_product : float, optional
-        Specifies the time-frequency tradeoff of the tapers and also the number
-        of tapers if `n_tapers` is not set.
-    detrend_type : string or None, optional
-        Subtracting a constant or a linear trend from each time window. If None
-        then no detrending is done.
-    start_time : float, optional
-        Start time of time series.
+    time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+        Input time series data. Multiple trials are supported and will be
+        averaged in the spectral domain.
+    sampling_frequency : float, default=1000
+        Sampling rate in Hz of the time series data.
+    time_halfbandwidth_product : float, default=3
+        Time-bandwidth product controlling frequency resolution and number of
+        tapers. Larger values give better frequency resolution but more spectral
+        smoothing. Typical values are 2-4.
+    detrend_type : {"constant", "linear", None}, default="constant"
+        Type of detrending applied to each time window:
+        - "constant": remove DC component
+        - "linear": remove linear trend
+        - None: no detrending
     time_window_duration : float, optional
-        Duration of sliding window in which to compute the fft. Defaults to
-        the entire time if not set.
+        Duration in seconds of sliding time windows. If None, analyzes entire
+        time series (no time resolution).
     time_window_step : float, optional
-        Duration of time to skip when moving the window forward. By default,
-        this equals the duration of the time window.
-    tapers : array, optional, shape (n_time_samples_per_window, n_tapers)
-        Pass in a pre-computed set of tapers. If `None`, then the tapers are
-        automically calculated based on the `time_halfbandwidth_product`,
-        `n_tapers`, and `n_time_samples_per_window`.
+        Step size in seconds between consecutive time windows. If None, uses
+        non-overlapping windows (step = window duration).
     n_tapers : int, optional
-        Set the number of tapers. If `None`, the number of tapers is computed
-        by 2 * `time_halfbandwidth_product` - 1.
+        Number of DPSS tapers to use. If None, computed as
+        floor(2 * time_halfbandwidth_product) - 1.
+    tapers : NDArray[floating], shape (n_time_samples_per_window, n_tapers), optional
+        Pre-computed tapering windows. If None, DPSS tapers are computed
+        automatically.
+    start_time : float or NDArray[floating], default=0
+        Start time in seconds of the time series data.
+    n_fft_samples : int, optional
+        Length of FFT. If None, uses next power of 2 >= n_time_samples_per_window.
     n_time_samples_per_window : int, optional
-        Number of samples in each sliding window. If `time_window_duration` is
-        set, then this is calculated automically.
+        Number of samples per time window. Computed from time_window_duration
+        if not provided.
     n_time_samples_per_step : int, optional
-        Number of samples to skip when moving the window forward. If
-        `time_window_step` is set, then this is calculated automically.
-    is_low_bias : bool, optional
-        If `True`, excludes tapers with eigenvalues < 0.9
+        Number of samples to advance between windows. Computed from
+        time_window_step if not provided.
+    is_low_bias : bool, default=True
+        If True, exclude tapers with eigenvalues < 0.9 to reduce bias.
 
+    Attributes
+    ----------
+    fft : NDArray[complex128]
+        Complex-valued FFT coefficients with shape
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals).
+    frequencies : NDArray[float64], shape (n_frequencies,)
+        Frequency values in Hz corresponding to FFT bins.
+    time : NDArray[float64], shape (n_time_windows,)
+        Time values in seconds for center of each time window.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Generate test signal: 50Hz + noise
+    >>> fs = 1000  # 1 kHz sampling
+    >>> t = np.arange(0, 1, 1/fs)
+    >>> signal = np.sin(2*np.pi*50*t) + 0.1*np.random.randn(len(t))
+    >>> data = signal[:, np.newaxis]  # Shape: (1000, 1)
+    >>>
+    >>> # Multitaper analysis
+    >>> mt = Multitaper(data, sampling_frequency=fs,
+    ...                 time_halfbandwidth_product=4)
+    >>> print(f"FFT shape: {mt.fft.shape}")
+    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies[-1]:.1f} Hz")
+
+    Notes
+    -----
+    The multitaper method uses discrete prolate spheroidal sequences (DPSS)
+    as tapers, which are optimal for spectral analysis in the sense of minimizing
+    spectral leakage while maximizing energy concentration in the frequency band
+    of interest.
+
+    References
+    ----------
+    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
+           Proceedings of the IEEE, 70(9), 1055-1096.
+    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
+           Physical Applications. Cambridge University Press.
     """
 
     def __init__(
         self,
-        time_series,
-        sampling_frequency=1000,
-        time_halfbandwidth_product=3,
-        detrend_type="constant",
-        time_window_duration=None,
-        time_window_step=None,
-        n_tapers=None,
-        tapers=None,
-        start_time=0,
-        n_fft_samples=None,
-        n_time_samples_per_window=None,
-        n_time_samples_per_step=None,
-        is_low_bias=True,
-    ):
+        time_series: NDArray[np.floating],
+        sampling_frequency: float = 1000,
+        time_halfbandwidth_product: float = 3,
+        detrend_type: Optional[str] = "constant",
+        time_window_duration: Optional[float] = None,
+        time_window_step: Optional[float] = None,
+        n_tapers: Optional[int] = None,
+        tapers: Optional[NDArray[np.floating]] = None,
+        start_time: Union[float, NDArray[np.floating]] = 0,
+        n_fft_samples: Optional[int] = None,
+        n_time_samples_per_window: Optional[int] = None,
+        n_time_samples_per_step: Optional[int] = None,
+        is_low_bias: bool = True,
+    ) -> None:
         self.time_series = xp.asarray(time_series)
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
