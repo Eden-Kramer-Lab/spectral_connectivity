@@ -18,10 +18,10 @@ def test_get_normal_distribution_p_values():
 
 def test_fisher_z_transform():
     coherency = 0.5 * np.exp(1j * np.pi / 2) * np.ones((2, 2))
-    bias1, bias2 = 3, 6
-    expected_difference_z = np.ones((2, 2))
+    n_obs1, n_obs2 = 6, 6
+    expected_difference_z = np.zeros((2, 2))
     assert np.allclose(
-        coherence_fisher_z_transform(coherency, bias1, coherency2=coherency, n_obs2=bias2),
+        coherence_fisher_z_transform(coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2),
         expected_difference_z,
     )
 

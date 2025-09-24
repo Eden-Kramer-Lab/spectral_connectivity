@@ -936,7 +936,7 @@ class Connectivity:
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
             self.coherency(), frequencies, frequencies_of_interest
         )
-        bias = coherence_bias(self.n_observations)
+
 
         n_signals = bandpassed_coherency.shape[-1]
         signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
@@ -946,7 +946,7 @@ class Connectivity:
 
         is_significant = _find_significant_frequencies(
             bandpassed_coherency,
-            bias,
+            self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
         )
@@ -1019,10 +1019,9 @@ class Connectivity:
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
         )
-        bandpassed_coherency, bandpassed_frequencies = _bandpass(
+        bandpassed_coherency, _ = _bandpass(
             self.coherency(), frequencies, frequencies_of_interest
         )
-        bias = coherence_bias(self.n_observations)
         n_signals = bandpassed_coherency.shape[-1]
         signal_combination_ind = xp.array(list(combinations(xp.arange(n_signals), 2)))
         bandpassed_coherency = bandpassed_coherency[
@@ -1031,7 +1030,7 @@ class Connectivity:
 
         is_significant = _find_significant_frequencies(
             bandpassed_coherency,
-            bias,
+            self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
         )
@@ -1432,7 +1431,7 @@ def _find_largest_independent_group(is_significant, frequency_step, min_group_si
 
 def _find_significant_frequencies(
     coherency,
-    bias,
+    n_obs,
     frequency_step=1,
     significance_threshold=0.05,
     min_group_size=3,
@@ -1451,9 +1450,8 @@ def _find_significant_frequencies(
     ----------
     coherency : array, shape (..., n_frequencies, n_signals, n_signals)
         The complex coherency between signals.
-    bias : float
-        Bias from the number of independent estimates of the frequency
-        transform.
+    n_obs : int
+        The number of observations used to estimate the coherency.
     frequency_step : int
         The number of points between each independent frequency step
     significance_threshold : float
@@ -1469,10 +1467,10 @@ def _find_significant_frequencies(
                                         n_signal_combintaions)
 
     """
-    z_coherence = coherence_fisher_z_transform(coherency, bias)
+    z_coherence = coherence_fisher_z_transform(coherency, n_obs)
     p_values = get_normal_distribution_p_values(z_coherence)
     is_significant = adjust_for_multiple_comparisons(
-        p_values, alpha=significance_threshold
+        p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )
     return np.apply_along_axis(
         _find_largest_independent_group,
