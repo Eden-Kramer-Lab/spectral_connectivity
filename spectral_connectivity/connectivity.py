@@ -405,7 +405,6 @@ class Connectivity:
             Cross-spectral matrix for specified pairs.
 
         """
-
         pairs = np.array(pairs)
         fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
         fourier_coefficients = fourier_coefficients.astype(self._dtype)
@@ -857,7 +856,6 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
-
         # define functions
         def fcn_imag(x):
             return x.imag
@@ -1765,7 +1763,7 @@ def _get_independent_frequency_step(frequency_difference, frequency_resolution):
 
 
 def _find_largest_significant_group(is_significant):
-    """Finds the largest cluster of significant values over frequencies.
+    """Find the largest cluster of significant values over frequencies.
 
     If frequency value is significant and its neighbor in the next frequency
     is also a significant value, then they are part of the same cluster.
@@ -1795,7 +1793,9 @@ def _find_largest_significant_group(is_significant):
 
 
 def _get_independent_frequencies(is_significant, frequency_step):
-    """Given a `frequency_step` that determines the distance to the next
+    """Set non-distinguishable points to false based on frequency step.
+
+    Given a `frequency_step` that determines the distance to the next
     significant point, sets non-distinguishable points to false.
 
     Parameters
@@ -1813,8 +1813,10 @@ def _get_independent_frequencies(is_significant, frequency_step):
 
 
 def _find_largest_independent_group(is_significant, frequency_step, min_group_size=3):
-    """Finds the largest significant cluster of frequency points and
-    returns the independent frequency points of that cluster
+    """Find the largest significant cluster and return independent points.
+
+    Find the largest significant cluster of frequency points and
+    return the independent frequency points of that cluster.
 
     Parameters
     ----------
@@ -1844,7 +1846,7 @@ def _find_significant_frequencies(
     min_group_size=3,
     multiple_comparisons_method="Benjamini_Hochberg_procedure",
 ):
-    """Determines the largest significant cluster along the frequency axis.
+    """Determine the largest significant cluster along the frequency axis.
 
     This function uses the fisher z-transform to determine the p-values and
     adjusts for multiple comparisons using the
@@ -1890,12 +1892,12 @@ def _find_significant_frequencies(
 
 
 def _conjugate_transpose(x):
-    """Conjugate transpose of the last two dimensions of array x"""
+    """Conjugate transpose of the last two dimensions of array x."""
     return x.swapaxes(-1, -2).conjugate()
 
 
 def _estimate_global_coherence(fourier_coefficients, max_rank=1):
-    """Estimate global coherence
+    """Estimate global coherence.
 
     Parameters
     ----------

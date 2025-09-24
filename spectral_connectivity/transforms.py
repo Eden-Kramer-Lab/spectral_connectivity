@@ -424,8 +424,7 @@ def _add_axes(time_series):
 
 
 def _sliding_window(data, window_size, step_size=1, axis=-1, is_copy=True):
-    """
-    Calculate a sliding window over a signal
+    """Calculate a sliding window over a signal.
 
     Parameters
     ----------
@@ -485,7 +484,9 @@ def _sliding_window(data, window_size, step_size=1, axis=-1, is_copy=True):
 
 
 def _multitaper_fft(tapers, time_series, n_fft_samples, sampling_frequency, axis=-2):
-    """Projects the data on the tapers and returns the discrete Fourier
+    """Project data onto tapers and compute discrete Fourier transform.
+
+    Projects the data on the tapers and returns the discrete Fourier
     transform
 
     Parameters
@@ -514,7 +515,9 @@ def _make_tapers(
     n_tapers,
     is_low_bias=True,
 ):
-    """Returns the Discrete prolate spheroidal sequences (tapers) for
+    """Return discrete prolate spheroidal sequences (tapers) for multitaper analysis.
+
+    Returns the Discrete prolate spheroidal sequences (tapers) for
     multi-taper spectral analysis.
 
     Parameters
@@ -542,7 +545,9 @@ def _make_tapers(
 
 def tridisolve(d, e, b, overwrite_b=True):
     """Symmetric tridiagonal system solver, from Golub and Van Loan p157.
+
     .. note:: Copied from NiTime.
+
     Parameters
     ----------
     d : ndarray
@@ -583,9 +588,12 @@ def tridisolve(d, e, b, overwrite_b=True):
 
 def tridi_inverse_iteration(d, e, w, x0=None, rtol=1e-8):
     """Perform an inverse iteration.
+
     This will find the eigenvector corresponding to the given eigenvalue
     in a symmetric tridiagonal system.
-    ..note:: Copied from NiTime.
+
+    .. note:: Copied from NiTime.
+
     Parameters
     ----------
     d : array
@@ -703,8 +711,11 @@ def _find_tapers_from_interpolation(
     n_time_samples_per_window,
     interp_kind,
 ):
-    """Create the tapers of the smaller size `interp_from` and then
-    interpolate to the larger size `n_time_samples_per_window`."""
+    """Create tapers of smaller size and interpolate to larger size.
+
+    Create the tapers of the smaller size `interp_from` and then
+    interpolate to the larger size `n_time_samples_per_window`.
+    """
     smaller_tapers, _ = dpss_windows(
         interp_from, time_halfbandwidth_product, n_tapers, is_low_bias=False
     )
@@ -728,7 +739,9 @@ def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):
 def _find_tapers_from_optimization(
     n_time_samples_per_window, time_index, half_bandwidth, n_tapers
 ):
-    """here we want to set up an optimization problem to find a sequence
+    """Set up optimization problem to find sequence with concentrated energy.
+
+    Set up an optimization problem to find a sequence
     whose energy is maximally concentrated within band
     [-half_bandwidth, half_bandwidth]. Thus,
     the measure lambda(T, half_bandwidth) is the ratio between the
@@ -747,7 +760,8 @@ def _find_tapers_from_optimization(
     the main diagonal = ([n_time_samples_per_window-1-2*t]/2)**2 cos(2PIW),
     t=[0,1,2,...,n_time_samples_per_window-1] and the first off-diagonal =
     t(n_time_samples_per_window-t)/2, t=[1,2,...,
-    n_time_samples_per_window-1] [see Percival and Walden, 1993]"""
+    n_time_samples_per_window-1] [see Percival and Walden, 1993]
+    """
     try:
         time_index = xp.asnumpy(time_index)
     except AttributeError:
@@ -783,7 +797,9 @@ def _find_tapers_from_optimization(
 
 
 def _fix_taper_sign(tapers, n_time_samples_per_window):
-    """By convention (Percival and Walden, 1993 pg 379)
+    """Fix taper signs according to convention.
+
+    By convention (Percival and Walden, 1993 pg 379)
     symmetric tapers (k=0,2,4,...) should have a positive average and
     antisymmetric tapers should begin with a positive lobe.
 
@@ -791,7 +807,6 @@ def _fix_taper_sign(tapers, n_time_samples_per_window):
     ----------
     tapers : array, shape (n_tapers, n_time_samples_per_window)
     """
-
     # Fix sign of symmetric tapers
     is_not_symmetric = tapers[::2, :].sum(axis=1) < 0
     fix_sign = is_not_symmetric * -1
@@ -827,9 +842,11 @@ def _get_low_bias_tapers(tapers, eigenvalues):
 
 
 def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
-    """Finds the eigenvalues of the original spectral concentration
+    """Find eigenvalues of spectral concentration problem.
+
+    Find the eigenvalues of the original spectral concentration
     problem using the autocorr sequence technique from Percival and Walden,
-    1993 pg 390
+    1993 pg 390.
 
     Parameters
     ----------
@@ -842,7 +859,6 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
     eigenvalues : array, shape (n_tapers,)
 
     """
-
     ideal_filter = 4 * half_bandwidth * xp.sinc(2 * half_bandwidth * time_index)
     ideal_filter[0] = 2 * half_bandwidth
     n_time_samples_per_window = len(time_index)
@@ -876,10 +892,12 @@ def detrend(data, axis=-1, type="linear", bp=0, overwrite_data=False):
         only has an effect when ``type == 'linear'``.
     overwrite_data : bool, optional
         If True, perform in place detrending and avoid a copy. Default is False
+
     Returns
     -------
     ret : ndarray
         The detrended input data.
+
     Examples
     --------
     >>> from scipy import signal
