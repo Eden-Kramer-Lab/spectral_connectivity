@@ -143,6 +143,29 @@ conda activate spectral_connectivity
 pip install -e .
 ```
 
+## Releases
+
+This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based on git tags. The version is automatically determined from the repository state:
+
+- **Tagged releases**: `1.2.0`
+- **Development versions**: `1.2.0.dev5+g1a2b3c4` (5 commits since tag + git hash)
+
+### Making a Release
+
+To create a new release:
+
+```bash
+# 1. Update version tag
+git tag v1.2.0
+git push origin v1.2.0
+
+# 2. Build and publish
+hatch build
+twine upload dist/*
+```
+
+The version number is automatically extracted from the git tag (without the 'v' prefix).
+
 ### Recent publications and pre-prints that used this software
 
 + Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
