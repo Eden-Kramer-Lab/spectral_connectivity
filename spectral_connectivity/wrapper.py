@@ -148,7 +148,8 @@ def multitaper_connectivity(
 
     Parameters
     ----------
-    time_series : NDArray[floating], shape (n_times, n_trials, n_channels) or (n_times, n_channels)
+    time_series : NDArray[floating],
+        shape (n_times, n_trials, n_channels) or (n_times, n_channels)
         Time series data. For multiple trials, trials are averaged in spectral domain.
     sampling_frequency : float
         Sampling rate in Hz of the time series data.
@@ -166,7 +167,8 @@ def multitaper_connectivity(
     connectivity_kwargs : dict, optional
         Additional keyword arguments passed to connectivity methods.
     **kwargs : dict
-        Additional arguments passed to Multitaper constructor (e.g., time_bandwidth_product,
+        Additional arguments passed to Multitaper constructor
+        (e.g., time_bandwidth_product,
         n_tapers, n_fft_samples).
 
     Returns

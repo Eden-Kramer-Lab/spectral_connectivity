@@ -7,7 +7,6 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import os
 from logging import getLogger
-from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -54,12 +53,14 @@ def _get_initial_conditions(
 
     Parameters
     ----------
-    cross_spectral_matrix : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Cross-spectral density matrix to be decomposed.
 
     Returns
     -------
-    minimum_phase_factor : NDArray[complexfloating], shape (n_time_samples, ..., 1, n_signals, n_signals)
+    minimum_phase_factor : NDArray[complexfloating],
+        shape (n_time_samples, ..., 1, n_signals, n_signals)
         Initial guess for minimum phase square root matrix.
 
     Notes
@@ -103,12 +104,14 @@ def _get_causal_signal(
 
     Parameters
     ----------
-    linear_predictor : NDArray[complexfloating], shape (..., n_fft_samples, n_signals, n_signals)
+    linear_predictor : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
         Linear predictor matrix in frequency domain.
 
     Returns
     -------
-    causal_part_of_linear_predictor : NDArray[complexfloating], shape (..., n_fft_samples, n_signals, n_signals)
+    causal_part_of_linear_predictor : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
         Causal part of the linear predictor after plus operator.
 
     Notes
@@ -178,7 +181,7 @@ def _check_convergence(
 def _get_linear_predictor(
     minimum_phase_factor: NDArray[np.complexfloating],
     cross_spectral_matrix: NDArray[np.complexfloating],
-    I: NDArray[np.complexfloating],
+    identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
     """Compute linear predictor for Wilson algorithm update step.
 
@@ -188,16 +191,19 @@ def _get_linear_predictor(
 
     Parameters
     ----------
-    minimum_phase_factor : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    minimum_phase_factor : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Current minimum phase square root estimate.
-    cross_spectral_matrix : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Target cross-spectral matrix to be factored.
     I : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity matrix.
 
     Returns
     -------
-    linear_predictor : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    linear_predictor : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Adjustment matrix for updating minimum phase factor estimate.
 
     Notes
@@ -212,7 +218,7 @@ def _get_linear_predictor(
     covariance_sandwich_estimator = xp.linalg.solve(
         minimum_phase_factor, _conjugate_transpose(covariance_sandwich_estimator)
     )
-    return covariance_sandwich_estimator + I
+    return covariance_sandwich_estimator + identity_matrix
 
 
 def minimum_phase_decomposition(
@@ -229,7 +235,8 @@ def minimum_phase_decomposition(
 
     Parameters
     ----------
-    cross_spectral_matrix : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Cross-spectral density matrix to be decomposed. Must be Hermitian
         positive semidefinite for each frequency.
     tolerance : float, default=1e-8
@@ -239,7 +246,8 @@ def minimum_phase_decomposition(
 
     Returns
     -------
-    minimum_phase_factor : NDArray[complexfloating], shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+    minimum_phase_factor : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Minimum phase square root of cross_spectral_matrix. All eigenvalues
         have negative real parts (minimum phase property).
 
@@ -278,7 +286,7 @@ def minimum_phase_decomposition(
     """
     n_time_points = cross_spectral_matrix.shape[0]
     n_signals = cross_spectral_matrix.shape[-1]
-    I = xp.eye(n_signals)
+    identity_matrix = xp.eye(n_signals)
     is_converged = xp.zeros(n_time_points, dtype=bool)
     minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
     minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
@@ -291,7 +299,7 @@ def minimum_phase_decomposition(
         )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         linear_predictor = _get_linear_predictor(
-            minimum_phase_factor, cross_spectral_matrix, I
+            minimum_phase_factor, cross_spectral_matrix, identity_matrix
         )
         minimum_phase_factor = xp.matmul(
             minimum_phase_factor, _get_causal_signal(linear_predictor)

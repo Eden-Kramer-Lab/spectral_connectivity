@@ -5,7 +5,7 @@ from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -17,7 +17,6 @@ from spectral_connectivity.minimum_phase_decomposition import (
 )
 from spectral_connectivity.statistics import (
     adjust_for_multiple_comparisons,
-    coherence_bias,
     coherence_fisher_z_transform,
     get_normal_distribution_p_values,
 )
@@ -56,7 +55,11 @@ EXPECTATION = {
 
 
 def _asnumpy(connectivity_measure):
-    """Decorator that transforms cupy array to numpy array. If cupy is not installed, then return original."""
+    """
+    Decorator that transforms cupy array to numpy array.
+
+    If cupy is not installed, then return original.
+    """
 
     @wraps(connectivity_measure)
     def wrapper(*args, **kwargs):
@@ -108,11 +111,14 @@ class Connectivity:
 
     Parameters
     ----------
-    fourier_coefficients : NDArray[complexfloating], shape (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    fourier_coefficients : NDArray[complexfloating],
+        shape (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
-    expectation_type : {"trials_tapers", "trials", "tapers", "time", "time_trials", "time_tapers", "time_trials_tapers"}, default="trials_tapers"
+    expectation_type : {"trials_tapers", "trials", "tapers", "time",
+        "time_trials", "time_tapers", "time_trials_tapers"},
+        default="trials_tapers"
         Specifies how to average the cross-spectral matrix:
         - "trials_tapers": average over trials and tapers (most common)
         - "trials": average over trials only (keep taper dimension)
@@ -431,7 +437,8 @@ class Connectivity:
 
         Returns
         -------
-        imaginary_coherence_magnitude : array, shape (..., n_fft_samples, n_signals, n_signals)
+        imaginary_coherence_magnitude : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -460,7 +467,8 @@ class Connectivity:
 
         Returns
         -------
-        canonical_coherence : array, shape (n_time_samples, n_fft_samples, n_groups, n_groups)
+        canonical_coherence : array,
+            shape (n_time_samples, n_fft_samples, n_groups, n_groups)
             The maximimal coherence for each group pair
         labels : array, shape (n_groups,)
             The sorted unique group labels that correspond to `n_groups`
@@ -533,7 +541,8 @@ class Connectivity:
                                            n_fft_samples,
                                            n_components)
             The vector of global coherences (square of the singular values)
-        unnormalized_global_coherence : ndarray, shape (n_time_windows, n_fft_samples, n_signals, n_components)
+        unnormalized_global_coherence : ndarray,
+            shape (n_time_windows, n_fft_samples, n_signals, n_components)
             The (unnormalized) global coherence vectors
 
         References
@@ -655,7 +664,8 @@ class Connectivity:
 
         Returns
         -------
-        weighted_phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
+        weighted_phase_lag_index : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -706,7 +716,8 @@ class Connectivity:
 
         Returns
         -------
-        weighted_phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
+        weighted_phase_lag_index : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -813,7 +824,8 @@ class Connectivity:
 
         Returns
         -------
-        directed_transfer_function : array, shape (..., n_fft_samples, n_signals, n_signals)
+        directed_transfer_function : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -863,7 +875,8 @@ class Connectivity:
 
         Returns
         -------
-        partial_directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
+        partial_directed_coherence : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -905,7 +918,8 @@ class Connectivity:
 
         Returns
         -------
-        generalized_partial_directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
+        generalized_partial_directed_coherence : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -930,7 +944,8 @@ class Connectivity:
 
         Returns
         -------
-        direct_directed_transfer_function : array, shape (..., n_fft_samples, n_signals, n_signals)
+        direct_directed_transfer_function : array,
+            shape (..., n_fft_samples, n_signals, n_signals)
 
         References
         ----------
@@ -1058,7 +1073,8 @@ class Connectivity:
 
         Returns
         -------
-        possible_delays : array, shape (..., n_frequencies, (n_range * 2) + 1, n_signals,  n_signals)
+        possible_delays : array,
+            shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals)
 
         """
         frequencies = self.frequencies
@@ -1201,7 +1217,8 @@ def _estimate_transfer_function(minimum_phase):
 
     Returns
     -------
-    transfer_function : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
+    transfer_function : array,
+        shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The transfer function of a MVAR model.
 
     References
@@ -1303,11 +1320,13 @@ def _reshape(fourier_coefficients):
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    fourier_coefficients : array,
+        shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
 
     Returns
     -------
-    fourier_coefficients : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+    fourier_coefficients : array,
+        shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
 
     """
     (n_time_windows, _, _, n_fft_samples, n_signals) = fourier_coefficients.shape
@@ -1320,11 +1339,13 @@ def _normalize_fourier_coefficients(fourier_coefficients):
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    fourier_coefficients : array,
+        shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
 
     Returns
     -------
-    normalized_fourier_coefficients : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+    normalized_fourier_coefficients : array,
+        shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
 
     """
     U, _, V_transpose = xp.linalg.svd(
@@ -1341,8 +1362,10 @@ def _estimate_canonical_coherence(
 
     Parameters
     ----------
-    normalized_fourier_coefficients1 : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
-    normalized_fourier_coefficients2 : array, shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+    normalized_fourier_coefficients1 : array,
+        shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
+    normalized_fourier_coefficients2 : array,
+        shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers)
 
     Returns
     -------
@@ -1505,7 +1528,8 @@ def _find_significant_frequencies(
         The threshold for a p-value to be considered significant.
     min_group_size : int
         The minimum number of independent frequency points for
-    multiple_comparisons_method : 'Benjamini_Hochberg_procedure' | 'Bonferroni_correction'
+    multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
+        'Bonferroni_correction'
         Procedure used to correct for multiple comparisons.
 
     Returns

@@ -42,7 +42,8 @@ class Multitaper(object):
 
     Parameters
     ----------
-    time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+    time_series : NDArray[floating],
+        shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
         Input time series data. Multiple trials are supported and will be
         averaged in the spectral domain.
     sampling_frequency : float, default=1000
@@ -104,7 +105,10 @@ class Multitaper(object):
     >>> mt = Multitaper(data, sampling_frequency=fs,
     ...                 time_halfbandwidth_product=4)
     >>> print(f"FFT shape: {mt.fft.shape}")
-    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies[-1]:.1f} Hz")
+    >>> print(
+    ...     f"Frequencies: {len(mt.frequencies)} bins, "
+    ...     f"max = {mt.frequencies[-1]:.1f} Hz"
+    ... )
 
     Notes
     -----
@@ -166,7 +170,10 @@ class Multitaper(object):
 
     @property
     def tapers(self):
-        """Returns the tapers used for the multitpaer function. Tapers are the windowing function.
+        """
+        Returns the tapers used for the multitpaer function.
+
+        Tapers are the windowing function.
 
         Returns
         -------
@@ -277,7 +284,11 @@ class Multitaper(object):
 
     @property
     def frequency_resolution(self):
-        """Range of frequencies the transform is able to resolve given the time-frequency tradeoff."""
+        """
+        Range of frequencies the transform is able to resolve.
+
+        Given the time-frequency tradeoff.
+        """
         return 2.0 * self.time_halfbandwidth_product / self.time_window_duration
 
     @property
@@ -290,7 +301,8 @@ class Multitaper(object):
 
         Returns
         -------
-        fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+        fourier_coefficients : array,
+            shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
 
         """
         time_series = _add_axes(self.time_series)
@@ -395,7 +407,8 @@ def _multitaper_fft(tapers, time_series, n_fft_samples, sampling_frequency, axis
 
     Returns
     -------
-    fourier_coefficients : array_like, shape (n_windows, n_trials, n_tapers n_fft_samples, n_signals)
+    fourier_coefficients : array_like,
+        shape (n_windows, n_trials, n_tapers n_fft_samples, n_signals)
 
     """
     projected_time_series = (

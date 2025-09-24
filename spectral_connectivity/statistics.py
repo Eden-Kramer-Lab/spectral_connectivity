@@ -1,6 +1,6 @@
 """Common statistical procedures used with frequency domain measures."""
 
-from typing import Callable, Dict, Literal, Optional, Tuple, Union
+from typing import Callable, Dict, Literal, Tuple, Union
 
 import numpy as np
 import scipy.special
@@ -93,7 +93,9 @@ MULTIPLE_COMPARISONS: Dict[str, Callable] = {
 def adjust_for_multiple_comparisons(
     p_values: NDArray[np.floating],
     alpha: float = 0.05,
-    method: Literal["Benjamini_Hochberg_procedure", "Bonferroni_correction"] = "Benjamini_Hochberg_procedure",
+    method: Literal[
+        "Benjamini_Hochberg_procedure", "Bonferroni_correction"
+    ] = "Benjamini_Hochberg_procedure",
 ) -> NDArray[np.bool_]:
     """Apply multiple comparison correction to p-values.
 
@@ -106,7 +108,8 @@ def adjust_for_multiple_comparisons(
         P-values from statistical tests to be corrected.
     alpha : float, default=0.05
         Significance threshold for the correction method.
-    method : {"Benjamini_Hochberg_procedure", "Bonferroni_correction"}, default="Benjamini_Hochberg_procedure"
+    method : {"Benjamini_Hochberg_procedure", "Bonferroni_correction"},
+        default="Benjamini_Hochberg_procedure"
         Multiple comparison correction method to apply.
 
     Returns
@@ -121,7 +124,9 @@ def adjust_for_multiple_comparisons(
     >>> # Using Benjamini-Hochberg (default)
     >>> bh_sig = adjust_for_multiple_comparisons(p_vals)
     >>> # Using Bonferroni
-    >>> bonf_sig = adjust_for_multiple_comparisons(p_vals, method="Bonferroni_correction")
+    >>> bonf_sig = adjust_for_multiple_comparisons(
+    ...     p_vals, method="Bonferroni_correction"
+    ... )
     """
     # TODO: add axis keyword?
     return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
@@ -258,10 +263,13 @@ def coherence_bias(n_observations: int) -> float:
 
     References
     ----------
-    .. [1] Enochson, L.D., and Goodman, N.R. (1965). Gaussian approximations to the distribution
+    .. [1] Enochson, L.D., and Goodman, N.R. (1965). Gaussian approximations
+           to the distribution
            of sample coherence (Measurement analysis corp Los Angeles CA).
-    .. [2] Bokil, H., Purpura, K., Schoffelen, J.-M., Thomson, D., and Mitra, P. (2007). Comparing
-           spectra and coherences for groups of unequal size. Journal of Neuroscience Methods 159,
+    .. [2] Bokil, H., Purpura, K., Schoffelen, J.-M., Thomson, D., and Mitra, P.
+           (2007). Comparing
+           spectra and coherences for groups of unequal size.
+           Journal of Neuroscience Methods 159,
            337–345. 10.1016/j.jneumeth.2006.07.011.
     """
     degrees_of_freedom = 2 * n_observations
