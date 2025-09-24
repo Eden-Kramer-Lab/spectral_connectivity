@@ -29,7 +29,7 @@ def _conjugate_transpose(x):
     return x.swapaxes(-1, -2).conjugate()
 
 
-def _get_intial_conditions(cross_spectral_matrix):
+def _get_initial_conditions(cross_spectral_matrix):
     """Returns a guess for the minimum phase factor using the Cholesky
     factorization.
 
@@ -191,7 +191,7 @@ def minimum_phase_decomposition(
     I = xp.eye(n_signals)
     is_converged = xp.zeros(n_time_points, dtype=bool)
     minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
-    minimum_phase_factor[..., :, :, :] = _get_intial_conditions(cross_spectral_matrix)
+    minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
 
     for iteration in range(max_iterations):
         logger.debug(

@@ -127,7 +127,7 @@ class Connectivity:
     References
     ----------
     .. [1] Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing
-           information flow in brain networks with noxparametric Granger
+           information flow in brain networks with nonparametric Granger
            causality. NeuroImage 41, 354-362.
 
     """
@@ -142,6 +142,15 @@ class Connectivity:
         dtype: np.dtype = xp.complex128,
     ):
         self.fourier_coefficients = fourier_coefficients
+
+        # Validate expectation_type early
+        if expectation_type not in EXPECTATION:
+            allowed_values = ", ".join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
+            raise ValueError(
+                f"Invalid expectation_type '{expectation_type}'. "
+                f"Allowed values are: {allowed_values}"
+            )
+
         self.expectation_type = expectation_type
         self._frequencies = frequencies
         self._blocks = blocks
@@ -1128,7 +1137,7 @@ def _estimate_noise_covariance(minimum_phase):
     References
     ----------
     .. [1] Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing
-           information flow in brain networks with noxparametric Granger
+           information flow in brain networks with nonparametric Granger
            causality. NeuroImage 41, 354-362.
 
     """
@@ -1157,7 +1166,7 @@ def _estimate_transfer_function(minimum_phase):
     References
     ----------
     .. [1] Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing
-           information flow in brain networks with noxparametric Granger
+           information flow in brain networks with nonparametric Granger
            causality. NeuroImage 41, 354-362.
 
     """
@@ -1209,7 +1218,7 @@ def _remove_instantaneous_causality(noise_covariance):
 
 
 def _set_diagonal_to_zero(x):
-    """Sets the diaginal of the last two dimensions to zero."""
+    """Sets the diagonal of the last two dimensions to zero."""
     n_signals = x.shape[-1]
     diagonal_index = xp.diag_indices(n_signals)
     x[..., diagonal_index[0], diagonal_index[1]] = 0
