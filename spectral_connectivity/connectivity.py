@@ -16,7 +16,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
 from spectral_connectivity.statistics import (
     adjust_for_multiple_comparisons,
     coherence_bias,
-    fisher_z_transform,
+    coherence_fisher_z_transform,
     get_normal_distribution_p_values,
 )
 
@@ -1469,7 +1469,7 @@ def _find_significant_frequencies(
                                         n_signal_combintaions)
 
     """
-    z_coherence = fisher_z_transform(coherency, bias)
+    z_coherence = coherence_fisher_z_transform(coherency, bias)
     p_values = get_normal_distribution_p_values(z_coherence)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold
