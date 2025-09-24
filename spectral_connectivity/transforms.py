@@ -2,7 +2,7 @@
 
 import os
 from logging import getLogger
-from typing import Optional, Union
+from typing import Any, Callable, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -155,7 +155,7 @@ class Multitaper(object):
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         """Return string representation of Multitaper object.
 
         Returns
@@ -177,7 +177,7 @@ class Multitaper(object):
         )
 
     @property
-    def tapers(self):
+    def tapers(self) -> NDArray[np.floating]:
         """Return the tapers used for the multitaper function.
 
         Tapers are the windowing function.
@@ -199,7 +199,7 @@ class Multitaper(object):
         return self._tapers
 
     @property
-    def time_window_duration(self):
+    def time_window_duration(self) -> float:
         """Return duration of each time bin.
 
         Returns
@@ -215,7 +215,7 @@ class Multitaper(object):
         return self._time_window_duration
 
     @property
-    def time_window_step(self):
+    def time_window_step(self) -> float:
         """Return how much each time window slides.
 
         Returns
@@ -231,7 +231,7 @@ class Multitaper(object):
         return self._time_window_step
 
     @property
-    def n_tapers(self):
+    def n_tapers(self) -> int:
         """Return number of desired tapers.
 
         Note that the number of tapers may be less than this number if
@@ -248,7 +248,7 @@ class Multitaper(object):
         return self._n_tapers
 
     @property
-    def n_time_samples_per_window(self):
+    def n_time_samples_per_window(self) -> int:
         """Return number of samples per time bin.
 
         Returns
@@ -269,7 +269,7 @@ class Multitaper(object):
         return self._n_time_samples_per_window
 
     @property
-    def n_fft_samples(self):
+    def n_fft_samples(self) -> int:
         """Return number of frequency bins.
 
         Returns
@@ -283,7 +283,7 @@ class Multitaper(object):
         return self._n_fft_samples
 
     @property
-    def frequencies(self):
+    def frequencies(self) -> NDArray[np.floating]:
         """Return frequency of each frequency bin.
 
         Returns
@@ -295,7 +295,7 @@ class Multitaper(object):
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
     @property
-    def n_time_samples_per_step(self):
+    def n_time_samples_per_step(self) -> int:
         """Return number of samples to step between windows.
 
         If `time_window_step` is set, then calculate the
@@ -318,7 +318,7 @@ class Multitaper(object):
         return self._n_samples_per_time_step
 
     @property
-    def time(self):
+    def time(self) -> NDArray[np.floating]:
         """Return time of each time bin.
 
         Returns
@@ -336,7 +336,7 @@ class Multitaper(object):
         return self.start_time + window_start_time
 
     @property
-    def n_signals(self):
+    def n_signals(self) -> int:
         """Return number of signals computed.
 
         Returns
@@ -348,7 +348,7 @@ class Multitaper(object):
         return 1 if len(self.time_series.shape) < 2 else self.time_series.shape[-1]
 
     @property
-    def n_trials(self):
+    def n_trials(self) -> int:
         """Return number of trials computed.
 
         Returns
@@ -360,7 +360,7 @@ class Multitaper(object):
         return 1 if len(self.time_series.shape) < 3 else self.time_series.shape[1]
 
     @property
-    def frequency_resolution(self):
+    def frequency_resolution(self) -> float:
         """Return range of frequencies the transform is able to resolve.
 
         Given the time-frequency tradeoff.
@@ -374,7 +374,7 @@ class Multitaper(object):
         return 2.0 * self.time_halfbandwidth_product / self.time_window_duration
 
     @property
-    def nyquist_frequency(self):
+    def nyquist_frequency(self) -> float:
         """Return maximum resolvable frequency.
 
         Returns
@@ -385,7 +385,7 @@ class Multitaper(object):
         """
         return self.sampling_frequency / 2
 
-    def fft(self):
+    def fft(self) -> NDArray[np.complexfloating]:
         """Compute the fast Fourier transform using the multitaper method.
 
         Returns
@@ -412,7 +412,7 @@ class Multitaper(object):
         ).swapaxes(2, -1)
 
 
-def _add_axes(time_series):
+def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
     """If no trial or signal axes included, add one in."""
     n_axes = len(time_series.shape)
     if n_axes == 1:  # add trials and signals axes
@@ -423,7 +423,13 @@ def _add_axes(time_series):
         return time_series
 
 
-def _sliding_window(data, window_size, step_size=1, axis=-1, is_copy=True):
+def _sliding_window(
+    data: NDArray[np.floating],
+    window_size: int,
+    step_size: int = 1,
+    axis: int = -1,
+    is_copy: bool = True,
+) -> NDArray[np.floating]:
     """Calculate a sliding window over a signal.
 
     Parameters
@@ -483,7 +489,13 @@ def _sliding_window(data, window_size, step_size=1, axis=-1, is_copy=True):
     return strided.copy() if is_copy else strided
 
 
-def _multitaper_fft(tapers, time_series, n_fft_samples, sampling_frequency, axis=-2):
+def _multitaper_fft(
+    tapers: NDArray[np.floating],
+    time_series: NDArray[np.floating],
+    n_fft_samples: int,
+    sampling_frequency: float,
+    axis: int = -2,
+) -> NDArray[np.complexfloating]:
     """Project data onto tapers and compute discrete Fourier transform.
 
     Projects the data on the tapers and returns the discrete Fourier
@@ -543,7 +555,12 @@ def _make_tapers(
     return tapers.T * xp.sqrt(sampling_frequency)
 
 
-def tridisolve(d, e, b, overwrite_b=True):
+def tridisolve(
+    d: NDArray[np.floating],
+    e: NDArray[np.floating],
+    b: NDArray[np.floating],
+    overwrite_b: bool = True,
+) -> NDArray[np.floating]:
     """Symmetric tridiagonal system solver, from Golub and Van Loan p157.
 
     .. note:: Copied from NiTime.
@@ -586,7 +603,13 @@ def tridisolve(d, e, b, overwrite_b=True):
         return x
 
 
-def tridi_inverse_iteration(d, e, w, x0=None, rtol=1e-8):
+def tridi_inverse_iteration(
+    d: NDArray[np.floating],
+    e: NDArray[np.floating],
+    w: float,
+    x0: Optional[NDArray[np.floating]] = None,
+    rtol: float = 1e-8,
+) -> NDArray[np.floating]:
     """Perform an inverse iteration.
 
     This will find the eigenvector corresponding to the given eigenvalue
@@ -628,13 +651,13 @@ def tridi_inverse_iteration(d, e, w, x0=None, rtol=1e-8):
 
 
 def dpss_windows(
-    n_time_samples_per_window,
-    time_halfbandwidth_product,
-    n_tapers,
-    is_low_bias=True,
-    interp_from=None,
-    interp_kind="linear",
-):
+    n_time_samples_per_window: int,
+    time_halfbandwidth_product: float,
+    n_tapers: int,
+    is_low_bias: bool = True,
+    interp_from: Optional[int] = None,
+    interp_kind: str = "linear",
+) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute Discrete Prolate Spheroidal Sequences.
 
     Will give of orders [0, n_tapers-1] for a given frequency-spacing
@@ -694,7 +717,7 @@ def dpss_windows(
             n_time_samples_per_window, time_index, half_bandwidth, n_tapers
         )
 
-    tapers = _fix_taper_sign(tapers, n_time_samples_per_window)
+    _fix_taper_sign(tapers, n_time_samples_per_window)
     eigenvalues = _get_taper_eigenvalues(tapers, half_bandwidth, time_index)
 
     return (
@@ -705,12 +728,12 @@ def dpss_windows(
 
 
 def _find_tapers_from_interpolation(
-    interp_from,
-    time_halfbandwidth_product,
-    n_tapers,
-    n_time_samples_per_window,
-    interp_kind,
-):
+    interp_from: int,
+    time_halfbandwidth_product: float,
+    n_tapers: int,
+    n_time_samples_per_window: int,
+    interp_kind: str,
+) -> list:
     """Create tapers of smaller size and interpolate to larger size.
 
     Create the tapers of the smaller size `interp_from` and then
@@ -726,7 +749,11 @@ def _find_tapers_from_interpolation(
     ]
 
 
-def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):
+def _interpolate_taper(
+    taper: NDArray[np.floating],
+    interp_kind: str,
+    n_time_samples_per_window: int,
+) -> NDArray[np.floating]:
     interpolation_function = interpolate.interp1d(
         xp.arange(taper.shape[-1]), taper, kind=interp_kind
     )
@@ -737,8 +764,11 @@ def _interpolate_taper(taper, interp_kind, n_time_samples_per_window):
 
 
 def _find_tapers_from_optimization(
-    n_time_samples_per_window, time_index, half_bandwidth, n_tapers
-):
+    n_time_samples_per_window: int,
+    time_index: NDArray[np.floating],
+    half_bandwidth: float,
+    n_tapers: int,
+) -> NDArray[np.floating]:
     """Set up optimization problem to find sequence with concentrated energy.
 
     Set up an optimization problem to find a sequence
@@ -796,7 +826,9 @@ def _find_tapers_from_optimization(
     return xp.asarray(tapers)
 
 
-def _fix_taper_sign(tapers, n_time_samples_per_window):
+def _fix_taper_sign(
+    tapers: NDArray[np.floating], n_time_samples_per_window: int
+) -> None:
     """Fix taper signs according to convention.
 
     By convention (Percival and Walden, 1993 pg 379)
@@ -825,7 +857,9 @@ def _fix_taper_sign(tapers, n_time_samples_per_window):
     return tapers
 
 
-def _auto_correlation(data, axis=-1):
+def _auto_correlation(
+    data: NDArray[np.floating], axis: int = -1
+) -> NDArray[np.floating]:
     n_time_samples_per_window = data.shape[axis]
     n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
     dpss_fft = fft(data, n_fft_samples, axis=axis)
@@ -833,7 +867,9 @@ def _auto_correlation(data, axis=-1):
     return xp.real(ifft(power, axis=axis))
 
 
-def _get_low_bias_tapers(tapers, eigenvalues):
+def _get_low_bias_tapers(
+    tapers: NDArray[np.floating], eigenvalues: NDArray[np.floating]
+) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
     is_low_bias = eigenvalues > 0.9
     if not xp.any(is_low_bias):
         logger.warning("Could not properly use low_bias, " "keeping lowest-bias taper")
@@ -841,7 +877,11 @@ def _get_low_bias_tapers(tapers, eigenvalues):
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
 
-def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
+def _get_taper_eigenvalues(
+    tapers: NDArray[np.floating],
+    half_bandwidth: float,
+    time_index: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """Find eigenvalues of spectral concentration problem.
 
     Find the eigenvalues of the original spectral concentration
@@ -867,7 +907,13 @@ def _get_taper_eigenvalues(tapers, half_bandwidth, time_index):
     )
 
 
-def detrend(data, axis=-1, type="linear", bp=0, overwrite_data=False):
+def detrend(
+    data: NDArray[np.floating],
+    axis: int = -1,
+    type: str = "linear",
+    bp: Union[int, list, NDArray[np.integer]] = 0,
+    overwrite_data: bool = False,
+) -> NDArray[np.floating]:
     """
     Remove linear trend along axis from data.
 

@@ -5,7 +5,7 @@ from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
-from typing import Optional
+from typing import Any, Callable, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -54,7 +54,7 @@ EXPECTATION = {
 }
 
 
-def _asnumpy(connectivity_measure):
+def _asnumpy(connectivity_measure: Callable) -> Callable:
     """Transform cupy array to numpy array.
 
     If cupy is not installed, then return original.
@@ -72,7 +72,7 @@ def _asnumpy(connectivity_measure):
     """
 
     @wraps(connectivity_measure)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         measure = connectivity_measure(*args, **kwargs)
         if measure is not None:
             try:
@@ -85,7 +85,7 @@ def _asnumpy(connectivity_measure):
     return wrapper
 
 
-def _non_negative_frequencies(axis):
+def _non_negative_frequencies(axis: int) -> Callable:
     """Remove the negative frequencies.
 
     Parameters
@@ -100,9 +100,9 @@ def _non_negative_frequencies(axis):
 
     """
 
-    def decorator(connectivity_measure):
+    def decorator(connectivity_measure: Callable) -> Callable:
         @wraps(connectivity_measure)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             measure = connectivity_measure(*args, **kwargs)
             if measure is not None:
                 n_frequencies = measure.shape[axis]
@@ -116,7 +116,7 @@ def _non_negative_frequencies(axis):
     return decorator
 
 
-def _nonsorted_unique(x):
+def _nonsorted_unique(x: NDArray[Any]) -> NDArray[Any]:
     """Return non-sorted and unique list of elements.
 
     Parameters
@@ -280,7 +280,7 @@ class Connectivity:
     @property
     @_asnumpy
     @_non_negative_frequencies(axis=0)
-    def frequencies(self):
+    def frequencies(self) -> Optional[NDArray[np.floating]]:
         """Return non-negative frequencies of the transform.
 
         Returns
@@ -291,10 +291,11 @@ class Connectivity:
         """
         if self._frequencies is not None:
             return self._frequencies
+        return None
 
     @property
     @_asnumpy
-    def all_frequencies(self):
+    def all_frequencies(self) -> Optional[NDArray[np.floating]]:
         """Return positive and negative frequencies of the transform.
 
         Returns
@@ -305,15 +306,16 @@ class Connectivity:
         """
         if self._frequencies is not None:
             return self._frequencies
+        return None
 
     @property
-    def _power(self):
+    def _power(self) -> NDArray[np.floating]:
         return self._expectation(
             self.fourier_coefficients * self.fourier_coefficients.conjugate()
         ).real
 
     @property
-    def _cross_spectral_matrix(self):
+    def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
         """Return the complex-valued linear association between fourier coefficients.
 
         Returns
@@ -328,7 +330,9 @@ class Connectivity:
             fourier_coefficients, fourier_coefficients, dtype=self._dtype
         )
 
-    def _expectation_cross_spectral_matrix(self, fcn=None, dtype=None):
+    def _expectation_cross_spectral_matrix(
+        self, fcn: Optional[Callable] = None, dtype: Optional[np.dtype] = None
+    ) -> NDArray[np.complexfloating]:
         """Compute full or block-wise cross-spectral matrix.
 
         Parameters
@@ -347,7 +351,7 @@ class Connectivity:
         # define identity function
         if fcn is None:
 
-            def fcn(x):
+            def fcn(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
                 return x
 
         if not isinstance(self._blocks, int) or (self._blocks < 1):
@@ -391,7 +395,9 @@ class Connectivity:
 
         return csm
 
-    def _subset_cross_spectral_matrix(self, pairs):
+    def _subset_cross_spectral_matrix(
+        self, pairs: Union[list, NDArray[np.integer]]
+    ) -> NDArray[np.complexfloating]:
         """Compute cross-spectral matrix for subset of channel pairs.
 
         Parameters
@@ -429,28 +435,28 @@ class Connectivity:
         return csm
 
     @property
-    def _minimum_phase_factor(self):
+    def _minimum_phase_factor(self) -> NDArray[np.complexfloating]:
         return minimum_phase_decomposition(self._expectation_cross_spectral_matrix())
 
     @property
     @_non_negative_frequencies(axis=-3)
-    def _transfer_function(self):
+    def _transfer_function(self) -> NDArray[np.complexfloating]:
         return _estimate_transfer_function(self._minimum_phase_factor)
 
     @property
-    def _noise_covariance(self):
+    def _noise_covariance(self) -> NDArray[np.floating]:
         return _estimate_noise_covariance(self._minimum_phase_factor)
 
     @property
-    def _MVAR_Fourier_coefficients(self):
+    def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
         return xp.linalg.inv(self._transfer_function)
 
     @property
-    def _expectation(self):
+    def _expectation(self) -> Callable:
         return EXPECTATION[self.expectation_type]
 
     @property
-    def n_observations(self):
+    def n_observations(self) -> int:
         """Return number of observations.
 
         Returns
@@ -463,11 +469,11 @@ class Connectivity:
         if isinstance(axes, int):
             return self.fourier_coefficients.shape[axes]
         else:
-            return np.prod([self.fourier_coefficients.shape[axis] for axis in axes])
+            return int(np.prod([self.fourier_coefficients.shape[axis] for axis in axes]))
 
     @_asnumpy
     @_non_negative_frequencies(axis=-2)
-    def power(self):
+    def power(self) -> NDArray[np.floating]:
         """Return power of the signal.
 
         Only returns the non-negative frequencies.
@@ -481,7 +487,7 @@ class Connectivity:
         return self._power
 
     @_non_negative_frequencies(axis=-3)
-    def coherency(self):
+    def coherency(self) -> NDArray[np.complexfloating]:
         """Return the complex-valued linear association between time series.
 
         Computed in the frequency domain.
@@ -503,7 +509,7 @@ class Connectivity:
         return complex_coherencey
 
     @_asnumpy
-    def coherence_phase(self):
+    def coherence_phase(self) -> NDArray[np.floating]:
         """Return the phase angle of the complex coherency.
 
         Returns
@@ -515,7 +521,7 @@ class Connectivity:
         return xp.angle(self.coherency())
 
     @_asnumpy
-    def coherence_magnitude(self):
+    def coherence_magnitude(self) -> NDArray[np.floating]:
         """Return the magnitude squared of the complex coherency.
 
         Note that the squared modulus of coherency (originally a complex quantity)
@@ -539,7 +545,7 @@ class Connectivity:
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
-    def imaginary_coherence(self):
+    def imaginary_coherence(self) -> NDArray[np.floating]:
         """Return the normalized imaginary component of the cross-spectrum.
 
         Projects the cross-spectrum onto the imaginary axis to mitigate the
@@ -569,7 +575,9 @@ class Connectivity:
             / xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
         )
 
-    def canonical_coherence(self, group_labels):
+    def canonical_coherence(
+        self, group_labels: NDArray[np.integer]
+    ) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
         """Find the maximal coherence between each combination of groups.
 
         The canonical coherence finds two sets of weights such that the
@@ -639,7 +647,9 @@ class Connectivity:
         except AttributeError:
             return canonical_coherence_magnitude, labels
 
-    def global_coherence(self, max_rank=1):
+    def global_coherence(
+        self, max_rank: int = 1
+    ) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
 
         The linear combinations of signals that capture the most coherent
@@ -709,13 +719,13 @@ class Connectivity:
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
-    def _phase_locking_value(self):
-        def fcn(x):
+    def _phase_locking_value(self) -> NDArray[np.complexfloating]:
+        def fcn(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
             return x / xp.abs(x)
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
 
-    def phase_locking_value(self):
+    def phase_locking_value(self) -> NDArray[np.floating]:
         """Return the cross-spectrum with power scaled to magnitude 1.
 
         The phase locking value attempts to mitigate power differences
@@ -856,7 +866,6 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
-
         # define functions
         def fcn_imag(x):
             return x.imag
@@ -938,7 +947,9 @@ class Connectivity:
         return _estimate_spectral_granger_prediction(total_power, csm, pairs)
 
     @_asnumpy
-    def subset_pairwise_spectral_granger_prediction(self, pairs):
+    def subset_pairwise_spectral_granger_prediction(
+        self, pairs: Union[list, NDArray[np.integer]]
+    ) -> NDArray[np.floating]:
         """Return predictive power for a subset of signal pairs.
 
         Parameters
@@ -1362,7 +1373,9 @@ class Connectivity:
         return _inner_combination(bandpassed_coherency).imag
 
 
-def _inner_combination(data, axis=-3):
+def _inner_combination(
+    data: NDArray[np.complexfloating], axis: int = -3
+) -> NDArray[np.complexfloating]:
     """Take the inner product of all possible pairs of a dimension.
 
     Take combinations without regard to order.
@@ -1386,7 +1399,9 @@ def _inner_combination(data, axis=-3):
     return (combination_slice1.conjugate() * combination_slice2).sum(axis=axis)
 
 
-def _estimate_noise_covariance(minimum_phase):
+def _estimate_noise_covariance(
+    minimum_phase: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
     """Estimate noise covariance non-parametrically from minimum phase factor.
 
     Given a matrix square root of the cross spectral matrix (
@@ -1417,7 +1432,9 @@ def _estimate_noise_covariance(minimum_phase):
     ).real
 
 
-def _estimate_transfer_function(minimum_phase):
+def _estimate_transfer_function(
+    minimum_phase: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
     """Estimate transfer function non-parametrically from minimum phase factor.
 
     Given a matrix square root of the cross spectral matrix (
@@ -1448,7 +1465,11 @@ def _estimate_transfer_function(minimum_phase):
     )
 
 
-def _estimate_predictive_power(total_power, rotated_covariance, transfer_function):
+def _estimate_predictive_power(
+    total_power: NDArray[np.floating],
+    rotated_covariance: NDArray[np.floating],
+    transfer_function: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
     """Estimate predictive power from total power and transfer function.
 
     Parameters
@@ -1475,7 +1496,7 @@ def _estimate_predictive_power(total_power, rotated_covariance, transfer_functio
     return predictive_power
 
 
-def _squared_magnitude(x):
+def _squared_magnitude(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
     """Return squared magnitude of complex array.
 
     Parameters
@@ -1492,7 +1513,11 @@ def _squared_magnitude(x):
     return xp.abs(x) ** 2
 
 
-def _complex_inner_product(a, b, dtype=xp.complex128):
+def _complex_inner_product(
+    a: NDArray[np.complexfloating],
+    b: NDArray[np.complexfloating],
+    dtype: np.dtype = xp.complex128,
+) -> NDArray[np.complexfloating]:
     """Measure orthogonality (similarity) of complex arrays.
 
     Measures the orthogonality (similarity) of complex arrays in
@@ -1514,7 +1539,9 @@ def _complex_inner_product(a, b, dtype=xp.complex128):
     return xp.matmul(a, _conjugate_transpose(b), dtype=dtype)
 
 
-def _remove_instantaneous_causality(noise_covariance):
+def _remove_instantaneous_causality(
+    noise_covariance: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """Remove instantaneous causality effects from noise covariance.
 
     Rotates the noise covariance so that the effect of instantaneous
@@ -1538,7 +1565,9 @@ def _remove_instantaneous_causality(noise_covariance):
     return variance.swapaxes(-1, -2) - noise_covariance**2 / variance
 
 
-def _set_diagonal_to_zero(x):
+def _set_diagonal_to_zero(
+    x: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """Set diagonal of the last two dimensions to zero.
 
     Parameters
@@ -1558,7 +1587,11 @@ def _set_diagonal_to_zero(x):
     return x
 
 
-def _total_inflow(transfer_function, noise_variance=1.0, axis=-1):
+def _total_inflow(
+    transfer_function: NDArray[np.complexfloating],
+    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
+    axis: Union[int, Tuple[int, ...]] = -1,
+) -> NDArray[np.floating]:
     """Measure effect of incoming signals onto a node via sum of squares.
 
     Parameters
@@ -1585,7 +1618,9 @@ def _total_inflow(transfer_function, noise_variance=1.0, axis=-1):
     )
 
 
-def _get_noise_variance(noise_covariance):
+def _get_noise_variance(
+    noise_covariance: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """Extract noise variance from noise covariance matrix.
 
     Parameters
@@ -1604,7 +1639,10 @@ def _get_noise_variance(noise_covariance):
     ]
 
 
-def _total_outflow(MVAR_Fourier_coefficients, noise_variance=1.0):
+def _total_outflow(
+    MVAR_Fourier_coefficients: NDArray[np.complexfloating],
+    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
+) -> NDArray[np.floating]:
     """Measure effect of outgoing signals on the node via sum of squares.
 
     Parameters
@@ -1629,7 +1667,9 @@ def _total_outflow(MVAR_Fourier_coefficients, noise_variance=1.0):
     )
 
 
-def _reshape(fourier_coefficients):
+def _reshape(
+    fourier_coefficients: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
     """Combine trials and tapers dimensions and move to last axis.
 
     Combine trials and tapers dimensions and move the combined dimension
@@ -1653,7 +1693,9 @@ def _reshape(fourier_coefficients):
     return xp.moveaxis(fourier_coefficients.reshape(new_shape), 1, -1)
 
 
-def _normalize_fourier_coefficients(fourier_coefficients):
+def _normalize_fourier_coefficients(
+    fourier_coefficients: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
     """Normalize fourier coefficients by power within group.
 
     Parameters
@@ -1740,7 +1782,9 @@ def _bandpass(data, frequencies, frequencies_of_interest, axis=-3):
     )
 
 
-def _get_independent_frequency_step(frequency_difference, frequency_resolution):
+def _get_independent_frequency_step(
+    frequency_difference: float, frequency_resolution: float
+) -> int:
     """Find number of points for statistically independent frequencies.
 
     Find the number of points of a frequency axis such that they
@@ -1763,7 +1807,9 @@ def _get_independent_frequency_step(frequency_difference, frequency_resolution):
     return int(xp.ceil(frequency_resolution / frequency_difference))
 
 
-def _find_largest_significant_group(is_significant):
+def _find_largest_significant_group(
+    is_significant: NDArray[np.bool_],
+) -> NDArray[np.bool_]:
     """Find the largest cluster of significant values over frequencies.
 
     If frequency value is significant and its neighbor in the next frequency
@@ -1793,7 +1839,9 @@ def _find_largest_significant_group(is_significant):
         return np.zeros(is_significant.shape, dtype=bool)
 
 
-def _get_independent_frequencies(is_significant, frequency_step):
+def _get_independent_frequencies(
+    is_significant: NDArray[np.bool_], frequency_step: int
+) -> NDArray[np.bool_]:
     """Set non-distinguishable points to false based on frequency step.
 
     Given a `frequency_step` that determines the distance to the next
@@ -1813,7 +1861,9 @@ def _get_independent_frequencies(is_significant, frequency_step):
     return np.in1d(np.arange(0, len(is_significant)), independent_index)
 
 
-def _find_largest_independent_group(is_significant, frequency_step, min_group_size=3):
+def _find_largest_independent_group(
+    is_significant: NDArray[np.bool_], frequency_step: int, min_group_size: int = 3
+) -> NDArray[np.bool_]:
     """Find the largest significant cluster and return independent points.
 
     Find the largest significant cluster of frequency points and
@@ -1892,12 +1942,14 @@ def _find_significant_frequencies(
     )
 
 
-def _conjugate_transpose(x):
+def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
     """Conjugate transpose of the last two dimensions of array x."""
     return x.swapaxes(-1, -2).conjugate()
 
 
-def _estimate_global_coherence(fourier_coefficients, max_rank=1):
+def _estimate_global_coherence(
+    fourier_coefficients: NDArray[np.complexfloating], max_rank: int = 1
+) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Estimate global coherence.
 
     Parameters
@@ -1934,7 +1986,11 @@ def _estimate_global_coherence(fourier_coefficients, max_rank=1):
     return global_coherence, unnormalized_global_coherence
 
 
-def _estimate_spectral_granger_prediction(total_power, csm, pairs):
+def _estimate_spectral_granger_prediction(
+    total_power: NDArray[np.floating],
+    csm: NDArray[np.complexfloating],
+    pairs: Union[list, NDArray[np.integer]],
+) -> NDArray[np.floating]:
     """
     Estimate spectral granger causality.
 
