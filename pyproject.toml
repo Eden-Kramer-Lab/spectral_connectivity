@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=69", "wheel", "build"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "spectral_connectivity"
-version = "1.1.2"
+dynamic = ["version"]
 description = "Frequency domain functional and directed connectivity analysis tools for electrophysiological data"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -55,8 +55,6 @@ Repository = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
 Documentation = "https://spectral-connectivity.readthedocs.io/en/latest/"
 "Bug Reports" = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues"
 
-[tool.setuptools.packages.find]
-include = ["spectral_connectivity*"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
@@ -91,7 +89,11 @@ warn_unreachable = true
 show_error_codes = true
 plugins = ["numpy.typing.mypy_plugin"]
 
-[tool.setuptools]
-# Dynamic version reading from __init__.py (if needed for future versions)
-# For now, version is static above
-zip-safe = false
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "spectral_connectivity/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spectral_connectivity"]

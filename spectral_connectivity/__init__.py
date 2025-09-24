@@ -9,5 +9,10 @@ from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.wrapper import multitaper_connectivity
 
-__version__ = "1.1.2"
+try:
+    from spectral_connectivity._version import __version__
+except ImportError:
+    # Fallback for development installs
+    from importlib.metadata import version
+    __version__ = version("spectral_connectivity")
 __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]

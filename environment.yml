@@ -32,4 +32,5 @@ dependencies:
 
 # CI/Build tools
 - coveralls
-- setuptools
+- hatch
+- build
