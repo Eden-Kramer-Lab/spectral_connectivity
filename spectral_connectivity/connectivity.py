@@ -937,7 +937,6 @@ class Connectivity:
             self.coherency(), frequencies, frequencies_of_interest
         )
 
-
         n_signals = bandpassed_coherency.shape[-1]
         signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
         bandpassed_coherency = bandpassed_coherency[

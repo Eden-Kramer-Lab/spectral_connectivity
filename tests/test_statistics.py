@@ -21,7 +21,9 @@ def test_fisher_z_transform():
     n_obs1, n_obs2 = 6, 6
     expected_difference_z = np.zeros((2, 2))
     assert np.allclose(
-        coherence_fisher_z_transform(coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2),
+        coherence_fisher_z_transform(
+            coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2
+        ),
         expected_difference_z,
     )
 
