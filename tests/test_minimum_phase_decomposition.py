@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.fftpack import fft, ifft
+from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
 from spectral_connectivity.minimum_phase_decomposition import (
