@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=69", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectral_connectivity"
+version = "1.1.2"
+description = "Frequency domain functional and directed connectivity analysis tools for electrophysiological data"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Eric Denovellis", email = "eric.denovellis@ucsf.edu"}
+]
+license = {text = "GPL-3.0-only"}
+keywords = ["python", "neuroscience", "electrophysiology", "multitaper", "spectrogram", "frequency-domain"]
+
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX",
+    "Operating System :: Unix",
+    "Operating System :: MacOS",
+]
+
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "xarray>=0.20",
+    "matplotlib>=3.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "nitime",
+    "pytest-cov",
+    "black",
+    "flake8",
+]
+gpu = [
+    "cupy-cuda12x",
+]
+
+[project.urls]
+Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
+Repository = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
+Documentation = "https://spectral-connectivity.readthedocs.io/en/latest/"
+"Bug Reports" = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues"
+
+[tool.setuptools.packages.find]
+include = ["spectral_connectivity*"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+
+# Tool configurations for optional linting/formatting
+[tool.black]
+target-version = ["py39"]
+line-length = 88
+
+[tool.setuptools]
+# Dynamic version reading from __init__.py (if needed for future versions)
+# For now, version is static above
+zip-safe = false
