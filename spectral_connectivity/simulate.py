@@ -9,14 +9,17 @@ def simulate_MVAR(
     n_time_samples=100,
     n_trials=1,
     n_burnin_samples=100,
+    random_state=None,
 ):
     """
     Simulate multivariate autoregressive (MVAR) process.
 
     Parameters
     ----------
-    coefficients : array, shape (n_time_samples, n_lags, n_signals, n_signals)
+    coefficients : array, shape (n_lags, n_signals, n_signals)
     noise_covariance : array, shape (n_signals, n_signals)
+    random_state : int, np.random.Generator, or None, optional
+        Random number generator seed or instance for reproducible results.
 
     Returns
     -------
@@ -27,7 +30,14 @@ def simulate_MVAR(
     n_lags, n_signals, _ = coefficients.shape
     if noise_covariance is None:
         noise_covariance = np.eye(n_signals)
-    time_series = np.random.multivariate_normal(
+
+    rng = (
+        random_state
+        if isinstance(random_state, np.random.Generator)
+        else np.random.default_rng(random_state)
+    )
+
+    time_series = rng.multivariate_normal(
         np.zeros((n_signals,)),
         noise_covariance,
         size=(n_time_samples + n_burnin_samples, n_trials),
