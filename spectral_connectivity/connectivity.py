@@ -483,6 +483,11 @@ class Connectivity:
         NDArray[floating]
             Power spectral density for non-negative frequencies.
 
+        Notes
+        -----
+        **Range**: [0, ∞). Power spectral density is always non-negative
+        with no finite upper bound.
+
         """
         return self._power
 
@@ -521,6 +526,10 @@ class Connectivity:
         -------
         phase : array, shape (..., n_fft_samples, n_signals, n_signals)
             Phase angles in radians.
+
+        Notes
+        -----
+        **Range**: [−π, π]. Phase angles in radians for complex coherency.
 
         """
         return xp.angle(self.coherency())
@@ -612,6 +621,11 @@ class Connectivity:
         labels : array, shape (n_groups,)
             The sorted unique group labels that correspond to `n_groups`.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Maximal coherence values are bounded like
+        coherence magnitude.
+
         References
         ----------
         .. [1] Stephen, E.P. (2015). Characterizing dynamically evolving
@@ -686,6 +700,11 @@ class Connectivity:
         unnormalized_global_coherence : ndarray
             Shape (n_time_windows, n_fft_samples, n_signals, n_components).
             The (unnormalized) global coherence vectors.
+
+        Notes
+        -----
+        **Range**: [0, ∞). Global coherence values are non-negative
+        with no finite upper bound (squared singular values).
 
         References
         ----------
@@ -824,6 +843,10 @@ class Connectivity:
             Shape (..., n_fft_samples, n_signals, n_signals).
             Weighted phase lag index values.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Weighted by imaginary coherency magnitude.
+
         References
         ----------
         .. [1] Vinck, M., Oostenveld, R., van Wingerden, M., Battaglia, F.,
@@ -853,6 +876,10 @@ class Connectivity:
         phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
             Debiased squared phase lag index values.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Bias-corrected version of squared phase lag index.
+
         References
         ----------
         .. [1] Vinck, M., Oostenveld, R., van Wingerden, M., Battaglia, F.,
@@ -881,6 +908,10 @@ class Connectivity:
         weighted_phase_lag_index : array
             Shape (..., n_fft_samples, n_signals, n_signals).
             Debiased squared weighted phase lag index values.
+
+        Notes
+        -----
+        **Range**: [0, 1]. Bias-corrected weighted phase lag index squared.
 
         References
         ----------
@@ -928,6 +959,10 @@ class Connectivity:
         -------
         phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
             Pairwise phase consistency values.
+
+        Notes
+        -----
+        **Range**: [0, 1]. Unbiased phase consistency measure.
 
         References
         ----------
@@ -1066,6 +1101,10 @@ class Connectivity:
         directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
             Directed coherence values.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Normalized directional connectivity measure.
+
         References
         ----------
         .. [1] Baccala, L., Sameshima, K., Ballester, G., Do Valle, A., and
@@ -1101,6 +1140,10 @@ class Connectivity:
         partial_directed_coherence : array
             Shape (..., n_fft_samples, n_signals, n_signals).
             Partial directed coherence values.
+
+        Notes
+        -----
+        **Range**: [0, 1]. Normalized direct coupling measure.
 
         References
         ----------
@@ -1148,6 +1191,10 @@ class Connectivity:
             Shape (..., n_fft_samples, n_signals, n_signals).
             Generalized partial directed coherence values.
 
+        Notes
+        -----
+        **Range**: [0, 1]. Normalized, scaled by noise variance.
+
         References
         ----------
         .. [1] Baccala, L.A., Sameshima, K., and Takahashi, D.Y. (2007).
@@ -1176,6 +1223,10 @@ class Connectivity:
         direct_directed_transfer_function : array
             Shape (..., n_fft_samples, n_signals, n_signals).
             Direct directed transfer function values.
+
+        Notes
+        -----
+        **Range**: [0, 1]. Normalized combination of DTF and partial coherence.
 
         References
         ----------
@@ -1218,6 +1269,10 @@ class Connectivity:
             Slope of phase vs frequency.
         r_value : array, shape (..., n_signals, n_signals)
             Correlation coefficient of linear fit.
+
+        Notes
+        -----
+        **Range**: (−∞, ∞). Time delays can be positive or negative.
 
         References
         ----------
@@ -1382,6 +1437,10 @@ class Connectivity:
         -------
         phase_slope_index : array, shape (..., n_signals, n_signals)
             Phase slope index values.
+
+        Notes
+        -----
+        **Range**: (−∞, ∞). Signed directional measure with no bounds.
 
         References
         ----------

@@ -32,6 +32,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 ## Implementation Details
 
 ### Bounded Metrics [0, 1]
+
 - **coherence_magnitude**: Magnitude-squared coherence
 - **phase_locking_value**: Phase consistency measure
 - **phase_lag_index**: Signed phase consistency (unsigned version)
@@ -43,13 +44,17 @@ The following summarizes the theoretical value ranges for common connectivity me
 - **generalized_partial_directed_coherence**: Scaled by noise variance
 
 ### Bounded Metrics [−1, 1]
+
 - **imaginary_coherence**: Raw imaginary part of normalized cross-spectrum
 
 ### Unbounded Metrics [0, ∞)
+
 - **pairwise_spectral_granger_prediction**: Spectral Granger causality
 
 ### Unbounded Metrics (−∞, ∞)
+
 - **phase_slope_index**: Directional phase coupling measure
 
 ### Complex-valued Metrics
+
 - **coherency**: Complex coherence with magnitude ∈ [0, 1] and phase ∈ [−π, π]
