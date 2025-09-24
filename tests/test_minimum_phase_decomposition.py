@@ -6,7 +6,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     _check_convergence,
     _conjugate_transpose,
     _get_causal_signal,
-    _get_intial_conditions,
+    _get_initial_conditions,
     minimum_phase_decomposition,
 )
 
@@ -48,7 +48,7 @@ def test__get_initial_conditions():
         * 4
     )
     cross_spectral_matrix[..., 1, 0] = 0
-    minimum_phase_factor = _get_intial_conditions(cross_spectral_matrix)
+    minimum_phase_factor = _get_initial_conditions(cross_spectral_matrix)
     expected_cross_spectral_matrix = np.zeros(
         (n_time_samples, 1, n_signals, n_signals), dtype=complex
     )
