@@ -37,14 +37,12 @@ def simple_synthetic_data():
         signals[:, trial, 0] = base_signal + 0.1 * np.random.randn(n_time_samples)
 
         # Signal 1: base with phase lag + noise
-        signals[:, trial, 1] = (
-            np.sin(2 * np.pi * 10 * t + np.pi/4) + 0.1 * np.random.randn(n_time_samples)
-        )
+        signals[:, trial, 1] = np.sin(
+            2 * np.pi * 10 * t + np.pi / 4
+        ) + 0.1 * np.random.randn(n_time_samples)
 
         # Signal 2: mostly independent + noise
-        signals[:, trial, 2] = (
-            0.1 * base_signal + 0.9 * np.random.randn(n_time_samples)
-        )
+        signals[:, trial, 2] = 0.1 * base_signal + 0.9 * np.random.randn(n_time_samples)
 
     return signals, sampling_frequency
 
