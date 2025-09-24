@@ -29,13 +29,11 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
     except ImportError:
-        print(
-            "Cupy not installed. Cupy is needed to use GPU for "
-            "spectral_connectivity."
+        raise RuntimeError(
+            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
+            "but CuPy is not installed. Please install CuPy with: "
+            "'pip install cupy' or 'conda install cupy'"
         )
-        import numpy as xp
-        from scipy.fft import ifft
-        from scipy.sparse.linalg import svds
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp

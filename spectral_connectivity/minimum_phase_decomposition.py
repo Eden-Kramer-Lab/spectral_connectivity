@@ -11,8 +11,11 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
         import cupy as xp
         from cupyx.scipy.fft import fft, ifft
     except ImportError:
-        import numpy as xp
-        from scipy.fft import fft, ifft
+        raise RuntimeError(
+            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
+            "but CuPy is not installed. Please install CuPy with: "
+            "'pip install cupy' or 'conda install cupy'"
+        )
 else:
     import numpy as xp
     from scipy.fft import fft, ifft
