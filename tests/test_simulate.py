@@ -1,15 +1,11 @@
 import numpy as np
-import pytest
 
 from spectral_connectivity.simulate import simulate_MVAR
 
 
 def test_simulate_MVAR_deterministic_with_seed():
     """Test that seeded simulations produce identical results."""
-    coefficients = np.array([
-        [[0.5, 0.1],
-         [0.2, 0.3]]
-    ])
+    coefficients = np.array([[[0.5, 0.1], [0.2, 0.3]]])
     noise_covariance = np.eye(2)
 
     # Run simulation twice with same seed
@@ -18,7 +14,7 @@ def test_simulate_MVAR_deterministic_with_seed():
         noise_covariance=noise_covariance,
         n_time_samples=50,
         n_trials=2,
-        random_state=42
+        random_state=42,
     )
 
     result2 = simulate_MVAR(
@@ -26,7 +22,7 @@ def test_simulate_MVAR_deterministic_with_seed():
         noise_covariance=noise_covariance,
         n_time_samples=50,
         n_trials=2,
-        random_state=42
+        random_state=42,
     )
 
     # Should be identical
@@ -35,21 +31,14 @@ def test_simulate_MVAR_deterministic_with_seed():
 
 def test_simulate_MVAR_different_seeds():
     """Test that different seeds produce different results."""
-    coefficients = np.array([
-        [[0.5, 0.1],
-         [0.2, 0.3]]
-    ])
+    coefficients = np.array([[[0.5, 0.1], [0.2, 0.3]]])
 
     result1 = simulate_MVAR(
-        coefficients=coefficients,
-        n_time_samples=50,
-        random_state=42
+        coefficients=coefficients, n_time_samples=50, random_state=42
     )
 
     result2 = simulate_MVAR(
-        coefficients=coefficients,
-        n_time_samples=50,
-        random_state=123
+        coefficients=coefficients, n_time_samples=50, random_state=123
     )
 
     # Should be different
@@ -58,16 +47,11 @@ def test_simulate_MVAR_different_seeds():
 
 def test_simulate_MVAR_generator_instance():
     """Test using numpy Generator instance."""
-    coefficients = np.array([
-        [[0.4, 0.0],
-         [0.0, 0.4]]
-    ])
+    coefficients = np.array([[[0.4, 0.0], [0.0, 0.4]]])
 
     rng = np.random.default_rng(42)
     result = simulate_MVAR(
-        coefficients=coefficients,
-        n_time_samples=10,
-        random_state=rng
+        coefficients=coefficients, n_time_samples=10, random_state=rng
     )
 
     # Should run without error and produce expected shape
