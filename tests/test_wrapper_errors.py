@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from spectral_connectivity.wrapper import connectivity_to_xarray
 from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.wrapper import connectivity_to_xarray
 
 
 def test_unsupported_method_error_message():
