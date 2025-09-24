@@ -300,6 +300,7 @@ def test__get_taper_eigenvalues(n_time_samples, time_halfbandwidth_product, n_ta
 
 
 def test__auto_correlation():
+    np.random.seed(42)
     n_time_samples, n_tapers = 100, 3
     test_data = np.random.rand(n_tapers, n_time_samples)
     rxx = _auto_correlation(test_data)[:, :n_time_samples]

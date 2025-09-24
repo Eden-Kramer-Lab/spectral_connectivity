@@ -6,7 +6,9 @@ from spectral_connectivity.wrapper import multitaper_connectivity
 
 
 @mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
-def test_multitaper_coherence_magnitude(time_window_duration):
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_multitaper_coherence_magnitude(time_window_duration, dtype):
+    np.random.seed(42)
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
     n_trials, n_signals = 10, 2
@@ -31,6 +33,7 @@ def test_multitaper_coherence_magnitude(time_window_duration):
 
 
 def test_multitaper_connectivity():
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -81,6 +84,7 @@ def test_multitaper_n_signals(n_signals):
     """
     Test dataarray interface
     """
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -125,6 +129,7 @@ def test_multitaper_n_signals(n_signals):
 
 @mark.parametrize("n_signals", range(2, 5))
 def test_multitaper_connectivities_n_signals(n_signals):
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -159,6 +164,7 @@ def test_multitaper_connectivities_n_signals(n_signals):
 
 
 def test_frequencies():
+    np.random.seed(42)
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.random.random((n_time_samples, n_trials, n_signals))
     # time_series = np.zeros((n_time_samples, n_trials, n_signals))
