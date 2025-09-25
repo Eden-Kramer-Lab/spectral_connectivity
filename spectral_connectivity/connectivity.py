@@ -449,7 +449,8 @@ class Connectivity:
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
         H = self._transfer_function
         # Tikhonov regularization: solve(H + λI, I) instead of inv(H)
-        lam = 1e-12 * xp.mean(xp.real(xp.conj(H) * H))  # Scale-aware regularization
+        # Scale-aware regularization parameter
+        lam = 1e-12 * xp.mean(xp.real(xp.conj(H) * H))
         identity = xp.eye(H.shape[-1], dtype=H.dtype)
         regularized_H = H + lam * identity
         return xp.linalg.solve(regularized_H, identity)

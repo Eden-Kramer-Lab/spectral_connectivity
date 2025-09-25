@@ -605,28 +605,36 @@ def test_subset_pairwise_granger_prediction():
 
 
 def test_mvar_regularized_inverse_near_singular():
-    """Test regularized inverse handles near-singular frequency bins without LinAlgError."""
+    """Test regularized inverse handles near-singular frequency bins."""
     np.random.seed(42)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 10, 1, 5, 3)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
+        1, 10, 1, 5, 3
+    )
 
-    # Create nearly singular Fourier coefficients by making signals highly correlated
+    # Create nearly singular Fourier coefficients by making signals
+    # highly correlated
     fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
+        dtype=complex,
     )
 
     # Base signal
-    base_signal = np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples) + \
-                  1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+    base_signal = np.random.randn(
+        n_time_samples, n_trials, n_tapers, n_fft_samples
+    ) + 1j * np.random.randn(
+        n_time_samples, n_trials, n_tapers, n_fft_samples
+    )
 
-    # Create near-singular cross-spectral matrix by making signals nearly dependent
+    # Create near-singular cross-spectral matrix by making signals
+    # nearly dependent
     fourier_coefficients[..., 0] = base_signal
     fourier_coefficients[..., 1] = base_signal + 1e-10 * (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples) +
-        1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
     )
     fourier_coefficients[..., 2] = base_signal + 1e-10 * (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples) +
-        1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
     )
 
     # This should not raise LinAlgError with regularized inverse
