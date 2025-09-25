@@ -104,7 +104,7 @@ def _non_negative_frequencies(axis: int) -> Callable:
             measure = connectivity_measure(*args, **kwargs)
             if measure is not None:
                 n_frequencies = measure.shape[axis]
-                non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
+                non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
                 return xp.take(measure, indices=non_neg_index, axis=axis)
             else:
                 return None
@@ -635,7 +635,7 @@ class Connectivity:
         """
         labels = np.unique(group_labels)
         n_frequencies = self.fourier_coefficients.shape[-2]
-        non_negative_frequencies = xp.arange(0, (n_frequencies + 1) // 2)
+        non_negative_frequencies = xp.arange(0, n_frequencies // 2 + 1)
         fourier_coefficients = self.fourier_coefficients[
             ..., non_negative_frequencies, :
         ]
@@ -2105,7 +2105,7 @@ def _estimate_spectral_granger_prediction(
         The spectral granger causality of the signals.
     """
     n_frequencies = total_power.shape[-2]
-    non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
+    non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
     total_power = xp.take(total_power, indices=non_neg_index, axis=-2)
 
     n_frequencies = csm.shape[-3]
