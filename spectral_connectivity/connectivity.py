@@ -511,7 +511,7 @@ class Connectivity:
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
         )
-        norm[norm == 0] = xp.nan
+        norm = xp.maximum(norm, xp.finfo(norm.dtype).eps)
         complex_coherencey = self._expectation_cross_spectral_matrix() / norm
         n_signals = self.fourier_coefficients.shape[-1]
         diagonal_ind = xp.arange(0, n_signals)
@@ -560,7 +560,8 @@ class Connectivity:
                Processing (ICASSP), pp 4240–4243.
 
         """
-        return _squared_magnitude(self.coherency())
+        magnitude = _squared_magnitude(self.coherency())
+        return xp.clip(magnitude, 0, 1)
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -594,10 +595,14 @@ class Connectivity:
                Neurophysiology 115, 2292-2307.
 
         """
-        return xp.abs(
-            self._expectation_cross_spectral_matrix().imag
-            / xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
+        denominator = xp.sqrt(
+            self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
         )
+        denominator = xp.maximum(denominator, xp.finfo(denominator.dtype).eps)
+        imaginary_coh = xp.abs(
+            self._expectation_cross_spectral_matrix().imag / denominator
+        )
+        return xp.clip(imaginary_coh, 0, 1)
 
     def canonical_coherence(
         self, group_labels: NDArray[np.integer]
