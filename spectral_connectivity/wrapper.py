@@ -66,7 +66,7 @@ def connectivity_to_xarray(
     >>> coherence.dims
     ('time', 'frequency', 'source', 'target')
     """
-    if (method in ["group_delay", "canonical_coherence"]) or ("directed" in method):
+    if (method in ["group_delay"]) or ("directed" in method):
         raise ValueError(
             f"The method '{method}' is not supported by the xarray interface. "
             f"Please use the Connectivity class directly instead:\n\n"
@@ -234,7 +234,6 @@ def multitaper_connectivity(
             "subset_pairwise_spectral_granger_prediction",
             # Methods not supported by xarray interface
             "group_delay",
-            "canonical_coherence",
             "directed_transfer_function",
             "directed_coherence",
             "partial_directed_coherence",
@@ -250,6 +249,7 @@ def multitaper_connectivity(
     elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
+
     m = Multitaper(
         time_series=time_series,
         sampling_frequency=sampling_frequency,
