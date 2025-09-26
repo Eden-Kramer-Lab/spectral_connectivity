@@ -1,4 +1,11 @@
-"""Common statistical procedures used with frequency domain measures."""
+"""Statistical procedures for connectivity analysis.
+
+This module provides statistical functions for testing significance of
+connectivity measures, including multiple comparison corrections and
+transforms for coherence-based measures. Functions support both parametric
+and non-parametric approaches for statistical inference in frequency domain
+connectivity analysis.
+"""
 
 from typing import Callable, Dict, Literal, Tuple, Union
 

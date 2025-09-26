@@ -1,4 +1,9 @@
-"""Functions to simulate processes."""
+"""Functions to simulate time series processes for connectivity analysis.
+
+This module provides functions for generating synthetic time series data
+following various dynamical models, primarily multivariate autoregressive
+(MVAR) processes commonly used for testing connectivity methods.
+"""
 
 from typing import Optional, Union
 
