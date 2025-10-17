@@ -560,7 +560,8 @@ def test__inner_combination():
 
 
 def test_directed_transfer_function():
-    c = Connectivity(fourier_coefficients=np.empty((1,)))
+    # Use proper 5D shape for fourier_coefficients
+    c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
     type(c)._transfer_function = PropertyMock(
         return_value=np.arange(1, 5).reshape((2, 2))
     )
@@ -570,7 +571,8 @@ def test_directed_transfer_function():
 
 
 def test_partial_directed_coherence():
-    c = Connectivity(fourier_coefficients=np.empty((1,)))
+    # Use proper 5D shape for fourier_coefficients
+    c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
     type(c)._MVAR_Fourier_coefficients = PropertyMock(
         return_value=np.arange(1, 5).reshape((2, 2))
     )
@@ -602,3 +604,119 @@ def test_subset_pairwise_granger_prediction():
     for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)
         assert np.allclose(gp_subset[..., j, i], gp_all[..., j, i], equal_nan=True)
+
+
+def test_connectivity_rejects_wrong_ndim():
+    """Test that Connectivity rejects inputs with wrong number of dimensions."""
+    import pytest
+
+    # Test 1D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 1D"):
+        fourier_1d = np.ones(10, dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_1d)
+
+    # Test 2D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 2D"):
+        fourier_2d = np.ones((10, 5), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_2d)
+
+    # Test 3D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 3D"):
+        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_3d)
+
+    # Test 4D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 4D"):
+        fourier_4d = np.ones((10, 5, 2, 100), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_4d)
+
+    # Test 6D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 6D"):
+        fourier_6d = np.ones((10, 5, 2, 100, 3, 4), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_6d)
+
+    # Verify error message contains helpful information
+    with pytest.raises(
+        ValueError, match=r"Expected shape.*n_time_windows.*n_trials.*n_tapers"
+    ):
+        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_3d)
+
+    # Verify error message suggests using Multitaper
+    with pytest.raises(ValueError, match="use the Multitaper class"):
+        fourier_2d = np.ones((10, 5), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_2d)
+
+
+def test_connectivity_requires_multiple_signals():
+    """Test that Connectivity requires at least 2 signals."""
+    import pytest
+
+    # Test with 0 signals
+    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 0"):
+        fourier_0_signals = np.ones((2, 2, 2, 100, 0), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_0_signals)
+
+    # Test with 1 signal
+    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 1"):
+        fourier_1_signal = np.ones((2, 2, 2, 100, 1), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_1_signal)
+
+    # Verify that 2 signals is accepted
+    fourier_2_signals = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    conn = Connectivity(fourier_coefficients=fourier_2_signals)
+    assert conn.fourier_coefficients.shape[-1] == 2
+
+
+def test_connectivity_warns_on_nan():
+    """Test that Connectivity warns when fourier_coefficients contains NaN or Inf."""
+    import warnings
+
+    # Test NaN values
+    fourier_with_nan = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_nan[0, 0, 0, 0, 0] = np.nan
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_nan)
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "NaN or Inf values" in str(w[0].message)
+        assert "Check your input data" in str(w[0].message)
+
+    # Test Inf values
+    fourier_with_inf = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_inf[0, 0, 0, 0, 0] = np.inf
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_inf)
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "NaN or Inf values" in str(w[0].message)
+
+    # Test complex Inf values
+    fourier_with_complex_inf = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_complex_inf[0, 0, 0, 0, 0] = complex(np.inf, 1.0)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_complex_inf)
+        assert len(w) == 1
+        assert "NaN or Inf values" in str(w[0].message)
+        # Check for actionable suggestions
+        assert "interpolating" in str(w[0].message) or "artifact removal" in str(
+            w[0].message
+        )
+
+    # Test valid data (no warning)
+    fourier_valid = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_valid)
+        # Filter out any warnings that are not from Connectivity
+        connectivity_warnings = [
+            warning for warning in w if "fourier_coefficients" in str(warning.message)
+        ]
+        assert len(connectivity_warnings) == 0

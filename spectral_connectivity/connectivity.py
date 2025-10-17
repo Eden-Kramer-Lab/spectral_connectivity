@@ -1,6 +1,7 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import os
+import warnings
 from collections.abc import Callable
 from functools import partial, wraps
 from inspect import signature
@@ -149,6 +150,8 @@ class Connectivity:
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
+        **Validation**: Must be 5-dimensional with at least 2 signals and
+        contain only finite values (no NaN/Inf).
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
@@ -221,15 +224,52 @@ class Connectivity:
         blocks: int | None = None,
         dtype: np.dtype = xp.complex128,
     ) -> None:
-        self.fourier_coefficients = fourier_coefficients
+        # Validate shape of fourier_coefficients
+        if fourier_coefficients.ndim != 5:
+            raise ValueError(
+                f"fourier_coefficients must be 5-dimensional, got {fourier_coefficients.ndim}D array.\n"
+                f"Expected shape: (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)\n"
+                f"Got shape: {fourier_coefficients.shape}\n\n"
+                f"If you have time series data, use the Multitaper class to transform it:\n"
+                f"  from spectral_connectivity import Multitaper\n"
+                f"  m = Multitaper(time_series, sampling_frequency=your_fs, ...)\n"
+                f"  fourier_coefficients = m.fft()"
+            )
 
-        # Validate expectation_type early
+        # Validate minimum number of signals
+        n_signals = fourier_coefficients.shape[-1]
+        if n_signals < 2:
+            raise ValueError(
+                f"At least 2 signals are required for connectivity analysis, got {n_signals}.\n"
+                f"fourier_coefficients shape: {fourier_coefficients.shape}\n"
+                f"The last dimension should contain at least 2 signals."
+            )
+
+        # Validate expectation_type early (fail fast before expensive operations)
         if expectation_type not in EXPECTATION:
             allowed_values = ", ".join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
             raise ValueError(
                 f"Invalid expectation_type '{expectation_type}'. "
                 f"Allowed values are: {allowed_values}"
             )
+
+        # Check for NaN or Inf values (expensive but important validation)
+        if not xp.all(xp.isfinite(fourier_coefficients)):
+            warnings.warn(
+                "fourier_coefficients contains NaN or Inf values. This may indicate:\n"
+                "  - NaN/Inf in your input time series data\n"
+                "  - Issues with windowing parameters (e.g., window too short)\n"
+                "  - Numerical instability in preprocessing\n\n"
+                "Suggestions:\n"
+                "  - Check your input data for NaN/Inf values\n"
+                "  - Consider interpolating missing data points\n"
+                "  - Review artifact removal procedures\n"
+                "  - Verify time_window_duration and time_halfbandwidth_product parameters",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        self.fourier_coefficients = fourier_coefficients
 
         self.expectation_type = expectation_type
         self._frequencies = frequencies
