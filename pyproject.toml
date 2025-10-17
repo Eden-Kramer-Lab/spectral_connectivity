@@ -135,7 +135,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
 strict_optional = true
-disallow_untyped_defs = false
+disallow_untyped_defs = false  # Will be enabled per-module
 disallow_incomplete_defs = false
 check_untyped_defs = true
 disallow_untyped_decorators = false
@@ -154,6 +154,22 @@ module = [
     "xarray.*"
 ]
 ignore_missing_imports = true
+
+# Enable stricter type checking for fully-annotated modules
+[[tool.mypy.overrides]]
+module = [
+    "spectral_connectivity.simulate",
+    "spectral_connectivity.utils",
+    "spectral_connectivity.wrapper",
+    "spectral_connectivity.minimum_phase_decomposition",
+    "spectral_connectivity.statistics",
+    "spectral_connectivity._version"
+]
+disallow_untyped_defs = true
+
+# TODO: Enable for these modules after adding missing type hints:
+# - spectral_connectivity.transforms (1 function)
+# - spectral_connectivity.connectivity (27 functions)
 
 [tool.hatch.version]
 source = "vcs"

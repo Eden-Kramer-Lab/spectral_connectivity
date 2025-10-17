@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Physical constants with scientific rationale** (`spectral_connectivity/transforms.py`):
+  - `MIN_EIGENVALUE_THRESHOLD = 0.9`: Minimum eigenvalue for low-bias tapers
+    - Documents that 90% of taper energy must be in main lobe to reduce spectral leakage
+    - Reference: Thomson (1982), "Spectrum estimation and harmonic analysis"
+  - `TAPER_MULTIPLIER = 2.0`: Multiplier for calculating number of tapers
+    - Documents the theoretical basis: ~2*NW orthogonal Slepian sequences are well-concentrated
+    - Reference: Slepian (1978), "Prolate spheroidal wave functions"
+  - All magic numbers replaced with named constants throughout codebase
+  - Docstrings updated to reference constants while preserving readability
 - Comprehensive test suite for advanced connectivity measures (`tests/test_advanced_connectivity.py`):
   - 18 test methods covering `canonical_coherence()`, `global_coherence()`, and `group_delay()`
   - Tests validate output shapes, value ranges, and mathematical properties (symmetry, antisymmetry)
@@ -36,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Consistency checks with actual `Multitaper` behavior
 
 ### Changed
+- **Incremental MyPy strictness** (`pyproject.toml`):
+  - Enabled `disallow_untyped_defs = true` for 6 fully-annotated modules
+  - Per-module overrides for gradual type hint adoption
+  - Documented remaining work: transforms (1 function), connectivity (27 functions)
+  - All existing type hints validated, no regressions
+- **Test coverage improvements**:
+  - Overall coverage increased from 85% to **88%**
+  - `connectivity.py` coverage improved from 71% to **93%**
+  - Fixed snapshot tests after Nyquist frequency bin correction
+  - Updated test assertions to use correct frequency bin calculation: `N//2 + 1` instead of `(N+1)//2`
 - Improved method discovery in `multitaper_connectivity()` wrapper:
   - Replaced `dir()` with `inspect.getmembers(predicate=inspect.isfunction)` for type-safe method filtering
   - Automatically excludes properties and classmethods (more robust)
@@ -51,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All TODO comments from codebase (2 resolved)
 
 ### Fixed
+- **MyPy type annotation error** in `detrend()` function (`transforms.py:1867-1876`):
+  - Fixed union type handling for `bp` parameter (`int | NDArray[np.integer]`)
+  - Simplified conditional logic to check `isinstance(bp, int)` first
+  - Eliminated unreachable code warnings from MyPy
+  - No functional changes, purely type safety improvement
 
 #### **BREAKING CHANGE: Nyquist Frequency Now Included for Even-Length FFTs**
 

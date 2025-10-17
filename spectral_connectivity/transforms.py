@@ -11,6 +11,24 @@ from scipy.linalg import eigvals_banded
 
 logger = getLogger(__name__)
 
+# Physical Constants with Scientific Rationale
+#
+# MIN_EIGENVALUE_THRESHOLD: Minimum eigenvalue for low-bias tapers
+# - Eigenvalues represent the concentration of taper energy within the desired bandwidth
+# - Value of 0.9 means 90% of the taper's energy is contained in the main lobe
+# - Tapers with lower eigenvalues have more spectral leakage from side lobes
+# - This threshold provides a good balance between bias reduction and preserving enough tapers
+# - Reference: Thomson (1982), "Spectrum estimation and harmonic analysis"
+MIN_EIGENVALUE_THRESHOLD = 0.9
+
+# TAPER_MULTIPLIER: Multiplier for calculating number of tapers from time_halfbandwidth_product
+# - The number of tapers is floor(2 * NW) - 1, where NW is time_halfbandwidth_product
+# - Factor of 2 comes from the spectral concentration theory: approximately 2*NW orthogonal
+#   functions (Slepian sequences) exist that are well-concentrated in both time and frequency
+# - The -1 ensures we stay within the well-concentrated region
+# - Reference: Slepian (1978), "Prolate spheroidal wave functions"
+TAPER_MULTIPLIER = 2.0
+
 
 class MultitaperParameters(TypedDict):
     """Parameter suggestions for multitaper analysis.
@@ -120,7 +138,7 @@ def estimate_frequency_resolution(
     estimate_n_tapers : Estimate number of tapers
     suggest_parameters : Automatically suggest parameters for target resolution
     """
-    return 2.0 * time_halfbandwidth_product / time_window_duration
+    return TAPER_MULTIPLIER * time_halfbandwidth_product / time_window_duration
 
 
 def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
@@ -152,7 +170,7 @@ def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
     where NW is the time-halfbandwidth product.
 
     **Note:** The actual number of tapers used by Multitaper may be lower
-    if `is_low_bias=True` (default), which excludes tapers with eigenvalues < 0.9.
+    if `is_low_bias=True` (default), which excludes tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9).
 
     **Typical values:**
     - NW=2 → 3 tapers (minimal averaging)
@@ -175,7 +193,7 @@ def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
     estimate_frequency_resolution : Estimate frequency resolution
     suggest_parameters : Automatically suggest parameters
     """
-    return int(np.floor(2 * time_halfbandwidth_product)) - 1
+    return int(np.floor(TAPER_MULTIPLIER * time_halfbandwidth_product)) - 1
 
 
 def suggest_parameters(
@@ -316,7 +334,7 @@ def suggest_parameters(
 
         # Calculate required window duration: T = 2*NW / Δf
         time_window_duration = (
-            2.0 * time_halfbandwidth_product / desired_freq_resolution
+            TAPER_MULTIPLIER * time_halfbandwidth_product / desired_freq_resolution
         )
 
         # Check if this is achievable with the signal duration
@@ -331,7 +349,7 @@ def suggest_parameters(
                 "To achieve this resolution, you need either:\n"
                 f"  - Longer signal (at least {time_window_duration:.2f}s)\n"
                 f"  - Coarser frequency resolution (at least "
-                f"{2.0 * time_halfbandwidth_product / signal_duration:.2f} Hz)"
+                f"{TAPER_MULTIPLIER * time_halfbandwidth_product / signal_duration:.2f} Hz)"
             )
 
         # If window would give us fewer than 3 time windows, increase NW slightly
@@ -494,7 +512,7 @@ class Multitaper:
         Number of samples to advance between windows. Computed from
         time_window_step if not provided.
     is_low_bias : bool, default=True
-        If True, exclude tapers with eigenvalues < 0.9 to reduce bias.
+        If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
 
     Attributes
     ----------
@@ -961,7 +979,7 @@ FFT samples:          {self.n_fft_samples}
         """Return number of desired tapers.
 
         Note that the number of tapers may be less than this number if
-        the bias of the tapers is too high (eigenvalues > 0.9).
+        the bias of the tapers is too high (eigenvalues > MIN_EIGENVALUE_THRESHOLD = 0.9).
 
         Returns
         -------
@@ -970,7 +988,7 @@ FFT samples:          {self.n_fft_samples}
 
         """
         if self._n_tapers is None:
-            return int(xp.floor(2 * self.time_halfbandwidth_product - 1))
+            return int(xp.floor(TAPER_MULTIPLIER * self.time_halfbandwidth_product - 1))
         return self._n_tapers
 
     @property
@@ -1106,7 +1124,11 @@ FFT samples:          {self.n_fft_samples}
             Frequency resolution in Hz.
 
         """
-        return 2.0 * self.time_halfbandwidth_product / self.time_window_duration
+        return (
+            TAPER_MULTIPLIER
+            * self.time_halfbandwidth_product
+            / self.time_window_duration
+        )
 
     @property
     def nyquist_frequency(self) -> float:
@@ -1400,7 +1422,7 @@ def _make_tapers(
     time_halfbandwidth_product : float
     n_tapers : int
     is_low_bias : bool
-        Keep only tapers with eigenvalues > 0.9
+        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
 
     Returns
     -------
@@ -1537,7 +1559,7 @@ def dpss_windows(
     n_tapers : int
         Number of DPSS windows to return
     is_low_bias : bool
-        Keep only tapers with eigenvalues > 0.9
+        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
     interp_from : int (optional)
         The tapers can be calculated using interpolation from a set of
         tapers with the same NW and n_tapers, but shorter
@@ -1734,7 +1756,7 @@ def _auto_correlation(
 def _get_low_bias_tapers(
     tapers: NDArray[np.floating], eigenvalues: NDArray[np.floating]
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    is_low_bias = eigenvalues > 0.9
+    is_low_bias = eigenvalues > MIN_EIGENVALUE_THRESHOLD
     if not xp.any(is_low_bias):
         logger.warning("Could not properly use low_bias, " "keeping lowest-bias taper")
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
@@ -1846,13 +1868,12 @@ def detrend(
             else:  # NumPy array or already a list
                 invalid_bp_list = invalid_bp.tolist()
 
-            if hasattr(bp, "__iter__"):
-                if hasattr(bp, "get"):  # CuPy array
-                    bp_list = xp.asnumpy(bp).tolist()
-                else:  # NumPy array or list
-                    bp_list = bp if isinstance(bp, list) else bp.tolist()
-            else:
+            if isinstance(bp, int):
                 bp_list = [bp]  # Wrap single int in list for display
+            elif hasattr(bp, "get"):  # CuPy array
+                bp_list = xp.asnumpy(bp).tolist()
+            else:  # NumPy array
+                bp_list = bp.tolist()
 
             raise ValueError(
                 f"Breakpoint value(s) {invalid_bp_list} exceed data length.\n"

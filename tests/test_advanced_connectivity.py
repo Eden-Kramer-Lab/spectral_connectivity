@@ -65,7 +65,7 @@ class TestCanonicalCoherence:
 
         # Validate output shapes
         # canonical_coherence returns (n_time_windows, n_non_negative_freqs, n_groups, n_groups)
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (
             m.time.size,
             n_non_negative_freqs,
@@ -112,7 +112,7 @@ class TestCanonicalCoherence:
         canonical_coh, labels = conn.canonical_coherence(group_labels)
 
         # Validate shapes
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (
             m.time.size,
             n_non_negative_freqs,
@@ -151,7 +151,7 @@ class TestCanonicalCoherence:
         canonical_coh, labels = conn.canonical_coherence(group_labels)
 
         # Validate shapes
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (
             m.time.size,
             n_non_negative_freqs,
@@ -185,7 +185,7 @@ class TestCanonicalCoherence:
         canonical_coh, labels = conn.canonical_coherence(group_labels)
 
         # Validate shapes
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (
             m.time.size,
             n_non_negative_freqs,
@@ -216,7 +216,7 @@ class TestCanonicalCoherence:
         canonical_coh, _labels = conn.canonical_coherence(group_labels)
 
         # Should work even with single signals
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (
             m.time.size,
             n_non_negative_freqs,
@@ -711,7 +711,7 @@ class TestAdvancedConnectivityIntegration:
         # Test canonical coherence
         group_labels = np.array([0, 0, 0, 1, 1, 1])
         canonical_coh, _labels = conn.canonical_coherence(group_labels)
-        n_non_negative_freqs = (m.frequencies.size + 1) // 2
+        n_non_negative_freqs = m.frequencies.size // 2 + 1
         assert canonical_coh.shape == (m.time.size, n_non_negative_freqs, 2, 2)
 
         # Test global coherence

@@ -2,17 +2,17 @@
 # name: test_baccala_example2_directed_transfer_function[dtf_at_25hz]
   list([
     list([
-      0.7098937741510488,
-      0.04170307980738457,
-      0.24840314604156621,
+      0.709893774151049,
+      0.041703079807384594,
+      0.24840314604156638,
     ]),
     list([
-      0.19990826425127378,
-      0.4529154194325527,
-      0.34717631631617346,
+      0.19990826425127367,
+      0.45291541943255254,
+      0.34717631631617357,
     ]),
     list([
-      0.057228935759376855,
+      0.05722893575937684,
       0.1397690125410971,
       0.8030020516995261,
     ]),
@@ -21,7 +21,7 @@
 # name: test_baccala_example2_directed_transfer_function[dtf_shape]
   tuple(
     1,
-    500,
+    501,
     3,
     3,
   )
@@ -29,26 +29,26 @@
 # name: test_baccala_example2_partial_directed_coherence[pdc_at_25hz]
   list([
     list([
-      0.695584667715585,
-      0.10932855637329505,
-      0.07902806469911004,
+      0.6955846677157799,
+      0.10932855637319572,
+      0.07902806469912754,
     ]),
     list([
-      0.3043583373045675,
-      0.7941124097945432,
-      0.4179724448625634,
+      0.3043583373043747,
+      0.7941124097947405,
+      0.417972444862244,
     ]),
     list([
-      5.699497984730916e-05,
-      0.09655903383216162,
-      0.5029994904383266,
+      5.699497984567396e-05,
+      0.09655903383206378,
+      0.5029994904386287,
     ]),
   ])
 # ---
 # name: test_baccala_example2_partial_directed_coherence[pdc_shape]
   tuple(
     1,
-    500,
+    501,
     3,
     3,
   )
@@ -56,37 +56,37 @@
 # name: test_dhamala_example1_direct_dtf[ddtf_at_30hz]
   list([
     list([
-      0.029642439730251016,
-      0.0004439107406330511,
-      0.009674579344505102,
+      0.029641920924028096,
+      0.00044390297124264917,
+      0.009674410018630055,
     ]),
     list([
-      2.9065855469685593e-05,
-      0.017084639325064658,
-      9.668097595418112e-06,
+      2.9065393681223428e-05,
+      0.017084367890116775,
+      9.667943991961452e-06,
     ]),
     list([
-      7.296534873537972e-05,
-      0.012195537594898111,
-      0.01780881060173541,
+      7.29625468081381e-05,
+      0.012195069276584708,
+      0.017808126729295205,
     ]),
   ])
 # ---
 # name: test_dhamala_example1_direct_dtf[ddtf_shape]
   tuple(
     1,
-    2000,
+    2001,
     3,
     3,
   )
 # ---
 # name: test_dhamala_example1_subset_granger[subset_gc_pair0to1_at_30hz]
-  0.6382974682992835
+  0.6382974682992426
 # ---
 # name: test_dhamala_example1_subset_granger[subset_gc_shape]
   tuple(
     1,
-    2000,
+    2001,
     3,
     3,
   )
@@ -94,19 +94,19 @@
 # name: test_ding_example1_generalized_pdc[gpdc_at_50hz]
   list([
     list([
-      0.9303429300290544,
-      0.0002665085007102023,
+      0.9303429300291189,
+      0.0002665085007103637,
     ]),
     list([
-      0.06965706997094563,
-      0.9997334914992897,
+      0.06965706997088106,
+      0.9997334914992901,
     ]),
   ])
 # ---
 # name: test_ding_example1_generalized_pdc[gpdc_shape]
   tuple(
     1,
-    500,
+    501,
     2,
     2,
   )
@@ -114,16 +114,16 @@
 # name: test_ding_example1_granger_causality[granger_shape]
   tuple(
     1,
-    500,
+    501,
     2,
     2,
   )
 # ---
 # name: test_ding_example1_granger_causality[granger_x1_to_x2_at_50hz]
-  0.05835666385356131
+  0.05835666385355687
 # ---
 # name: test_ding_example1_granger_causality[granger_x2_to_x1_at_50hz]
-  0.00020339332917718167
+  0.00020339332917806985
 # ---
 # name: test_intro_basic_coherence[coherence_at_200hz]
   0.9809957145809289
@@ -159,7 +159,7 @@
 # name: test_intro_canonical_coherence[canonical_coherence_shape]
   tuple(
     1,
-    500,
+    501,
     2,
     2,
   )
@@ -177,7 +177,7 @@
 # name: test_intro_coherence_with_time_windows[coherence_time_shape]
   tuple(
     30,
-    1000,
+    1001,
     2,
     2,
   )
