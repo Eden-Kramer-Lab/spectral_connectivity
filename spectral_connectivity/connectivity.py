@@ -51,6 +51,10 @@ EXPECTATION = {
     "time_trials_tapers": partial(xp.mean, axis=(0, 1, 2)),
 }
 
+# Tikhonov regularization factor for stabilizing matrix inversions
+# Used to prevent numerical instability with near-singular matrices
+TIKHONOV_REGULARIZATION_FACTOR = 1e-12
+
 
 def _asnumpy(connectivity_measure: Callable) -> Callable:
     """Transform cupy array to numpy array.
@@ -450,7 +454,7 @@ class Connectivity:
         H = self._transfer_function
         # Tikhonov regularization: solve(H + λI, I) instead of inv(H)
         # Scale-aware regularization parameter
-        lam = 1e-12 * xp.mean(xp.real(xp.conj(H) * H))
+        lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(xp.real(xp.conj(H) * H))
         identity = xp.eye(H.shape[-1], dtype=H.dtype)
         regularized_H = H + lam * identity
         return xp.linalg.solve(regularized_H, identity)
@@ -1563,7 +1567,7 @@ def _estimate_transfer_function(
     inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
     H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
     # Tikhonov regularization: solve(H_0 + λI, I) instead of inv(H_0)
-    lam = 1e-12 * xp.mean(H_0 * H_0)  # Scale-aware regularization for real matrix
+    lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(H_0 * H_0)  # Scale-aware regularization for real matrix
     identity = xp.eye(H_0.shape[-1], dtype=H_0.dtype)
     regularized_H_0 = H_0 + lam * identity
     H_0_inv = xp.linalg.solve(regularized_H_0, identity)
