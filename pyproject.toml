@@ -50,6 +50,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
+    "syrupy>=4.0",
     "nitime",
     "black>=24.0",
     "ruff>=0.8.0",
