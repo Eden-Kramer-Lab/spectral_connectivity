@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Test infrastructure** (`tests/conftest.py`):
+  - Added pytest fixture to reset numpy random state before each test
+  - Ensures consistent test reproducibility with fixed seed (42)
+  - Helps prevent test ordering issues from shared random state
+  - Auto-runs before every test without explicit fixture declaration
 - **Physical constants with scientific rationale** (`spectral_connectivity/transforms.py`):
   - `MIN_EIGENVALUE_THRESHOLD = 0.9`: Minimum eigenvalue for low-bias tapers
     - Documents that 90% of taper energy must be in main lobe to reduce spectral leakage
