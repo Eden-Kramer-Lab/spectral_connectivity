@@ -652,6 +652,59 @@ def test_nyquist_bin_odd_n():
     ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
 
 
+def test_mvar_regularized_inverse_near_singular():
+    """Test regularized inverse handles near-singular frequency bins."""
+    np.random.seed(42)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
+        1, 10, 1, 5, 3
+    )
+
+    # Create nearly singular Fourier coefficients by making signals
+    # highly correlated
+    fourier_coefficients = np.zeros(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
+        dtype=complex,
+    )
+
+    # Base signal
+    base_signal = np.random.randn(
+        n_time_samples, n_trials, n_tapers, n_fft_samples
+    ) + 1j * np.random.randn(
+        n_time_samples, n_trials, n_tapers, n_fft_samples
+    )
+
+    # Create near-singular cross-spectral matrix by making signals
+    # nearly dependent
+    fourier_coefficients[..., 0] = base_signal
+    fourier_coefficients[..., 1] = base_signal + 1e-10 * (
+        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
+    fourier_coefficients[..., 2] = base_signal + 1e-10 * (
+        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples)
+    )
+
+    # This should not raise LinAlgError with regularized inverse
+    conn = Connectivity(fourier_coefficients=fourier_coefficients)
+
+    # Test that MVAR coefficients are computed without error
+    mvar_coeffs = conn._MVAR_Fourier_coefficients
+    assert mvar_coeffs is not None
+    assert np.all(np.isfinite(mvar_coeffs))
+
+    # Test that transfer function is computed without error
+    transfer_func = conn._transfer_function
+    assert transfer_func is not None
+    assert np.all(np.isfinite(transfer_func))
+
+    # Test connectivity measures that depend on MVAR work
+    dtf = conn.directed_transfer_function()
+    assert np.all(np.isfinite(dtf))
+    assert np.all(dtf >= 0)  # DTF should be non-negative
+    assert np.all(dtf <= 1)  # DTF should be bounded by 1
+
+
 def test_connectivity_rejects_wrong_ndim():
     """Test that Connectivity rejects inputs with wrong number of dimensions."""
     import pytest
