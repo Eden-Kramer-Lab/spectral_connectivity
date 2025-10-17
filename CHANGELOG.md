@@ -51,6 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All TODO comments from codebase (2 resolved)
 
 ### Fixed
+
+- **Tikhonov regularization for MVAR matrix inversion stability**:
+  - Replaced direct matrix inverse (`xp.linalg.inv()`) with Tikhonov-regularized solve in MVAR computations
+  - Prevents `LinAlgError` exceptions when computing Granger causality with near-singular matrices
+  - Affected functions: `_MVAR_Fourier_coefficients` property and `_estimate_transfer_function` function
+  - Uses scale-aware regularization: λ = `TIKHONOV_REGULARIZATION_FACTOR` × mean(||H||²)
+  - Added module-level constant `TIKHONOV_REGULARIZATION_FACTOR = 1e-12` for consistency
+  - Solves `(H + λI)x = I` instead of computing `inv(H)` for better numerical stability
+  - Added stress test `test_mvar_regularized_inverse_near_singular()` validating near-singular cases
+  - All Granger causality measures now handle highly correlated signals gracefully
+  - See PR #72 for detailed numerical analysis
+
 - CHANGELOG.md to track version changes following Keep a Changelog format
 - Ruff linter configuration for faster, more comprehensive Python linting
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)
