@@ -15,12 +15,12 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, ifft
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        )
+        ) from exc
 else:
     import numpy as xp
     from scipy.fft import fft, ifft
@@ -296,9 +296,7 @@ def minimum_phase_decomposition(
 
     for iteration in range(max_iterations):
         logger.debug(
-            "iteration: {0}, {1} of {2} converged".format(
-                iteration, is_converged.sum(), len(is_converged)
-            )
+            f"iteration: {iteration}, {is_converged.sum()} of {len(is_converged)} converged"
         )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         linear_predictor = _get_linear_predictor(
@@ -319,8 +317,6 @@ def minimum_phase_decomposition(
             return minimum_phase_factor
     else:
         logger.warning(
-            "Maximum iterations reached. {} of {} converged".format(
-                is_converged.sum(), len(is_converged)
-            )
+            f"Maximum iterations reached. {is_converged.sum()} of {len(is_converged)} converged"
         )
         return minimum_phase_factor

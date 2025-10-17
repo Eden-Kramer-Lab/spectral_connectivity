@@ -2,7 +2,6 @@
 
 import os
 from logging import getLogger
-from typing import Any, Callable, Optional, Tuple, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -17,12 +16,12 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
         import cupy as xp
         from cupy.linalg import lstsq
         from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        )
+        ) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
@@ -30,7 +29,7 @@ else:
     from scipy.linalg import lstsq
 
 
-class Multitaper(object):
+class Multitaper:
     """
     Multitaper spectral analysis for robust power spectral density estimation.
 
@@ -128,15 +127,15 @@ class Multitaper(object):
         time_series: NDArray[np.floating],
         sampling_frequency: float = 1000,
         time_halfbandwidth_product: float = 3,
-        detrend_type: Optional[str] = "constant",
-        time_window_duration: Optional[float] = None,
-        time_window_step: Optional[float] = None,
-        n_tapers: Optional[int] = None,
-        tapers: Optional[NDArray[np.floating]] = None,
-        start_time: Union[float, NDArray[np.floating]] = 0,
-        n_fft_samples: Optional[int] = None,
-        n_time_samples_per_window: Optional[int] = None,
-        n_time_samples_per_step: Optional[int] = None,
+        detrend_type: str | None = "constant",
+        time_window_duration: float | None = None,
+        time_window_step: float | None = None,
+        n_tapers: int | None = None,
+        tapers: NDArray[np.floating] | None = None,
+        start_time: float | NDArray[np.floating] = 0,
+        n_fft_samples: int | None = None,
+        n_time_samples_per_window: int | None = None,
+        n_time_samples_per_step: int | None = None,
         is_low_bias: bool = True,
     ) -> None:
         self.time_series = xp.asarray(time_series)
@@ -164,14 +163,14 @@ class Multitaper(object):
         """
         return (
             "Multitaper("
-            "sampling_frequency={0.sampling_frequency!r}, "
-            "time_halfbandwidth_product={0.time_halfbandwidth_product!r},\n"
-            "           time_window_duration={0.time_window_duration!r}, "
-            "time_window_step={0.time_window_step!r},\n"
-            "           detrend_type={0.detrend_type!r}, "
-            "start_time={0.start_time}, "
-            "n_tapers={0.n_tapers}"
-            ")".format(self)
+            f"sampling_frequency={self.sampling_frequency!r}, "
+            f"time_halfbandwidth_product={self.time_halfbandwidth_product!r},\n"
+            f"           time_window_duration={self.time_window_duration!r}, "
+            f"time_window_step={self.time_window_step!r},\n"
+            f"           detrend_type={self.detrend_type!r}, "
+            f"start_time={self.start_time}, "
+            f"n_tapers={self.n_tapers}"
+            ")"
         )
 
     @property
@@ -608,13 +607,14 @@ def tridisolve(
 
     if not overwrite_b:
         return x
+    return x
 
 
 def tridi_inverse_iteration(
     d: NDArray[np.floating],
     e: NDArray[np.floating],
     w: float,
-    x0: Optional[NDArray[np.floating]] = None,
+    x0: NDArray[np.floating] | None = None,
     rtol: float = 1e-8,
 ) -> NDArray[np.floating]:
     """Perform an inverse iteration.
@@ -662,9 +662,9 @@ def dpss_windows(
     time_halfbandwidth_product: float,
     n_tapers: int,
     is_low_bias: bool = True,
-    interp_from: Optional[int] = None,
+    interp_from: int | None = None,
     interp_kind: str = "linear",
-) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute Discrete Prolate Spheroidal Sequences.
 
     Will give of orders [0, n_tapers-1] for a given frequency-spacing
@@ -876,7 +876,7 @@ def _auto_correlation(
 
 def _get_low_bias_tapers(
     tapers: NDArray[np.floating], eigenvalues: NDArray[np.floating]
-) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     is_low_bias = eigenvalues > 0.9
     if not xp.any(is_low_bias):
         logger.warning("Could not properly use low_bias, " "keeping lowest-bias taper")
@@ -918,7 +918,7 @@ def detrend(
     data: NDArray[np.floating],
     axis: int = -1,
     type: str = "linear",
-    bp: Union[int, list, NDArray[np.integer]] = 0,
+    bp: int | NDArray[np.integer] = 0,
     overwrite_data: bool = False,
 ) -> NDArray[np.floating]:
     """
@@ -973,12 +973,12 @@ def detrend(
     else:
         dshape = data.shape
         N = dshape[axis]
-        bp = xp.sort(xp.unique(xp.r_[0, bp, N]))
-        if xp.any(bp > N):
+        bp_array = xp.sort(xp.unique(xp.r_[0, bp, N]))
+        if xp.any(bp_array > N):
             raise ValueError(
                 "Breakpoints must be less than length " "of data along given axis."
             )
-        Nreg = len(bp) - 1
+        Nreg = len(bp_array) - 1
         # Restructure data so that axis is along first dimension and
         #  all other dimensions are collapsed into second dimension
         rnk = len(dshape)
@@ -994,11 +994,11 @@ def detrend(
             newdata = newdata.astype(dtype)
         # Find leastsq fit and remove it for each piece
         for m in range(Nreg):
-            Npts = bp[m + 1] - bp[m]
+            Npts = bp_array[m + 1] - bp_array[m]
             A = xp.ones((Npts, 2), dtype)
-            A[:, 0] = xp.cast[dtype](np.arange(1, Npts + 1) * 1.0 / Npts)
-            sl = slice(bp[m], bp[m + 1])
-            coef, resids, rank, s = lstsq(A, newdata[sl])
+            A[:, 0] = xp.asarray(np.arange(1, Npts + 1) * 1.0 / Npts, dtype=dtype)
+            sl = slice(bp_array[m], bp_array[m + 1])
+            coef, _resids, _rank, _s = lstsq(A, newdata[sl])
             newdata[sl] = newdata[sl] - A @ coef
         # Put data back in original shape.
         tdshape = xp.take(dshape, newdims, 0)

@@ -7,7 +7,8 @@ and non-parametric approaches for statistical inference in frequency domain
 connectivity analysis.
 """
 
-from typing import Callable, Dict, Literal, Tuple, Union
+from collections.abc import Callable
+from typing import Literal
 
 import numpy as np
 import scipy.special
@@ -91,7 +92,7 @@ def Bonferroni_correction(
     return p_values <= alpha / p_values.size
 
 
-MULTIPLE_COMPARISONS: Dict[str, Callable] = {
+MULTIPLE_COMPARISONS: dict[str, Callable] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,
 }
@@ -142,7 +143,7 @@ def adjust_for_multiple_comparisons(
 def coherence_fisher_z_transform(
     coherency1: NDArray[np.complexfloating],
     n_obs1: int,
-    coherency2: Union[NDArray[np.complexfloating], float] = 0,
+    coherency2: NDArray[np.complexfloating] | float = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform coherence magnitude to approximately normal distribution.
@@ -239,7 +240,7 @@ def get_normal_distribution_p_values(
     try:
         return 1 - scipy.stats.norm.cdf(data, loc=mean, scale=std_deviation)
     except TypeError:
-        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)
+        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)  # type: ignore[attr-defined]
 
 
 def coherence_bias(n_observations: int) -> float:
@@ -348,9 +349,9 @@ def coherence_rate_adjustment(
 
 def power_confidence_intervals(
     n_tapers: int,
-    power: Union[NDArray[np.floating], float] = 1,
+    power: NDArray[np.floating] | float = 1,
     ci: float = 0.95,
-) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
     Uses chi-squared distribution to compute confidence bounds for power
@@ -442,7 +443,7 @@ def power_variance(n_observations: int) -> float:
 def power_fisher_z_transform(
     spectrum1: NDArray[np.floating],
     n_obs1: int,
-    spectrum2: Union[NDArray[np.floating], float] = 0,
+    spectrum2: NDArray[np.floating] | float = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform power spectrum estimates for statistical testing.

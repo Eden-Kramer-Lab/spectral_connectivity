@@ -1,7 +1,8 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+from collections.abc import Sequence
 from logging import getLogger
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -16,7 +17,7 @@ logger = getLogger(__name__)
 def connectivity_to_xarray(
     m: Multitaper,
     method: str = "coherence_magnitude",
-    signal_names: Optional[Sequence[str]] = None,
+    signal_names: Sequence[str] | None = None,
     squeeze: bool = False,
     **kwargs: Any,
 ) -> xr.DataArray:
@@ -75,11 +76,15 @@ def connectivity_to_xarray(
             f"result = conn.{method}()\n"
         )
     # Name the source and target axes
+    signal_names_list: Sequence[str]
     if signal_names is None:
-        signal_names = np.arange(m.time_series.shape[-1])
+        signal_names_list = list(np.arange(m.time_series.shape[-1]).astype(str))
+    else:
+        signal_names_list = signal_names
+
     connectivity = Connectivity.from_multitaper(m)
     if method == "canonical_coherence":
-        connectivity_mat, labels = getattr(connectivity, method)(**kwargs)
+        connectivity_mat, _labels = getattr(connectivity, method)(**kwargs)
     else:
         connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
@@ -89,7 +94,7 @@ def connectivity_to_xarray(
     if method == "power":
         xar = xr.DataArray(
             connectivity_mat,
-            coords=[connectivity.time, connectivity.frequencies, signal_names],
+            coords=[connectivity.time, connectivity.frequencies, signal_names_list],
             dims=["time", "frequency", "source"],
         )
 
@@ -107,8 +112,8 @@ def connectivity_to_xarray(
             coords=[
                 connectivity.time,
                 connectivity.frequencies,
-                signal_names,
-                signal_names,
+                signal_names_list,
+                signal_names_list,
             ],
             dims=["time", "frequency", "source", "target"],
         )
@@ -132,13 +137,13 @@ def connectivity_to_xarray(
 def multitaper_connectivity(
     time_series: NDArray[np.floating],
     sampling_frequency: float,
-    time_window_duration: Optional[float] = None,
-    method: Optional[Union[str, List[str]]] = None,
-    signal_names: Optional[Sequence[str]] = None,
+    time_window_duration: float | None = None,
+    method: str | list[str] | None = None,
+    signal_names: Sequence[str] | None = None,
     squeeze: bool = False,
-    connectivity_kwargs: Optional[Dict[str, Any]] = None,
+    connectivity_kwargs: dict[str, Any] | None = None,
     **kwargs: Any,
-) -> Union[xr.DataArray, xr.Dataset]:
+) -> xr.DataArray | xr.Dataset:
     """
     Compute connectivity measures with multitaper spectral estimation.
 

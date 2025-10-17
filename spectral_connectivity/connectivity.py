@@ -1,11 +1,12 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import os
+from collections.abc import Callable
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,12 +30,12 @@ if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
         import cupy as xp
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
-    except ImportError:
+    except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        )
+        ) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
@@ -215,9 +216,9 @@ class Connectivity:
         self,
         fourier_coefficients: NDArray[np.complexfloating],
         expectation_type: str = "trials_tapers",
-        frequencies: Optional[NDArray[np.floating]] = None,
-        time: Optional[NDArray[np.floating]] = None,
-        blocks: Optional[int] = None,
+        frequencies: NDArray[np.floating] | None = None,
+        time: NDArray[np.floating] | None = None,
+        blocks: int | None = None,
         dtype: np.dtype = xp.complex128,
     ) -> None:
         self.fourier_coefficients = fourier_coefficients
@@ -278,7 +279,7 @@ class Connectivity:
     @property
     @_asnumpy
     @_non_negative_frequencies(axis=0)
-    def frequencies(self) -> Optional[NDArray[np.floating]]:
+    def frequencies(self) -> NDArray[np.floating] | None:
         """Return non-negative frequencies of the transform.
 
         Returns
@@ -293,7 +294,7 @@ class Connectivity:
 
     @property
     @_asnumpy
-    def all_frequencies(self) -> Optional[NDArray[np.floating]]:
+    def all_frequencies(self) -> NDArray[np.floating] | None:
         """Return positive and negative frequencies of the transform.
 
         Returns
@@ -329,7 +330,7 @@ class Connectivity:
         )
 
     def _expectation_cross_spectral_matrix(
-        self, fcn: Optional[Callable] = None, dtype: Optional[np.dtype] = None
+        self, fcn: Callable | None = None, dtype: np.dtype | None = None
     ) -> NDArray[np.complexfloating]:
         """Compute full or block-wise cross-spectral matrix.
 
@@ -394,7 +395,7 @@ class Connectivity:
         return csm
 
     def _subset_cross_spectral_matrix(
-        self, pairs: Union[list, NDArray[np.integer]]
+        self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
         """Compute cross-spectral matrix for subset of channel pairs.
 
@@ -601,7 +602,7 @@ class Connectivity:
 
     def canonical_coherence(
         self, group_labels: NDArray[np.integer]
-    ) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
         """Find the maximal coherence between each combination of groups.
 
         The canonical coherence finds two sets of weights such that the
@@ -641,7 +642,7 @@ class Connectivity:
         ]
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
-                fourier_coefficients[..., np.in1d(group_labels, label)]
+                fourier_coefficients[..., xp.isin(group_labels, label)]
             )
             for label in labels
         ]
@@ -678,7 +679,7 @@ class Connectivity:
 
     def global_coherence(
         self, max_rank: int = 1
-    ) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
 
         The linear combinations of signals that capture the most coherent
@@ -825,7 +826,13 @@ class Connectivity:
         """
 
         def fcn(x):
-            return xp.sign(x.imag)
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            # Self-connections should have zero imaginary component
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.sign(imag_part)
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
 
@@ -1010,11 +1017,11 @@ class Connectivity:
         n_signals = csm.shape[-1]
         pairs = combinations(range(n_signals), 2)
         total_power = self._power
-        return _estimate_spectral_granger_prediction(total_power, csm, pairs)
+        return _estimate_spectral_granger_prediction(total_power, csm, pairs)  # type: ignore[arg-type]
 
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
-        self, pairs: Union[list, NDArray[np.integer]]
+        self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.floating]:
         """Return predictive power for a subset of signal pairs.
 
@@ -1684,8 +1691,8 @@ def _set_diagonal_to_zero(
 
 def _total_inflow(
     transfer_function: NDArray[np.complexfloating],
-    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
-    axis: Union[int, Tuple[int, ...]] = -1,
+    noise_variance: float | NDArray[np.floating] = 1.0,
+    axis: int | tuple[int, ...] = -1,
 ) -> NDArray[np.floating]:
     """Measure effect of incoming signals onto a node via sum of squares.
 
@@ -1736,7 +1743,7 @@ def _get_noise_variance(
 
 def _total_outflow(
     MVAR_Fourier_coefficients: NDArray[np.complexfloating],
-    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
+    noise_variance: float | NDArray[np.floating] = 1.0,
 ) -> NDArray[np.floating]:
     """Measure effect of outgoing signals on the node via sum of squares.
 
@@ -1953,7 +1960,7 @@ def _get_independent_frequencies(
     """
     index = is_significant.nonzero()[0]
     independent_index = index[0 : len(index) : frequency_step]
-    return np.in1d(np.arange(0, len(is_significant)), independent_index)
+    return xp.isin(np.arange(0, len(is_significant)), independent_index)
 
 
 def _find_largest_independent_group(
@@ -2044,7 +2051,7 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 
 def _estimate_global_coherence(
     fourier_coefficients: NDArray[np.complexfloating], max_rank: int = 1
-) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Estimate global coherence.
 
     Parameters
@@ -2069,9 +2076,7 @@ def _estimate_global_coherence(
             fourier_coefficients, full_matrices=False
         )
         global_coherence = global_coherence[:max_rank] ** 2 / n_estimates
-        unnormalized_global_coherence = unnormalized_global_coherence[
-            :, :max_rank
-        ]  # noqa
+        unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]
     else:
         unnormalized_global_coherence, global_coherence, _ = svds(
             fourier_coefficients, max_rank
@@ -2084,7 +2089,7 @@ def _estimate_global_coherence(
 def _estimate_spectral_granger_prediction(
     total_power: NDArray[np.floating],
     csm: NDArray[np.complexfloating],
-    pairs: Union[list, NDArray[np.integer]],
+    pairs: list | NDArray[np.integer],
 ) -> NDArray[np.floating]:
     """
     Estimate spectral granger causality.
