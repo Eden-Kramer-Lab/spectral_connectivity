@@ -32,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Prevents ambiguous dimension interpretation
 - Enhanced error messages following WHAT/WHY/HOW pattern throughout
 - 3D input requirement for `Multitaper` class to eliminate dimension ambiguity
+- Intelligent error suggestion for `expectation_type` parameter:
+  - Detects wrong word order (e.g., "tapers_trials" instead of "trials_tapers")
+  - Suggests correct ordering with helpful explanation
+  - Lists all valid options with most common choice highlighted
+- Improved `detrend()` function error messages:
+  - Clear explanation of linear vs constant detrending
+  - Examples with domain-specific terminology (DC offset, best-fit line)
+  - Actionable guidance for parameter selection
+- Enhanced breakpoint validation in `detrend()`:
+  - Shows specific invalid breakpoint values
+  - Displays valid range based on actual data dimensions
+  - Includes user's original input for easy debugging
+- Comprehensive test suite for error message quality (`test_error_messages.py`)
 
 ### Changed
 - **BREAKING**: Minimum Python version raised from 3.9 to 3.10

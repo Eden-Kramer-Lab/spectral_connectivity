@@ -1293,7 +1293,14 @@ def detrend(
     0.06  # random
     """
     if type not in ["linear", "l", "constant", "c"]:
-        raise ValueError("Trend type must be 'linear' or 'constant'.")
+        raise ValueError(
+            f"Invalid trend type '{type}' is not supported.\n"
+            f"The detrend function only supports linear and constant detrending.\n"
+            f"Valid options are:\n"
+            f"  - 'linear' or 'l': Remove linear trend (best-fit line)\n"
+            f"  - 'constant' or 'c': Remove mean (DC offset)\n"
+            f"Example: detrend(data, type='linear')"
+        )
     data = xp.asarray(data)
     dtype = data.dtype.char
     if dtype not in "dfDF":
@@ -1305,8 +1312,26 @@ def detrend(
         N = dshape[axis]
         bp_array = xp.sort(xp.unique(xp.r_[0, bp, N]))
         if xp.any(bp_array > N):
+            invalid_bp = bp_array[bp_array > N]
+            # Convert to list for display (works with both numpy and cupy)
+            if hasattr(invalid_bp, "get"):  # CuPy array
+                invalid_bp_list = xp.asnumpy(invalid_bp).tolist()
+            else:  # NumPy array or already a list
+                invalid_bp_list = invalid_bp.tolist()
+
+            if hasattr(bp, "__iter__"):
+                if hasattr(bp, "get"):  # CuPy array
+                    bp_list = xp.asnumpy(bp).tolist()
+                else:  # NumPy array or list
+                    bp_list = bp if isinstance(bp, list) else bp.tolist()
+            else:
+                bp_list = [bp]  # Wrap single int in list for display
+
             raise ValueError(
-                "Breakpoints must be less than length " "of data along given axis."
+                f"Breakpoint value(s) {invalid_bp_list} exceed data length.\n"
+                f"Data has {N} samples along axis {axis}, but breakpoint(s) are beyond this range.\n"
+                f"Breakpoints must be in the range [0, {N}).\n"
+                f"Check your breakpoint array: {bp_list}"
             )
         Nreg = len(bp_array) - 1
         # Restructure data so that axis is along first dimension and

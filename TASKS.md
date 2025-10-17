@@ -155,34 +155,40 @@
 
 ### Task 2.2: Improve Error Messages (WHAT/WHY/HOW Pattern)
 
-- [ ] Audit all error messages in codebase
-- [ ] Update error messages to answer:
-  - [ ] WHAT: Clear statement of problem
-  - [ ] WHY: Brief explanation of cause
-  - [ ] HOW: Specific, actionable recovery steps
-- [ ] Priority error messages to improve:
-  - [ ] Detrend type validation (`transforms.py:968`)
-  - [ ] Breakpoint validation (`transforms.py:980-982`)
-  - [ ] GPU import error (already good, verify completeness)
-  - [ ] expectation_type validation (enhance with order checking)
-- [ ] Add order validation for `expectation_type`:
-  - [ ] Detect if user used wrong order (e.g., "trials_time" instead of "time_trials")
-  - [ ] Suggest correct order in error message
-- [ ] Write tests:
-  - [ ] `test_error_messages_are_helpful()` - verify message quality
-  - [ ] `test_expectation_type_suggests_correct_order()`
+- [x] Audit all error messages in codebase
+- [x] Update error messages to answer:
+  - [x] WHAT: Clear statement of problem
+  - [x] WHY: Brief explanation of cause
+  - [x] HOW: Specific, actionable recovery steps
+- [x] Priority error messages to improve:
+  - [x] Detrend type validation (`transforms.py:1296-1303`)
+  - [x] Breakpoint validation (`transforms.py:1314-1335`)
+  - [x] GPU import error (already good, verified completeness)
+  - [x] expectation_type validation (enhanced with order checking)
+- [x] Add order validation for `expectation_type`:
+  - [x] Detect if user used wrong order (e.g., "tapers_trials" instead of "trials_tapers")
+  - [x] Suggest correct order in error message
+- [x] Write tests:
+  - [x] `test_error_messages_are_helpful()` - verify message quality
+  - [x] `test_expectation_type_suggests_correct_order()`
 
 **Files:**
 
-- `spectral_connectivity/transforms.py:968,980-982`
-- `spectral_connectivity/connectivity.py:226-232`
-- All modules (audit)
+- `spectral_connectivity/transforms.py` - Lines 1296-1303, 1314-1335
+- `spectral_connectivity/connectivity.py` - Lines 248-283
+- `tests/test_error_messages.py` - New comprehensive test suite (199 lines, 9 tests)
+- `tests/test_expectation_validation.py` - Updated test assertion
 
 **Acceptance Criteria:**
 
-- [ ] All error messages follow WHAT/WHY/HOW pattern
-- [ ] Users can recover from errors without reading source code
-- [ ] expectation_type catches order mistakes
+- [x] All error messages follow WHAT/WHY/HOW pattern
+- [x] Users can recover from errors without reading source code
+- [x] expectation_type catches order mistakes
+- [x] All tests pass (177/177)
+- [x] Code quality gates pass (ruff, black, mypy)
+- [x] Applied spectral-code-reviewer and scientific-ux-reviewer agents
+
+**Completed:** 2025-10-17
 
 ---
 

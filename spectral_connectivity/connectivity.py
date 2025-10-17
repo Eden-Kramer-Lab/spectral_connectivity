@@ -247,11 +247,40 @@ class Connectivity:
 
         # Validate expectation_type early (fail fast before expensive operations)
         if expectation_type not in EXPECTATION:
-            allowed_values = ", ".join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
-            raise ValueError(
-                f"Invalid expectation_type '{expectation_type}'. "
-                f"Allowed values are: {allowed_values}"
+            # Detect common mistakes: wrong word order
+            words = set(expectation_type.split("_"))
+            valid_words = {"time", "trials", "tapers"}
+            suggestion = None
+
+            if words.issubset(valid_words):
+                # User has the right words, just wrong order
+                # Find the correct ordering
+                for valid_key in EXPECTATION.keys():
+                    if set(valid_key.split("_")) == words:
+                        suggestion = valid_key
+                        break
+
+            error_msg = (
+                f"Invalid expectation_type '{expectation_type}' is not supported.\n"
+                f"This parameter controls which dimensions to average over when computing "
+                f"the cross-spectral matrix.\n"
             )
+
+            if suggestion:
+                error_msg += (
+                    f"\nDid you mean '{suggestion}'? "
+                    f"(The words must be in a specific order)\n"
+                )
+
+            error_msg += "\nValid options are:\n"
+            for key in sorted(EXPECTATION.keys()):
+                error_msg += f"  - '{key}'\n"
+
+            error_msg += (
+                "\nMost common: 'trials_tapers' (average over both trials and tapers)"
+            )
+
+            raise ValueError(error_msg)
 
         # Check for NaN or Inf values (expensive but important validation)
         if not xp.all(xp.isfinite(fourier_coefficients)):
