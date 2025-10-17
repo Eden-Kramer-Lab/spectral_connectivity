@@ -226,9 +226,12 @@ def multitaper_connectivity(
         connectivity_kwargs = {}
     return_dataarray = False  # Default: return dataset
     if method is None:
-        # All implemented methods except internal
-        # TODO is there a better way to get all Connectivity methods?
-        bad_methods = [
+        # All implemented methods except internal and excluded methods
+        import inspect
+
+        # Methods that are not connectivity measures or not supported by xarray interface
+        excluded_methods = {
+            # Properties and utility methods (not connectivity measures)
             "delay",
             "n_observations",
             "frequencies",
@@ -246,11 +249,15 @@ def multitaper_connectivity(
             "generalized_partial_directed_coherence",
             "direct_directed_transfer_function",
             "blockwise_spectral_granger_prediction",
-        ]
+        }
+
+        # Get all public callable methods using inspect
         method = [
-            x
-            for x in dir(Connectivity)
-            if not x.startswith("_") and x not in bad_methods
+            name
+            for name, member in inspect.getmembers(
+                Connectivity, predicate=inspect.isfunction
+            )
+            if not name.startswith("_") and name not in excluded_methods
         ]
     elif isinstance(method, str):
         method = [method]  # Convert to list

@@ -136,7 +136,11 @@ def adjust_for_multiple_comparisons(
     ...     p_vals, method="Bonferroni_correction"
     ... )
     """
-    # TODO: add axis keyword?
+    # Note: This function treats all p-values as a single family of tests by
+    # flattening the input array. This is the standard approach for multiple
+    # comparison correction. An axis parameter could be added in the future if
+    # there's a need to correct along specific dimensions independently, but
+    # current use cases don't require this functionality.
     return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
 
 

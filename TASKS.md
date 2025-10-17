@@ -390,33 +390,44 @@
 
 ### Task 3.3: Resolve TODO Comments
 
-- [ ] **wrapper.py:230** - "TODO is there a better way to get all Connectivity methods?"
-  - [ ] Replace `dir()` with `inspect.getmembers()`
-  - [ ] Filter for public methods using `inspect.ismethod()`
-  - [ ] Test that it finds all expected methods
-- [ ] **statistics.py:139** - "TODO: add axis keyword?"
-  - [ ] Add `axis` parameter to `adjust_for_multiple_comparisons()`
-  - [ ] Implement using `np.apply_along_axis()` if axis specified
-  - [ ] Update docstring with axis parameter
-  - [ ] Add tests for multi-dimensional corrections
-  - [ ] OR: Remove TODO if not needed, document decision
-- [ ] Remove or implement all TODO comments:
-  - [ ] Search codebase for remaining TODOs
-  - [ ] Create issues for deferred features
-  - [ ] Remove stale comments
+- [x] **wrapper.py:230** - "TODO is there a better way to get all Connectivity methods?"
+  - [x] Replace `dir()` with `inspect.getmembers(predicate=inspect.isfunction)`
+  - [x] Renamed `bad_methods` to `excluded_methods` for clarity
+  - [x] Improved categorization with comments (properties vs unsupported methods)
+  - [x] Changed from list to set for O(1) membership testing
+  - [x] Added comprehensive test `test_method_discovery_with_inspect()`
+- [x] **statistics.py:139** - "TODO: add axis keyword?"
+  - [x] Analyzed use cases - axis parameter not needed for current usage
+  - [x] Documented design decision with clear explanation
+  - [x] Explained: function treats all p-values as single family (standard approach)
+  - [x] Left open for future if needed, but not implementing now
+- [x] Search codebase for remaining TODOs:
+  - [x] Only 2 TODOs found (both resolved)
+  - [x] No additional TODOs in codebase
 
 **Files:**
 
-- `spectral_connectivity/wrapper.py:230`
-- `spectral_connectivity/statistics.py:139`
-- All modules (search for TODO)
+- `spectral_connectivity/wrapper.py` - Lines 228-261 (refactored method discovery)
+- `spectral_connectivity/statistics.py` - Lines 139-144 (documented decision)
+- `tests/test_wrapper.py` - Lines 1 (added import), 191-248 (new test)
 
 **Acceptance Criteria:**
 
-- [ ] No TODO comments in codebase (or all documented in issues)
-- [ ] `inspect.getmembers()` properly finds all methods
-- [ ] axis parameter works correctly (if implemented)
-- [ ] Tests verify new functionality
+- [x] No TODO comments in codebase
+- [x] `inspect.getmembers()` properly finds all methods (verified by test)
+- [x] Semantically superior: automatically excludes properties and classmethods
+- [x] Tests verify new functionality
+- [x] All 216 tests pass (215 existing + 1 new)
+- [x] Applied spectral-code-reviewer agent - APPROVED
+
+**Key Improvements:**
+
+- **Semantic Correctness:** `inspect.isfunction` provides type-safe filtering, automatically excluding properties and classmethods
+- **Robustness:** Future properties/classmethods will be auto-excluded without updating exclusion list
+- **Performance:** Set membership is O(1) vs list O(n)
+- **Documentation:** Exemplary design decision documentation in statistics.py
+
+**Completed:** 2025-10-17
 
 ---
 

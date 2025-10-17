@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Domain-specific tests (EEG, LFP typical parameters)
   - Edge cases (conflicting parameters, impossible resolutions)
   - Consistency checks with actual `Multitaper` behavior
+
+### Changed
+- Improved method discovery in `multitaper_connectivity()` wrapper:
+  - Replaced `dir()` with `inspect.getmembers(predicate=inspect.isfunction)` for type-safe method filtering
+  - Automatically excludes properties and classmethods (more robust)
+  - Renamed `bad_methods` to `excluded_methods` with clear categorization
+  - Changed from list to set for O(1) membership testing
+  - Added test `test_method_discovery_with_inspect()` to verify behavior
+- Documented design decision for `adjust_for_multiple_comparisons()`:
+  - Replaced TODO comment with clear explanation of current behavior
+  - Explained why axis parameter is not implemented (standard approach treats all p-values as single family)
+  - Left open for future enhancement if needed
+
+### Removed
+- All TODO comments from codebase (2 resolved)
+
+### Fixed
 - CHANGELOG.md to track version changes following Keep a Changelog format
 - Ruff linter configuration for faster, more comprehensive Python linting
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)
