@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive test suite for advanced connectivity measures (`tests/test_advanced_connectivity.py`):
+  - 18 test methods covering `canonical_coherence()`, `global_coherence()`, and `group_delay()`
+  - Tests validate output shapes, value ranges, and mathematical properties (symmetry, antisymmetry)
+  - Integration tests for complete Multitaper → Connectivity → advanced measures workflow
+  - Tests handle edge cases: different group sizes, single signals, non-contiguous labels
+  - Graceful handling of group_delay edge case when no frequencies are significant
 - Parameter helper functions for guided multitaper analysis:
   - `estimate_frequency_resolution()`: Calculate frequency resolution from parameters
   - `estimate_n_tapers()`: Calculate number of tapers from time-halfbandwidth product
