@@ -59,7 +59,7 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "**.ipynb_checkpoints",
-    "setup.py",
+    "pyproject.toml",
     "README.md",
 ]
 

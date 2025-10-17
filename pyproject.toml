@@ -1,0 +1,165 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spectral_connectivity"
+dynamic = ["version"]
+description = "Frequency domain functional and directed connectivity analysis tools for electrophysiological data"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Eric Denovellis", email = "eric.denovellis@ucsf.edu" }]
+license = { text = "GPL-3.0-only" }
+keywords = [
+    "python",
+    "neuroscience",
+    "electrophysiology",
+    "multitaper",
+    "spectrogram",
+    "frequency-domain",
+    "connectivity",
+    "coherence",
+    "granger-causality",
+]
+
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "numpy>=1.24,<3.0",
+    "scipy>=1.10",
+    "xarray>=2023.1",
+    "matplotlib>=3.7"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "syrupy>=4.0",
+    "nitime",
+    "black>=24.0",
+    "ruff>=0.8.0",
+    "mypy>=1.8",
+    "numpydoc>=1.6",
+]
+gpu = ["cupy-cuda12x>=12.0"]
+
+[project.urls]
+Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
+Repository = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
+Documentation = "https://spectral-connectivity.readthedocs.io/en/latest/"
+"Bug Reports" = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues"
+Changelog = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md"
+"Source Code" = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
+"Issue Tracker" = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues"
+
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Tool configurations for linting/formatting
+[tool.black]
+target-version = ["py310", "py311", "py312", "py313"]
+line-length = 88
+skip-string-normalization = false
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = [
+    ".venv",
+    "docs",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+# Enable pycodestyle (E, W), Pyflakes (F), isort (I), numpy-specific (NPY),
+# pydocstyle (D), pyupgrade (UP), and more
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "NPY",   # numpy-specific rules
+    "RUF",   # Ruff-specific rules
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "B905",  # zip without explicit strict parameter
+    "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
+    "N803",  # argument name should be lowercase (conflicts with scientific notation)
+    "N806",  # variable in function should be lowercase (conflicts with scientific notation)
+    "NPY002", # numpy random legacy - requires significant test refactoring, can be done in future PR
+    "RUF002", # docstring contains ambiguous unicode characters (mathematical symbols are intentional)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"tests/*.py" = ["D"]      # Don't require docstrings in tests
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+known-first-party = ["spectral_connectivity"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+strict_optional = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+warn_return_any = false
+warn_unreachable = true
+show_error_codes = true
+no_implicit_optional = true
+
+# Per-module options
+[[tool.mypy.overrides]]
+module = [
+    "nitime.*",
+    "cupy.*",
+    "cupyx.*",
+    "scipy.*",
+    "xarray.*"
+]
+ignore_missing_imports = true
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "spectral_connectivity/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["spectral_connectivity"]

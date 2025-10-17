@@ -1,0 +1,342 @@
+# serializer version: 1
+# name: test_baccala_example2_directed_transfer_function[dtf_at_25hz]
+  list([
+    list([
+      0.7098937741510488,
+      0.04170307980738457,
+      0.24840314604156621,
+    ]),
+    list([
+      0.19990826425127378,
+      0.4529154194325527,
+      0.34717631631617346,
+    ]),
+    list([
+      0.057228935759376855,
+      0.1397690125410971,
+      0.8030020516995261,
+    ]),
+  ])
+# ---
+# name: test_baccala_example2_directed_transfer_function[dtf_shape]
+  tuple(
+    1,
+    500,
+    3,
+    3,
+  )
+# ---
+# name: test_baccala_example2_partial_directed_coherence[pdc_at_25hz]
+  list([
+    list([
+      0.695584667715585,
+      0.10932855637329505,
+      0.07902806469911004,
+    ]),
+    list([
+      0.3043583373045675,
+      0.7941124097945432,
+      0.4179724448625634,
+    ]),
+    list([
+      5.699497984730916e-05,
+      0.09655903383216162,
+      0.5029994904383266,
+    ]),
+  ])
+# ---
+# name: test_baccala_example2_partial_directed_coherence[pdc_shape]
+  tuple(
+    1,
+    500,
+    3,
+    3,
+  )
+# ---
+# name: test_dhamala_example1_direct_dtf[ddtf_at_30hz]
+  list([
+    list([
+      0.029642439730251016,
+      0.0004439107406330511,
+      0.009674579344505102,
+    ]),
+    list([
+      2.9065855469685593e-05,
+      0.017084639325064658,
+      9.668097595418112e-06,
+    ]),
+    list([
+      7.296534873537972e-05,
+      0.012195537594898111,
+      0.01780881060173541,
+    ]),
+  ])
+# ---
+# name: test_dhamala_example1_direct_dtf[ddtf_shape]
+  tuple(
+    1,
+    2000,
+    3,
+    3,
+  )
+# ---
+# name: test_dhamala_example1_subset_granger[subset_gc_pair0to1_at_30hz]
+  0.6382974682992835
+# ---
+# name: test_dhamala_example1_subset_granger[subset_gc_shape]
+  tuple(
+    1,
+    2000,
+    3,
+    3,
+  )
+# ---
+# name: test_ding_example1_generalized_pdc[gpdc_at_50hz]
+  list([
+    list([
+      0.9303429300290544,
+      0.0002665085007102023,
+    ]),
+    list([
+      0.06965706997094563,
+      0.9997334914992897,
+    ]),
+  ])
+# ---
+# name: test_ding_example1_generalized_pdc[gpdc_shape]
+  tuple(
+    1,
+    500,
+    2,
+    2,
+  )
+# ---
+# name: test_ding_example1_granger_causality[granger_shape]
+  tuple(
+    1,
+    500,
+    2,
+    2,
+  )
+# ---
+# name: test_ding_example1_granger_causality[granger_x1_to_x2_at_50hz]
+  0.05835666385356131
+# ---
+# name: test_ding_example1_granger_causality[granger_x2_to_x1_at_50hz]
+  0.00020339332917718167
+# ---
+# name: test_intro_basic_coherence[coherence_at_200hz]
+  0.9809957145809289
+# ---
+# name: test_intro_basic_coherence[coherence_shape]
+  tuple(
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_basic_power_spectrum[power_at_200hz]
+  list([
+    1.5810365370744819,
+    1.650108418360882,
+  ])
+# ---
+# name: test_intro_basic_power_spectrum[power_shape]
+  tuple(
+    30013,
+    2,
+  )
+# ---
+# name: test_intro_canonical_coherence[canonical_coherence_at_50hz]
+  1.0000000000000013
+# ---
+# name: test_intro_canonical_coherence[canonical_coherence_labels]
+  list([
+    0,
+    1,
+  ])
+# ---
+# name: test_intro_canonical_coherence[canonical_coherence_shape]
+  tuple(
+    1,
+    500,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_coherence_phase[phase_at_200hz]
+  1.6138623399664196
+# ---
+# name: test_intro_coherence_phase[phase_shape]
+  tuple(
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_coherence_with_time_windows[coherence_time_shape]
+  tuple(
+    30,
+    1000,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_coherence_with_time_windows[frequency_resolution]
+  5.0
+# ---
+# name: test_intro_coherency[coherency_magnitude_at_200hz]
+  0.9904522777907722
+# ---
+# name: test_intro_coherency[coherency_phase_at_200hz]
+  -1.6138623399664196
+# ---
+# name: test_intro_coherency[coherency_shape]
+  tuple(
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_debiased_squared_phase_lag_index[debiased_pli2_at_200hz]
+  0.0
+# ---
+# name: test_intro_debiased_squared_phase_lag_index[debiased_pli2_shape]
+  tuple(
+    1,
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_debiased_squared_weighted_phase_lag_index[dwpli2_at_200hz]
+  0.995062950359831
+# ---
+# name: test_intro_debiased_squared_weighted_phase_lag_index[dwpli2_shape]
+  tuple(
+    1,
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_delay[delay_mean]
+  nan
+# ---
+# name: test_intro_delay[delay_shape]
+  tuple(
+    12005,
+    7,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_global_coherence[global_coherence_components_shape]
+  tuple(
+    1,
+    1000,
+    4,
+    1,
+  )
+# ---
+# name: test_intro_global_coherence[global_coherence_mean]
+  0.002472688733431512
+# ---
+# name: test_intro_global_coherence[global_coherence_shape]
+  tuple(
+    1,
+    1000,
+    1,
+  )
+# ---
+# name: test_intro_group_delay[group_delay_mean]
+  nan
+# ---
+# name: test_intro_group_delay[group_delay_r_value_shape]
+  tuple(
+    2,
+    2,
+  )
+# ---
+# name: test_intro_group_delay[group_delay_shape]
+  tuple(
+    2,
+    2,
+  )
+# ---
+# name: test_intro_group_delay[group_delay_slope_shape]
+  tuple(
+    2,
+    2,
+  )
+# ---
+# name: test_intro_imaginary_coherence[imag_coherence_at_200hz]
+  0.9895339329869453
+# ---
+# name: test_intro_imaginary_coherence[imag_coherence_shape]
+  tuple(
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_multitaper_connectivity_wrapper[coordinate_names]
+  list([
+    'time',
+    'frequency',
+    'source',
+    'target',
+  ])
+# ---
+# name: test_intro_multitaper_connectivity_wrapper[output_dimensions]
+  list([
+    'time',
+    'frequency',
+    'source',
+    'target',
+  ])
+# ---
+# name: test_intro_multitaper_connectivity_wrapper[output_type]
+  'DataArray'
+# ---
+# name: test_intro_pairwise_phase_consistency[ppc_at_200hz]
+  0.16570573296183747
+# ---
+# name: test_intro_pairwise_phase_consistency[ppc_shape]
+  tuple(
+    1,
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_phase_locking_value[plv_at_200hz]
+  0.5083356135134324
+# ---
+# name: test_intro_phase_locking_value[plv_shape]
+  tuple(
+    1,
+    30013,
+    2,
+    2,
+  )
+# ---
+# name: test_intro_phase_slope_index[psi_mean]
+  nan
+# ---
+# name: test_intro_phase_slope_index[psi_shape]
+  tuple(
+    2,
+    2,
+  )
+# ---
+# name: test_intro_weighted_phase_lag_index[wpli_at_200hz]
+  -0.9982088764555365
+# ---
+# name: test_intro_weighted_phase_lag_index[wpli_shape]
+  tuple(
+    30013,
+    2,
+    2,
+  )
+# ---

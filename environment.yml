@@ -3,21 +3,35 @@ channels:
 - conda-forge
 - defaults
 dependencies:
-- numpy >= 1.11
-- matplotlib
-- scipy
-- xarray
+# Core dependencies (match pyproject.toml)
+- python>=3.10
+- "numpy >= 1.24, <3.0"
+- "scipy >= 1.10"
+- "xarray >= 2023.1"
+- "matplotlib >= 3.7"
 - nitime
-- "pytest >= 2.7.1"
-- pytest-cov
-- coveralls
-- setuptools
-- black
-- flake8
-- jupyter
-- numpydoc
+
+# Development and testing
+- "pytest >= 8.0"
+- "pytest-cov >= 4.1"
+- "mypy >= 1.8"
+
+# Code formatting and linting
+- "black >= 24.0"
+- "ruff >= 0.8.0"
+
+# Documentation
+- "numpydoc >= 1.6"
 - sphinx
 - sphinx-copybutton
 - sphinx-autoapi
+
+# Jupyter environment
 - jupyter
 - jupyterlab
+
+# CI/Build tools
+- coveralls
+- hatch
+- build
+- twine

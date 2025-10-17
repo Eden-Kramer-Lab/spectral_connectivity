@@ -1,0 +1,59 @@
+{% set name = "spectral_connectivity" %}
+{% set version = "1.1.2" %}
+
+package:
+  name: {{ name|lower }}
+  version: {{ version }}
+
+source:
+  url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/spectral_connectivity-{{ version }}.tar.gz
+  sha256: # This will be automatically filled by conda-build from PyPI
+
+build:
+  number: 0
+  noarch: python
+  script: {{ PYTHON }} -m pip install . -vv
+  entry_points:
+    # Add any console scripts here if you have them
+
+requirements:
+  host:
+    - python >=3.9
+    - pip
+    - hatchling
+    - hatch-vcs
+  run:
+    - python >=3.9
+    - numpy >=1.21
+    - scipy >=1.7
+    - xarray >=0.20
+    - matplotlib >=3.4
+
+test:
+  imports:
+    - spectral_connectivity
+    - spectral_connectivity.connectivity
+    - spectral_connectivity.transforms
+    - spectral_connectivity.wrapper
+  commands:
+    - python -c "import spectral_connectivity; print(spectral_connectivity.__version__)"
+  requires:
+    - pytest
+
+about:
+  home: https://github.com/Eden-Kramer-Lab/spectral_connectivity
+  license: GPL-3.0-only
+  license_family: GPL3
+  license_file: LICENSE
+  summary: Frequency domain functional and directed connectivity analysis tools for electrophysiological data
+  description: |
+    spectral_connectivity is a Python software package that computes multitaper
+    spectral estimates and frequency-domain brain connectivity measures such as
+    coherence, spectral granger causality, and the phase lag index using the
+    multitaper Fourier transform.
+  doc_url: https://spectral-connectivity.readthedocs.io/
+  dev_url: https://github.com/Eden-Kramer-Lab/spectral_connectivity
+
+extra:
+  recipe-maintainers:
+    - edeno

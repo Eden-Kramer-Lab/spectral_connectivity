@@ -1,6 +1,6 @@
 # spectral_connectivity
 
-[![PR Test](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/PR-test.yml/badge.svg)](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/PR-test.yml)
+[![Test, Build, and Publish](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/release.yml/badge.svg)](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/release.yml)
 [![DOI](https://zenodo.org/badge/104382538.svg)](https://zenodo.org/badge/latestdoi/104382538)
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/Eden-Kramer-Lab/spectral_connectivity/master)
 [![status](https://joss.theoj.org/papers/27eb33e699c9ea723783c44576d081bb/status.svg)](https://joss.theoj.org/papers/27eb33e699c9ea723783c44576d081bb)
@@ -13,10 +13,12 @@
 | [**Documentation**](#documentation)
 | [**Usage Example**](#usage-example)
 | [**Installation**](#installation)
-| [**Citation**](#citation)
 | [**Developer Installation**](#developer-installation)
+| [**Contributing**](#contributing)
+| [**License**](#license)
+| [**Citation**](#citation)
 
-### What is spectral_connectivity?
+## What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
@@ -62,13 +64,9 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 
 ### Documentation
 
-See the documentation [here](https://spectral-connectivity.readthedocs.io/en/latest/).
+See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
 
-### Citation
-
-For citation, please use the following:
-
-> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
+For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
 
 ### Implemented Measures
 
@@ -108,6 +106,167 @@ Directed
 
 See [environment.yml](environment.yml) for the most current list of dependencies.
 
+### GPU Acceleration
+
+`spectral_connectivity` supports GPU acceleration using [CuPy](https://cupy.dev/), which can provide significant speedups for large datasets (10-100x faster depending on data size and GPU hardware).
+
+#### GPU Setup Options
+
+There are three ways to enable GPU acceleration:
+
+**Option 1: Environment Variable (Shell)**
+
+```bash
+export SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
+python your_script.py
+```
+
+**Option 2: Environment Variable (Python Script)**
+
+```python
+import os
+# IMPORTANT: Must set BEFORE importing spectral_connectivity
+# (Python loads modules once; changing the variable after import has no effect)
+os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'
+
+from spectral_connectivity import Multitaper, Connectivity
+
+# Verify GPU is active
+import spectral_connectivity as sc
+backend = sc.get_compute_backend()
+print(backend['message'])
+# Should print: "Using GPU backend with CuPy on <your GPU name>"
+```
+
+**Option 3: Environment Variable (Jupyter Notebook)**
+
+```python
+# In first cell (before any imports):
+%env SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
+
+# In second cell:
+from spectral_connectivity import Multitaper, Connectivity
+import spectral_connectivity as sc
+
+# Verify GPU is active
+backend = sc.get_compute_backend()
+print(f"Backend: {backend['backend']}")
+print(f"Device: {backend['device_name']}")
+# Should show: Backend: gpu, Device: <your GPU name>
+
+# Note: If you already imported spectral_connectivity before setting the
+# environment variable, you must restart your kernel for changes to take effect:
+# Kernel → Restart & Clear Output, then run cells again
+```
+
+#### Installing CuPy
+
+**Recommended (conda - auto-detects CUDA version):**
+
+```bash
+conda install -c conda-forge cupy
+```
+
+**Alternative (pip - auto-detect, may be slower on first run):**
+
+```bash
+pip install cupy
+```
+
+**Advanced (pip - specify CUDA version for faster install):**
+
+```bash
+# Check your CUDA version first: nvidia-smi
+pip install cupy-cuda11x  # For CUDA 11.x
+pip install cupy-cuda12x  # For CUDA 12.x
+```
+
+See [CuPy Installation Guide](https://docs.cupy.dev/en/stable/install.html) for detailed instructions and GPU-specific requirements.
+
+#### Checking GPU Status
+
+Use `get_compute_backend()` to check if GPU acceleration is enabled:
+
+```python
+import spectral_connectivity as sc
+
+backend = sc.get_compute_backend()
+print(backend['message'])
+# Example output (GPU enabled):
+# "Using GPU backend with CuPy on NVIDIA Tesla V100-SXM2-16GB."
+
+# Or if GPU not available:
+# "Using CPU backend with NumPy. To enable GPU acceleration:
+#   1. Install CuPy: 'conda install -c conda-forge cupy' or 'pip install cupy'
+#   2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing
+# See documentation for detailed setup instructions."
+
+# Check all details
+for key, value in backend.items():
+    print(f"{key}: {value}")
+```
+
+Output fields:
+- `backend`: Either "cpu" or "gpu"
+- `gpu_enabled`: Whether GPU was requested via environment variable
+- `gpu_available`: Whether CuPy is installed and importable
+- `device_name`: Name of compute device (e.g., "CPU" or "GPU (Compute Capability 7.5)")
+- `message`: Human-readable explanation of current configuration
+
+#### Troubleshooting GPU Issues
+
+**Issue: "GPU support was requested but CuPy is not installed"**
+
+Solution: Install CuPy as shown above, ensuring the CUDA version matches your system.
+
+**Issue: GPU not being used even after setting environment variable**
+
+Possible causes:
+1. Environment variable set *after* importing spectral_connectivity
+   - Solution: Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before any imports
+   - In scripts: Move the `os.environ[...]` line to the very top, before all spectral_connectivity imports
+   - In notebooks: Restart kernel (Kernel → Restart & Clear Output) and set variable in first cell
+2. CuPy not installed or CUDA version mismatch
+   - Solution: Run `python -c "import cupy; print(cupy.__version__)"` to verify installation
+3. CUDA not available on system
+   - Solution: Check CUDA installation with `nvidia-smi`
+4. Environment variable set in script but after import statement
+   - Solution: Ensure `os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'` appears before `from spectral_connectivity import ...`
+
+**Issue: Out of memory errors on GPU**
+
+Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
+```python
+# Remove or unset the environment variable
+os.environ.pop('SPECTRAL_CONNECTIVITY_ENABLE_GPU', None)
+```
+
+**Issue: Need to check GPU vs CPU performance**
+
+Use `get_compute_backend()` to verify which backend is active, then compare timing:
+
+```python
+import time
+import spectral_connectivity as sc
+
+backend = sc.get_compute_backend()
+print(f"Running on: {backend['backend']}")
+
+start = time.time()
+# Your spectral connectivity code here
+elapsed = time.time() - start
+print(f"Elapsed time: {elapsed:.2f}s")
+```
+
+#### When to Use GPU Acceleration
+
+GPU acceleration is most beneficial for:
+- Large datasets (many signals, long recordings, or many trials)
+- High frequency resolution (small time windows, many tapers)
+- Computing multiple connectivity measures from the same data
+
+For small datasets (< 10 signals, < 1000 time points), CPU may be faster due to GPU transfer overhead.
+
 ### Installation
 
 ```bash
@@ -127,19 +286,79 @@ If you want to make contributions to this library, please use this installation.
 1. Install miniconda (or anaconda) if it isn't already installed. Type into bash (or install from the anaconda website):
 
 ```bash
-wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
 bash miniconda.sh -b -p $HOME/miniconda
 export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
-2. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
+1. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
 
 ```bash
 conda env create -f environment.yml
 conda activate spectral_connectivity
 pip install -e .
 ```
+
+## Releases
+
+This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based on git tags. The version is automatically determined from the repository state:
+
+- **Tagged releases**: `1.2.0`
+- **Development versions**: `1.2.0.dev5+g1a2b3c4` (5 commits since tag + git hash)
+
+### Making a Release
+
+To create a new release:
+
+```bash
+# 1. Update version tag
+git tag v1.2.0
+git push origin v1.2.0
+
+# 2. Build and publish to PyPI
+hatch build
+twine upload dist/*
+
+# 3. Build and publish to conda
+conda build conda-recipe/ --output-folder ./conda-builds
+anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
+```
+
+The version number is automatically extracted from the git tag (without the 'v' prefix).
+
+### Conda Package
+
+This package is also available on conda via the `edeno` channel:
+
+```bash
+conda install -c edeno spectral_connectivity
+```
+
+**Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
+- 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
+- Or volunteer to help maintain the conda-forge feedstock
+
+## Contributing
+
+We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+
++ How to report bugs and request features
++ Development workflow and coding standards
++ Testing requirements
++ Code review process
+
+For questions or discussions, please open an issue on GitHub.
+
+## License
+
+This project is licensed under the **GPL-3.0** License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+For citation, please use the following:
+
+> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
 
 ### Recent publications and pre-prints that used this software
 

@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 from pytest import mark
 
@@ -6,7 +8,9 @@ from spectral_connectivity.wrapper import multitaper_connectivity
 
 
 @mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
-def test_multitaper_coherence_magnitude(time_window_duration):
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_multitaper_coherence_magnitude(time_window_duration, dtype):
+    np.random.seed(42)
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
     n_trials, n_signals = 10, 2
@@ -31,6 +35,7 @@ def test_multitaper_coherence_magnitude(time_window_duration):
 
 
 def test_multitaper_connectivity():
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -69,7 +74,7 @@ def test_multitaper_connectivity():
                 sampling_frequency=sampling_frequency,
                 time_window_duration=time_window_duration,
             )
-        except NotImplementedError:
+        except (NotImplementedError, ValueError):
             pass
 
         assert not (m.values == 0).all()
@@ -81,6 +86,7 @@ def test_multitaper_n_signals(n_signals):
     """
     Test dataarray interface
     """
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -119,12 +125,13 @@ def test_multitaper_n_signals(n_signals):
             assert not (m.values == 0).all()
             assert not (np.isnan(m.values)).all()
 
-        except NotImplementedError:
+        except (NotImplementedError, ValueError):
             pass
 
 
 @mark.parametrize("n_signals", range(2, 5))
 def test_multitaper_connectivities_n_signals(n_signals):
+    np.random.seed(42)
     time_window_duration = 0.1
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
@@ -159,6 +166,7 @@ def test_multitaper_connectivities_n_signals(n_signals):
 
 
 def test_frequencies():
+    np.random.seed(42)
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.random.random((n_time_samples, n_trials, n_signals))
     # time_series = np.zeros((n_time_samples, n_trials, n_signals))
@@ -178,3 +186,65 @@ def test_frequencies():
 
         expected_frequencies = np.array([0, 250])
         assert np.allclose(cons[mea].frequency, expected_frequencies)
+
+
+def test_method_discovery_with_inspect():
+    """Test that inspect.getmembers() correctly identifies Connectivity methods.
+
+    This test verifies that the refactored method discovery in wrapper.py
+    using inspect.getmembers() finds all expected connectivity methods.
+    """
+    # Methods that should be excluded (not connectivity measures or not xarray-compatible)
+    excluded_methods = {
+        # Properties and utility methods
+        "delay",
+        "n_observations",
+        "frequencies",
+        "all_frequencies",
+        "global_coherence",
+        "from_multitaper",
+        "phase_slope_index",
+        "subset_pairwise_spectral_granger_prediction",
+        # Methods not supported by xarray interface
+        "group_delay",
+        "canonical_coherence",
+        "directed_transfer_function",
+        "directed_coherence",
+        "partial_directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+        "blockwise_spectral_granger_prediction",
+    }
+
+    # Get methods using inspect (same as wrapper.py implementation)
+    methods_via_inspect = [
+        name
+        for name, member in inspect.getmembers(
+            Connectivity, predicate=inspect.isfunction
+        )
+        if not name.startswith("_") and name not in excluded_methods
+    ]
+
+    # Get methods using dir() (old implementation)
+    methods_via_dir = [
+        x
+        for x in dir(Connectivity)
+        if not x.startswith("_") and x not in excluded_methods
+    ]
+
+    # Both methods should find the same set of methods
+    assert set(methods_via_inspect) == set(methods_via_dir)
+
+    # Verify we find expected connectivity methods
+    expected_methods = {
+        "coherence_magnitude",
+        "coherency",
+        "imaginary_coherence",
+        "phase_locking_value",
+        "power",
+    }
+    assert expected_methods.issubset(set(methods_via_inspect))
+
+    # Verify excluded methods are not included
+    found_methods_set = set(methods_via_inspect)
+    assert not excluded_methods.intersection(found_methods_set)

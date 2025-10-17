@@ -13,11 +13,15 @@ Please note that we **cannot**, in general, answer questions about particular co
 Code contributions are always welcome, from simple bug fixes to new features. To contribute code:
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
-2. Run [black](https://github.com/python/black) and [flake8](http://flake8.pycqa.org/en/latest/) on your code.
-3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through github actions.
+2. Run code quality tools on your changes:
+   - Format with [black](https://github.com/psf/black): `black spectral_connectivity/ tests/`
+   - Lint with [ruff](https://github.com/astral-sh/ruff): `ruff check spectral_connectivity/ tests/`
+   - Type check with [mypy](https://mypy.readthedocs.io/): `mypy spectral_connectivity/`
+3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
-6. Submit a pull request.
+6. Update [CHANGELOG.md](CHANGELOG.md) with your changes under the "Unreleased" section.
+7. Submit a pull request.
 
 If you are fixing a known issue, please add the issue number to the PR message.
 
@@ -31,32 +35,48 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ### How to make a release
 
-1. Bump the version number and tag the commit
-2. Upload to pypi
+This project uses an automated release workflow. To create a new release:
 
-```bash
-git clean -xfd
-python setup.py sdist bdist_wheel
-twine upload dist/*
-```
+1. **Update CHANGELOG.md**
+   - Move changes from "Unreleased" section to a new version section
+   - Use format: `## [X.Y.Z] - YYYY-MM-DD`
+   - Commit the changelog update
 
-3. Upload to conda. This requires anaconda and conda-build.
+2. **Create and push a version tag**
+   ```bash
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
+   ```
 
-```bash
-CONDA_DIR=~/miniconda3
-USER=edeno
+3. **Automated workflow** (`.github/workflows/release.yml`)
+   The release workflow will automatically:
+   - Run code quality checks (black, ruff, mypy)
+   - Run tests on Python 3.10, 3.11, 3.12, and 3.13
+   - Build source distribution and wheel
+   - Test the built packages
+   - Publish to PyPI (requires trusted publishing setup)
+   - Create a GitHub release with notes extracted from CHANGELOG.md
 
-conda skeleton pypi spectral_connectivity --noarch-python --python-version 3.6
+4. **Manual PyPI upload** (if needed)
+   If you need to publish manually:
+   ```bash
+   python -m build
+   twine check dist/*
+   twine upload dist/*
+   ```
 
-conda build spectral_connectivity --no-anaconda-upload --python 3.6
+5. **Conda release** (requires anaconda and conda-build)
+   ```bash
+   conda build conda-recipe/ --output-folder ./conda-builds
+   anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
+   ```
 
-anaconda upload $CONDA_DIR/conda-bld/*/spectral_connectivity-*.tar.bz2 -u $USER --skip
+### Version Numbering
 
-rm -r spectral_connectivity
-conda build purge-all
-```
-
-4. Release on github.
+This project follows [Semantic Versioning](https://semver.org/):
+- **MAJOR** version for incompatible API changes
+- **MINOR** version for new functionality in a backwards compatible manner
+- **PATCH** version for backwards compatible bug fixes
 
 ## Authorship on manuscripts
 
