@@ -194,31 +194,65 @@
 
 ### Task 2.3: Add GPU Status Utility Function
 
-- [ ] Create `get_compute_backend()` function in `__init__.py`:
-  - [ ] Return dict with: backend, gpu_enabled, gpu_available, device_name, message
-  - [ ] Check if cupy is in sys.modules
-  - [ ] Check if cupy is importable (but don't import if not requested)
-  - [ ] Provide helpful message for each case
-- [ ] Update GPU initialization code to log device info
-- [ ] Improve README documentation:
-  - [ ] Add section on GPU setup with all 3 options (env var, script, notebook)
-  - [ ] Include CuPy installation instructions
-  - [ ] Add troubleshooting for common GPU issues
-- [ ] Write tests:
-  - [ ] `test_get_compute_backend_cpu()` - CPU mode
-  - [ ] `test_get_compute_backend_gpu()` - GPU mode (if available)
+- [x] Create `get_compute_backend()` function in `utils.py`:
+  - [x] Return dict with: backend, gpu_enabled, gpu_available, device_name, message
+  - [x] Check if cupy is in sys.modules
+  - [x] Check if cupy is importable (but don't import if not requested)
+  - [x] Provide helpful message for each case (4 different scenarios)
+  - [x] Show actual GPU model name (e.g., "NVIDIA Tesla V100") instead of compute capability
+  - [x] Add example return value to docstring
+- [x] Update GPU initialization code to log device info
+  - [x] Enhanced logging in transforms.py to show GPU model name
+  - [x] Enhanced logging in connectivity.py to show GPU model name
+- [x] Improve README documentation:
+  - [x] Add comprehensive GPU Acceleration section (130+ lines)
+  - [x] Include all 3 setup options (env var shell, script, notebook)
+  - [x] Add verification steps to each setup example
+  - [x] Simplified CuPy installation instructions (conda recommended)
+  - [x] Add troubleshooting for 4 common GPU issues
+  - [x] Explain import timing requirement (why "before importing" matters)
+  - [x] Add example outputs to code examples
+  - [x] Include kernel restart guidance for notebooks
+  - [x] Provide guidance on when to use GPU acceleration
+- [x] Write comprehensive tests:
+  - [x] 13 test methods covering all scenarios
+  - [x] `test_cpu_mode_default()` - CPU mode default
+  - [x] `test_cpu_mode_explicit_false()` - CPU mode explicit
+  - [x] `test_gpu_mode_when_cupy_available()` - GPU mode with CuPy
+  - [x] `test_gpu_mode_when_cupy_not_available()` - GPU mode without CuPy
+  - [x] `test_return_value_structure()` - Validate return dict structure
+  - [x] `test_backend_values()` - Validate backend field values
+  - [x] `test_boolean_fields()` - Validate boolean types
+  - [x] `test_device_name_present()` - Validate device_name field
+  - [x] `test_message_is_helpful()` - Validate message quality
+  - [x] `test_detect_cupy_import_state()` - Import state detection
+  - [x] `test_environment_variable_respected()` - Env var handling
+  - [x] `test_cpu_backend_details()` - CPU backend details
+  - [x] Additional integration tests for consistency
+- [x] Apply spectral-code-reviewer and scientific-ux-reviewer agents
+- [x] Address all UX feedback (GPU model names, import timing, examples)
 
 **Files:**
 
-- `spectral_connectivity/__init__.py`
-- `README.md`
-- `tests/test_gpu.py` (new file)
+- `spectral_connectivity/utils.py` - NEW module with `get_compute_backend()`
+- `spectral_connectivity/__init__.py` - Import and re-export from utils
+- `spectral_connectivity/transforms.py` - Enhanced GPU device logging (lines 19-32)
+- `spectral_connectivity/connectivity.py` - Enhanced GPU device logging (lines 34-47)
+- `README.md` - Comprehensive GPU Acceleration section (lines 109-260)
+- `tests/test_gpu.py` - NEW comprehensive test suite (151 lines, 13 tests)
 
 **Acceptance Criteria:**
 
-- [ ] Users can check GPU status programmatically
-- [ ] Clear documentation for all GPU setup methods
-- [ ] Helpful error messages when GPU requested but unavailable
+- [x] Users can check GPU status programmatically
+- [x] Clear documentation for all GPU setup methods
+- [x] Helpful error messages when GPU requested but unavailable
+- [x] GPU device shows actual model name (e.g., "NVIDIA Tesla V100-SXM2-16GB")
+- [x] Import timing requirement clearly explained
+- [x] All setup examples include verification steps
+- [x] All tests pass (11 passed, 1 skipped when CuPy unavailable)
+- [x] Code quality gates pass (ruff, black, mypy)
+
+**Completed:** 2025-10-17
 
 ---
 

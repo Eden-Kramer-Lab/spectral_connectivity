@@ -7,6 +7,7 @@ directed connectivity measures from time series data using multitaper methods.
 # flake8: noqa
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper, prepare_time_series
+from spectral_connectivity.utils import get_compute_backend
 from spectral_connectivity.wrapper import multitaper_connectivity
 
 # Import version information
@@ -24,4 +25,5 @@ __all__ = [
     "Multitaper",
     "multitaper_connectivity",
     "prepare_time_series",
+    "get_compute_backend",
 ]

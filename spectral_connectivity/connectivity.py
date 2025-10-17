@@ -27,10 +27,24 @@ logger = getLogger(__name__)
 
 if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
     try:
-        logger.info("Using GPU for spectral_connectivity...")
         import cupy as xp
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
+
+        # Log GPU device information
+        try:
+            device = xp.cuda.Device()
+            # Try to get the actual GPU model name first
+            try:
+                device_name = xp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
+                device_name = device_name.strip('\x00')
+            except Exception:
+                # Fallback to compute capability
+                compute_cap = device.compute_capability
+                device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
+            logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+        except Exception:
+            logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "

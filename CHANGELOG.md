@@ -45,6 +45,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Displays valid range based on actual data dimensions
   - Includes user's original input for easy debugging
 - Comprehensive test suite for error message quality (`test_error_messages.py`)
+- GPU status utility function `get_compute_backend()`:
+  - Returns dict with backend type, GPU availability, device name, and helpful message
+  - Shows actual GPU model name (e.g., "NVIDIA Tesla V100-SXM2-16GB") instead of compute capability
+  - Detects CuPy availability without side effects (uses `importlib.util.find_spec`)
+  - Provides 4 different message variants for different GPU configurations
+  - Includes comprehensive NumPy-style docstring with 3 usage examples
+  - Example return value documented in docstring
+  - Located in new `spectral_connectivity.utils` module
+- Enhanced GPU device logging in `transforms.py` and `connectivity.py`:
+  - Now shows actual GPU model name in log messages
+  - Graceful fallback to compute capability if name unavailable
+- Comprehensive GPU documentation in README.md:
+  - 130+ line GPU Acceleration section with setup, troubleshooting, and usage guidance
+  - 3 setup methods documented (shell, Python script, Jupyter notebook)
+  - Verification steps included in all setup examples
+  - Simplified CuPy installation instructions (conda recommended first)
+  - Troubleshooting guide with 4 common issues and solutions
+  - Clear explanation of import timing requirement (why "before importing" matters)
+  - Example outputs shown for all code samples
+  - Kernel restart guidance for Jupyter notebook users
+  - Guidance on when GPU acceleration is beneficial
+- Comprehensive test suite for GPU backend (`tests/test_gpu.py`):
+  - 13 test methods covering all GPU configuration scenarios
+  - Tests for CPU mode (default and explicit)
+  - Tests for GPU mode (with and without CuPy available)
+  - Validation of return value structure and types
+  - Mock-based testing to avoid CuPy dependency
+  - All tests pass (11 passed, 1 skipped when CuPy unavailable)
 
 ### Changed
 - **BREAKING**: Minimum Python version raised from 3.9 to 3.10
