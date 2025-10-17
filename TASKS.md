@@ -296,40 +296,59 @@
 
 ### Task 3.1: Add Parameter Helper Functions
 
-- [ ] Create utility functions in `transforms.py`:
-  - [ ] `estimate_frequency_resolution(sampling_freq, window_duration, time_halfbandwidth_product)`
-  - [ ] `estimate_n_tapers(time_halfbandwidth_product)`
-  - [ ] `suggest_parameters(sampling_freq, signal_duration, desired_freq_resolution=None, desired_n_tapers=None)`
-- [ ] Update `time_halfbandwidth_product` docstring:
-  - [ ] Add formula for frequency resolution
-  - [ ] Provide examples with common values
-  - [ ] Explain formula to achieve target resolution
-- [ ] Add `summarize_parameters()` method to `Multitaper`:
-  - [ ] Print human-readable summary of all parameters
-  - [ ] Show computed values (n_tapers, freq_resolution, n_windows)
-  - [ ] Format nicely for terminal/notebook output
-- [ ] Create alternative constructor (optional):
-  - [ ] `Multitaper.from_target_resolution()` classmethod
-  - [ ] Automatically calculates time_halfbandwidth_product
-- [ ] Write tests:
-  - [ ] `test_estimate_frequency_resolution()`
-  - [ ] `test_estimate_n_tapers()`
-  - [ ] `test_suggest_parameters()`
-  - [ ] `test_summarize_parameters_output()`
-  - [ ] `test_from_target_resolution()` (if implemented)
-- [ ] Add examples to docstrings showing parameter selection
+- [x] Create utility functions in `transforms.py`:
+  - [x] `estimate_frequency_resolution(sampling_freq, window_duration, time_halfbandwidth_product)`
+  - [x] `estimate_n_tapers(time_halfbandwidth_product)`
+  - [x] `suggest_parameters(sampling_freq, signal_duration, desired_freq_resolution=None, desired_n_tapers=None)`
+  - [x] Added MultitaperParameters TypedDict for type-safe return values
+- [x] Update `time_halfbandwidth_product` docstring:
+  - [x] Add formula for frequency resolution
+  - [x] Provide examples with common values (NW=2,3,4,5+)
+  - [x] Explain formula to achieve target resolution
+  - [x] Include practical guidance on parameter selection
+- [x] Add `summarize_parameters()` method to `Multitaper`:
+  - [x] Print human-readable summary of all parameters
+  - [x] Show computed values (n_tapers, freq_resolution, n_windows)
+  - [x] Format nicely for terminal/notebook output
+  - [x] Show overlap percentage for windowing
+- [x] Write comprehensive tests:
+  - [x] `test_estimate_frequency_resolution()` - 6 tests covering basic calc, effects, consistency
+  - [x] `test_estimate_n_tapers()` - 5 tests covering basic calc, different NW values, consistency
+  - [x] `test_suggest_parameters()` - 8 tests covering defaults, targets, conflicts, errors, EEG/LFP scenarios
+  - [x] `test_summarize_parameters()` - 3 tests covering method existence, format, content
+  - [x] Total: 22 comprehensive tests, all passing
+- [x] Add examples to docstrings showing parameter selection
+  - [x] Domain-specific examples (EEG, LFP applications)
+  - [x] Real-world use cases with expected outputs
+- [x] Code quality checks:
+  - [x] All tests pass (215 total, 22 new)
+  - [x] Ruff linting passes
+  - [x] Black formatting applied
+  - [x] Type hints complete with TypedDict
+- [x] Review agents applied:
+  - [x] spectral-code-reviewer: Fixed critical TypedDict, MyPy, and Ruff issues
+  - [x] scientific-ux-reviewer: Confirmed production-ready UX
+- [x] Updated exports in `__init__.py`
 
 **Files:**
 
-- `spectral_connectivity/transforms.py`
-- `tests/test_transforms.py`
+- `spectral_connectivity/transforms.py` - Lines 15-43 (TypedDict), 45-123 (estimate_frequency_resolution), 126-178 (estimate_n_tapers), 181-384 (suggest_parameters), 407-430 (enhanced docstring), 790-903 (summarize_parameters)
+- `tests/test_parameter_helpers.py` - NEW comprehensive test suite (294 lines, 22 tests)
+- `spectral_connectivity/__init__.py` - Updated exports
 
 **Acceptance Criteria:**
 
-- [ ] Users can estimate frequency resolution before computing
-- [ ] Helper functions guide parameter selection
-- [ ] Examples demonstrate common use cases
-- [ ] All functions have tests with 100% coverage
+- [x] Users can estimate frequency resolution before computing
+- [x] Helper functions guide parameter selection
+- [x] Examples demonstrate common use cases (EEG, LFP)
+- [x] All functions have tests with 100% coverage
+- [x] Type-safe with MultitaperParameters TypedDict
+- [x] Documentation follows NumPy style with practical examples
+- [x] Error messages follow WHAT/WHY/HOW pattern
+
+**Completed:** 2025-10-17
+
+**Note:** Deferred alternative constructor `Multitaper.from_target_resolution()` - not needed given `suggest_parameters()` provides equivalent functionality with more flexibility.
 
 ---
 

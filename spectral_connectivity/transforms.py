@@ -2,6 +2,7 @@
 
 import os
 from logging import getLogger
+from typing import TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -9,6 +10,379 @@ from scipy import interpolate
 from scipy.linalg import eigvals_banded
 
 logger = getLogger(__name__)
+
+
+class MultitaperParameters(TypedDict):
+    """Parameter suggestions for multitaper analysis.
+
+    Attributes
+    ----------
+    sampling_frequency : float
+        Sampling rate in Hz.
+    time_halfbandwidth_product : float
+        Suggested time-bandwidth product (NW).
+    time_window_duration : float
+        Suggested window duration in seconds.
+    n_tapers : int
+        Number of tapers.
+    frequency_resolution : float
+        Resulting frequency resolution in Hz.
+    n_time_windows : int
+        Approximate number of time windows.
+    nyquist_frequency : float
+        Maximum frequency (sampling_frequency / 2) in Hz.
+    """
+
+    sampling_frequency: float
+    time_halfbandwidth_product: float
+    time_window_duration: float
+    n_tapers: int
+    frequency_resolution: float
+    n_time_windows: int
+    nyquist_frequency: float
+
+
+def estimate_frequency_resolution(
+    sampling_frequency: float,
+    time_window_duration: float,
+    time_halfbandwidth_product: float,
+) -> float:
+    """
+    Estimate the frequency resolution for given multitaper parameters.
+
+    The frequency resolution (Δf) represents the bandwidth over which spectral
+    energy is averaged. It is determined by the time-frequency trade-off inherent
+    in spectral analysis.
+
+    Parameters
+    ----------
+    sampling_frequency : float
+        Sampling rate in Hz of the time series data.
+        Note: This doesn't affect frequency resolution, only the maximum
+        frequency (Nyquist = sampling_frequency / 2).
+    time_window_duration : float
+        Duration in seconds of each analysis window.
+        Longer windows provide better (finer) frequency resolution.
+    time_halfbandwidth_product : float
+        Time-bandwidth product controlling the spectral concentration.
+        Higher values provide more spectral smoothing (coarser resolution).
+
+    Returns
+    -------
+    frequency_resolution : float
+        Frequency resolution in Hz. This represents the bandwidth over which
+        spectral estimates are averaged.
+
+    Notes
+    -----
+    The frequency resolution formula is:
+
+    .. math::
+        \\Delta f = \\frac{2 \\cdot NW}{T}
+
+    where:
+    - NW is the time-halfbandwidth product
+    - T is the time window duration in seconds
+
+    **Key relationships:**
+    - Longer time windows (↑T) → Better resolution (↓Δf)
+    - Higher time-halfbandwidth product (↑NW) → More smoothing (↑Δf)
+
+    **Typical values:**
+    - For 1 Hz resolution: Use T=6s with NW=3
+    - For 5 Hz resolution: Use T=1.2s with NW=3
+    - For 0.5 Hz resolution: Use T=12s with NW=3
+
+    Examples
+    --------
+    EEG application with 1 Hz resolution:
+
+    >>> freq_res = estimate_frequency_resolution(
+    ...     sampling_frequency=250,
+    ...     time_window_duration=6.0,
+    ...     time_halfbandwidth_product=3,
+    ... )
+    >>> print(f"Frequency resolution: {freq_res} Hz")
+    Frequency resolution: 1.0 Hz
+
+    LFP application with 5 Hz resolution:
+
+    >>> freq_res = estimate_frequency_resolution(
+    ...     sampling_frequency=1000,
+    ...     time_window_duration=1.2,
+    ...     time_halfbandwidth_product=3,
+    ... )
+    >>> print(f"Frequency resolution: {freq_res} Hz")
+    Frequency resolution: 5.0 Hz
+
+    See Also
+    --------
+    estimate_n_tapers : Estimate number of tapers
+    suggest_parameters : Automatically suggest parameters for target resolution
+    """
+    return 2.0 * time_halfbandwidth_product / time_window_duration
+
+
+def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
+    """
+    Estimate the number of tapers for a given time-halfbandwidth product.
+
+    The number of tapers determines how many independent spectral estimates
+    are averaged together. More tapers provide better variance reduction
+    but also more spectral smoothing.
+
+    Parameters
+    ----------
+    time_halfbandwidth_product : float
+        Time-bandwidth product. Typical values are 2-5.
+
+    Returns
+    -------
+    n_tapers : int
+        Number of discrete prolate spheroidal sequence (DPSS) tapers that
+        will be used.
+
+    Notes
+    -----
+    The number of tapers is calculated as:
+
+    .. math::
+        n_{\\text{tapers}} = \\lfloor 2 \\cdot NW \\rfloor - 1
+
+    where NW is the time-halfbandwidth product.
+
+    **Note:** The actual number of tapers used by Multitaper may be lower
+    if `is_low_bias=True` (default), which excludes tapers with eigenvalues < 0.9.
+
+    **Typical values:**
+    - NW=2 → 3 tapers (minimal averaging)
+    - NW=3 → 5 tapers (balanced, recommended)
+    - NW=4 → 7 tapers (strong averaging)
+    - NW=5 → 9 tapers (very strong averaging)
+
+    Examples
+    --------
+    >>> n_tapers = estimate_n_tapers(time_halfbandwidth_product=3)
+    >>> print(f"Number of tapers: {n_tapers}")
+    Number of tapers: 5
+
+    >>> n_tapers = estimate_n_tapers(time_halfbandwidth_product=4)
+    >>> print(f"Number of tapers: {n_tapers}")
+    Number of tapers: 7
+
+    See Also
+    --------
+    estimate_frequency_resolution : Estimate frequency resolution
+    suggest_parameters : Automatically suggest parameters
+    """
+    return int(np.floor(2 * time_halfbandwidth_product)) - 1
+
+
+def suggest_parameters(
+    sampling_frequency: float,
+    signal_duration: float,
+    desired_freq_resolution: float | None = None,
+    desired_n_tapers: int | None = None,
+) -> MultitaperParameters:
+    """
+    Suggest appropriate multitaper parameters for your analysis.
+
+    This helper function recommends parameters based on your data characteristics
+    and analysis goals. It helps answer the common question: "What parameters
+    should I use for my data?"
+
+    Parameters
+    ----------
+    sampling_frequency : float
+        Sampling rate in Hz of your data.
+    signal_duration : float
+        Total duration in seconds of your signal.
+    desired_freq_resolution : float, optional
+        Target frequency resolution in Hz. If specified, parameters will be
+        chosen to achieve approximately this resolution.
+        Cannot be specified together with desired_n_tapers.
+    desired_n_tapers : int, optional
+        Target number of tapers for variance reduction. If specified,
+        time_halfbandwidth_product will be chosen to achieve this.
+        Cannot be specified together with desired_freq_resolution.
+
+    Returns
+    -------
+    params : MultitaperParameters
+        TypedDict containing suggested parameters with the following keys:
+        - 'sampling_frequency': float - Input sampling frequency
+        - 'time_halfbandwidth_product': float - Suggested NW
+        - 'time_window_duration': float - Suggested window duration (seconds)
+        - 'n_tapers': int - Number of tapers
+        - 'frequency_resolution': float - Resulting frequency resolution (Hz)
+        - 'n_time_windows': int - Approximate number of time windows
+        - 'nyquist_frequency': float - Maximum frequency (Hz)
+
+    Raises
+    ------
+    ValueError
+        If desired frequency resolution is impossible to achieve with given
+        signal duration.
+
+    Warns
+    -----
+    UserWarning
+        If both desired_freq_resolution and desired_n_tapers are specified.
+        In this case, desired_freq_resolution takes precedence and
+        desired_n_tapers is ignored.
+
+    Notes
+    -----
+    **Default behavior** (no targets specified):
+    - Uses NW=3 (balanced trade-off)
+    - Sets window duration to capture ~5 time windows
+    - Aims for reasonable frequency and time resolution
+
+    **With desired_freq_resolution:**
+    - Calculates required window duration: T = 2*NW / Δf_target
+    - Uses NW=3 by default unless this gives too few time windows
+    - Ensures at least 3 time windows for temporal dynamics
+
+    **With desired_n_tapers:**
+    - Calculates NW from: NW = (n_tapers + 1) / 2
+    - Uses reasonable window duration based on signal length
+
+    Examples
+    --------
+    Get reasonable defaults for EEG data:
+
+    >>> params = suggest_parameters(
+    ...     sampling_frequency=250,
+    ...     signal_duration=60.0,
+    ... )
+    >>> print(f"Suggested NW: {params['time_halfbandwidth_product']}")
+    >>> print(f"Window duration: {params['time_window_duration']:.2f}s")
+    >>> print(f"Frequency resolution: {params['frequency_resolution']:.2f} Hz")
+    >>> print(f"Number of tapers: {params['n_tapers']}")
+
+    Target specific frequency resolution:
+
+    >>> params = suggest_parameters(
+    ...     sampling_frequency=1000,
+    ...     signal_duration=10.0,
+    ...     desired_freq_resolution=2.0,  # Want 2 Hz resolution
+    ... )
+    >>> print(f"Achieved resolution: {params['frequency_resolution']:.2f} Hz")
+    Achieved resolution: 2.00 Hz
+
+    Target specific number of tapers:
+
+    >>> params = suggest_parameters(
+    ...     sampling_frequency=1000,
+    ...     signal_duration=5.0,
+    ...     desired_n_tapers=9,  # Want strong averaging
+    ... )
+    >>> print(f"Number of tapers: {params['n_tapers']}")
+    Number of tapers: 9
+
+    See Also
+    --------
+    estimate_frequency_resolution : Calculate frequency resolution
+    estimate_n_tapers : Calculate number of tapers
+    Multitaper.summarize_parameters : Display parameters for existing analysis
+    """
+    import warnings
+
+    # Validate inputs
+    if desired_freq_resolution is not None and desired_n_tapers is not None:
+        warnings.warn(
+            "Both 'desired_freq_resolution' and 'desired_n_tapers' were specified. "
+            "This is typically not recommended as they have competing effects on the analysis. "
+            "Using 'desired_freq_resolution' and ignoring 'desired_n_tapers'.",
+            UserWarning,
+            stacklevel=2,
+        )
+        desired_n_tapers = None
+
+    # Default: balanced parameters (NW=3)
+    if desired_freq_resolution is None and desired_n_tapers is None:
+        time_halfbandwidth_product = 3.0
+        # Use ~20% of signal duration as window, aim for ~5 windows
+        time_window_duration = min(signal_duration / 5.0, signal_duration * 0.2)
+        # But ensure at least 0.5s window for reasonable freq resolution
+        time_window_duration = max(time_window_duration, 0.5)
+        # And don't exceed signal duration
+        time_window_duration = min(time_window_duration, signal_duration)
+
+    # User wants specific frequency resolution
+    elif desired_freq_resolution is not None:
+        # Start with NW=3 (typical balanced value)
+        time_halfbandwidth_product = 3.0
+
+        # Calculate required window duration: T = 2*NW / Δf
+        time_window_duration = (
+            2.0 * time_halfbandwidth_product / desired_freq_resolution
+        )
+
+        # Check if this is achievable with the signal duration
+        if time_window_duration > signal_duration:
+            raise ValueError(
+                f"Cannot achieve desired frequency resolution of {desired_freq_resolution} Hz "
+                f"with signal duration of {signal_duration}s.\n"
+                "\n"
+                f"Required window duration: {time_window_duration:.2f}s\n"
+                f"Available signal duration: {signal_duration:.2f}s\n"
+                "\n"
+                "To achieve this resolution, you need either:\n"
+                f"  - Longer signal (at least {time_window_duration:.2f}s)\n"
+                f"  - Coarser frequency resolution (at least "
+                f"{2.0 * time_halfbandwidth_product / signal_duration:.2f} Hz)"
+            )
+
+        # If window would give us fewer than 3 time windows, increase NW slightly
+        # to reduce window duration (at the cost of coarser freq resolution)
+        min_n_windows = 3
+        max_window_for_min_windows = signal_duration / min_n_windows
+        if time_window_duration > max_window_for_min_windows:
+            # Adjust NW to give us at least min_n_windows
+            time_window_duration = max_window_for_min_windows
+            # Recalculate NW to achieve target resolution with this window
+            time_halfbandwidth_product = (
+                desired_freq_resolution * time_window_duration / 2.0
+            )
+            # But keep NW >= 1
+            time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
+
+    # User wants specific number of tapers
+    elif desired_n_tapers is not None:
+        # Calculate NW from n_tapers: n_tapers = floor(2*NW) - 1
+        # So: NW = (n_tapers + 1) / 2
+        time_halfbandwidth_product = (desired_n_tapers + 1) / 2.0
+
+        # Use reasonable window duration (~20% of signal, but at least 0.5s)
+        time_window_duration = min(signal_duration / 5.0, signal_duration * 0.2)
+        time_window_duration = max(time_window_duration, 0.5)
+        time_window_duration = min(time_window_duration, signal_duration)
+
+    else:
+        # This should never happen given the logic above, but for type safety
+        raise ValueError("Internal error: unexpected parameter combination")
+
+    # Calculate derived parameters
+    n_tapers = estimate_n_tapers(time_halfbandwidth_product)
+    frequency_resolution = estimate_frequency_resolution(
+        sampling_frequency, time_window_duration, time_halfbandwidth_product
+    )
+    n_time_windows = int(
+        np.floor(signal_duration / time_window_duration)
+    )  # Non-overlapping estimate
+    nyquist_frequency = sampling_frequency / 2.0
+
+    return {
+        "sampling_frequency": sampling_frequency,
+        "time_halfbandwidth_product": time_halfbandwidth_product,
+        "time_window_duration": time_window_duration,
+        "n_tapers": n_tapers,
+        "frequency_resolution": frequency_resolution,
+        "n_time_windows": n_time_windows,
+        "nyquist_frequency": nyquist_frequency,
+    }
+
 
 if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
     try:
@@ -69,9 +443,29 @@ class Multitaper:
     sampling_frequency : float, default=1000
         Sampling rate in Hz of the time series data.
     time_halfbandwidth_product : float, default=3
-        Time-bandwidth product controlling frequency resolution and number of
-        tapers. Larger values give better frequency resolution but more spectral
-        smoothing. Typical values are 2-4.
+        Time-bandwidth product (often denoted as NW) controlling the trade-off
+        between frequency resolution and variance reduction.
+
+        **Effect on analysis:**
+        - Determines frequency resolution: Δf = 2·NW / T (where T is window duration)
+        - Determines number of tapers: n_tapers = floor(2·NW) - 1
+        - Higher values → More spectral smoothing, better variance reduction
+        - Lower values → Better frequency resolution, less averaging
+
+        **Typical values:**
+        - NW = 2: Minimal smoothing, 3 tapers, best frequency resolution
+        - NW = 3: Balanced trade-off (recommended default), 5 tapers
+        - NW = 4: More smoothing, 7 tapers, strong variance reduction
+        - NW = 5+: Heavy smoothing, 9+ tapers, very strong variance reduction
+
+        **Examples:**
+        For 1 Hz frequency resolution with 1 second windows: use NW ≤ 0.5
+        For 5 Hz frequency resolution with 1 second windows: use NW ≤ 2.5
+        For 10 Hz frequency resolution with 1 second windows: use NW ≤ 5
+
+        Use `estimate_frequency_resolution()` to calculate the resolution
+        for different parameter combinations, or use `suggest_parameters()`
+        to get recommendations for your specific data and analysis goals.
     detrend_type : {"constant", "linear", None}, default="constant"
         Type of detrending applied to each time window:
         - "constant": remove DC component
@@ -392,6 +786,121 @@ class Multitaper:
             f"n_tapers={self.n_tapers}"
             ")"
         )
+
+    def summarize_parameters(self) -> str:
+        """
+        Generate a human-readable summary of the multitaper analysis parameters.
+
+        This method displays key parameters and their implications for your analysis,
+        making it easier to understand and communicate your spectral analysis settings.
+
+        Returns
+        -------
+        summary : str
+            A formatted string containing:
+            - Input parameters (sampling frequency, time-halfbandwidth product)
+            - Derived parameters (n_tapers, frequency resolution)
+            - Data dimensions (n_signals, n_trials, n_time_samples)
+            - Frequency range (0 to Nyquist)
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity.transforms import Multitaper
+        >>> data = np.random.randn(5000, 1, 64)  # 5s, 64 EEG channels
+        >>> mt = Multitaper(
+        ...     data,
+        ...     sampling_frequency=1000,
+        ...     time_window_duration=1.0,
+        ...     time_halfbandwidth_product=3,
+        ... )
+        >>> print(mt.summarize_parameters())
+        Multitaper Spectral Analysis Configuration
+        ===========================================
+        <BLANKLINE>
+        Data Shape
+        ----------
+        Time samples:    5000 (5.00 seconds)
+        Signals:         64
+        Trials:          1
+        <BLANKLINE>
+        Spectral Parameters
+        -------------------
+        Sampling frequency:            1000.0 Hz
+        Time-halfbandwidth product:    3.0
+        Number of tapers:              5
+        <BLANKLINE>
+        Time Windowing
+        --------------
+        Window duration:  1.000 s (1000 samples)
+        Window step:      1.000 s (non-overlapping)
+        Number of windows: 5
+        <BLANKLINE>
+        Frequency Analysis
+        ------------------
+        Frequency resolution: 6.0 Hz
+        Nyquist frequency:    500.0 Hz
+        Frequency range:      0.0 - 500.0 Hz
+        FFT samples:          1024
+
+        See Also
+        --------
+        suggest_parameters : Get parameter suggestions before creating Multitaper
+        estimate_frequency_resolution : Estimate frequency resolution
+        estimate_n_tapers : Estimate number of tapers
+        """
+        # Calculate time windows info
+        n_time_samples = self.time_series.shape[0]
+        signal_duration = n_time_samples / self.sampling_frequency
+        n_windows = int(
+            xp.floor(
+                (n_time_samples - self.n_time_samples_per_window)
+                / self.n_time_samples_per_step
+            )
+            + 1
+        )
+
+        # Determine overlap description
+        if self.time_window_step == self.time_window_duration:
+            overlap_desc = "(non-overlapping)"
+        else:
+            overlap_percent = (
+                100
+                * (self.time_window_duration - self.time_window_step)
+                / self.time_window_duration
+            )
+            overlap_desc = f"({overlap_percent:.0f}% overlap)"
+
+        summary = f"""Multitaper Spectral Analysis Configuration
+===========================================
+
+Data Shape
+----------
+Time samples:    {n_time_samples} ({signal_duration:.2f} seconds)
+Signals:         {self.n_signals}
+Trials:          {self.n_trials}
+
+Spectral Parameters
+-------------------
+Sampling frequency:            {self.sampling_frequency} Hz
+Time-halfbandwidth product:    {self.time_halfbandwidth_product}
+Number of tapers:              {self.n_tapers}
+
+Time Windowing
+--------------
+Window duration:  {self.time_window_duration:.3f} s ({self.n_time_samples_per_window} samples)
+Window step:      {self.time_window_step:.3f} s {overlap_desc}
+Number of windows: {n_windows}
+
+Frequency Analysis
+------------------
+Frequency resolution: {self.frequency_resolution:.1f} Hz
+Nyquist frequency:    {self.nyquist_frequency:.1f} Hz
+Frequency range:      0.0 - {self.nyquist_frequency:.1f} Hz
+FFT samples:          {self.n_fft_samples}
+"""
+
+        return summary
 
     @property
     def tapers(self) -> NDArray[np.floating]:

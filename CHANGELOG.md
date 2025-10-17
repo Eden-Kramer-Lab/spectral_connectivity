@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Parameter helper functions for guided multitaper analysis:
+  - `estimate_frequency_resolution()`: Calculate frequency resolution from parameters
+  - `estimate_n_tapers()`: Calculate number of tapers from time-halfbandwidth product
+  - `suggest_parameters()`: Get parameter recommendations for your data
+  - `MultitaperParameters` TypedDict for type-safe parameter handling
+- `summarize_parameters()` method to `Multitaper` class:
+  - Human-readable summary of all analysis parameters
+  - Shows computed values (n_tapers, frequency_resolution, n_windows)
+  - Displays overlap percentage for windowing
+  - Formatted for terminal/notebook output
+- Enhanced `time_halfbandwidth_product` docstring with formulas and practical guidance:
+  - Mathematical relationship to frequency resolution and n_tapers
+  - Typical values (NW=2,3,4,5+) with trade-off explanations
+  - Examples for achieving target resolutions (1 Hz, 5 Hz, 10 Hz)
+  - Cross-references to helper functions
+- Comprehensive test suite for parameter helpers (`test_parameter_helpers.py`):
+  - 22 tests covering all helper functions
+  - Domain-specific tests (EEG, LFP typical parameters)
+  - Edge cases (conflicting parameters, impossible resolutions)
+  - Consistency checks with actual `Multitaper` behavior
 - CHANGELOG.md to track version changes following Keep a Changelog format
 - Ruff linter configuration for faster, more comprehensive Python linting
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)

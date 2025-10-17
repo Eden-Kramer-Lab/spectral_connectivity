@@ -30,28 +30,32 @@ The package represents production-ready scientific software with strong fundamen
 **Status:** All checks passed (ruff + black)
 
 **Strengths:**
+
 - Consistent 88-character line length (Black standard)
 - Modern Python 3.10+ syntax with PEP 604 type hints (`str | None` instead of `Union[str, None]`)
 - Proper use of f-strings and modern idioms
 - Well-organized imports with isort integration
 
 **Evidence:**
+
 ```bash
 ruff check spectral_connectivity/ tests/
 # Result: All checks passed!
 ```
 
-### 1.2 Type Hints   GOOD (with improvement opportunities)
+### 1.2 Type Hints ï¿½ GOOD (with improvement opportunities)
 
 **Status:** MyPy passes, but coverage could be enhanced
 
 **Strengths:**
+
 - All public functions have type hints for parameters and return values
 - Proper use of `NDArray[np.floating]`, `NDArray[np.complexfloating]` from `numpy.typing`
 - Good use of `Literal` types for constrained string arguments
 - `Callable` types properly annotated
 
 **Weaknesses:**
+
 - MyPy configuration allows `disallow_untyped_defs = false` and `disallow_incomplete_defs = false`
 - Some internal helper functions lack complete type annotations
 - No strict mode enabled (would catch more edge cases)
@@ -59,6 +63,7 @@ ruff check spectral_connectivity/ tests/
 **Recommendations:**
 
 1. **Medium Priority**: Gradually enable stricter mypy settings:
+
    ```toml
    [tool.mypy]
    disallow_untyped_defs = true  # Require all functions to have types
@@ -66,6 +71,7 @@ ruff check spectral_connectivity/ tests/
    ```
 
 2. **Quick Win**: Add missing type hints to internal functions in `transforms.py`:
+
    ```python
    # Current (line 529)
    def _make_tapers(
@@ -92,23 +98,24 @@ ruff check spectral_connectivity/ tests/
 
 ## 2. Testing Assessment
 
-### 2.1 Test Coverage   GOOD (77% overall)
+### 2.1 Test Coverage ï¿½ GOOD (77% overall)
 
 **Breakdown by Module:**
 
 | Module | Statements | Missed | Coverage | Status |
 |--------|-----------|--------|----------|---------|
-| `__init__.py` | 9 | 3 | 67% |   Acceptable |
+| `__init__.py` | 9 | 3 | 67% | ï¿½ Acceptable |
 | `_version.py` | 13 | 0 | **100%** |  Excellent |
-| `connectivity.py` | 473 | 136 | 71% |   Good |
+| `connectivity.py` | 473 | 136 | 71% | ï¿½ Good |
 | `minimum_phase_decomposition.py` | 61 | 7 | 89% |  Excellent |
 | `simulate.py` | 12 | 0 | **100%** |  Excellent |
-| `statistics.py` | 60 | 18 | 70% |   Good |
+| `statistics.py` | 60 | 18 | 70% | ï¿½ Good |
 | `transforms.py` | 256 | 46 | 82% |  Very Good |
 | `wrapper.py` | 56 | 5 | 91% |  Excellent |
-| **TOTAL** | **940** | **215** | **77%** |   Good |
+| **TOTAL** | **940** | **215** | **77%** | ï¿½ Good |
 
 **Test Organization:** 149 tests across 11 test files
+
 - `test_connectivity.py`: 50 tests
 - `test_transforms.py`: 47 tests
 - `test_wrapper.py`: 16 tests
@@ -118,12 +125,14 @@ ruff check spectral_connectivity/ tests/
 ### 2.2 Test Quality  GOOD
 
 **Strengths:**
+
 - Proper use of `pytest` with parametrization (`@mark.parametrize`)
 - Tests validate against `nitime` library (independent reference implementation)
 - Good separation of unit vs integration tests
 - Tests cover GPU/CPU switching logic
 
 **Example of quality parametrized test:**
+
 ```python
 # tests/test_connectivity.py
 @mark.parametrize("axis", [(0), (1), (2), (3)])
@@ -135,6 +144,7 @@ def test_cross_spectrum(axis, dtype):
 ### 2.3 Missing Test Coverage (Specific Lines)
 
 **Critical Gaps in `connectivity.py`:**
+
 - **Lines 361-395**: Block-wise connectivity computation (complex memory optimization logic)
 - **Lines 637-678**: `canonical_coherence()` method
 - **Lines 719-753**: `global_coherence()` method
@@ -142,6 +152,7 @@ def test_cross_spectrum(axis, dtype):
 - **Lines 2061-2073**: `_find_significant_frequencies()` helper
 
 **Impact:**
+
 - Block-wise computation is a memory optimization for large arrays - untested failure modes
 - Advanced connectivity measures (canonical/global coherence, group delay) lack validation
 - Statistical significance testing not fully validated
@@ -149,6 +160,7 @@ def test_cross_spectrum(axis, dtype):
 **Recommendations:**
 
 1. **High Priority**: Add tests for block-wise computation:
+
    ```python
    def test_expectation_cross_spectral_matrix_blocks():
        """Test that blocked computation matches full computation."""
@@ -179,19 +191,21 @@ The package implements a clean separation of concerns:
 
 ```
 transforms.py (Layer 1: Spectral Analysis)
-    “
+    ï¿½
 connectivity.py (Layer 2: Connectivity Metrics)
-    “
+    ï¿½
 wrapper.py (Layer 3: High-Level API)
 ```
 
 **Strengths:**
+
 - Clear responsibility boundaries
 - Each layer can be used independently
 - `Connectivity.from_multitaper()` provides clean integration
 - Wrapper functions return labeled xarray DataArrays for user convenience
 
 **Example of clean integration:**
+
 ```python
 # wrapper.py lines 85, 270-277
 connectivity = Connectivity.from_multitaper(m)
@@ -217,18 +231,22 @@ else:
 ```
 
 **Strengths:**
+
 - Single `xp` alias used throughout for numpy/cupy compatibility
 - Explicit error when GPU requested but CuPy unavailable
 - Environment variable control (no runtime switching complexity)
 - Graceful fallback with informative logging
 
 **Potential Issues:**
+
 - No runtime GPU detection (must set environment variable before import)
 - Cannot switch GPU/CPU mid-execution
 - Mixing GPU/CPU arrays could cause cryptic errors
 
 **Recommendations:**
+
 1. **Low Priority**: Add utility function to check GPU availability:
+
    ```python
    def is_gpu_available() -> bool:
        """Check if GPU computation is enabled and CuPy is available."""
@@ -240,11 +258,13 @@ else:
 ### 3.3 Caching Strategy  VERY GOOD
 
 **Implementation:**
+
 - Cross-spectral matrices cached via `@property` decorators
 - Minimum phase decomposition cached (expensive Wilson algorithm)
 - Transfer functions computed once and reused
 
 **Evidence:**
+
 ```python
 # connectivity.py
 @property
@@ -257,17 +277,21 @@ def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
 ```
 
 **Strengths:**
+
 - Pythonic use of `@property` for lazy evaluation
 - Avoids redundant computation when multiple connectivity measures requested
 - Memory efficient (computed on demand)
 
 **Potential Issues:**
+
 - Properties never invalidated (no cache eviction)
 - Large datasets could exhaust memory
 - No explicit cache management API
 
 **Recommendations:**
+
 1. **Low Priority**: Document memory implications in docstrings:
+
    ```python
    @property
    def _cross_spectral_matrix(self):
@@ -291,6 +315,7 @@ def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
 **Format:** NumPy-style docstrings (consistent with scipy/numpy)
 
 **Strengths:**
+
 - All public functions have complete docstrings
 - Parameters documented with types, units, ranges, defaults
 - Return values documented with shapes
@@ -298,6 +323,7 @@ def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
 - Scientific references cited (e.g., Dhamala 2008, Thomson 1982)
 
 **Example of high-quality docstring:**
+
 ```python
 # connectivity.py lines 227-289
 class Connectivity:
@@ -327,11 +353,13 @@ class Connectivity:
 ### 4.2 Module-Level Documentation  GOOD
 
 **Strengths:**
+
 - All modules have descriptive docstrings
 - Purpose clearly stated
 - Context provided for scientific users
 
 **Example:**
+
 ```python
 # minimum_phase_decomposition.py lines 1-6
 """Minimum phase decomposition for spectral density matrices.
@@ -342,17 +370,20 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 """
 ```
 
-### 4.3 Code Comments   ADEQUATE
+### 4.3 Code Comments ï¿½ ADEQUATE
 
 **Strengths:**
+
 - Complex algorithms have inline comments
 - Non-obvious logic explained (e.g., Wilson algorithm steps)
 
 **Weaknesses:**
+
 - Some dense numerical code lacks explanation
 - Occasional TODO comments suggest incomplete work
 
 **TODO Comments Found:**
+
 ```python
 # statistics.py:139
 # TODO: add axis keyword?
@@ -362,11 +393,13 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 ```
 
 **Recommendations:**
+
 1. **Medium Priority**: Resolve or track TODOs:
    - `statistics.py`: Add axis parameter for per-dimension multiple comparisons
    - `wrapper.py`: Use `inspect` module to get methods programmatically
 
 2. **Low Priority**: Add comments to complex numerical sections:
+
    ```python
    # transforms.py line 808-834 (DPSS optimization)
    # Current: Minimal comments on tridiagonal eigenvalue problem
@@ -382,12 +415,14 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 ### 5.1 Algorithmic Efficiency  EXCELLENT
 
 **Strengths:**
+
 - Uses `scipy.linalg.eigvals_banded` for efficient DPSS computation (tridiagonal solver)
 - FFT lengths optimized with `scipy.fft.next_fast_len()`
 - Vectorized numpy operations throughout
 - Block-wise processing option for large arrays
 
 **Evidence:**
+
 ```python
 # transforms.py line 286
 self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
@@ -403,19 +438,22 @@ w = eigvals_banded(
 )
 ```
 
-### 5.2 Memory Efficiency   GOOD
+### 5.2 Memory Efficiency ï¿½ GOOD
 
 **Strengths:**
+
 - Lazy evaluation via `@property` decorators
 - Optional block-wise computation for large datasets
 - Strided arrays avoided in sliding window (copying enabled by default)
 
 **Potential Issues:**
+
 - No memory profiling tests
 - Large cross-spectral matrices can exhaust RAM
 - No warnings for potentially OOM operations
 
 **Example concern:**
+
 ```python
 # connectivity.py line 317-330
 @property
@@ -426,7 +464,9 @@ def _cross_spectral_matrix(self):
 ```
 
 **Recommendations:**
+
 1. **Medium Priority**: Add memory estimation utility:
+
    ```python
    def estimate_memory_usage(
        n_time_windows: int,
@@ -443,7 +483,7 @@ def _cross_spectral_matrix(self):
    ```
 
 2. **Low Priority**: Document memory requirements in README
-   - Rule of thumb: N signals requires O(N²) memory
+   - Rule of thumb: N signals requires O(Nï¿½) memory
    - Block-wise computation trades speed for memory
 
 **Severity:** Medium (could cause issues for large datasets)
@@ -451,17 +491,21 @@ def _cross_spectral_matrix(self):
 ### 5.3 GPU Performance  GOOD
 
 **Implementation:**
+
 - CuPy arrays handled consistently via `xp` alias
 - FFT operations use GPU-accelerated CuPy FFT
 - Matrix operations leverage GPU BLAS
 
 **Potential Issues:**
+
 - No GPU memory management (relies on CuPy defaults)
 - No benchmarks comparing GPU vs CPU performance
 - Mixing GPU/CPU code could cause hidden transfers
 
 **Recommendations:**
+
 1. **Low Priority**: Add performance benchmarks:
+
    ```python
    # tests/test_performance.py
    @pytest.mark.benchmark
@@ -478,14 +522,16 @@ def _cross_spectral_matrix(self):
 
 ## 6. Error Handling & Validation
 
-### 6.1 Input Validation   ADEQUATE
+### 6.1 Input Validation ï¿½ ADEQUATE
 
 **Strengths:**
+
 - Expectation type validated with helpful error message
 - Empty arrays cause matrix decomposition errors (caught and logged)
 - Invalid parameters caught early (e.g., `ValueError` for bad `expectation_type`)
 
 **Evidence:**
+
 ```python
 # connectivity.py lines 226-232
 if expectation_type not in EXPECTATION:
@@ -497,12 +543,15 @@ if expectation_type not in EXPECTATION:
 ```
 
 **Weaknesses:**
+
 - No validation of array shapes in `Connectivity.__init__`
 - No checks for NaN/Inf in input data
 - No validation that frequencies match FFT length
 
 **Recommendations:**
+
 1. **High Priority**: Add shape validation in `Connectivity.__init__`:
+
    ```python
    def __init__(self, fourier_coefficients, ...):
        # Validate expected 5D shape
@@ -518,6 +567,7 @@ if expectation_type not in EXPECTATION:
    ```
 
 2. **Medium Priority**: Validate `Multitaper` inputs:
+
    ```python
    def __init__(self, time_series, sampling_frequency=1000, ...):
        if sampling_frequency <= 0:
@@ -532,11 +582,13 @@ if expectation_type not in EXPECTATION:
 ### 6.2 Exception Handling  GOOD
 
 **Strengths:**
+
 - Appropriate exception types used (`ValueError`, `RuntimeError`, `NotImplementedError`)
 - GPU import errors wrapped with helpful messages
 - Matrix decomposition failures caught and logged
 
 **Evidence:**
+
 ```python
 # minimum_phase_decomposition.py lines 74-93
 try:
@@ -550,13 +602,17 @@ except xp.linalg.linalg.LinAlgError:
 ```
 
 **Potential Issues:**
+
 - Deprecation warning for `numpy.linalg.linalg` (line 78)
+
   ```python
   except xp.linalg.linalg.LinAlgError:  # Deprecated in NumPy 2.0
   ```
 
 **Recommendations:**
+
 1. **Quick Win**: Fix deprecation warning:
+
    ```python
    # Change line 78 in minimum_phase_decomposition.py
    except xp.linalg.LinAlgError:  # Works for both NumPy and CuPy
@@ -575,6 +631,7 @@ except xp.linalg.linalg.LinAlgError:
 **Status:** No instances found (good practice followed)
 
 Evidence: Inspected all function signatures, proper use of `None` as default:
+
 ```python
 # Good pattern used throughout
 def function(arg: list | None = None):
@@ -582,9 +639,10 @@ def function(arg: list | None = None):
         arg = []
 ```
 
-#### 7.1.2 Magic Numbers   MINOR
+#### 7.1.2 Magic Numbers ï¿½ MINOR
 
 **Found:**
+
 ```python
 # minimum_phase_decomposition.py:85
 N_RAND = 1000  # Should be constant at module level
@@ -597,7 +655,9 @@ return int(xp.floor(2 * self.time_halfbandwidth_product - 1))  # Magic formula
 ```
 
 **Recommendations:**
+
 1. **Low Priority**: Extract magic numbers to named constants:
+
    ```python
    # At module level
    MIN_EIGENVALUE_THRESHOLD = 0.9  # Low-bias taper criterion
@@ -607,15 +667,18 @@ return int(xp.floor(2 * self.time_halfbandwidth_product - 1))  # Magic formula
 
 **Severity:** Low (values are standard from literature)
 
-#### 7.1.3 Long Functions   MINOR
+#### 7.1.3 Long Functions ï¿½ MINOR
 
 **Found:**
+
 - `minimum_phase_decomposition()`: 33 lines (acceptable for algorithm)
 - `_find_significant_frequencies()`: 40+ lines (could be refactored)
 - `group_delay()`: 60+ lines (complex method)
 
 **Recommendations:**
+
 1. **Low Priority**: Consider extracting sub-functions:
+
    ```python
    # connectivity.py group_delay() method
    # Extract regression logic into separate function
@@ -626,16 +689,19 @@ return int(xp.floor(2 * self.time_halfbandwidth_product - 1))  # Magic formula
 
 **Severity:** Low (complexity is inherent to algorithms)
 
-#### 7.1.4 God Objects   MINOR
+#### 7.1.4 God Objects ï¿½ MINOR
 
 **Found:**
+
 - `Connectivity` class: 15+ public methods, 470+ lines
   - Handles both functional and directed connectivity
   - Many closely related methods (good cohesion)
   - Could split into `FunctionalConnectivity` and `DirectedConnectivity` subclasses
 
 **Recommendations:**
+
 1. **Low Priority** (major refactor): Consider class hierarchy:
+
    ```python
    class ConnectivityBase:
        """Shared cross-spectral matrix computation"""
@@ -656,6 +722,7 @@ return int(xp.floor(2 * self.time_halfbandwidth_product - 1))  # Magic formula
 ### 8.1 Dependencies  EXCELLENT
 
 **Core Requirements:**
+
 ```toml
 dependencies = [
     "numpy>=1.24,<3.0",      # Modern numpy
@@ -666,12 +733,14 @@ dependencies = [
 ```
 
 **Strengths:**
+
 - Minimal core dependencies
 - Conservative version bounds (avoid breaking changes)
 - Optional GPU support (`cupy` not required)
 - Dev dependencies properly separated
 
 **Dev Dependencies:**
+
 ```toml
 dev = [
     "pytest>=8.0",
@@ -689,6 +758,7 @@ dev = [
 **Supported:** Python 3.10, 3.11, 3.12, 3.13
 
 **Evidence:**
+
 ```toml
 requires-python = ">=3.10"
 classifiers = [
@@ -700,6 +770,7 @@ classifiers = [
 ```
 
 **Strengths:**
+
 - Modern Python versions only (leverages recent features)
 - Tested on all supported versions (per CI config)
 - Uses PEP 604 union syntax (`|` instead of `Union`)
@@ -707,6 +778,7 @@ classifiers = [
 ### 8.3 Import Structure  CLEAN
 
 **Public API:**
+
 ```python
 # __init__.py
 from spectral_connectivity.connectivity import Connectivity
@@ -717,6 +789,7 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 ```
 
 **Strengths:**
+
 - Clear public API via `__all__`
 - No circular imports
 - Clean namespace (internal modules not exported)
@@ -727,15 +800,17 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 
 ### 9.1 `transforms.py` (1011 lines)  EXCELLENT
 
-**Role:** Multitaper spectral analysis (time ’ frequency domain)
+**Role:** Multitaper spectral analysis (time ï¿½ frequency domain)
 
 **Strengths:**
+
 - Well-structured `Multitaper` class with clear properties
 - DPSS computation validated against `nitime`
 - Efficient strided sliding window implementation
 - Proper detrending (constant, linear, or none)
 
 **Minor Issues:**
+
 - Some helper functions lack type hints (e.g., `_make_tapers`)
 - Detrend function is 90+ lines (complex but necessary)
 
@@ -743,17 +818,19 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 
 **Recommendation:** Add more edge case tests (e.g., very short time series)
 
-### 9.2 `connectivity.py` (2176 lines)   LARGE BUT WELL-ORGANIZED
+### 9.2 `connectivity.py` (2176 lines) ï¿½ LARGE BUT WELL-ORGANIZED
 
 **Role:** Compute 15+ connectivity measures
 
 **Strengths:**
+
 - Comprehensive coverage of functional and directed measures
 - Consistent pattern for all methods (decorators, docstrings)
 - Proper use of expectation types
 - Good separation of public and private methods
 
 **Issues:**
+
 - Very large file (consider splitting)
 - Some advanced methods untested (canonical coherence, global coherence)
 - Block-wise computation untested
@@ -761,6 +838,7 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 **Coverage:** 71% (acceptable given complexity)
 
 **Recommendations:**
+
 1. **Medium Priority**: Split into `functional.py` and `directed.py`
 2. **High Priority**: Add tests for block-wise computation
 3. **Medium Priority**: Add integration tests for advanced measures
@@ -770,6 +848,7 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 **Role:** High-level convenience functions with xarray output
 
 **Strengths:**
+
 - Clean separation of concerns
 - Proper error handling for unsupported methods
 - Good use of xarray for labeled output
@@ -778,9 +857,11 @@ __all__ = ["Connectivity", "Multitaper", "multitaper_connectivity"]
 **Coverage:** 91% (excellent)
 
 **Minor Issue:**
+
 - TODO comment about finding methods (line 230)
 
 **Recommendation:** Use `inspect.getmembers()` instead of `dir()`:
+
 ```python
 import inspect
 method = [
@@ -794,6 +875,7 @@ method = [
 **Role:** Wilson algorithm for spectral matrix factorization
 
 **Strengths:**
+
 - Well-documented algorithm with academic references
 - Proper convergence checking
 - Graceful fallback for Cholesky failures
@@ -802,6 +884,7 @@ method = [
 **Coverage:** 89% (excellent)
 
 **Minor Issue:**
+
 - Deprecation warning for `xp.linalg.linalg.LinAlgError` (line 78)
 
 **Recommendation:** Fix deprecation (see Section 6.2)
@@ -811,6 +894,7 @@ method = [
 **Role:** Statistical inference for connectivity measures
 
 **Strengths:**
+
 - Multiple comparison corrections (Benjamini-Hochberg, Bonferroni)
 - Fisher z-transform for coherence significance
 - Proper bias correction for finite sample sizes
@@ -819,6 +903,7 @@ method = [
 **Coverage:** 70% (good)
 
 **Minor Issue:**
+
 - TODO comment about axis parameter (line 139)
 
 **Recommendation:** Add axis parameter for multi-dimensional corrections
@@ -830,12 +915,14 @@ method = [
 ### 10.1 `pyproject.toml`  EXCELLENT
 
 **Strengths:**
+
 - Modern build system (hatchling with VCS versioning)
 - Comprehensive tool configurations (black, ruff, mypy, pytest)
 - Proper metadata (classifiers, URLs, keywords)
 - Optional dependencies well-organized (`[dev]`, `[gpu]`)
 
 **Best Practices:**
+
 ```toml
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "NPY", "RUF"]
@@ -851,12 +938,14 @@ check_untyped_defs = true  # Type check even untyped functions
 ### 10.2 `environment.yml`  GOOD
 
 **Strengths:**
+
 - Matches `pyproject.toml` dependencies
 - Includes documentation tools (sphinx)
 - Includes CI/build tools (hatch, twine)
 - Has `nitime` for test validation
 
 **Minor Issue:**
+
 - Some redundancy with `pyproject.toml` (unavoidable for conda)
 
 ---
@@ -866,6 +955,7 @@ check_untyped_defs = true  # Type check even untyped functions
 ### 11.1 Quick Wins (< 1 hour)
 
 1. **Fix deprecation warning** (`minimum_phase_decomposition.py:78`)
+
    ```python
    except xp.linalg.LinAlgError:  # Instead of xp.linalg.linalg.LinAlgError
    ```
@@ -940,6 +1030,7 @@ check_untyped_defs = true  # Type check even untyped functions
 ### Overall Rating: **APPROVE** 
 
 The `spectral_connectivity` package demonstrates **production-ready quality** with:
+
 -  Clean architecture (three-layer design)
 -  Comprehensive functionality (15+ connectivity measures)
 -  Good test coverage (77%, with specific gaps identified)
@@ -951,21 +1042,24 @@ The `spectral_connectivity` package demonstrates **production-ready quality** wi
 
 ### Required Before Merge: **NONE** (code is already in production-stable state)
 
-### Recommended Improvements:
+### Recommended Improvements
 
 **Priority 1 (High - address within 1-2 weeks):**
+
 1. Add input validation to core classes
 2. Add tests for block-wise computation
 3. Test advanced connectivity measures (canonical, global coherence)
 4. Fix deprecation warning in `minimum_phase_decomposition.py`
 
 **Priority 2 (Medium - address within 1-2 months):**
+
 1. Increase test coverage to 85%+
 2. Add memory estimation utility
 3. Enable stricter mypy settings incrementally
 4. Resolve all TODO comments
 
 **Priority 3 (Low - address as time permits):**
+
 1. Consider splitting `connectivity.py` into submodules
 2. Add performance benchmarks
 3. Extract magic numbers to named constants
@@ -976,11 +1070,13 @@ The `spectral_connectivity` package demonstrates **production-ready quality** wi
 ## Summary Statistics
 
 **Files Reviewed:**
+
 - 8 core Python modules (~10,500 lines)
 - 11 test files (149 tests)
 - 2 configuration files (`pyproject.toml`, `environment.yml`)
 
 **Quality Metrics:**
+
 - Test coverage: 77% (good)
 - Linting errors: 0 (excellent)
 - Type checking errors: 0 (excellent)
