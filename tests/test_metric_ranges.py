@@ -20,7 +20,7 @@ def _in_range(x, min_val, max_val, tolerance=1e-12):
 @pytest.fixture
 def simple_synthetic_data():
     """Create simple synthetic data for fast testing."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     n_time_samples, n_trials, n_signals = 100, 5, 3
     sampling_frequency = 500
 
@@ -34,15 +34,15 @@ def simple_synthetic_data():
     signals = np.zeros((n_time_samples, n_trials, n_signals))
     for trial in range(n_trials):
         # Signal 0: base + noise
-        signals[:, trial, 0] = base_signal + 0.1 * np.random.randn(n_time_samples)
+        signals[:, trial, 0] = base_signal + 0.1 * rng.standard_normal((n_time_samples))
 
         # Signal 1: base with phase lag + noise
         signals[:, trial, 1] = np.sin(
             2 * np.pi * 10 * t + np.pi / 4
-        ) + 0.1 * np.random.randn(n_time_samples)
+        ) + 0.1 * rng.standard_normal((n_time_samples))
 
         # Signal 2: mostly independent + noise
-        signals[:, trial, 2] = 0.1 * base_signal + 0.9 * np.random.randn(n_time_samples)
+        signals[:, trial, 2] = 0.1 * base_signal + 0.9 * rng.standard_normal((n_time_samples))
 
     return signals, sampling_frequency
 

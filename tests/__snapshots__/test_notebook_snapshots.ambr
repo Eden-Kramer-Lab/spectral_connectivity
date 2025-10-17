@@ -126,7 +126,7 @@
   0.00020339332917806985
 # ---
 # name: test_intro_basic_coherence[coherence_at_200hz]
-  0.9809957145809289
+  0.9859366319303832
 # ---
 # name: test_intro_basic_coherence[coherence_shape]
   tuple(
@@ -137,8 +137,8 @@
 # ---
 # name: test_intro_basic_power_spectrum[power_at_200hz]
   list([
-    1.5810365370744819,
-    1.650108418360882,
+    1.6679640625448355,
+    1.749483982845157,
   ])
 # ---
 # name: test_intro_basic_power_spectrum[power_shape]
@@ -148,7 +148,7 @@
   )
 # ---
 # name: test_intro_canonical_coherence[canonical_coherence_at_50hz]
-  1.0000000000000013
+  0.9999999999999998
 # ---
 # name: test_intro_canonical_coherence[canonical_coherence_labels]
   list([
@@ -165,7 +165,7 @@
   )
 # ---
 # name: test_intro_coherence_phase[phase_at_200hz]
-  1.6138623399664196
+  1.5796950558582719
 # ---
 # name: test_intro_coherence_phase[phase_shape]
   tuple(
@@ -186,10 +186,10 @@
   5.0
 # ---
 # name: test_intro_coherency[coherency_magnitude_at_200hz]
-  0.9904522777907722
+  0.9929434182924942
 # ---
 # name: test_intro_coherency[coherency_phase_at_200hz]
-  -1.6138623399664196
+  -1.5796950558582719
 # ---
 # name: test_intro_coherency[coherency_shape]
   tuple(
@@ -199,7 +199,7 @@
   )
 # ---
 # name: test_intro_debiased_squared_phase_lag_index[debiased_pli2_at_200hz]
-  0.0
+  0.22222222222222227
 # ---
 # name: test_intro_debiased_squared_phase_lag_index[debiased_pli2_shape]
   tuple(
@@ -210,7 +210,7 @@
   )
 # ---
 # name: test_intro_debiased_squared_weighted_phase_lag_index[dwpli2_at_200hz]
-  0.995062950359831
+  0.9922616773046015
 # ---
 # name: test_intro_debiased_squared_weighted_phase_lag_index[dwpli2_shape]
   tuple(
@@ -240,7 +240,7 @@
   )
 # ---
 # name: test_intro_global_coherence[global_coherence_mean]
-  0.002472688733431512
+  0.002487054300575145
 # ---
 # name: test_intro_global_coherence[global_coherence_shape]
   tuple(
@@ -271,7 +271,7 @@
   )
 # ---
 # name: test_intro_imaginary_coherence[imag_coherence_at_200hz]
-  0.9895339329869453
+  0.9929041042585596
 # ---
 # name: test_intro_imaginary_coherence[imag_coherence_shape]
   tuple(
@@ -300,7 +300,7 @@
   'DataArray'
 # ---
 # name: test_intro_pairwise_phase_consistency[ppc_at_200hz]
-  0.16570573296183747
+  0.30663490847172303
 # ---
 # name: test_intro_pairwise_phase_consistency[ppc_shape]
   tuple(
@@ -311,7 +311,7 @@
   )
 # ---
 # name: test_intro_phase_locking_value[plv_at_200hz]
-  0.5083356135134324
+  0.6194154294147727
 # ---
 # name: test_intro_phase_locking_value[plv_shape]
   tuple(
@@ -331,7 +331,7 @@
   )
 # ---
 # name: test_intro_weighted_phase_lag_index[wpli_at_200hz]
-  -0.9982088764555365
+  -0.9972234599272058
 # ---
 # name: test_intro_weighted_phase_lag_index[wpli_shape]
   tuple(

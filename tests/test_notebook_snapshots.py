@@ -57,8 +57,8 @@ def intro_tutorial_signals() -> dict[str, Any]:
     phase_offset = np.pi / 2
     signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
 
-    # Use fixed random seed for reproducibility
-    rng = np.random.RandomState(42)
+    # Use modern RNG API for better test isolation
+    rng = np.random.default_rng(42)
     noise = rng.normal(0, 4, signal.shape)
 
     return {
@@ -456,8 +456,8 @@ def test_intro_canonical_coherence(snapshot):
     n_time_samples = 1000
     n_signals = 6
 
-    rng = np.random.RandomState(42)
-    time_series_2d = rng.randn(n_time_samples, n_signals)
+    rng = np.random.default_rng(42)
+    time_series_2d = rng.standard_normal((n_time_samples, n_signals))
 
     # Add some shared oscillation between areas
     time = np.linspace(0, 1, n_time_samples)
@@ -563,8 +563,8 @@ def test_intro_global_coherence(snapshot):
     n_time_samples = 1000
     n_signals = 4
 
-    rng = np.random.RandomState(42)
-    time_series_2d = rng.randn(n_time_samples, n_signals)
+    rng = np.random.default_rng(42)
+    time_series_2d = rng.standard_normal((n_time_samples, n_signals))
 
     # Add some shared oscillation across all signals
     time = np.linspace(0, 1, n_time_samples)

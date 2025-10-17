@@ -305,7 +305,7 @@ def test__get_taper_eigenvalues(n_time_samples, time_halfbandwidth_product, n_ta
 
 
 def test__auto_correlation():
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     n_time_samples, n_tapers = 100, 3
     test_data = np.random.rand(n_tapers, n_time_samples)
     rxx = _auto_correlation(test_data)[:, :n_time_samples]
@@ -343,13 +343,14 @@ def test_fft():
 
 def test_multitaper_requires_3d_input():
     """Test that Multitaper requires 3D input array."""
+    rng = np.random.default_rng(42)
     # 1D input should raise ValueError
-    time_series_1d = np.random.randn(100)
+    time_series_1d = rng.standard_normal((100))
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
         Multitaper(time_series=time_series_1d)
 
     # 2D input should raise ValueError with helpful message
-    time_series_2d = np.random.randn(100, 5)
+    time_series_2d = rng.standard_normal((100, 5))
     with pytest.raises(
         ValueError,
         match=r"Expected 3D array.*got 2D.*Use prepare_time_series|np.newaxis",
@@ -357,22 +358,23 @@ def test_multitaper_requires_3d_input():
         Multitaper(time_series=time_series_2d)
 
     # 4D input should raise ValueError
-    time_series_4d = np.random.randn(100, 10, 5, 3)
+    time_series_4d = rng.standard_normal((100, 10, 5, 3))
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 4D"):
         Multitaper(time_series=time_series_4d)
 
     # 3D input should work
-    time_series_3d = np.random.randn(100, 10, 5)
+    time_series_3d = rng.standard_normal((100, 10, 5))
     m = Multitaper(time_series=time_series_3d)
     assert m.time_series.ndim == 3
 
 
 def test_prepare_time_series_single_trial():
     """Test helper function for converting 2D (time, signals) to 3D."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
     # Case 1: Single trial with multiple signals
-    time_series_2d = np.random.randn(100, 5)  # 100 time points, 5 signals
+    time_series_2d = rng.standard_normal((100, 5))  # 100 time points, 5 signals
     result = prepare_time_series(time_series_2d, axis="signals")
     assert result.shape == (100, 1, 5)  # (n_time, 1 trial, n_signals)
 
@@ -382,10 +384,11 @@ def test_prepare_time_series_single_trial():
 
 def test_prepare_time_series_single_signal():
     """Test helper function for converting 2D (time, trials) to 3D."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
     # Case 2: Multiple trials with single signal
-    time_series_2d = np.random.randn(100, 10)  # 100 time points, 10 trials
+    time_series_2d = rng.standard_normal((100, 10))  # 100 time points, 10 trials
     result = prepare_time_series(time_series_2d, axis="trials")
     assert result.shape == (100, 10, 1)  # (n_time, n_trials, 1 signal)
 
@@ -395,10 +398,11 @@ def test_prepare_time_series_single_signal():
 
 def test_prepare_time_series_1d():
     """Test helper function for converting 1D (time,) to 3D."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
     # 1D input: single trial, single signal
-    time_series_1d = np.random.randn(100)
+    time_series_1d = rng.standard_normal((100))
     result = prepare_time_series(time_series_1d)
     assert result.shape == (100, 1, 1)  # (n_time, 1 trial, 1 signal)
 
@@ -408,10 +412,11 @@ def test_prepare_time_series_1d():
 
 def test_prepare_time_series_3d_passthrough():
     """Test that prepare_time_series passes through 3D arrays unchanged."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
     # 3D input should be returned unchanged
-    time_series_3d = np.random.randn(100, 10, 5)
+    time_series_3d = rng.standard_normal((100, 10, 5))
     result = prepare_time_series(time_series_3d)
     assert result.shape == (100, 10, 5)
     assert np.allclose(result, time_series_3d)
@@ -419,18 +424,20 @@ def test_prepare_time_series_3d_passthrough():
 
 def test_prepare_time_series_invalid_axis():
     """Test that prepare_time_series raises error for invalid axis."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
-    time_series_2d = np.random.randn(100, 5)
+    time_series_2d = rng.standard_normal((100, 5))
     with pytest.raises(ValueError, match=r"axis must be.*'signals'.*'trials'"):
         prepare_time_series(time_series_2d, axis="invalid")
 
 
 def test_prepare_time_series_requires_axis_for_2d():
     """Test that prepare_time_series requires axis parameter for 2D input."""
+    rng = np.random.default_rng(42)
     from spectral_connectivity.transforms import prepare_time_series
 
-    time_series_2d = np.random.randn(100, 5)
+    time_series_2d = rng.standard_normal((100, 5))
     with pytest.raises(
         ValueError, match=r"For 2D input.*must specify.*axis.*parameter"
     ):
@@ -439,8 +446,9 @@ def test_prepare_time_series_requires_axis_for_2d():
 
 def test_multitaper_dimension_consistency():
     """Test that Multitaper produces consistent output for properly shaped 3D input."""
+    rng = np.random.default_rng(42)
     n_time_samples, n_trials, n_signals = 100, 10, 5
-    time_series = np.random.randn(n_time_samples, n_trials, n_signals)
+    time_series = rng.standard_normal((n_time_samples, n_trials, n_signals))
 
     m = Multitaper(time_series=time_series, sampling_frequency=1000)
 
@@ -459,7 +467,8 @@ def test_multitaper_dimension_consistency():
 
 def test_multitaper_rejects_negative_sampling_freq():
     """Test that Multitaper rejects negative sampling frequencies."""
-    time_series = np.random.randn(100, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
         Multitaper(time_series=time_series, sampling_frequency=-1000)
@@ -470,7 +479,8 @@ def test_multitaper_rejects_negative_sampling_freq():
 
 def test_multitaper_rejects_invalid_time_halfbandwidth():
     """Test that Multitaper rejects invalid time_halfbandwidth_product values."""
-    time_series = np.random.randn(100, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((100, 1, 1))
 
     # Test negative value
     with pytest.raises(
@@ -493,7 +503,8 @@ def test_multitaper_rejects_invalid_time_halfbandwidth():
 
 def test_multitaper_rejects_negative_time_window_duration():
     """Test that Multitaper rejects negative time_window_duration."""
-    time_series = np.random.randn(100, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.raises(ValueError, match=r"time_window_duration.*must be positive"):
         Multitaper(
@@ -510,7 +521,8 @@ def test_multitaper_rejects_negative_time_window_duration():
 
 def test_multitaper_rejects_negative_time_window_step():
     """Test that Multitaper rejects negative time_window_step."""
-    time_series = np.random.randn(100, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.raises(ValueError, match=r"time_window_step.*must be positive"):
         Multitaper(
@@ -523,9 +535,10 @@ def test_multitaper_rejects_negative_time_window_step():
 
 def test_multitaper_warns_likely_transposed():
     """Test that Multitaper warns when data appears to be transposed."""
+    rng = np.random.default_rng(42)
     # Create time series where n_time < n_signals (likely transposed)
     # Shape: (10 time points, 1 trial, 100 signals) - suspiciously few time points
-    time_series = np.random.randn(10, 1, 100)
+    time_series = rng.standard_normal((10, 1, 100))
 
     with pytest.warns(UserWarning, match=r"data may be transposed"):
         Multitaper(time_series=time_series, sampling_frequency=1000)
@@ -533,22 +546,23 @@ def test_multitaper_warns_likely_transposed():
 
 def test_multitaper_warns_on_nan_input():
     """Test that Multitaper warns when input contains NaN or Inf values."""
+    rng = np.random.default_rng(42)
     # Test NaN
-    time_series_nan = np.random.randn(100, 1, 1)
+    time_series_nan = rng.standard_normal((100, 1, 1))
     time_series_nan[50, 0, 0] = np.nan
 
     with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
         Multitaper(time_series=time_series_nan, sampling_frequency=1000)
 
     # Test Inf
-    time_series_inf = np.random.randn(100, 1, 1)
+    time_series_inf = rng.standard_normal((100, 1, 1))
     time_series_inf[50, 0, 0] = np.inf
 
     with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
         Multitaper(time_series=time_series_inf, sampling_frequency=1000)
 
     # Test -Inf
-    time_series_neginf = np.random.randn(100, 1, 1)
+    time_series_neginf = rng.standard_normal((100, 1, 1))
     time_series_neginf[50, 0, 0] = -np.inf
 
     with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
@@ -557,7 +571,8 @@ def test_multitaper_warns_on_nan_input():
 
 def test_multitaper_warns_on_large_time_halfbandwidth():
     """Test that Multitaper warns when time_halfbandwidth_product is unusually large."""
-    time_series = np.random.randn(100, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.warns(UserWarning, match=r"unusually large"):
         Multitaper(time_series=time_series, time_halfbandwidth_product=15)
@@ -565,7 +580,8 @@ def test_multitaper_warns_on_large_time_halfbandwidth():
 
 def test_multitaper_warns_on_step_larger_than_duration():
     """Test that Multitaper warns when time_window_step > time_window_duration."""
-    time_series = np.random.randn(1000, 1, 1)
+    rng = np.random.default_rng(42)
+    time_series = rng.standard_normal((1000, 1, 1))
 
     with pytest.warns(UserWarning, match=r"creates gaps"):
         Multitaper(

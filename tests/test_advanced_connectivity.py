@@ -9,6 +9,11 @@ from spectral_connectivity import Connectivity, Multitaper
 class TestCanonicalCoherence:
     """Test canonical_coherence() method."""
 
+    @pytest.fixture(autouse=True)
+    def setup_rng(self):
+        """Set up RNG for each test method."""
+        self.rng = np.random.default_rng(42)
+
     def test_canonical_coherence_basic(self):
         """Test basic canonical coherence computation."""
         # Create synthetic data with known structure:
@@ -28,9 +33,9 @@ class TestCanonicalCoherence:
             phase_offset = i * 0.1  # Small phase offsets
             signal = np.sin(2 * np.pi * freq1 * time + phase_offset)
             # Add trials with noise
-            signal_trials = signal[np.newaxis, :] + 0.1 * np.random.randn(
+            signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal((
                 n_trials, n_time
-            )
+            ))
             group1_signals.append(signal_trials)
 
         # Group 2 (signals 3, 4, 5) - strong coherence at 40 Hz
@@ -38,9 +43,9 @@ class TestCanonicalCoherence:
         for i in range(3):
             phase_offset = i * 0.1
             signal = np.sin(2 * np.pi * freq2 * time + phase_offset)
-            signal_trials = signal[np.newaxis, :] + 0.1 * np.random.randn(
+            signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal((
                 n_trials, n_time
-            )
+            ))
             group2_signals.append(signal_trials)
 
         # Combine all signals: shape (n_time, n_trials, n_signals)
@@ -97,7 +102,7 @@ class TestCanonicalCoherence:
 
         # Group 1: 2 signals, Group 2: 4 signals, Group 3: 3 signals
         n_signals = 9
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -136,7 +141,7 @@ class TestCanonicalCoherence:
         n_signals = 4
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -170,7 +175,7 @@ class TestCanonicalCoherence:
         n_signals = 6
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -202,7 +207,7 @@ class TestCanonicalCoherence:
         n_signals = 3  # One signal per group
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -229,6 +234,11 @@ class TestCanonicalCoherence:
 class TestGlobalCoherence:
     """Test global_coherence() method."""
 
+    @pytest.fixture(autouse=True)
+    def setup_rng(self):
+        """Set up RNG for each test method."""
+        self.rng = np.random.default_rng(42)
+
     def test_global_coherence_basic(self):
         """Test basic global coherence computation."""
         n_time = 100
@@ -246,10 +256,10 @@ class TestGlobalCoherence:
         for _i in range(n_signals):
             # Each signal = common component + independent noise
             weight = 0.7  # Strong common component
-            signal = weight * common_signal + (1 - weight) * np.random.randn(n_time)
-            signal_trials = signal[np.newaxis, :] + 0.1 * np.random.randn(
+            signal = weight * common_signal + (1 - weight) * self.rng.standard_normal((n_time))
+            signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal((
                 n_trials, n_time
-            )
+            ))
             signals.append(signal_trials)
 
         time_series = np.stack(signals, axis=-1)
@@ -296,7 +306,7 @@ class TestGlobalCoherence:
         n_signals = 6
         sampling_frequency = 500
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -340,7 +350,7 @@ class TestGlobalCoherence:
         n_signals = 4
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -375,7 +385,7 @@ class TestGlobalCoherence:
         n_signals = 2  # Minimum for connectivity
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -398,8 +408,8 @@ class TestGlobalCoherence:
         sampling_frequency = 100
 
         # Use deterministic data for reproducibility
-        np.random.seed(42)
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        rng = np.random.default_rng(42)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -420,6 +430,11 @@ class TestGlobalCoherence:
 class TestGroupDelay:
     """Test group_delay() method."""
 
+    @pytest.fixture(autouse=True)
+    def setup_rng(self):
+        """Set up RNG for each test method."""
+        self.rng = np.random.default_rng(42)
+
     def test_group_delay_basic(self):
         """Test basic group delay computation with known phase relationship."""
         # Create two signals with known time delay
@@ -437,12 +452,12 @@ class TestGroupDelay:
         signal2 = np.sin(2 * np.pi * freq * (time - time_delay))
 
         # Add trials
-        signal1_trials = signal1[np.newaxis, :] + 0.05 * np.random.randn(
+        signal1_trials = signal1[np.newaxis, :] + 0.05 * self.rng.standard_normal((
             n_trials, n_time
-        )
-        signal2_trials = signal2[np.newaxis, :] + 0.05 * np.random.randn(
+        ))
+        signal2_trials = signal2[np.newaxis, :] + 0.05 * self.rng.standard_normal((
             n_trials, n_time
-        )
+        ))
 
         # Combine: shape (n_time, n_trials, n_signals)
         time_series = np.stack([signal1_trials, signal2_trials], axis=-1)
@@ -496,7 +511,7 @@ class TestGroupDelay:
         n_signals = 3
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -529,7 +544,7 @@ class TestGroupDelay:
         n_signals = 3
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -566,7 +581,7 @@ class TestGroupDelay:
         n_signals = 3
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -601,7 +616,7 @@ class TestGroupDelay:
         n_signals = 3
         sampling_frequency = 200
 
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
@@ -637,10 +652,10 @@ class TestGroupDelay:
 
         signals = []
         for _i in range(n_signals):
-            signal = base_signal + 0.2 * np.random.randn(n_time)
-            signal_trials = signal[np.newaxis, :] + 0.1 * np.random.randn(
+            signal = base_signal + 0.2 * self.rng.standard_normal((n_time))
+            signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal((
                 n_trials, n_time
-            )
+            ))
             signals.append(signal_trials)
 
         time_series = np.stack(signals, axis=-1)
@@ -672,6 +687,11 @@ class TestGroupDelay:
 class TestAdvancedConnectivityIntegration:
     """Integration tests for advanced connectivity measures."""
 
+    @pytest.fixture(autouse=True)
+    def setup_rng(self):
+        """Set up RNG for each test method."""
+        self.rng = np.random.default_rng(42)
+
     def test_multitaper_to_connectivity_to_advanced_measures(self):
         """Test complete workflow from Multitaper to advanced measures."""
         # Create realistic synthetic data
@@ -691,9 +711,9 @@ class TestAdvancedConnectivityIntegration:
             signal = weight1 * np.sin(
                 2 * np.pi * freq1 * time + i * 0.2
             ) + weight2 * np.sin(2 * np.pi * freq2 * time + i * 0.3)
-            signal_trials = signal[np.newaxis, :] + 0.1 * np.random.randn(
+            signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal((
                 n_trials, n_time
-            )
+            ))
             signals.append(signal_trials)
 
         time_series = np.stack(signals, axis=-1)
@@ -752,8 +772,8 @@ class TestAdvancedConnectivityIntegration:
         sampling_frequency = 500
 
         # Deterministic seed for reproducibility
-        np.random.seed(123)
-        time_series = np.random.randn(n_time, n_trials, n_signals)
+        rng = np.random.default_rng(123)
+        time_series = self.rng.standard_normal((n_time, n_trials, n_signals))
 
         m = Multitaper(
             time_series=time_series,
