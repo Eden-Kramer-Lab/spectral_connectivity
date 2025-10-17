@@ -75,7 +75,7 @@ def _get_initial_conditions(
         return xp.linalg.cholesky(
             ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
         ).swapaxes(-1, -2)
-    except xp.linalg.linalg.LinAlgError:
+    except xp.linalg.LinAlgError:
         logger.warning(
             "Computing the initial conditions using the Cholesky failed. "
             "Using a random initial condition."
