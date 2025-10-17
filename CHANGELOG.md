@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)
 - Modern unified CI/CD workflow (`release.yml`) with automated PyPI publishing
 - Support for Python 3.13
+- Comprehensive parameter validation to `Multitaper` class:
+  - Validates `sampling_frequency > 0` with domain-specific examples (EEG, LFP, fMRI)
+  - Validates `time_halfbandwidth_product >= 1` with physical meaning explanation
+  - Validates `time_window_duration > 0` (when provided) with frequency resolution formula
+  - Validates `time_window_step > 0` (when provided) with overlap guidance
+  - Warns when `time_halfbandwidth_product > 10` (unusually large, performance impact)
+  - Warns when `time_window_step > time_window_duration` (creates data gaps)
+  - Warns when data appears transposed (`n_time < n_signals`)
+  - Warns when input contains NaN or Inf values with recovery suggestions
+- Input shape validation to `Connectivity` class:
+  - Requires 5D `fourier_coefficients` with clear error messages
+  - Validates minimum 2 signals for connectivity analysis
+  - Warns on NaN/Inf values in Fourier coefficients
+- `prepare_time_series()` helper function for safe dimension handling:
+  - Converts 1D/2D arrays to required 3D format
+  - Explicit `axis` parameter to clarify dimension meaning
+  - Prevents ambiguous dimension interpretation
+- Enhanced error messages following WHAT/WHY/HOW pattern throughout
+- 3D input requirement for `Multitaper` class to eliminate dimension ambiguity
 
 ### Changed
 - **BREAKING**: Minimum Python version raised from 3.9 to 3.10

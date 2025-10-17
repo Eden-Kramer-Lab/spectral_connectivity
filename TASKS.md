@@ -87,35 +87,45 @@
 
 ### Task 1.3: Add Parameter Validation to Multitaper
 
-- [ ] Validate `sampling_frequency > 0`
-  - [ ] Raise `ValueError` with suggested common values
-- [ ] Validate `time_halfbandwidth_product >= 1`
-  - [ ] Explain physical meaning in error message
-  - [ ] Suggest typical ranges (1-5)
-- [ ] Validate `time_window_duration > 0` (if provided)
-- [ ] Validate `time_window_step > 0` (if provided)
-- [ ] Add warning for likely transposed data:
-  - [ ] Check if `shape[0] < shape[1]` for 2D/3D arrays
-  - [ ] Warn user they may need to transpose
-- [ ] Add warning for NaN/Inf in input time_series
-  - [ ] Suggest interpolation, artifact removal, preprocessing checks
-- [ ] Write tests:
-  - [ ] `test_multitaper_rejects_negative_sampling_freq()`
-  - [ ] `test_multitaper_rejects_invalid_time_halfbandwidth()`
-  - [ ] `test_multitaper_warns_likely_transposed()`
-  - [ ] `test_multitaper_warns_on_nan_input()`
+- [x] Validate `sampling_frequency > 0`
+  - [x] Raise `ValueError` with suggested common values
+- [x] Validate `time_halfbandwidth_product >= 1`
+  - [x] Explain physical meaning in error message
+  - [x] Suggest typical ranges (1-5)
+  - [x] Add warning for unusually large values (> 10)
+- [x] Validate `time_window_duration > 0` (if provided)
+- [x] Validate `time_window_step > 0` (if provided)
+  - [x] Add warning when step > duration (creates gaps)
+- [x] Add warning for likely transposed data:
+  - [x] Check if `shape[0] < shape[2]` for 3D arrays (n_time < n_signals)
+  - [x] Warn user they may need to transpose
+- [x] Add warning for NaN/Inf in input time_series
+  - [x] Suggest interpolation, artifact removal, preprocessing checks
+- [x] Write tests:
+  - [x] `test_multitaper_rejects_negative_sampling_freq()`
+  - [x] `test_multitaper_rejects_invalid_time_halfbandwidth()`
+  - [x] `test_multitaper_rejects_negative_time_window_duration()`
+  - [x] `test_multitaper_rejects_negative_time_window_step()`
+  - [x] `test_multitaper_warns_likely_transposed()`
+  - [x] `test_multitaper_warns_on_nan_input()`
+  - [x] `test_multitaper_warns_on_large_time_halfbandwidth()`
+  - [x] `test_multitaper_warns_on_step_larger_than_duration()`
 
 **Files:**
 
-- `spectral_connectivity/transforms.py:73`
-- `tests/test_transforms.py`
+- `spectral_connectivity/transforms.py` - Lines 201-342
+- `tests/test_transforms.py` - Lines 457-577
 
 **Acceptance Criteria:**
 
-- [ ] All invalid parameters caught before computation
-- [ ] Error messages provide context and suggestions
-- [ ] Warnings guide users to fix data issues
-- [ ] 100% coverage of validation paths
+- [x] All invalid parameters caught before computation
+- [x] Error messages provide context and suggestions
+- [x] Warnings guide users to fix data issues
+- [x] 100% coverage of validation paths
+- [x] Applied spectral-code-reviewer and scientific-ux-reviewer agents
+- [x] Addressed all reviewer feedback
+
+**Completed:** 2025-10-17
 
 ---
 

@@ -452,3 +452,125 @@ def test_multitaper_dimension_consistency():
     fft_result = m.fft()
     assert fft_result.shape[1] == n_trials  # trials dimension
     assert fft_result.shape[4] == n_signals  # signals dimension
+
+
+# Task 1.3: Parameter Validation Tests
+
+
+def test_multitaper_rejects_negative_sampling_freq():
+    """Test that Multitaper rejects negative sampling frequencies."""
+    time_series = np.random.randn(100, 1, 1)
+
+    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+        Multitaper(time_series=time_series, sampling_frequency=-1000)
+
+    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+        Multitaper(time_series=time_series, sampling_frequency=0)
+
+
+def test_multitaper_rejects_invalid_time_halfbandwidth():
+    """Test that Multitaper rejects invalid time_halfbandwidth_product values."""
+    time_series = np.random.randn(100, 1, 1)
+
+    # Test negative value
+    with pytest.raises(
+        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
+    ):
+        Multitaper(time_series=time_series, time_halfbandwidth_product=-1)
+
+    # Test zero
+    with pytest.raises(
+        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
+    ):
+        Multitaper(time_series=time_series, time_halfbandwidth_product=0)
+
+    # Test value less than 1
+    with pytest.raises(
+        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
+    ):
+        Multitaper(time_series=time_series, time_halfbandwidth_product=0.5)
+
+
+def test_multitaper_rejects_negative_time_window_duration():
+    """Test that Multitaper rejects negative time_window_duration."""
+    time_series = np.random.randn(100, 1, 1)
+
+    with pytest.raises(ValueError, match=r"time_window_duration.*must be positive"):
+        Multitaper(
+            time_series=time_series,
+            sampling_frequency=1000,
+            time_window_duration=-0.5,
+        )
+
+    with pytest.raises(ValueError, match=r"time_window_duration.*must be positive"):
+        Multitaper(
+            time_series=time_series, sampling_frequency=1000, time_window_duration=0
+        )
+
+
+def test_multitaper_rejects_negative_time_window_step():
+    """Test that Multitaper rejects negative time_window_step."""
+    time_series = np.random.randn(100, 1, 1)
+
+    with pytest.raises(ValueError, match=r"time_window_step.*must be positive"):
+        Multitaper(
+            time_series=time_series, sampling_frequency=1000, time_window_step=-0.1
+        )
+
+    with pytest.raises(ValueError, match=r"time_window_step.*must be positive"):
+        Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=0)
+
+
+def test_multitaper_warns_likely_transposed():
+    """Test that Multitaper warns when data appears to be transposed."""
+    # Create time series where n_time < n_signals (likely transposed)
+    # Shape: (10 time points, 1 trial, 100 signals) - suspiciously few time points
+    time_series = np.random.randn(10, 1, 100)
+
+    with pytest.warns(UserWarning, match=r"data may be transposed"):
+        Multitaper(time_series=time_series, sampling_frequency=1000)
+
+
+def test_multitaper_warns_on_nan_input():
+    """Test that Multitaper warns when input contains NaN or Inf values."""
+    # Test NaN
+    time_series_nan = np.random.randn(100, 1, 1)
+    time_series_nan[50, 0, 0] = np.nan
+
+    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
+        Multitaper(time_series=time_series_nan, sampling_frequency=1000)
+
+    # Test Inf
+    time_series_inf = np.random.randn(100, 1, 1)
+    time_series_inf[50, 0, 0] = np.inf
+
+    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
+        Multitaper(time_series=time_series_inf, sampling_frequency=1000)
+
+    # Test -Inf
+    time_series_neginf = np.random.randn(100, 1, 1)
+    time_series_neginf[50, 0, 0] = -np.inf
+
+    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
+        Multitaper(time_series=time_series_neginf, sampling_frequency=1000)
+
+
+def test_multitaper_warns_on_large_time_halfbandwidth():
+    """Test that Multitaper warns when time_halfbandwidth_product is unusually large."""
+    time_series = np.random.randn(100, 1, 1)
+
+    with pytest.warns(UserWarning, match=r"unusually large"):
+        Multitaper(time_series=time_series, time_halfbandwidth_product=15)
+
+
+def test_multitaper_warns_on_step_larger_than_duration():
+    """Test that Multitaper warns when time_window_step > time_window_duration."""
+    time_series = np.random.randn(1000, 1, 1)
+
+    with pytest.warns(UserWarning, match=r"creates gaps"):
+        Multitaper(
+            time_series=time_series,
+            sampling_frequency=1000,
+            time_window_duration=0.5,
+            time_window_step=1.0,
+        )

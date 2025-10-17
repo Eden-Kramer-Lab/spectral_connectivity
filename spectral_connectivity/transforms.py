@@ -198,6 +198,149 @@ class Multitaper:
 
             raise ValueError(error_msg)
 
+        # Validate sampling_frequency
+        if sampling_frequency <= 0:
+            raise ValueError(
+                f"sampling_frequency must be positive, got {sampling_frequency}.\n"
+                "\n"
+                "The sampling frequency is the rate at which your data was collected.\n"
+                "Common values:\n"
+                "  - EEG: 250-1000 Hz\n"
+                "  - LFP/ephys: 1000-30000 Hz\n"
+                "  - fMRI: 0.5-2 Hz (1/TR)\n"
+                "\n"
+                "Check your data acquisition settings or metadata."
+            )
+
+        # Validate time_halfbandwidth_product
+        if time_halfbandwidth_product < 1:
+            raise ValueError(
+                f"time_halfbandwidth_product must be at least 1, got {time_halfbandwidth_product}.\n"
+                "\n"
+                "The time-halfbandwidth product controls the spectral concentration and\n"
+                "number of tapers used. It represents the trade-off between:\n"
+                "  - Frequency resolution (lower values = better resolution)\n"
+                "  - Variance reduction (higher values = more averaging, less variance)\n"
+                "\n"
+                "Typical values:\n"
+                "  - 1-2: Good frequency resolution, minimal smoothing\n"
+                "  - 3-4: Balanced (recommended for most applications)\n"
+                "  - 5+: Heavy smoothing, strong variance reduction\n"
+                "\n"
+                "A value less than 1 is not physically meaningful."
+            )
+
+        # Warn if time_halfbandwidth_product is unusually large
+        if time_halfbandwidth_product > 10:
+            import warnings
+
+            warnings.warn(
+                f"time_halfbandwidth_product = {time_halfbandwidth_product} is unusually large.\n"
+                "\n"
+                "Values above 10 apply very heavy spectral smoothing and are rarely used.\n"
+                "This will create many tapers and significantly slow computation.\n"
+                "\n"
+                "Common values are 1-5. If you're unsure, try 3 (a typical default).\n"
+                "If you specifically need heavy smoothing, you can ignore this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Validate time_window_duration
+        if time_window_duration is not None and time_window_duration <= 0:
+            raise ValueError(
+                f"time_window_duration must be positive, got {time_window_duration}.\n"
+                "\n"
+                "The time window duration is the length of each analysis window in seconds.\n"
+                "It determines the frequency resolution: Δf ≈ 2 * time_halfbandwidth_product / time_window_duration.\n"
+                "\n"
+                "Examples:\n"
+                "  - 1.0 second window with NW=3 → ~6 Hz resolution\n"
+                "  - 0.5 second window with NW=3 → ~12 Hz resolution\n"
+                "\n"
+                "Use None (default) to analyze the entire time series without windowing."
+            )
+
+        # Validate time_window_step
+        if time_window_step is not None and time_window_step <= 0:
+            raise ValueError(
+                f"time_window_step must be positive, got {time_window_step}.\n"
+                "\n"
+                "The time window step is how far to advance the window for each computation (in seconds).\n"
+                "  - Small step: More time resolution, more overlapping windows, slower computation\n"
+                "  - Large step: Less overlap, faster computation, coarser time resolution\n"
+                "\n"
+                "Common choices:\n"
+                "  - step = duration: No overlap (consecutive windows)\n"
+                "  - step = duration/2: 50% overlap (recommended for most applications)\n"
+                "  - step < duration: More overlap, smoother temporal evolution\n"
+                "\n"
+                "Use None (default) to match time_window_duration (no overlap)."
+            )
+
+        # Warn if time_window_step creates gaps between windows
+        if (
+            time_window_step is not None
+            and time_window_duration is not None
+            and time_window_step > time_window_duration
+        ):
+            import warnings
+
+            warnings.warn(
+                f"time_window_step ({time_window_step}s) is larger than "
+                f"time_window_duration ({time_window_duration}s).\n"
+                "\n"
+                "This creates gaps between analysis windows - some data will not be analyzed.\n"
+                "If you want contiguous coverage, set step ≤ duration.\n"
+                "\n"
+                "If gaps are intended (e.g., sampling every Nth window), ignore this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Warn if data appears to be transposed (very few time points, many signals)
+        n_time, _, n_signals = self.time_series.shape
+        if n_time < n_signals:
+            import warnings
+
+            warnings.warn(
+                f"Your time series has only {n_time} time points but {n_signals} signals. "
+                "This seems unusual and your data may be transposed.\n"
+                "\n"
+                "Expected shape: (n_time_samples, n_trials, n_signals)\n"
+                f"Your shape: {self.time_series.shape}\n"
+                "\n"
+                "If your data is transposed, use:\n"
+                "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
+                "\n"
+                "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Warn if data contains NaN or Inf
+        if not xp.all(xp.isfinite(self.time_series)):
+            import warnings
+
+            warnings.warn(
+                "Input time_series contains NaN or infinite values.\n"
+                "\n"
+                "This will produce invalid spectral estimates. Common causes:\n"
+                "  - Missing data or recording artifacts\n"
+                "  - Incorrect preprocessing (division by zero, log of negative)\n"
+                "  - Corrupted data files\n"
+                "\n"
+                "Suggestions:\n"
+                "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
+                "  - Remove bad segments or trials\n"
+                "  - Check your preprocessing pipeline\n"
+                "  - Verify data integrity\n"
+                "\n"
+                "For artifact removal, consider using MNE-Python or similar tools.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
