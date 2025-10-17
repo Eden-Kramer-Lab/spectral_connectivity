@@ -606,6 +606,52 @@ def test_subset_pairwise_granger_prediction():
         assert np.allclose(gp_subset[..., j, i], gp_all[..., j, i], equal_nan=True)
 
 
+def test_nyquist_bin_even_n():
+    """Test that Nyquist bin is included for even N FFT lengths."""
+    # Create signal with even FFT length (N=1024)
+    np.random.seed(42)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 1, 1, 1024, 2
+
+    # Create random fourier coefficients with full frequency spectrum
+    fourier_coefficients = np.random.random(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+    ).astype(complex)
+
+    c = Connectivity(fourier_coefficients=fourier_coefficients)
+
+    # Test coherence which uses @_non_negative_frequencies decorator
+    coherence = c.coherence_magnitude()
+
+    # For even N=1024, should have N//2+1 = 513 frequencies (including Nyquist)
+    expected_n_frequencies = n_fft_samples // 2 + 1
+    assert (
+        coherence.shape[-3] == expected_n_frequencies
+    ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+
+
+def test_nyquist_bin_odd_n():
+    """Test that frequency indexing works correctly for odd N FFT lengths."""
+    # Create signal with odd FFT length (N=1023)
+    np.random.seed(42)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 1, 1, 1023, 2
+
+    # Create random fourier coefficients with full frequency spectrum
+    fourier_coefficients = np.random.random(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+    ).astype(complex)
+
+    c = Connectivity(fourier_coefficients=fourier_coefficients)
+
+    # Test coherence which uses @_non_negative_frequencies decorator
+    coherence = c.coherence_magnitude()
+
+    # For odd N=1023, should have (N+1)//2 = 512 frequencies (no Nyquist)
+    expected_n_frequencies = (n_fft_samples + 1) // 2
+    assert (
+        coherence.shape[-3] == expected_n_frequencies
+    ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+
+
 def test_connectivity_rejects_wrong_ndim():
     """Test that Connectivity rejects inputs with wrong number of dimensions."""
     import pytest

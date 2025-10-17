@@ -184,7 +184,7 @@ def test_frequencies():
         assert not (cons[mea].values == 0).all()
         assert not (np.isnan(cons[mea].values)).all()
 
-        expected_frequencies = np.array([0, 250])
+        expected_frequencies = np.array([0, 250, -500])  # Now includes Nyquist bin
         assert np.allclose(cons[mea].frequency, expected_frequencies)
 
 

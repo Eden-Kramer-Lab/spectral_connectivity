@@ -51,6 +51,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All TODO comments from codebase (2 resolved)
 
 ### Fixed
+
+#### **BREAKING CHANGE: Nyquist Frequency Now Included for Even-Length FFTs**
+
+- **Critical bug fix**: Corrected frequency bin indexing to include Nyquist frequency for even-length FFTs
+  - **Affected code**: Changed frequency indexing from `(N+1)//2` to `N//2 + 1` in three locations:
+    - `_non_negative_frequencies` decorator (line 107)
+    - `canonical_coherence` method (line 638)
+    - `_estimate_spectral_granger_prediction` function (line 2108)
+  - **Impact on results**:
+    - Even-length FFTs (N=1024): Now return 513 frequencies instead of 512 (adds Nyquist bin)
+    - Odd-length FFTs (N=1023): No change (still return 512 frequencies)
+  - **Affected functions**: All connectivity measures using `@_non_negative_frequencies` decorator:
+    - `coherency()`, `coherence_magnitude()`, `coherence_phase()`, `imaginary_coherence()`
+    - `phase_lag_index()`, `weighted_phase_lag_index()`, `debiased_squared_phase_lag_index()`
+    - `debiased_squared_weighted_phase_lag_index()`, `phase_locking_value()`, `pairwise_phase_consistency()`
+    - `power()`, all Granger causality measures (DTF, PDC, etc.)
+  - **Scientific justification**: The Nyquist frequency (sampling_rate/2) represents the highest frequency
+    that can be unambiguously represented in sampled data. For even-length FFTs, this frequency should be
+    included once (not in negative frequencies). Excluding it discards valid spectral information and
+    violates standard FFT conventions (numpy.fft.rfft, scipy.fft.rfft).
+  - **Migration impact**:
+    - New analyses: More accurate (includes previously missing frequency information)
+    - Comparing to old results: Array shapes differ by 1 in frequency dimension for even-length FFTs
+    - Published results: Document which version was used in methods section
+  - **Tests added**:
+    - `test_nyquist_bin_even_n()`: Validates N=1024 produces 513 frequencies
+    - `test_nyquist_bin_odd_n()`: Validates N=1023 produces 512 frequencies
+  - **Example**: With 1000 Hz sampling and 1024-sample FFT:
+    - Old (incorrect): 512 bins, missing 500 Hz (Nyquist)
+    - New (correct): 513 bins, includes 500 Hz (Nyquist)
+  - See PR #71 for detailed analysis and discussion
+
 - CHANGELOG.md to track version changes following Keep a Changelog format
 - Ruff linter configuration for faster, more comprehensive Python linting
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)
