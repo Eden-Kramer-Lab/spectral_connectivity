@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All TODO comments from codebase (2 resolved)
 
 ### Fixed
+
+- **Numerical stability improvements for coherence calculations**:
+  - Replaced zero-clamping with epsilon-clamping in `coherency()` to prevent division by zero
+  - Changed from `norm[norm == 0] = xp.nan` to `norm = xp.maximum(norm, xp.finfo(norm.dtype).eps)`
+  - Added bounds clipping to `coherence_magnitude()` to ensure values stay in [0, 1] range
+  - Added bounds clipping to `imaginary_coherence()` with epsilon protection
+  - Prevents numerical artifacts from floating-point precision issues
+  - More graceful degradation for low-power signals compared to NaN propagation
+  - Added comprehensive test suite (`test_coherence_bounds.py`) with 3 tests covering edge cases
+  - See PR #62 for detailed analysis
+
 - CHANGELOG.md to track version changes following Keep a Changelog format
 - Ruff linter configuration for faster, more comprehensive Python linting
 - Enhanced package metadata with additional project URLs (Changelog, Source Code, Issue Tracker)
