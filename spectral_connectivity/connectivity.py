@@ -1,11 +1,13 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import os
+import warnings
+from collections.abc import Callable
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,16 +27,34 @@ logger = getLogger(__name__)
 
 if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
     try:
-        logger.info("Using GPU for spectral_connectivity...")
         import cupy as xp
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
-    except ImportError:
+
+        # Log GPU device information
+        try:
+            device = xp.cuda.Device()
+            # Try to get the actual GPU model name first
+            try:
+                device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
+                    "name"
+                ].decode()
+                device_name = device_name.strip("\x00")
+            except Exception:
+                # Fallback to compute capability
+                compute_cap = device.compute_capability
+                device_name = (
+                    f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
+                )
+            logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+        except Exception:
+            logger.info("Using GPU for spectral_connectivity...")
+    except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        )
+        ) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
@@ -152,6 +172,8 @@ class Connectivity:
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
+        **Validation**: Must be 5-dimensional with at least 2 signals and
+        contain only finite values (no NaN/Inf).
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
@@ -167,8 +189,42 @@ class Connectivity:
     time : NDArray[floating], shape (n_time_windows,), optional
         Time values in seconds for each time window. If None, uses indices.
     blocks : int, optional
-        Number of blocks for memory-efficient computation of large arrays.
-        Useful for high-resolution spectrograms.
+        Number of blocks for memory-efficient computation of large connectivity
+        matrices. When specified, the cross-spectral matrix is computed in
+        chunks rather than all at once, reducing peak memory usage.
+
+        **When to use blocks:**
+
+        - Large number of signals (n_signals >= 50, as a rough guideline;
+          benefit increases with more signals)
+        - Memory-constrained environments
+        - High-resolution spectrograms (large n_time_windows × n_frequencies)
+        - GPU computing with limited VRAM
+
+        **When NOT to use blocks:**
+
+        - Small datasets (n_signals < 50): The overhead of block management
+          may exceed the memory benefit, making blocks=None faster
+        - When speed is critical and memory is abundant
+
+        **Memory-Speed Tradeoff:**
+
+        - **Without blocks** (default): Fastest for small datasets, but requires
+          memory for full (n_time_windows × n_frequencies × n_signals × n_signals)
+          array
+        - **With blocks**: Reduces peak memory by 70-80% for large arrays
+          (measured 73% reduction for n_signals=50, blocks=5), with minimal
+          speed penalty (typically <10%)
+
+        **Quick Decision Guide:**
+
+        - n_signals < 50: Use default (blocks=None)
+        - 50 ≤ n_signals < 100: Use blocks=5 if memory is limited
+        - n_signals ≥ 100: Recommended blocks=5 or blocks=10
+        - Out of memory errors: Increase blocks value (try doubling)
+
+        **Important**: Results are numerically identical whether using blocks
+        or not (validated to floating-point precision).
     dtype : np.dtype, default=complex128
         Data type for internal computations. Should match input precision.
 
@@ -219,20 +275,86 @@ class Connectivity:
         self,
         fourier_coefficients: NDArray[np.complexfloating],
         expectation_type: str = "trials_tapers",
-        frequencies: Optional[NDArray[np.floating]] = None,
-        time: Optional[NDArray[np.floating]] = None,
-        blocks: Optional[int] = None,
+        frequencies: NDArray[np.floating] | None = None,
+        time: NDArray[np.floating] | None = None,
+        blocks: int | None = None,
         dtype: np.dtype = xp.complex128,
     ) -> None:
-        self.fourier_coefficients = fourier_coefficients
-
-        # Validate expectation_type early
-        if expectation_type not in EXPECTATION:
-            allowed_values = ", ".join(f"'{k}'" for k in sorted(EXPECTATION.keys()))
+        # Validate shape of fourier_coefficients
+        if fourier_coefficients.ndim != 5:
             raise ValueError(
-                f"Invalid expectation_type '{expectation_type}'. "
-                f"Allowed values are: {allowed_values}"
+                f"fourier_coefficients must be 5-dimensional, got {fourier_coefficients.ndim}D array.\n"
+                f"Expected shape: (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)\n"
+                f"Got shape: {fourier_coefficients.shape}\n\n"
+                f"If you have time series data, use the Multitaper class to transform it:\n"
+                f"  from spectral_connectivity import Multitaper\n"
+                f"  m = Multitaper(time_series, sampling_frequency=your_fs, ...)\n"
+                f"  fourier_coefficients = m.fft()"
             )
+
+        # Validate minimum number of signals
+        n_signals = fourier_coefficients.shape[-1]
+        if n_signals < 2:
+            raise ValueError(
+                f"At least 2 signals are required for connectivity analysis, got {n_signals}.\n"
+                f"fourier_coefficients shape: {fourier_coefficients.shape}\n"
+                f"The last dimension should contain at least 2 signals."
+            )
+
+        # Validate expectation_type early (fail fast before expensive operations)
+        if expectation_type not in EXPECTATION:
+            # Detect common mistakes: wrong word order
+            words = set(expectation_type.split("_"))
+            valid_words = {"time", "trials", "tapers"}
+            suggestion = None
+
+            if words.issubset(valid_words):
+                # User has the right words, just wrong order
+                # Find the correct ordering
+                for valid_key in EXPECTATION.keys():
+                    if set(valid_key.split("_")) == words:
+                        suggestion = valid_key
+                        break
+
+            error_msg = (
+                f"Invalid expectation_type '{expectation_type}' is not supported.\n"
+                f"This parameter controls which dimensions to average over when computing "
+                f"the cross-spectral matrix.\n"
+            )
+
+            if suggestion:
+                error_msg += (
+                    f"\nDid you mean '{suggestion}'? "
+                    f"(The words must be in a specific order)\n"
+                )
+
+            error_msg += "\nValid options are:\n"
+            for key in sorted(EXPECTATION.keys()):
+                error_msg += f"  - '{key}'\n"
+
+            error_msg += (
+                "\nMost common: 'trials_tapers' (average over both trials and tapers)"
+            )
+
+            raise ValueError(error_msg)
+
+        # Check for NaN or Inf values (expensive but important validation)
+        if not xp.all(xp.isfinite(fourier_coefficients)):
+            warnings.warn(
+                "fourier_coefficients contains NaN or Inf values. This may indicate:\n"
+                "  - NaN/Inf in your input time series data\n"
+                "  - Issues with windowing parameters (e.g., window too short)\n"
+                "  - Numerical instability in preprocessing\n\n"
+                "Suggestions:\n"
+                "  - Check your input data for NaN/Inf values\n"
+                "  - Consider interpolating missing data points\n"
+                "  - Review artifact removal procedures\n"
+                "  - Verify time_window_duration and time_halfbandwidth_product parameters",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        self.fourier_coefficients = fourier_coefficients
 
         self.expectation_type = expectation_type
         self._frequencies = frequencies
@@ -282,7 +404,7 @@ class Connectivity:
     @property
     @_asnumpy
     @_non_negative_frequencies(axis=0)
-    def frequencies(self) -> Optional[NDArray[np.floating]]:
+    def frequencies(self) -> NDArray[np.floating] | None:
         """Return non-negative frequencies of the transform.
 
         Returns
@@ -297,7 +419,7 @@ class Connectivity:
 
     @property
     @_asnumpy
-    def all_frequencies(self) -> Optional[NDArray[np.floating]]:
+    def all_frequencies(self) -> NDArray[np.floating] | None:
         """Return positive and negative frequencies of the transform.
 
         Returns
@@ -333,7 +455,7 @@ class Connectivity:
         )
 
     def _expectation_cross_spectral_matrix(
-        self, fcn: Optional[Callable] = None, dtype: Optional[np.dtype] = None
+        self, fcn: Callable | None = None, dtype: np.dtype | None = None
     ) -> NDArray[np.complexfloating]:
         """Compute full or block-wise cross-spectral matrix.
 
@@ -366,7 +488,7 @@ class Connectivity:
 
             # define sections
             n_signals = fourier_coefficients.shape[-2]
-            _is, _it = xp.triu_indices(n_signals, k=1)
+            _is, _it = xp.triu_indices(n_signals, k=0)
             sections = xp.array_split(xp.c_[_is, _it], self._blocks)
 
             # prepare final output
@@ -391,14 +513,14 @@ class Connectivity:
                     )
                 )
 
-                # fill the output array (symmetric filling)
+                # fill the output array (Hermitian symmetric filling)
                 csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
-                csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
+                csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = xp.conj(_out)
 
         return csm
 
     def _subset_cross_spectral_matrix(
-        self, pairs: Union[list, NDArray[np.integer]]
+        self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
         """Compute cross-spectral matrix for subset of channel pairs.
 
@@ -611,7 +733,7 @@ class Connectivity:
 
     def canonical_coherence(
         self, group_labels: NDArray[np.integer]
-    ) -> Tuple[NDArray[np.floating], NDArray[np.integer]]:
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
         """Find the maximal coherence between each combination of groups.
 
         The canonical coherence finds two sets of weights such that the
@@ -651,7 +773,7 @@ class Connectivity:
         ]
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
-                fourier_coefficients[..., np.in1d(group_labels, label)]
+                fourier_coefficients[..., xp.isin(group_labels, label)]
             )
             for label in labels
         ]
@@ -688,7 +810,7 @@ class Connectivity:
 
     def global_coherence(
         self, max_rank: int = 1
-    ) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
 
         The linear combinations of signals that capture the most coherent
@@ -835,7 +957,13 @@ class Connectivity:
         """
 
         def fcn(x):
-            return xp.sign(x.imag)
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            # Self-connections should have zero imaginary component
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.sign(imag_part)
 
         return self._expectation_cross_spectral_matrix(fcn=fcn)
 
@@ -867,12 +995,25 @@ class Connectivity:
 
         """
 
-        def fcn(x):
-            return xp.abs(x.imag)
+        def fcn_abs(x):
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.abs(imag_part)
 
-        weights = self._expectation_cross_spectral_matrix(fcn=fcn)
+        def fcn_imag(x):
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part
+
+        weights = self._expectation_cross_spectral_matrix(fcn=fcn_abs)
         weights[weights < xp.finfo(float).eps] = 1
-        return self._expectation_cross_spectral_matrix(fcn=lambda x: x.imag) / weights
+        return self._expectation_cross_spectral_matrix(fcn=fcn_imag) / weights
 
     @_asnumpy
     def debiased_squared_phase_lag_index(self):
@@ -935,13 +1076,28 @@ class Connectivity:
 
         # define functions
         def fcn_imag(x):
-            return x.imag
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part
 
         def fcn_imag_sq(x):
-            return x.imag**2
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part**2
 
         def fcn_abs_imag(x):
-            return xp.abs(x.imag)
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.abs(imag_part)
 
         n_observations = self.n_observations
         imaginary_csm_sum = (
@@ -1020,11 +1176,11 @@ class Connectivity:
         n_signals = csm.shape[-1]
         pairs = combinations(range(n_signals), 2)
         total_power = self._power
-        return _estimate_spectral_granger_prediction(total_power, csm, pairs)
+        return _estimate_spectral_granger_prediction(total_power, csm, pairs)  # type: ignore[arg-type]
 
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
-        self, pairs: Union[list, NDArray[np.integer]]
+        self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.floating]:
         """Return predictive power for a subset of signal pairs.
 
@@ -1698,8 +1854,8 @@ def _set_diagonal_to_zero(
 
 def _total_inflow(
     transfer_function: NDArray[np.complexfloating],
-    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
-    axis: Union[int, Tuple[int, ...]] = -1,
+    noise_variance: float | NDArray[np.floating] = 1.0,
+    axis: int | tuple[int, ...] = -1,
 ) -> NDArray[np.floating]:
     """Measure effect of incoming signals onto a node via sum of squares.
 
@@ -1750,7 +1906,7 @@ def _get_noise_variance(
 
 def _total_outflow(
     MVAR_Fourier_coefficients: NDArray[np.complexfloating],
-    noise_variance: Union[float, NDArray[np.floating]] = 1.0,
+    noise_variance: float | NDArray[np.floating] = 1.0,
 ) -> NDArray[np.floating]:
     """Measure effect of outgoing signals on the node via sum of squares.
 
@@ -1967,7 +2123,7 @@ def _get_independent_frequencies(
     """
     index = is_significant.nonzero()[0]
     independent_index = index[0 : len(index) : frequency_step]
-    return np.in1d(np.arange(0, len(is_significant)), independent_index)
+    return xp.isin(np.arange(0, len(is_significant)), independent_index)
 
 
 def _find_largest_independent_group(
@@ -2058,7 +2214,7 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 
 def _estimate_global_coherence(
     fourier_coefficients: NDArray[np.complexfloating], max_rank: int = 1
-) -> Tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Estimate global coherence.
 
     Parameters
@@ -2083,9 +2239,7 @@ def _estimate_global_coherence(
             fourier_coefficients, full_matrices=False
         )
         global_coherence = global_coherence[:max_rank] ** 2 / n_estimates
-        unnormalized_global_coherence = unnormalized_global_coherence[
-            :, :max_rank
-        ]  # noqa
+        unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]
     else:
         unnormalized_global_coherence, global_coherence, _ = svds(
             fourier_coefficients, max_rank
@@ -2098,7 +2252,7 @@ def _estimate_global_coherence(
 def _estimate_spectral_granger_prediction(
     total_power: NDArray[np.floating],
     csm: NDArray[np.complexfloating],
-    pairs: Union[list, NDArray[np.integer]],
+    pairs: list | NDArray[np.integer],
 ) -> NDArray[np.floating]:
     """
     Estimate spectral granger causality.

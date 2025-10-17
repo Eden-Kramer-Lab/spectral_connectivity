@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 from pytest import mark
 
@@ -184,3 +186,65 @@ def test_frequencies():
 
         expected_frequencies = np.array([0, 250])
         assert np.allclose(cons[mea].frequency, expected_frequencies)
+
+
+def test_method_discovery_with_inspect():
+    """Test that inspect.getmembers() correctly identifies Connectivity methods.
+
+    This test verifies that the refactored method discovery in wrapper.py
+    using inspect.getmembers() finds all expected connectivity methods.
+    """
+    # Methods that should be excluded (not connectivity measures or not xarray-compatible)
+    excluded_methods = {
+        # Properties and utility methods
+        "delay",
+        "n_observations",
+        "frequencies",
+        "all_frequencies",
+        "global_coherence",
+        "from_multitaper",
+        "phase_slope_index",
+        "subset_pairwise_spectral_granger_prediction",
+        # Methods not supported by xarray interface
+        "group_delay",
+        "canonical_coherence",
+        "directed_transfer_function",
+        "directed_coherence",
+        "partial_directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+        "blockwise_spectral_granger_prediction",
+    }
+
+    # Get methods using inspect (same as wrapper.py implementation)
+    methods_via_inspect = [
+        name
+        for name, member in inspect.getmembers(
+            Connectivity, predicate=inspect.isfunction
+        )
+        if not name.startswith("_") and name not in excluded_methods
+    ]
+
+    # Get methods using dir() (old implementation)
+    methods_via_dir = [
+        x
+        for x in dir(Connectivity)
+        if not x.startswith("_") and x not in excluded_methods
+    ]
+
+    # Both methods should find the same set of methods
+    assert set(methods_via_inspect) == set(methods_via_dir)
+
+    # Verify we find expected connectivity methods
+    expected_methods = {
+        "coherence_magnitude",
+        "coherency",
+        "imaginary_coherence",
+        "phase_locking_value",
+        "power",
+    }
+    assert expected_methods.issubset(set(methods_via_inspect))
+
+    # Verify excluded methods are not included
+    found_methods_set = set(methods_via_inspect)
+    assert not excluded_methods.intersection(found_methods_set)

@@ -1,6 +1,14 @@
-"""Common statistical procedures used with frequency domain measures."""
+"""Statistical procedures for connectivity analysis.
 
-from typing import Callable, Dict, Literal, Tuple, Union
+This module provides statistical functions for testing significance of
+connectivity measures, including multiple comparison corrections and
+transforms for coherence-based measures. Functions support both parametric
+and non-parametric approaches for statistical inference in frequency domain
+connectivity analysis.
+"""
+
+from collections.abc import Callable
+from typing import Literal
 
 import numpy as np
 import scipy.special
@@ -44,7 +52,7 @@ def Benjamini_Hochberg_procedure(
     threshold_line = np.linspace(0, alpha, num=p_values.size + 1, endpoint=True)[1:]
     sorted_p_values = np.sort(p_values.flatten())
     try:
-        threshold_ind: int = np.max(np.where(sorted_p_values <= threshold_line)[0])
+        threshold_ind = int(np.max(np.where(sorted_p_values <= threshold_line)[0]))
         threshold = sorted_p_values[threshold_ind]
     except ValueError:  # There are no values below threshold
         threshold = -1
@@ -84,7 +92,7 @@ def Bonferroni_correction(
     return p_values <= alpha / p_values.size
 
 
-MULTIPLE_COMPARISONS: Dict[str, Callable] = {
+MULTIPLE_COMPARISONS: dict[str, Callable] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,
 }
@@ -128,14 +136,18 @@ def adjust_for_multiple_comparisons(
     ...     p_vals, method="Bonferroni_correction"
     ... )
     """
-    # TODO: add axis keyword?
+    # Note: This function treats all p-values as a single family of tests by
+    # flattening the input array. This is the standard approach for multiple
+    # comparison correction. An axis parameter could be added in the future if
+    # there's a need to correct along specific dimensions independently, but
+    # current use cases don't require this functionality.
     return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
 
 
 def coherence_fisher_z_transform(
     coherency1: NDArray[np.complexfloating],
     n_obs1: int,
-    coherency2: Union[NDArray[np.complexfloating], float] = 0,
+    coherency2: NDArray[np.complexfloating] | float = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform coherence magnitude to approximately normal distribution.
@@ -232,7 +244,7 @@ def get_normal_distribution_p_values(
     try:
         return 1 - scipy.stats.norm.cdf(data, loc=mean, scale=std_deviation)
     except TypeError:
-        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)
+        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)  # type: ignore[attr-defined]
 
 
 def coherence_bias(n_observations: int) -> float:
@@ -341,9 +353,9 @@ def coherence_rate_adjustment(
 
 def power_confidence_intervals(
     n_tapers: int,
-    power: Union[NDArray[np.floating], float] = 1,
+    power: NDArray[np.floating] | float = 1,
     ci: float = 0.95,
-) -> Tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
     Uses chi-squared distribution to compute confidence bounds for power
@@ -435,7 +447,7 @@ def power_variance(n_observations: int) -> float:
 def power_fisher_z_transform(
     spectrum1: NDArray[np.floating],
     n_obs1: int,
-    spectrum2: Union[NDArray[np.floating], float] = 0,
+    spectrum2: NDArray[np.floating] | float = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform power spectrum estimates for statistical testing.

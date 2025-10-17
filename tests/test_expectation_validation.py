@@ -53,7 +53,7 @@ def test_invalid_expectation_type_raises_error():
 
     # Check error message contains key elements
     assert "Invalid expectation_type 'invalid_option'" in error_msg
-    assert "Allowed values are:" in error_msg
+    assert "Valid options are:" in error_msg  # Updated format
     assert "'trials'" in error_msg  # Should list valid options
     assert "'trials_tapers'" in error_msg  # Should list valid options
 

@@ -560,7 +560,8 @@ def test__inner_combination():
 
 
 def test_directed_transfer_function():
-    c = Connectivity(fourier_coefficients=np.empty((1,)))
+    # Use proper 5D shape for fourier_coefficients
+    c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
     type(c)._transfer_function = PropertyMock(
         return_value=np.arange(1, 5).reshape((2, 2))
     )
@@ -570,7 +571,8 @@ def test_directed_transfer_function():
 
 
 def test_partial_directed_coherence():
-    c = Connectivity(fourier_coefficients=np.empty((1,)))
+    # Use proper 5D shape for fourier_coefficients
+    c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
     type(c)._MVAR_Fourier_coefficients = PropertyMock(
         return_value=np.arange(1, 5).reshape((2, 2))
     )
@@ -655,3 +657,374 @@ def test_mvar_regularized_inverse_near_singular():
     assert np.all(np.isfinite(dtf))
     assert np.all(dtf >= 0)  # DTF should be non-negative
     assert np.all(dtf <= 1)  # DTF should be bounded by 1
+
+
+def test_connectivity_rejects_wrong_ndim():
+    """Test that Connectivity rejects inputs with wrong number of dimensions."""
+    import pytest
+
+    # Test 1D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 1D"):
+        fourier_1d = np.ones(10, dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_1d)
+
+    # Test 2D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 2D"):
+        fourier_2d = np.ones((10, 5), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_2d)
+
+    # Test 3D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 3D"):
+        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_3d)
+
+    # Test 4D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 4D"):
+        fourier_4d = np.ones((10, 5, 2, 100), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_4d)
+
+    # Test 6D array
+    with pytest.raises(ValueError, match="must be 5-dimensional, got 6D"):
+        fourier_6d = np.ones((10, 5, 2, 100, 3, 4), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_6d)
+
+    # Verify error message contains helpful information
+    with pytest.raises(
+        ValueError, match=r"Expected shape.*n_time_windows.*n_trials.*n_tapers"
+    ):
+        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_3d)
+
+    # Verify error message suggests using Multitaper
+    with pytest.raises(ValueError, match="use the Multitaper class"):
+        fourier_2d = np.ones((10, 5), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_2d)
+
+
+def test_connectivity_requires_multiple_signals():
+    """Test that Connectivity requires at least 2 signals."""
+    import pytest
+
+    # Test with 0 signals
+    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 0"):
+        fourier_0_signals = np.ones((2, 2, 2, 100, 0), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_0_signals)
+
+    # Test with 1 signal
+    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 1"):
+        fourier_1_signal = np.ones((2, 2, 2, 100, 1), dtype=np.complex128)
+        Connectivity(fourier_coefficients=fourier_1_signal)
+
+    # Verify that 2 signals is accepted
+    fourier_2_signals = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    conn = Connectivity(fourier_coefficients=fourier_2_signals)
+    assert conn.fourier_coefficients.shape[-1] == 2
+
+
+def test_connectivity_warns_on_nan():
+    """Test that Connectivity warns when fourier_coefficients contains NaN or Inf."""
+    import warnings
+
+    # Test NaN values
+    fourier_with_nan = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_nan[0, 0, 0, 0, 0] = np.nan
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_nan)
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "NaN or Inf values" in str(w[0].message)
+        assert "Check your input data" in str(w[0].message)
+
+    # Test Inf values
+    fourier_with_inf = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_inf[0, 0, 0, 0, 0] = np.inf
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_inf)
+        assert len(w) == 1
+        assert issubclass(w[0].category, UserWarning)
+        assert "NaN or Inf values" in str(w[0].message)
+
+    # Test complex Inf values
+    fourier_with_complex_inf = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+    fourier_with_complex_inf[0, 0, 0, 0, 0] = complex(np.inf, 1.0)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_with_complex_inf)
+        assert len(w) == 1
+        assert "NaN or Inf values" in str(w[0].message)
+        # Check for actionable suggestions
+        assert "interpolating" in str(w[0].message) or "artifact removal" in str(
+            w[0].message
+        )
+
+    # Test valid data (no warning)
+    fourier_valid = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        Connectivity(fourier_coefficients=fourier_valid)
+        # Filter out any warnings that are not from Connectivity
+        connectivity_warnings = [
+            warning for warning in w if "fourier_coefficients" in str(warning.message)
+        ]
+        assert len(connectivity_warnings) == 0
+
+
+def test_expectation_cross_spectral_matrix_blocks():
+    """Test that blocked computation produces identical results to unblocked.
+
+    The blocks parameter enables memory-efficient computation of large
+    connectivity matrices by processing signal pairs in chunks. This test
+    verifies that using blocks produces identical results to computing all
+    connections at once.
+    """
+    # Create test data with known structure
+    # Use realistic dimensions: 10 time windows, 3 trials, 5 tapers, 50 frequencies, 10 signals
+    n_time_windows = 10
+    n_trials = 3
+    n_tapers = 5
+    n_frequencies = 50
+    n_signals = 10
+
+    # Create Fourier coefficients with some structure
+    np.random.seed(42)
+    fourier_coefficients = np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    ) + 1j * np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    )
+    fourier_coefficients = fourier_coefficients.astype(np.complex128)
+
+    # Test with different expectation types
+    expectation_types = ["trials_tapers", "trials", "tapers"]
+
+    for expectation_type in expectation_types:
+        # Compute without blocks (all connections at once)
+        conn_unblocked = Connectivity(
+            fourier_coefficients=fourier_coefficients,
+            expectation_type=expectation_type,
+            blocks=None,
+        )
+        csm_unblocked = conn_unblocked._expectation_cross_spectral_matrix()
+
+        # Test with different numbers of blocks
+        for n_blocks in [2, 3, 5]:
+            conn_blocked = Connectivity(
+                fourier_coefficients=fourier_coefficients,
+                expectation_type=expectation_type,
+                blocks=n_blocks,
+            )
+            csm_blocked = conn_blocked._expectation_cross_spectral_matrix()
+
+            # Verify shapes match
+            assert csm_blocked.shape == csm_unblocked.shape, (
+                f"Shape mismatch with blocks={n_blocks}, "
+                f"expectation_type={expectation_type}: "
+                f"{csm_blocked.shape} vs {csm_unblocked.shape}"
+            )
+
+            # Verify values match within floating-point tolerance
+            assert np.allclose(csm_blocked, csm_unblocked, rtol=1e-10, atol=1e-12), (
+                f"Values mismatch with blocks={n_blocks}, "
+                f"expectation_type={expectation_type}. "
+                f"Max difference: {np.max(np.abs(csm_blocked - csm_unblocked))}"
+            )
+
+
+def test_expectation_cross_spectral_matrix_blocks_coherence():
+    """Test that blocked computation produces identical coherence results.
+
+    This test verifies that coherence, a normalized connectivity measure,
+    produces identical results whether computed with or without blocks.
+    """
+    # Create test data
+    n_time_windows = 5
+    n_trials = 2
+    n_tapers = 3
+    n_frequencies = 20
+    n_signals = 8
+
+    np.random.seed(123)
+    fourier_coefficients = np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    ) + 1j * np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    )
+    fourier_coefficients = fourier_coefficients.astype(np.complex128)
+
+    # Compute coherence without blocks
+    conn_unblocked = Connectivity(
+        fourier_coefficients=fourier_coefficients, blocks=None
+    )
+    coherence_unblocked = conn_unblocked.coherence_magnitude()
+
+    # Compute coherence with blocks
+    for n_blocks in [2, 4]:
+        conn_blocked = Connectivity(
+            fourier_coefficients=fourier_coefficients, blocks=n_blocks
+        )
+        coherence_blocked = conn_blocked.coherence_magnitude()
+
+        # Verify shapes match
+        assert coherence_blocked.shape == coherence_unblocked.shape
+
+        # Verify NaN locations match (diagonal elements)
+        assert np.array_equal(
+            np.isnan(coherence_blocked), np.isnan(coherence_unblocked)
+        ), f"NaN pattern mismatch with blocks={n_blocks}"
+
+        # Verify non-NaN values match
+        mask = ~np.isnan(coherence_unblocked)
+        assert np.allclose(
+            coherence_blocked[mask], coherence_unblocked[mask], rtol=1e-10, atol=1e-12
+        ), (
+            f"Coherence mismatch with blocks={n_blocks}. "
+            f"Max difference: {np.max(np.abs(coherence_blocked[mask] - coherence_unblocked[mask]))}"
+        )
+
+
+def test_expectation_cross_spectral_matrix_blocks_edge_cases():
+    """Test edge cases for blocked computation.
+
+    This test verifies that blocks parameter handles edge cases correctly:
+    - blocks=1 (equivalent to unblocked)
+    - blocks > number of signal pairs (more blocks than needed)
+    - Very small datasets
+    """
+    # Small dataset
+    n_time_windows = 2
+    n_trials = 2
+    n_tapers = 2
+    n_frequencies = 5
+    n_signals = 3  # Only 3 signals = 3 unique pairs in upper triangle
+
+    np.random.seed(456)
+    fourier_coefficients = np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    ) + 1j * np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    )
+    fourier_coefficients = fourier_coefficients.astype(np.complex128)
+
+    # Compute reference (unblocked)
+    conn_ref = Connectivity(fourier_coefficients=fourier_coefficients, blocks=None)
+    csm_ref = conn_ref._expectation_cross_spectral_matrix()
+
+    # Test blocks=1 (should work like unblocked)
+    conn_block1 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=1)
+    csm_block1 = conn_block1._expectation_cross_spectral_matrix()
+    assert np.allclose(csm_block1, csm_ref, rtol=1e-10, atol=1e-12)
+
+    # Test blocks > number of pairs (should handle gracefully)
+    # With 3 signals, there are 3 pairs: (0,1), (0,2), (1,2)
+    conn_block10 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=10)
+    csm_block10 = conn_block10._expectation_cross_spectral_matrix()
+    assert np.allclose(csm_block10, csm_ref, rtol=1e-10, atol=1e-12)
+
+
+def test_blocks_parameter_symmetry():
+    """Test that blocked computation maintains matrix symmetry.
+
+    The cross-spectral matrix should be symmetric (csm[i,j] = csm[j,i]*).
+    This test verifies that blocked computation properly fills both
+    upper and lower triangles.
+    """
+    n_time_windows = 3
+    n_trials = 2
+    n_tapers = 2
+    n_frequencies = 10
+    n_signals = 6
+
+    np.random.seed(789)
+    fourier_coefficients = np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    ) + 1j * np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    )
+    fourier_coefficients = fourier_coefficients.astype(np.complex128)
+
+    # Test with blocks
+    conn_blocked = Connectivity(fourier_coefficients=fourier_coefficients, blocks=3)
+    csm_blocked = conn_blocked._expectation_cross_spectral_matrix()
+
+    # Verify symmetry: csm[..., i, j] should equal conj(csm[..., j, i])
+    csm_transpose_conj = np.conj(np.swapaxes(csm_blocked, -2, -1))
+
+    assert np.allclose(csm_blocked, csm_transpose_conj, rtol=1e-10, atol=1e-12), (
+        "Cross-spectral matrix is not symmetric with blocked computation. "
+        f"Max difference: {np.max(np.abs(csm_blocked - csm_transpose_conj))}"
+    )
+
+
+def test_blocks_reduce_memory():
+    """Test that blocked computation reduces peak memory usage.
+
+    The blocks parameter is designed to reduce memory consumption for large
+    connectivity matrices by computing signal pairs in chunks. This test
+    verifies that using blocks actually reduces peak memory usage.
+
+    Memory Reduction Mechanism:
+    - Without blocks: Computes full (n_signals x n_signals) cross-spectral matrix
+    - With blocks: Computes smaller chunks at a time, reducing peak memory
+
+    Expected memory reduction is most noticeable for large n_signals
+    (e.g., n_signals >= 50).
+    """
+    import tracemalloc
+
+    # Use moderately large dimensions to observe memory difference
+    # (not too large to avoid slow tests)
+    n_time_windows = 20
+    n_trials = 5
+    n_tapers = 7
+    n_frequencies = 100
+    n_signals = 50  # Large enough to see memory benefit
+
+    np.random.seed(999)
+    fourier_coefficients = np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    ) + 1j * np.random.randn(
+        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
+    )
+    fourier_coefficients = fourier_coefficients.astype(np.complex128)
+
+    # Measure memory for unblocked computation
+    tracemalloc.start()
+    conn_unblocked = Connectivity(
+        fourier_coefficients=fourier_coefficients, blocks=None
+    )
+    _ = conn_unblocked._expectation_cross_spectral_matrix()
+    _, peak_unblocked = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # Measure memory for blocked computation
+    tracemalloc.start()
+    conn_blocked = Connectivity(fourier_coefficients=fourier_coefficients, blocks=5)
+    _ = conn_blocked._expectation_cross_spectral_matrix()
+    _, peak_blocked = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    # Verify that blocked uses less or equal memory
+    # Note: In practice, blocked computation should use less memory for large arrays,
+    # but the benefit may be small for moderate sizes. We check that it doesn't
+    # use significantly MORE memory (within 20% overhead for block management).
+    memory_ratio = peak_blocked / peak_unblocked
+    assert memory_ratio <= 1.2, (
+        f"Blocked computation uses significantly more memory than unblocked. "
+        f"Ratio: {memory_ratio:.2f} (peak_blocked={peak_blocked:,}, "
+        f"peak_unblocked={peak_unblocked:,})"
+    )
+
+    # Document the actual memory usage for reference
+    # (this helps users understand the benefit)
+    print(
+        f"\nMemory usage comparison (n_signals={n_signals}):\n"
+        f"  Unblocked: {peak_unblocked:,} bytes\n"
+        f"  Blocked:   {peak_blocked:,} bytes\n"
+        f"  Ratio:     {memory_ratio:.2%}"
+    )

@@ -4,24 +4,24 @@ channels:
 - defaults
 dependencies:
 # Core dependencies (match pyproject.toml)
-- "numpy >= 1.21"
-- "scipy >= 1.7"
-- "xarray >= 0.20"
-- "matplotlib >= 3.4"
+- python>=3.10
+- "numpy >= 1.24, <3.0"
+- "scipy >= 1.10"
+- "xarray >= 2023.1"
+- "matplotlib >= 3.7"
 - nitime
 
 # Development and testing
-- "pytest >= 7"
-- pytest-cov
-- "mypy >= 1.0"
-- pydocstyle
+- "pytest >= 8.0"
+- "pytest-cov >= 4.1"
+- "mypy >= 1.8"
 
 # Code formatting and linting
-- black
-- flake8
+- "black >= 24.0"
+- "ruff >= 0.8.0"
 
 # Documentation
-- numpydoc
+- "numpydoc >= 1.6"
 - sphinx
 - sphinx-copybutton
 - sphinx-autoapi
@@ -34,3 +34,4 @@ dependencies:
 - coveralls
 - hatch
 - build
+- twine
