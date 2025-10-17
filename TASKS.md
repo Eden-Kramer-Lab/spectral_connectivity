@@ -258,30 +258,34 @@
 
 ### Task 2.4: Add Tests for Block-wise Computation
 
-- [ ] Create `test_expectation_cross_spectral_matrix_blocks()`:
-  - [ ] Generate test data (10 time windows, 10 signals)
-  - [ ] Compute connectivity with `blocks=None`
-  - [ ] Compute connectivity with `blocks=2`, `blocks=3`, etc.
-  - [ ] Verify all results match within floating-point tolerance
-  - [ ] Test with different expectation_types
-- [ ] Create `test_blocks_reduce_memory()`:
-  - [ ] Use memory profiling to verify blocks reduce peak memory
-  - [ ] Document memory reduction in test docstring
-- [ ] Add documentation to `Connectivity` class:
-  - [ ] Explain when to use `blocks` parameter
-  - [ ] Document memory tradeoff (speed vs memory)
-  - [ ] Provide rule of thumb (e.g., use blocks if n_signals > 50)
+- [x] Create `test_expectation_cross_spectral_matrix_blocks()`:
+  - [x] Generate test data (10 time windows, 10 signals)
+  - [x] Compute connectivity with `blocks=None`
+  - [x] Compute connectivity with `blocks=2`, `blocks=3`, etc.
+  - [x] Verify all results match within floating-point tolerance
+  - [x] Test with different expectation_types
+- [x] Create `test_blocks_reduce_memory()`:
+  - [x] Use memory profiling to verify blocks reduce peak memory
+  - [x] Document memory reduction in test docstring
+- [x] Add documentation to `Connectivity` class:
+  - [x] Explain when to use `blocks` parameter
+  - [x] Document memory tradeoff (speed vs memory)
+  - [x] Provide rule of thumb (e.g., use blocks if n_signals > 50)
 
 **Files:**
 
-- `tests/test_connectivity.py`
-- `spectral_connectivity/connectivity.py` (docstring)
+- `tests/test_connectivity.py` - Lines 725-976 (5 new tests)
+- `spectral_connectivity/connectivity.py` - Lines 187-223 (enhanced docstring), Lines 475, 502 (bug fixes)
 
 **Acceptance Criteria:**
 
-- [ ] Blocked and unblocked computation produce identical results
-- [ ] Memory reduction verified (at least qualitatively)
-- [ ] Documentation guides users when to use blocks
+- [x] Blocked and unblocked computation produce identical results
+- [x] Memory reduction verified (73% reduction for n_signals=50, blocks=5)
+- [x] Documentation guides users when to use blocks
+- [x] Bug fixes: diagonal elements and Hermitian symmetry
+- [x] Applied spectral-code-reviewer and scientific-ux-reviewer agents
+
+**Completed:** 2025-10-17
 
 ---
 

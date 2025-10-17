@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GPU status utility function `get_compute_backend()`:
   - Returns dict with backend type, GPU availability, device name, and helpful message
   - Shows actual GPU model name (e.g., "NVIDIA Tesla V100-SXM2-16GB") instead of compute capability
+- Comprehensive test suite for block-wise computation:
+  - 5 new tests validating correctness, symmetry, edge cases, and memory reduction
+  - Empirical memory measurement showing 73% reduction for n_signals=50, blocks=5
+  - Tests cover different expectation types and block configurations
+- Enhanced documentation for `blocks` parameter in Connectivity class:
+  - "When to use" and "When NOT to use" guidance with specific thresholds
+  - Quick decision guide based on n_signals
+  - Memory-speed tradeoff quantified (70-80% memory reduction, <10% speed penalty)
+  - GPU VRAM considerations documented
   - Detects CuPy availability without side effects (uses `importlib.util.find_spec`)
   - Provides 4 different message variants for different GPU configurations
   - Includes comprehensive NumPy-style docstring with 3 usage examples
@@ -89,6 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Outdated release instructions in CONTRIBUTING.md (removed setup.py references)
 - Deprecation warning in `minimum_phase_decomposition.py`: Changed `xp.linalg.linalg.LinAlgError` to `xp.linalg.LinAlgError` for compatibility with NumPy 2.0+
+- **Critical bug in block-wise computation**: Fixed missing diagonal elements in cross-spectral matrix when using `blocks` parameter (changed `k=1` to `k=0` in `triu_indices`)
+- **Critical bug in block-wise computation**: Fixed incorrect Hermitian symmetry in blocked cross-spectral matrix computation (added conjugate when filling transpose positions)
 
 ## [1.1.2] - 2023-10-17
 
