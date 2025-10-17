@@ -45,11 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Consistency checks with actual `Multitaper` behavior
 
 ### Changed
-- **Incremental MyPy strictness** (`pyproject.toml`):
-  - Enabled `disallow_untyped_defs = true` for 6 fully-annotated modules
-  - Per-module overrides for gradual type hint adoption
-  - Documented remaining work: transforms (1 function), connectivity (27 functions)
-  - All existing type hints validated, no regressions
+- **Complete type hint coverage** (`spectral_connectivity/transforms.py`, `spectral_connectivity/connectivity.py`):
+  - Added type hints to ALL 28 previously untyped functions:
+    - `transforms._make_tapers()`: Added parameter and return types
+    - `connectivity.py`: 27 functions including all connectivity measures and helper functions
+  - Used `TYPE_CHECKING` block to avoid circular imports for Multitaper type
+  - Added `Literal` types for `multiple_comparisons_method` parameter
+  - Fixed `Optional`/`None` handling in `_get_independent_frequency_step()` and `_bandpass()`
+  - Fixed phase_lag_index return type (extract real part from complex result)
+  - Enabled `disallow_untyped_defs = true` for transforms and connectivity modules
+  - All 9 modules now have strict type checking enabled
+  - 100% of public API is now fully type-annotated
 - **Test coverage improvements**:
   - Overall coverage increased from 85% to **88%**
   - `connectivity.py` coverage improved from 71% to **93%**

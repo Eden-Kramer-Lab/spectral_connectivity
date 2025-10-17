@@ -163,13 +163,11 @@ module = [
     "spectral_connectivity.wrapper",
     "spectral_connectivity.minimum_phase_decomposition",
     "spectral_connectivity.statistics",
-    "spectral_connectivity._version"
+    "spectral_connectivity._version",
+    "spectral_connectivity.transforms",
+    "spectral_connectivity.connectivity"
 ]
 disallow_untyped_defs = true
-
-# TODO: Enable for these modules after adding missing type hints:
-# - spectral_connectivity.transforms (1 function)
-# - spectral_connectivity.connectivity (27 functions)
 
 [tool.hatch.version]
 source = "vcs"

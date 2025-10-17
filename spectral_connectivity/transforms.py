@@ -1404,12 +1404,12 @@ def _multitaper_fft(
 
 
 def _make_tapers(
-    n_time_samples_per_window,
-    sampling_frequency,
-    time_halfbandwidth_product,
-    n_tapers,
-    is_low_bias=True,
-):
+    n_time_samples_per_window: int,
+    sampling_frequency: float,
+    time_halfbandwidth_product: float,
+    n_tapers: int,
+    is_low_bias: bool = True,
+) -> NDArray[np.floating]:
     """Return discrete prolate spheroidal sequences (tapers) for multitaper analysis.
 
     Returns the Discrete prolate spheroidal sequences (tapers) for
@@ -1870,6 +1870,8 @@ def detrend(
 
             if isinstance(bp, int):
                 bp_list = [bp]  # Wrap single int in list for display
+            elif isinstance(bp, list):
+                bp_list = bp  # Already a list
             elif hasattr(bp, "get"):  # CuPy array
                 bp_list = xp.asnumpy(bp).tolist()
             else:  # NumPy array

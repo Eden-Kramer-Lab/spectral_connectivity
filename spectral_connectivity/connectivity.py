@@ -7,7 +7,7 @@ from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
 from logging import getLogger
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -22,6 +22,9 @@ from spectral_connectivity.statistics import (
     coherence_fisher_z_transform,
     get_normal_distribution_p_values,
 )
+
+if TYPE_CHECKING:
+    from spectral_connectivity.transforms import Multitaper
 
 logger = getLogger(__name__)
 
@@ -368,11 +371,11 @@ class Connectivity:
     @classmethod
     def from_multitaper(
         cls,
-        multitaper_instance,
-        expectation_type="trials_tapers",
-        blocks=None,
-        dtype=xp.complex128,
-    ):
+        multitaper_instance: "Multitaper",
+        expectation_type: str = "trials_tapers",
+        blocks: int | None = None,
+        dtype: Any = xp.complex128,
+    ) -> "Connectivity":
         """Construct connectivity class using a multitaper instance.
 
         Parameters
@@ -926,7 +929,7 @@ class Connectivity:
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
-    def phase_lag_index(self):
+    def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
 
         A non-parametric synchrony measure designed to mitigate power
@@ -961,7 +964,7 @@ class Connectivity:
 
         """
 
-        def fcn(x):
+        def fcn(x: NDArray[np.complexfloating]) -> Any:  # Returns sign of imag part
             # Zero diagonal imaginary parts to avoid numerical precision issues
             # Self-connections should have zero imaginary component
             imag_part = x.imag
@@ -970,11 +973,12 @@ class Connectivity:
             imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
             return xp.sign(imag_part)
 
-        return self._expectation_cross_spectral_matrix(fcn=fcn)
+        result = self._expectation_cross_spectral_matrix(fcn=fcn)
+        return result.real  # sign of imag is real
 
     @_asnumpy
     @_non_negative_frequencies(-3)
-    def weighted_phase_lag_index(self):
+    def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
 
         Weighted average of the phase lag index using the imaginary
@@ -1000,7 +1004,7 @@ class Connectivity:
 
         """
 
-        def fcn_abs(x):
+        def fcn_abs(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
             # Zero diagonal imaginary parts to avoid numerical precision issues
             imag_part = x.imag
             n_signals = imag_part.shape[-1]
@@ -1008,7 +1012,7 @@ class Connectivity:
             imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
             return xp.abs(imag_part)
 
-        def fcn_imag(x):
+        def fcn_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
             # Zero diagonal imaginary parts to avoid numerical precision issues
             imag_part = x.imag
             n_signals = imag_part.shape[-1]
@@ -1021,7 +1025,7 @@ class Connectivity:
         return self._expectation_cross_spectral_matrix(fcn=fcn_imag) / weights
 
     @_asnumpy
-    def debiased_squared_phase_lag_index(self):
+    def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
 
         The square of the phase lag index corrected for the positive
@@ -1052,7 +1056,7 @@ class Connectivity:
 
     @_asnumpy
     @_non_negative_frequencies(-3)
-    def debiased_squared_weighted_phase_lag_index(self):
+    def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
 
         The square of the weighted phase lag index corrected for the
@@ -1080,7 +1084,7 @@ class Connectivity:
         """
 
         # define functions
-        def fcn_imag(x):
+        def fcn_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
             # Zero diagonal imaginary parts to avoid numerical precision issues
             imag_part = x.imag
             n_signals = imag_part.shape[-1]
@@ -1088,7 +1092,7 @@ class Connectivity:
             imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
             return imag_part
 
-        def fcn_imag_sq(x):
+        def fcn_imag_sq(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
             # Zero diagonal imaginary parts to avoid numerical precision issues
             imag_part = x.imag
             n_signals = imag_part.shape[-1]
@@ -1096,7 +1100,7 @@ class Connectivity:
             imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
             return imag_part**2
 
-        def fcn_abs_imag(x):
+        def fcn_abs_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
             # Zero diagonal imaginary parts to avoid numerical precision issues
             imag_part = x.imag
             n_signals = imag_part.shape[-1]
@@ -1120,7 +1124,7 @@ class Connectivity:
         return (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights
 
     @_asnumpy
-    def pairwise_phase_consistency(self):
+    def pairwise_phase_consistency(self) -> NDArray[np.floating]:
         """Return square of phase locking value corrected for bias.
 
         The square of the phase locking value corrected for the
@@ -1152,7 +1156,7 @@ class Connectivity:
         return ppc.real
 
     @_asnumpy
-    def pairwise_spectral_granger_prediction(self):
+    def pairwise_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return amount of power at a node explained by other nodes.
 
         The amount of power at a node in a frequency explained by (is
@@ -1205,7 +1209,7 @@ class Connectivity:
         total_power = self._power
         return _estimate_spectral_granger_prediction(total_power, csm, pairs)
 
-    def conditional_spectral_granger_prediction(self):
+    def conditional_spectral_granger_prediction(self) -> None:
         """Raise NotImplementedError for conditional spectral Granger prediction.
 
         Raises
@@ -1216,7 +1220,7 @@ class Connectivity:
         """
         raise NotImplementedError
 
-    def blockwise_spectral_granger_prediction(self):
+    def blockwise_spectral_granger_prediction(self) -> None:
         """Raise NotImplementedError for blockwise spectral Granger prediction.
 
         Raises
@@ -1228,7 +1232,7 @@ class Connectivity:
         raise NotImplementedError
 
     @_asnumpy
-    def directed_transfer_function(self):
+    def directed_transfer_function(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by inflow.
 
         The transfer function coupling strength normalized by the total
@@ -1259,7 +1263,7 @@ class Connectivity:
         )
 
     @_asnumpy
-    def directed_coherence(self):
+    def directed_coherence(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by inflow.
 
         The transfer function coupling strength normalized by the total
@@ -1292,7 +1296,9 @@ class Connectivity:
             / _total_inflow(self._transfer_function, noise_variance)
         )
 
-    def partial_directed_coherence(self, keep_cupy=False):
+    def partial_directed_coherence(
+        self, keep_cupy: bool = False
+    ) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by outflow.
 
         The transfer function coupling strength normalized by its
@@ -1344,7 +1350,7 @@ class Connectivity:
                 )
 
     @_asnumpy
-    def generalized_partial_directed_coherence(self):
+    def generalized_partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return generalized partial directed coherence.
 
         The transfer function coupling strength normalized by its
@@ -1383,7 +1389,7 @@ class Connectivity:
         )
 
     @_asnumpy
-    def direct_directed_transfer_function(self):
+    def direct_directed_transfer_function(self) -> NDArray[np.floating]:
         """Return combination of directed transfer function and partial coherence.
 
         A combination of the directed transfer function estimate of
@@ -1418,10 +1424,10 @@ class Connectivity:
 
     def group_delay(
         self,
-        frequencies_of_interest=None,
-        frequency_resolution=None,
-        significance_threshold=0.05,
-    ):
+        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequency_resolution: float | None = None,
+        significance_threshold: float = 0.05,
+    ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
         """Return the average time-delay of a broadband signal.
 
         Parameters
@@ -1485,7 +1491,7 @@ class Connectivity:
                 xp.unwrap(xp.angle(bandpassed_coherency), axis=-2), mask=~is_significant
             )
 
-        def _linear_regression(response):
+        def _linear_regression(response: NDArray[np.floating]) -> Any:
             return linregress(bandpassed_frequencies, y=response)
 
         regression_results = np.ma.apply_along_axis(
@@ -1515,11 +1521,11 @@ class Connectivity:
     @_asnumpy
     def delay(
         self,
-        frequencies_of_interest=None,
-        frequency_resolution=None,
-        significance_threshold=0.05,
-        n_range=3,
-    ):
+        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequency_resolution: float | None = None,
+        significance_threshold: float = 0.05,
+        n_range: int = 3,
+    ) -> NDArray[np.floating]:
         """Find a range of possible delays from the coherence phase.
 
         The delay (and phase) at each frequency is indistinguishable from
@@ -1589,8 +1595,10 @@ class Connectivity:
 
     @_asnumpy
     def phase_slope_index(
-        self, frequencies_of_interest=None, frequency_resolution=None
-    ):
+        self,
+        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequency_resolution: float | None = None,
+    ) -> NDArray[np.floating]:
         """Return weighted average of slopes projected onto imaginary axis.
 
         The phase slope index finds the complex weighted average of the
@@ -1990,8 +1998,9 @@ def _normalize_fourier_coefficients(
 
 
 def _estimate_canonical_coherence(
-    normalized_fourier_coefficients1, normalized_fourier_coefficients2
-):
+    normalized_fourier_coefficients1: NDArray[np.complexfloating],
+    normalized_fourier_coefficients2: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
     """Find maximum complex correlation between groups of signals.
 
     Find the maximum complex correlation between groups of signals
@@ -2020,7 +2029,12 @@ def _estimate_canonical_coherence(
     ]
 
 
-def _bandpass(data, frequencies, frequencies_of_interest, axis=-3):
+def _bandpass(
+    data: NDArray[np.complexfloating],
+    frequencies: NDArray[np.floating],
+    frequencies_of_interest: NDArray[np.floating] | None,
+    axis: int = -3,
+) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
     """Filter data matrix along axis for frequencies of interest.
 
     Filters the data matrix along an axis given a maximum and minimum
@@ -2045,6 +2059,8 @@ def _bandpass(data, frequencies, frequencies_of_interest, axis=-3):
         Corresponding filtered frequencies.
 
     """
+    if frequencies_of_interest is None:
+        return data, frequencies
     frequency_index = (frequencies_of_interest[0] < frequencies) & (
         frequencies < frequencies_of_interest[1]
     )
@@ -2055,7 +2071,7 @@ def _bandpass(data, frequencies, frequencies_of_interest, axis=-3):
 
 
 def _get_independent_frequency_step(
-    frequency_difference: float, frequency_resolution: float
+    frequency_difference: float, frequency_resolution: float | None
 ) -> int:
     """Find number of points for statistically independent frequencies.
 
@@ -2066,8 +2082,8 @@ def _get_independent_frequency_step(
     ----------
     frequency_difference : float
         The distance between two frequency points.
-    frequency_resolution : float
-        The ability to resolve frequency points.
+    frequency_resolution : float | None
+        The ability to resolve frequency points. If None, returns 1.
 
     Returns
     -------
@@ -2076,6 +2092,8 @@ def _get_independent_frequency_step(
         frequency points are statistically independent.
 
     """
+    if frequency_resolution is None:
+        return 1
     return int(xp.ceil(frequency_resolution / frequency_difference))
 
 
@@ -2162,13 +2180,15 @@ def _find_largest_independent_group(
 
 
 def _find_significant_frequencies(
-    coherency,
-    n_obs,
-    frequency_step=1,
-    significance_threshold=0.05,
-    min_group_size=3,
-    multiple_comparisons_method="Benjamini_Hochberg_procedure",
-):
+    coherency: NDArray[np.complexfloating],
+    n_obs: int,
+    frequency_step: int = 1,
+    significance_threshold: float = 0.05,
+    min_group_size: int = 3,
+    multiple_comparisons_method: Literal[
+        "Benjamini_Hochberg_procedure", "Bonferroni_correction"
+    ] = "Benjamini_Hochberg_procedure",
+) -> NDArray[np.bool_]:
     """Determine the largest significant cluster along the frequency axis.
 
     This function uses the fisher z-transform to determine the p-values and
