@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from pytest import mark
 from scipy.signal import correlate
@@ -167,8 +168,12 @@ def test_n_trials():
     m = Multitaper(time_series=time_series)
     assert m.n_trials == n_trials
 
-    time_series = np.zeros((n_time_samples, n_signals))
-    m = Multitaper(time_series=time_series)
+    # Test with 2D input converted using prepare_time_series
+    from spectral_connectivity.transforms import prepare_time_series
+
+    time_series_2d = np.zeros((n_time_samples, n_signals))
+    time_series_3d = prepare_time_series(time_series_2d, axis="signals")
+    m = Multitaper(time_series=time_series_3d)
     assert m.n_trials == 1
 
 
@@ -334,3 +339,116 @@ def test_fft():
         m.fft().shape,
         (n_windows, n_trials, m.tapers.shape[1], m.n_fft_samples, n_signals),
     )
+
+
+def test_multitaper_requires_3d_input():
+    """Test that Multitaper requires 3D input array."""
+    # 1D input should raise ValueError
+    time_series_1d = np.random.randn(100)
+    with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
+        Multitaper(time_series=time_series_1d)
+
+    # 2D input should raise ValueError with helpful message
+    time_series_2d = np.random.randn(100, 5)
+    with pytest.raises(
+        ValueError,
+        match=r"Expected 3D array.*got 2D.*Use prepare_time_series|np.newaxis",
+    ):
+        Multitaper(time_series=time_series_2d)
+
+    # 4D input should raise ValueError
+    time_series_4d = np.random.randn(100, 10, 5, 3)
+    with pytest.raises(ValueError, match=r"Expected 3D array.*got 4D"):
+        Multitaper(time_series=time_series_4d)
+
+    # 3D input should work
+    time_series_3d = np.random.randn(100, 10, 5)
+    m = Multitaper(time_series=time_series_3d)
+    assert m.time_series.ndim == 3
+
+
+def test_prepare_time_series_single_trial():
+    """Test helper function for converting 2D (time, signals) to 3D."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    # Case 1: Single trial with multiple signals
+    time_series_2d = np.random.randn(100, 5)  # 100 time points, 5 signals
+    result = prepare_time_series(time_series_2d, axis="signals")
+    assert result.shape == (100, 1, 5)  # (n_time, 1 trial, n_signals)
+
+    # Verify data is preserved
+    assert np.allclose(result[:, 0, :], time_series_2d)
+
+
+def test_prepare_time_series_single_signal():
+    """Test helper function for converting 2D (time, trials) to 3D."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    # Case 2: Multiple trials with single signal
+    time_series_2d = np.random.randn(100, 10)  # 100 time points, 10 trials
+    result = prepare_time_series(time_series_2d, axis="trials")
+    assert result.shape == (100, 10, 1)  # (n_time, n_trials, 1 signal)
+
+    # Verify data is preserved
+    assert np.allclose(result[:, :, 0], time_series_2d)
+
+
+def test_prepare_time_series_1d():
+    """Test helper function for converting 1D (time,) to 3D."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    # 1D input: single trial, single signal
+    time_series_1d = np.random.randn(100)
+    result = prepare_time_series(time_series_1d)
+    assert result.shape == (100, 1, 1)  # (n_time, 1 trial, 1 signal)
+
+    # Verify data is preserved
+    assert np.allclose(result[:, 0, 0], time_series_1d)
+
+
+def test_prepare_time_series_3d_passthrough():
+    """Test that prepare_time_series passes through 3D arrays unchanged."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    # 3D input should be returned unchanged
+    time_series_3d = np.random.randn(100, 10, 5)
+    result = prepare_time_series(time_series_3d)
+    assert result.shape == (100, 10, 5)
+    assert np.allclose(result, time_series_3d)
+
+
+def test_prepare_time_series_invalid_axis():
+    """Test that prepare_time_series raises error for invalid axis."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    time_series_2d = np.random.randn(100, 5)
+    with pytest.raises(ValueError, match=r"axis must be.*'signals'.*'trials'"):
+        prepare_time_series(time_series_2d, axis="invalid")
+
+
+def test_prepare_time_series_requires_axis_for_2d():
+    """Test that prepare_time_series requires axis parameter for 2D input."""
+    from spectral_connectivity.transforms import prepare_time_series
+
+    time_series_2d = np.random.randn(100, 5)
+    with pytest.raises(
+        ValueError, match=r"For 2D input.*must specify.*axis.*parameter"
+    ):
+        prepare_time_series(time_series_2d)
+
+
+def test_multitaper_dimension_consistency():
+    """Test that Multitaper produces consistent output for properly shaped 3D input."""
+    n_time_samples, n_trials, n_signals = 100, 10, 5
+    time_series = np.random.randn(n_time_samples, n_trials, n_signals)
+
+    m = Multitaper(time_series=time_series, sampling_frequency=1000)
+
+    # Check that properties report correct dimensions
+    assert m.n_signals == n_signals
+    assert m.n_trials == n_trials
+
+    # Check that FFT output has correct shape
+    fft_result = m.fft()
+    assert fft_result.shape[1] == n_trials  # trials dimension
+    assert fft_result.shape[4] == n_signals  # signals dimension

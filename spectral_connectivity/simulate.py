@@ -5,7 +5,6 @@ following various dynamical models, primarily multivariate autoregressive
 (MVAR) processes commonly used for testing connectivity methods.
 """
 
-
 import numpy as np
 from numpy.typing import NDArray
 

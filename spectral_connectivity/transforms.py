@@ -39,10 +39,15 @@ class Multitaper:
 
     Parameters
     ----------
-    time_series : NDArray[floating],
-        shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
-        Input time series data. Multiple trials are supported and will be
-        averaged in the spectral domain.
+    time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
+        Input time series data. **Must be 3D array.**
+        - n_time_samples: number of time points
+        - n_trials: number of trials (use 1 for single trial)
+        - n_signals: number of signals/channels
+        Multiple trials are averaged in the spectral domain.
+
+        **Important:** If your data is 1D or 2D, use `prepare_time_series()`
+        helper function to convert it to the required 3D format.
     sampling_frequency : float, default=1000
         Sampling rate in Hz of the time series data.
     time_halfbandwidth_product : float, default=3
@@ -91,21 +96,33 @@ class Multitaper:
 
     Examples
     --------
+    Using the helper function (recommended for 2D data):
+
     >>> import numpy as np
+    >>> from spectral_connectivity.transforms import Multitaper, prepare_time_series
+    >>> # EEG recording: 5 seconds at 1000 Hz, 64 channels
+    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_3d = prepare_time_series(eeg_data, axis='signals')
+    >>> mt = Multitaper(eeg_3d, sampling_frequency=1000, time_halfbandwidth_product=4)
+    >>> print(f"FFT shape: {mt.fft().shape}")
+    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies[-1]:.1f} Hz")
+
+    Manual reshaping with np.newaxis (advanced):
+
     >>> # Generate test signal: 50Hz + noise
     >>> fs = 1000  # 1 kHz sampling
     >>> t = np.arange(0, 1, 1/fs)
     >>> signal = np.sin(2*np.pi*50*t) + 0.1*np.random.randn(len(t))
-    >>> data = signal[:, np.newaxis]  # Shape: (1000, 1)
-    >>>
-    >>> # Multitaper analysis
-    >>> mt = Multitaper(data, sampling_frequency=fs,
-    ...                 time_halfbandwidth_product=4)
-    >>> print(f"FFT shape: {mt.fft.shape}")
-    >>> print(
-    ...     f"Frequencies: {len(mt.frequencies)} bins, "
-    ...     f"max = {mt.frequencies[-1]:.1f} Hz"
-    ... )
+    >>> # Manually reshape to 3D: (n_time, n_trials, n_signals)
+    >>> data = signal[:, np.newaxis, np.newaxis]  # Shape: (1000, 1, 1)
+    >>> mt = Multitaper(data, sampling_frequency=fs, time_halfbandwidth_product=4)
+
+    Multiple trials (already 3D):
+
+    >>> # Epoched data: 100 trials, 5 channels, 1 second each at 1000 Hz
+    >>> epoched_data = np.random.randn(1000, 100, 5)  # (n_time, n_trials, n_signals)
+    >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
+    >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")  # Trials: 100, Signals: 5
 
     Notes
     -----
@@ -139,6 +156,48 @@ class Multitaper:
         is_low_bias: bool = True,
     ) -> None:
         self.time_series = xp.asarray(time_series)
+
+        # Validate that time_series is 3D
+        if self.time_series.ndim != 3:
+            error_msg = (
+                f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
+                f"but got {self.time_series.ndim}D array with shape {self.time_series.shape}.\n"
+                "\n"
+            )
+
+            if self.time_series.ndim == 1:
+                error_msg += (
+                    "For a single time series, use:\n"
+                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                    "  >>> time_series_3d = prepare_time_series(time_series)\n"
+                    "Or manually:\n"
+                    "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
+                )
+            elif self.time_series.ndim == 2:
+                error_msg += (
+                    "For 2D data, you must clarify the meaning of the second dimension.\n"
+                    "\n"
+                    "Use prepare_time_series() helper:\n"
+                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                    "  >>> # If shape is (n_time, n_signals) with 1 trial:\n"
+                    "  >>> time_series_3d = prepare_time_series(time_series, axis='signals')\n"
+                    "  >>> # If shape is (n_time, n_trials) with 1 signal:\n"
+                    "  >>> time_series_3d = prepare_time_series(time_series, axis='trials')\n"
+                    "\n"
+                    "Or manually with np.newaxis:\n"
+                    "  >>> # For (n_time, n_signals) → (n_time, 1, n_signals):\n"
+                    "  >>> time_series_3d = time_series[:, np.newaxis, :]\n"
+                    "  >>> # For (n_time, n_trials) → (n_time, n_trials, 1):\n"
+                    "  >>> time_series_3d = time_series[:, :, np.newaxis]"
+                )
+            else:
+                error_msg += (
+                    f"Arrays with {self.time_series.ndim} dimensions are not supported.\n"
+                    "Expected shape: (n_time_samples, n_trials, n_signals)"
+                )
+
+            raise ValueError(error_msg)
+
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
@@ -416,6 +475,132 @@ class Multitaper:
         return _multitaper_fft(
             self.tapers, time_series, self.n_fft_samples, self.sampling_frequency
         ).swapaxes(2, -1)
+
+
+def prepare_time_series(
+    time_series: NDArray[np.floating], axis: str | None = None
+) -> NDArray[np.floating]:
+    """
+    Convert time series data to the 3D format required by Multitaper.
+
+    This helper function ensures your data has the correct shape
+    (n_time_samples, n_trials, n_signals) for spectral analysis.
+
+    Parameters
+    ----------
+    time_series : NDArray[floating]
+        Input time series data with 1D, 2D, or 3D shape.
+    axis : {"signals", "trials"}, optional
+        For 2D input, specify which axis represents the second dimension:
+        - "signals": shape is (n_time_samples, n_signals), adds trials axis
+        - "trials": shape is (n_time_samples, n_trials), adds signals axis
+        Required for 2D input, ignored for 1D and 3D input.
+
+    Returns
+    -------
+    time_series_3d : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
+        Time series data reshaped to 3D format.
+
+    Raises
+    ------
+    ValueError
+        If input is 2D and axis parameter is not provided.
+        If axis is not "signals" or "trials".
+        If input has more than 3 dimensions.
+
+    Examples
+    --------
+    Single-trial EEG/LFP recording with multiple channels:
+
+    >>> import numpy as np
+    >>> # Load continuous EEG: 5 seconds at 1000 Hz, 64 channels
+    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_3d = prepare_time_series(eeg_data, axis="signals")
+    >>> eeg_3d.shape
+    (5000, 1, 64)  # (n_time, 1 trial, 64 channels)
+
+    Multiple trials of a single electrode:
+
+    >>> # 20 trials of one LFP channel, 2 seconds each at 1000 Hz
+    >>> lfp_trials = np.random.randn(2000, 20)  # Shape: (n_time, n_trials)
+    >>> lfp_3d = prepare_time_series(lfp_trials, axis="trials")
+    >>> lfp_3d.shape
+    (2000, 20, 1)  # (n_time, 20 trials, 1 channel)
+
+    Single time series (e.g., spike times converted to continuous):
+
+    >>> # One neuron's firing rate over time
+    >>> firing_rate = np.random.randn(1000)
+    >>> firing_rate_3d = prepare_time_series(firing_rate)
+    >>> firing_rate_3d.shape
+    (1000, 1, 1)  # (n_time, 1 trial, 1 signal)
+
+    Already properly formatted (pass-through):
+
+    >>> # Epoched data from MNE or similar: 10 trials, 5 channels, 100 timepoints
+    >>> epoched_data = np.random.randn(100, 10, 5)
+    >>> result = prepare_time_series(epoched_data)
+    >>> result.shape
+    (100, 10, 5)  # Unchanged
+
+    Notes
+    -----
+    **Common mistake:** Using 2D data without specifying the axis parameter.
+    A 2D array (100, 5) could mean either:
+    - 100 time points × 5 signals (1 trial) → use axis="signals"
+    - 100 time points × 5 trials (1 signal) → use axis="trials"
+
+    You must explicitly specify which interpretation is correct.
+
+    See Also
+    --------
+    Multitaper : Multitaper spectral analysis class
+    """
+    time_series_array = xp.asarray(time_series)
+    ndim = time_series_array.ndim
+
+    if ndim == 1:
+        # Single time series: (n_time,) → (n_time, 1, 1)
+        return time_series_array[:, xp.newaxis, xp.newaxis]
+
+    elif ndim == 2:
+        # Ambiguous case - require explicit axis specification
+        if axis is None:
+            raise ValueError(
+                "For 2D input, you must specify the 'axis' parameter.\n"
+                f"Input shape: {time_series_array.shape}\n"
+                "\n"
+                "Specify:\n"
+                "  - axis='signals' if shape is (n_time_samples, n_signals)\n"
+                "  - axis='trials' if shape is (n_time_samples, n_trials)\n"
+                "\n"
+                "Example:\n"
+                "  >>> # 5 EEG channels, 1 trial:\n"
+                "  >>> data_3d = prepare_time_series(data, axis='signals')\n"
+                "  >>> # 5 trials, 1 channel:\n"
+                "  >>> data_3d = prepare_time_series(data, axis='trials')"
+            )
+
+        if axis == "signals":
+            # (n_time, n_signals) → (n_time, 1, n_signals)
+            return time_series_array[:, xp.newaxis, :]
+        elif axis == "trials":
+            # (n_time, n_trials) → (n_time, n_trials, 1)
+            return time_series_array[:, :, xp.newaxis]
+        else:
+            raise ValueError(
+                f"axis must be either 'signals' or 'trials', got: {axis!r}"
+            )
+
+    elif ndim == 3:
+        # Already in correct format
+        return time_series_array
+
+    else:
+        raise ValueError(
+            f"Expected 1D, 2D, or 3D array, got {ndim}D array with shape "
+            f"{time_series_array.shape}"
+        )
 
 
 def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
