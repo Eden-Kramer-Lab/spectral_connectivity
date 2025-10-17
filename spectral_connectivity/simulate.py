@@ -1,6 +1,9 @@
-"""Functions to simulate processes."""
+"""Functions to simulate time series processes for connectivity analysis.
 
-from typing import Optional, Union
+This module provides functions for generating synthetic time series data
+following various dynamical models, primarily multivariate autoregressive
+(MVAR) processes commonly used for testing connectivity methods.
+"""
 
 import numpy as np
 from numpy.typing import NDArray
@@ -8,11 +11,11 @@ from numpy.typing import NDArray
 
 def simulate_MVAR(
     coefficients: NDArray[np.floating],
-    noise_covariance: Optional[NDArray[np.floating]] = None,
+    noise_covariance: NDArray[np.floating] | None = None,
     n_time_samples: int = 100,
     n_trials: int = 1,
     n_burnin_samples: int = 100,
-    random_state: Optional[Union[int, np.random.Generator]] = None,
+    random_state: int | np.random.Generator | None = None,
 ) -> NDArray[np.floating]:
     """
     Simulate multivariate autoregressive (MVAR) process.
