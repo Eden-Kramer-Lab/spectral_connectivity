@@ -52,7 +52,7 @@ def Benjamini_Hochberg_procedure(
     threshold_line = np.linspace(0, alpha, num=p_values.size + 1, endpoint=True)[1:]
     sorted_p_values = np.sort(p_values.flatten())
     try:
-        threshold_ind: int = np.max(np.where(sorted_p_values <= threshold_line)[0])
+        threshold_ind = int(np.max(np.where(sorted_p_values <= threshold_line)[0]))
         threshold = sorted_p_values[threshold_ind]
     except ValueError:  # There are no values below threshold
         threshold = -1

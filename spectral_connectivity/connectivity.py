@@ -864,12 +864,25 @@ class Connectivity:
 
         """
 
-        def fcn(x):
-            return xp.abs(x.imag)
+        def fcn_abs(x):
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.abs(imag_part)
 
-        weights = self._expectation_cross_spectral_matrix(fcn=fcn)
+        def fcn_imag(x):
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part
+
+        weights = self._expectation_cross_spectral_matrix(fcn=fcn_abs)
         weights[weights < xp.finfo(float).eps] = 1
-        return self._expectation_cross_spectral_matrix(fcn=lambda x: x.imag) / weights
+        return self._expectation_cross_spectral_matrix(fcn=fcn_imag) / weights
 
     @_asnumpy
     def debiased_squared_phase_lag_index(self):
@@ -932,13 +945,28 @@ class Connectivity:
 
         # define functions
         def fcn_imag(x):
-            return x.imag
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part
 
         def fcn_imag_sq(x):
-            return x.imag**2
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return imag_part**2
 
         def fcn_abs_imag(x):
-            return xp.abs(x.imag)
+            # Zero diagonal imaginary parts to avoid numerical precision issues
+            imag_part = x.imag
+            n_signals = imag_part.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
+            return xp.abs(imag_part)
 
         n_observations = self.n_observations
         imaginary_csm_sum = (

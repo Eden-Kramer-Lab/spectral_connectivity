@@ -740,7 +740,7 @@ def _find_tapers_from_interpolation(
     n_tapers: int,
     n_time_samples_per_window: int,
     interp_kind: str,
-) -> list:
+) -> NDArray[np.floating]:
     """Create tapers of smaller size and interpolate to larger size.
 
     Create the tapers of the smaller size `interp_from` and then
@@ -750,10 +750,12 @@ def _find_tapers_from_interpolation(
         interp_from, time_halfbandwidth_product, n_tapers, is_low_bias=False
     )
 
-    return [
-        _interpolate_taper(taper, interp_kind, n_time_samples_per_window)
-        for taper in smaller_tapers
-    ]
+    return xp.array(
+        [
+            _interpolate_taper(taper, interp_kind, n_time_samples_per_window)
+            for taper in smaller_tapers
+        ]
+    )
 
 
 def _interpolate_taper(
@@ -880,7 +882,7 @@ def _get_low_bias_tapers(
     is_low_bias = eigenvalues > 0.9
     if not xp.any(is_low_bias):
         logger.warning("Could not properly use low_bias, " "keeping lowest-bias taper")
-        is_low_bias = [xp.argmax(eigenvalues)]
+        is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
 
@@ -1004,5 +1006,5 @@ def detrend(
         tdshape = xp.take(dshape, newdims, 0)
         ret = xp.reshape(newdata, tuple(tdshape))
         vals = list(range(1, rnk))
-        olddims = vals[:axis] + [0] + vals[axis:]
+        olddims = [*vals[:axis], 0, *vals[axis:]]
         return xp.transpose(ret, tuple(olddims))
