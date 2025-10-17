@@ -23,7 +23,9 @@ class TestGetComputeBackend:
 
             assert result["backend"] == "cpu"
             assert result["gpu_enabled"] is False
-            assert result["gpu_available"] is not None  # Should report if CuPy is available
+            assert (
+                result["gpu_available"] is not None
+            )  # Should report if CuPy is available
             assert "device_name" in result
             assert "message" in result
             assert isinstance(result["message"], str)
@@ -42,6 +44,7 @@ class TestGetComputeBackend:
         # Only run if cupy is actually installed
         try:
             import cupy  # noqa: F401
+
             cupy_available = True
         except ImportError:
             cupy_available = False
@@ -72,13 +75,22 @@ class TestGetComputeBackend:
                 assert "gpu_available" in result
                 assert result["gpu_available"] is False
                 assert "message" in result
-                assert "cupy" in result["message"].lower() or "gpu" in result["message"].lower()
+                assert (
+                    "cupy" in result["message"].lower()
+                    or "gpu" in result["message"].lower()
+                )
 
     def test_return_value_structure(self):
         """Test that return value has all required keys."""
         result = get_compute_backend()
 
-        required_keys = {"backend", "gpu_enabled", "gpu_available", "device_name", "message"}
+        required_keys = {
+            "backend",
+            "gpu_enabled",
+            "gpu_available",
+            "device_name",
+            "message",
+        }
         assert set(result.keys()) == required_keys
 
     def test_backend_values(self):
@@ -145,6 +157,12 @@ class TestGPUModeConsistency:
 
             if result["backend"] == "cpu":
                 # CPU backend should indicate numpy
-                assert "cpu" in result["message"].lower() or "numpy" in result["message"].lower()
+                assert (
+                    "cpu" in result["message"].lower()
+                    or "numpy" in result["message"].lower()
+                )
                 # Device name should indicate CPU
-                assert "cpu" in result["device_name"].lower() or result["device_name"] == "CPU"
+                assert (
+                    "cpu" in result["device_name"].lower()
+                    or result["device_name"] == "CPU"
+                )
