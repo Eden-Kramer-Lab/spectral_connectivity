@@ -659,6 +659,122 @@ def test_nyquist_bin_odd_n():
     ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
 
 
+def test_nyquist_frequency_sign_even_n():
+    """Test that Nyquist frequency has correct positive sign for even N.
+
+    Regression test for issue where fftfreq() returns negative Nyquist
+    for even N, causing frequency axis misalignment in spectrograms.
+    """
+    from spectral_connectivity.transforms import Multitaper, prepare_time_series
+
+    # Create test signal with even N
+    sampling_frequency = 1500
+    n_samples = 1000  # Even N
+    signal = np.random.randn(n_samples)
+
+    # Transform to get frequencies
+    signal_3d = prepare_time_series(signal)
+    multitaper = Multitaper(signal_3d, sampling_frequency=sampling_frequency)
+    connectivity = Connectivity.from_multitaper(multitaper)
+
+    # Check that all frequencies are non-negative
+    freqs = connectivity.frequencies
+    assert freqs is not None, "Frequencies should not be None"
+    assert len(freqs) == n_samples // 2 + 1, f"Expected {n_samples // 2 + 1} frequencies, got {len(freqs)}"
+    assert np.all(freqs >= 0), f"All frequencies should be non-negative, got min={freqs.min()}"
+
+    # Check Nyquist frequency specifically
+    nyquist = sampling_frequency / 2
+    assert np.isclose(freqs[-1], nyquist), f"Last frequency should be Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+    assert freqs[-1] > 0, f"Nyquist frequency should be positive, got {freqs[-1]}"
+
+
+def test_nyquist_frequency_sign_odd_n():
+    """Test that frequencies are correct for odd N FFT (no Nyquist bin)."""
+    from spectral_connectivity.transforms import Multitaper, prepare_time_series
+
+    # Create test signal and force odd FFT length
+    sampling_frequency = 1500
+    signal = np.random.randn(1023)  # Will result in odd n_fft_samples
+
+    # Transform to get frequencies
+    signal_3d = prepare_time_series(signal)
+    multitaper = Multitaper(signal_3d, sampling_frequency=sampling_frequency, n_fft_samples=1023)
+    connectivity = Connectivity.from_multitaper(multitaper)
+
+    # Verify we have odd n_fft_samples
+    n_fft = multitaper.n_fft_samples
+    assert n_fft % 2 == 1, f"Expected odd n_fft_samples, got {n_fft}"
+
+    # Check frequencies
+    freqs = connectivity.frequencies
+    assert freqs is not None, "Frequencies should not be None"
+    expected_n_freqs = (n_fft + 1) // 2
+    assert len(freqs) == expected_n_freqs, f"Expected {expected_n_freqs} frequencies, got {len(freqs)}"
+    assert np.all(freqs >= 0), f"All frequencies should be non-negative, got min={freqs.min()}"
+
+    # For odd N, last frequency should be less than Nyquist
+    nyquist = sampling_frequency / 2
+    assert freqs[-1] < nyquist, f"For odd N, last frequency should be < Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+
+
+def test_spectrogram_frequency_alignment():
+    """Test that spectrogram power peaks align with correct frequencies.
+
+    Regression test for frequency axis misalignment where negative Nyquist
+    caused spectrograms to show power at wrong frequencies.
+    """
+    from spectral_connectivity.transforms import Multitaper, prepare_time_series
+
+    # Create signal with known frequency content
+    sampling_frequency = 500
+    duration = 10
+    time = np.arange(0, duration, 1 / sampling_frequency)
+    n_time_samples = len(time)
+
+    # Signal with 50 Hz that turns on at t=5s, plus constant 100 Hz
+    signal_50 = np.sin(2 * np.pi * time * 50)
+    signal_50[: n_time_samples // 2] = 0  # Turn on at t=5s
+    signal_100 = np.sin(2 * np.pi * time * 100)
+    signal = signal_50 + signal_100
+
+    # Compute spectrogram
+    signal_3d = prepare_time_series(signal)
+    multitaper = Multitaper(
+        signal_3d,
+        sampling_frequency=sampling_frequency,
+        time_halfbandwidth_product=1,
+        time_window_duration=1.0,
+        time_window_step=0.5,
+    )
+    connectivity = Connectivity.from_multitaper(multitaper)
+    power = connectivity.power()
+
+    # Find frequency bins
+    freqs = connectivity.frequencies
+    freq_50_idx = np.argmin(np.abs(freqs - 50))
+    freq_100_idx = np.argmin(np.abs(freqs - 100))
+
+    # Verify frequencies are correct
+    assert np.abs(freqs[freq_50_idx] - 50) < 2, f"50 Hz bin at {freqs[freq_50_idx]} Hz, should be ~50 Hz"
+    assert np.abs(freqs[freq_100_idx] - 100) < 2, f"100 Hz bin at {freqs[freq_100_idx]} Hz, should be ~100 Hz"
+
+    # Verify power dynamics
+    power_50 = power[:, freq_50_idx, 0]
+    power_100 = power[:, freq_100_idx, 0]
+
+    # 50 Hz should increase dramatically after t=5s
+    power_50_before = power_50[: len(power_50) // 2].mean()
+    power_50_after = power_50[len(power_50) // 2 :].mean()
+    assert power_50_after > 100 * power_50_before, "50 Hz power should increase >100x after t=5s"
+
+    # 100 Hz should remain constant
+    power_100_before = power_100[: len(power_100) // 2].mean()
+    power_100_after = power_100[len(power_100) // 2 :].mean()
+    ratio = power_100_after / power_100_before
+    assert 0.5 < ratio < 2.0, f"100 Hz power should be constant (ratio ~1.0), got {ratio:.2f}"
+
+
 def test_mvar_regularized_inverse_near_singular():
     """Test regularized inverse handles near-singular frequency bins."""
     # Use seed 999 which produces a more well-behaved near-singular problem
