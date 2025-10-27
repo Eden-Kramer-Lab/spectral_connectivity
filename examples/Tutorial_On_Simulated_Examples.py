@@ -2424,16 +2424,21 @@ connectivity = Connectivity.from_multitaper(multitaper)
 
 global_coherence, unnormalized_global_coherence = connectivity.global_coherence()
 print(global_coherence.shape)  # n_time, n_frequencies, n_components
+
+# Extract non-negative frequencies (first N//2+1 frequencies)
+n_nonneg_freqs = len(connectivity.frequencies)
+global_coherence_nonneg = global_coherence[:, :n_nonneg_freqs, 0].T  # (freqs, time)
+
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
-    np.append(connectivity.frequencies, multitaper.nyquist_frequency),
+    np.append(connectivity.frequencies, connectivity.frequencies[-1]),  # Add edge for pcolormesh
 )
 plt.figure()
 plt.pcolormesh(
     time_grid,
     freq_grid,
-    global_coherence[:, connectivity.all_frequencies >= 0, 0].T,
-    shading="auto",
+    global_coherence_nonneg,
+    shading="flat",
 )
 plt.title("Global Coherence (1st component)")
 plt.xlabel("Time [s]")
