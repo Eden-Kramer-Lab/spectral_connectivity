@@ -94,6 +94,7 @@ extend-exclude = [
     "build",
     "dist",
     "*.egg-info",
+    "spectral_connectivity/_version.py",
 ]
 
 [tool.ruff.lint]
