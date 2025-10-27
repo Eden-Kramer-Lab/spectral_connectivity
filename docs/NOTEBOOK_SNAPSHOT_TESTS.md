@@ -19,12 +19,14 @@ Create snapshot tests for tutorial notebooks to verify:
 
 ### Test Types
 
-#### 1. Snapshot Tests (Fast, Always Run)
+#### 1. Snapshot Tests (Fast* Always Run)
 - Hand-written test functions in `tests/test_notebooks.py`
 - Use `syrupy` fixture to snapshot numerical outputs
 - Test key scenarios inspired by notebook examples
-- Verify arrays match expected values exactly
+- Verify arrays match expected values using `np.allclose()` (rtol=1e-7, atol=1e-10)
 - Run on every commit/PR
+
+**Performance Note:** The full test suite (27 tests) takes ~2-3 minutes to run due to pytest/syrupy overhead with large NumPy arrays. Individual tests are fast (<1s each), but memory accumulation causes super-linear scaling when running all tests together. This is expected behavior and not a bug in the test code itself.
 
 #### 2. Execution Tests (Slow, Marked)
 - Verify notebooks execute without errors

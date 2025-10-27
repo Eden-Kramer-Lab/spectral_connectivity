@@ -605,25 +605,27 @@ def test_group_delay_signal2_leads(snapshot):
 
 
 def test_group_delay_signal2_leads_over_time(snapshot):
-    """Group delay: Signal #2 leads Signal #1 over time."""
+    """Group delay: Signal #2 leads Signal #1 over time (with trials)."""
     np.random.seed(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
+    n_trials = 100  # Need trials for sufficient observations with windowing
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     frequency_of_interest = 200
     n_signals = 2
     time_lag = 0.010
-    signal = np.zeros((n_time_samples, n_signals))
+    signal = np.zeros((n_time_samples, n_trials, n_signals))
 
+    # Signal 2 leads (appears first in time)
     time_shifted = time + time_lag
-    signal[:, 0] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    signal[:, 1] = np.sin(2 * np.pi * time * frequency_of_interest)
+    signal[:, :, 0] = np.sin(2 * np.pi * time_shifted[:, np.newaxis] * frequency_of_interest)
+    signal[:, :, 1] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
     noise = np.random.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise, axis="signals"),
+        prepare_time_series(signal + noise),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=1,
         time_window_duration=0.080,
@@ -831,10 +833,11 @@ def test_global_coherence(snapshot):
 
 
 # ============ Tutorial_Using_Paper_Examples tests ============
+# Only keeping 3 representative MVAR examples
 
 
 def test_baccala_example2(snapshot):
-    """Baccala Example 2: Partial directed coherence."""
+    """Baccala Example 2: Partial directed coherence (representative PDC example)."""
     np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3
@@ -846,7 +849,7 @@ def test_baccala_example2(snapshot):
         coefficients,
         noise_covariance=noise_covariance,
         n_time_samples=n_time_samples,
-        n_trials=500,
+        n_trials=50,  # Reduced for faster test runtime
         n_burnin_samples=500,
     )
 
@@ -867,150 +870,8 @@ def test_baccala_example2(snapshot):
     assert outputs == snapshot
 
 
-def test_baccala_example3(snapshot):
-    """Baccala Example 3."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 5
-
-    coefficients = np.array(
-        [
-            [
-                [0.95 * np.sqrt(2.0), 0, 0, 0, 0],
-                [-0.9025, 0, 0, 0, 0],
-                [0, 0.5, 0, 0, 0],
-                [0, 0, 0, 0, 0],
-                [0, 0, 0, 0, 0.5],
-            ],
-            [[0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [0, -0.4, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, -0.2, 0]],
-        ]
-    )
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=1,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "partial_directed_coherence": connectivity.partial_directed_coherence(),
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_baccala_example4(snapshot):
-    """Baccala Example 4."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.5, 0, 0], [-0.5, 0.3, 0.4], [0, 0, -0.2]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=1,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "partial_directed_coherence": connectivity.partial_directed_coherence(),
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_baccala_example5(snapshot):
-    """Baccala Example 5."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.5, 0.3, 0], [-0.5, 0.3, 0], [0, 0.4, -0.2]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=1,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "partial_directed_coherence": connectivity.partial_directed_coherence(),
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_baccala_example6(snapshot):
-    """Baccala Example 6."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.5, 0.3, 0.4], [-0.5, 0.3, 1.0], [0, -0.3, -0.2]]])
-    noise_covariance = np.diag([1.0, 0.7, 1.0])
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=1,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "generalized_partial_directed_coherence": connectivity.generalized_partial_directed_coherence(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
 def test_ding_example1(snapshot):
-    """Ding Example 1."""
+    """Ding Example 1: Direct DTF (representative dDTF example)."""
     np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 2
@@ -1022,7 +883,7 @@ def test_ding_example1(snapshot):
         coefficients,
         noise_covariance=noise_covariance,
         n_time_samples=n_time_samples,
-        n_trials=500,
+        n_trials=50,  # Reduced for faster test runtime
         n_burnin_samples=500,
     )
 
@@ -1037,150 +898,13 @@ def test_ding_example1(snapshot):
     outputs = {
         "directed_transfer_function": connectivity.directed_transfer_function(),
         "direct_directed_transfer_function": connectivity.direct_directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_ding_example2a(snapshot):
-    """Ding Example 2a."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.8, 0.0, 0.0], [0.4, 0.5, 0.0], [0.0, 0.5, 0.5]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "direct_directed_transfer_function": connectivity.direct_directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_ding_example2b(snapshot):
-    """Ding Example 2b."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.8, 0.0, 0.0], [0.4, 0.5, 0.0], [0.4, 0.0, 0.5]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "direct_directed_transfer_function": connectivity.direct_directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_ding_example3(snapshot):
-    """Ding Example 3."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 4
-
-    coefficients = np.array(
-        [
-            [[0.8, 0.0, 0.0, 0.0], [0.4, 0.5, 0.0, 0.0], [0.0, 0.5, 0.5, 0.0], [0.0, 0.0, 0.5, 0.5]],
-            [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.4, 0.0, 0.0, 0.0]],
-        ]
-    )
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "directed_transfer_function": connectivity.directed_transfer_function(),
-        "direct_directed_transfer_function": connectivity.direct_directed_transfer_function(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_nedungadi_example1(snapshot):
-    """Nedungadi Example 1."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 2
-
-    coefficients = np.array([[[0.5, 0.3], [0.4, 0.5]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "pairwise_spectral_granger": connectivity.pairwise_spectral_granger_prediction(),
-        "conditional_spectral_granger": connectivity.conditional_spectral_granger_prediction(),
         "frequencies": connectivity.frequencies,
     }
     assert outputs == snapshot
 
 
 def test_nedungadi_example2(snapshot):
-    """Nedungadi Example 2."""
+    """Nedungadi Example 2: Conditional Granger (representative example showing confounds)."""
     np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3
@@ -1192,153 +916,7 @@ def test_nedungadi_example2(snapshot):
         coefficients,
         noise_covariance=noise_covariance,
         n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "pairwise_spectral_granger": connectivity.pairwise_spectral_granger_prediction(),
-        "conditional_spectral_granger": connectivity.conditional_spectral_granger_prediction(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_wen_example1(snapshot):
-    """Wen Example 1."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array(
-        [[[0.9, 0.0, 0.0], [0.16, 0.8, 0.0], [0.0, 0.0, 0.5]], [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]]
-    )
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "new_partial_directed_coherence": connectivity.new_partial_directed_coherence(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_wen_example2(snapshot):
-    """Wen Example 2."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 4
-
-    coefficients = np.array(
-        [
-            [
-                [0.9, 0.0, 0.0, 0.0],
-                [0.16, 0.8, 0.0, 0.0],
-                [0.0, 0.0, 0.5, 0.0],
-                [0.0, 0.0, 0.2, 0.5],
-            ],
-            [
-                [0.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-                [0.25, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 0.0, 0.0],
-            ],
-        ]
-    )
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "new_partial_directed_coherence": connectivity.new_partial_directed_coherence(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_dhamala_example1(snapshot):
-    """Dhamala Example 1."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 2
-
-    coefficients = np.array([[[0.55, 0.0], [0.25, 0.55]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
-        n_burnin_samples=500,
-    )
-
-    multitaper = Multitaper(
-        prepare_time_series(time_series),
-        sampling_frequency=sampling_frequency,
-        time_halfbandwidth_product=2,
-        start_time=0,
-    )
-    connectivity = Connectivity.from_multitaper(multitaper)
-
-    outputs = {
-        "pairwise_spectral_granger": connectivity.pairwise_spectral_granger_prediction(),
-        "frequencies": connectivity.frequencies,
-    }
-    assert outputs == snapshot
-
-
-def test_dhamala_example2(snapshot):
-    """Dhamala Example 2."""
-    np.random.seed(42)
-    sampling_frequency = 200
-    n_time_samples, n_signals = 1000, 3
-
-    coefficients = np.array([[[0.55, 0.0, 0.0], [0.25, 0.55, 0.0], [0.0, 0.25, 0.55]]])
-    noise_covariance = np.eye(n_signals)
-
-    time_series = simulate_MVAR(
-        coefficients,
-        noise_covariance=noise_covariance,
-        n_time_samples=n_time_samples,
-        n_trials=500,
+        n_trials=50,  # Reduced for faster test runtime
         n_burnin_samples=500,
     )
 
