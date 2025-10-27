@@ -18,7 +18,7 @@
 #
 # The `spectral_connectivity` package has two main classes used for computation:
 # + `Multitaper`
-# + `Connectivity`. 
+# + `Connectivity`.
 #
 # There is also a function called `multitaper_connectivity` which combines the usage of the two classes and outputs a labeled array, which can be convenient for understanding the output and plotting.
 #
@@ -26,7 +26,7 @@
 #
 # ## Multitaper
 #
-# `Multitaper` is used to compute the multitaper Fourier transform of a set of signals. It returns Fourier coefficients that can subsequently be used by the `Connectivity` class to compute frequency-domain metrics on the signals such as power and coherence. 
+# `Multitaper` is used to compute the multitaper Fourier transform of a set of signals. It returns Fourier coefficients that can subsequently be used by the `Connectivity` class to compute frequency-domain metrics on the signals such as power and coherence.
 #
 # Let's simulate a set of signals and see how to use the `Multitaper` class. We simulate two signals (`signal`) which oscillate at 200 Hz and are offset in phase by $\frac{\pi}{2}$. We also simulate some white noise to add to the signal (`noise`). We want to compute the multitaper Fourier transform of these two signals.
 #
@@ -127,9 +127,11 @@ sampling_frequency
 
 # %%
 # Convert signal to 3D format (n_time_samples, n_trials, n_signals)
-signal_with_noise = prepare_time_series(signal + noise, axis='signals')
+signal_with_noise = prepare_time_series(signal + noise, axis="signals")
 multitaper = Multitaper(
-    signal_with_noise, sampling_frequency=sampling_frequency, time_halfbandwidth_product=5
+    signal_with_noise,
+    sampling_frequency=sampling_frequency,
+    time_halfbandwidth_product=5,
 )
 multitaper
 
@@ -143,7 +145,7 @@ multitaper.time_window_duration
 multitaper.time_window_step
 
 # %% [markdown]
-# We can also look at the frequency resolution (which is determined by the `time_halfbandwidth_product` and the `time_window_duration`). 
+# We can also look at the frequency resolution (which is determined by the `time_halfbandwidth_product` and the `time_window_duration`).
 #
 # NOTE: The bandwidth is another way to refer to the frequency resolution.
 
@@ -157,7 +159,7 @@ multitaper.frequency_resolution
 multitaper.nyquist_frequency
 
 # %% [markdown]
-# Note that we haven't run the tranformation yet. To do this we can use the method `fft` to get the Fourier coefficients. 
+# Note that we haven't run the tranformation yet. To do this we can use the method `fft` to get the Fourier coefficients.
 #
 # This will have shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
 
@@ -374,7 +376,7 @@ coherence.sel(frequency=slice(100, 300)).plot(
 # %% [markdown]
 # ## Using GPUs
 #
-# The `spectral_connectivity` package can do computations on the GPU to speed up the code. To do this, you must have the package `cupy` installed AND have the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` set. 
+# The `spectral_connectivity` package can do computations on the GPU to speed up the code. To do this, you must have the package `cupy` installed AND have the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` set.
 #
 # WARNING: the environmental variable must be set before the first import of the `spectral_connectivity` package or the GPU enabled functions will not work.
 #

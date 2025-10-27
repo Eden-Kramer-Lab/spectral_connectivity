@@ -631,9 +631,9 @@ def test_nyquist_bin_even_n():
 
     # For even N=1024, should have N//2+1 = 513 frequencies (including Nyquist)
     expected_n_frequencies = n_fft_samples // 2 + 1
-    assert (
-        coherence.shape[-3] == expected_n_frequencies
-    ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+    assert coherence.shape[-3] == expected_n_frequencies, (
+        f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+    )
 
 
 def test_nyquist_bin_odd_n():
@@ -654,9 +654,9 @@ def test_nyquist_bin_odd_n():
 
     # For odd N=1023, should have (N+1)//2 = 512 frequencies (no Nyquist)
     expected_n_frequencies = (n_fft_samples + 1) // 2
-    assert (
-        coherence.shape[-3] == expected_n_frequencies
-    ), f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+    assert coherence.shape[-3] == expected_n_frequencies, (
+        f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
+    )
 
 
 def test_nyquist_frequency_sign_even_n():
@@ -680,12 +680,18 @@ def test_nyquist_frequency_sign_even_n():
     # Check that all frequencies are non-negative
     freqs = connectivity.frequencies
     assert freqs is not None, "Frequencies should not be None"
-    assert len(freqs) == n_samples // 2 + 1, f"Expected {n_samples // 2 + 1} frequencies, got {len(freqs)}"
-    assert np.all(freqs >= 0), f"All frequencies should be non-negative, got min={freqs.min()}"
+    assert len(freqs) == n_samples // 2 + 1, (
+        f"Expected {n_samples // 2 + 1} frequencies, got {len(freqs)}"
+    )
+    assert np.all(freqs >= 0), (
+        f"All frequencies should be non-negative, got min={freqs.min()}"
+    )
 
     # Check Nyquist frequency specifically
     nyquist = sampling_frequency / 2
-    assert np.isclose(freqs[-1], nyquist), f"Last frequency should be Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+    assert np.isclose(freqs[-1], nyquist), (
+        f"Last frequency should be Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+    )
     assert freqs[-1] > 0, f"Nyquist frequency should be positive, got {freqs[-1]}"
 
 
@@ -699,7 +705,9 @@ def test_nyquist_frequency_sign_odd_n():
 
     # Transform to get frequencies
     signal_3d = prepare_time_series(signal)
-    multitaper = Multitaper(signal_3d, sampling_frequency=sampling_frequency, n_fft_samples=1023)
+    multitaper = Multitaper(
+        signal_3d, sampling_frequency=sampling_frequency, n_fft_samples=1023
+    )
     connectivity = Connectivity.from_multitaper(multitaper)
 
     # Verify we have odd n_fft_samples
@@ -710,12 +718,18 @@ def test_nyquist_frequency_sign_odd_n():
     freqs = connectivity.frequencies
     assert freqs is not None, "Frequencies should not be None"
     expected_n_freqs = (n_fft + 1) // 2
-    assert len(freqs) == expected_n_freqs, f"Expected {expected_n_freqs} frequencies, got {len(freqs)}"
-    assert np.all(freqs >= 0), f"All frequencies should be non-negative, got min={freqs.min()}"
+    assert len(freqs) == expected_n_freqs, (
+        f"Expected {expected_n_freqs} frequencies, got {len(freqs)}"
+    )
+    assert np.all(freqs >= 0), (
+        f"All frequencies should be non-negative, got min={freqs.min()}"
+    )
 
     # For odd N, last frequency should be less than Nyquist
     nyquist = sampling_frequency / 2
-    assert freqs[-1] < nyquist, f"For odd N, last frequency should be < Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+    assert freqs[-1] < nyquist, (
+        f"For odd N, last frequency should be < Nyquist ({nyquist} Hz), got {freqs[-1]} Hz"
+    )
 
 
 def test_spectrogram_frequency_alignment():
@@ -756,8 +770,12 @@ def test_spectrogram_frequency_alignment():
     freq_100_idx = np.argmin(np.abs(freqs - 100))
 
     # Verify frequencies are correct
-    assert np.abs(freqs[freq_50_idx] - 50) < 2, f"50 Hz bin at {freqs[freq_50_idx]} Hz, should be ~50 Hz"
-    assert np.abs(freqs[freq_100_idx] - 100) < 2, f"100 Hz bin at {freqs[freq_100_idx]} Hz, should be ~100 Hz"
+    assert np.abs(freqs[freq_50_idx] - 50) < 2, (
+        f"50 Hz bin at {freqs[freq_50_idx]} Hz, should be ~50 Hz"
+    )
+    assert np.abs(freqs[freq_100_idx] - 100) < 2, (
+        f"100 Hz bin at {freqs[freq_100_idx]} Hz, should be ~100 Hz"
+    )
 
     # Verify power dynamics
     power_50 = power[:, freq_50_idx, 0]
@@ -766,22 +784,24 @@ def test_spectrogram_frequency_alignment():
     # 50 Hz should increase dramatically after t=5s
     power_50_before = power_50[: len(power_50) // 2].mean()
     power_50_after = power_50[len(power_50) // 2 :].mean()
-    assert power_50_after > 100 * power_50_before, "50 Hz power should increase >100x after t=5s"
+    assert power_50_after > 100 * power_50_before, (
+        "50 Hz power should increase >100x after t=5s"
+    )
 
     # 100 Hz should remain constant
     power_100_before = power_100[: len(power_100) // 2].mean()
     power_100_after = power_100[len(power_100) // 2 :].mean()
     ratio = power_100_after / power_100_before
-    assert 0.5 < ratio < 2.0, f"100 Hz power should be constant (ratio ~1.0), got {ratio:.2f}"
+    assert 0.5 < ratio < 2.0, (
+        f"100 Hz power should be constant (ratio ~1.0), got {ratio:.2f}"
+    )
 
 
 def test_mvar_regularized_inverse_near_singular():
     """Test regularized inverse handles near-singular frequency bins."""
     # Use seed 999 which produces a more well-behaved near-singular problem
     rng = np.random.default_rng(999)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (
-        1, 10, 1, 5, 3
-    )
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 10, 1, 5, 3)
 
     # Create nearly singular Fourier coefficients by making signals
     # highly correlated
@@ -791,11 +811,9 @@ def test_mvar_regularized_inverse_near_singular():
     )
 
     # Base signal
-    base_signal = rng.standard_normal((
-        n_time_samples, n_trials, n_tapers, n_fft_samples
-    )) + 1j * rng.standard_normal((
-        n_time_samples, n_trials, n_tapers, n_fft_samples
-    ))
+    base_signal = rng.standard_normal(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    ) + 1j * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
 
     # Create near-singular cross-spectral matrix by making signals
     # nearly dependent
@@ -877,7 +895,6 @@ def test_connectivity_rejects_wrong_ndim():
 
 def test_connectivity_requires_multiple_signals():
     """Test that Connectivity allows single signals for power, but connectivity methods require >= 2."""
-    import pytest
 
     # Single signal is now allowed (for power spectral density)
     fourier_1_signal = np.ones((2, 2, 2, 100, 1), dtype=np.complex128)
@@ -966,11 +983,11 @@ def test_expectation_cross_spectral_matrix_blocks():
 
     # Create Fourier coefficients with some structure
     rng = np.random.default_rng(42)
-    fourier_coefficients = rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    )) + 1j * rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    ))
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
     # Test with different expectation types
@@ -1023,11 +1040,11 @@ def test_expectation_cross_spectral_matrix_blocks_coherence():
     n_signals = 8
 
     rng = np.random.default_rng(123)
-    fourier_coefficients = rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    )) + 1j * rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    ))
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
     # Compute coherence without blocks
@@ -1077,11 +1094,11 @@ def test_expectation_cross_spectral_matrix_blocks_edge_cases():
     n_signals = 3  # Only 3 signals = 3 unique pairs in upper triangle
 
     rng = np.random.default_rng(456)
-    fourier_coefficients = rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    )) + 1j * rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    ))
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
     # Compute reference (unblocked)
@@ -1114,11 +1131,11 @@ def test_blocks_parameter_symmetry():
     n_signals = 6
 
     rng = np.random.default_rng(789)
-    fourier_coefficients = rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    )) + 1j * rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    ))
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
     # Test with blocks
@@ -1159,11 +1176,11 @@ def test_blocks_reduce_memory():
     n_signals = 50  # Large enough to see memory benefit
 
     rng = np.random.default_rng(999)
-    fourier_coefficients = rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    )) + 1j * rng.standard_normal((
-        n_time_windows, n_trials, n_tapers, n_frequencies, n_signals
-    ))
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
     # Measure memory for unblocked computation

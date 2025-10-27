@@ -457,7 +457,7 @@ plt.ylim((-10, 10))
 plt.legend()
 
 multitaper = Multitaper(
-    prepare_time_series(signal, axis='signals'),
+    prepare_time_series(signal, axis="signals"),
     sampling_frequency=sampling_frequency,
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
@@ -468,7 +468,7 @@ plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1
 
 
 multitaper = Multitaper(
-    prepare_time_series(signal + noise, axis='signals'),
+    prepare_time_series(signal + noise, axis="signals"),
     sampling_frequency=sampling_frequency,
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
@@ -2431,7 +2431,9 @@ global_coherence_nonneg = global_coherence[:, :n_nonneg_freqs, 0].T  # (freqs, t
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
-    np.append(connectivity.frequencies, connectivity.frequencies[-1]),  # Add edge for pcolormesh
+    np.append(
+        connectivity.frequencies, connectivity.frequencies[-1]
+    ),  # Add edge for pcolormesh
 )
 plt.figure()
 plt.pcolormesh(

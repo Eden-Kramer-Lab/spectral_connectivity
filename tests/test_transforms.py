@@ -104,7 +104,7 @@ def test_time_window_step(sampling_frequency, time_window_step, expected_step):
 
 
 @mark.parametrize(
-    ("sampling_frequency, time_window_duration," "expected_n_time_samples_per_window"),
+    ("sampling_frequency, time_window_duration,expected_n_time_samples_per_window"),
     [(1000, None, 100), (1000, 0.1, 100), (2000, 0.025, 50)],
 )
 def test_n_time_samples(
@@ -121,10 +121,7 @@ def test_n_time_samples(
 
 
 @mark.parametrize(
-    (
-        "sampling_frequency, time_window_duration, n_fft_samples,"
-        "expected_n_fft_samples"
-    ),
+    ("sampling_frequency, time_window_duration, n_fft_samples,expected_n_fft_samples"),
     [(1000, None, 5, 5), (1000, 0.1, None, 100)],
 )
 def test_n_fft_samples(
@@ -178,10 +175,7 @@ def test_n_trials():
 
 
 @mark.parametrize(
-    (
-        "time_halfbandwidth_product, time_window_duration, "
-        "expected_frequency_resolution"
-    ),
+    ("time_halfbandwidth_product, time_window_duration, expected_frequency_resolution"),
     [(3, 0.10, 60), (1, 0.02, 100), (5, 1, 10)],
 )
 def test_frequency_resolution(
@@ -198,7 +192,7 @@ def test_frequency_resolution(
 
 
 @mark.parametrize(
-    ("time_window_step, n_time_samples_per_step, " "expected_n_samples_per_time_step"),
+    ("time_window_step, n_time_samples_per_step, expected_n_samples_per_time_step"),
     [(None, None, 100), (0.001, None, 1), (0.002, None, 2), (None, 10, 10)],
 )
 def test_n_samples_per_time_step(
@@ -305,7 +299,7 @@ def test__get_taper_eigenvalues(n_time_samples, time_halfbandwidth_product, n_ta
 
 
 def test__auto_correlation():
-    rng = np.random.default_rng(42)
+    np.random.default_rng(42)
     n_time_samples, n_tapers = 100, 3
     test_data = np.random.rand(n_tapers, n_time_samples)
     rxx = _auto_correlation(test_data)[:, :n_time_samples]
@@ -345,7 +339,7 @@ def test_multitaper_requires_3d_input():
     """Test that Multitaper requires 3D input array."""
     rng = np.random.default_rng(42)
     # 1D input should raise ValueError
-    time_series_1d = rng.standard_normal((100))
+    time_series_1d = rng.standard_normal(100)
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
         Multitaper(time_series=time_series_1d)
 
@@ -402,7 +396,7 @@ def test_prepare_time_series_1d():
     from spectral_connectivity.transforms import prepare_time_series
 
     # 1D input: single trial, single signal
-    time_series_1d = rng.standard_normal((100))
+    time_series_1d = rng.standard_normal(100)
     result = prepare_time_series(time_series_1d)
     assert result.shape == (100, 1, 1)  # (n_time, 1 trial, 1 signal)
 

@@ -88,6 +88,7 @@ def plot_directional(time_series, sampling_frequency, time_halfbandwidth_product
 #
 # ![image.png](attachment:image.png)
 
+
 # %%
 def baccala_example2():
     """Baccalá, L.A., and Sameshima, K. (2001). Partial directed coherence:
@@ -124,6 +125,7 @@ plot_directional(*baccala_example2(), time_halfbandwidth_product=1)
 #     Cybernetics 84, 463–474.
 #
 # ![image.png](attachment:image.png)
+
 
 # %%
 def baccala_example3():
@@ -174,6 +176,7 @@ plot_directional(*baccala_example3(), time_halfbandwidth_product=3)
 #
 # ![image.png](attachment:image.png)
 
+
 # %%
 def baccala_example4():
     """Baccalá, L.A., and Sameshima, K. (2001). Partial directed coherence:
@@ -217,8 +220,9 @@ plot_directional(*baccala_example4(), time_halfbandwidth_product=1)
 # > Baccalá, L.A., and Sameshima, K. (2001). Partial directed coherence:
 #     a new concept in neural structure determination. Biological
 #     Cybernetics 84, 463–474.
-#     
+#
 #  ![image.png](attachment:image.png)
+
 
 # %%
 def baccala_example5():
@@ -267,6 +271,7 @@ plot_directional(*baccala_example5(), time_halfbandwidth_product=1)
 #
 # ![image.png](attachment:image.png)
 
+
 # %%
 def baccala_example6():
     """Baccalá, L.A., and Sameshima, K. (2001). Partial directed coherence:
@@ -311,11 +316,12 @@ plot_directional(*baccala_example6(), time_halfbandwidth_product=1)
 # > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
 #     basic theory and application to neuroscience. Handbook of Time Series
 #     Analysis: Recent Theoretical Developments and Applications 437.
-#     
+#
 # $$ x_1 = 0.9x_1(n-1) -0.5x_1(n-2) + w_1 $$
 # $$ x_2 = 0.8x_2(n-1) -0.5x_2(n-2) + 0.16x_1(n-1) -0.2x_1(n-2) + w_2 $$
 #
 # ![image.png](attachment:image.png)
+
 
 # %%
 def ding_example1():
@@ -353,13 +359,14 @@ plot_directional(*ding_example1(), time_halfbandwidth_product=3)
 # > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
 #     basic theory and application to neuroscience. Handbook of Time Series
 #     Analysis: Recent Theoretical Developments and Applications 437.
-#  
-# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$ 
+#
+# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$
 # $$ x_2 = 0.9x_2(n-1) - 0.8x_2(n-2) + w_2$$
 # $$ x_3 = 0.5x_3(n-1) - 0.2x_3(n-2) + 0.5x_2(n-1) + w_3$$
 # ![image.png](attachment:image.png)
 #
 # > dashed curves showing the results for the first model and the solid curves for the second model
+
 
 # %%
 def ding_example2a():
@@ -400,13 +407,14 @@ plot_directional(*ding_example2a())
 # > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
 #     basic theory and application to neuroscience. Handbook of Time Series
 #     Analysis: Recent Theoretical Developments and Applications 437.
-#  
-# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$ 
+#
+# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$
 # $$ x_2 = 0.9x_2(n-1) - 0.8x_2(n-2) + w_2$$
 # $$ x_3 = 0.5x_3(n-1) - 0.2x_3(n-2) + 0.5x_2(n-1) + w_3$$
 # ![image.png](attachment:image.png)
 #
 # > dashed curves showing the results for the first model and the solid curves for the second model
+
 
 # %%
 def ding_example2b():
@@ -447,7 +455,7 @@ plot_directional(*ding_example2b(), time_halfbandwidth_product=2)
 # > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
 #     basic theory and application to neuroscience. Handbook of Time Series Analysis:
 #     Recent Theoretical Developments and Applications 437.
-#     
+#
 # $$ x_1 = 0.95\sqrt2x_1(n-1) - 0.9025x_1(n-2) + w_1 $$
 # $$ x_2 = 0.5x_1(n-2) + w_2 $$
 # $$ x_3 = -0.4x_1(n-3) + w_3 $$
@@ -455,6 +463,7 @@ plot_directional(*ding_example2b(), time_halfbandwidth_product=2)
 # $$ x_5 = 0.25\sqrt2x_4(n-1) + 0.25\sqrt2x_5(n-1) + w_5 $$
 #
 # ![image.png](attachment:image.png)
+
 
 # %%
 def ding_example3():
@@ -500,6 +509,7 @@ plot_directional(*ding_example3(), time_halfbandwidth_product=1)
 #
 # > Nedungadi, A.G., Ding, M., and Rangarajan, G. (2011). Block coherence: a method for measuring the interdependence between two blocks of neurobiological time series. Biological Cybernetics 104, 197–207.
 
+
 # %%
 def Nedungadi_example1():
     """Nedungadi, A.G., Ding, M., and Rangarajan, G. (2011).
@@ -536,6 +546,7 @@ plot_directional(*Nedungadi_example1(), time_halfbandwidth_product=3)
 # ## Nedungadi Example 2
 #
 # > Nedungadi, A.G., Ding, M., and Rangarajan, G. (2011). Block coherence: a method for measuring the interdependence between two blocks of neurobiological time series. Biological Cybernetics 104, 197–207.
+
 
 # %%
 def Nedungadi_example2():
@@ -575,6 +586,7 @@ plot_directional(*Nedungadi_example2(), time_halfbandwidth_product=3)
 # > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610–20110610.
 #
 # ![image.png](attachment:image.png)
+
 
 # %%
 def Wen_example1():
@@ -620,6 +632,7 @@ plot_directional(*Wen_example1(), time_halfbandwidth_product=1)
 # > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610–20110610.
 #
 # ![image.png](attachment:image.png)
+
 
 # %%
 def Wen_example2():
@@ -671,6 +684,7 @@ plot_directional(*Wen_example2(), time_halfbandwidth_product=3)
 #
 # ![image.png](attachment:image.png)
 
+
 # %%
 def Dhamala_example1():
     sampling_frequency = 200
@@ -706,6 +720,7 @@ plot_directional(*Dhamala_example1(), time_halfbandwidth_product=1)
 # ## Dhamala Example 2
 #
 # > Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing information flow in brain networks with nonparametric Granger causality. NeuroImage 41, 354–362.
+
 
 # %%
 def Dhamala_example2a():

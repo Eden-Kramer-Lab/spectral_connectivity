@@ -272,9 +272,14 @@ class TestSummarizeParameters:
 
         # Should mention key parameters
         assert "sampling_frequency" in summary.lower() or "1000" in summary
-        assert "time-halfbandwidth product" in summary.lower() or str(mt.time_halfbandwidth_product) in summary
+        assert (
+            "time-halfbandwidth product" in summary.lower()
+            or str(mt.time_halfbandwidth_product) in summary
+        )
         assert "tapers" in summary.lower() or str(mt.n_tapers) in summary
-        assert "frequency resolution" in summary.lower() or "resolution" in summary.lower()
+        assert (
+            "frequency resolution" in summary.lower() or "resolution" in summary.lower()
+        )
 
     def test_readable_format(self):
         """Test that summary is human-readable (not repr)."""

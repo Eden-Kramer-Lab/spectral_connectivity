@@ -1758,7 +1758,7 @@ def _get_low_bias_tapers(
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     is_low_bias = eigenvalues > MIN_EIGENVALUE_THRESHOLD
     if not xp.any(is_low_bias):
-        logger.warning("Could not properly use low_bias, " "keeping lowest-bias taper")
+        logger.warning("Could not properly use low_bias, keeping lowest-bias taper")
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
@@ -1797,7 +1797,7 @@ def detrend(
     data: NDArray[np.floating],
     axis: int = -1,
     type: str = "linear",
-    bp: int | NDArray[np.integer] = 0,
+    bp: int | list[int] | NDArray[np.integer] = 0,
     overwrite_data: bool = False,
 ) -> NDArray[np.floating]:
     """

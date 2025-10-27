@@ -6,14 +6,14 @@ by notebook examples but hand-written for clarity and focus.
 
 Uses syrupy with custom NumPy extension for approximate equality.
 """
+
 import numpy as np
 import pytest
-from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 from syrupy.extensions.amber import AmberSnapshotExtension
 
 from spectral_connectivity import Connectivity, Multitaper
-from spectral_connectivity.transforms import prepare_time_series
 from spectral_connectivity.simulate import simulate_MVAR
+from spectral_connectivity.transforms import prepare_time_series
 
 
 class NumPySnapshotExtension(AmberSnapshotExtension):
@@ -75,7 +75,9 @@ def test_coherence_magnitude_phase_offset(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     # Create 2 signals with pi/2 phase offset
     frequency_of_interest = 200
@@ -108,7 +110,9 @@ def test_spectrogram_temporal_dynamics(snapshot):
     time_extent = (0, 50)
     frequency_of_interest = [200, 50]
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     # Create signal with 200 Hz constant, 50 Hz turns on at t=25s
     signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -143,7 +147,9 @@ def test_coherogram_phase_change(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     # Random phase before t=1.5s, fixed phase after
     signal = np.zeros((n_time_samples, n_trials, n_signals))
@@ -179,7 +185,9 @@ def test_power_spectrum_30hz(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
     signal = np.sin(2 * np.pi * time * frequency_of_interest)
     noise = np.random.normal(0, 4, len(signal))
 
@@ -206,7 +214,9 @@ def test_spectrogram_with_trials(snapshot):
     frequency_of_interest = [200, 50]
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     n_trials = 10
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     # Create signal with 200 Hz constant, 50 Hz turns on at t=25s
     signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -242,7 +252,9 @@ def test_spectrogram_decreased_frequency_resolution(snapshot):
     time_extent = (0, 50)
     frequency_of_interest = [200, 50]
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
     signal[: n_time_samples // 2, 1] = 0
@@ -273,7 +285,9 @@ def test_coherence_no_trials(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -307,7 +321,9 @@ def test_coherence_with_trials(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -341,7 +357,9 @@ def test_imaginary_coherence(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -375,7 +393,9 @@ def test_phase_locking_value(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -409,7 +429,9 @@ def test_phase_lag_index(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -443,7 +465,9 @@ def test_weighted_phase_lag_index(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -477,7 +501,9 @@ def test_debiased_squared_weighted_phase_lag_index(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -511,7 +537,9 @@ def test_pairwise_phase_consistency(snapshot):
     n_signals = 2
     frequency_of_interest = 200
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
@@ -542,7 +570,9 @@ def test_group_delay_signal1_leads(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -576,7 +606,9 @@ def test_group_delay_signal2_leads(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -611,7 +643,9 @@ def test_group_delay_signal2_leads_over_time(snapshot):
     time_extent = (0, 2.400)
     n_trials = 100  # Need trials for sufficient observations with windowing
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -620,7 +654,9 @@ def test_group_delay_signal2_leads_over_time(snapshot):
 
     # Signal 2 leads (appears first in time)
     time_shifted = time + time_lag
-    signal[:, :, 0] = np.sin(2 * np.pi * time_shifted[:, np.newaxis] * frequency_of_interest)
+    signal[:, :, 0] = np.sin(
+        2 * np.pi * time_shifted[:, np.newaxis] * frequency_of_interest
+    )
     signal[:, :, 1] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
     noise = np.random.normal(0, 4, signal.shape)
 
@@ -648,7 +684,9 @@ def test_phase_slope_index_signal1_leads(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -681,7 +719,9 @@ def test_phase_slope_index_signal2_leads(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 2
@@ -714,7 +754,9 @@ def test_canonical_coherence(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_group1_signals = 3
@@ -760,7 +802,9 @@ def test_canonical_coherence_high_noise(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_group1_signals = 5
@@ -804,7 +848,9 @@ def test_global_coherence(snapshot):
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
-    time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
+    time = np.linspace(
+        time_extent[0], time_extent[1], num=n_time_samples, endpoint=True
+    )
 
     frequency_of_interest = 200
     n_signals = 5
@@ -956,9 +1002,7 @@ def test_tutorial_simulated_examples_executes():
     )
 
     assert result.returncode == 0, (
-        f"Notebook execution failed:\n"
-        f"STDOUT: {result.stdout}\n"
-        f"STDERR: {result.stderr}"
+        f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
     )
 
 
@@ -982,7 +1026,5 @@ def test_tutorial_paper_examples_executes():
     )
 
     assert result.returncode == 0, (
-        f"Notebook execution failed:\n"
-        f"STDOUT: {result.stdout}\n"
-        f"STDERR: {result.stderr}"
+        f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
     )

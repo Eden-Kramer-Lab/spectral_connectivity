@@ -51,16 +51,19 @@ pytest tests/test_connectivity.py::TestConnectivity::test_coherence -v
 ### Code Quality
 ```bash
 # Format code
-black .
+ruff format .
+
+# Check formatting
+ruff format --check .
 
 # Lint code
-flake8
+ruff check .
+
+# Fix auto-fixable linting issues
+ruff check --fix .
 
 # Type checking
 mypy spectral_connectivity/
-
-# Documentation style
-pydocstyle spectral_connectivity/
 ```
 
 ### Building and Release
@@ -79,7 +82,7 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
 
 ### Dependencies
 - Core: numpy, scipy, xarray, matplotlib
-- Dev tools: pytest, black, flake8, mypy, pydocstyle
+- Dev tools: pytest, ruff, mypy, numpydoc
 - Optional GPU: cupy-cuda12x
 
 ## Testing Strategy
