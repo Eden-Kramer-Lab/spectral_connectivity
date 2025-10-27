@@ -345,7 +345,7 @@ plt.colorbar()
 from spectral_connectivity import multitaper_connectivity
 
 coherence = multitaper_connectivity(
-    signal + noise,
+    signal_with_noise,
     sampling_frequency=sampling_frequency,
     time_halfbandwidth_product=5,
     time_window_duration=2.0,
