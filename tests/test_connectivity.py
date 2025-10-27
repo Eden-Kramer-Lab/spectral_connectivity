@@ -760,18 +760,17 @@ def test_connectivity_rejects_wrong_ndim():
 
 
 def test_connectivity_requires_multiple_signals():
-    """Test that Connectivity requires at least 2 signals."""
+    """Test that Connectivity allows single signals for power, but connectivity methods require >= 2."""
     import pytest
 
-    # Test with 0 signals
-    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 0"):
-        fourier_0_signals = np.ones((2, 2, 2, 100, 0), dtype=np.complex128)
-        Connectivity(fourier_coefficients=fourier_0_signals)
+    # Single signal is now allowed (for power spectral density)
+    fourier_1_signal = np.ones((2, 2, 2, 100, 1), dtype=np.complex128)
+    conn = Connectivity(fourier_coefficients=fourier_1_signal)
+    assert conn.fourier_coefficients.shape[-1] == 1
 
-    # Test with 1 signal
-    with pytest.raises(ValueError, match=r"At least 2 signals are required.*got 1"):
-        fourier_1_signal = np.ones((2, 2, 2, 100, 1), dtype=np.complex128)
-        Connectivity(fourier_coefficients=fourier_1_signal)
+    # Power computation should work for single signal
+    power = conn.power()
+    assert power.shape[-1] == 1
 
     # Verify that 2 signals is accepted
     fourier_2_signals = np.ones((2, 2, 2, 100, 2), dtype=np.complex128)
