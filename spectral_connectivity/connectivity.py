@@ -295,14 +295,9 @@ class Connectivity:
                 f"  fourier_coefficients = m.fft()"
             )
 
-        # Validate minimum number of signals
-        n_signals = fourier_coefficients.shape[-1]
-        if n_signals < 2:
-            raise ValueError(
-                f"At least 2 signals are required for connectivity analysis, got {n_signals}.\n"
-                f"fourier_coefficients shape: {fourier_coefficients.shape}\n"
-                f"The last dimension should contain at least 2 signals."
-            )
+        # Note: Power spectral density can be computed on single signals,
+        # but connectivity metrics (coherence, Granger causality, etc.) require >= 2 signals.
+        # Per-method validation is done in methods that require multiple signals.
 
         # Validate expectation_type early (fail fast before expensive operations)
         if expectation_type not in EXPECTATION:
@@ -406,7 +401,6 @@ class Connectivity:
 
     @property
     @_asnumpy
-    @_non_negative_frequencies(axis=0)
     def frequencies(self) -> NDArray[np.floating] | None:
         """Return non-negative frequencies of the transform.
 
@@ -417,7 +411,16 @@ class Connectivity:
 
         """
         if self._frequencies is not None:
-            return self._frequencies
+            # Extract non-negative frequencies (first N//2 + 1 for even N, (N+1)//2 for odd N)
+            n_frequencies = len(self._frequencies)
+            non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
+            freqs = xp.take(self._frequencies, indices=non_neg_index, axis=0)
+
+            # fftfreq returns negative Nyquist for even N, fix the sign
+            if len(freqs) > 0 and freqs[-1] < 0:
+                freqs = freqs.copy()  # Don't modify the original
+                freqs[-1] = abs(freqs[-1])
+            return freqs
         return None
 
     @property
