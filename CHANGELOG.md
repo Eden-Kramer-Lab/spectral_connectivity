@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2025-10-27
+
+### BREAKING CHANGES
+
+#### 3D Input Requirement for Multitaper Class
+
+**BREAKING CHANGE**: `Multitaper` now requires 3D input arrays with explicit `(n_time_samples, n_trials, n_signals)` shape. Previously ambiguous 2D arrays now raise informative `ValueError`.
+
+- **Migration Required**: Use the new `prepare_time_series()` helper function to convert 1D/2D arrays to 3D format
+- **Why**: Eliminates dangerous ambiguity where `(n_time, n)` could mean either:
+  - `(n_time, 1 trial, n signals)` OR
+  - `(n_time, n trials, 1 signal)`
+
+  Silent misinterpretation produces scientifically incorrect results.
+
+**Migration Example**:
+```python
+# Before (ambiguous)
+mt = Multitaper(eeg_data, sampling_frequency=1000)
+
+# After (explicit)
+from spectral_connectivity.transforms import prepare_time_series
+eeg_3d = prepare_time_series(eeg_data, axis='signals')  # or axis='trials'
+mt = Multitaper(eeg_3d, sampling_frequency=1000)
+```
+
+#### Nyquist Frequency Now Included for Even-Length FFTs
+
+**BREAKING CHANGE**: Corrected frequency bin indexing to include Nyquist frequency for even-length FFTs
+
+- **Impact on results**:
+  - Even-length FFTs (N=1024): Now return 513 frequencies instead of 512 (adds Nyquist bin)
+  - Odd-length FFTs (N=1023): No change (still return 512 frequencies)
+- **Affected functions**: All connectivity measures using `@_non_negative_frequencies` decorator
+- **Scientific justification**: The Nyquist frequency (sampling_rate/2) represents valid spectral information that should not be discarded
+- See CHANGELOG "Unreleased" section for complete details and migration guidance
+
+#### Development Tooling Changes
+
+- **BREAKING**: Migrated from `black` to `ruff format` for code formatting
+- **BREAKING**: Migrated from `flake8`/`pydocstyle` to `ruff` for linting
+- Development workflows now use `ruff format` and `ruff check` commands
+- All formatting/linting configurations moved to `pyproject.toml` under `[tool.ruff]`
+- Developers must update their tooling: `pip install ruff` (100x faster than previous tools)
+
 ### Added
+- `prepare_time_series()` helper function for safe dimension handling:
+  - Converts 1D/2D arrays to required 3D format
+  - Explicit `axis` parameter to clarify dimension meaning
+  - Prevents ambiguous dimension interpretation
+  - **Required for migration to v2.0.0**
+- Comprehensive notebook snapshot testing with Syrupy:
+  - 27 snapshot tests covering all tutorial notebook examples
+  - Tests validate output shapes, data types, and numerical properties
+  - Ensures tutorial examples remain accurate across releases
+  - Automatically catches breaking changes in example code
+  - Uses Syrupy's snapshot testing for efficient test maintenance
 - **Test infrastructure** (`tests/conftest.py`):
   - Added pytest fixture to reset numpy random state before each test
   - Ensures consistent test reproducibility with fixed seed (42)
@@ -80,14 +136,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - All TODO comments from codebase (2 resolved)
 
+### Changed
+- **Development tooling modernization**:
+  - Migrated from `black` to `ruff format` for code formatting (100x faster)
+  - Migrated from `flake8`/`pydocstyle` to `ruff check` for linting
+  - Updated GitHub Actions CI to use `ruff format --check` and `ruff check`
+  - Updated [CLAUDE.md](CLAUDE.md) with new ruff commands
+  - All formatting and linting now unified under single fast tool
+- **Code quality improvements**:
+  - Applied `ruff format` to all source files (10 files reformatted)
+  - Fixed 19 auto-fixable ruff linting issues
+  - All source code and tests now pass `ruff check` with zero warnings
+  - Type hints improved with better union handling for `detrend()` function
+- Updated tutorial notebooks to use `prepare_time_series()` for 3D input
+- Improved random number generation in tests for better isolation
+
 ### Fixed
 - **MyPy type annotation error** in `detrend()` function (`transforms.py:1867-1876`):
-  - Fixed union type handling for `bp` parameter (`int | NDArray[np.integer]`)
-  - Simplified conditional logic to check `isinstance(bp, int)` first
+  - Fixed union type handling for `bp` parameter (now `int | list[int] | NDArray[np.integer]`)
+  - Added support for list input in addition to int and ndarray
   - Eliminated unreachable code warnings from MyPy
-  - No functional changes, purely type safety improvement
+  - All 9 source files now pass strict mypy type checking
 
-#### **BREAKING CHANGE: Nyquist Frequency Now Included for Even-Length FFTs**
+#### **Nyquist Frequency Fix (from earlier release)**
 
 - **Critical bug fix**: Corrected frequency bin indexing to include Nyquist frequency for even-length FFTs
   - **Affected code**: Changed frequency indexing from `(N+1)//2` to `N//2 + 1` in three locations:
@@ -327,7 +398,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.0.4...v1.1.0
