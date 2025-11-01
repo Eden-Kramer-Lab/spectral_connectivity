@@ -504,7 +504,9 @@ class Multitaper:
     start_time : float or NDArray[floating], default=0
         Start time in seconds of the time series data.
     n_fft_samples : int, optional
-        Length of FFT. If None, uses next power of 2 >= n_time_samples_per_window.
+        Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
+        to be fast for the FFT algorithm. The value is determined by
+        scipy.fft.next_fast_len (or cupy.fft.next_fast_len when GPU is enabled).
     n_time_samples_per_window : int, optional
         Number of samples per time window. Computed from time_window_duration
         if not provided.
