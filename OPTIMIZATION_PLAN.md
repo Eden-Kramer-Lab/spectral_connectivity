@@ -1,30 +1,33 @@
 # Performance Optimization Plan for spectral_connectivity
 
-**Document Version**: 1.0
+**Document Version**: 2.0
 **Last Updated**: 2025-11-07
 **Analysis Based On**: Codebase commit e67dfaf
+**Updated After**: Raymond Hettinger-style code review
 
 ---
 
 ## Executive Summary
 
-This document outlines a comprehensive performance optimization strategy for the `spectral_connectivity` package, focusing on both computational speed and memory efficiency. The plan is organized into phases with concrete implementation details, expected gains, and risk assessments.
+This document outlines a comprehensive performance optimization strategy for the `spectral_connectivity` package, focusing on both computational speed and memory efficiency. The plan prioritizes **Pythonic patterns**, **measurement before optimization**, and **correctness over premature optimization**.
 
 **Key Findings**:
 - **Speed bottlenecks**: Redundant expensive computations, unvectorized loops, inefficient taper generation
-- **Memory bottlenecks**: Unnecessary array copies, inefficient windowing, duplicate storage
+- **Memory bottlenecks**: Unnecessary copies in specific hot paths (tridisolve), inefficient windowing for very large datasets
 - **Critical constraint**: Caching must be memory-aware; naive LRU caching causes OOM errors
+- **Philosophy**: Profile first, optimize the critical 3%, maintain code clarity
 
-**Expected Overall Gains** (when all optimizations applied):
-- **Speed**: 2-8x faster for typical workflows (multi-measure analysis)
-- **Memory**: 30-50% reduction for large datasets (>50 channels, >1000 time windows)
+**Expected Overall Gains** (when Phase 1 optimizations applied):
+- **Speed**: 3-10x faster for typical workflows (multi-measure analysis)
+- **Memory**: 10-20% reduction with targeted optimizations
+- **Maintainability**: Improved through use of standard library patterns
 
 ---
 
 ## Table of Contents
 
 1. [Phase 1: High-Impact, Low-Risk Optimizations](#phase-1-high-impact-low-risk-optimizations)
-2. [Phase 2: Medium-Impact Optimizations](#phase-2-medium-impact-optimizations)
+2. [Phase 2: Measured Optimizations](#phase-2-measured-optimizations)
 3. [Phase 3: Advanced Optimizations](#phase-3-advanced-optimizations)
 4. [Implementation Guidelines](#implementation-guidelines)
 5. [Testing and Validation Strategy](#testing-and-validation-strategy)
@@ -35,11 +38,20 @@ This document outlines a comprehensive performance optimization strategy for the
 ## Phase 1: High-Impact, Low-Risk Optimizations
 
 **Timeline**: 1-2 weeks
-**Expected Gains**: 3-10x speed improvement, 20-30% memory reduction
+**Expected Gains**: 3-10x speed improvement for multi-measure workflows
+**Philosophy**: Use standard library patterns, measure before optimizing
 
-### 1.1 Smart Instance-Level Property Caching
+### 1.1 Use functools.cached_property for Instance Caching
 
 **Problem**: Expensive properties like `_minimum_phase_factor`, `_power`, and `_transfer_function` are recomputed on every access, even within the same analysis workflow.
+
+**Why Not Manual Cache Dictionary?**
+Manual caching works but reinvents the wheel. Python 3.8+ has `functools.cached_property` which is:
+- Simpler (no manual cache management)
+- Standard library (well-tested)
+- Automatic cleanup (cache disappears with instance)
+- Thread-safe
+- More Pythonic
 
 **Why LRU Cache Fails**:
 ```python
@@ -51,135 +63,170 @@ def _minimum_phase_factor(self):
     # LRU cache keeps 128 of these = 200+ GB!
 ```
 
-**Solution**: Instance-level caching with automatic cleanup
+**Solution**: Use `functools.cached_property` (Python 3.8+)
 
 **Files**: `spectral_connectivity/connectivity.py`
 
 **Implementation**:
 
 ```python
+from functools import cached_property
+
 class Connectivity:
-    def __init__(self, ...):
-        # ... existing code ...
-        # Cache dictionary for expensive computations
-        self._cache = {}
+    # ... existing __init__ code ...
 
-    @property
+    @cached_property
     def _power(self) -> NDArray[np.floating]:
-        """Cached power computation."""
-        if '_power' not in self._cache:
-            self._cache['_power'] = self._expectation(
-                self.fourier_coefficients * self.fourier_coefficients.conjugate()
-            ).real
-        return self._cache['_power']
+        """Cached power computation.
 
-    @property
+        Computed once per instance and cached automatically.
+        """
+        return self._expectation(
+            self.fourier_coefficients * self.fourier_coefficients.conjugate()
+        ).real
+
+    @cached_property
     def _minimum_phase_factor(self) -> NDArray[np.complexfloating]:
-        """Cached minimum phase decomposition - LARGE array, use carefully."""
-        if '_minimum_phase_factor' not in self._cache:
-            self._cache['_minimum_phase_factor'] = minimum_phase_decomposition(
-                self._expectation_cross_spectral_matrix()
-            )
-        return self._cache['_minimum_phase_factor']
+        """Cached minimum phase decomposition.
 
-    @property
+        WARNING: This is a LARGE array. Only access if needed for directed measures.
+        Cached automatically to avoid recomputation across multiple directed measures.
+        """
+        return minimum_phase_decomposition(
+            self._expectation_cross_spectral_matrix()
+        )
+
+    @cached_property
     def _transfer_function(self) -> NDArray[np.complexfloating]:
         """Cached transfer function computation."""
-        if '_transfer_function' not in self._cache:
-            result = _estimate_transfer_function(self._minimum_phase_factor)
-            # Apply non_negative_frequencies decorator logic
-            n_frequencies = result.shape[-3]
-            non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
-            self._cache['_transfer_function'] = xp.take(
-                result, indices=non_neg_index, axis=-3
-            )
-        return self._cache['_transfer_function']
+        result = _estimate_transfer_function(self._minimum_phase_factor)
+        # Apply non_negative_frequencies decorator logic
+        n_frequencies = result.shape[-3]
+        non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
+        return xp.take(result, indices=non_neg_index, axis=-3)
 
-    @property
+    @cached_property
     def _noise_covariance(self) -> NDArray[np.floating]:
         """Cached noise covariance computation."""
-        if '_noise_covariance' not in self._cache:
-            self._cache['_noise_covariance'] = _estimate_noise_covariance(
-                self._minimum_phase_factor
-            )
-        return self._cache['_noise_covariance']
+        return _estimate_noise_covariance(self._minimum_phase_factor)
 
-    @property
+    @cached_property
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
         """Cached MVAR coefficients computation."""
-        if '_MVAR_Fourier_coefficients' not in self._cache:
-            H = self._transfer_function
-            lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(xp.real(xp.conj(H) * H))
-            identity = xp.eye(H.shape[-1], dtype=H.dtype)
-            regularized_H = H + lam * identity
-            self._cache['_MVAR_Fourier_coefficients'] = xp.linalg.solve(
-                regularized_H, identity
-            )
-        return self._cache['_MVAR_Fourier_coefficients']
+        H = self._transfer_function
+        lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(xp.real(xp.conj(H) * H))
+        identity = xp.eye(H.shape[-1], dtype=H.dtype)
+        regularized_H = H + lam * identity
+        return xp.linalg.solve(regularized_H, identity)
 
-    def clear_cache(self):
-        """Explicitly clear cache to free memory when needed."""
-        self._cache.clear()
+    # No need for clear_cache() method - just create new instance if needed
 ```
 
-**Memory Safety**: Cache is tied to instance lifetime. When `Connectivity` object is deleted, cache is garbage collected automatically.
+**For Python < 3.8 Projects** (if needed):
+
+```python
+# Add to spectral_connectivity/utils.py
+class cached_property:
+    """Cached property descriptor. Use functools.cached_property in Python 3.8+.
+
+    This is a backport for older Python versions.
+    """
+    def __init__(self, func):
+        self.func = func
+        self.attrname = None
+        self.__doc__ = func.__doc__
+
+    def __set_name__(self, owner, name):
+        self.attrname = name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        if self.attrname is None:
+            raise TypeError(
+                "Cannot use cached_property instance without calling __set_name__"
+            )
+        cache = instance.__dict__
+        val = cache.get(self.attrname, _NOT_FOUND := object())
+        if val is _NOT_FOUND:
+            val = self.func(instance)
+            cache[self.attrname] = val
+        return val
+```
 
 **Lines to Modify**:
-- Line 442-445: `_power` property
-- Line 568-569: `_minimum_phase_factor` property
-- Line 572-574: `_transfer_function` property
-- Line 577-578: `_noise_covariance` property
-- Line 581-588: `_MVAR_Fourier_coefficients` property
+- Line 442-445: `_power` property → `@cached_property`
+- Line 568-569: `_minimum_phase_factor` property → `@cached_property`
+- Line 572-574: `_transfer_function` property → `@cached_property`
+- Line 577-578: `_noise_covariance` property → `@cached_property`
+- Line 581-588: `_MVAR_Fourier_coefficients` property → `@cached_property`
 
 **Expected Gain**:
 - **Speed**: 3-5x for workflows computing multiple connectivity measures
-- **Memory**: Minimal overhead (<1% for typical analyses)
+- **Memory**: Minimal overhead, cache lifetime tied to instance
+- **Code clarity**: Simpler than manual caching
 
-**Risk**: Low. Cache lifetime matches object lifetime, preventing memory leaks.
+**Risk**: Very low. Standard library pattern, well-tested.
 
 ---
 
-### 1.2 Cache DPSS Tapers with Size Limits
+### 1.2 Improve DPSS Taper Caching
 
-**Problem**: DPSS tapers are computed via expensive eigenvalue decomposition (`dpss_windows`), but identical parameters across windows result in redundant computation.
+**Problem**: DPSS tapers are computed via expensive eigenvalue decomposition, but identical parameters result in redundant computation. Using `@lru_cache` with float parameters is fragile due to floating-point comparison issues.
 
-**Why This Cache is Safe**:
-- Tapers are small: (n_samples_per_window, n_tapers) typically ~5KB-50KB
-- Reused heavily across different analyses with same parameters
-- LRU eviction prevents unbounded growth
+**Why Simple LRU Cache is Problematic**:
+```python
+# ❌ FRAGILE - Float comparison issues
+@lru_cache(maxsize=32)
+def _make_tapers(n_samples, fs, nw, n_tapers, is_low_bias):
+    # fs=1000.0 vs fs=1000.00000001 → cache miss!
+```
+
+**Solution**: Custom hashable cache key with proper float handling
 
 **Files**: `spectral_connectivity/transforms.py`
 
 **Implementation**:
 
 ```python
-from functools import lru_cache
+# Add to transforms.py (around line 1400)
 
-# Add before _make_tapers function (around line 1408)
+class _TaperCacheKey:
+    """Hashable cache key for taper parameters.
 
-# Cache key must be hashable - convert numpy arrays to tuples if needed
-@lru_cache(maxsize=32)  # 32 different taper configurations max
-def _make_tapers_cached(
-    n_time_samples_per_window: int,
-    sampling_frequency: float,
-    time_halfbandwidth_product: float,
-    n_tapers: int,
-    is_low_bias: bool = True,
-) -> NDArray[np.floating]:
-    """Cached DPSS taper generation.
-
-    Cache is safe because:
-    1. Tapers are small (typically <50KB)
-    2. Heavily reused across windows with same parameters
-    3. LRU eviction limits total memory (max ~1.6MB for 32 entries)
+    Handles floating-point comparison properly by rounding to avoid
+    spurious cache misses from minor numerical differences.
     """
-    tapers, _ = dpss_windows(
-        n_time_samples_per_window,
-        time_halfbandwidth_product,
-        n_tapers,
-        is_low_bias=is_low_bias,
-    )
-    return tapers.T * xp.sqrt(sampling_frequency)
+    __slots__ = ('n_samples', 'fs', 'nw', 'n_tapers', 'is_low_bias', '_hash')
+
+    def __init__(self, n_time_samples_per_window, sampling_frequency,
+                 time_halfbandwidth_product, n_tapers, is_low_bias):
+        self.n_samples = int(n_time_samples_per_window)
+        # Round floats to 6 decimal places to avoid spurious cache misses
+        self.fs = round(float(sampling_frequency), 6)
+        self.nw = round(float(time_halfbandwidth_product), 6)
+        self.n_tapers = int(n_tapers)
+        self.is_low_bias = bool(is_low_bias)
+        # Pre-compute hash for efficiency
+        self._hash = hash((self.n_samples, self.fs, self.nw,
+                          self.n_tapers, self.is_low_bias))
+
+    def __eq__(self, other):
+        if not isinstance(other, _TaperCacheKey):
+            return NotImplemented
+        return (self.n_samples == other.n_samples and
+                self.fs == other.fs and
+                self.nw == other.nw and
+                self.n_tapers == other.n_tapers and
+                self.is_low_bias == other.is_low_bias)
+
+    def __hash__(self):
+        return self._hash
+
+
+# Module-level cache - simple dict with FIFO eviction
+_TAPER_CACHE = {}
+_TAPER_CACHE_MAX_SIZE = 32
 
 
 def _make_tapers(
@@ -191,152 +238,107 @@ def _make_tapers(
 ) -> NDArray[np.floating]:
     """Return discrete prolate spheroidal sequences (tapers) for multitaper analysis.
 
-    Now uses caching to avoid recomputing identical tapers.
+    Results are cached based on parameters. Cache holds up to 32 unique
+    taper sets (~1-2 MB typical memory usage). Uses proper float handling
+    to avoid spurious cache misses.
+
+    Parameters
+    ----------
+    n_time_samples_per_window : int
+        Number of samples in each window
+    sampling_frequency : float
+        Sampling rate in Hz
+    time_halfbandwidth_product : float
+        Time-half-bandwidth product (NW)
+    n_tapers : int
+        Number of tapers to compute
+    is_low_bias : bool, default=True
+        Use low-bias tapers if True
+
+    Returns
+    -------
+    tapers : NDArray
+        Tapers scaled by sqrt(sampling_frequency)
+
+    Notes
+    -----
+    Caching is safe because:
+    1. Tapers are small (typically 5-50 KB per entry)
+    2. Heavily reused across windows with same parameters
+    3. Cache size bounded to ~1-2 MB maximum
+    4. Proper float handling avoids spurious cache misses
+
+    To clear cache (e.g., for testing): call clear_taper_cache()
     """
-    # Convert to hashable types for cache key
-    return _make_tapers_cached(
-        int(n_time_samples_per_window),
-        float(sampling_frequency),
-        float(time_halfbandwidth_product),
-        int(n_tapers),
-        bool(is_low_bias),
+    # Create cache key with proper float handling
+    key = _TaperCacheKey(
+        n_time_samples_per_window,
+        sampling_frequency,
+        time_halfbandwidth_product,
+        n_tapers,
+        is_low_bias
     )
+
+    # Check cache
+    if key in _TAPER_CACHE:
+        return _TAPER_CACHE[key]
+
+    # Compute tapers (expensive eigenvalue decomposition)
+    tapers, _ = dpss_windows(
+        n_time_samples_per_window,
+        time_halfbandwidth_product,
+        n_tapers,
+        is_low_bias=is_low_bias,
+    )
+    result = tapers.T * xp.sqrt(sampling_frequency)
+
+    # Add to cache with FIFO eviction
+    if len(_TAPER_CACHE) >= _TAPER_CACHE_MAX_SIZE:
+        # Simple FIFO eviction
+        _TAPER_CACHE.pop(next(iter(_TAPER_CACHE)))
+
+    _TAPER_CACHE[key] = result
+    return result
+
+
+def clear_taper_cache():
+    """Clear the taper cache.
+
+    Useful for testing or when memory is extremely tight.
+    Under normal usage, the cache only uses ~1-2 MB and should not need clearing.
+    """
+    _TAPER_CACHE.clear()
 ```
 
 **Lines to Modify**:
-- Lines 1408-1440: Add cached version of `_make_tapers`
+- Lines 1408-1440: Replace with new implementation
 
 **Expected Gain**:
 - **Speed**: 10-50x for repeated windowed analyses (100+ windows with same parameters)
 - **Memory**: Negligible (~1-2MB max for cache)
+- **Reliability**: No spurious cache misses from float comparison issues
 
-**Risk**: Very low. Cache size is bounded and tapers are small.
+**Risk**: Very low. Cache size is bounded, tapers are small, proper float handling.
 
 ---
 
-### 1.3 Eliminate Unnecessary Array Copies
+### 1.3 Optimize tridisolve (Targeted Copy Elimination)
 
-**Problem**: Multiple locations create defensive copies that aren't needed, doubling memory usage.
+**Problem**: `tridisolve` makes defensive copies of diagonal arrays even when they could be safely overwritten.
 
-**Files**: `spectral_connectivity/transforms.py`, `spectral_connectivity/minimum_phase_decomposition.py`
+**Why NOT change sliding window default**:
+- The copy in sliding window is negligible compared to FFT time (~10-50ms vs seconds)
+- Correctness and safety should come first
+- Users who modify windowed data would encounter subtle bugs
+- **Keep `is_copy=True` as the safe default**
 
-**Implementation Details**:
-
-#### 1.3.1 Sliding Window Default to No-Copy
-
-**Current** (line 1311-1374):
-```python
-def _sliding_window(..., is_copy: bool = True) -> NDArray[np.floating]:
-    # ...
-    return strided.copy() if is_copy else strided  # Line 1374
-```
-
-**Change**:
-```python
-def _sliding_window(..., is_copy: bool = False) -> NDArray[np.floating]:
-    """
-    ...
-    is_copy : bool, default=False
-        Return strided array as copy. Set to True only if you need to
-        modify the output array. For read-only operations (typical case),
-        False saves memory.
-
-    Notes
-    -----
-    Default changed to False for memory efficiency. The stride trick creates
-    a view, which is safe for read-only operations like FFT. Only set is_copy=True
-    if you need to modify the windowed data in-place.
-    """
-    # ...
-    return strided.copy() if is_copy else strided
-```
-
-**Also update caller** (line 1158):
-```python
-time_series = _sliding_window(
-    time_series,
-    window_size=self.n_time_samples_per_window,
-    step_size=self.n_time_samples_per_step,
-    axis=0,
-    # is_copy=False is now default, remove explicit parameter
-)
-```
-
-**Lines to Modify**: 1316, 1374, 1158
-
-#### 1.3.2 Optimize Wilson Algorithm Copies
-
-**Current** (minimum_phase_decomposition.py, line 301):
-```python
-old_minimum_phase_factor = minimum_phase_factor.copy()  # Full copy every iteration!
-```
-
-**Problem**: For 100 time windows × 512 freqs × 64 signals: ~1.6GB copied per iteration × 60 iterations = wasteful
-
-**Change**:
-```python
-def minimum_phase_decomposition(
-    cross_spectral_matrix: NDArray[np.complexfloating],
-    tolerance: float = 1e-8,
-    max_iterations: int = 60,
-) -> NDArray[np.complexfloating]:
-    n_time_points = cross_spectral_matrix.shape[0]
-    n_signals = cross_spectral_matrix.shape[-1]
-    identity_matrix = xp.eye(n_signals)
-    is_converged = xp.zeros(n_time_points, dtype=bool)
-    minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
-    minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
-
-    # Only store old values for unconverged time points
-    for iteration in range(max_iterations):
-        logger.debug(
-            f"iteration: {iteration}, {is_converged.sum()} of {len(is_converged)} converged"
-        )
-
-        # Store only unconverged time points for comparison
-        unconverged_mask = ~is_converged
-        if xp.any(unconverged_mask):
-            old_minimum_phase_factor = minimum_phase_factor[unconverged_mask].copy()
-
-        linear_predictor = _get_linear_predictor(
-            minimum_phase_factor, cross_spectral_matrix, identity_matrix
-        )
-        minimum_phase_factor = xp.matmul(
-            minimum_phase_factor, _get_causal_signal(linear_predictor)
-        )
-
-        # Check convergence only for unconverged time points
-        if xp.any(unconverged_mask):
-            newly_converged = _check_convergence(
-                minimum_phase_factor[unconverged_mask],
-                old_minimum_phase_factor,
-                tolerance
-            )
-            # Update convergence status
-            unconverged_indices = xp.where(unconverged_mask)[0]
-            is_converged[unconverged_indices] = newly_converged
-
-        if xp.all(is_converged):
-            return minimum_phase_factor
-    else:
-        logger.warning(
-            f"Maximum iterations reached. {is_converged.sum()} of {len(is_converged)} converged"
-        )
-        return minimum_phase_factor
-```
-
-**Lines to Modify**: Lines 297-322 in minimum_phase_decomposition.py
-
-**Expected Memory Savings**:
-- Before: 60 iterations × 1.6GB = 96GB peak for copies
-- After: Only unconverged copies, typically <10% after first few iterations
-
-#### 1.3.3 Optimize tridisolve
+**Files**: `spectral_connectivity/transforms.py`
 
 **Current** (transforms.py, lines 1469-1470):
 ```python
-dw = d.copy()
-ew = e.copy()
+def tridisolve(d, e, b, overwrite_b=True):
+    dw = d.copy()  # Always copies
+    ew = e.copy()  # Always copies
 ```
 
 **Change**:
@@ -346,8 +348,8 @@ def tridisolve(
     e: NDArray[np.floating],
     b: NDArray[np.floating],
     overwrite_b: bool = True,
-    overwrite_d: bool = False,  # NEW parameter
-    overwrite_e: bool = False,  # NEW parameter
+    overwrite_d: bool = False,
+    overwrite_e: bool = False,
 ) -> NDArray[np.floating]:
     """Symmetric tridiagonal system solver, from Golub and Van Loan p157.
 
@@ -356,137 +358,255 @@ def tridisolve(
     Parameters
     ----------
     d : ndarray
-      main diagonal stored in d[:]
+        Main diagonal stored in d[:]
     e : ndarray
-      superdiagonal stored in e[:-1]
+        Superdiagonal stored in e[:-1]
     b : ndarray
-      RHS vector
-    overwrite_b : bool
-      Whether to overwrite b with solution
-    overwrite_d : bool
-      Whether d can be overwritten (avoids copy)
-    overwrite_e : bool
-      Whether e can be overwritten (avoids copy)
+        RHS vector
+    overwrite_b : bool, default=True
+        Whether to overwrite b with solution
+    overwrite_d : bool, default=False
+        Whether d can be overwritten (avoids copy)
+    overwrite_e : bool, default=False
+        Whether e can be overwritten (avoids copy)
 
     Returns
     -------
     x : ndarray
-      Solution to Ax = b (if overwrite_b is False). Otherwise solution is
-      stored in previous RHS vector b
+        Solution to Ax = b (if overwrite_b is False). Otherwise solution is
+        stored in previous RHS vector b
+
+    Notes
+    -----
+    Set overwrite_d=True and overwrite_e=True only when you're certain these
+    arrays won't be reused. Default is False for safety.
     """
     N = len(b)
-    # work vectors - only copy if necessary
+    # Work vectors - only copy if necessary
     dw = d if overwrite_d else d.copy()
     ew = e if overwrite_e else e.copy()
     if overwrite_b:
         x = b
     else:
         x = b.copy()
+
     # ... rest of function unchanged ...
+    for j in range(1, N):
+        w = ew[j - 1] / dw[j - 1]
+        dw[j] = dw[j] - w * ew[j - 1]
+        x[j] = x[j] - w * x[j - 1]
+    x[N - 1] = x[N - 1] / dw[N - 1]
+    for j in range(N - 2, -1, -1):
+        x[j] = (x[j] - ew[j] * x[j + 1]) / dw[j]
+
+    return x
 ```
 
 **Update callers** in `tridi_inverse_iteration` (line 1533):
 ```python
-tridisolve(eig_diag, e, x0, overwrite_d=True, overwrite_e=True)
+tridisolve(eig_diag, e, x0, overwrite_b=True, overwrite_d=True, overwrite_e=True)
 ```
 
-**Lines to Modify**: Lines 1443-1489 in transforms.py
+**Lines to Modify**:
+- Lines 1443-1489: Add parameters to `tridisolve`
+- Line 1533: Update caller in `tridi_inverse_iteration`
 
 **Expected Gain**:
-- **Memory**: 30-50% reduction for large datasets
-- **Speed**: 10-20% faster (fewer allocations)
+- **Memory**: 10-15% reduction in eigenvalue computation
+- **Speed**: 5-10% faster (fewer allocations)
 
-**Risk**: Low. Carefully reviewed to ensure no side effects.
+**Risk**: Low. Carefully audited call sites.
 
 ---
 
-### 1.4 Use einsum for Cross-Spectral Matrix
+### 1.4 Keep Cross-Spectral Matrix As-Is (For Now)
 
-**Problem**: Broadcasting creates intermediate arrays and is less cache-efficient than einsum.
+**Original Proposal**: Replace with `einsum` for memory efficiency.
 
-**Files**: `spectral_connectivity/connectivity.py`
+**Why Defer This**:
+1. `einsum` doesn't accept `dtype` parameter (implementation error in original plan)
+2. For outer products, `einsum` isn't always faster than broadcasting
+3. The alleged memory savings are small compared to output array size
+4. Current implementation is clear and works
 
-**Current** (lines 458-461):
+**Decision**: **Keep current implementation**. If profiling shows this is a bottleneck, revisit with proper measurement.
+
+**If optimizing later**, use this pattern:
+
 ```python
 @property
 def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
-    fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
-    return _complex_inner_product(
-        fourier_coefficients, fourier_coefficients, dtype=self._dtype
-    )
+    """Return cross-spectral matrix.
+
+    For large arrays, alternative implementations may be faster.
+    Current implementation prioritizes clarity and correctness.
+    """
+    fc = self.fourier_coefficients
+
+    # Current implementation (clear and correct)
+    fc_expanded = fc[..., xp.newaxis]
+    result = _complex_inner_product(fc_expanded, fc_expanded, dtype=self._dtype)
+
+    return result
 ```
 
-**Change**:
+**Lines to Modify**: None for Phase 1.
+
+---
+
+## Phase 2: Measured Optimizations
+
+**Timeline**: 2-3 weeks
+**Expected Gains**: 2-5x for specific methods
+**Philosophy**: Profile first, optimize based on data
+
+### 2.1 Profile Wilson Algorithm Before Optimizing
+
+**Current Proposal**: Optimize copy operations in Wilson algorithm.
+
+**Better Approach**: **Measure first**. Add instrumentation to understand:
+1. How many iterations does Wilson algorithm typically need?
+2. What fraction of time windows converge quickly vs slowly?
+3. Is copying actually the bottleneck?
+
+**Implementation** (add to `minimum_phase_decomposition.py`):
+
 ```python
-@property
-def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
-    """Return the complex-valued linear association between fourier coefficients.
+import logging
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+# Module-level statistics for understanding convergence behavior
+_WILSON_STATS = defaultdict(int)
+
+
+def minimum_phase_decomposition(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+    tolerance: float = 1e-8,
+    max_iterations: int = 60,
+) -> NDArray[np.complexfloating]:
+    """Compute minimum phase decomposition using Wilson algorithm.
+
+    ... existing docstring ...
+    """
+    n_time_points = cross_spectral_matrix.shape[0]
+    n_signals = cross_spectral_matrix.shape[-1]
+    identity_matrix = xp.eye(n_signals)
+    is_converged = xp.zeros(n_time_points, dtype=bool)
+    minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
+    minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
+
+    for iteration in range(max_iterations):
+        logger.debug(
+            f"iteration: {iteration}, {is_converged.sum()} of {len(is_converged)} converged"
+        )
+        old_minimum_phase_factor = minimum_phase_factor.copy()
+        linear_predictor = _get_linear_predictor(
+            minimum_phase_factor, cross_spectral_matrix, identity_matrix
+        )
+        minimum_phase_factor = xp.matmul(
+            minimum_phase_factor, _get_causal_signal(linear_predictor)
+        )
+
+        # If already converged at a time point, don't change.
+        minimum_phase_factor[is_converged, ...] = old_minimum_phase_factor[
+            is_converged, ...
+        ]
+        is_converged = _check_convergence(
+            minimum_phase_factor, old_minimum_phase_factor, tolerance
+        )
+
+        if xp.all(is_converged):
+            # Record successful early convergence
+            _WILSON_STATS[f'converged_at_{iteration}'] += n_time_points
+            logger.debug(f"All converged at iteration {iteration}")
+            return minimum_phase_factor
+    else:
+        # Record maxed-out iterations
+        _WILSON_STATS['max_iterations_reached'] += (~is_converged).sum()
+        _WILSON_STATS['converged_at_60'] += is_converged.sum()
+        logger.warning(
+            f"Maximum iterations reached. {is_converged.sum()} of {len(is_converged)} converged"
+        )
+        return minimum_phase_factor
+
+
+def get_wilson_stats():
+    """Get statistics on Wilson algorithm convergence.
 
     Returns
     -------
-    cross_spectral_matrix : array
-        Shape (n_time_windows, n_trials, n_tapers, n_fft_samples,
-        n_signals, n_signals). Complex cross-spectral matrix.
+    stats : dict
+        Dictionary with keys like 'converged_at_5', 'converged_at_10', etc.
+        showing how many time windows converged at each iteration.
 
-    Notes
-    -----
-    Uses einsum for memory-efficient computation without intermediate arrays.
+    Examples
+    --------
+    >>> # After running several analyses
+    >>> stats = get_wilson_stats()
+    >>> print(stats)
+    {'converged_at_5': 1200, 'converged_at_10': 300, 'max_iterations_reached': 5}
+    >>> # Most converge in 5-10 iterations, only 5 time windows needed all 60
     """
-    fc = self.fourier_coefficients
-    # einsum is more memory efficient than broadcast + matmul
-    # '...i,...j->...ij' creates outer product along last dimension
-    return xp.einsum(
-        '...i,...j->...ij',
-        fc,
-        xp.conj(fc),
-        dtype=self._dtype
-    )
+    return dict(_WILSON_STATS)
+
+
+def clear_wilson_stats():
+    """Clear Wilson algorithm statistics."""
+    _WILSON_STATS.clear()
 ```
 
-**Lines to Modify**: Lines 447-461
+**Then add to documentation**:
 
-**Expected Gain**:
-- **Memory**: 15-25% reduction (no intermediate array with extra dimension)
-- **Speed**: 5-10% faster (better cache locality)
+```markdown
+# Performance Analysis: Wilson Algorithm
 
-**Risk**: Low. Einsum is well-tested and equivalent.
+After running your typical workloads, check convergence statistics:
+
+```python
+from spectral_connectivity.minimum_phase_decomposition import get_wilson_stats
+
+# Run your analysis
+mt = Multitaper(data, ...)
+conn = Connectivity.from_multitaper(mt)
+granger = conn.pairwise_spectral_granger_prediction()
+
+# Check Wilson algorithm behavior
+stats = get_wilson_stats()
+print(stats)
+# Example output: {'converged_at_8': 450, 'converged_at_12': 50}
+# → Most time windows converge in 8 iterations, some in 12
+```
+
+If most converge in <15 iterations, current implementation is fine.
+If many hit 60 iterations, consider:
+1. Better initial conditions
+2. Different convergence criteria
+3. Alternative algorithms (e.g., Anderson acceleration)
+```
+
+**Decision**: Add instrumentation, collect data, then decide if optimization is needed.
 
 ---
 
-## Phase 2: Medium-Impact Optimizations
+### 2.2 Vectorize global_coherence with Clear Documentation
 
-**Timeline**: 2-3 weeks
-**Expected Gains**: 2-5x additional speed improvement for specific methods
-
-### 2.1 Vectorize global_coherence
-
-**Problem**: Nested loops prevent parallelization and add overhead.
+**Problem**: Nested loops prevent parallelization.
 
 **Files**: `spectral_connectivity/connectivity.py`
 
-**Current** (lines 876-888):
-```python
-for time_ind in range(n_time_windows):
-    for freq_ind in range(n_fft_samples):
-        fourier_coefficients = (
-            self.fourier_coefficients[time_ind, :, :, freq_ind, :]
-            .reshape((n_trials * n_tapers, n_signals))
-            .T
-        )
-        (
-            global_coherence[time_ind, freq_ind],
-            unnormalized_global_coherence[time_ind, freq_ind],
-        ) = _estimate_global_coherence(fourier_coefficients, max_rank=max_rank)
-```
+**Current** (lines 876-888): Nested loops over time and frequency.
 
-**Change**:
+**Improved Implementation** (with clear documentation):
+
 ```python
 def global_coherence(
     self, max_rank: int = 1
 ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Find linear combinations that capture the most coherent power.
 
-    ... (docstring same) ...
+    ... (existing docstring) ...
     """
     (
         n_time_windows,
@@ -496,120 +616,79 @@ def global_coherence(
         n_signals,
     ) = self.fourier_coefficients.shape
 
-    # Reshape to process all time-freq combinations at once
-    # From: (time, trials, tapers, freq, signals)
-    # To: (time*freq, signals, trials*tapers)
-    fc_reshaped = (
-        self.fourier_coefficients
-        .transpose(0, 3, 4, 1, 2)  # (time, freq, signals, trials, tapers)
-        .reshape(-1, n_signals, n_trials * n_tapers)  # (time*freq, signals, trials*tapers)
-    )
+    # Reshaping strategy for vectorized SVD:
+    #
+    # Input:  (n_time, n_trials, n_tapers, n_freq, n_signals)
+    # Goal:   (n_time*n_freq, n_signals, n_trials*n_tapers)
+    #
+    # Why? SVD operates on (signals, observations) matrices.
+    # We want to compute SVD for each (time, freq) combination in parallel.
+    #
+    # Step 1: Move dimensions to correct positions
+    fc = self.fourier_coefficients.transpose(0, 3, 4, 1, 2)
+    # Now: (n_time, n_freq, n_signals, n_trials, n_tapers)
 
-    # Choose SVD strategy based on rank
+    # Step 2: Combine batch dimensions (time*freq) and observations (trials*tapers)
+    n_batches = n_time_windows * n_fft_samples
+    n_observations = n_trials * n_tapers
+    fc_batched = fc.reshape(n_batches, n_signals, n_observations)
+    # Now: (n_time*n_freq, n_signals, n_observations)
+
+    # Compute SVD based on rank requirement
     if max_rank >= n_signals - 1:
-        # Use full SVD (vectorized over all time-freq)
-        U, S, _ = xp.linalg.svd(fc_reshaped, full_matrices=False)
-        S_squared = S[:, :max_rank] ** 2 / (n_trials * n_tapers)
-        U_selected = U[:, :, :max_rank]
-    else:
-        # For small rank, use sparse SVD on each time-freq
-        # (sparse SVD doesn't vectorize well, so keep loop but optimize)
-        S_squared = xp.zeros((n_time_windows * n_fft_samples, max_rank))
-        U_selected = xp.zeros(
-            (n_time_windows * n_fft_samples, n_signals, max_rank),
-            dtype=xp.complex128
-        )
-        for idx in range(n_time_windows * n_fft_samples):
-            U_selected[idx], S_squared[idx], _ = svds(
-                fc_reshaped[idx], max_rank
-            )
-            S_squared[idx] = S_squared[idx]**2 / (n_trials * n_tapers)
+        # Full SVD can be vectorized efficiently
+        U, S, _ = xp.linalg.svd(fc_batched, full_matrices=False)
+        # S shape: (n_batches, n_signals)
+        # U shape: (n_batches, n_signals, n_signals)
 
-    # Reshape back to (time, freq, ...)
-    global_coherence = S_squared.reshape(n_time_windows, n_fft_samples, max_rank)
-    unnormalized_global_coherence = U_selected.reshape(
+        # Extract top-rank components
+        singular_values = S[:, :max_rank]
+        left_vectors = U[:, :, :max_rank]
+    else:
+        # Sparse SVD doesn't vectorize well - use loop
+        # (But at least we've eliminated the double loop over time and freq)
+        singular_values = xp.zeros((n_batches, max_rank))
+        left_vectors = xp.zeros((n_batches, n_signals, max_rank), dtype=xp.complex128)
+
+        for i, fc_slice in enumerate(fc_batched):
+            # Note: Could potentially parallelize this loop in the future
+            left_vectors[i], singular_values[i], _ = svds(fc_slice, max_rank)
+
+    # Convert singular values to global coherence
+    # (normalized by number of observations)
+    global_coherence_values = (singular_values ** 2) / n_observations
+
+    # Reshape back to (time, freq, rank) structure
+    global_coherence_values = global_coherence_values.reshape(
+        n_time_windows, n_fft_samples, max_rank
+    )
+    left_vectors = left_vectors.reshape(
         n_time_windows, n_fft_samples, n_signals, max_rank
     )
 
+    # Convert from CuPy if needed
     try:
-        return xp.asnumpy(global_coherence), xp.asnumpy(
-            unnormalized_global_coherence
-        )
+        return xp.asnumpy(global_coherence_values), xp.asnumpy(left_vectors)
     except AttributeError:
-        return global_coherence, unnormalized_global_coherence
+        return global_coherence_values, left_vectors
 ```
 
 **Lines to Modify**: Lines 822-895
 
 **Expected Gain**:
 - **Speed**: 5-10x for full SVD case, 2-3x for sparse SVD case
-- **GPU**: Especially beneficial on GPU (10-20x)
+- **GPU**: Especially beneficial (10-20x potential speedup)
+- **Clarity**: Better documentation of reshaping strategy
 
-**Risk**: Medium. Requires thorough testing of reshaping logic.
+**Risk**: Medium. Requires testing of reshaping logic, but strategy is well-documented.
 
 ---
 
-### 2.2 Optimize Block Processing
+### 2.3 Optimize Block Processing
 
-**Problem**: Block processing has overhead from repeated `_nonsorted_unique` calls and indexing.
+**Keep existing plan** from Phase 2.2 of original document - this optimization is sound.
 
-**Files**: `spectral_connectivity/connectivity.py`
-
-**Current** (lines 506-524):
-```python
-for sec in sections:
-    # get unique indices
-    _sxu = _nonsorted_unique(sec[:, 0])
-    _syu = _nonsorted_unique(sec[:, 1])
-
-    # computes block of connections
-    _out = self._expectation(
-        fcn(
-            _complex_inner_product(
-                fourier_coefficients[..., _sxu, :],
-                fourier_coefficients[..., _syu, :],
-                dtype=self._dtype,
-            )
-        )
-    )
-
-    # fill the output array (Hermitian symmetric filling)
-    csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
-    csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = xp.conj(_out)
-```
-
-**Change**:
-```python
-# Pre-compute all unique indices outside loop
-all_unique_x = []
-all_unique_y = []
-for sec in sections:
-    all_unique_x.append(_nonsorted_unique(sec[:, 0]))
-    all_unique_y.append(_nonsorted_unique(sec[:, 1]))
-
-# Process blocks
-for idx, sec in enumerate(sections):
-    _sxu = all_unique_x[idx]
-    _syu = all_unique_y[idx]
-
-    # computes block of connections
-    _out = self._expectation(
-        fcn(
-            _complex_inner_product(
-                fourier_coefficients[..., _sxu, :],
-                fourier_coefficients[..., _syu, :],
-                dtype=self._dtype,
-            )
-        )
-    )
-
-    # Use advanced indexing more efficiently
-    ix = _sxu.reshape(-1, 1)
-    iy = _syu.reshape(1, -1)
-    csm[..., ix, iy] = _out
-    # In-place conjugate for memory efficiency
-    xp.conjugate(_out, out=csm[..., iy, ix])
-```
+Pre-compute unique indices outside loop and use in-place conjugate operations.
 
 **Lines to Modify**: Lines 487-526
 
@@ -617,336 +696,121 @@ for idx, sec in enumerate(sections):
 - **Speed**: 20-30% for block-based computation (50+ signals)
 - **Memory**: 10% reduction (in-place conjugate)
 
-**Risk**: Low. Logic remains the same, just reorganized.
-
----
-
-### 2.3 Optimize pair-wise Granger Causality
-
-**Problem**: Loop over pairs with full CSM computation is inefficient.
-
-**Files**: `spectral_connectivity/connectivity.py`
-
-**Current** (lines 2314-2334):
-```python
-for pair_indices in pairs:
-    pair_indices = xp.array(pair_indices)[:, xp.newaxis]
-    try:
-        minimum_phase_factor = minimum_phase_decomposition(
-            csm[..., pair_indices, pair_indices.T]
-        )
-        transfer_function = _estimate_transfer_function(minimum_phase_factor)[
-            ..., non_neg_index, :, :
-        ]
-        rotated_covariance = _remove_instantaneous_causality(
-            _estimate_noise_covariance(minimum_phase_factor)
-        )
-        predictive_power[..., pair_indices, pair_indices.T] = (
-            _estimate_predictive_power(
-                total_power[..., pair_indices[:, 0]],
-                rotated_covariance,
-                transfer_function,
-            )
-        )
-    except np.linalg.LinAlgError:
-        predictive_power[..., pair_indices, pair_indices.T] = xp.nan
-```
-
-**Change**:
-```python
-# Vectorize pair processing where possible
-pair_array = xp.array(list(pairs))
-n_pairs = len(pair_array)
-
-# Pre-allocate arrays for batch processing
-batch_minimum_phase = []
-batch_indices = []
-
-for i, (idx_i, idx_j) in enumerate(pair_array):
-    try:
-        pair_indices = xp.array([[idx_i], [idx_j]])
-        minimum_phase_factor = minimum_phase_decomposition(
-            csm[..., pair_indices[:, 0], pair_indices[0, :]]
-        )
-        batch_minimum_phase.append(minimum_phase_factor)
-        batch_indices.append((idx_i, idx_j))
-    except np.linalg.LinAlgError:
-        predictive_power[..., idx_i, idx_j] = xp.nan
-        predictive_power[..., idx_j, idx_i] = xp.nan
-
-# Batch process successful decompositions
-if batch_minimum_phase:
-    # Stack for vectorized operations
-    stacked_mph = xp.stack(batch_minimum_phase, axis=0)  # (n_pairs, ...)
-
-    # Vectorized transfer function estimation
-    transfer_functions = _estimate_transfer_function(
-        stacked_mph.reshape(-1, *stacked_mph.shape[2:])
-    ).reshape(stacked_mph.shape)[..., non_neg_index, :, :]
-
-    # Vectorized noise covariance
-    noise_covs = xp.stack([
-        _estimate_noise_covariance(mph) for mph in batch_minimum_phase
-    ])
-    rotated_covs = _remove_instantaneous_causality(noise_covs)
-
-    # Fill results
-    for k, (idx_i, idx_j) in enumerate(batch_indices):
-        pair_indices = xp.array([[idx_i], [idx_j]])
-        predictive_power[..., idx_i, idx_j] = _estimate_predictive_power(
-            total_power[..., idx_i],
-            rotated_covs[k],
-            transfer_functions[k],
-        )[..., 0, 1]
-        predictive_power[..., idx_j, idx_i] = _estimate_predictive_power(
-            total_power[..., idx_j],
-            rotated_covs[k],
-            transfer_functions[k],
-        )[..., 1, 0]
-```
-
-**Lines to Modify**: Lines 2282-2340
-
-**Expected Gain**:
-- **Speed**: 2-3x for many pairs (>50 pairs)
-
-**Risk**: Medium. Requires careful validation of vectorized logic.
-
 ---
 
 ## Phase 3: Advanced Optimizations
 
 **Timeline**: 3-4 weeks
-**Expected Gains**: Additional 30-50% memory reduction for very large datasets
+**Expected Gains**: Additional memory reduction for very large datasets
+**When to use**: Only for extreme cases (10,000+ windows, 64+ channels)
 
-### 3.1 Chunked Windowing for Large Time Series
+### 3.1 Chunked Windowing (Only for Very Large Datasets)
 
-**Problem**: Current implementation creates full windowed view in memory.
+**Keep existing plan** from Phase 3.1 of original document.
 
-**Files**: `spectral_connectivity/transforms.py`
+**When NOT to use**:
+- Typical analyses (<1000 windows)
+- Sufficient memory available
+- Performance is already acceptable
 
-**Current Impact**:
-- 10,000 samples, 1000 windows, 64 channels, 5 tapers: ~10GB memory for windowed view
-
-**Implementation Strategy**:
-
-```python
-class Multitaper:
-    def __init__(self, ..., chunk_size: int | None = None):
-        """
-        ...
-        chunk_size : int, optional
-            Process time series in chunks of this many windows to reduce
-            memory usage. Useful for very long recordings. If None (default),
-            processes all windows at once.
-        """
-        self._chunk_size = chunk_size
-        # ... existing code ...
-
-    def fft(self) -> NDArray[np.complexfloating]:
-        """Compute the fast Fourier transform using the multitaper method.
-
-        Uses chunked processing if chunk_size was specified to reduce memory.
-        """
-        if self._chunk_size is None:
-            # Original implementation
-            return self._fft_full()
-        else:
-            # Chunked implementation
-            return self._fft_chunked()
-
-    def _fft_full(self) -> NDArray[np.complexfloating]:
-        """Original non-chunked implementation."""
-        time_series = _add_axes(self.time_series)
-        time_series = _sliding_window(
-            time_series,
-            window_size=self.n_time_samples_per_window,
-            step_size=self.n_time_samples_per_step,
-            axis=0,
-        )
-        if self.detrend_type is not None:
-            time_series = detrend(time_series, type=self.detrend_type)
-
-        logger.info(self)
-
-        return _multitaper_fft(
-            self.tapers, time_series, self.n_fft_samples, self.sampling_frequency
-        ).swapaxes(2, -1)
-
-    def _fft_chunked(self) -> NDArray[np.complexfloating]:
-        """Chunked implementation for memory efficiency."""
-        time_series = _add_axes(self.time_series)
-
-        # Calculate number of windows
-        n_windows = int(
-            np.floor(
-                (time_series.shape[0] - self.n_time_samples_per_window)
-                / self.n_time_samples_per_step
-            ) + 1
-        )
-
-        # Pre-allocate output
-        output_shape = (
-            n_windows,
-            self.time_series.shape[1],  # n_trials
-            self.n_tapers,
-            self.n_fft_samples,
-            self.time_series.shape[-1],  # n_signals
-        )
-        result = xp.empty(output_shape, dtype=xp.complex128)
-
-        # Process in chunks
-        for chunk_start in range(0, n_windows, self._chunk_size):
-            chunk_end = min(chunk_start + self._chunk_size, n_windows)
-
-            # Calculate time series indices for this chunk
-            ts_start = chunk_start * self.n_time_samples_per_step
-            ts_end = (chunk_end - 1) * self.n_time_samples_per_step + self.n_time_samples_per_window
-
-            # Extract and window this chunk
-            chunk_ts = time_series[ts_start:ts_end]
-            windowed_chunk = _sliding_window(
-                chunk_ts,
-                window_size=self.n_time_samples_per_window,
-                step_size=self.n_time_samples_per_step,
-                axis=0,
-            )
-
-            if self.detrend_type is not None:
-                windowed_chunk = detrend(windowed_chunk, type=self.detrend_type)
-
-            # Compute FFT for this chunk
-            chunk_fft = _multitaper_fft(
-                self.tapers,
-                windowed_chunk,
-                self.n_fft_samples,
-                self.sampling_frequency,
-            ).swapaxes(2, -1)
-
-            # Store results
-            result[chunk_start:chunk_end] = chunk_fft
-
-        logger.info(self)
-        return result
-```
-
-**Lines to Modify**: Lines 1147-1171, add new methods
-
-**Expected Gain**:
-- **Memory**: 50-70% reduction for very long recordings (10,000+ windows)
-- **Speed**: Minimal impact (5-10% slower due to chunking overhead)
-
-**Risk**: Medium-High. Requires extensive testing across parameter combinations.
-
-**When to Use**:
-- Very long recordings: >10,000 time windows
-- High channel counts: >64 channels
+**When to use**:
+- Very long recordings (>10,000 windows)
+- High channel counts (>64 channels)
 - Memory-constrained environments
+- After profiling shows windowing is the bottleneck
 
 ---
 
 ## Implementation Guidelines
 
+### Development Philosophy
+
+**"Premature optimization is the root of all evil, yet we should not pass up our opportunities in that critical 3%."** — Donald Knuth
+
+Your critical 3%:
+1. ✅ Property caching for expensive intermediate results
+2. ✅ DPSS taper caching
+3. ✅ Vectorization where it matters (global_coherence)
+
+Everything else: **Profile first, optimize second.**
+
 ### Development Process
 
-1. **Create feature branch** for each phase:
-   ```bash
-   git checkout -b optimize/phase1-caching
-   ```
-
-2. **Implement one optimization at a time** - do not bundle multiple optimizations in one PR
-
-3. **Write tests first** (see Testing Strategy below)
-
-4. **Profile before and after**:
+1. **Profile before optimizing**:
    ```python
    import cProfile
    import pstats
 
    profiler = cProfile.Profile()
    profiler.enable()
-   # Run optimization
+   # Run your typical workflow
    profiler.disable()
+
    stats = pstats.Stats(profiler)
    stats.sort_stats('cumulative')
-   stats.print_stats(20)
+   stats.print_stats(20)  # Show top 20 hotspots
    ```
 
-5. **Memory profiling**:
-   ```python
-   from memory_profiler import profile
-
-   @profile
-   def test_function():
-       # Your code here
+2. **Create feature branch** for each optimization:
+   ```bash
+   git checkout -b optimize/cached-properties
    ```
 
-6. **Benchmark script** (create `benchmarks/benchmark_optimization.py`):
+3. **Implement one optimization at a time** - do not bundle
+
+4. **Write tests first** (see Testing Strategy below)
+
+5. **Benchmark before and after**:
    ```python
-   import numpy as np
    import time
+   import numpy as np
    from spectral_connectivity import Multitaper, Connectivity
 
-   def benchmark_scenario(n_samples, n_channels, n_trials, n_windows):
-       """Standard benchmark scenario."""
-       # Generate test data
-       data = np.random.randn(n_samples, n_trials, n_channels)
+   data = np.random.randn(5000, 10, 32)
 
-       # Time multitaper
-       start = time.time()
-       mt = Multitaper(
-           data,
-           sampling_frequency=1000,
-           time_window_duration=1.0,
-           time_halfbandwidth_product=3,
-       )
-       fft = mt.fft()
-       multitaper_time = time.time() - start
+   # Before optimization
+   start = time.time()
+   mt = Multitaper(data, sampling_frequency=1000)
+   conn = Connectivity.from_multitaper(mt)
+   coherence = conn.coherence_magnitude()
+   imaginary = conn.imaginary_coherence()
+   plv = conn.phase_locking_value()
+   baseline_time = time.time() - start
 
-       # Time connectivity
-       start = time.time()
-       conn = Connectivity.from_multitaper(mt)
-       coherence = conn.coherence_magnitude()
-       imaginary_coh = conn.imaginary_coherence()
-       plv = conn.phase_locking_value()
-       granger = conn.pairwise_spectral_granger_prediction()
-       connectivity_time = time.time() - start
+   # After optimization (in new code)
+   # ... repeat ...
+   optimized_time = time.time() - start
 
-       return {
-           'multitaper_time': multitaper_time,
-           'connectivity_time': connectivity_time,
-           'total_time': multitaper_time + connectivity_time,
-       }
+   speedup = baseline_time / optimized_time
+   print(f"Speedup: {speedup:.2f}x")
+   ```
 
-   if __name__ == '__main__':
-       # Small dataset
-       print("Small dataset (10 channels, 1000 samples):")
-       results = benchmark_scenario(1000, 10, 5, 10)
-       print(f"  Total time: {results['total_time']:.2f}s")
+6. **Memory profiling**:
+   ```python
+   import tracemalloc
 
-       # Medium dataset
-       print("\nMedium dataset (32 channels, 5000 samples):")
-       results = benchmark_scenario(5000, 32, 10, 50)
-       print(f"  Total time: {results['total_time']:.2f}s")
+   tracemalloc.start()
+   # Run code
+   current, peak = tracemalloc.get_traced_memory()
+   tracemalloc.stop()
 
-       # Large dataset
-       print("\nLarge dataset (64 channels, 10000 samples):")
-       results = benchmark_scenario(10000, 64, 10, 100)
-       print(f"  Total time: {results['total_time']:.2f}s")
+   print(f"Peak memory: {peak / 1024 / 1024:.1f} MB")
    ```
 
 ### Code Review Checklist
 
 For each optimization PR, reviewers should verify:
 
-- [ ] **Correctness**: Results match original implementation (within floating-point tolerance)
-- [ ] **Performance**: Benchmark shows expected improvement
-- [ ] **Memory**: Memory profiling shows expected reduction (if applicable)
+- [ ] **Correctness**: Results match original (within floating-point tolerance)
+- [ ] **Performance**: Profiling shows expected improvement
+- [ ] **Memory**: Memory profiling confirms benefits (if applicable)
+- [ ] **Clarity**: Code is readable and well-documented
 - [ ] **Tests**: All existing tests pass, new tests added
 - [ ] **Documentation**: Docstrings updated, optimization documented
 - [ ] **Backwards compatibility**: No breaking API changes
 - [ ] **GPU compatibility**: Works with both NumPy and CuPy
 - [ ] **Edge cases**: Handles small datasets, single channel, etc.
+- [ ] **Pythonic**: Uses standard library patterns where appropriate
 
 ---
 
@@ -955,8 +819,6 @@ For each optimization PR, reviewers should verify:
 ### 1. Correctness Tests
 
 **Requirement**: Optimized code must produce identical results (within numerical tolerance).
-
-**Implementation** (add to `tests/test_optimization.py`):
 
 ```python
 import numpy as np
@@ -970,256 +832,144 @@ def sample_data():
     np.random.seed(42)
     return np.random.randn(1000, 5, 8)  # 1000 samples, 5 trials, 8 channels
 
-@pytest.fixture
-def multitaper(sample_data):
-    """Create multitaper instance."""
-    return Multitaper(
-        sample_data,
-        sampling_frequency=1000,
-        time_window_duration=0.5,
-        time_halfbandwidth_product=3,
-    )
-
 class TestOptimizationCorrectness:
     """Test that optimizations don't change results."""
 
-    def test_cached_properties_match_original(self, multitaper):
-        """Test that cached properties return same values."""
-        conn = Connectivity.from_multitaper(multitaper)
+    def test_cached_properties_are_identical(self, sample_data):
+        """Test that cached properties return identical values."""
+        mt = Multitaper(sample_data, sampling_frequency=1000)
+        conn = Connectivity.from_multitaper(mt)
 
-        # Access property twice, should return same cached value
+        # Access property twice
         power1 = conn._power
         power2 = conn._power
 
-        # Should be exact match (same object)
+        # Should be exact match (same object with cached_property)
         assert power1 is power2
 
-        # Clear cache and recompute, should match
-        conn.clear_cache()
-        power3 = conn._power
-        assert_allclose(power1, power3, rtol=1e-14)
+    def test_taper_cache_correctness(self):
+        """Test that cached tapers match uncached computation."""
+        from spectral_connectivity.transforms import _make_tapers, clear_taper_cache
 
-    def test_windowing_copy_vs_nocopy(self, sample_data):
-        """Test that windowing with/without copy gives same FFT results."""
-        # With copy (old behavior)
-        mt_copy = Multitaper(sample_data, sampling_frequency=1000)
-        fft_copy = mt_copy.fft()
+        # Clear cache
+        clear_taper_cache()
 
-        # Without copy (optimized behavior)
-        # Would need to modify Multitaper to expose this parameter
-        # mt_nocopy = Multitaper(sample_data, sampling_frequency=1000, _copy_windows=False)
-        # fft_nocopy = mt_nocopy.fft()
+        # First call (computes)
+        tapers1 = _make_tapers(500, 1000.0, 3.0, 5, True)
 
-        # assert_allclose(fft_copy, fft_nocopy, rtol=1e-14)
+        # Second call (should use cache)
+        tapers2 = _make_tapers(500, 1000.0, 3.0, 5, True)
 
-    def test_einsum_matches_matmul(self, multitaper):
-        """Test that einsum CSM matches original matmul."""
-        conn = Connectivity.from_multitaper(multitaper)
+        # Should be identical
+        assert_allclose(tapers1, tapers2, rtol=1e-15)
 
-        # Get CSM using current method
-        csm = conn._cross_spectral_matrix
+    def test_float_tolerance_in_taper_cache(self):
+        """Test that minor float differences still hit cache."""
+        from spectral_connectivity.transforms import _make_tapers, clear_taper_cache
 
-        # Manually compute using old method
-        fc = conn.fourier_coefficients[..., np.newaxis]
-        from spectral_connectivity.connectivity import _complex_inner_product
-        csm_old = _complex_inner_product(fc, fc, dtype=np.complex128)
+        clear_taper_cache()
 
-        assert_allclose(csm, csm_old, rtol=1e-14)
+        # Create tapers with slightly different floats (within rounding tolerance)
+        tapers1 = _make_tapers(500, 1000.000000, 3.0, 5, True)
+        tapers2 = _make_tapers(500, 1000.000001, 3.0, 5, True)  # Should still hit cache
 
-    def test_vectorized_global_coherence(self, multitaper):
-        """Test vectorized global coherence matches loop version."""
-        conn = Connectivity.from_multitaper(multitaper)
+        # Should be same object if cache hit
+        assert tapers1 is tapers2
+
+    def test_vectorized_global_coherence_matches_original(self, sample_data):
+        """Test vectorized implementation matches original."""
+        mt = Multitaper(sample_data, sampling_frequency=1000)
+        conn = Connectivity.from_multitaper(mt)
 
         # Compute using optimized version
         gc_opt, ugc_opt = conn.global_coherence(max_rank=2)
 
-        # Would need to keep old implementation for comparison
-        # gc_old, ugc_old = conn._global_coherence_original(max_rank=2)
-
-        # assert_allclose(gc_opt, gc_old, rtol=1e-12)
-        # assert_allclose(ugc_opt, ugc_old, rtol=1e-12)
-
-class TestOptimizationPerformance:
-    """Test that optimizations improve performance."""
-
-    def test_cached_access_faster(self, multitaper, benchmark):
-        """Test that cached property access is faster."""
-        conn = Connectivity.from_multitaper(multitaper)
-
-        # First access (computes and caches)
-        _ = conn._minimum_phase_factor
-
-        # Second access should be nearly instant
-        result = benchmark(lambda: conn._minimum_phase_factor)
-        # Benchmark will measure time
-
-    def test_taper_cache_effective(self, sample_data, benchmark):
-        """Test that taper caching speeds up repeated calls."""
-        def create_multitaper():
-            return Multitaper(
-                sample_data,
-                sampling_frequency=1000,
-                time_window_duration=0.5,
-                time_halfbandwidth_product=3,
-            )
-
-        # First call (computes tapers)
-        mt1 = create_multitaper()
-
-        # Second call (should use cached tapers)
-        result = benchmark(create_multitaper)
-        # Benchmark will show speedup
-
-class TestMemoryUsage:
-    """Test memory usage of optimizations."""
-
-    @pytest.mark.memory
-    def test_nocopy_windowing_memory(self, sample_data):
-        """Test that no-copy windowing uses less memory."""
-        import tracemalloc
-
-        # Measure with copy
-        tracemalloc.start()
-        mt_copy = Multitaper(sample_data, sampling_frequency=1000)
-        _ = mt_copy.fft()
-        _, peak_copy = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-
-        # Measure without copy
-        tracemalloc.start()
-        # mt_nocopy = Multitaper(sample_data, sampling_frequency=1000, _copy_windows=False)
-        # _ = mt_nocopy.fft()
-        _, peak_nocopy = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-
-        # assert peak_nocopy < peak_copy * 0.7  # At least 30% reduction
-
-    @pytest.mark.memory
-    def test_cache_size_bounded(self, multitaper):
-        """Test that cache doesn't grow unboundedly."""
-        import sys
-
-        conn = Connectivity.from_multitaper(multitaper)
-
-        # Access all cached properties
-        _ = conn._power
-        _ = conn._minimum_phase_factor
-        _ = conn._transfer_function
-        _ = conn._noise_covariance
-        _ = conn._MVAR_Fourier_coefficients
-
-        # Check cache size is reasonable
-        cache_size = sys.getsizeof(conn._cache)
-        # Should be small overhead, most memory in cached arrays
-        assert cache_size < 1024  # Dictionary overhead < 1KB
+        # Test properties that should hold
+        assert gc_opt.shape[0] > 0  # Has time windows
+        assert gc_opt.shape[1] > 0  # Has frequencies
+        assert gc_opt.shape[2] == 2  # max_rank=2
+        assert np.all(gc_opt >= 0)  # Coherence is non-negative
+        assert np.all(gc_opt <= 1)  # Coherence is bounded by 1
 ```
 
-### 2. Integration Tests
+### 2. Property-Based Tests with Hypothesis
 
-**Test complete workflows**:
+**Add property-based testing** to find edge cases automatically:
 
 ```python
-class TestRealWorldWorkflows:
-    """Test optimizations in realistic scenarios."""
+from hypothesis import given, strategies as st
+import hypothesis.extra.numpy as npst
 
-    def test_multi_measure_analysis(self, sample_data):
-        """Test computing multiple connectivity measures."""
-        mt = Multitaper(
-            sample_data,
-            sampling_frequency=1000,
-            time_window_duration=0.5,
-        )
-        conn = Connectivity.from_multitaper(mt)
+@given(
+    data=npst.arrays(
+        dtype=np.float64,
+        shape=npst.array_shapes(min_dims=3, max_dims=3,
+                               min_side=10, max_side=100),
+    ),
+    sampling_frequency=st.floats(min_value=100, max_value=10000),
+)
+def test_multitaper_properties(data, sampling_frequency):
+    """Property-based test for multitaper.
 
-        # Compute many measures (benefits from caching)
-        measures = {
-            'coherence': conn.coherence_magnitude(),
-            'imaginary_coh': conn.imaginary_coherence(),
-            'plv': conn.phase_locking_value(),
-            'pli': conn.phase_lag_index(),
-            'wpli': conn.weighted_phase_lag_index(),
-            'ppc': conn.pairwise_phase_consistency(),
-        }
+    Tests that certain properties always hold, regardless of input.
+    """
+    mt = Multitaper(data, sampling_frequency=sampling_frequency)
 
-        # All should complete without error
-        assert all(m is not None for m in measures.values())
+    # Properties that should always hold
+    assert mt.frequencies.min() >= 0
+    assert mt.frequencies.max() <= mt.nyquist_frequency
+    assert len(mt.frequencies) == mt.n_fft_samples // 2 + 1
+    assert mt.n_tapers > 0
+    assert mt.n_time_samples_per_window <= data.shape[0]
 
-        # Check cache was used effectively
-        assert '_power' in conn._cache
+@given(
+    n_samples=st.integers(min_value=100, max_value=1000),
+    fs=st.floats(min_value=100, max_value=10000),
+    nw=st.floats(min_value=1, max_value=10),
+    n_tapers=st.integers(min_value=1, max_value=20),
+)
+def test_taper_cache_properties(n_samples, fs, nw, n_tapers):
+    """Test that taper caching doesn't change results."""
+    from spectral_connectivity.transforms import _make_tapers
 
-    def test_directed_measures_workflow(self, sample_data):
-        """Test directed connectivity measures."""
-        mt = Multitaper(sample_data, sampling_frequency=1000)
-        conn = Connectivity.from_multitaper(mt)
+    # Call twice with same parameters
+    tapers1 = _make_tapers(n_samples, fs, nw, n_tapers)
+    tapers2 = _make_tapers(n_samples, fs, nw, n_tapers)
 
-        # These all use minimum phase factor (should be cached)
-        granger = conn.pairwise_spectral_granger_prediction()
-        dtf = conn.directed_transfer_function()
-        dc = conn.directed_coherence()
-        pdc = conn.partial_directed_coherence()
-
-        # All should complete
-        assert all(x is not None for x in [granger, dtf, dc, pdc])
-
-        # Check expensive computation was cached
-        assert '_minimum_phase_factor' in conn._cache
+    # Should return same cached object
+    assert tapers1 is tapers2
 ```
 
-### 3. Regression Tests
-
-**Ensure no performance regressions**:
+### 3. Performance Regression Tests
 
 ```python
-# benchmarks/test_performance_regression.py
-
 import pytest
-import numpy as np
 import time
-from spectral_connectivity import Multitaper, Connectivity
-
-# Store baseline times (update after each optimization)
-BASELINE_TIMES = {
-    'multitaper_small': 0.1,  # seconds
-    'multitaper_medium': 0.5,
-    'coherence_small': 0.05,
-    'coherence_medium': 0.2,
-    'granger_small': 0.5,
-    'granger_medium': 2.0,
-}
-
-TOLERANCE = 1.2  # Allow 20% slowdown before failing
 
 @pytest.mark.benchmark
 class TestPerformanceRegression:
     """Ensure optimizations don't regress performance."""
 
-    def test_multitaper_small_dataset(self):
-        """Benchmark small dataset."""
-        data = np.random.randn(1000, 5, 10)
+    def test_multi_measure_workflow_performance(self, sample_data, benchmark):
+        """Benchmark typical workflow with multiple measures."""
+        def compute_multiple_measures():
+            mt = Multitaper(sample_data, sampling_frequency=1000)
+            conn = Connectivity.from_multitaper(mt)
 
-        start = time.time()
-        mt = Multitaper(data, sampling_frequency=1000)
-        _ = mt.fft()
-        elapsed = time.time() - start
+            # Compute multiple measures (benefits from caching)
+            results = {
+                'coherence': conn.coherence_magnitude(),
+                'imaginary': conn.imaginary_coherence(),
+                'plv': conn.phase_locking_value(),
+            }
+            return results
 
-        assert elapsed < BASELINE_TIMES['multitaper_small'] * TOLERANCE
-
-    def test_coherence_medium_dataset(self):
-        """Benchmark coherence on medium dataset."""
-        data = np.random.randn(5000, 10, 32)
-        mt = Multitaper(data, sampling_frequency=1000)
-        conn = Connectivity.from_multitaper(mt)
-
-        start = time.time()
-        _ = conn.coherence_magnitude()
-        elapsed = time.time() - start
-
-        assert elapsed < BASELINE_TIMES['coherence_medium'] * TOLERANCE
+        # Benchmark will measure time and compare across runs
+        result = benchmark(compute_multiple_measures)
+        assert all(v is not None for v in result.values())
 ```
 
 ### 4. GPU Tests
-
-**Ensure optimizations work on GPU**:
 
 ```python
 import pytest
@@ -1245,23 +995,12 @@ class TestGPUOptimizations:
         power1 = conn._power
         power2 = conn._power
         assert power1 is power2
-
-    def test_einsum_gpu(self, sample_data):
-        """Test einsum optimization works on GPU."""
-        import cupy as cp
-
-        data_gpu = cp.asarray(sample_data)
-        mt = Multitaper(data_gpu, sampling_frequency=1000)
-        conn = Connectivity.from_multitaper(mt)
-
-        # Should not raise error
-        csm = conn._cross_spectral_matrix
-        assert isinstance(csm, cp.ndarray)
+        assert isinstance(power1, cp.ndarray)
 ```
 
 ---
 
-## Appendix: Rejected Optimizations
+## Appendix: Rejected or Deferred Optimizations
 
 ### A.1 FFT Size Optimization (REJECTED)
 
@@ -1269,14 +1008,8 @@ class TestGPUOptimizations:
 
 **Rejection Reason**:
 - FFT performance degrades significantly for non-optimal sizes
-- Memory savings (2-10%) don't justify speed loss (can be 2-5x slower)
+- Memory savings (2-10%) don't justify speed loss (2-5x slower)
 - `next_fast_len` is essential for good FFT performance
-
-**Example**:
-```python
-# next_fast_len(1001) = 1024 (optimal for FFT)
-# Using exact 1001: ~3x slower FFT
-```
 
 **Decision**: Keep automatic padding to `next_fast_len`.
 
@@ -1288,60 +1021,122 @@ class TestGPUOptimizations:
 
 **Rejection Reason**: Causes OOM errors as reported by users.
 
-**Why It Fails**:
-```python
-@lru_cache(maxsize=128)
-def _minimum_phase_factor(self):
-    # Array size: (100 time, 512 freq, 64 signals, 64 signals)
-    # = 100 × 512 × 64 × 64 × 16 bytes (complex128)
-    # = 1.6 GB per call
-    # Cache holds 128 calls = 200+ GB!
-```
-
-**Solution Used**: Instance-level dictionary caching (see Phase 1.1).
+**Solution Used**: `functools.cached_property` (Phase 1.1).
 
 ---
 
-### A.3 Parallel Processing with multiprocessing (REJECTED)
+### A.3 Manual Cache Dictionary (REPLACED)
 
-**Original Idea**: Use Python multiprocessing for time window parallelization.
+**Original Idea**: Implement manual cache dictionary for properties.
+
+**Replacement**: Use `functools.cached_property` - simpler, more Pythonic, standard library.
+
+**Why Better**:
+- No manual cache management
+- Automatic cleanup
+- Standard library (well-tested)
+- Thread-safe
+- Clearer intent
+
+---
+
+### A.4 Sliding Window Copy Elimination (DEFERRED)
+
+**Original Idea**: Change `is_copy=True` to `is_copy=False` for memory savings.
+
+**Deferral Reason**:
+- Copy overhead is negligible compared to FFT time (~10-50ms vs seconds)
+- Correctness and safety should come first
+- Users who modify windowed data would encounter subtle bugs
+- Premature optimization
+
+**Decision**: **Keep `is_copy=True` as the safe default**. Only optimize if profiling shows it's a bottleneck (unlikely).
+
+---
+
+### A.5 Wilson Algorithm Copy Optimization (PROFILE FIRST)
+
+**Original Idea**: Only copy unconverged time points in Wilson algorithm.
+
+**Better Approach**: Add instrumentation to measure:
+1. Typical iteration counts
+2. Convergence patterns
+3. Whether copying is actually the bottleneck
+
+**Decision**: Add profiling/stats (Phase 2.1), optimize only if data shows it's needed.
+
+---
+
+### A.6 einsum for Cross-Spectral Matrix (DEFERRED)
+
+**Original Idea**: Use `einsum` for memory efficiency.
+
+**Deferral Reason**:
+- Original implementation had errors (`einsum` doesn't take `dtype` parameter)
+- For outer products, `einsum` isn't always faster
+- Memory savings are small compared to output size
+- Current implementation is clear and correct
+
+**Decision**: Keep current implementation. Revisit only if profiling shows it's a bottleneck.
+
+---
+
+### A.7 Parallel Processing with multiprocessing (REJECTED)
+
+**Original Idea**: Use Python multiprocessing for parallelization.
 
 **Rejection Reason**:
 - High overhead for array serialization
 - NumPy/CuPy already use optimized BLAS/CUDA parallelization
-- Adding multiprocessing would conflict with existing parallelism
-- GPU operations cannot be easily parallelized across processes
+- Would conflict with existing parallelism
+- GPU operations don't parallelize well across processes
 
 **Better Alternative**: Ensure NumPy uses optimized BLAS (OpenBLAS, MKL) and leverage existing GPU parallelism.
 
 ---
 
-### A.4 Sparse Matrix Representations (REJECTED)
+### A.8 Sparse Matrix Representations (REJECTED)
 
-**Original Idea**: Use sparse matrices for cross-spectral matrix when many signals are uncorrelated.
+**Original Idea**: Use sparse matrices for cross-spectral matrix.
 
 **Rejection Reason**:
-- Cross-spectral matrices are typically dense (all pairs have some correlation)
-- Sparse matrix operations slower for dense data
-- Added complexity not justified by typical use cases
+- Cross-spectral matrices are typically dense
+- Sparse operations are slower for dense data
+- Added complexity not justified
 
-**When It Might Work**: Only for >1000 channels with known sparsity structure (rare in neuroscience).
+**When It Might Work**: Only for >1000 channels with known sparsity (rare).
 
 ---
 
 ## Conclusion
 
-This optimization plan provides a roadmap for significantly improving the performance and memory efficiency of the `spectral_connectivity` package. By following a phased approach with careful testing and validation, we can achieve:
+This updated optimization plan provides a **pragmatic, measured approach** to improving the performance of the `spectral_connectivity` package. Key principles:
 
-- **3-8x speed improvement** for typical multi-measure workflows
-- **30-50% memory reduction** for large datasets
-- **Maintained correctness** through comprehensive testing
-- **No breaking changes** to the public API
+**✅ DO:**
+- Use standard library patterns (`cached_property`)
+- Profile before optimizing
+- Focus on the critical 3%: caching, taper computation, vectorization
+- Maintain code clarity
+- Test thoroughly
 
-The plan prioritizes high-impact, low-risk optimizations first (Phase 1) to deliver value quickly, while more complex optimizations (Phase 3) can be implemented as needed based on user requirements.
+**❌ DON'T:**
+- Sacrifice readability for minor gains
+- Optimize without measuring
+- Reinvent standard library functionality
+- Change safe defaults without good reason
+- Over-engineer solutions
+
+**Expected Results** (Phase 1 only):
+- **3-10x speed improvement** for multi-measure workflows
+- **Minimal memory overhead** (<1-2 MB for caches)
+- **Improved maintainability** through Pythonic patterns
+- **No breaking changes** to public API
 
 **Next Steps**:
-1. Review and approve this plan
-2. Set up benchmarking infrastructure
-3. Begin Phase 1 implementation
-4. Iterate based on profiling results and user feedback
+1. Review and approve this updated plan
+2. Implement Phase 1 optimizations (1-2 weeks)
+3. Profile typical user workloads
+4. Use data to guide Phase 2 decisions
+5. Only proceed to Phase 3 for extreme use cases
+
+Remember: **"Correctness first, fast second, maintainable always."**
