@@ -851,6 +851,44 @@ def test_mvar_regularized_inverse_near_singular():
     # near-singular matrices that don't converge, we just verify no crash
 
 
+def test_regularized_solve_rhs_matches_batched_lhs():
+    """RHS identity passed to xp.linalg.solve must match batched LHS shape.
+
+    NumPy accepts an unbatched (M, M) identity against a batched LHS, but CuPy
+    rejects the mismatch and crashes. We assert the contract on CPU so this
+    class of bug is caught without GPU CI.
+    """
+    from spectral_connectivity import connectivity as conn_mod
+
+    real_solve = conn_mod.xp.linalg.solve
+    captured = []
+
+    def recording_solve(a, b):
+        captured.append((a.shape, b.shape))
+        return real_solve(a, b)
+
+    rng = np.random.default_rng(0)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (2, 2, 2, 4, 3)
+    fourier_coefficients = rng.standard_normal(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+    )
+    conn = Connectivity(fourier_coefficients=fourier_coefficients.astype(complex))
+
+    with patch.object(conn_mod.xp.linalg, "solve", side_effect=recording_solve):
+        # Touch both fixed code paths.
+        _ = conn._transfer_function  # _estimate_transfer_function
+        _ = conn._MVAR_Fourier_coefficients  # _MVAR_Fourier_coefficients
+
+    assert captured, "expected xp.linalg.solve to be called"
+    for a_shape, b_shape in captured:
+        assert a_shape == b_shape, (
+            f"solve received mismatched shapes a={a_shape}, b={b_shape}; "
+            "RHS must be broadcast to LHS batched shape for CuPy compatibility"
+        )
+
+
 def test_connectivity_rejects_wrong_ndim():
     """Test that Connectivity rejects inputs with wrong number of dimensions."""
     import pytest

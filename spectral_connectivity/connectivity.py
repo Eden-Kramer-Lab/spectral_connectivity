@@ -584,8 +584,11 @@ class Connectivity:
         # Scale-aware regularization parameter
         lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(xp.real(xp.conj(H) * H))
         identity = xp.eye(H.shape[-1], dtype=H.dtype)
-        regularized_H = H + lam * identity
-        return xp.linalg.solve(regularized_H, identity)
+        # Broadcast identity to H's batch dimensions so CuPy's batched solve
+        # accepts the RHS shape (NumPy tolerates the mismatch; CuPy does not).
+        identity_batched = xp.broadcast_to(identity, H.shape)
+        regularized_H = H + lam * identity_batched
+        return xp.linalg.solve(regularized_H, identity_batched)
 
     @property
     def _expectation(self) -> Callable:
@@ -1743,8 +1746,9 @@ def _estimate_transfer_function(
         H_0 * H_0
     )  # Scale-aware regularization for real matrix
     identity = xp.eye(H_0.shape[-1], dtype=H_0.dtype)
-    regularized_H_0 = H_0 + lam * identity
-    H_0_inv = xp.linalg.solve(regularized_H_0, identity)
+    identity_batched = xp.broadcast_to(identity, H_0.shape)
+    regularized_H_0 = H_0 + lam * identity_batched
+    H_0_inv = xp.linalg.solve(regularized_H_0, identity_batched)
     return xp.matmul(minimum_phase, H_0_inv)
 
 
