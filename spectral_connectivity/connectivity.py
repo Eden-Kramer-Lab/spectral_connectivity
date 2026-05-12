@@ -584,8 +584,11 @@ class Connectivity:
         # Scale-aware regularization parameter
         lam = TIKHONOV_REGULARIZATION_FACTOR * xp.mean(xp.real(xp.conj(H) * H))
         identity = xp.eye(H.shape[-1], dtype=H.dtype)
-        regularized_H = H + lam * identity
-        return xp.linalg.solve(regularized_H, identity)
+        # Broadcast identity to H's batch dimensions so CuPy's batched solve
+        # accepts the RHS shape (NumPy tolerates the mismatch; CuPy does not).
+        identity_batched = xp.broadcast_to(identity, H.shape)
+        regularized_H = H + lam * identity_batched
+        return xp.linalg.solve(regularized_H, identity_batched)
 
     @property
     def _expectation(self) -> Callable:
@@ -1972,7 +1975,7 @@ def _reshape(
         Reshaped Fourier coefficients.
 
     """
-    n_time_windows, _, _, n_fft_samples, n_signals = fourier_coefficients.shape
+    (n_time_windows, _, _, n_fft_samples, n_signals) = fourier_coefficients.shape
     new_shape = (n_time_windows, -1, n_fft_samples, n_signals)
     return xp.moveaxis(fourier_coefficients.reshape(new_shape), 1, -1)
 
