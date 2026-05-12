@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-12
+
 ### Fixed
 
 - Broadcast identity matrix to batch dimensions of the LHS before calling `xp.linalg.solve` in `_estimate_transfer_function` and `_MVAR_Fourier_coefficients`, fixing CuPy batched-solve shape mismatch crashes that affected `directed_transfer_function`, `partial_directed_coherence`, `generalized_partial_directed_coherence`, and `direct_directed_transfer_function` on GPU.
