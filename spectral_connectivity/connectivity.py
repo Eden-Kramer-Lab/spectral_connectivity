@@ -1743,8 +1743,9 @@ def _estimate_transfer_function(
         H_0 * H_0
     )  # Scale-aware regularization for real matrix
     identity = xp.eye(H_0.shape[-1], dtype=H_0.dtype)
-    regularized_H_0 = H_0 + lam * identity
-    H_0_inv = xp.linalg.solve(regularized_H_0, identity)
+    identity_batched = xp.broadcast_to(identity, H_0.shape)
+    regularized_H_0 = H_0 + lam * identity_batched
+    H_0_inv = xp.linalg.solve(regularized_H_0, identity_batched)
     return xp.matmul(minimum_phase, H_0_inv)
 
 
@@ -1971,7 +1972,7 @@ def _reshape(
         Reshaped Fourier coefficients.
 
     """
-    (n_time_windows, _, _, n_fft_samples, n_signals) = fourier_coefficients.shape
+    n_time_windows, _, _, n_fft_samples, n_signals = fourier_coefficients.shape
     new_shape = (n_time_windows, -1, n_fft_samples, n_signals)
     return xp.moveaxis(fourier_coefficients.reshape(new_shape), 1, -1)
 

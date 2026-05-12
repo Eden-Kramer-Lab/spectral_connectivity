@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Broadcast identity matrix to batch dimensions of `H_0` in `_estimate_transfer_function` to fix `xp.linalg.solve` shape mismatch when using CuPy backend.
+
 ## [2.0.0] - 2025-10-27
 
 ### BREAKING CHANGES

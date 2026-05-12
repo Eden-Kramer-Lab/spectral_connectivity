@@ -1001,9 +1001,9 @@ def test_tutorial_simulated_examples_executes():
         text=True,
     )
 
-    assert result.returncode == 0, (
-        f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
 
 
 @pytest.mark.slow
@@ -1025,6 +1025,6 @@ def test_tutorial_paper_examples_executes():
         text=True,
     )
 
-    assert result.returncode == 0, (
-        f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"Notebook execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
