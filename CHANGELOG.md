@@ -289,6 +289,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -exit tests are combined into a single reduction. Results are bit-for-bit
   identical; this is a GPU benefit (fewer host synchronizations) and a no-op on
   CPU.
+- `transforms.dpss_windows` now computes the Slepian tapers via
+  `scipy.signal.windows.dpss` (a LAPACK `eigh_tridiagonal` solve) instead of the
+  package's own tridiagonal inverse-iteration solver. The eigenvalue problem and
+  concentration-ratio formula are identical; SciPy solves it with compiled LAPACK
+  rather than a Python-level iteration, so it is ~4.6–4.9× faster and removes a
+  class of numerical edge cases (e.g. the singular-pivot NaN that previously
+  required a guard). Tapers match the previous solver to ~1e-14 and eigenvalues
+  to ~1e-15 (both up to the usual per-taper sign, which agrees here), and the
+  independent `nitime` reference to floating-point tolerance. The validation,
+  low-bias taper selection, and integer-`n_tapers` checks are unchanged. The now
+  -unused custom solver helpers (`tridisolve`, `tridi_inverse_iteration`,
+  `_find_tapers_from_optimization`, `_get_taper_eigenvalues`, `_fix_taper_sign`,
+  `_auto_correlation`) and the interpolation fast-path (`interp_from` /
+  `interp_kind`, `_find_tapers_from_interpolation`, `_interpolate_taper`) were
+  removed; `dpss_windows` no longer accepts `interp_from` / `interp_kind`.
 
 ### Added
 

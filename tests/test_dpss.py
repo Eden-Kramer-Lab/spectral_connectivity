@@ -57,7 +57,7 @@ def test_dpss_low_bias_keeps_valid_tapers():
         (8, 5, 3),  # NW >= n/2
         (8, 2, 20),  # n_tapers > window length
         (8, 2, 0),  # n_tapers < 1
-        (1, 0.25, 1),  # window length < 2 (crashed _fix_taper_sign)
+        (1, 0.25, 1),  # window length < 2
     ],
 )
 def test_dpss_windows_rejects_invalid_bandwidth_or_taper_count(n, nw, k):

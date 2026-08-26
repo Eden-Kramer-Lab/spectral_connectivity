@@ -5,8 +5,7 @@ from typing import TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy import interpolate
-from scipy.linalg import eigvals_banded
+from scipy.signal.windows import dpss as scipy_dpss
 
 from spectral_connectivity.utils import is_gpu_enabled
 
@@ -411,7 +410,7 @@ if is_gpu_enabled():
     try:
         import cupy as xp
         from cupy.linalg import lstsq
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
+        from cupyx.scipy.fft import fft, fftfreq, next_fast_len
 
         # Log GPU device information
         try:
@@ -440,7 +439,7 @@ if is_gpu_enabled():
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
+    from scipy.fft import fft, fftfreq, next_fast_len
     from scipy.linalg import lstsq
 
 
@@ -1534,163 +1533,43 @@ def _make_tapers(
     return tapers.T * xp.sqrt(sampling_frequency)
 
 
-def tridisolve(
-    d: NDArray[np.floating],
-    e: NDArray[np.floating],
-    b: NDArray[np.floating],
-    overwrite_b: bool = True,
-) -> NDArray[np.floating]:
-    """Symmetric tridiagonal system solver, from Golub and Van Loan p157.
-
-    .. note:: Copied from NiTime.
-
-    Parameters
-    ----------
-    d : ndarray
-      main diagonal stored in d[:]
-    e : ndarray
-      superdiagonal stored in e[:-1]
-    b : ndarray
-      RHS vector
-    Returns
-    -------
-    x : ndarray
-      Solution to Ax = b (if overwrite_b is False). Otherwise solution is
-      stored in previous RHS vector b
-    """
-    N = len(b)
-    # work vectors
-    dw = d.copy()
-    ew = e.copy()
-    if overwrite_b:
-        x = b
-    else:
-        x = b.copy()
-
-    # This solver is used for inverse iteration, where the matrix (A - wI) is
-    # singular by construction (w is an exact eigenvalue). A pivot can then be
-    # exactly zero and the unpivoted elimination would divide by it, propagating
-    # NaN into the taper (e.g. dpss_windows(8, 2, 3)). Floor the pivot magnitude
-    # by a value tiny relative to the matrix scale: non-degenerate solves (whose
-    # pivots are orders of magnitude larger) are unchanged, while a (near-)zero
-    # pivot becomes a small finite number and inverse iteration still converges
-    # to the eigenvector.
-    pivot_floor = float(
-        np.finfo(dw.dtype).eps * (float(np.abs(dw).max()) + float(np.abs(ew).max()))
-    )
-    if pivot_floor == 0:
-        pivot_floor = float(np.finfo(dw.dtype).tiny)
-
-    def _nonzero_pivot(pivot: float) -> float:
-        if abs(pivot) >= pivot_floor:
-            return pivot
-        return pivot_floor if pivot >= 0 else -pivot_floor
-
-    for k in range(1, N):
-        # e^(k-1) = e(k-1) / d(k-1)
-        # d(k) = d(k) - e^(k-1)e(k-1) / d(k-1)
-        t = ew[k - 1]
-        ew[k - 1] = t / _nonzero_pivot(dw[k - 1])
-        dw[k] = dw[k] - t * ew[k - 1]
-    for k in range(1, N):
-        x[k] = x[k] - ew[k - 1] * x[k - 1]
-    x[N - 1] = x[N - 1] / _nonzero_pivot(dw[N - 1])
-    for k in range(N - 2, -1, -1):
-        x[k] = x[k] / _nonzero_pivot(dw[k]) - ew[k] * x[k + 1]
-
-    if not overwrite_b:
-        return x
-    return x
-
-
-def tridi_inverse_iteration(
-    d: NDArray[np.floating],
-    e: NDArray[np.floating],
-    w: float,
-    x0: NDArray[np.floating] | None = None,
-    rtol: float = 1e-8,
-) -> NDArray[np.floating]:
-    """Perform an inverse iteration.
-
-    This will find the eigenvector corresponding to the given eigenvalue
-    in a symmetric tridiagonal system.
-
-    .. note:: Copied from NiTime.
-
-    Parameters
-    ----------
-    d : array
-      main diagonal of the tridiagonal system
-    e : array
-      offdiagonal stored in e[:-1]
-    w : float
-      eigenvalue of the eigenvector
-    x0 : array
-      initial point to start the iteration
-    rtol : float
-      tolerance for the norm of the difference of iterates
-    Returns
-    -------
-    e: array
-      The converged eigenvector
-    """
-    eig_diag = d - w
-    if x0 is None:
-        x0 = np.random.randn(len(d))
-    x_prev = np.zeros_like(x0)
-    norm_x = np.linalg.norm(x0)
-    # the eigenvector is unique up to sign change, so iterate
-    # until || |x^(n)| - |x^(n-1)| ||^2 < rtol
-    x0 /= norm_x
-    while np.linalg.norm(np.abs(x0) - np.abs(x_prev)) > rtol:
-        x_prev = x0.copy()
-        tridisolve(eig_diag, e, x0)
-        norm_x = np.linalg.norm(x0)
-        x0 /= norm_x
-    return x0
-
-
 def dpss_windows(
     n_time_samples_per_window: int,
     time_halfbandwidth_product: float,
     n_tapers: int,
     is_low_bias: bool = True,
-    interp_from: int | None = None,
-    interp_kind: str = "linear",
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute Discrete Prolate Spheroidal Sequences.
 
-    Will give of orders [0, n_tapers-1] for a given frequency-spacing
-    multiple NW and sequence length `n_time_samples_per_window`.
+    Returns the DPSS (Slepian) tapers of orders [0, n_tapers-1] for a given
+    time-halfbandwidth product NW and window length
+    ``n_time_samples_per_window``, together with their spectral-concentration
+    ratios (eigenvalues).
 
-    Copied from NiTime and MNE-Python
+    Delegates to :func:`scipy.signal.windows.dpss`, which solves the same
+    symmetric tridiagonal eigenproblem (Percival & Walden 1993) via LAPACK. The
+    ``sym=True`` / ``norm=2`` options reproduce the symmetric, unit-L2-norm
+    convention used here, matching the previous vendored NiTime/MNE
+    implementation to floating-point tolerance. It is CPU-only (banded linear
+    algebra); the result is moved to the active array namespace afterward, as
+    before.
 
     Parameters
     ----------
     n_time_samples_per_window : int
-        Sequence length
+        Sequence length.
     time_halfbandwidth_product : float, unitless
-        Standardized half bandwidth corresponding to 2 * half_bw = BW * f0
-        = BW * `n_time_samples_per_window` / dt but with dt taken as 1
+        Standardized half bandwidth NW.
     n_tapers : int
-        Number of DPSS windows to return
+        Number of DPSS windows to return.
     is_low_bias : bool
-        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
-    interp_from : int (optional)
-        The tapers can be calculated using interpolation from a set of
-        tapers with the same NW and n_tapers, but shorter
-        n_time_samples_per_window.
-        This is the length of the shorter set of tapers.
-    interp_kind : str (optional)
-        This ixput variable is passed to scipy.interpolate.interp1d and
-        specifies the kind of interpolation as a string ('linear',
-        'nearest', 'zero', 'slinear', 'quadratic, 'cubic') or as an integer
-        specifying the order of the spline interpolator to use.
+        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9).
 
     Returns
     -------
     tapers, eigenvalues : tuple
-        tapers is an array, shape (n_tapers, n_time_samples_per_window)
+        ``tapers`` has shape (n_tapers, n_time_samples_per_window);
+        ``eigenvalues`` has shape (n_tapers,).
 
     Notes
     -----
@@ -1698,7 +1577,6 @@ def dpss_windows(
     Slepian, D. Prolate spheroidal wave functions, Fourier analysis, and
     uncertainty V: The discrete case. Bell System Technical Journal,
     Volume 57 (1978), 1371430
-
     """
     # Reject a fractional n_tapers before coercion: silently truncating (e.g.
     # 2.9 -> 2) would disagree with the reported Multitaper.n_tapers metadata.
@@ -1725,172 +1603,23 @@ def dpss_windows(
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
             f"(= {n_time_samples_per_window}), got {n_tapers}."
         )
-    half_bandwidth = float(time_halfbandwidth_product) / n_time_samples_per_window
-    time_index = xp.arange(n_time_samples_per_window, dtype="d")
 
-    if interp_from is not None:
-        tapers = _find_tapers_from_interpolation(
-            interp_from,
-            time_halfbandwidth_product,
-            n_tapers,
-            n_time_samples_per_window,
-            interp_kind,
-        )
-    else:
-        tapers = _find_tapers_from_optimization(
-            n_time_samples_per_window, time_index, half_bandwidth, n_tapers
-        )
-
-    _fix_taper_sign(tapers, n_time_samples_per_window)
-    eigenvalues = _get_taper_eigenvalues(tapers, half_bandwidth, time_index)
+    tapers, eigenvalues = scipy_dpss(
+        n_time_samples_per_window,
+        time_halfbandwidth_product,
+        n_tapers,
+        sym=True,
+        norm=2,
+        return_ratios=True,
+    )
+    tapers = xp.asarray(tapers)
+    eigenvalues = xp.asarray(eigenvalues)
 
     return (
         _get_low_bias_tapers(tapers, eigenvalues)
         if is_low_bias
         else (tapers, eigenvalues)
     )
-
-
-def _find_tapers_from_interpolation(
-    interp_from: int,
-    time_halfbandwidth_product: float,
-    n_tapers: int,
-    n_time_samples_per_window: int,
-    interp_kind: str,
-) -> NDArray[np.floating]:
-    """Create tapers of smaller size and interpolate to larger size.
-
-    Create the tapers of the smaller size `interp_from` and then
-    interpolate to the larger size `n_time_samples_per_window`.
-    """
-    smaller_tapers, _ = dpss_windows(
-        interp_from, time_halfbandwidth_product, n_tapers, is_low_bias=False
-    )
-
-    return xp.array(
-        [
-            _interpolate_taper(taper, interp_kind, n_time_samples_per_window)
-            for taper in smaller_tapers
-        ]
-    )
-
-
-def _interpolate_taper(
-    taper: NDArray[np.floating],
-    interp_kind: str,
-    n_time_samples_per_window: int,
-) -> NDArray[np.floating]:
-    interpolation_function = interpolate.interp1d(
-        xp.arange(taper.shape[-1]), taper, kind=interp_kind
-    )
-    interpolated_taper = interpolation_function(
-        xp.linspace(0, taper.shape[-1] - 1, n_time_samples_per_window, endpoint=False)
-    )
-    return interpolated_taper / xp.sqrt(xp.sum(interpolated_taper**2))
-
-
-def _find_tapers_from_optimization(
-    n_time_samples_per_window: int,
-    time_index: NDArray[np.floating],
-    half_bandwidth: float,
-    n_tapers: int,
-) -> NDArray[np.floating]:
-    """Set up optimization problem to find sequence with concentrated energy.
-
-    Set up an optimization problem to find a sequence
-    whose energy is maximally concentrated within band
-    [-half_bandwidth, half_bandwidth]. Thus,
-    the measure lambda(T, half_bandwidth) is the ratio between the
-    energy within that band, and the total energy. This leads to the
-    eigen-system (A - (l1)I)v = 0, where the eigenvector corresponding
-    to the largest eigenvalue is the sequence with maximally
-    concentrated energy. The collection of eigenvectors of this system
-    are called Slepian sequences, or discrete prolate spheroidal
-    sequences (DPSS). Only the first K, K = 2NW/dt orders of DPSS will
-    exhibit good spectral concentration
-    [see http://en.wikipedia.org/wiki/Spectral_concentration_problem]
-
-    Here I set up an alternative symmetric tri-diagonal eigenvalue
-    problem such that
-    (B - (l2)I)v = 0, and v are our DPSS (but eigenvalues l2 != l1)
-    the main diagonal = ([n_time_samples_per_window-1-2*t]/2)**2 cos(2PIW),
-    t=[0,1,2,...,n_time_samples_per_window-1] and the first off-diagonal =
-    t(n_time_samples_per_window-t)/2, t=[1,2,...,
-    n_time_samples_per_window-1] [see Percival and Walden, 1993]
-    """
-    try:
-        time_index = xp.asnumpy(time_index)
-    except AttributeError:
-        pass
-    diagonal = ((n_time_samples_per_window - 1 - 2 * time_index) / 2.0) ** 2 * np.cos(
-        2 * np.pi * half_bandwidth
-    )
-    off_diag = np.zeros_like(time_index)
-    off_diag[:-1] = time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.0
-    # put the diagonals in LAPACK 'packed' storage
-    ab = np.zeros((2, n_time_samples_per_window), dtype=float)
-    ab[1] = diagonal
-    ab[0, 1:] = off_diag[:-1]
-    # only calculate the highest n_tapers eigenvalues
-    w = eigvals_banded(
-        ab,
-        select="i",
-        select_range=(
-            n_time_samples_per_window - n_tapers,
-            n_time_samples_per_window - 1,
-        ),
-    )
-    w = w[::-1]
-
-    # find the corresponding eigenvectors via inverse iteration
-    t = np.linspace(0, np.pi, n_time_samples_per_window)
-    tapers = np.zeros((n_tapers, n_time_samples_per_window), dtype=float)
-    for taper_ind in range(n_tapers):
-        tapers[taper_ind, :] = tridi_inverse_iteration(
-            diagonal, off_diag, w[taper_ind], x0=np.sin((taper_ind + 1) * t)
-        )
-    return xp.asarray(tapers)
-
-
-def _fix_taper_sign(
-    tapers: NDArray[np.floating], n_time_samples_per_window: int
-) -> NDArray[np.floating]:
-    """Fix taper signs according to convention.
-
-    By convention (Percival and Walden, 1993 pg 379)
-    symmetric tapers (k=0,2,4,...) should have a positive average and
-    antisymmetric tapers should begin with a positive lobe.
-
-    Parameters
-    ----------
-    tapers : array, shape (n_tapers, n_time_samples_per_window)
-    """
-    # Fix sign of symmetric tapers
-    is_not_symmetric = tapers[::2, :].sum(axis=1) < 0
-    fix_sign = is_not_symmetric * -1
-    fix_sign[fix_sign == 0] = 1
-    tapers[::2, :] *= fix_sign[:, xp.newaxis]
-
-    # Fix sign of antisymmetric tapers.
-    # rather than test the sign of one point, test the sign of the
-    # linear slope up to the first (largest) peak
-    largest_peak_ind = xp.argmax(
-        xp.abs(tapers[1::2, : n_time_samples_per_window // 2]), axis=1
-    )
-    for taper_ind, peak_ind in enumerate(largest_peak_ind):
-        if xp.sum(tapers[2 * taper_ind + 1, :peak_ind]) < 0:
-            tapers[2 * taper_ind + 1, :] *= -1
-    return tapers
-
-
-def _auto_correlation(
-    data: NDArray[np.floating], axis: int = -1
-) -> NDArray[np.floating]:
-    n_time_samples_per_window = data.shape[axis]
-    n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
-    dpss_fft = fft(data, n_fft_samples, axis=axis)
-    power = dpss_fft * dpss_fft.conj()
-    return xp.real(ifft(power, axis=axis))
 
 
 def _get_low_bias_tapers(
@@ -1901,36 +1630,6 @@ def _get_low_bias_tapers(
         logger.warning("Could not properly use low_bias, keeping lowest-bias taper")
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
-
-
-def _get_taper_eigenvalues(
-    tapers: NDArray[np.floating],
-    half_bandwidth: float,
-    time_index: NDArray[np.floating],
-) -> NDArray[np.floating]:
-    """Find eigenvalues of spectral concentration problem.
-
-    Find the eigenvalues of the original spectral concentration
-    problem using the autocorr sequence technique from Percival and Walden,
-    1993 pg 390.
-
-    Parameters
-    ----------
-    tapers : array, shape (n_tapers, n_time_samples_per_window)
-    half_bandwidth : float
-    time_index : array, (n_time_samples_per_window,)
-
-    Returns
-    -------
-    eigenvalues : array, shape (n_tapers,)
-
-    """
-    ideal_filter = 4 * half_bandwidth * xp.sinc(2 * half_bandwidth * time_index)
-    ideal_filter[0] = 2 * half_bandwidth
-    n_time_samples_per_window = len(time_index)
-    return xp.dot(
-        _auto_correlation(tapers)[:, :n_time_samples_per_window], ideal_filter
-    )
 
 
 def detrend(

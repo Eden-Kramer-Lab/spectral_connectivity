@@ -2,15 +2,11 @@ import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from pytest import mark
-from scipy.signal import correlate
 
 from spectral_connectivity.transforms import (
     Multitaper,
     _add_axes,
-    _auto_correlation,
-    _fix_taper_sign,
     _get_low_bias_tapers,
-    _get_taper_eigenvalues,
     _multitaper_fft,
     _sliding_window,
     dpss_windows,
@@ -273,19 +269,6 @@ def test__get_low_bias_tapers(eigenvalues, expected_n_tapers):
     )
 
 
-def test__fix_taper_sign():
-    n_time_samples, n_tapers = 100, 4
-    tapers = -3 * np.ones((n_tapers, n_time_samples))
-    tapers[1, :3] = -1 * np.arange(0, 3)  # Begin with negative lobe
-    tapers[2, :] = 2
-    tapers[3, :3] = np.arange(0, 3)  # Begin with positive lobe
-    fixed_tapers = _fix_taper_sign(tapers, n_time_samples)
-    assert np.all(fixed_tapers[::2, :].sum(axis=1) >= 0)
-    assert np.all(fixed_tapers[2, :] == 2)
-    assert np.all(fixed_tapers[1, :].sum() >= 0)
-    assert ~np.all(fixed_tapers[3, :].sum() >= 0)
-
-
 @mark.parametrize(
     "n_time_samples, time_halfbandwidth_product, n_tapers",
     [(1000, 3, 5), (31, 6, 4), (31, 7, 4)],
@@ -300,33 +283,6 @@ def test_dpss_windows(n_time_samples, time_halfbandwidth_product, n_tapers):
     assert np.allclose(np.sum(tapers**2, axis=1), 1.0)
     assert np.allclose(tapers, nitime_tapers)
     assert np.allclose(eigenvalues, nitime_eigenvalues)
-
-
-@mark.parametrize(
-    "n_time_samples, time_halfbandwidth_product, n_tapers",
-    [(31, 6, 4), (31, 7, 4), (31, 8, 4), (31, 8, 4.2)],
-)
-def test__get_taper_eigenvalues(n_time_samples, time_halfbandwidth_product, n_tapers):
-    time_index = np.arange(n_time_samples, dtype="d")
-    half_bandwidth = float(time_halfbandwidth_product) / n_time_samples
-    nitime_tapers, _ = nitime_dpss_windows(
-        n_time_samples, time_halfbandwidth_product, n_tapers
-    )
-    eigenvalues = _get_taper_eigenvalues(nitime_tapers, half_bandwidth, time_index)
-    assert np.allclose(eigenvalues, 1.0)
-
-
-def test__auto_correlation():
-    np.random.default_rng(42)
-    n_time_samples, n_tapers = 100, 3
-    test_data = np.random.rand(n_tapers, n_time_samples)
-    rxx = _auto_correlation(test_data)[:, :n_time_samples]
-
-    for taper_ind in np.arange(n_tapers):
-        expected_correlation = correlate(
-            test_data[taper_ind, :], test_data[taper_ind, :]
-        )[n_time_samples - 1 :]
-        assert np.allclose(rxx[taper_ind], expected_correlation)
 
 
 def test__multitaper_fft():
