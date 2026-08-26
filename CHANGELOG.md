@@ -232,6 +232,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   representative case; the default multi-measure `multitaper_connectivity` call
   is correspondingly faster. Only the reduced `(..., n_signals, n_signals)`
   cross-spectrum is cached, never the large observation-resolved form.
+- `Connectivity.global_coherence` now computes its per-time-frequency-bin
+  components with a single batched decomposition over all bins instead of a
+  Python loop with one SVD per bin — a batched Hermitian eigendecomposition of
+  the cross-spectral matrices (the measure's definition, Cimenser et al. 2011)
+  when `n_estimates >= n_signals`, or the economy SVD of the thin coefficient
+  matrix otherwise (which computes only the `n_estimates` non-trivial
+  components). This was ~15× faster on a 1024-bin case and, on GPU, removes the
+  two per-bin host syncs the old loop forced. Results match the previous per-bin
+  path to floating-point tolerance (~5e-16 on the coherence fractions; the
+  vectors, like singular vectors, are defined only up to a per-component phase
+  for distinct components, and up to an arbitrary unitary rotation/permutation
+  within any set of repeated/degenerate components, so they need not match the
+  previous path). The batched path is used when the decomposition dimension
+  `min(n_signals, n_estimates) <= 64` and is chunked over bins — from the
+  original tensor, sized to the real per-bin working set — to bound peak memory;
+  a per-bin `svds` fallback is retained for large square matrices, where
+  computing every component would be wasteful.
 
 ## [2.0.1] - 2026-05-12
 

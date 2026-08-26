@@ -1926,14 +1926,63 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
     fc = rng.standard_normal((1, 8, 1, 4, 6)) + 1j * rng.standard_normal(
         (1, 8, 1, 4, 6)
     )
-    with patch.object(conn_mod, "svds", ascending_svds):
-        gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
-    with patch.object(conn_mod, "svds", descending_svds):
-        gc_desc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
+    # Force the per-bin svds fallback (the moderate-n_signals default is the
+    # batched eigendecomposition, which never calls svds) so the mock takes
+    # effect and this exercises the svds ordering logic it is written for.
+    with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
+        with patch.object(conn_mod, "svds", ascending_svds):
+            gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(
+                max_rank=3
+            )
+        with patch.object(conn_mod, "svds", descending_svds):
+            gc_desc, _ = Connectivity(fourier_coefficients=fc).global_coherence(
+                max_rank=3
+            )
     # Same result regardless of the order svds returned, and strongest-first.
     np.testing.assert_allclose(gc_asc, gc_desc)
     assert np.all(gc_asc[..., 0] >= gc_asc[..., 1] - 1e-9)
     assert np.all(gc_asc[..., 1] >= gc_asc[..., 2] - 1e-9)
+
+
+def test_global_coherence_batched_matches_per_bin_fallback():
+    """The batched path matches the per-bin svds/svd path, thin and wide.
+
+    global_coherence batches over bins with an ``eigh`` of the cross-spectral
+    matrix (``n_estimates >= n_signals``) or the economy SVD of the thin matrix
+    (``n_estimates < n_signals``), falling back to a per-bin loop for large
+    square matrices. All must agree on the coherence fractions (the vectors need
+    not agree: they are defined only up to a per-component phase, or an arbitrary
+    unitary rotation within a degenerate subspace), including NaN placement for
+    zero-power bins.
+    """
+    from unittest.mock import patch
+
+    from spectral_connectivity import connectivity as conn_mod
+
+    rng = np.random.default_rng(4)
+    # wide: n_estimates (30) >= n_signals (8) -> eigh path
+    # thin: n_estimates (2) <  n_signals (8) -> economy SVD path
+    for shape in [(2, 10, 3, 20, 8), (2, 1, 2, 20, 8)]:
+        fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+            np.complex128
+        )
+        fc = fc.copy()
+        fc[0, :, :, 5, :] = 0.0  # a zero-power bin -> NaN on both paths
+        max_available = min(shape[4], shape[1] * shape[2])
+
+        for max_rank in (1, min(3, max_available)):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
+                # Force the per-bin fallback by lowering the batching threshold.
+                with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+                    gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
+            np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))
+            np.testing.assert_allclose(
+                gc_batched, gc_loop, rtol=1e-9, atol=1e-11, equal_nan=True
+            )
+            assert np.all(gc_batched[~np.isnan(gc_batched)] >= 0)
+            assert np.all(gc_batched[~np.isnan(gc_batched)] <= 1)
 
 
 def test_phase_slope_index_raises_with_fewer_than_two_bins():

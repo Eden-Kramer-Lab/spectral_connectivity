@@ -77,6 +77,20 @@ EXPECTATION = {
 # Used to prevent numerical instability with near-singular matrices
 TIKHONOV_REGULARIZATION_FACTOR = 1e-12
 
+# global_coherence computes, per time-frequency bin, the strongest components of
+# the (n_signals, n_estimates) coefficient matrix. When the decomposition
+# dimension min(n_signals, n_estimates) is modest these are found with a single
+# batched decomposition over all bins (eigh of the cross-spectral matrix when
+# n_estimates >= n_signals, otherwise the economy SVD of the thin matrix),
+# replacing a Python loop over bins and its per-bin device syncs on GPU. Above
+# this dimension the per-bin path (svds for the top components of a large square
+# matrix) is used, where computing every component would be wasteful.
+GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS = 64
+# Bin-chunk element cap for the batched path: peak memory scales with
+# chunk * (n_signals * n_estimates + min(n_signals, n_estimates)**2), so cap the
+# element count to keep it bounded regardless of the number of bins.
+GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
+
 # Largest relative gap between the diagonal-noise-power denominator that
 # ``directed_coherence`` uses and the true power spectral density, tolerated
 # before it warns that its diagonal-noise-covariance assumption is violated (see
@@ -1286,26 +1300,41 @@ class Connectivity:
             )
             max_rank = max_available_rank
 
-        # S - singular values
-        global_coherence = xp.zeros((n_time_windows, n_fft_samples, max_rank))
-        # U - rotation
-        unnormalized_global_coherence = xp.zeros(
-            (n_time_windows, n_fft_samples, n_signals, max_rank), dtype=xp.complex128
-        )
+        # The batched decomposition works on min(n_signals, n_estimates)-square
+        # matrices, so gate on that dimension (not n_signals alone): a thin
+        # matrix with few estimates is cheap even for many signals, while a large
+        # square matrix is better served by the per-bin svds fallback.
+        n_estimates = n_trials * n_tapers
+        if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
+            global_coherence, unnormalized_global_coherence = _batched_global_coherence(
+                self._fourier_coefficients, max_rank
+            )
+        else:
+            # Per-bin fallback for large square matrices, where computing every
+            # component is wasteful and svds finds only the top ones requested.
+            # S - singular values
+            global_coherence = xp.zeros((n_time_windows, n_fft_samples, max_rank))
+            # U - rotation
+            unnormalized_global_coherence = xp.zeros(
+                (n_time_windows, n_fft_samples, n_signals, max_rank),
+                dtype=xp.complex128,
+            )
 
-        for time_ind in range(n_time_windows):
-            for freq_ind in range(n_fft_samples):
-                # reshape to (n_signals, n_trials * n_tapers)
-                fourier_coefficients = (
-                    self._fourier_coefficients[time_ind, :, :, freq_ind, :]
-                    .reshape((n_trials * n_tapers, n_signals))
-                    .T
-                )
+            for time_ind in range(n_time_windows):
+                for freq_ind in range(n_fft_samples):
+                    # reshape to (n_signals, n_trials * n_tapers)
+                    fourier_coefficients = (
+                        self._fourier_coefficients[time_ind, :, :, freq_ind, :]
+                        .reshape((n_trials * n_tapers, n_signals))
+                        .T
+                    )
 
-                (
-                    global_coherence[time_ind, freq_ind],
-                    unnormalized_global_coherence[time_ind, freq_ind],
-                ) = _estimate_global_coherence(fourier_coefficients, max_rank=max_rank)
+                    (
+                        global_coherence[time_ind, freq_ind],
+                        unnormalized_global_coherence[time_ind, freq_ind],
+                    ) = _estimate_global_coherence(
+                        fourier_coefficients, max_rank=max_rank
+                    )
 
         if xp.any(xp.isnan(global_coherence)):
             warnings.warn(
@@ -2920,6 +2949,133 @@ def _find_significant_frequencies(
 def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
     """Conjugate transpose of the last two dimensions of array x."""
     return x.swapaxes(-1, -2).conjugate()
+
+
+def _global_coherence_components(
+    block: NDArray[np.complexfloating], max_rank: int, use_eigh: bool
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    """Global-coherence fractions and vectors for one chunk of bins.
+
+    Parameters
+    ----------
+    block : ndarray, shape (n_bins, n_signals, n_estimates)
+        Per-bin coefficient matrices for this chunk.
+    max_rank : int
+        Number of strongest components to return.
+    use_eigh : bool
+        If True (``n_estimates >= n_signals``), diagonalize the
+        ``(n_signals, n_signals)`` cross-spectral matrix with ``eigh``. If False
+        (a *thin* matrix), use the economy SVD, which computes only the
+        ``n_estimates`` non-trivial components rather than a large rank-deficient
+        cross-spectral matrix.
+
+    Returns
+    -------
+    fractions : ndarray, shape (n_bins, max_rank)
+        Fraction of total coherent power per component, strongest first, in
+        [0, 1]; NaN for a (near-)zero-power bin.
+    vectors : ndarray, shape (n_bins, n_signals, max_rank)
+        Global-coherence vectors (left singular vectors).
+    """
+    # Rescale each bin by its max magnitude first: the coherence fraction is
+    # invariant to this, but summing squares of extreme-magnitude coefficients
+    # would under/overflow to a false zero/inf (see the per-bin path). A
+    # genuinely zero-power bin is flagged and returned as NaN.
+    max_magnitude = xp.max(xp.abs(block), axis=(-2, -1), keepdims=True)
+    is_zero_power = max_magnitude == 0
+    scaled = block / xp.where(is_zero_power, 1, max_magnitude)
+    # total_power is the squared Frobenius norm (== sum of squared singular
+    # values); using it as the denominator keeps each fraction in [0, 1] exactly.
+    total_power = xp.sum(xp.abs(scaled) ** 2, axis=(-2, -1))
+
+    if use_eigh:
+        # Eigenvalues of the Hermitian PSD cross-spectral matrix are the squared
+        # singular values; eigenvectors are the left singular vectors.
+        cross_spectral_matrix = xp.matmul(scaled, _conjugate_transpose(scaled))
+        eigenvalues, eigenvectors = xp.linalg.eigh(cross_spectral_matrix)
+        # eigh returns ascending order; take the strongest components first.
+        component_power = xp.flip(eigenvalues, axis=-1)[..., :max_rank]
+        vectors = xp.flip(eigenvectors, axis=-1)[..., :max_rank]
+    else:
+        # Thin matrix: the economy SVD returns descending singular values and the
+        # left singular vectors directly, computing only n_estimates components.
+        left_vectors, singular_values, _ = xp.linalg.svd(scaled, full_matrices=False)
+        component_power = singular_values[..., :max_rank] ** 2
+        vectors = left_vectors[..., :max_rank]
+
+    safe_total = xp.where(total_power == 0, 1, total_power)
+    fractions = xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
+
+    undefined = is_zero_power[..., 0, 0]
+    fractions = xp.where(undefined[:, xp.newaxis], xp.nan, fractions)
+    vectors = xp.where(undefined[:, xp.newaxis, xp.newaxis], xp.nan, vectors)
+    return fractions, vectors
+
+
+def _batched_global_coherence(
+    fourier_coefficients: NDArray[np.complexfloating], max_rank: int
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    """Global coherence for all time-frequency bins, batched over bins.
+
+    Global coherence is defined as the eigenvalues of the per-bin cross-spectral
+    matrix, normalized by their total (Cimenser et al. 2011). Diagonalizing all
+    bins at once replaces the Python loop over bins and its per-bin device syncs.
+    The eigenvalues equal the squared singular values used by the per-bin path,
+    so the returned fractions match it to floating-point tolerance. The vectors
+    are only defined up to a per-component phase where the components are
+    distinct, and up to an arbitrary unitary rotation/permutation within any set
+    of repeated (degenerate) components, so they need not match the per-bin path.
+
+    Bins are processed in chunks taken from the original tensor (only each chunk
+    is rearranged, never the whole array), and the chunk size is derived from the
+    actual per-bin working set so peak memory stays bounded on both CPU and GPU.
+
+    Parameters
+    ----------
+    fourier_coefficients : ndarray,
+        shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    max_rank : int
+        Number of strongest components to return.
+
+    Returns
+    -------
+    global_coherence : ndarray, shape (n_time_windows, n_fft_samples, max_rank)
+    vectors : ndarray,
+        shape (n_time_windows, n_fft_samples, n_signals, max_rank)
+    """
+    n_time, n_trials, n_tapers, n_fft, n_signals = fourier_coefficients.shape
+    n_estimates = n_trials * n_tapers
+
+    global_coherence = xp.empty((n_time, n_fft, max_rank))
+    vectors = xp.empty((n_time, n_fft, n_signals, max_rank), dtype=xp.complex128)
+
+    # Size the frequency chunk from the per-bin peak working set so memory stays
+    # bounded regardless of the number of bins. Several coefficient-sized arrays
+    # are live at once (the rearranged block, its rescaled copy, the conjugate
+    # transpose fed to matmul, and the SVD's U/Vh factors on the thin path), plus
+    # the decomposition of a min(n_signals, n_estimates)-square matrix and its
+    # vectors; the 4x / 2x factors approximate that simultaneous footprint.
+    decomposition_dim = min(n_signals, n_estimates)
+    per_bin_elements = 4 * n_signals * n_estimates + 2 * decomposition_dim**2
+    chunk = max(1, GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS // per_bin_elements)
+    use_eigh = n_estimates >= n_signals
+
+    for time_ind in range(n_time):
+        # View of this time slice as (n_fft, n_signals, n_trials, n_tapers); only
+        # a chunk of frequencies is materialized (reshaped) at a time, so the
+        # full-size transpose/copy of the tensor is never formed.
+        time_slice = fourier_coefficients[time_ind].transpose(2, 3, 0, 1)
+        for freq_start in range(0, n_fft, chunk):
+            freq_stop = min(freq_start + chunk, n_fft)
+            block = time_slice[freq_start:freq_stop].reshape(
+                freq_stop - freq_start, n_signals, n_estimates
+            )
+            fractions, block_vectors = _global_coherence_components(
+                block, max_rank, use_eigh
+            )
+            global_coherence[time_ind, freq_start:freq_stop] = fractions
+            vectors[time_ind, freq_start:freq_stop] = block_vectors
+    return global_coherence, vectors
 
 
 def _estimate_global_coherence(
