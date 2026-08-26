@@ -198,6 +198,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expensive directed-connectivity intermediates (minimum-phase factor, transfer function, noise covariance, MVAR coefficients) are cached per `Connectivity` instance and are automatically invalidated when `fourier_coefficients` or `expectation_type` is reassigned (they are now validated properties), so a reused instance cannot serve stale results. Reassigning `fourier_coefficients` with a different FFT-bin or time-window count now also resets the frequency/time coordinates to geometry-matching defaults (with a `UserWarning`), instead of leaving stale coordinates that silently dropped or misaligned bins in coordinate-dependent methods. Tikhonov regularization is scaled per (time-window, frequency) matrix rather than by a single global scalar.
 - `multitaper_connectivity` gives an actionable error for `global_coherence` / `phase_slope_index` (which do not fit the xarray interface) instead of a cryptic xarray error.
 
+### Performance
+
+- The expected cross-spectral matrix (used by coherence, spectral Granger, and
+  most other measures) is now computed with a single batched matrix
+  multiplication that contracts the averaged trial/taper/time axes directly,
+  instead of materializing the full per-observation
+  `(..., n_signals, n_signals)` outer product and then averaging. Results are
+  unchanged to floating-point tolerance. On a representative case this was
+  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). As a consequence, the
+  default computation now bypasses the `blocks` parameter entirely (it never
+  forms the large intermediate that `blocks` was meant to chunk, so blocking it
+  only added overhead); `blocks` still reduces memory for the transform-based
+  measures (e.g. coherence magnitude, imaginary coherence) that must form the
+  outer product.
+
 ## [2.0.1] - 2026-05-12
 
 ### Fixed

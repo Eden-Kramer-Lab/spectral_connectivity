@@ -1170,6 +1170,54 @@ def test_connectivity_warns_on_nan():
         assert len(connectivity_warnings) == 0
 
 
+def test_reduced_cross_spectral_matrix_matches_outer_product():
+    """The reduced (batched-matmul) CSM matches the full outer-product mean.
+
+    ``_expectation_cross_spectral_matrix(fcn=None)`` now contracts the averaged
+    observation axes directly instead of materializing the per-observation outer
+    product. It must agree, to floating-point tolerance, with the explicit
+    ``self._expectation(self._cross_spectral_matrix)`` for every expectation
+    type, and must propagate NaNs the same way.
+    """
+    n_time_windows, n_trials, n_tapers, n_frequencies, n_signals = 4, 6, 5, 32, 4
+    rng = np.random.default_rng(7)
+    shape = (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    fourier_coefficients = (
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    ).astype(np.complex128)
+
+    for expectation_type in [
+        "time",
+        "trials",
+        "tapers",
+        "time_trials",
+        "time_tapers",
+        "trials_tapers",
+        "time_trials_tapers",
+    ]:
+        conn = Connectivity(
+            fourier_coefficients=fourier_coefficients,
+            expectation_type=expectation_type,
+        )
+        reduced = conn._expectation_cross_spectral_matrix()
+        reference = conn._expectation(conn._cross_spectral_matrix)
+        assert reduced.shape == reference.shape, expectation_type
+        np.testing.assert_allclose(
+            reduced, reference, rtol=1e-10, atol=1e-12, err_msg=expectation_type
+        )
+
+    # NaN in one observation/signal must poison the same rows/columns as the
+    # explicit outer-product mean would.
+    nan_coefficients = fourier_coefficients.copy()
+    nan_coefficients[0, 0, 0, 0, 1] = np.nan
+    conn = Connectivity(
+        fourier_coefficients=nan_coefficients, expectation_type="trials_tapers"
+    )
+    reduced = conn._expectation_cross_spectral_matrix()
+    reference = conn._expectation(conn._cross_spectral_matrix)
+    np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
+
+
 def test_expectation_cross_spectral_matrix_blocks():
     """Test that blocked computation produces identical results to unblocked.
 
@@ -1360,25 +1408,38 @@ def test_blocks_reduce_memory():
     """Test that blocked computation reduces peak memory usage.
 
     The blocks parameter is designed to reduce memory consumption for large
-    connectivity matrices by computing signal pairs in chunks. This test
-    verifies that using blocks actually reduces peak memory usage.
+    connectivity matrices by computing signal pairs in chunks. It helps
+    whenever a per-observation transform ``fcn`` must be applied before
+    averaging (e.g. coherence magnitude, imaginary coherence), because that
+    forces the full per-observation outer product to be materialized.
 
     Memory Reduction Mechanism:
-    - Without blocks: Computes full (n_signals x n_signals) cross-spectral matrix
-    - With blocks: Computes smaller chunks at a time, reducing peak memory
+    - Without blocks: Materializes the full (n_time, n_trials, n_tapers,
+      n_frequencies, n_signals, n_signals) outer product, applies ``fcn``,
+      then averages.
+    - With blocks: Applies ``fcn`` to smaller signal-pair chunks at a time,
+      reducing peak memory.
+
+    Note: the default ``fcn=None`` path no longer benefits from blocks; it is
+    reduced directly with a single batched matmul (see
+    ``_reduced_cross_spectral_matrix``), so it never forms the large
+    intermediate that blocks was designed to chunk. This test therefore
+    exercises an ``fcn`` path, which is where blocks still saves memory.
 
     Expected memory reduction is most noticeable for large n_signals
     (e.g., n_signals >= 50).
     """
     import tracemalloc
 
-    # Use moderately large dimensions to observe memory difference
-    # (not too large to avoid slow tests)
-    n_time_windows = 20
-    n_trials = 5
-    n_tapers = 7
-    n_frequencies = 100
-    n_signals = 50  # Large enough to see memory benefit
+    # Keep dimensions small: the unblocked fcn path materializes a full
+    # (..., n_signals, n_signals) complex outer product plus a transformed
+    # copy, so large sizes risk OOM on the CI matrix. These dimensions still
+    # show the blocked path using less peak memory.
+    n_time_windows = 5
+    n_trials = 4
+    n_tapers = 4
+    n_frequencies = 30
+    n_signals = 20  # Large enough to see the block memory benefit
 
     rng = np.random.default_rng(999)
     fourier_coefficients = rng.standard_normal(
@@ -1388,19 +1449,24 @@ def test_blocks_reduce_memory():
     )
     fourier_coefficients = fourier_coefficients.astype(np.complex128)
 
+    # A per-observation transform forces the full outer product to be built,
+    # which is exactly the case blocks is designed to chunk.
+    def fcn(x):
+        return np.abs(x)
+
     # Measure memory for unblocked computation
     tracemalloc.start()
     conn_unblocked = Connectivity(
         fourier_coefficients=fourier_coefficients, blocks=None
     )
-    _ = conn_unblocked._expectation_cross_spectral_matrix()
+    _ = conn_unblocked._expectation_cross_spectral_matrix(fcn=fcn)
     _, peak_unblocked = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
     # Measure memory for blocked computation
     tracemalloc.start()
     conn_blocked = Connectivity(fourier_coefficients=fourier_coefficients, blocks=5)
-    _ = conn_blocked._expectation_cross_spectral_matrix()
+    _ = conn_blocked._expectation_cross_spectral_matrix(fcn=fcn)
     _, peak_blocked = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 

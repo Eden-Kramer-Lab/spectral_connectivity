@@ -729,11 +729,15 @@ class Connectivity:
 
         """
         self._validate_multiple_signals()
-        # define identity function
+        # The identity (``fcn=None``) path is reduced directly over the averaged
+        # observation axes, regardless of ``blocks``: it never forms the large
+        # per-observation outer product that ``blocks`` exists to chunk, so
+        # blocking it would only add overhead (see
+        # ``_reduced_cross_spectral_matrix``). ``blocks`` still applies to the
+        # transformed (``fcn`` given) paths below, which must materialize that
+        # outer product before averaging.
         if fcn is None:
-
-            def fcn(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-                return x
+            return self._reduced_cross_spectral_matrix()
 
         if not isinstance(self._blocks, int) or (self._blocks < 1):
             # compute all connections at once
@@ -778,6 +782,56 @@ class Connectivity:
                 csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = xp.conj(_out)
 
         return csm
+
+    def _reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+        """Expected cross-spectral matrix via a single batched matmul.
+
+        Numerically equivalent (to floating-point tolerance) to
+        ``self._expectation(self._cross_spectral_matrix)``, but contracts the
+        averaged observation axes (any subset of time/trials/tapers, taken from
+        the active ``expectation_type``) directly instead of materializing the
+        full ``(..., n_signals, n_signals)`` outer product for every
+        observation. For the default ``trials_tapers`` expectation this replaces
+        a large intermediate with a small result and is markedly faster.
+
+        Returns
+        -------
+        array, shape (..., n_frequencies, n_signals, n_signals)
+            Expected cross-spectral matrix. The leading axes are whichever of
+            time/trials/tapers are *not* averaged, matching the shape produced
+            by the equivalent expectation over the full outer product.
+
+        """
+        fourier_coefficients = self.fourier_coefficients
+        # Reuse the same axis metadata that ``n_observations`` reads, so this
+        # stays correct for every expectation_type without a parallel mapping.
+        axes = signature(self._expectation).parameters["axis"].default
+        average_axes = (axes,) if isinstance(axes, int) else tuple(axes)
+
+        signal_axis = fourier_coefficients.ndim - 1
+        frequency_axis = signal_axis - 1
+        kept_axes = [axis for axis in range(frequency_axis) if axis not in average_axes]
+        # Reorder to (kept leading axes..., frequency, averaged axes..., signals)
+        # so the averaged axes collapse into a single observation axis adjacent
+        # to signals, ready for a batched matmul.
+        order = [*kept_axes, frequency_axis, *average_axes, signal_axis]
+        observations = xp.transpose(fourier_coefficients, order)
+
+        n_observations = int(
+            np.prod([fourier_coefficients.shape[axis] for axis in average_axes])
+        )
+        n_signals = fourier_coefficients.shape[signal_axis]
+        observations = observations.reshape(
+            (*observations.shape[: len(kept_axes) + 1], n_observations, n_signals)
+        )
+        # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
+        # _complex_inner_product's convention, then averaged over observations.
+        cross_spectral_matrix = xp.matmul(
+            xp.swapaxes(observations, -1, -2),
+            xp.conj(observations),
+            dtype=self._dtype,
+        )
+        return cross_spectral_matrix / n_observations
 
     def _subset_cross_spectral_matrix(
         self, pairs: list | NDArray[np.integer]
