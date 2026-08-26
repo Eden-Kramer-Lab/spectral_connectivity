@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`statistics.Benjamini_Hochberg_procedure` — undefined tests no longer
+  penalize the valid ones**: non-finite p-values (a coherence pair involving a
+  dead/zero-power channel yields `NaN`) were counted toward the number of tests,
+  which tightened the Benjamini-Hochberg threshold and made the *valid* pairs
+  more conservative (fewer significant frequencies in `group_delay` / `delay`).
+  They are now excluded from the family and returned as not-significant, so a
+  dead channel no longer reduces the power of the healthy pairs. Results for
+  finite p-values (the usual case, all channels live) are unchanged
+  (bit-for-bit over 3000 randomized trials). The procedure now delegates to
+  `scipy.stats.false_discovery_control`, which additionally rejects finite
+  p-values outside `[0, 1]`. **Dependency floor raised:** `scipy>=1.11` (was
+  `>=1.10`), the release that added `false_discovery_control`.
 - **Wilson minimum-phase decomposition — one singular sub-spectrum no longer
   poisons the whole batch**: a single rank-deficient window (e.g. duplicated /
   linearly dependent channels) made the batched `linalg.solve` raise, which

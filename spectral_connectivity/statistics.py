@@ -46,16 +46,25 @@ def Benjamini_Hochberg_procedure(
     >>> significant = Benjamini_Hochberg_procedure(p_vals, alpha=0.05)
     >>> significant
     array([ True,  True, False, False, False])
+
+    Notes
+    -----
+    Non-finite p-values (``NaN``/``inf``) mark undefined tests — for example a
+    coherence pair involving a dead/zero-power channel — and are excluded from
+    the family: they neither count toward the number of tests nor tighten the
+    threshold for the valid ones, and are returned as ``False``. All input
+    dimensions are pooled into a single family (the array is raveled); the
+    result has the input shape. Delegates to
+    :func:`scipy.stats.false_discovery_control`, which rejects finite p-values
+    outside ``[0, 1]``.
     """
-    p_values = np.array(p_values)
-    threshold_line = np.linspace(0, alpha, num=p_values.size + 1, endpoint=True)[1:]
-    sorted_p_values = np.sort(p_values.flatten())
-    try:
-        threshold_ind = int(np.max(np.where(sorted_p_values <= threshold_line)[0]))
-        threshold = sorted_p_values[threshold_ind]
-    except ValueError:  # There are no values below threshold
-        threshold = -1
-    return p_values <= threshold
+    p_values = np.asarray(p_values, dtype=float)
+    is_significant = np.zeros(p_values.shape, dtype=bool)
+    valid = np.isfinite(p_values)
+    if valid.any():
+        adjusted = scipy.stats.false_discovery_control(p_values[valid], method="bh")
+        is_significant[valid] = adjusted <= alpha
+    return is_significant
 
 
 def Bonferroni_correction(

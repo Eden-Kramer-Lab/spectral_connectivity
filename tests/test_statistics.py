@@ -55,6 +55,37 @@ def test_Benjamini_Hochberg_procedure(p_values, expected_is_significant):
     )
 
 
+def test_Benjamini_Hochberg_excludes_nan_from_family():
+    """Undefined (NaN) tests must not count toward the FDR family.
+
+    A NaN p-value marks an undefined test (e.g. a coherence pair with a
+    dead/zero-power channel). It must be returned as not-significant and must
+    not tighten the threshold for the valid tests: the decision for the finite
+    p-values is identical whether or not NaN padding is present.
+    """
+    alpha = 0.05
+    valid = np.array([0.001, 0.02, 0.04, 0.3])
+    padded = np.array([0.001, 0.02, 0.04, 0.3, np.nan, np.nan])
+
+    result_valid = Benjamini_Hochberg_procedure(valid, alpha)
+    result_padded = Benjamini_Hochberg_procedure(padded, alpha)
+
+    # NaN entries are never significant.
+    assert not result_padded[4:].any()
+    # The finite entries are unaffected by the presence of NaN.
+    assert np.array_equal(result_padded[:4], result_valid)
+    # All-NaN input yields all-False (no valid tests), same input shape.
+    all_nan = Benjamini_Hochberg_procedure(np.full((2, 3), np.nan), alpha)
+    assert all_nan.shape == (2, 3)
+    assert not all_nan.any()
+
+
+def test_Benjamini_Hochberg_rejects_out_of_range_pvalues():
+    """A finite p-value outside [0, 1] is invalid input and must raise."""
+    with pytest.raises(ValueError):
+        Benjamini_Hochberg_procedure(np.array([0.1, 1.5, 0.2]), alpha=0.05)
+
+
 @mark.parametrize(
     "p_values, expected_is_significant",
     [
