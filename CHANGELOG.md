@@ -347,7 +347,8 @@ mt = Multitaper(eeg_data, sampling_frequency=1000)
 
 # After (explicit)
 from spectral_connectivity.transforms import prepare_time_series
-eeg_3d = prepare_time_series(eeg_data, axis='signals')  # or axis='trials'
+
+eeg_3d = prepare_time_series(eeg_data, axis="signals")  # or axis='trials'
 mt = Multitaper(eeg_3d, sampling_frequency=1000)
 ```
 

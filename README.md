@@ -76,7 +76,7 @@ from spectral_connectivity import suggest_parameters
 
 params = suggest_parameters(
     sampling_frequency=1000,
-    signal_duration=2.0,          # seconds
+    signal_duration=2.0,  # seconds
     desired_freq_resolution=4.0,  # Hz
 )
 print(params)  # -> time_halfbandwidth_product, time_window_duration, n_tapers, ...
@@ -94,18 +94,20 @@ method), use the `Multitaper` and `Connectivity` classes directly:
 from spectral_connectivity import Multitaper, Connectivity
 
 # Compute multitaper spectral estimate
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
+m = Multitaper(
+    time_series=signals,
+    sampling_frequency=sampling_frequency,
+    time_halfbandwidth_product=time_halfbandwidth_product,
+    time_window_duration=0.060,
+    time_window_step=0.060,
+    start_time=time[0],
+)
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
 c = Connectivity.from_multitaper(m)
 
 # Here are a couple of examples
-power = c.power() # spectral power
+power = c.power()  # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
@@ -174,16 +176,18 @@ python your_script.py
 
 ```python
 import os
+
 # IMPORTANT: Must set BEFORE importing spectral_connectivity
 # (Python loads modules once; changing the variable after import has no effect)
-os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'
+os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
 
 from spectral_connectivity import Multitaper, Connectivity
 
 # Verify GPU is active
 import spectral_connectivity as sc
+
 backend = sc.get_compute_backend()
-print(backend['message'])
+print(backend["message"])
 # Should print: "Using GPU backend with CuPy on <your GPU name>"
 ```
 
@@ -240,7 +244,7 @@ Use `get_compute_backend()` to check if GPU acceleration is enabled:
 import spectral_connectivity as sc
 
 backend = sc.get_compute_backend()
-print(backend['message'])
+print(backend["message"])
 # Example output (GPU enabled):
 # "Using GPU backend with CuPy on NVIDIA Tesla V100-SXM2-16GB."
 
@@ -287,7 +291,7 @@ Possible causes:
 Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
 ```python
 # Remove or unset the environment variable
-os.environ.pop('SPECTRAL_CONNECTIVITY_ENABLE_GPU', None)
+os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
 ```
 
 **Issue: Need to check GPU vs CPU performance**
