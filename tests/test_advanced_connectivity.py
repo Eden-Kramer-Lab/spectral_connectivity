@@ -736,6 +736,50 @@ class TestGroupDelay:
         assert np.isfinite(slope[..., 0, 1]).all()
         assert np.isfinite(r_value[..., 0, 1]).all()
 
+    def test_group_delay_stable_for_large_frequency_offset(self):
+        """Group delay stays accurate when frequencies dwarf their spacing.
+
+        With a large absolute-frequency offset, the naive raw-moment variance
+        (``count * sum_xx - sum_x**2``) cancels to exactly zero in float64 and
+        the slope blows up to inf/NaN. The mean-centered computation must still
+        recover the injected phase slope. This is the case the centering exists
+        for; comparing to ``linregress`` (which also centers) would not exercise
+        it.
+        """
+        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 30, 1, 32, 3
+        expected_slope = -0.7
+        # Frequency labels offset far from zero relative to their 0.001 spacing.
+        frequencies = 1e6 + np.arange(n_fft) * 0.001
+        # group_delay regresses over the non-negative frequencies; the raw-moment
+        # variance genuinely cancels to zero on that grid in float64 (the old
+        # failure the centering fixes).
+        band = frequencies[: n_fft // 2 + 1]
+        assert len(band) * (band @ band) - band.sum() ** 2 == 0.0
+
+        fourier = np.zeros(
+            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
+        )
+        for trial in range(n_trials):
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
+                n_fft
+            )
+            fourier[0, trial, 0, :, 0] = base
+            # coherency(0, 1) phase == angle(f0 * conj(f1)) == slope * (f - f0).
+            fourier[0, trial, 0, :, 1] = base * np.exp(
+                -1j * expected_slope * (frequencies - frequencies[0])
+            )
+            fourier[0, trial, 0, :, 2] = self.rng.standard_normal(
+                n_fft
+            ) + 1j * self.rng.standard_normal(n_fft)
+
+        _delay, slope, r_value = Connectivity(
+            fourier_coefficients=fourier, frequencies=frequencies
+        ).group_delay()
+
+        assert np.isfinite(slope[..., 0, 1]).all()
+        np.testing.assert_allclose(slope[..., 0, 1], expected_slope, atol=1e-9)
+        np.testing.assert_allclose(np.abs(r_value[..., 0, 1]), 1.0, atol=1e-9)
+
     def test_group_delay_matches_scipy_linregress(self):
         """The vectorized masked regression matches a per-slice scipy linregress.
 

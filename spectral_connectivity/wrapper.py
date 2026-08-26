@@ -16,11 +16,12 @@ logger = getLogger(__name__)
 
 
 def _to_host_array(x: Any) -> NDArray:
-    """Return a NumPy view of ``x``, moving it off the GPU if needed.
+    """Return ``x`` as a host NumPy array, moving it off the GPU if needed.
 
     Under GPU mode ``Multitaper`` coordinates are CuPy arrays, which NumPy will
-    not implicitly convert. CuPy arrays expose ``.get()`` to copy to host;
-    NumPy arrays have no such method and pass through unchanged.
+    not implicitly convert. CuPy arrays expose ``.get()`` to copy to host (so the
+    GPU case returns a copy, not a view); NumPy arrays have no such method and
+    pass through unchanged.
     """
     to_host = getattr(x, "get", None)
     return np.asarray(to_host() if callable(to_host) else x)

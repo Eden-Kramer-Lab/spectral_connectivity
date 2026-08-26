@@ -82,8 +82,9 @@ TIKHONOV_REGULARIZATION_FACTOR = 1e-12
 # batched decomposition over all bins (eigh of the cross-spectral matrix when
 # n_estimates >= n_signals, otherwise the economy SVD of the thin matrix),
 # replacing a Python loop over bins and its per-bin device syncs on GPU. Above
-# this dimension the per-bin path (svds for the top components of a large square
-# matrix) is used, where computing every component would be wasteful.
+# this dimension the per-bin path is used (it finds only the requested top
+# components via svds when max_rank is small), where forming every component of
+# a large matrix would be wasteful.
 GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS = 64
 # Bin-chunk element cap for the batched path: peak memory scales with
 # chunk * (n_signals * n_estimates + min(n_signals, n_estimates)**2), so cap the
@@ -248,42 +249,26 @@ class Connectivity:
     time : NDArray[floating], shape (n_time_windows,), optional
         Time values in seconds for each time window. If None, uses indices.
     blocks : int, optional
-        Number of blocks for memory-efficient computation of large connectivity
-        matrices. When specified, the cross-spectral matrix is computed in
-        chunks rather than all at once, reducing peak memory usage.
+        Number of signal-pair blocks for memory-efficient computation of a
+        per-observation cross-spectral matrix transform, computing it in chunks
+        rather than all at once.
 
-        **When to use blocks:**
+        **Applies to a narrow set of measures.** Most measures no longer form a
+        per-observation outer product: the coherence family (``coherency``,
+        ``coherence_magnitude``, ``coherence_phase``, ``imaginary_coherence``),
+        spectral Granger, and the directed measures reduce the expected
+        cross-spectral matrix directly with a batched matmul and ignore
+        ``blocks`` (there is nothing to chunk). The phase-lag-index family
+        (``phase_lag_index`` and relatives) rejects ``blocks`` with an error. As
+        of this design, ``blocks`` therefore only affects ``phase_locking_value``,
+        which applies a per-observation normalization before averaging and so
+        must materialize that outer product.
 
-        - Large number of signals (n_signals >= 50, as a rough guideline;
-          benefit increases with more signals)
-        - Memory-constrained environments
-        - High-resolution spectrograms (large n_time_windows × n_frequencies)
-        - GPU computing with limited VRAM
-
-        **When NOT to use blocks:**
-
-        - Small datasets (n_signals < 50): The overhead of block management
-          may exceed the memory benefit, making blocks=None faster
-        - When speed is critical and memory is abundant
-
-        **Memory-Speed Tradeoff:**
-
-        - **Without blocks** (default): Fastest for small datasets, but requires
-          memory for full (n_time_windows × n_frequencies × n_signals × n_signals)
-          array
-        - **With blocks**: Reduces peak memory by 70-80% for large arrays
-          (measured 73% reduction for n_signals=50, blocks=5), with minimal
-          speed penalty (typically <10%)
-
-        **Quick Decision Guide:**
-
-        - n_signals < 50: Use default (blocks=None)
-        - 50 ≤ n_signals < 100: Use blocks=5 if memory is limited
-        - n_signals ≥ 100: Recommended blocks=5 or blocks=10
-        - Out of memory errors: Increase blocks value (try doubling)
-
-        **Important**: Results are numerically identical whether using blocks
-        or not (validated to floating-point precision).
+        For ``phase_locking_value`` on many signals (a rough guideline:
+        ``n_signals >= 50``), a small value such as ``blocks=5`` or ``blocks=10``
+        reduces peak memory by chunking the signal-pair dimension, at a minor
+        speed cost; increase it if you still hit out-of-memory errors. Results
+        are numerically identical whether or not ``blocks`` is used.
     dtype : np.dtype, default=complex128
         Data type for internal computations. Should match input precision.
     minimum_phase_tolerance : float, default=1e-8
@@ -433,7 +418,7 @@ class Connectivity:
         Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
         Stored as an immutable snapshot: the setter keeps a private copy so the
         cached intermediates (power, cross-spectrum, directed factors) cannot be
-        silently invalidated by in-place edits to the caller's array. This
+        silently made stale by in-place edits to the caller's array. This
         accessor never hands out a writable alias of that private copy — on
         NumPy a read-only *view* of the copy is returned (an in-place edit
         raises, and the view cannot re-enable writeability because its base is
@@ -1309,8 +1294,9 @@ class Connectivity:
                 self._fourier_coefficients, max_rank
             )
         else:
-            # Per-bin fallback for large square matrices, where computing every
-            # component is wasteful and svds finds only the top ones requested.
+            # Per-bin fallback for a large decomposition dimension, where forming
+            # every component is wasteful and svds (used when max_rank is small)
+            # finds only the top ones requested.
             # S - singular values
             global_coherence = xp.zeros((n_time_windows, n_fft_samples, max_rank))
             # U - rotation

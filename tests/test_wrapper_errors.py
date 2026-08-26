@@ -108,3 +108,14 @@ def test_injected_connectivity_mismatch_raises():
         connectivity_to_xarray(
             m_two_signals, "coherence_magnitude", connectivity=connectivity_500
         )
+
+    # Different number of time windows (same frequency grid and channel count)
+    # -> the `time` branch of the validator rejects it.
+    longer_series = rng.standard_normal((768, 3, 4))
+    m_short = Multitaper(time_series, sampling_frequency=500, time_window_duration=0.2)
+    m_long = Multitaper(longer_series, sampling_frequency=500, time_window_duration=0.2)
+    connectivity_short = Connectivity.from_multitaper(m_short)
+    with pytest.raises(ValueError, match="time"):
+        connectivity_to_xarray(
+            m_long, "coherence_magnitude", connectivity=connectivity_short
+        )

@@ -840,6 +840,32 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
         np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
 
 
+def test_fourier_coefficients_getter_copies_when_backing_not_frozen():
+    """On backends without a writeable flag (CuPy) the getter returns a copy.
+
+    CuPy cannot mark an array read-only, so the setter's freeze is a no-op there
+    and the backing stays writeable. Emulate that on NumPy by re-enabling the
+    backing's writeable flag, then confirm the getter hands out an independent
+    writable copy (not the backing) so an in-place edit cannot reach the cache.
+    """
+    rng = np.random.default_rng(11)
+    shape = (1, 4, 2, 8, 3)
+    fourier = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+
+    c = Connectivity(fourier_coefficients=fourier)
+    power_before = c.power().copy()
+    # Emulate a backend where the freeze did not take (backing stays writeable).
+    c._fourier_coefficients.flags.writeable = True
+
+    returned = c.fourier_coefficients
+    assert returned is not c._fourier_coefficients  # a fresh copy, not the backing
+    assert returned.flags.writeable  # writable, but disconnected from the instance
+    returned[...] = 0.0  # mutating the copy must not affect the warmed cache
+    np.testing.assert_array_equal(c.power(), power_before)
+
+
 def test_debiased_weighted_pli_requires_multiple_observations():
     """debiased_squared_weighted_phase_lag_index guards n_observations < 2."""
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 2), dtype=complex))
@@ -1983,6 +2009,78 @@ def test_global_coherence_batched_matches_per_bin_fallback():
             )
             assert np.all(gc_batched[~np.isnan(gc_batched)] >= 0)
             assert np.all(gc_batched[~np.isnan(gc_batched)] <= 1)
+
+
+def test_global_coherence_batched_chunking_matches_single_chunk():
+    """The multi-chunk path matches processing all bins in one chunk.
+
+    The default element cap keeps every test's bins in a single chunk, so the
+    partial-last-chunk reshape/strided-write logic is otherwise unexercised.
+    Force a tiny cap so bins are processed in several chunks (with a zero-power
+    bin near a boundary) and require an identical result.
+    """
+    from unittest.mock import patch
+
+    from spectral_connectivity import connectivity as conn_mod
+
+    rng = np.random.default_rng(7)
+    shape = (2, 10, 3, 20, 6)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+    fc = fc.copy()
+    fc[0, :, :, 7, :] = 0.0  # zero-power bin (-> NaN), placed to straddle chunks
+
+    gc_single, vec_single = Connectivity(fc).global_coherence(max_rank=2)
+    # Cap chosen so `chunk` is only a few bins, forcing multiple iterations and a
+    # partial final chunk (20 frequency bins do not divide evenly).
+    with patch.object(conn_mod, "GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS", 6 * 6 * 3):
+        gc_multi, vec_multi = Connectivity(fc).global_coherence(max_rank=2)
+
+    np.testing.assert_array_equal(np.isnan(gc_single), np.isnan(gc_multi))
+    np.testing.assert_allclose(gc_single, gc_multi, equal_nan=True)
+    np.testing.assert_allclose(vec_single, vec_multi, equal_nan=True)
+
+
+def test_global_coherence_vectors_are_orthonormal_eigenvectors():
+    """The returned vectors are unit-norm eigenvectors, even ill-conditioned.
+
+    The coherence vectors are a documented output but are only checked for shape
+    elsewhere. Verify (including near-duplicate, ill-conditioned channels) that
+    each returned vector has unit norm and that the leading vector is an
+    eigenvector of the per-bin scaled cross-spectral matrix.
+    """
+    rng = np.random.default_rng(8)
+    n_time, n_trials, n_tapers, n_fft, n_signals = 1, 12, 2, 8, 4
+    base = rng.standard_normal(
+        (n_time, n_trials, n_tapers, n_fft)
+    ) + 1j * rng.standard_normal((n_time, n_trials, n_tapers, n_fft))
+    fc = np.zeros((n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex)
+    fc[..., 0] = base
+    fc[..., 1] = base * (1 + 1e-10)  # near-duplicate -> ill-conditioned
+    fc[..., 2] = 0.5 * base + 0.01 * (
+        rng.standard_normal(base.shape) + 1j * rng.standard_normal(base.shape)
+    )
+    fc[..., 3] = rng.standard_normal(base.shape) + 1j * rng.standard_normal(base.shape)
+
+    _gc, vectors = Connectivity(fc).global_coherence(max_rank=2)
+
+    norms = np.linalg.norm(vectors, axis=-2)
+    np.testing.assert_allclose(norms, 1.0, atol=1e-8)
+
+    # Reconstruct the per-bin scaled cross-spectral matrix and check the leading
+    # vector is an eigenvector (parallel to C @ v0).
+    observations = fc.transpose(0, 3, 4, 1, 2).reshape(
+        n_time * n_fft, n_signals, n_trials * n_tapers
+    )
+    scaled = observations / np.max(np.abs(observations), axis=(-2, -1), keepdims=True)
+    cross_spectral = scaled @ np.conj(scaled).swapaxes(-1, -2)
+    leading = vectors.reshape(n_time * n_fft, n_signals, 2)[:, :, 0]
+    projected = np.einsum("bij,bj->bi", cross_spectral, leading)
+    alignment = np.abs(np.sum(np.conj(leading) * projected, axis=-1)) / (
+        np.linalg.norm(leading, axis=-1) * np.linalg.norm(projected, axis=-1)
+    )
+    np.testing.assert_allclose(alignment, 1.0, atol=1e-6)
 
 
 def test_phase_slope_index_raises_with_fewer_than_two_bins():
