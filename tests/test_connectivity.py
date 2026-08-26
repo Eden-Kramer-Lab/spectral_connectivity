@@ -986,6 +986,41 @@ def test_phase_lag_index_moments_are_computed_lazily():
         "squared",
     }
 
+    # A repeated measure reuses the cached moment object (it is not recomputed).
+    reuse = Connectivity(fc)
+    reuse.phase_lag_index()
+    cached_sign = reuse.__dict__["_imaginary_moment_cache"]["sign"]
+    reuse.phase_lag_index()
+    assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
+
+
+def test_phase_lag_index_family_fully_cached_path_matches_cold():
+    """The fully-cached (no missing key) return path yields the cold result.
+
+    When every requested moment is already cached, the method returns purely
+    from the cache. Exercise that path with the reverse family order (dwpli
+    caches imaginary/absolute/squared, so wpli then needs nothing new) and a
+    repeated call, and require the values to match a fresh instance. This would
+    catch a cache-return bug (e.g. iterating the cache instead of the requested
+    keys) that the forward-order tests, which always add a key, cannot.
+    """
+    rng = np.random.default_rng(2)
+    shape = (2, 6, 4, 16, 4)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+
+    warm = Connectivity(fc)
+    warm.debiased_squared_weighted_phase_lag_index()  # caches imag/abs/squared
+    wpli_from_cache = warm.weighted_phase_lag_index()  # all keys already cached
+    pli_first = warm.phase_lag_index()
+    pli_again = warm.phase_lag_index()  # sign already cached
+
+    cold = Connectivity(fc)
+    np.testing.assert_array_equal(wpli_from_cache, cold.weighted_phase_lag_index())
+    np.testing.assert_array_equal(pli_first, cold.phase_lag_index())
+    np.testing.assert_array_equal(pli_first, pli_again)
+
 
 def test_fourier_coefficients_are_an_immutable_snapshot():
     """In-place edits must not silently bypass cache invalidation.

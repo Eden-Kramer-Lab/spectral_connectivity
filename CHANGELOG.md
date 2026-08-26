@@ -301,9 +301,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   numerically equivalent to the single-threaded result — a threaded FFT may
   differ at the floating-point-rounding level (~1e-16) from summation order, not
   bit-for-bit. It is opt-in to avoid oversubscribing CPUs when the analysis is
-  already
-  parallelized at a higher level, and is ignored on the GPU backend (whose FFT
-  has no such parameter and is already parallel).
+  already parallelized at a higher level, and is ignored on the GPU backend
+  (whose FFT has no such parameter and is already parallel).
 
 ## [2.0.1] - 2026-05-12
 
