@@ -6,7 +6,7 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 """
 
 import warnings
-from logging import getLogger
+from logging import DEBUG, getLogger
 
 import numpy as np
 from numpy.typing import NDArray
@@ -450,9 +450,13 @@ def minimum_phase_decomposition(
     minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
 
     for iteration in range(max_iterations):
-        logger.debug(
-            f"iteration: {iteration}, {int(is_converged.sum())} of {n_units} converged"
-        )
+        # ``int(is_converged.sum())`` would sync the device (and reduce on CPU)
+        # every iteration; guard it so it only runs when debug logging is on.
+        if logger.isEnabledFor(DEBUG):
+            logger.debug(
+                f"iteration: {iteration}, "
+                f"{int(is_converged.sum())} of {n_units} converged"
+            )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         # A rank-deficient sub-spectrum makes the batched solve inside
         # _get_linear_predictor singular; _solve_isolating_singular resolves only
@@ -473,13 +477,17 @@ def minimum_phase_decomposition(
         is_converged = _check_convergence(
             minimum_phase_factor, old_minimum_phase_factor, tolerance
         )
-        if xp.all(is_converged):
-            return minimum_phase_factor
-        # A sub-spectrum that became singular is now NaN and can never converge.
-        # Treat such units as finished so a single rank-deficient window does not
-        # force the whole batch to exhaust the iteration budget.
+        # A sub-spectrum that became singular is now NaN and can never converge;
+        # treat such units as finished so a single rank-deficient window does not
+        # force the whole batch to exhaust the iteration budget. Combine the
+        # "all finished" and "all converged" tests so the loop reduces the device
+        # to a Python bool at most once per iteration (a GPU synchronization; a
+        # no-op difference on CPU). The inner test only runs on the final
+        # iteration, so it costs one extra reduction total.
         singular_units = ~_all_finite_units(minimum_phase_factor, batch_shape)
         if xp.all(is_converged | singular_units):
+            if xp.all(is_converged):
+                return minimum_phase_factor
             break
 
     # Not every sub-spectrum converged (iteration budget exhausted, or a factor

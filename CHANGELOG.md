@@ -277,6 +277,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   representative case, further speeding up a warmed `group_delay`. The slices are
   processed in bounded chunks (with `int32` run-length temporaries) so peak
   memory stays independent of their number.
+- The Wilson minimum-phase iteration (used by the directed measures — spectral
+  Granger, DTF, PDC and relatives) now synchronizes the device at most once per
+  iteration instead of three times: the per-iteration convergence-count debug
+  log is guarded behind the debug log level (so its reduction is not computed
+  when debug logging is off), and the "all converged" and "all finished" early
+  -exit tests are combined into a single reduction. Results are bit-for-bit
+  identical; this is a GPU benefit (fewer host synchronizations) and a no-op on
+  CPU.
 
 ### Added
 

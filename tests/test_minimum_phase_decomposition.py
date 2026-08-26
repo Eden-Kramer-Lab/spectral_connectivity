@@ -106,6 +106,30 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum():
     assert np.isfinite(factor[2]).all()  # healthy window converged
 
 
+def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
+    """The per-iteration debug log (guarded to avoid a device sync) still works.
+
+    The convergence-count log line is only evaluated when debug logging is
+    enabled; exercise that branch so a formatting error in it cannot hide behind
+    the default (disabled) log level, and confirm the result is unaffected.
+    """
+    import logging
+
+    rng = np.random.default_rng(0)
+    coeffs = rng.standard_normal((1, 8, 2, 2)) + 1j * rng.standard_normal((1, 8, 2, 2))
+    cross_spectral_matrix = np.matmul(
+        coeffs, coeffs.conj().swapaxes(-1, -2)
+    ) + 2 * np.eye(2)
+
+    factor_default = minimum_phase_decomposition(cross_spectral_matrix)
+    with caplog.at_level(
+        logging.DEBUG, logger="spectral_connectivity.minimum_phase_decomposition"
+    ):
+        factor_debug = minimum_phase_decomposition(cross_spectral_matrix)
+    np.testing.assert_array_equal(factor_debug, factor_default)
+    assert any("converged" in message for message in caplog.messages)
+
+
 def test_get_initial_conditions_isolates_non_positive_definite_units():
     """A non-PD sub-spectrum must not change the healthy units' initialization.
 
