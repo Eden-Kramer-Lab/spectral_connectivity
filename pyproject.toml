@@ -56,7 +56,8 @@ dev = [
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "numpydoc>=1.6",
 ]
-gpu = ["cupy-cuda12x>=12.0"]
+# CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
+gpu = ["cupy-cuda12x>=13.0"]
 
 [project.urls]
 Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"

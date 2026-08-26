@@ -409,8 +409,8 @@ def suggest_parameters(
 if is_gpu_enabled():
     try:
         import cupy as xp
-        from cupy.linalg import lstsq
         from cupyx.scipy.fft import fft, fftfreq, next_fast_len
+        from cupyx.scipy.signal import detrend as _backend_detrend
 
         # Log GPU device information
         try:
@@ -440,7 +440,7 @@ else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
     from scipy.fft import fft, fftfreq, next_fast_len
-    from scipy.linalg import lstsq
+    from scipy.signal import detrend as _backend_detrend
 
 
 class Multitaper:
@@ -1651,7 +1651,9 @@ def detrend(
     """
     Remove linear trend along axis from data.
 
-    Copied from scipy and now uses cupy or numpy functions.
+    Thin wrapper that validates ``type``/``bp`` (raising actionable errors) and
+    delegates the computation to ``scipy.signal.detrend`` on CPU or
+    ``cupyx.scipy.signal.detrend`` on GPU.
 
     Parameters
     ----------
@@ -1699,22 +1701,21 @@ def detrend(
             f"  - 'constant' or 'c': Remove mean (DC offset)\n"
             f"Example: detrend(data, type='linear')"
         )
+    # Normalize the short aliases so the backend (which documents only the long
+    # forms) is never handed 'l'/'c'.
+    type = "linear" if type in ["linear", "l"] else "constant"
     data = xp.asarray(data)
-    dtype = data.dtype.char
-    if dtype not in "dfDF":
-        dtype = "d"
-    if type in ["constant", "c"]:
-        return data - xp.mean(data, axis, keepdims=True)
-    else:
-        dshape = data.shape
-        N = dshape[axis]
+    # Validate breakpoints up front (linear only) so the error names the
+    # offending value and the data length; the backend raises a terser message.
+    if type == "linear":
+        N = data.shape[axis]
         bp_array = xp.sort(xp.unique(xp.r_[0, bp, N]))
         if xp.any(bp_array > N):
             invalid_bp = bp_array[bp_array > N]
-            # Convert to list for display (works with both numpy and cupy)
+            # Convert to list for display (works with both numpy and cupy).
             if hasattr(invalid_bp, "get"):  # CuPy array
                 invalid_bp_list = xp.asnumpy(invalid_bp).tolist()
-            else:  # NumPy array or already a list
+            else:  # NumPy array
                 invalid_bp_list = invalid_bp.tolist()
 
             if isinstance(bp, int):
@@ -1732,31 +1733,8 @@ def detrend(
                 f"Breakpoints must be in the range [0, {N}).\n"
                 f"Check your breakpoint array: {bp_list}"
             )
-        Nreg = len(bp_array) - 1
-        # Restructure data so that axis is along first dimension and
-        #  all other dimensions are collapsed into second dimension
-        rnk = len(dshape)
-        if axis < 0:
-            axis = axis + rnk
-        newdims = xp.r_[axis, 0:axis, axis + 1 : rnk]
-        newdata = xp.reshape(
-            xp.transpose(data, tuple(newdims)), (N, np.prod(dshape) // N)
-        )
-        if not overwrite_data:
-            newdata = newdata.copy()  # make sure we have a copy
-        if newdata.dtype.char not in "dfDF":
-            newdata = newdata.astype(dtype)
-        # Find leastsq fit and remove it for each piece
-        for m in range(Nreg):
-            Npts = bp_array[m + 1] - bp_array[m]
-            A = xp.ones((Npts, 2), dtype)
-            A[:, 0] = xp.asarray(np.arange(1, Npts + 1) * 1.0 / Npts, dtype=dtype)
-            sl = slice(bp_array[m], bp_array[m + 1])
-            coef, _resids, _rank, _s = lstsq(A, newdata[sl])
-            newdata[sl] = newdata[sl] - A @ coef
-        # Put data back in original shape.
-        tdshape = xp.take(dshape, newdims, 0)
-        ret = xp.reshape(newdata, tuple(tdshape))
-        vals = list(range(1, rnk))
-        olddims = [*vals[:axis], 0, *vals[axis:]]
-        return xp.transpose(ret, tuple(olddims))
+    # Delegate the least-squares/mean removal to SciPy (CPU) or CuPy (GPU),
+    # which implement the same computation. Their detrend signatures match.
+    return _backend_detrend(
+        data, axis=axis, type=type, bp=bp, overwrite_data=overwrite_data
+    )

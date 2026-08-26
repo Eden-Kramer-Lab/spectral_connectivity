@@ -316,6 +316,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   center-time coordinate); timings were neutral. With `is_copy=False` the view
   is now read-only (NumPy's default), which prevents the accidental in-place
   aliasing the previous writable view allowed; both production call sites copy.
+- `transforms.detrend` now delegates the actual mean/least-squares removal to
+  `scipy.signal.detrend` (CPU) or `cupyx.scipy.signal.detrend` (GPU) instead of
+  carrying a vendored copy of SciPy's algorithm, removing ~50 lines. The
+  package's own `type`/`bp` validation and its actionable error messages are
+  kept, so behavior — including the errors — is unchanged; CPU output is
+  bit-for-bit identical (verified across constant/linear detrending, the
+  `'l'`/`'c'` aliases, several axes, breakpoints, and int/float32 dtypes).
+  **Dependency floor raised:** the GPU extra now requires `cupy-cuda12x>=13.0`
+  (was `>=12.0`), because `cupyx.scipy.signal.detrend` was added in CuPy 13.
+  GPU users on CuPy 12 must upgrade; CuPy 13 still targets CUDA 12.x.
 
 ### Added
 
