@@ -400,6 +400,7 @@ class Connectivity:
     _CACHED_INTERMEDIATES = (
         "_power",
         "_cached_reduced_cross_spectral_matrix",
+        "_imaginary_cross_spectrum_moments",
         "_minimum_phase_factor",
         "_transfer_function",
         "_noise_covariance",
@@ -1390,6 +1391,43 @@ class Connectivity:
         """
         return xp.abs(self._phase_locking_value())
 
+    @cached_property
+    def _imaginary_cross_spectrum_moments(self) -> dict[str, NDArray[np.floating]]:
+        """Reduced moments of the per-observation imaginary cross-spectrum.
+
+        The phase-lag-index family (``phase_lag_index``,
+        ``weighted_phase_lag_index``, ``debiased_squared_weighted_phase_lag_index``)
+        each average a function -- ``sign``, identity, ``abs`` or square -- of the
+        imaginary part of the per-observation cross-spectral matrix, with the
+        diagonal zeroed. Forming that large observation-level cross-spectrum once
+        and reducing it to these four moments avoids re-forming it per method (it
+        is otherwise built once per ``fcn``). Only the small reduced moments are
+        cached; they are invalidated with the other cached intermediates and are
+        treated as read-only (methods copy before any in-place edit).
+
+        Returns
+        -------
+        dict of str -> array, each shape (..., n_frequencies, n_signals, n_signals)
+            Keys ``"sign"``, ``"imaginary"``, ``"absolute"``, ``"squared"`` hold
+            ``E[sign(Im)]``, ``E[Im]``, ``E[|Im|]`` and ``E[Im**2]``.
+        """
+        self._validate_multiple_signals()
+        # Full observation-level cross-spectral matrix (transient); the
+        # phase-lag-index family rejects block mode, so the non-block form is
+        # always the correct input.
+        imaginary = self._cross_spectral_matrix.imag
+        n_signals = imaginary.shape[-1]
+        diagonal_index = xp.diag_indices(n_signals)
+        # Self-connections have no meaningful imaginary part; zero the diagonal
+        # to avoid numerical-precision noise (matches the per-method fcns).
+        imaginary[..., diagonal_index[0], diagonal_index[1]] = 0
+        return {
+            "sign": self._expectation(xp.sign(imaginary)),
+            "imaginary": self._expectation(imaginary),
+            "absolute": self._expectation(xp.abs(imaginary)),
+            "squared": self._expectation(imaginary**2),
+        }
+
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
     def phase_lag_index(self) -> NDArray[np.floating]:
@@ -1428,18 +1466,9 @@ class Connectivity:
         """
 
         self._reject_block_mode("phase_lag_index")
-
-        def fcn(x: NDArray[np.complexfloating]) -> Any:  # Returns sign of imag part
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            # Self-connections should have zero imaginary component
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return xp.sign(imag_part)
-
-        result = self._expectation_cross_spectral_matrix(fcn=fcn)
-        return result.real  # sign of imag is real
+        # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
+        # array is disconnected from the cached moment.
+        return self._imaginary_cross_spectrum_moments["sign"].real.copy()
 
     @_asnumpy
     @_non_negative_frequencies(-3)
@@ -1476,26 +1505,12 @@ class Connectivity:
         """
 
         self._reject_block_mode("weighted_phase_lag_index")
-
-        def fcn_abs(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return xp.abs(imag_part)
-
-        def fcn_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return imag_part
-
-        weights = self._expectation_cross_spectral_matrix(fcn=fcn_abs)
+        moments = self._imaginary_cross_spectrum_moments
+        # Copy before the in-place zero-weight guard so the cached moment is not
+        # mutated.
+        weights = moments["absolute"].copy()
         weights[weights < xp.finfo(float).eps] = 1
-        return self._expectation_cross_spectral_matrix(fcn=fcn_imag) / weights
+        return moments["imaginary"] / weights
 
     @_asnumpy
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
@@ -1558,45 +1573,15 @@ class Connectivity:
 
         """
         self._reject_block_mode("debiased_squared_weighted_phase_lag_index")
-
-        # define functions
-        def fcn_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return imag_part
-
-        def fcn_imag_sq(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return imag_part**2
-
-        def fcn_abs_imag(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
-            # Zero diagonal imaginary parts to avoid numerical precision issues
-            imag_part = x.imag
-            n_signals = imag_part.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            imag_part[..., diagonal_index[0], diagonal_index[1]] = 0
-            return xp.abs(imag_part)
-
         self._validate_debiasing_observations(
             "debiased_squared_weighted_phase_lag_index"
         )
         n_observations = self.n_observations
-        imaginary_csm_sum = (
-            self._expectation_cross_spectral_matrix(fcn=fcn_imag) * n_observations
-        )
-        squared_imaginary_csm_sum = (
-            self._expectation_cross_spectral_matrix(fcn=fcn_imag_sq) * n_observations
-        )
-        imaginary_csm_magnitude_sum = (
-            self._expectation_cross_spectral_matrix(fcn=fcn_abs_imag) * n_observations
-        )
+        moments = self._imaginary_cross_spectrum_moments
+        # Each product is a fresh array, so the cached moments are not mutated.
+        imaginary_csm_sum = moments["imaginary"] * n_observations
+        squared_imaginary_csm_sum = moments["squared"] * n_observations
+        imaginary_csm_magnitude_sum = moments["absolute"] * n_observations
         weights = imaginary_csm_magnitude_sum**2 - squared_imaginary_csm_sum
         weights[weights == 0] = xp.nan
 

@@ -867,6 +867,71 @@ def test_power_and_cross_spectrum_caches_invalidate():
     assert c._power.shape != power_trials_tapers.shape
 
 
+def test_phase_lag_index_family_matches_per_fcn_reference():
+    """The fused phase-lag-index family matches the per-fcn cross-spectrum path.
+
+    phase_lag_index, weighted_phase_lag_index and
+    debiased_squared_weighted_phase_lag_index now share one observation-level
+    imaginary cross-spectrum (four cached moments) instead of re-forming it per
+    ``fcn``. Each must equal the original per-fcn computation. Also checks that
+    computing one measure does not corrupt a cached moment another relies on.
+    """
+    rng = np.random.default_rng(0)
+    shape = (2, 8, 5, 32, 5)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+
+    def zero_diagonal_imag(x):
+        imag = x.imag
+        n_signals = imag.shape[-1]
+        di = np.diag_indices(n_signals)
+        imag[..., di[0], di[1]] = 0
+        return imag
+
+    def non_negative(a):  # mirror the @_non_negative_frequencies(-3) decorator
+        return a[..., : a.shape[-3] // 2 + 1, :, :]
+
+    conn = Connectivity(fc)
+    n_observations = conn.n_observations
+    # Reference moments via independent per-fcn expectation calls.
+    mean_sign = conn._expectation_cross_spectral_matrix(
+        fcn=lambda x: np.sign(zero_diagonal_imag(x))
+    )
+    mean_imag = conn._expectation_cross_spectral_matrix(fcn=zero_diagonal_imag)
+    mean_abs = conn._expectation_cross_spectral_matrix(
+        fcn=lambda x: np.abs(zero_diagonal_imag(x))
+    )
+    mean_sq = conn._expectation_cross_spectral_matrix(
+        fcn=lambda x: zero_diagonal_imag(x) ** 2
+    )
+
+    expected_pli = non_negative(mean_sign.real)
+    weights = mean_abs.copy()
+    weights[weights < np.finfo(float).eps] = 1
+    expected_wpli = non_negative(mean_imag / weights)
+    imag_sum = mean_imag * n_observations
+    sq_sum = mean_sq * n_observations
+    abs_sum = mean_abs * n_observations
+    dwpli_weights = abs_sum**2 - sq_sum
+    dwpli_weights[dwpli_weights == 0] = np.nan
+    expected_dwpli = non_negative((imag_sum**2 - sq_sum) / dwpli_weights)
+
+    np.testing.assert_array_equal(conn.phase_lag_index(), expected_pli)
+    np.testing.assert_array_equal(conn.weighted_phase_lag_index(), expected_wpli)
+    np.testing.assert_array_equal(
+        conn.debiased_squared_weighted_phase_lag_index(), expected_dwpli
+    )
+
+    # Computing wpli (which guards its weights in place on a copy) must not
+    # change a later debiased_squared_weighted_phase_lag_index result.
+    warm = Connectivity(fc)
+    warm.weighted_phase_lag_index()
+    np.testing.assert_array_equal(
+        warm.debiased_squared_weighted_phase_lag_index(), expected_dwpli
+    )
+
+
 def test_fourier_coefficients_are_an_immutable_snapshot():
     """In-place edits must not silently bypass cache invalidation.
 

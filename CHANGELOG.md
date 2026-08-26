@@ -232,6 +232,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   representative case; the default multi-measure `multitaper_connectivity` call
   is correspondingly faster. Only the reduced `(..., n_signals, n_signals)`
   cross-spectrum is cached, never the large observation-resolved form.
+- The phase-lag-index family (`phase_lag_index`, `weighted_phase_lag_index`,
+  `debiased_squared_weighted_phase_lag_index`) now shares one observation-level
+  imaginary cross-spectrum, reduced to four small cached moments (`E[sign(Im)]`,
+  `E[Im]`, `E[|Im|]`, `E[Im**2]`), instead of re-forming that large intermediate
+  once per transform function. Computing the family together was ~3.4× faster in
+  a representative case; results are bit-for-bit identical. Only the reduced
+  moments are cached (never the observation-level cross-spectrum), and they are
+  invalidated with the other cached intermediates.
 - `Connectivity.global_coherence` now computes its per-time-frequency-bin
   components with a single batched decomposition over all bins instead of a
   Python loop with one SVD per bin — a batched Hermitian eigendecomposition of
