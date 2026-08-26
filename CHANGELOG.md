@@ -261,6 +261,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   residuals so the fit stays accurate when the absolute frequencies are large
   relative to their spacing. `scipy.stats.mstats.linregress` is no longer
   imported.
+- Significant-frequency cluster selection (`_find_significant_frequencies`, used
+  by `group_delay` and `delay`) now selects the largest independent significant
+  cluster for all (time, signal-pair) slices with a vectorized pass instead of
+  `np.apply_along_axis` (one Python call per slice). Results are bit-for-bit
+  identical (it is boolean logic); the selection kernel was ~30× faster in a
+  representative case, further speeding up a warmed `group_delay`. The slices are
+  processed in bounded chunks (with `int32` run-length temporaries) so peak
+  memory stays independent of their number.
 
 ## [2.0.1] - 2026-05-12
 

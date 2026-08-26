@@ -2903,6 +2903,103 @@ def _find_largest_independent_group(
     return is_significant
 
 
+# Element cap (rows * n_frequencies) for one chunk of the significant-frequency
+# selector. The per-slice int32 run-length temporaries dominate its memory, so
+# processing the flattened signal-pair slices in chunks keeps peak usage bounded
+# regardless of the number of slices.
+_SIGNIFICANCE_SELECTION_CHUNK_ELEMENTS = 2_000_000
+
+
+def _select_largest_independent_cluster(
+    block: NDArray[np.bool_], frequency_step: int, min_group_size: int
+) -> NDArray[np.bool_]:
+    """Largest independent significant cluster per row (frequency on last axis).
+
+    ``block`` has shape ``(n_rows, n_frequencies)``. See
+    ``_largest_independent_group_along_frequency`` for the selection rule.
+    """
+    n_frequencies = block.shape[-1]
+    # run_length[r, f] = length of the contiguous True-run ending at f (0 where
+    # False): a cumulative count that resets at each False (running count minus
+    # its value at the most recent False). int32 suffices (runs <= n_frequencies)
+    # and halves the temporaries relative to the default int64.
+    cumulative = np.cumsum(block, axis=-1, dtype=np.int32)
+    run_length = cumulative - np.maximum.accumulate(
+        np.where(block, np.int32(0), cumulative), axis=-1
+    )
+
+    # Largest run per row; run_length only reaches this value at a run's end, so
+    # the first index attaining it is the end of the first largest cluster
+    # (matching the "first cluster on ties" rule).
+    max_size = run_length.max(axis=-1, keepdims=True)
+    end_index = np.expand_dims(np.argmax(run_length == max_size, axis=-1), -1)
+    start_index = end_index - max_size + 1
+
+    frequency_index = np.arange(n_frequencies)
+    # The largest cluster is contiguous [start_index, end_index]; max_size == 0
+    # means no significant frequency, giving an all-False row.
+    in_largest_cluster = (
+        (frequency_index >= start_index)
+        & (frequency_index <= end_index)
+        & (max_size > 0)
+    )
+    # Independent points are start_index, start_index + frequency_step, ...
+    independent = in_largest_cluster & (
+        (frequency_index - start_index) % frequency_step == 0
+    )
+    count = independent.sum(axis=-1, keepdims=True)
+    return independent & (count >= min_group_size)
+
+
+def _largest_independent_group_along_frequency(
+    is_significant: NDArray[np.bool_], frequency_step: int, min_group_size: int
+) -> NDArray[np.bool_]:
+    """Vectorized ``_find_largest_independent_group`` over the frequency axis (-2).
+
+    For every slice along axis -2, keep the largest contiguous cluster of
+    significant frequencies (the first cluster on ties), subsample it every
+    ``frequency_step`` points, and drop the slice to all-False if fewer than
+    ``min_group_size`` independent points remain. Equivalent to applying
+    ``_find_largest_independent_group`` per slice, but computed for all slices at
+    once instead of via ``np.apply_along_axis`` (one Python call per slice). The
+    slices are processed in bounded chunks so peak memory stays independent of
+    their number.
+
+    Parameters
+    ----------
+    is_significant : bool array, shape (..., n_frequencies, n_signal_pairs)
+    frequency_step : int
+        Spacing (in points) between retained independent frequencies.
+    min_group_size : int
+        Minimum number of independent points for a cluster to be kept.
+
+    Returns
+    -------
+    bool array, same shape as ``is_significant``.
+    """
+    axis = -2
+    n_frequencies = is_significant.shape[axis]
+    if is_significant.size == 0:
+        # An empty frequency band (or any zero-length axis) has no cluster to
+        # select; return an all-False array of the same (empty) shape.
+        return np.zeros(is_significant.shape, dtype=bool)
+    # Move frequency to the last axis and flatten the rest so the signal-pair
+    # slices can be processed in chunks. asarray(copy=False) avoids a needless
+    # copy of an already-boolean input; the reshape of the moved (non-contiguous)
+    # view then makes a single bool copy.
+    moved = np.moveaxis(np.asarray(is_significant, dtype=bool), axis, -1)
+    flattened = moved.reshape(-1, n_frequencies)
+
+    result = np.empty_like(flattened)
+    chunk = max(1, _SIGNIFICANCE_SELECTION_CHUNK_ELEMENTS // max(1, n_frequencies))
+    for start in range(0, flattened.shape[0], chunk):
+        block = flattened[start : start + chunk]
+        result[start : start + chunk] = _select_largest_independent_cluster(
+            block, frequency_step, min_group_size
+        )
+    return np.moveaxis(result.reshape(moved.shape), -1, axis)
+
+
 def _find_significant_frequencies(
     coherency: NDArray[np.complexfloating],
     n_obs: int,
@@ -2951,12 +3048,8 @@ def _find_significant_frequencies(
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )
-    return np.apply_along_axis(
-        _find_largest_independent_group,
-        -2,
-        is_significant,
-        frequency_step,
-        min_group_size,
+    return _largest_independent_group_along_frequency(
+        is_significant, frequency_step, min_group_size
     )
 
 

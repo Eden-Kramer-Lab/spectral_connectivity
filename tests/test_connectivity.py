@@ -509,6 +509,81 @@ def test__find_largest_independent_group(min_group_size, expected_is_significant
     )
 
 
+def test_largest_independent_group_vectorized_matches_reference():
+    """The vectorized selection equals the per-slice reference exactly.
+
+    ``_find_significant_frequencies`` selects the largest independent
+    significant cluster per (batch, pair) slice with a single vectorized pass
+    instead of ``np.apply_along_axis(_find_largest_independent_group, ...)``.
+    The two must agree bit-for-bit (it is boolean logic) over random inputs and
+    the edge cases (all/none significant, a single frequency, tied clusters).
+    The chunked path (bounded memory) must match the single-pass path.
+    """
+    from unittest.mock import patch
+
+    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity.connectivity import (
+        _largest_independent_group_along_frequency,
+    )
+
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        n_batch = int(rng.integers(1, 4))
+        n_frequencies = int(rng.integers(1, 25))
+        n_pairs = int(rng.integers(1, 6))
+        is_significant = rng.random((n_batch, n_frequencies, n_pairs)) < rng.uniform(
+            0.1, 0.9
+        )
+        frequency_step = int(rng.integers(1, 4))
+        min_group_size = int(rng.integers(1, 5))
+        reference = np.apply_along_axis(
+            _find_largest_independent_group,
+            -2,
+            is_significant,
+            frequency_step,
+            min_group_size,
+        )
+        vectorized = _largest_independent_group_along_frequency(
+            is_significant, frequency_step, min_group_size
+        )
+        np.testing.assert_array_equal(vectorized, reference)
+        # A tiny chunk cap forces the slices through several bounded chunks and
+        # must give the identical result.
+        with patch.object(conn_mod, "_SIGNIFICANCE_SELECTION_CHUNK_ELEMENTS", 7):
+            chunked = _largest_independent_group_along_frequency(
+                is_significant, frequency_step, min_group_size
+            )
+        np.testing.assert_array_equal(chunked, reference)
+
+    # An empty frequency band (n_frequencies == 0) must return an empty result,
+    # not raise (the reshape cannot infer a -1 dimension at size 0).
+    empty = np.zeros((2, 0, 3), dtype=bool)
+    assert _largest_independent_group_along_frequency(empty, 2, 3).shape == (2, 0, 3)
+
+    # Explicit edge cases, including two equal-size clusters (first is kept).
+    tie = np.array([[True, True, False, True, True, False]]).reshape(1, 6, 1)
+    for shape_case in (
+        np.zeros((1, 8, 2), bool),
+        np.ones((1, 8, 2), bool),
+        np.ones((1, 1, 3), bool),
+        tie,
+    ):
+        for frequency_step in (1, 2, 3):
+            for min_group_size in (1, 3):
+                np.testing.assert_array_equal(
+                    _largest_independent_group_along_frequency(
+                        shape_case, frequency_step, min_group_size
+                    ),
+                    np.apply_along_axis(
+                        _find_largest_independent_group,
+                        -2,
+                        shape_case,
+                        frequency_step,
+                        min_group_size,
+                    ),
+                )
+
+
 def test__total_inflow():
     transfer_function = np.ones((2, 3, 3))
     noise_variance = [4, 2, 3]
