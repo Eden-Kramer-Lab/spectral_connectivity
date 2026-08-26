@@ -1433,6 +1433,17 @@ def _sliding_window(
            [3, 4, 5]])
 
     """
+    # Validate before normalizing: ``axis % data.ndim`` would otherwise wrap an
+    # out-of-range axis onto a real one (e.g. axis=2 -> 0 on a 2-D array),
+    # windowing the wrong dimension silently instead of raising.
+    if not -data.ndim <= axis < data.ndim:
+        raise ValueError(
+            f"axis {axis} is out of bounds for an array of rank {data.ndim}."
+        )
+    # A non-positive step would pass a negative slice step below (reversing the
+    # windows) or an empty step, neither of which is a forward slide.
+    if step_size < 1:
+        raise ValueError(f"step_size must be a positive integer, got {step_size}.")
     # ``sliding_window_view`` appends the length-``window_size`` window axis at
     # the end and validates bounds/shape, which NumPy recommends over the
     # lower-level ``as_strided`` used previously. It only produces unit-step

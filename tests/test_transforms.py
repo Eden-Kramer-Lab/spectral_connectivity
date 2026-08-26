@@ -73,6 +73,28 @@ def test__sliding_window(test_array, window_size, step_size, axis, expected_arra
     )
 
 
+@mark.parametrize("axis", [2, 3, -3, -4])
+def test__sliding_window_rejects_out_of_range_axis(axis):
+    """An out-of-range axis must raise, not wrap onto a real dimension.
+
+    ``axis % data.ndim`` would silently window the wrong dimension (e.g.
+    ``axis=2`` -> 0 on a 2-D array) instead of raising.
+    """
+    data = np.arange(6).reshape((2, 3))
+    with pytest.raises(ValueError, match="out of bounds"):
+        _sliding_window(data, window_size=2, axis=axis)
+
+
+@mark.parametrize("step_size", [0, -1, -2])
+def test__sliding_window_rejects_non_positive_step(step_size):
+    """A non-positive step is not a forward slide and must raise.
+
+    A negative step would otherwise reverse the window order via the slice.
+    """
+    with pytest.raises(ValueError, match="step_size must be a positive integer"):
+        _sliding_window(np.arange(6), window_size=2, step_size=step_size)
+
+
 @mark.parametrize(
     "time_halfbandwidth_product, expected_n_tapers", [(3, 5), (1, 1), (1.75, 2)]
 )

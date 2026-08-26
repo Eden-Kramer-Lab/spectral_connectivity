@@ -328,6 +328,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   center-time coordinate); timings were neutral. With `is_copy=False` the view
   is now read-only (NumPy's default), which prevents the accidental in-place
   aliasing the previous writable view allowed; both production call sites copy.
+  An out-of-range `axis` and a non-positive `step_size` now raise `ValueError`
+  instead of silently windowing the wrong dimension or reversing the windows.
 - `transforms.detrend` now delegates the actual mean/least-squares removal to
   `scipy.signal.detrend` (CPU) or `cupyx.scipy.signal.detrend` (GPU) instead of
   carrying a vendored copy of SciPy's algorithm, removing ~50 lines. The
