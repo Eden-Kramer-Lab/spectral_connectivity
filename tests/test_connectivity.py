@@ -759,6 +759,87 @@ def test_changing_inputs_clears_cached_intermediates():
     assert c._minimum_phase_factor is not minimum_phase
 
 
+def test_power_and_cross_spectrum_caches_invalidate():
+    """Cached _power / reduced cross-spectrum must not serve stale results.
+
+    Both are cached per instance for reuse across measures; reassigning the
+    inputs must drop them so a later access recomputes from the new data.
+    """
+    rng = np.random.default_rng(5)
+    shape = (2, 4, 3, 8, 2)
+    fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+
+    # Populate both caches via coherency (reads power twice + reduced CSM).
+    c.coherency()
+    assert "_power" in c.__dict__
+    assert "_cached_reduced_cross_spectral_matrix" in c.__dict__
+    power_before = c._power
+    csm_before = c._cached_reduced_cross_spectral_matrix
+
+    # Reassigning to *different* data must recompute, not serve the stale cache.
+    other = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    c.fourier_coefficients = other
+    assert "_power" not in c.__dict__
+    assert "_cached_reduced_cross_spectral_matrix" not in c.__dict__
+    assert not np.allclose(c._power, power_before)
+    assert not np.allclose(c._cached_reduced_cross_spectral_matrix, csm_before)
+
+    # Changing expectation_type also invalidates (and changes the averaged shape).
+    power_trials_tapers = c._power
+    c.expectation_type = "tapers"  # retains the trials axis
+    assert "_power" not in c.__dict__
+    assert c._power.shape != power_trials_tapers.shape
+
+
+def test_fourier_coefficients_are_an_immutable_snapshot():
+    """In-place edits must not silently bypass cache invalidation.
+
+    The cached power / cross-spectrum assume the coefficients change only via
+    assignment (which clears the caches). The constructor therefore stores a
+    private snapshot, and the accessor never hands out a writable alias of it:
+    mutating the caller's original array, or the array the property returns, must
+    not serve stale scientific results.
+    """
+    rng = np.random.default_rng(9)
+    shape = (1, 4, 2, 8, 3)
+    fourier = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+
+    c = Connectivity(fourier_coefficients=fourier)
+    power_before = c.power().copy()
+    coherence_before = c.coherence_magnitude().copy()
+
+    # Mutating the caller's original array must not reach the warmed instance.
+    fourier[...] = 0.0
+    np.testing.assert_array_equal(c.power(), power_before)
+    np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
+
+    # Mutating the returned array must not reach the instance either. On NumPy
+    # the returned array is read-only, so the edit raises; on backends without a
+    # writeable flag (e.g. CuPy) the accessor returns a fresh copy, so the edit
+    # succeeds but is harmless. Both outcomes leave the cached results correct.
+    returned = c.fourier_coefficients
+    try:
+        returned[...] = 0.0
+    except ValueError:
+        pass  # read-only snapshot (NumPy)
+    np.testing.assert_array_equal(c.power(), power_before)
+    np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
+
+    # The returned array must not be re-enabled for writing. On NumPy the
+    # accessor returns a *view* whose base is read-only, so re-enabling
+    # writeability raises; a bare owning array would allow it and corrupt the
+    # cache. (Guarded: CuPy returns a writable copy, which is harmless anyway.)
+    returned = c.fourier_coefficients
+    if getattr(returned.flags, "writeable", True) is False:
+        with pytest.raises(ValueError):
+            returned.flags.writeable = True
+        np.testing.assert_array_equal(c.power(), power_before)
+        np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
+
+
 def test_debiased_weighted_pli_requires_multiple_observations():
     """debiased_squared_weighted_phase_lag_index guards n_observations < 2."""
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 2), dtype=complex))

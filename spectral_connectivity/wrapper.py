@@ -39,7 +39,10 @@ def _validate_connectivity_matches_multitaper(
     geometry the output depends on: channel count, the (two-sided) frequency
     grid, and the time bins.
     """
-    n_signals = connectivity.fourier_coefficients.shape[-1]
+    # Read the private snapshot for the shape: the public getter returns a
+    # defensive copy on backends without a writeable flag (CuPy), which would be
+    # wasteful here (this runs once per measure) and is unnecessary for shape.
+    n_signals = connectivity._fourier_coefficients.shape[-1]
     mismatches = []
     if n_signals != m.n_signals:
         mismatches.append(f"n_signals ({n_signals} != {m.n_signals})")
@@ -90,10 +93,9 @@ def connectivity_to_xarray(
     connectivity : Connectivity, optional
         A ``Connectivity`` already built from ``m``. When computing several
         measures from the same transform, pass a shared instance to avoid
-        recomputing the (uncached) FFT for each measure. (No wrapper-supported
-        measure currently shares a cached intermediate, so this only saves the
-        FFT for now.) When ``None`` (the default) one is constructed from ``m``
-        via
+        recomputing the (uncached) FFT for each measure and to reuse the cached
+        power / cross-spectrum across the coherence-family measures. When
+        ``None`` (the default) one is constructed from ``m`` via
         ``Connectivity.from_multitaper``. It must be built from ``m`` — ``m`` is
         still used for the output coordinates/metadata, so a mismatched
         ``connectivity`` would mislabel the result. This is enforced: an instance

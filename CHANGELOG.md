@@ -197,6 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable is parsed case-insensitively (`"true"`, `"1"`, `"yes"`, `"on"`) and warns on unrecognized values instead of silently falling back to CPU.
 - Expensive directed-connectivity intermediates (minimum-phase factor, transfer function, noise covariance, MVAR coefficients) are cached per `Connectivity` instance and are automatically invalidated when `fourier_coefficients` or `expectation_type` is reassigned (they are now validated properties), so a reused instance cannot serve stale results. Reassigning `fourier_coefficients` with a different FFT-bin or time-window count now also resets the frequency/time coordinates to geometry-matching defaults (with a `UserWarning`), instead of leaving stale coordinates that silently dropped or misaligned bins in coordinate-dependent methods. Tikhonov regularization is scaled per (time-window, frequency) matrix rather than by a single global scalar.
 - `multitaper_connectivity` gives an actionable error for `global_coherence` / `phase_slope_index` (which do not fit the xarray interface) instead of a cryptic xarray error.
+- `Connectivity` now stores its `fourier_coefficients` as a private immutable snapshot, so the per-instance caching cannot be silently corrupted by in-place edits (which would otherwise bypass cache invalidation and return stale power/coherence). The setter keeps a private copy that preserves the input's memory layout (`copy(order="K")`, so results are unchanged to the bit) and leaves the caller's original array untouched. The `fourier_coefficients` property never hands out a writable alias of that snapshot: on NumPy it returns a read-only view of the copy (an in-place edit raises, and because the view's base is read-only its writeability cannot be re-enabled), and on backends without a writeable flag (e.g. CuPy) a fresh copy is returned (editing it is harmless). To change the data, assign a new array to `fourier_coefficients`, which clears the caches, rather than editing in place.
 
 ### Performance
 
@@ -217,12 +218,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconstructing one (and recomputing the uncached FFT) per measure. Results are
   bit-for-bit identical. `connectivity_to_xarray` gained an optional
   `connectivity=` argument to accept the shared instance (validated against the
-  `Multitaper` to prevent mislabeled output). The realized benefit is avoiding
-  the repeated FFTs; it is modest on its own, because the tapers are already
-  memoized on the `Multitaper` (so the dominant taper cost was not repeated) and
-  the wrapper's measures do not yet share any cached intermediate. Sharing one
-  instance is a prerequisite for cross-measure reuse of intermediates once the
-  reduced cross-spectrum is cached.
+  `Multitaper` to prevent mislabeled output). The FFT saving is modest on its
+  own, because the tapers are already memoized on the `Multitaper` (so the
+  dominant taper cost was not repeated); sharing one instance also lets the
+  cached cross-spectrum and power (below) be reused across measures.
+- `Connectivity._power` and the reduced expected cross-spectral matrix are now
+  cached per instance (invalidated when `fourier_coefficients` or
+  `expectation_type` is reassigned, alongside the existing directed-measure
+  caches). `coherency` reads the power twice, and the coherence family plus
+  pairwise spectral Granger each read the cross-spectrum, so caching avoids
+  recomputing them — within a single measure and, for a shared instance, across
+  measures. A repeated `coherency` on a warmed instance was ~60× faster in a
+  representative case; the default multi-measure `multitaper_connectivity` call
+  is correspondingly faster. Only the reduced `(..., n_signals, n_signals)`
+  cross-spectrum is cached, never the large observation-resolved form.
 
 ## [2.0.1] - 2026-05-12
 

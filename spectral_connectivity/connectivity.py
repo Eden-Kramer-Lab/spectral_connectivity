@@ -360,8 +360,8 @@ class Connectivity:
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
         # canonical_coherence) would dereference None.
-        n_fft_samples = self.fourier_coefficients.shape[-2]
-        n_time_windows = self.fourier_coefficients.shape[0]
+        n_fft_samples = self._fourier_coefficients.shape[-2]
+        n_time_windows = self._fourier_coefficients.shape[0]
 
         # Supplied coordinates must be 1-D, finite, and match the data geometry.
         # A wrong shape (e.g. (n, 1)) or length would silently misalign/drop
@@ -400,6 +400,8 @@ class Connectivity:
     # Cached quantities that depend on fourier_coefficients / expectation_type
     # and must be invalidated when either changes (see the setters below).
     _CACHED_INTERMEDIATES = (
+        "_power",
+        "_cached_reduced_cross_spectral_matrix",
         "_minimum_phase_factor",
         "_transfer_function",
         "_noise_covariance",
@@ -416,9 +418,28 @@ class Connectivity:
         """Multitaper Fourier coefficients.
 
         Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-        Reassigning clears cached directed-connectivity intermediates.
+        Stored as an immutable snapshot: the setter keeps a private copy so the
+        cached intermediates (power, cross-spectrum, directed factors) cannot be
+        silently invalidated by in-place edits to the caller's array. This
+        accessor never hands out a writable alias of that private copy — on
+        NumPy a read-only *view* of the copy is returned (an in-place edit
+        raises, and the view cannot re-enable writeability because its base is
+        read-only); on backends without a writeable flag (e.g. CuPy) a fresh copy
+        is returned, so editing it has no effect on the cache. Either way, to
+        change the data assign a new array (which clears the caches) rather than
+        mutating the returned one. Internal computations read
+        ``self._fourier_coefficients`` directly to avoid this copy.
         """
-        return self._fourier_coefficients
+        coefficients = self._fourier_coefficients
+        # If the backing copy could not be frozen (e.g. CuPy has no settable
+        # writeable flag) return a defensive copy so an external in-place edit
+        # cannot corrupt the caches. Otherwise (NumPy) return a read-only *view*,
+        # not the owning array itself: a caller can re-enable writeability on an
+        # array that owns its data, but not on a view whose base is read-only, so
+        # the view cannot be turned back into a writable alias of the snapshot.
+        if getattr(coefficients.flags, "writeable", True):
+            return coefficients.copy()
+        return coefficients.view()
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
@@ -449,6 +470,24 @@ class Connectivity:
                 UserWarning,
                 stacklevel=2,
             )
+        # Own the coefficients as an immutable snapshot. The cached
+        # intermediates (_power, the reduced cross-spectrum, and the
+        # directed-measure factors) assume the coefficients change only through
+        # this setter, which clears them. Copying decouples the instance from
+        # later in-place mutation of the caller's array; marking the copy
+        # read-only turns an in-place mutation via the getter into a clear error
+        # rather than silently stale results. The caller's original array is
+        # left untouched (and, on the from_multitaper path, is unreferenced
+        # afterward, so steady-state memory is unchanged). CuPy may not support
+        # the writeable flag; the copy alone still provides the decoupling there.
+        # copy(order="K") keeps the caller's array's memory layout, so downstream
+        # matmuls see the same strides and results are unchanged to the bit (a
+        # plain C-order copy would perturb the BLAS summation order by ~1e-16).
+        value = value.copy(order="K")
+        try:
+            value.flags.writeable = False
+        except (AttributeError, ValueError):
+            pass
         self._fourier_coefficients = value
         self._clear_cached_intermediates()
         # On reassignment (not initial construction), a change in the number of
@@ -577,7 +616,7 @@ class Connectivity:
         all-NaN array with no error). ``power()`` is exempt because power
         spectral density is well-defined for one signal.
         """
-        n_signals = self.fourier_coefficients.shape[-1]
+        n_signals = self._fourier_coefficients.shape[-1]
         if n_signals < 2:
             raise ValueError(
                 f"Connectivity measures require at least 2 signals, but "
@@ -688,10 +727,14 @@ class Connectivity:
             return self._frequencies
         return None
 
-    @property
+    @cached_property
     def _power(self) -> NDArray[np.floating]:
+        # Cached per instance (invalidated when fourier_coefficients /
+        # expectation_type change; see _CACHED_INTERMEDIATES). coherency reads it
+        # twice and several measures each read it, so caching avoids recomputing
+        # the expectation. Consumers treat it as read-only.
         return self._expectation(
-            self.fourier_coefficients * self.fourier_coefficients.conjugate()
+            self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
 
     @property
@@ -705,7 +748,7 @@ class Connectivity:
             n_signals, n_signals). Complex cross-spectral matrix.
 
         """
-        fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+        fourier_coefficients = self._fourier_coefficients[..., xp.newaxis]
         return _complex_inner_product(
             fourier_coefficients, fourier_coefficients, dtype=self._dtype
         )
@@ -737,14 +780,14 @@ class Connectivity:
         # transformed (``fcn`` given) paths below, which must materialize that
         # outer product before averaging.
         if fcn is None:
-            return self._reduced_cross_spectral_matrix()
+            return self._cached_reduced_cross_spectral_matrix
 
         if not isinstance(self._blocks, int) or (self._blocks < 1):
             # compute all connections at once
             return self._expectation(fcn(self._cross_spectral_matrix))
         else:  # compute blocks of connections
             # get fourier coefficients
-            fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+            fourier_coefficients = self._fourier_coefficients[..., xp.newaxis]
             fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
             # define sections
@@ -802,7 +845,7 @@ class Connectivity:
             by the equivalent expectation over the full outer product.
 
         """
-        fourier_coefficients = self.fourier_coefficients
+        fourier_coefficients = self._fourier_coefficients
         # Reuse the same axis metadata that ``n_observations`` reads, so this
         # stays correct for every expectation_type without a parallel mapping.
         axes = signature(self._expectation).parameters["axis"].default
@@ -833,6 +876,21 @@ class Connectivity:
         )
         return cross_spectral_matrix / n_observations
 
+    @cached_property
+    def _cached_reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+        """Cache the identity (``fcn=None``) expected cross-spectral matrix.
+
+        This is the reduced result of ``_expectation_cross_spectral_matrix()``.
+        It is reused within a measure (``coherency`` divides it by power) and
+        across measures that share one ``Connectivity`` instance
+        (``coherence_magnitude``, ``coherence_phase``, ``imaginary_coherence``,
+        pairwise spectral Granger). Only the reduced ``(..., n_signals,
+        n_signals)`` form is cached, never the observation-resolved
+        ``_cross_spectral_matrix``. Invalidated with the other cached
+        intermediates when the inputs change; consumers treat it as read-only.
+        """
+        return self._reduced_cross_spectral_matrix()
+
     def _subset_cross_spectral_matrix(
         self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
@@ -850,10 +908,10 @@ class Connectivity:
 
         """
         pairs = np.array(pairs)
-        fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+        fourier_coefficients = self._fourier_coefficients[..., xp.newaxis]
         fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
-        csm_shape = list(self.fourier_coefficients.shape)
+        csm_shape = list(self._fourier_coefficients.shape)
         csm_shape += [csm_shape[-1]]
         dtype = self._dtype
         csm = xp.empty(csm_shape, dtype=dtype)
@@ -914,10 +972,10 @@ class Connectivity:
         """
         axes = signature(self._expectation).parameters["axis"].default
         if isinstance(axes, int):
-            return self.fourier_coefficients.shape[axes]
+            return self._fourier_coefficients.shape[axes]
         else:
             return int(
-                np.prod([self.fourier_coefficients.shape[axis] for axis in axes])
+                np.prod([self._fourier_coefficients.shape[axis] for axis in axes])
             )
 
     @_asnumpy
@@ -985,7 +1043,7 @@ class Connectivity:
             "for those pairs and is returned as NaN. This usually indicates "
             "a flat/dead channel or all-zero input.",
         )
-        n_signals = self.fourier_coefficients.shape[-1]
+        n_signals = self._fourier_coefficients.shape[-1]
         diagonal_ind = xp.arange(0, n_signals)
         complex_coherencey[..., diagonal_ind, diagonal_ind] = xp.nan
         return complex_coherencey
@@ -1118,9 +1176,9 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         labels = np.unique(group_labels)
-        n_frequencies = self.fourier_coefficients.shape[-2]
+        n_frequencies = self._fourier_coefficients.shape[-2]
         non_negative_frequencies = xp.arange(0, n_frequencies // 2 + 1)
-        fourier_coefficients = self.fourier_coefficients[
+        fourier_coefficients = self._fourier_coefficients[
             ..., non_negative_frequencies, :
         ]
         normalized_fourier_coefficients = [
@@ -1209,7 +1267,7 @@ class Connectivity:
             n_tapers,
             n_fft_samples,
             n_signals,
-        ) = self.fourier_coefficients.shape
+        ) = self._fourier_coefficients.shape
 
         # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
         # coefficient matrix has at most min(n_signals, n_trials * n_tapers)
@@ -1239,7 +1297,7 @@ class Connectivity:
             for freq_ind in range(n_fft_samples):
                 # reshape to (n_signals, n_trials * n_tapers)
                 fourier_coefficients = (
-                    self.fourier_coefficients[time_ind, :, :, freq_ind, :]
+                    self._fourier_coefficients[time_ind, :, :, freq_ind, :]
                     .reshape((n_trials * n_tapers, n_signals))
                     .T
                 )
