@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from pytest import mark
 
+from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import multitaper_connectivity
 
@@ -497,32 +498,85 @@ def test_default_result_is_netcdf_serializable(tmp_path):
     assert path.exists()
 
 
-def test_default_method_set_is_explicit_and_expected():
-    """method=None uses the explicit DEFAULT_METHODS allowlist.
+def test_default_method_set_is_explicit_and_ordered():
+    """method=None uses the explicit, ordered DEFAULT_METHODS allowlist.
 
-    Locked so an accidental change (or a newly added Connectivity method) cannot
-    silently alter the documented default set or break NetCDF serializability.
+    The exact tuple (including order) is locked: xarray preserves insertion
+    order, so the default Dataset's variable/iteration/serialization order is
+    part of the public contract. The order is the alphabetical order the
+    previous inspect-based discovery produced, so existing users see no change.
     """
     from spectral_connectivity.wrapper import DEFAULT_METHODS
 
-    expected = {
-        "power",
+    expected = (
         "coherence_magnitude",
         "coherence_phase",
-        "imaginary_coherence",
-        "phase_locking_value",
-        "phase_lag_index",
-        "weighted_phase_lag_index",
         "debiased_squared_phase_lag_index",
         "debiased_squared_weighted_phase_lag_index",
+        "imaginary_coherence",
         "pairwise_phase_consistency",
         "pairwise_spectral_granger_prediction",
-    }
-    assert set(DEFAULT_METHODS) == expected
+        "phase_lag_index",
+        "phase_locking_value",
+        "power",
+        "weighted_phase_lag_index",
+    )
+    assert DEFAULT_METHODS == expected
     # The deliberately excluded measures must not be in the default.
     for excluded in ("coherency", "global_coherence", "phase_slope_index"):
         assert excluded not in DEFAULT_METHODS
 
     rng = np.random.default_rng(1)
     ds = multitaper_connectivity(rng.standard_normal((256, 3)), sampling_frequency=250)
-    assert set(ds.data_vars) == expected
+    # Same measures AND same variable order as the allowlist.
+    assert tuple(ds.data_vars) == expected
+
+
+def test_from_multitaper_supports_subclass_overriding_init():
+    """from_multitaper must work for a subclass with the previous constructor.
+
+    The private adoption fast-path passes a keyword the base __init__ accepts; a
+    subclass that overrides __init__ (mirroring the old signature) need not, so
+    from_multitaper must fall back to the plain (defensive-copy) path for it
+    rather than raising TypeError.
+    """
+    rng = np.random.default_rng(3)
+    m = Multitaper(
+        rng.standard_normal((300, 6, 3)),
+        sampling_frequency=300,
+        time_halfbandwidth_product=3,
+    )
+
+    class LegacyConnectivity(Connectivity):
+        def __init__(
+            self,
+            fourier_coefficients,
+            expectation_type="trials_tapers",
+            frequencies=None,
+            time=None,
+            blocks=None,
+            dtype=np.complex128,
+            minimum_phase_tolerance=1e-8,
+            minimum_phase_max_iterations=500,
+        ):
+            super().__init__(
+                fourier_coefficients,
+                expectation_type,
+                frequencies,
+                time,
+                blocks,
+                dtype,
+                minimum_phase_tolerance,
+                minimum_phase_max_iterations,
+            )
+            self.marker = "subclass"
+
+    sub = LegacyConnectivity.from_multitaper(m)
+    assert isinstance(sub, LegacyConnectivity)
+    assert sub.marker == "subclass"
+    # Fell back to the defensive-copy path (owns its data), and works normally.
+    assert sub._fourier_coefficients.base is None
+    base = Connectivity.from_multitaper(m)
+    np.testing.assert_array_equal(sub.power(), base.power())
+    # The base class still uses the no-copy adoption path (stores a view).
+    assert base._fourier_coefficients.base is not None

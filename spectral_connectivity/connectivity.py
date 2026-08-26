@@ -669,19 +669,24 @@ class Connectivity:
             New Connectivity instance.
 
         """
-        return cls(
-            fourier_coefficients=multitaper_instance.fft(),
-            expectation_type=expectation_type,
-            time=multitaper_instance.time,
-            frequencies=multitaper_instance.frequencies,
-            blocks=blocks,
-            dtype=dtype,
-            minimum_phase_tolerance=minimum_phase_tolerance,
-            minimum_phase_max_iterations=minimum_phase_max_iterations,
-            # fft() returns a freshly built, unshared array; adopt it in place
-            # instead of copying (see Connectivity._adopt_fourier_coefficients).
-            _adopt_fourier_coefficients=True,
-        )
+        init_kwargs: dict[str, Any] = {
+            "fourier_coefficients": multitaper_instance.fft(),
+            "expectation_type": expectation_type,
+            "time": multitaper_instance.time,
+            "frequencies": multitaper_instance.frequencies,
+            "blocks": blocks,
+            "dtype": dtype,
+            "minimum_phase_tolerance": minimum_phase_tolerance,
+            "minimum_phase_max_iterations": minimum_phase_max_iterations,
+        }
+        # fft() returns a freshly built, unshared array, so adopt it in place
+        # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
+        # pass the private keyword when the subclass has not overridden __init__:
+        # an overriding subclass need not accept it, and passing it would raise
+        # TypeError. Such a subclass falls back to the defensive-copy path.
+        if cls.__init__ is Connectivity.__init__:
+            init_kwargs["_adopt_fourier_coefficients"] = True
+        return cls(**init_kwargs)
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.

@@ -24,18 +24,22 @@ logger = getLogger(__name__)
 # ``phase_slope_index`` (do not fit the per-signal-pair xarray layout), the
 # directed transfer-function family and canonical/group-delay/conditional
 # measures (different output shapes), and utility properties.
+# Order is significant: xarray preserves insertion order, so this fixes the
+# variable/iteration/serialization order of the default Dataset. It is kept
+# alphabetical to match the order the previous ``inspect.getmembers`` discovery
+# produced, so the default result is unchanged for existing users.
 DEFAULT_METHODS: tuple[str, ...] = (
-    "power",
     "coherence_magnitude",
     "coherence_phase",
-    "imaginary_coherence",
-    "phase_locking_value",
-    "phase_lag_index",
-    "weighted_phase_lag_index",
     "debiased_squared_phase_lag_index",
     "debiased_squared_weighted_phase_lag_index",
+    "imaginary_coherence",
     "pairwise_phase_consistency",
     "pairwise_spectral_granger_prediction",
+    "phase_lag_index",
+    "phase_locking_value",
+    "power",
+    "weighted_phase_lag_index",
 )
 
 
@@ -282,11 +286,14 @@ def multitaper_connectivity(
     method : str or list of str, optional
         Connectivity method(s) to compute. If None, computes the default set of
         real-valued measures that fit the xarray/NetCDF interface (see
-        ``DEFAULT_METHODS``) — not every measure. Notably excluded from the
-        default: ``coherency`` (complex; NetCDF cannot store it — request it
-        explicitly if needed), ``global_coherence`` and ``phase_slope_index``,
-        and the directed-transfer-function family; pass these by name to compute
-        them. Examples: "coherence_magnitude", "imaginary_coherence",
+        ``DEFAULT_METHODS``) — not every measure. ``coherency`` is left out of the
+        default only because it is complex (NetCDF cannot store it), but it can be
+        requested by name. Other measures that do not fit the ``(time, frequency,
+        source, target)`` layout — ``global_coherence``, ``phase_slope_index``,
+        ``group_delay``, ``canonical_coherence``, and the directed-transfer-
+        function family — are *not* available through this wrapper at all
+        (requesting one raises with a pointer to use ``Connectivity`` directly).
+        Examples: "coherence_magnitude", "imaginary_coherence",
         "phase_locking_value".
     signal_names : sequence of str, optional
         Names for signal channels used to label dimensions. If None, uses indices.
