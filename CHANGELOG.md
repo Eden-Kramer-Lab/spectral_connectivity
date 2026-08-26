@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > coordinate of multitaper/connectivity outputs will differ from earlier 2.x
 > releases.
 
+> **Upgrading — raised dependency floors:** this release requires `scipy>=1.11`
+> (was 1.10). If you use the GPU backend, upgrade `cupy-cuda12x` to `>=13.0`
+> (was 12.0) **before** upgrading `spectral_connectivity` — `pip install -U
+> spectral_connectivity` will not force-upgrade an already-installed
+> `cupy-cuda12x==12.x`, and the too-old CuPy is only detected at first GPU use
+> (now with an explicit version error, no longer a misleading "CuPy is not
+> installed" message). Upgrade with `pip install -U cupy-cuda12x`.
+
 ### Changed — corrected numerics (BREAKING)
 
 - **`Connectivity.global_coherence`**: now returns each component's fraction of
@@ -209,7 +217,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable is parsed case-insensitively (`"true"`, `"1"`, `"yes"`, `"on"`) and warns on unrecognized values instead of silently falling back to CPU.
 - Expensive directed-connectivity intermediates (minimum-phase factor, transfer function, noise covariance, MVAR coefficients) are cached per `Connectivity` instance and are automatically invalidated when `fourier_coefficients` or `expectation_type` is reassigned (they are now validated properties), so a reused instance cannot serve stale results. Reassigning `fourier_coefficients` with a different FFT-bin or time-window count now also resets the frequency/time coordinates to geometry-matching defaults (with a `UserWarning`), instead of leaving stale coordinates that silently dropped or misaligned bins in coordinate-dependent methods. Tikhonov regularization is scaled per (time-window, frequency) matrix rather than by a single global scalar.
 - `multitaper_connectivity` gives an actionable error for `global_coherence` / `phase_slope_index` (which do not fit the xarray interface) instead of a cryptic xarray error.
-- `Connectivity` now stores its `fourier_coefficients` as a private immutable snapshot, so the per-instance caching cannot be silently corrupted by in-place edits (which would otherwise bypass cache invalidation and return stale power/coherence). The setter keeps a private copy that preserves the input's memory layout (`copy(order="K")`, so results are unchanged to the bit) and leaves the caller's original array untouched. The `fourier_coefficients` property never hands out a writable alias of that snapshot: it always returns an independent copy, so mutating the returned array cannot reach the instance. (A read-only view is not sufficient — a caller could reach the owning base through `.base`, re-enable its `writeable` flag, and mutate the snapshot behind the caches; a copy severs that link on every backend.) Internal computations read the private snapshot directly, so the copy is paid only on explicit external access, not on the hot paths. To change the data, assign a new array to `fourier_coefficients`, which clears the caches, rather than editing in place.
+- `Connectivity` now stores its `fourier_coefficients` as a private immutable snapshot, so the per-instance caching cannot be silently corrupted by in-place edits (which would otherwise bypass cache invalidation and return stale power/coherence). The setter keeps a private copy that preserves the input's memory layout (`copy(order="K")`, so results are unchanged to the bit) and leaves the caller's original array untouched. The `fourier_coefficients` property never hands out a writable alias of that snapshot: it returns an independent, read-only copy. An in-place edit (`c.fourier_coefficients[...] = x`) therefore raises loudly instead of silently vanishing, and because the returned array is a copy (it owns its data) it is fully disconnected from the instance — re-enabling its `writeable` flag only affects the caller's throwaway copy. (A read-only *view* would not be safe: a caller could reach the owning base through `.base`, re-enable its `writeable` flag, and mutate the snapshot behind the caches.) On backends without a settable `writeable` flag (e.g. CuPy) the copy is returned writable but is still independent, so a write to it is harmless. Internal computations read the private snapshot directly, so the copy is paid only on explicit external access, not on the hot paths. To change the data, assign a new array to `fourier_coefficients`, which clears the caches, rather than editing in place.
 
 ### Performance
 

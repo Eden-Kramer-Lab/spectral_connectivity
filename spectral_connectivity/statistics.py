@@ -62,7 +62,18 @@ def Benjamini_Hochberg_procedure(
     is_significant = np.zeros(p_values.shape, dtype=bool)
     valid = np.isfinite(p_values)
     if valid.any():
-        adjusted = scipy.stats.false_discovery_control(p_values[valid], method="bh")
+        try:
+            adjusted = scipy.stats.false_discovery_control(p_values[valid], method="bh")
+        except ValueError as exc:
+            # SciPy raises about its own parameter name ("ps"); restate with this
+            # function's parameter and a domain hint, since out-of-range values
+            # usually mean a non-p-value (e.g. a coherence magnitude) was passed.
+            raise ValueError(
+                "p_values must all be in [0, 1]; got a value outside that range. "
+                "If these came from a connectivity measure, pass p-values (e.g. "
+                "from coherence_significance_pvalue), not coherence magnitudes or "
+                "correlations."
+            ) from exc
         is_significant[valid] = adjusted <= alpha
     return is_significant
 

@@ -410,32 +410,40 @@ if is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, fftfreq, next_fast_len
-        from cupyx.scipy.signal import detrend as _backend_detrend
-
-        # Log GPU device information
-        try:
-            device = xp.cuda.Device()
-            # Try to get the actual GPU model name first
-            try:
-                device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
-                    "name"
-                ].decode()
-                device_name = device_name.strip("\x00")
-            except Exception:
-                # Fallback to compute capability
-                compute_cap = device.compute_capability
-                device_name = (
-                    f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-                )
-            logger.info(f"Using GPU for spectral_connectivity on {device_name}")
-        except Exception:
-            logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
         ) from exc
+    try:
+        # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
+        # imports cupy fine but fails here, which must not be reported as
+        # "CuPy is not installed".
+        from cupyx.scipy.signal import detrend as _backend_detrend
+    except ImportError as exc:
+        raise RuntimeError(
+            f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
+            f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
+            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
+        ) from exc
+
+    # Log GPU device information
+    try:
+        device = xp.cuda.Device()
+        # Try to get the actual GPU model name first
+        try:
+            device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
+                "name"
+            ].decode()
+            device_name = device_name.strip("\x00")
+        except Exception:
+            # Fallback to compute capability
+            compute_cap = device.compute_capability
+            device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
+        logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+    except Exception:
+        logger.info("Using GPU for spectral_connectivity...")
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp

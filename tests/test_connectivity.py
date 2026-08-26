@@ -1047,23 +1047,23 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
     np.testing.assert_array_equal(c.power(), power_before)
     np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
 
-    # The getter returns an independent copy, so mutating it -- freely, since it
-    # is writable and owns its data -- cannot reach the instance.
+    # The getter returns an independent, read-only copy: an in-place edit raises
+    # loudly rather than silently vanishing against a discarded object.
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy, not a view of the snapshot
+    assert returned.flags.writeable is False
+    with pytest.raises(ValueError):
+        returned[...] = 0.0
+    # Even re-enabling writeability (permitted on an owning copy) and mutating it
+    # cannot reach the instance: the copy shares no buffer with the snapshot.
+    returned.flags.writeable = True
     returned[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
     np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
 
 
-def test_fourier_coefficients_getter_copies_when_backing_not_frozen():
-    """On backends without a writeable flag (CuPy) the getter returns a copy.
-
-    CuPy cannot mark an array read-only, so the setter's freeze is a no-op there
-    and the backing stays writeable. Emulate that on NumPy by re-enabling the
-    backing's writeable flag, then confirm the getter hands out an independent
-    writable copy (not the backing) so an in-place edit cannot reach the cache.
-    """
+def test_fourier_coefficients_getter_returns_fresh_independent_copy():
+    """Each getter call returns a distinct copy disconnected from the snapshot."""
     rng = np.random.default_rng(11)
     shape = (1, 4, 2, 8, 3)
     fourier = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
@@ -1072,14 +1072,21 @@ def test_fourier_coefficients_getter_copies_when_backing_not_frozen():
 
     c = Connectivity(fourier_coefficients=fourier)
     power_before = c.power().copy()
-    # Emulate a backend where the freeze did not take (backing stays writeable).
-    c._fourier_coefficients.flags.writeable = True
 
-    returned = c.fourier_coefficients
-    assert returned is not c._fourier_coefficients  # a fresh copy, not the backing
-    assert returned.flags.writeable  # writable, but disconnected from the instance
-    returned[...] = 0.0  # mutating the copy must not affect the warmed cache
+    first = c.fourier_coefficients
+    second = c.fourier_coefficients
+    # Distinct objects, neither aliasing the backing snapshot.
+    assert first is not second
+    assert first is not c._fourier_coefficients
+    assert first.base is None and second.base is None
+    np.testing.assert_array_equal(first, c._fourier_coefficients)
+
+    # Re-enable and mutate one copy; the other copy, the snapshot, and the cache
+    # are all untouched (independent buffers).
+    first.flags.writeable = True
+    first[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
+    assert not np.array_equal(first, second)
 
 
 def test_direct_construction_copies_and_is_isolated_from_caller_mutation():

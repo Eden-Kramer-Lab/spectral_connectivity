@@ -448,14 +448,18 @@ class Connectivity:
         Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
         Stored as an immutable snapshot so the cached intermediates (power,
         cross-spectrum, directed factors) cannot be silently made stale by
-        in-place edits. This accessor always returns an independent **copy**, so a
-        caller can use and mutate it freely without touching the instance. A
-        read-only view is not enough: its owning base is reachable through
-        ``.base``, and a caller can re-enable the owning array's ``writeable``
-        flag (NumPy permits it on an array that owns its data), then re-enable and
-        mutate the view — corrupting the snapshot behind the caches. To change the
-        data, assign a new array (which clears the caches) rather than mutating
-        the returned copy. Internal computations read
+        in-place edits. This accessor returns an independent, **read-only copy**:
+        an in-place edit (``c.fourier_coefficients[...] = x``) raises rather than
+        silently vanishing, and because the returned array is a copy (it owns its
+        data, so ``.base`` is ``None``) it is fully disconnected from the snapshot
+        — even re-enabling its ``writeable`` flag only affects the caller's throw-
+        away copy, never the instance. (A read-only *view* would not be safe: its
+        owning base is reachable through ``.base``, whose ``writeable`` flag a
+        caller can re-enable and then mutate the snapshot behind the caches.) On
+        backends without a settable ``writeable`` flag (e.g. CuPy) the copy is
+        returned writable, which is harmless because it is still independent. To
+        change the data, assign a new array (which clears the caches) rather than
+        mutating the returned copy. Internal computations read
         ``self._fourier_coefficients`` directly, so the copy is paid only on
         explicit external access, not on the hot paths.
 
@@ -465,11 +469,19 @@ class Connectivity:
         rather than duplicated, avoiding a transient doubling of the largest
         array. That is independent of this getter, which still copies on access.
         """
-        # Always hand out an independent copy -- see the note above on why a
-        # read-only view is insufficient (the owning base's writeable flag can be
-        # re-enabled). copy() severs that link: mutating the result cannot reach
-        # the snapshot or its base chain on any backend (NumPy or CuPy).
-        return self._fourier_coefficients.copy()
+        # Hand out an independent, read-only copy. copy() severs any link to the
+        # snapshot (the result owns its data, base is None), so a read-only *copy*
+        # is safe even if the caller re-enables its writeable flag -- unlike a
+        # read-only view, whose owning base is reachable and re-enable-able. The
+        # read-only flag makes an in-place edit raise loudly instead of silently
+        # vanishing against a discarded copy. On CuPy the freeze is a no-op; the
+        # copy is still independent, so a write to it is harmless.
+        snapshot = self._fourier_coefficients.copy()
+        try:
+            snapshot.flags.writeable = False
+        except (AttributeError, ValueError):
+            pass
+        return snapshot
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
@@ -1373,8 +1385,10 @@ class Connectivity:
             or max_workspace_elements < 1
         ):
             raise ValueError(
-                f"max_workspace_elements must be a positive integer, got "
-                f"{max_workspace_elements!r}."
+                f"max_workspace_elements must be a positive integer (e.g. "
+                f"1_000_000), got {max_workspace_elements!r}. It bounds the memory "
+                f"budget, in array elements, for global_coherence's batched "
+                f"decomposition; lower it to reduce peak memory."
             )
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
             global_coherence, unnormalized_global_coherence = _batched_global_coherence(

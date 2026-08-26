@@ -101,6 +101,7 @@ m = Multitaper(
     time_window_duration=0.060,
     time_window_step=0.060,
     start_time=time[0],
+    # fft_workers=-1,  # optional: parallelize the CPU FFT across all cores
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate

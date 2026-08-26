@@ -81,8 +81,13 @@ def test_Benjamini_Hochberg_excludes_nan_from_family():
 
 
 def test_Benjamini_Hochberg_rejects_out_of_range_pvalues():
-    """A finite p-value outside [0, 1] is invalid input and must raise."""
-    with pytest.raises(ValueError):
+    """A finite p-value outside [0, 1] must raise, named by this function's param.
+
+    The delegated SciPy error refers to its own parameter ``ps``; the message is
+    restated in terms of ``p_values`` with a domain hint so a caller who passed,
+    e.g., coherence magnitudes is pointed at the real fix.
+    """
+    with pytest.raises(ValueError, match="p_values must all be in"):
         Benjamini_Hochberg_procedure(np.array([0.1, 1.5, 0.2]), alpha=0.05)
 
 

@@ -267,7 +267,8 @@ def multitaper_connectivity(
         Additional keyword arguments passed to connectivity methods.
     **kwargs : dict
         Additional arguments passed to the Multitaper constructor
-        (e.g., time_halfbandwidth_product, n_tapers, n_fft_samples).
+        (e.g., time_halfbandwidth_product, n_tapers, n_fft_samples,
+        fft_workers=-1 to parallelize the CPU FFT across all cores).
 
     Returns
     -------
