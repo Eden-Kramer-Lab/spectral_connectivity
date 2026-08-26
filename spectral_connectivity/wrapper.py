@@ -14,6 +14,30 @@ from spectral_connectivity.transforms import Multitaper
 
 logger = getLogger(__name__)
 
+# Default measures for ``multitaper_connectivity(method=None)``: the real-valued
+# connectivity measures that fit the xarray/NetCDF interface. Defined explicitly
+# (rather than discovered by excluding a denylist) so the default set is stable
+# and documentable, and so a newly added Connectivity method cannot silently join
+# the default and break NetCDF serialization. Excluded on purpose: ``coherency``
+# (complex; NetCDF cannot store it — its content is covered by
+# coherence_magnitude/phase + imaginary_coherence), ``global_coherence`` and
+# ``phase_slope_index`` (do not fit the per-signal-pair xarray layout), the
+# directed transfer-function family and canonical/group-delay/conditional
+# measures (different output shapes), and utility properties.
+DEFAULT_METHODS: tuple[str, ...] = (
+    "power",
+    "coherence_magnitude",
+    "coherence_phase",
+    "imaginary_coherence",
+    "phase_locking_value",
+    "phase_lag_index",
+    "weighted_phase_lag_index",
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "pairwise_phase_consistency",
+    "pairwise_spectral_granger_prediction",
+)
+
 
 def _to_host_array(x: Any) -> NDArray:
     """Return ``x`` as a host NumPy array, moving it off the GPU if needed.
@@ -256,8 +280,14 @@ def multitaper_connectivity(
         Duration of sliding window in seconds for time-resolved analysis.
         If None, analyzes entire time series (no time resolution).
     method : str or list of str, optional
-        Connectivity method(s) to compute. If None, computes all available methods.
-        Examples: "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
+        Connectivity method(s) to compute. If None, computes the default set of
+        real-valued measures that fit the xarray/NetCDF interface (see
+        ``DEFAULT_METHODS``) — not every measure. Notably excluded from the
+        default: ``coherency`` (complex; NetCDF cannot store it — request it
+        explicitly if needed), ``global_coherence`` and ``phase_slope_index``,
+        and the directed-transfer-function family; pass these by name to compute
+        them. Examples: "coherence_magnitude", "imaginary_coherence",
+        "phase_locking_value".
     signal_names : sequence of str, optional
         Names for signal channels used to label dimensions. If None, uses indices.
     squeeze : bool, default=False
@@ -323,47 +353,11 @@ def multitaper_connectivity(
         connectivity_kwargs = {}
     return_dataarray = False  # Default: return dataset
     if method is None:
-        # All implemented methods except internal and excluded methods
-        import inspect
-
-        # Methods that are not connectivity measures or not supported by xarray interface
-        excluded_methods = {
-            # Properties and utility methods (not connectivity measures)
-            "delay",
-            "n_observations",
-            "frequencies",
-            "all_frequencies",
-            "fourier_coefficients",
-            "expectation_type",
-            "global_coherence",
-            "from_multitaper",
-            "phase_slope_index",
-            "subset_pairwise_spectral_granger_prediction",
-            # Complex-valued: NetCDF cannot store complex arrays, so it is
-            # excluded from the default so the default result stays serializable.
-            # Its information is covered by coherence_magnitude + coherence_phase
-            # (+ imaginary_coherence); request "coherency" explicitly if needed.
-            "coherency",
-            # Methods not supported by xarray interface
-            "group_delay",
-            "canonical_coherence",
-            "directed_transfer_function",
-            "directed_coherence",
-            "partial_directed_coherence",
-            "generalized_partial_directed_coherence",
-            "direct_directed_transfer_function",
-            "blockwise_spectral_granger_prediction",
-            "conditional_spectral_granger_prediction",
-        }
-
-        # Get all public callable methods using inspect
-        method = [
-            name
-            for name, member in inspect.getmembers(
-                Connectivity, predicate=inspect.isfunction
-            )
-            if not name.startswith("_") and name not in excluded_methods
-        ]
+        # The explicit NetCDF-safe / xarray-compatible default set (see
+        # DEFAULT_METHODS). Not every Connectivity method — coherency (complex),
+        # global_coherence / phase_slope_index, and the directed-transfer-function
+        # family are excluded.
+        method = list(DEFAULT_METHODS)
     elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable

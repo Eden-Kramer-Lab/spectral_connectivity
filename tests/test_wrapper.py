@@ -206,68 +206,23 @@ def test_frequencies():
         assert np.allclose(cons[mea].frequency, expected_frequencies)
 
 
-def test_method_discovery_with_inspect():
-    """Test that inspect.getmembers() correctly identifies Connectivity methods.
+def test_default_methods_are_real_connectivity_methods():
+    """Every DEFAULT_METHODS entry must be a real public Connectivity method.
 
-    This test verifies that the refactored method discovery in wrapper.py
-    using inspect.getmembers() finds all expected connectivity methods.
+    The default set is an explicit allowlist (no longer discovered by
+    inspecting Connectivity), so a typo or a rename of a measure would silently
+    make the default request a nonexistent method. Guard the allowlist against
+    that by checking each name resolves to a public callable on Connectivity.
     """
-    # Methods that should be excluded (not connectivity measures or not xarray-compatible)
-    excluded_methods = {
-        # Properties and utility methods
-        "delay",
-        "n_observations",
-        "frequencies",
-        "all_frequencies",
-        "fourier_coefficients",
-        "expectation_type",
-        "global_coherence",
-        "from_multitaper",
-        "phase_slope_index",
-        "subset_pairwise_spectral_granger_prediction",
-        # Methods not supported by xarray interface
-        "group_delay",
-        "canonical_coherence",
-        "directed_transfer_function",
-        "directed_coherence",
-        "partial_directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-        "blockwise_spectral_granger_prediction",
-    }
+    from spectral_connectivity.wrapper import DEFAULT_METHODS
 
-    # Get methods using inspect (same as wrapper.py implementation)
-    methods_via_inspect = [
+    public_callables = {
         name
-        for name, member in inspect.getmembers(
-            Connectivity, predicate=inspect.isfunction
-        )
-        if not name.startswith("_") and name not in excluded_methods
-    ]
-
-    # Get methods using dir() (old implementation)
-    methods_via_dir = [
-        x
-        for x in dir(Connectivity)
-        if not x.startswith("_") and x not in excluded_methods
-    ]
-
-    # Both methods should find the same set of methods
-    assert set(methods_via_inspect) == set(methods_via_dir)
-
-    # Verify we find expected connectivity methods
-    expected_methods = {
-        "coherence_magnitude",
-        "coherency",
-        "imaginary_coherence",
-        "phase_locking_value",
-        "power",
+        for name, _ in inspect.getmembers(Connectivity, predicate=inspect.isfunction)
+        if not name.startswith("_")
     }
-    assert expected_methods.issubset(set(methods_via_inspect))
-
-    # Verify excluded methods are not included
-    found_methods_set = set(methods_via_inspect)
-    assert not excluded_methods.intersection(found_methods_set)
+    for name in DEFAULT_METHODS:
+        assert name in public_callables, f"{name} is not a public Connectivity method"
 
 
 def test_result_is_netcdf_serializable(tmp_path):
@@ -540,3 +495,34 @@ def test_default_result_is_netcdf_serializable(tmp_path):
     path = tmp_path / "default.nc"
     ds.to_netcdf(path)
     assert path.exists()
+
+
+def test_default_method_set_is_explicit_and_expected():
+    """method=None uses the explicit DEFAULT_METHODS allowlist.
+
+    Locked so an accidental change (or a newly added Connectivity method) cannot
+    silently alter the documented default set or break NetCDF serializability.
+    """
+    from spectral_connectivity.wrapper import DEFAULT_METHODS
+
+    expected = {
+        "power",
+        "coherence_magnitude",
+        "coherence_phase",
+        "imaginary_coherence",
+        "phase_locking_value",
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+        "pairwise_phase_consistency",
+        "pairwise_spectral_granger_prediction",
+    }
+    assert set(DEFAULT_METHODS) == expected
+    # The deliberately excluded measures must not be in the default.
+    for excluded in ("coherency", "global_coherence", "phase_slope_index"):
+        assert excluded not in DEFAULT_METHODS
+
+    rng = np.random.default_rng(1)
+    ds = multitaper_connectivity(rng.standard_normal((256, 3)), sampling_frequency=250)
+    assert set(ds.data_vars) == expected

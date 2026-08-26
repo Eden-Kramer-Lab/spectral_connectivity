@@ -10,7 +10,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 | **Coherence magnitude** | [0, 1] | 0: none; 1: perfect linear dependence at frequency f. |
 | **Imaginary coherence** | [0, 1] (magnitude) | Raw imaginary part ranges [−1, 1]; magnitude version. |
 | **Canonical coherence** | [0, 1] | Maximal coherence between groups. |
-| **Global coherence** | [0, ∞) | Squared singular values; no upper bound. |
+| **Global coherence** | [0, 1] | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
 | **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
 | **PLI (Phase‑Lag Index)** | [−1, 1] | Signed version; unsigned in [0, 1]. |
 | **wPLI (Weighted PLI)** | [−1, 1] | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value. |
@@ -50,6 +50,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 - **partial_directed_coherence**: Normalized causal influence
 - **generalized_partial_directed_coherence**: PDC scaled by noise variance
 - **direct_directed_transfer_function**: DTF with partial coherence normalization
+- **global_coherence**: Fraction of total coherent power per component (eigenvalue of the cross-spectral matrix over the sum of all eigenvalues, Cimenser et al. 2011); scale-invariant
 
 ### Bounded Metrics [−1, 1]
 
@@ -62,7 +63,6 @@ The following summarizes the theoretical value ranges for common connectivity me
 ### Unbounded Metrics [0, ∞)
 
 - **power**: Power spectral density
-- **global_coherence**: Squared singular values
 - **pairwise_spectral_granger_prediction**: Spectral Granger causality
 
 ### Unbounded Metrics (−∞, ∞)

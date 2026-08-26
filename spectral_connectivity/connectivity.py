@@ -363,6 +363,7 @@ class Connectivity:
         dtype: np.dtype = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
+        *,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
         # fourier_coefficients and expectation_type are validated in their
@@ -1310,13 +1311,17 @@ class Connectivity:
         max_rank : int, default=1
             The number of components to keep (like the number of PC dimensions).
         max_workspace_elements : int, default=16_000_000
-            Peak-memory budget (in array elements) for the batched decomposition:
-            frequency bins are processed in chunks sized so the transient working
-            set stays near this many complex elements (the default ~16M ≈ 256 MB
-            of complex128). Lower it to reduce peak memory on a constrained CPU or
-            GPU (at the cost of more, smaller chunks); the default favors speed and
-            does not change the result. Ignored on the per-bin fallback path used
-            for a large decomposition dimension.
+            Approximate working-set target, in array elements, for the batched
+            decomposition: frequency bins are processed in chunks sized so the
+            main intermediates stay near this many complex elements (the default
+            ~16M ≈ 256 MB of complex128). It is a soft target, not a hard memory
+            cap — it counts the dominant per-bin intermediates, not the outputs or
+            LAPACK's internal workspace, and it never goes below one bin per chunk,
+            so actual peak memory is somewhat higher. Lower it to reduce peak
+            memory on a constrained CPU or GPU (at the cost of more, smaller
+            chunks); the default favors speed and does not change the result.
+            Ignored on the per-bin fallback path used for a large decomposition
+            dimension.
 
         Returns
         -------
