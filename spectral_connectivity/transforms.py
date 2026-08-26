@@ -1603,6 +1603,19 @@ def dpss_windows(
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
             f"(= {n_time_samples_per_window}), got {n_tapers}."
         )
+    if n_time_samples_per_window == 2 and n_tapers == 2:
+        # scipy.signal.windows.dpss cannot disambiguate the sign of the second
+        # (antisymmetric) taper for a two-sample window: its heuristic keeps the
+        # first sample with |value|^2 above max(1e-7, 1 / n_time_samples) = 0.5,
+        # but the length-two antisymmetric taper is [1, -1] / sqrt(2), whose
+        # samples are exactly 0.5, so none clear the threshold and SciPy raises a
+        # bare IndexError (both 1.10.x and current releases). A two-sample window
+        # cannot support a second taper usefully anyway, so reject the pair with
+        # an actionable message rather than surface SciPy's internal error.
+        raise ValueError(
+            "A two-sample window (n_time_samples_per_window=2) supports only a "
+            "single DPSS taper; request n_tapers=1 or use a longer window."
+        )
 
     tapers, eigenvalues = scipy_dpss(
         n_time_samples_per_window,

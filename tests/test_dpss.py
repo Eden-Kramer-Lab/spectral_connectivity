@@ -66,6 +66,24 @@ def test_dpss_windows_rejects_invalid_bandwidth_or_taper_count(n, nw, k):
         dpss_windows(n, nw, k, is_low_bias=False)
 
 
+@mark.parametrize("nw", [0.25, 0.5, 0.9])
+def test_dpss_windows_two_sample_two_tapers_raises_clearly(nw):
+    """A two-sample window with two tapers must raise a clear error.
+
+    ``scipy.signal.windows.dpss(2, NW, 2)`` raises a bare ``IndexError`` (on
+    both scipy 1.10.x and current releases) because its antisymmetric-taper
+    sign heuristic finds no sample above the ``1 / n_time_samples`` threshold.
+    The wrapper must reject the pair with an actionable message instead. A
+    single taper on a two-sample window still works.
+    """
+    with pytest.raises(ValueError, match="two-sample window"):
+        dpss_windows(2, nw, 2, is_low_bias=False)
+
+    tapers, _ = dpss_windows(2, nw, 1, is_low_bias=False)
+    assert tapers.shape == (1, 2)
+    assert np.isfinite(tapers).all()
+
+
 @mark.parametrize("bad_n_tapers", [2.9, 1.5, np.nan])
 def test_dpss_windows_rejects_fractional_n_tapers(bad_n_tapers):
     """A fractional n_tapers must raise, not be silently truncated."""

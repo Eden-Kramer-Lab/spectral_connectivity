@@ -303,7 +303,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_find_tapers_from_optimization`, `_get_taper_eigenvalues`, `_fix_taper_sign`,
   `_auto_correlation`) and the interpolation fast-path (`interp_from` /
   `interp_kind`, `_find_tapers_from_interpolation`, `_interpolate_taper`) were
-  removed; `dpss_windows` no longer accepts `interp_from` / `interp_kind`.
+  removed; `dpss_windows` no longer accepts `interp_from` / `interp_kind`. A
+  two-sample window with two tapers (`dpss_windows(2, NW, 2)`) now raises a clear
+  `ValueError` — SciPy's antisymmetric-taper sign heuristic degenerates for a
+  length-two window and raises a bare `IndexError` there (on both scipy 1.10.x
+  and current releases), and such a window cannot support a second taper anyway.
 
 ### Added
 
