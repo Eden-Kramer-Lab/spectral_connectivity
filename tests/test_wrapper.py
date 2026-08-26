@@ -328,9 +328,11 @@ def test_result_netcdf_serializable_with_detrend_none(tmp_path):
 def test_fft_workers_does_not_change_results():
     """The `fft_workers` FFT-parallelism option must not change the output.
 
-    `fft_workers` only sets SciPy's CPU FFT thread count; the transform is
-    identical regardless of the worker count, and the wrapper forwards the
-    argument to `Multitaper` via **kwargs.
+    `fft_workers` only sets SciPy's CPU FFT thread count. A threaded FFT is not
+    guaranteed bit-for-bit identical to the single-threaded one (summation order
+    can differ), so the results are compared with a tight tolerance rather than
+    exact equality. The wrapper forwards the argument to `Multitaper` via
+    **kwargs.
     """
     from spectral_connectivity.transforms import Multitaper
 
@@ -342,9 +344,9 @@ def test_fft_workers_does_not_change_results():
         result = Multitaper(
             time_series, sampling_frequency=500, fft_workers=workers
         ).fft()
-        np.testing.assert_array_equal(result, reference)
+        np.testing.assert_allclose(result, reference, rtol=1e-10, atol=1e-12)
 
-    # The wrapper forwards fft_workers via **kwargs; results are unchanged.
+    # The wrapper forwards fft_workers via **kwargs; results are equivalent.
     baseline = multitaper_connectivity(
         time_series, sampling_frequency=500, method="coherence_magnitude"
     )
@@ -354,7 +356,7 @@ def test_fft_workers_does_not_change_results():
         method="coherence_magnitude",
         fft_workers=-1,
     )
-    np.testing.assert_array_equal(baseline.values, parallel.values)
+    np.testing.assert_allclose(baseline.values, parallel.values, rtol=1e-10, atol=1e-12)
 
 
 def test_fft_workers_is_actually_forwarded_to_scipy():

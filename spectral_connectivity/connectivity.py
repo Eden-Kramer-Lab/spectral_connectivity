@@ -400,7 +400,7 @@ class Connectivity:
     _CACHED_INTERMEDIATES = (
         "_power",
         "_cached_reduced_cross_spectral_matrix",
-        "_imaginary_cross_spectrum_moments",
+        "_imaginary_moment_cache",
         "_minimum_phase_factor",
         "_transfer_function",
         "_noise_covariance",
@@ -1391,42 +1391,62 @@ class Connectivity:
         """
         return xp.abs(self._phase_locking_value())
 
-    @cached_property
-    def _imaginary_cross_spectrum_moments(self) -> dict[str, NDArray[np.floating]]:
+    def _imaginary_cross_spectrum_moments(
+        self, *keys: str
+    ) -> tuple[NDArray[np.floating], ...]:
         """Reduced moments of the per-observation imaginary cross-spectrum.
 
         The phase-lag-index family (``phase_lag_index``,
         ``weighted_phase_lag_index``, ``debiased_squared_weighted_phase_lag_index``)
         each average a function -- ``sign``, identity, ``abs`` or square -- of the
         imaginary part of the per-observation cross-spectral matrix, with the
-        diagonal zeroed. Forming that large observation-level cross-spectrum once
-        and reducing it to these four moments avoids re-forming it per method (it
-        is otherwise built once per ``fcn``). Only the small reduced moments are
-        cached; they are invalidated with the other cached intermediates and are
-        treated as read-only (methods copy before any in-place edit).
+        diagonal zeroed. This returns the requested reduced moments, computing
+        (and caching) any not already computed from a *single* formation of the
+        large observation-level cross-spectrum.
+
+        Computing only the requested keys keeps a single-measure call
+        (e.g. ``phase_lag_index`` needs only ``"sign"``) from doing the other
+        measures' reductions or retaining their moments; a shared instance
+        computing the whole family still forms the cross-spectrum only when a
+        needed moment is missing, so the family avoids re-forming it per
+        transform function. The cached moments are invalidated with the other
+        cached intermediates and are treated as read-only (callers copy before
+        any in-place edit).
+
+        Parameters
+        ----------
+        *keys : str
+            Any of ``"sign"``, ``"imaginary"``, ``"absolute"``, ``"squared"`` for
+            ``E[sign(Im)]``, ``E[Im]``, ``E[|Im|]`` and ``E[Im**2]``.
 
         Returns
         -------
-        dict of str -> array, each shape (..., n_frequencies, n_signals, n_signals)
-            Keys ``"sign"``, ``"imaginary"``, ``"absolute"``, ``"squared"`` hold
-            ``E[sign(Im)]``, ``E[Im]``, ``E[|Im|]`` and ``E[Im**2]``.
+        tuple of arrays, each shape (..., n_frequencies, n_signals, n_signals)
+            The requested moments, in the order of ``keys``.
         """
         self._validate_multiple_signals()
-        # Full observation-level cross-spectral matrix (transient); the
-        # phase-lag-index family rejects block mode, so the non-block form is
-        # always the correct input.
-        imaginary = self._cross_spectral_matrix.imag
-        n_signals = imaginary.shape[-1]
-        diagonal_index = xp.diag_indices(n_signals)
-        # Self-connections have no meaningful imaginary part; zero the diagonal
-        # to avoid numerical-precision noise (matches the per-method fcns).
-        imaginary[..., diagonal_index[0], diagonal_index[1]] = 0
-        return {
-            "sign": self._expectation(xp.sign(imaginary)),
-            "imaginary": self._expectation(imaginary),
-            "absolute": self._expectation(xp.abs(imaginary)),
-            "squared": self._expectation(imaginary**2),
-        }
+        cache = self.__dict__.setdefault("_imaginary_moment_cache", {})
+        missing = [key for key in keys if key not in cache]
+        if missing:
+            # Full observation-level cross-spectral matrix (transient); the
+            # phase-lag-index family rejects block mode, so the non-block form is
+            # always the correct input.
+            imaginary = self._cross_spectral_matrix.imag
+            n_signals = imaginary.shape[-1]
+            diagonal_index = xp.diag_indices(n_signals)
+            # Self-connections have no meaningful imaginary part; zero the
+            # diagonal to avoid numerical-precision noise (matches the per-method
+            # fcns). None of the reducers below mutate ``imaginary`` in place.
+            imaginary[..., diagonal_index[0], diagonal_index[1]] = 0
+            reducers = {
+                "sign": lambda: xp.sign(imaginary),
+                "imaginary": lambda: imaginary,
+                "absolute": lambda: xp.abs(imaginary),
+                "squared": lambda: imaginary**2,
+            }
+            for key in missing:
+                cache[key] = self._expectation(reducers[key]())
+        return tuple(cache[key] for key in keys)
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -1468,7 +1488,8 @@ class Connectivity:
         self._reject_block_mode("phase_lag_index")
         # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
         # array is disconnected from the cached moment.
-        return self._imaginary_cross_spectrum_moments["sign"].real.copy()
+        (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
+        return mean_sign.real.copy()
 
     @_asnumpy
     @_non_negative_frequencies(-3)
@@ -1505,12 +1526,14 @@ class Connectivity:
         """
 
         self._reject_block_mode("weighted_phase_lag_index")
-        moments = self._imaginary_cross_spectrum_moments
+        mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
+            "imaginary", "absolute"
+        )
         # Copy before the in-place zero-weight guard so the cached moment is not
         # mutated.
-        weights = moments["absolute"].copy()
+        weights = mean_absolute.copy()
         weights[weights < xp.finfo(float).eps] = 1
-        return moments["imaginary"] / weights
+        return mean_imaginary / weights
 
     @_asnumpy
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
@@ -1577,11 +1600,13 @@ class Connectivity:
             "debiased_squared_weighted_phase_lag_index"
         )
         n_observations = self.n_observations
-        moments = self._imaginary_cross_spectrum_moments
+        mean_imaginary, mean_squared, mean_absolute = (
+            self._imaginary_cross_spectrum_moments("imaginary", "squared", "absolute")
+        )
         # Each product is a fresh array, so the cached moments are not mutated.
-        imaginary_csm_sum = moments["imaginary"] * n_observations
-        squared_imaginary_csm_sum = moments["squared"] * n_observations
-        imaginary_csm_magnitude_sum = moments["absolute"] * n_observations
+        imaginary_csm_sum = mean_imaginary * n_observations
+        squared_imaginary_csm_sum = mean_squared * n_observations
+        imaginary_csm_magnitude_sum = mean_absolute * n_observations
         weights = imaginary_csm_magnitude_sum**2 - squared_imaginary_csm_sum
         weights[weights == 0] = xp.nan
 

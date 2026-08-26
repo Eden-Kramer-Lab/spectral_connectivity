@@ -854,7 +854,7 @@ def test_power_and_cross_spectrum_caches_invalidate():
     c.weighted_phase_lag_index()
     assert "_power" in c.__dict__
     assert "_cached_reduced_cross_spectral_matrix" in c.__dict__
-    assert "_imaginary_cross_spectrum_moments" in c.__dict__
+    assert "_imaginary_moment_cache" in c.__dict__
     power_before = c._power
     csm_before = c._cached_reduced_cross_spectral_matrix
     wpli_before = c.weighted_phase_lag_index()
@@ -864,7 +864,7 @@ def test_power_and_cross_spectrum_caches_invalidate():
     c.fourier_coefficients = other
     assert "_power" not in c.__dict__
     assert "_cached_reduced_cross_spectral_matrix" not in c.__dict__
-    assert "_imaginary_cross_spectrum_moments" not in c.__dict__
+    assert "_imaginary_moment_cache" not in c.__dict__
     assert not np.allclose(c._power, power_before)
     assert not np.allclose(c._cached_reduced_cross_spectral_matrix, csm_before)
     # The fused phase-lag-index family recomputes from the new data and matches a
@@ -948,6 +948,43 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(
         warm.debiased_squared_weighted_phase_lag_index(), expected_dwpli
     )
+
+
+def test_phase_lag_index_moments_are_computed_lazily():
+    """A single-measure call computes only the moments that measure needs.
+
+    The reduced imaginary-cross-spectrum moments are computed per key on demand,
+    so a lone ``phase_lag_index`` does not also compute (or retain) the other
+    measures' moments, while the family shares the ones already computed.
+    """
+    rng = np.random.default_rng(1)
+    shape = (2, 6, 4, 16, 4)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+
+    pli_only = Connectivity(fc)
+    pli_only.phase_lag_index()
+    assert set(pli_only.__dict__["_imaginary_moment_cache"]) == {"sign"}
+
+    wpli_only = Connectivity(fc)
+    wpli_only.weighted_phase_lag_index()
+    assert set(wpli_only.__dict__["_imaginary_moment_cache"]) == {
+        "imaginary",
+        "absolute",
+    }
+
+    # The family accumulates all four moments across measures.
+    family = Connectivity(fc)
+    family.phase_lag_index()
+    family.weighted_phase_lag_index()
+    family.debiased_squared_weighted_phase_lag_index()
+    assert set(family.__dict__["_imaginary_moment_cache"]) == {
+        "sign",
+        "imaginary",
+        "absolute",
+        "squared",
+    }
 
 
 def test_fourier_coefficients_are_an_immutable_snapshot():

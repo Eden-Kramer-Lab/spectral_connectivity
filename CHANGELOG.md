@@ -233,13 +233,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is correspondingly faster. Only the reduced `(..., n_signals, n_signals)`
   cross-spectrum is cached, never the large observation-resolved form.
 - The phase-lag-index family (`phase_lag_index`, `weighted_phase_lag_index`,
-  `debiased_squared_weighted_phase_lag_index`) now shares one observation-level
-  imaginary cross-spectrum, reduced to four small cached moments (`E[sign(Im)]`,
-  `E[Im]`, `E[|Im|]`, `E[Im**2]`), instead of re-forming that large intermediate
-  once per transform function. Computing the family together was ~3.4× faster in
-  a representative case; results are bit-for-bit identical. Only the reduced
-  moments are cached (never the observation-level cross-spectrum), and they are
-  invalidated with the other cached intermediates.
+  `debiased_squared_weighted_phase_lag_index`) now derives from shared reduced
+  moments of the observation-level imaginary cross-spectrum (`E[sign(Im)]`,
+  `E[Im]`, `E[|Im|]`, `E[Im**2]`), computed lazily per moment and cached, instead
+  of re-forming that large intermediate once per transform function. Each moment
+  is computed only when a measure needs it, from a single formation of the
+  cross-spectrum, so a single-measure call does only its own reductions while a
+  shared instance computing the whole family still avoids re-forming the
+  cross-spectrum per transform function. Computing the family together was ~3.4×
+  faster in a representative case; results are bit-for-bit identical. Only the
+  reduced moments actually requested are cached (never the observation-level
+  cross-spectrum), and they are invalidated with the other cached intermediates.
 - `Connectivity.global_coherence` now computes its per-time-frequency-bin
   components with a single batched decomposition over all bins instead of a
   Python loop with one SVD per bin — a batched Hermitian eigendecomposition of
@@ -291,10 +295,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Multitaper` gained an `fft_workers` argument (also accepted by
   `multitaper_connectivity` via `**kwargs`) that sets the number of parallel
   worker threads for SciPy's CPU FFT (`-1` uses all cores). It defaults to
-  `None` (SciPy's single-threaded default), so existing behavior and results are
-  unchanged; enabling it speeds up the FFT stage on multi-core CPUs (measured
-  ~1.4× for the transform on an 18-core machine; larger on some SciPy builds).
-  It is opt-in to avoid oversubscribing CPUs when the analysis is already
+  `None` (SciPy's single-threaded default), so existing behavior is unchanged;
+  enabling it speeds up the FFT stage on multi-core CPUs (measured ~1.4× for the
+  transform on an 18-core machine; larger on some SciPy builds). Results are
+  numerically equivalent to the single-threaded result — a threaded FFT may
+  differ at the floating-point-rounding level (~1e-16) from summation order, not
+  bit-for-bit. It is opt-in to avoid oversubscribing CPUs when the analysis is
+  already
   parallelized at a higher level, and is ignored on the GPU backend (whose FFT
   has no such parameter and is already parallel).
 
