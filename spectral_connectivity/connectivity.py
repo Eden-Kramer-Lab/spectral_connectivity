@@ -217,6 +217,27 @@ def _nonsorted_unique(x: NDArray[Any]) -> NDArray[Any]:
     return x[np.sort(u_idx)]
 
 
+def _freeze_writeable_chain(array: NDArray) -> None:
+    """Mark ``array`` and every array in its ``.base`` chain read-only (NumPy).
+
+    A NumPy view shares its buffer with its ``.base``, so freezing only the
+    outer array leaves that buffer writable through the base. ``Multitaper.fft``
+    returns a ``swapaxes`` view whose base *is* the writable owning array, so the
+    whole chain must be frozen for the adoption path to be safe. Backends without
+    a settable ``writeable`` flag (e.g. CuPy) raise, which is ignored: adoption
+    there still relies on the array being unshared, and the getter returns a
+    fresh copy on such backends anyway. ``.base`` chains are acyclic, so the walk
+    terminates at the owning array.
+    """
+    obj: NDArray | None = array
+    while obj is not None:
+        try:
+            obj.flags.writeable = False
+        except (AttributeError, ValueError):
+            pass
+        obj = getattr(obj, "base", None)
+
+
 class Connectivity:
     """
     Compute functional and directed connectivity measures from spectral data.
@@ -342,11 +363,19 @@ class Connectivity:
         dtype: np.dtype = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
+        _adopt_fourier_coefficients: bool = False,
     ) -> None:
         # fourier_coefficients and expectation_type are validated in their
         # property setters (below), which also clear the cached intermediates so
         # reassigning either on an existing instance cannot serve stale results.
-        self.fourier_coefficients = fourier_coefficients
+        # _adopt_fourier_coefficients is a private fast path for from_multitaper:
+        # the fft() output is unshared, so it is frozen in place instead of
+        # copied, avoiding a transient 2x peak of the largest array. It must not
+        # be set for a caller-owned array (see _adopt_fourier_coefficients).
+        if _adopt_fourier_coefficients:
+            self._adopt_fourier_coefficients(fourier_coefficients)
+        else:
+            self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         # Wilson minimum-phase factorization controls, used by the directed
         # measures. Near-singular cross-spectral matrices can need more than the
@@ -428,6 +457,12 @@ class Connectivity:
         change the data assign a new array (which clears the caches) rather than
         mutating the returned one. Internal computations read
         ``self._fourier_coefficients`` directly to avoid this copy.
+
+        ``from_multitaper`` skips the copy: the ``Multitaper.fft()`` output is
+        freshly built and unshared, so it is frozen in place (the whole ``.base``
+        chain, since ``fft()`` returns a view) rather than duplicated, avoiding a
+        transient doubling of the largest array. The read-only guarantee above is
+        unchanged.
         """
         coefficients = self._fourier_coefficients
         # If the backing copy could not be frozen (e.g. CuPy has no settable
@@ -442,6 +477,28 @@ class Connectivity:
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
+        # Public assignment always copies defensively: the caller may keep its
+        # array and later mutate it in place, which would silently invalidate the
+        # cached intermediates.
+        self._set_fourier_coefficients(value, adopt=False)
+
+    def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
+        """Take ownership of a freshly produced, unshared array without copying.
+
+        Used only by ``from_multitaper``, where ``value`` is the
+        ``Multitaper.fft()`` output and is referenced nowhere else. This avoids a
+        full copy of the largest array in the pipeline -- a transient ~2x peak on
+        every construction, which can push a memory-constrained GPU into OOM.
+
+        This is deliberately private and has no public ``copy=False`` surface: it
+        is safe only when the caller guarantees the array *and its writable NumPy
+        base buffer* are unshared, which ``from_multitaper`` controls.
+        """
+        self._set_fourier_coefficients(value, adopt=True)
+
+    def _set_fourier_coefficients(
+        self, value: NDArray[np.complexfloating], *, adopt: bool
+    ) -> None:
         if value.ndim != 5:
             raise ValueError(
                 f"fourier_coefficients must be 5-dimensional, got {value.ndim}D array.\n"
@@ -469,24 +526,31 @@ class Connectivity:
                 UserWarning,
                 stacklevel=2,
             )
-        # Own the coefficients as an immutable snapshot. The cached
-        # intermediates (_power, the reduced cross-spectrum, and the
-        # directed-measure factors) assume the coefficients change only through
-        # this setter, which clears them. Copying decouples the instance from
-        # later in-place mutation of the caller's array; marking the copy
-        # read-only turns an in-place mutation via the getter into a clear error
-        # rather than silently stale results. The caller's original array is
-        # left untouched (and, on the from_multitaper path, is unreferenced
-        # afterward, so steady-state memory is unchanged). CuPy may not support
-        # the writeable flag; the copy alone still provides the decoupling there.
-        # copy(order="K") keeps the caller's array's memory layout, so downstream
-        # matmuls see the same strides and results are unchanged to the bit (a
-        # plain C-order copy would perturb the BLAS summation order by ~1e-16).
-        value = value.copy(order="K")
-        try:
-            value.flags.writeable = False
-        except (AttributeError, ValueError):
-            pass
+        # Own the coefficients as an immutable snapshot: the cached intermediates
+        # (_power, the reduced cross-spectrum, and the directed-measure factors)
+        # assume the coefficients change only through the setter, which clears
+        # them. Marking the snapshot read-only turns an in-place edit via the
+        # getter into a clear error rather than silently stale results.
+        if adopt:
+            # `value` is unshared (Multitaper.fft output) but is a swapaxes VIEW
+            # whose base buffer is writable; freeze the whole base chain, not just
+            # the outer view, or the data stays reachable and mutable through
+            # `.base`. No copy -- this is the memory-saving path.
+            _freeze_writeable_chain(value)
+            owned = value
+        else:
+            # copy(order="K") keeps the caller's array's memory layout, so
+            # downstream matmuls see the same strides and results are unchanged to
+            # the bit (a plain C-order copy would perturb the BLAS summation order
+            # by ~1e-16). CuPy may not support the writeable flag; the copy alone
+            # still decouples the instance from later mutation of the caller's
+            # array there.
+            owned = value.copy(order="K")
+            try:
+                owned.flags.writeable = False
+            except (AttributeError, ValueError):
+                pass
+        value = owned
         self._fourier_coefficients = value
         self._clear_cached_intermediates()
         # On reassignment (not initial construction), a change in the number of
@@ -605,6 +669,9 @@ class Connectivity:
             dtype=dtype,
             minimum_phase_tolerance=minimum_phase_tolerance,
             minimum_phase_max_iterations=minimum_phase_max_iterations,
+            # fft() returns a freshly built, unshared array; adopt it in place
+            # instead of copying (see Connectivity._adopt_fourier_coefficients).
+            _adopt_fourier_coefficients=True,
         )
 
     def _validate_multiple_signals(self) -> None:
@@ -1218,7 +1285,9 @@ class Connectivity:
             return canonical_coherence_magnitude, labels
 
     def global_coherence(
-        self, max_rank: int = 1
+        self,
+        max_rank: int = 1,
+        max_workspace_elements: int = GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
     ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
 
@@ -1232,6 +1301,14 @@ class Connectivity:
         ----------
         max_rank : int, default=1
             The number of components to keep (like the number of PC dimensions).
+        max_workspace_elements : int, default=16_000_000
+            Peak-memory budget (in array elements) for the batched decomposition:
+            frequency bins are processed in chunks sized so the transient working
+            set stays near this many complex elements (the default ~16M ≈ 256 MB
+            of complex128). Lower it to reduce peak memory on a constrained CPU or
+            GPU (at the cost of more, smaller chunks); the default favors speed and
+            does not change the result. Ignored on the per-bin fallback path used
+            for a large decomposition dimension.
 
         Returns
         -------
@@ -1290,9 +1367,14 @@ class Connectivity:
         # matrix with few estimates is cheap even for many signals, while a large
         # square matrix is better served by the per-bin svds fallback.
         n_estimates = n_trials * n_tapers
+        if max_workspace_elements < 1:
+            raise ValueError(
+                f"max_workspace_elements must be a positive integer, got "
+                f"{max_workspace_elements}."
+            )
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
             global_coherence, unnormalized_global_coherence = _batched_global_coherence(
-                self._fourier_coefficients, max_rank
+                self._fourier_coefficients, max_rank, max_workspace_elements
             )
         else:
             # Per-bin fallback for a large decomposition dimension, where forming
@@ -3130,7 +3212,9 @@ def _global_coherence_components(
 
 
 def _batched_global_coherence(
-    fourier_coefficients: NDArray[np.complexfloating], max_rank: int
+    fourier_coefficients: NDArray[np.complexfloating],
+    max_rank: int,
+    max_workspace_elements: int = GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
 ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Global coherence for all time-frequency bins, batched over bins.
 
@@ -3174,7 +3258,7 @@ def _batched_global_coherence(
     # vectors; the 4x / 2x factors approximate that simultaneous footprint.
     decomposition_dim = min(n_signals, n_estimates)
     per_bin_elements = 4 * n_signals * n_estimates + 2 * decomposition_dim**2
-    chunk = max(1, GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS // per_bin_elements)
+    chunk = max(1, max_workspace_elements // per_bin_elements)
     use_eigh = n_estimates >= n_signals
 
     for time_ind in range(n_time):

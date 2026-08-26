@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from pytest import mark
 
+from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
@@ -1094,6 +1095,116 @@ def test_fourier_coefficients_getter_copies_when_backing_not_frozen():
     assert returned.flags.writeable  # writable, but disconnected from the instance
     returned[...] = 0.0  # mutating the copy must not affect the warmed cache
     np.testing.assert_array_equal(c.power(), power_before)
+
+
+def test_direct_construction_copies_and_is_isolated_from_caller_mutation():
+    """Connectivity(fc) must defensively copy: mutating fc cannot reach it."""
+    rng = np.random.default_rng(21)
+    shape = (1, 4, 2, 8, 3)
+    fourier = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+    c = Connectivity(fourier_coefficients=fourier)
+    # The stored snapshot owns its data (a copy), not a view of the caller's array.
+    assert c._fourier_coefficients.base is None
+    power_before = c.power().copy()
+    fourier[...] = 0.0
+    np.testing.assert_array_equal(c.power(), power_before)
+
+
+def test_from_multitaper_adopts_without_copying():
+    """from_multitaper takes ownership of fft() output without a full copy.
+
+    Multitaper.fft() returns a swapaxes view that is referenced nowhere else, so
+    Connectivity freezes it in place rather than copying the largest array in the
+    pipeline. The stored array is that view (``base`` is not None), and the entire
+    base chain is frozen so the backing buffer cannot be mutated.
+    """
+    rng = np.random.default_rng(22)
+    m = Multitaper(
+        rng.standard_normal((400, 6, 3)),
+        sampling_frequency=400,
+        time_halfbandwidth_product=3,
+    )
+    c = Connectivity.from_multitaper(m)
+
+    stored = c._fourier_coefficients
+    # Adopted (a view of fft() output), not an owning copy.
+    assert stored.base is not None
+
+    # The whole base chain is read-only, so the writable backing buffer of the
+    # swapaxes view is unreachable for mutation.
+    obj = stored
+    while obj is not None:
+        assert obj.flags.writeable is False
+        obj = obj.base
+
+    # Freezing only the outer view would leave the deepest base writable; confirm
+    # the deepest base cannot be mutated.
+    base = stored
+    while base.base is not None:
+        base = base.base
+    with pytest.raises(ValueError):
+        base[(0,) * base.ndim] = 0.0
+
+
+def test_from_multitaper_adopted_getter_cannot_be_made_writable():
+    """The getter over an adopted array must not expose a writable alias."""
+    rng = np.random.default_rng(23)
+    m = Multitaper(
+        rng.standard_normal((400, 6, 3)),
+        sampling_frequency=400,
+        time_halfbandwidth_product=3,
+    )
+    c = Connectivity.from_multitaper(m)
+    power_before = c.power().copy()
+
+    returned = c.fourier_coefficients
+    assert returned.flags.writeable is False
+    with pytest.raises(ValueError):
+        returned.flags.writeable = True
+    # Its base chain (the adopted storage) also stays frozen.
+    obj = returned
+    while obj is not None:
+        assert obj.flags.writeable is False
+        obj = obj.base
+    np.testing.assert_array_equal(c.power(), power_before)
+
+
+def test_from_multitaper_adoption_matches_copy_numerically():
+    """Adoption must not change results vs. the defensive-copy path."""
+    rng = np.random.default_rng(24)
+    m = Multitaper(
+        rng.standard_normal((400, 6, 3)),
+        sampling_frequency=400,
+        time_halfbandwidth_product=3,
+    )
+    adopted = Connectivity.from_multitaper(m)
+    copied = Connectivity(np.asarray(m.fft()))  # forces the copy path
+
+    np.testing.assert_array_equal(adopted.power(), copied.power())
+    for measure in ("coherence_magnitude", "imaginary_coherence"):
+        a = getattr(adopted, measure)()
+        b = getattr(copied, measure)()
+        # equal including matching NaN positions (the coherence diagonal)
+        assert np.array_equal(a, b, equal_nan=True)
+
+
+def test_from_multitaper_adoption_invalidates_cache_on_reassignment():
+    """Reassigning fourier_coefficients on an adopted instance clears caches."""
+    rng = np.random.default_rng(25)
+    m = Multitaper(
+        rng.standard_normal((400, 6, 3)),
+        sampling_frequency=400,
+        time_halfbandwidth_product=3,
+    )
+    c = Connectivity.from_multitaper(m)
+    _ = c.power()
+    assert "_power" in c.__dict__  # cached
+    c.fourier_coefficients = np.asarray(m.fft()) * 2.0
+    assert "_power" not in c.__dict__  # cleared
+    # New power reflects the reassigned (4x) data.
+    np.testing.assert_allclose(c.power(), 4.0 * Connectivity.from_multitaper(m).power())
 
 
 def test_debiased_weighted_pli_requires_multiple_observations():
@@ -2246,13 +2357,9 @@ def test_global_coherence_batched_chunking_matches_single_chunk():
 
     The default element cap keeps every test's bins in a single chunk, so the
     partial-last-chunk reshape/strided-write logic is otherwise unexercised.
-    Force a tiny cap so bins are processed in several chunks (with a zero-power
+    Force a tiny budget so bins are processed in several chunks (with a zero-power
     bin near a boundary) and require an identical result.
     """
-    from unittest.mock import patch
-
-    from spectral_connectivity import connectivity as conn_mod
-
     rng = np.random.default_rng(7)
     shape = (2, 10, 3, 20, 6)
     fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
@@ -2262,14 +2369,42 @@ def test_global_coherence_batched_chunking_matches_single_chunk():
     fc[0, :, :, 7, :] = 0.0  # zero-power bin (-> NaN), placed to straddle chunks
 
     gc_single, vec_single = Connectivity(fc).global_coherence(max_rank=2)
-    # Cap chosen so `chunk` is only a few bins, forcing multiple iterations and a
-    # partial final chunk (20 frequency bins do not divide evenly).
-    with patch.object(conn_mod, "GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS", 6 * 6 * 3):
-        gc_multi, vec_multi = Connectivity(fc).global_coherence(max_rank=2)
+    # Budget chosen so `chunk` is only a few bins, forcing multiple iterations and
+    # a partial final chunk (20 frequency bins do not divide evenly).
+    gc_multi, vec_multi = Connectivity(fc).global_coherence(
+        max_rank=2, max_workspace_elements=6 * 6 * 3
+    )
 
     np.testing.assert_array_equal(np.isnan(gc_single), np.isnan(gc_multi))
     np.testing.assert_allclose(gc_single, gc_multi, equal_nan=True)
     np.testing.assert_allclose(vec_single, vec_multi, equal_nan=True)
+
+
+def test_global_coherence_workspace_budget_is_configurable_and_result_invariant():
+    """max_workspace_elements bounds peak memory without changing the result.
+
+    Chunking is a memory-only concern: a tiny budget (many small chunks) and a
+    huge budget (a single chunk) must yield the same fractions and vectors, and a
+    non-positive budget must be rejected.
+    """
+    rng = np.random.default_rng(31)
+    shape = (2, 10, 3, 20, 6)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(
+        np.complex128
+    )
+    c = Connectivity(fc)
+
+    gc_default, vec_default = c.global_coherence(max_rank=2)
+    gc_tiny, vec_tiny = c.global_coherence(max_rank=2, max_workspace_elements=5_000)
+    gc_huge, vec_huge = c.global_coherence(max_rank=2, max_workspace_elements=10**9)
+
+    np.testing.assert_array_equal(gc_default, gc_tiny)
+    np.testing.assert_array_equal(gc_default, gc_huge)
+    np.testing.assert_array_equal(vec_default, vec_tiny)
+    np.testing.assert_array_equal(vec_default, vec_huge)
+
+    with pytest.raises(ValueError, match="max_workspace_elements must be a positive"):
+        c.global_coherence(max_workspace_elements=0)
 
 
 def test_global_coherence_vectors_are_orthonormal_eigenvectors():

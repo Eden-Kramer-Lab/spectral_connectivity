@@ -340,6 +340,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Dependency floor raised:** the GPU extra now requires `cupy-cuda12x>=13.0`
   (was `>=12.0`), because `cupyx.scipy.signal.detrend` was added in CuPy 13.
   GPU users on CuPy 12 must upgrade; CuPy 13 still targets CUDA 12.x.
+- **`Connectivity.from_multitaper` adopts the transform without copying.** The
+  immutable-snapshot setter copies the input Fourier coefficients (the largest
+  array in the pipeline) to protect the caches from external in-place edits.
+  `from_multitaper` passes the freshly built, unshared `Multitaper.fft()` output,
+  which nothing else references, so it is now frozen in place instead of copied —
+  removing a transient ~2x peak of that array during construction (which could
+  push a memory-constrained GPU into OOM). Because `fft()` returns a `swapaxes`
+  view whose base buffer is writable, the whole `.base` chain is frozen, so the
+  read-only guarantee is unchanged; results are bit-for-bit identical. Direct
+  construction (`Connectivity(fourier_coefficients=...)`) still copies
+  defensively, since a caller-supplied array may be retained and mutated.
+- **`Connectivity.global_coherence` gained a `max_workspace_elements` argument**
+  bounding the batched decomposition's transient working set (default ~16M
+  complex elements ≈ 256 MB, unchanged). Memory-constrained CPU/GPU callers can
+  lower it to trade a little speed (more, smaller frequency chunks) for a smaller
+  peak; the result is identical.
 
 ### Added
 
