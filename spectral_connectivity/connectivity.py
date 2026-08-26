@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage import label
-from scipy.stats.mstats import linregress
 
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
@@ -2037,29 +2036,58 @@ class Connectivity:
                 xp.unwrap(xp.angle(bandpassed_coherency), axis=-2), mask=~is_significant
             )
 
-        def _linear_regression(response: NDArray[np.floating]) -> Any:
-            return linregress(bandpassed_frequencies, y=response)
+        # Vectorized masked linear regression of the unwrapped phase on
+        # frequency, per (batch, signal pair), replacing a per-slice scipy
+        # ``linregress`` call (``apply_along_axis`` invokes it once per slice).
+        # Uses the closed-form ordinary-least-squares slope and Pearson r from
+        # centered masked sums over the frequency axis (-2); where at least two
+        # distinct significant frequencies remain these match ``linregress`` to
+        # floating-point tolerance, and degenerate slices (fewer than two, or a
+        # single distinct frequency) yield NaN as ``linregress`` does.
+        is_valid = ~np.ma.getmaskarray(coherence_phase)
+        # Replace masked entries with a finite value before the arithmetic: the
+        # masked phase can be NaN (e.g. a zero-power bin's coherency angle), and
+        # ``0 * NaN`` is NaN, which would poison the whole slice's sums even
+        # though the valid mask already excludes those entries.
+        phase = np.where(is_valid, np.ma.getdata(coherence_phase), 0.0)
+        frequency = np.asarray(bandpassed_frequencies, dtype=float).reshape(-1, 1)
+        axis = -2
+        count = is_valid.sum(axis, keepdims=True)
+        safe_count = np.where(count == 0, 1, count)
+        # Center x and y on their per-slice means before summing squares, so the
+        # variance does not catastrophically cancel when the absolute
+        # frequencies are large relative to their spacing (raw-moment
+        # ``count * sum_xx - sum_x**2`` loses all precision there).
+        mean_x = (is_valid * frequency).sum(axis, keepdims=True) / safe_count
+        mean_y = (is_valid * phase).sum(axis, keepdims=True) / safe_count
+        centered_x = frequency - mean_x
+        centered_y = phase - mean_y
+        sum_xx = (is_valid * centered_x * centered_x).sum(axis, keepdims=True)
+        sum_yy = (is_valid * centered_y * centered_y).sum(axis, keepdims=True)
+        sum_xy = (is_valid * centered_x * centered_y).sum(axis, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            pair_slope = (sum_xy / sum_xx)[..., 0, :]
+            pair_r_value = (sum_xy / np.sqrt(sum_xx * sum_yy))[..., 0, :]
+        # Guard against |r| drifting just past 1 from rounding.
+        pair_r_value = np.clip(pair_r_value, -1.0, 1.0)
 
-        regression_results = np.ma.apply_along_axis(
-            _linear_regression, -2, coherence_phase
-        )
         new_shape = (*bandpassed_coherency.shape[:-2], n_signals, n_signals)
         slope = np.full(new_shape, np.nan)
         slope[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
-            np.asarray(regression_results[..., 0, :], dtype=float)
+            pair_slope
         )
-        slope[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = (
-            -1 * np.asarray(regression_results[..., 0, :], dtype=float)
-        )
+        slope[
+            ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
+        ] = -pair_slope
 
         delay = slope / (2 * np.pi)
 
         r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
-            np.asarray(regression_results[..., 2, :], dtype=float)
+            pair_r_value
         )
         r_value[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = (
-            np.asarray(regression_results[..., 2, :], dtype=float)
+            pair_r_value
         )
 
         return delay, slope, r_value

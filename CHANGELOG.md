@@ -249,6 +249,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   original tensor, sized to the real per-bin working set — to bound peak memory;
   a per-bin `svds` fallback is retained for large square matrices, where
   computing every component would be wasteful.
+- `Connectivity.group_delay` fits the unwrapped coherence phase against
+  frequency with a vectorized masked regression (closed-form OLS slope and
+  Pearson r from centered sums over the frequency axis) instead of
+  `np.ma.apply_along_axis`, which called `scipy.stats.mstats.linregress` once per
+  (time, signal pair). The regression kernel was ~500× faster in a
+  representative case and matches the previous result to floating-point tolerance
+  (~1e-15), with the same NaN for slices that have fewer than two significant
+  frequencies. Masked (e.g. zero-power) frequencies are excluded rather than
+  allowed to poison the sums, and the moments are computed from mean-centered
+  residuals so the fit stays accurate when the absolute frequencies are large
+  relative to their spacing. `scipy.stats.mstats.linregress` is no longer
+  imported.
 
 ## [2.0.1] - 2026-05-12
 

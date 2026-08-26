@@ -700,6 +700,117 @@ class TestGroupDelay:
         assert np.all(np.isfinite(delay) | np.isnan(delay))
         assert np.all(np.isfinite(slope) | np.isnan(slope))
 
+    def test_group_delay_zero_power_bin_does_not_poison_slice(self):
+        """A masked (zero-power) frequency must not NaN-poison a pair's fit.
+
+        A zero-power frequency makes that bin's coherency NaN (0/0), which is
+        masked out. The vectorized regression must exclude it rather than let
+        ``0 * NaN`` propagate NaN through the whole slice's sums, so a pair that
+        is coherent at the remaining frequencies still gets a finite slope/r.
+        """
+        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 20, 1, 16, 3
+        delay = 0.3
+        bins = np.arange(n_fft)
+        fourier = np.zeros(
+            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
+        )
+        for trial in range(n_trials):
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
+                n_fft
+            )
+            fourier[0, trial, 0, :, 0] = base
+            # Signal 1 is signal 0 with a linear phase ramp (a broadband delay).
+            fourier[0, trial, 0, :, 1] = base * np.exp(
+                -1j * 2 * np.pi * bins * delay / n_fft
+            )
+            fourier[0, trial, 0, :, 2] = self.rng.standard_normal(
+                n_fft
+            ) + 1j * self.rng.standard_normal(n_fft)
+        fourier[..., 5, :] = 0.0  # a zero-power frequency -> NaN coherency, masked
+
+        _delay, slope, r_value = Connectivity(
+            fourier_coefficients=fourier
+        ).group_delay()
+
+        # The coherent pair (0, 1) keeps a finite fit despite the masked bin.
+        assert np.isfinite(slope[..., 0, 1]).all()
+        assert np.isfinite(r_value[..., 0, 1]).all()
+
+    def test_group_delay_matches_scipy_linregress(self):
+        """The vectorized masked regression matches a per-slice scipy linregress.
+
+        group_delay fits the unwrapped coherence phase against frequency per
+        (time, signal pair) with vectorized masked sums. This must reproduce the
+        slope and r-value that ``scipy.stats.mstats.linregress`` returns slice by
+        slice, including NaN for slices with fewer than two significant
+        frequencies.
+        """
+        from itertools import combinations
+
+        from scipy.stats.mstats import linregress
+
+        n_time, n_trials, n_signals, sampling_frequency = 400, 10, 4, 250
+        time = np.arange(n_time) / sampling_frequency
+        base = np.sin(2 * np.pi * 20 * time)
+        signals = []
+        for shift in range(n_signals):
+            signal = np.roll(base, shift) + 0.2 * self.rng.standard_normal(n_time)
+            trials = signal[:, np.newaxis] + 0.1 * self.rng.standard_normal(
+                (n_time, n_trials)
+            )
+            signals.append(trials)
+        time_series = np.stack(signals, axis=-1)  # (n_time, n_trials, n_signals)
+
+        conn = Connectivity.from_multitaper(
+            Multitaper(
+                time_series=time_series,
+                sampling_frequency=sampling_frequency,
+                time_window_duration=0.4,
+                time_halfbandwidth_product=3,
+            )
+        )
+        _delay, slope, r_value = conn.group_delay()
+
+        # Recompute a reference with the previous per-slice approach.
+        frequencies = conn.frequencies
+        from spectral_connectivity.connectivity import (
+            _bandpass,
+            _find_significant_frequencies,
+            _get_independent_frequency_step,
+        )
+
+        step = _get_independent_frequency_step(frequencies[1] - frequencies[0], None)
+        bandpassed, band_frequencies = _bandpass(conn.coherency(), frequencies, None)
+        pairs = np.asarray(list(combinations(range(n_signals), 2)))
+        bandpassed = bandpassed[..., pairs[:, 0], pairs[:, 1]]
+        significant = _find_significant_frequencies(
+            bandpassed, conn.n_observations, step, significance_threshold=0.05
+        )
+        phase = np.ma.masked_array(
+            np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant
+        )
+
+        reference_slope = np.full(slope.shape, np.nan)
+        reference_r = np.ones(r_value.shape)
+        it = np.ndindex(phase.shape[:-2])
+        for lead in it:
+            for pair_index, (i, j) in enumerate(pairs):
+                fit = linregress(
+                    band_frequencies, y=phase[(*lead, slice(None), pair_index)]
+                )
+                reference_slope[(*lead, i, j)] = fit[0]
+                reference_slope[(*lead, j, i)] = -fit[0]
+                reference_r[(*lead, i, j)] = fit[2]
+                reference_r[(*lead, j, i)] = fit[2]
+
+        np.testing.assert_array_equal(np.isnan(slope), np.isnan(reference_slope))
+        np.testing.assert_allclose(
+            slope, reference_slope, rtol=1e-9, atol=1e-11, equal_nan=True
+        )
+        np.testing.assert_allclose(
+            r_value, reference_r, rtol=1e-9, atol=1e-11, equal_nan=True
+        )
+
     def test_group_delay_antisymmetry(self):
         """Test that group delay shows antisymmetry: delay[i,j] = -delay[j,i]."""
         n_time = 200
