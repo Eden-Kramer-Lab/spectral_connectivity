@@ -357,6 +357,77 @@ def test_fft_workers_does_not_change_results():
     np.testing.assert_array_equal(baseline.values, parallel.values)
 
 
+def test_fft_workers_is_actually_forwarded_to_scipy():
+    """`fft_workers` must reach SciPy's FFT (and only on the CPU backend).
+
+    Output invariance alone cannot detect a dropped passthrough. Spy on the
+    module-level ``fft`` to confirm ``workers`` is forwarded when set, omitted
+    when ``None`` (SciPy's default), forwarded through the wrapper's **kwargs,
+    and NOT forwarded when the GPU backend is (simulated as) active.
+    """
+    from unittest.mock import patch
+
+    from spectral_connectivity import transforms
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((256, 3, 2))
+    real_fft = transforms.fft
+
+    def spying_fft(recorded):
+        def _fft(*args, **kwargs):
+            recorded.append(kwargs.get("workers", "MISSING"))
+            return real_fft(*args, **kwargs)
+
+        return _fft
+
+    def transform_workers(multitaper):
+        # Prime the tapers first (their DPSS eigenvalue FFT also uses this
+        # module's `fft`), so the spy records only the taper-projection FFT.
+        _ = multitaper.tapers  # prime the DPSS fft
+        recorded = []
+        with patch.object(transforms, "fft", spying_fft(recorded)):
+            multitaper.fft()
+        assert len(recorded) == 1
+        return recorded[0]
+
+    # Default: no `workers` key is passed (SciPy's single-threaded default).
+    assert transform_workers(Multitaper(time_series, sampling_frequency=500)) == (
+        "MISSING"
+    )
+
+    # Explicit value is forwarded verbatim.
+    assert (
+        transform_workers(
+            Multitaper(time_series, sampling_frequency=500, fft_workers=3)
+        )
+        == 3
+    )
+
+    # Forwarded through the wrapper's **kwargs (which reach Multitaper).
+    recorded = []
+    primer = Multitaper(time_series, sampling_frequency=500)
+    _ = primer.tapers  # warm the DPSS fft path unrelated to the transform
+    with patch.object(transforms, "fft", spying_fft(recorded)):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="coherence_magnitude",
+            fft_workers=2,
+        )
+    assert 2 in recorded  # the taper-projection FFT received workers=2
+
+    # On the GPU backend `workers` is not forwarded (cupyx's FFT has no such
+    # parameter). Simulate GPU on the CPU by patching the backend check.
+    gpu_multitaper = Multitaper(time_series, sampling_frequency=500, fft_workers=-1)
+    _ = gpu_multitaper.tapers
+    recorded = []
+    with patch.object(transforms, "is_gpu_enabled", lambda: True):
+        with patch.object(transforms, "fft", spying_fft(recorded)):
+            gpu_multitaper.fft()
+    assert recorded == ["MISSING"]
+
+
 def test_to_host_array_handles_device_arrays():
     """Coordinate validation must not implicitly convert GPU arrays.
 

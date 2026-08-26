@@ -558,7 +558,10 @@ def test_largest_independent_group_vectorized_matches_reference():
     # An empty frequency band (n_frequencies == 0) must return an empty result,
     # not raise (the reshape cannot infer a -1 dimension at size 0).
     empty = np.zeros((2, 0, 3), dtype=bool)
-    assert _largest_independent_group_along_frequency(empty, 2, 3).shape == (2, 0, 3)
+    empty_result = _largest_independent_group_along_frequency(empty, 2, 3)
+    assert empty_result.shape == (2, 0, 3)
+    assert empty_result.dtype == bool
+    assert empty_result.size == 0
 
     # Explicit edge cases, including two equal-size clusters (first is kept).
     tie = np.array([[True, True, False, True, True, False]]).reshape(1, 6, 1)
@@ -845,20 +848,32 @@ def test_power_and_cross_spectrum_caches_invalidate():
     fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
 
-    # Populate both caches via coherency (reads power twice + reduced CSM).
+    # Populate the caches: coherency reads power + reduced CSM; a phase-lag-index
+    # measure populates the shared imaginary-cross-spectrum moments.
     c.coherency()
+    c.weighted_phase_lag_index()
     assert "_power" in c.__dict__
     assert "_cached_reduced_cross_spectral_matrix" in c.__dict__
+    assert "_imaginary_cross_spectrum_moments" in c.__dict__
     power_before = c._power
     csm_before = c._cached_reduced_cross_spectral_matrix
+    wpli_before = c.weighted_phase_lag_index()
 
     # Reassigning to *different* data must recompute, not serve the stale cache.
     other = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     c.fourier_coefficients = other
     assert "_power" not in c.__dict__
     assert "_cached_reduced_cross_spectral_matrix" not in c.__dict__
+    assert "_imaginary_cross_spectrum_moments" not in c.__dict__
     assert not np.allclose(c._power, power_before)
     assert not np.allclose(c._cached_reduced_cross_spectral_matrix, csm_before)
+    # The fused phase-lag-index family recomputes from the new data and matches a
+    # fresh instance (a stale moment cache would fail this).
+    fresh_wpli = Connectivity(
+        fourier_coefficients=other, expectation_type="trials_tapers"
+    ).weighted_phase_lag_index()
+    assert not np.allclose(c.weighted_phase_lag_index(), wpli_before)
+    np.testing.assert_array_equal(c.weighted_phase_lag_index(), fresh_wpli)
 
     # Changing expectation_type also invalidates (and changes the averaged shape).
     power_trials_tapers = c._power
@@ -867,13 +882,16 @@ def test_power_and_cross_spectrum_caches_invalidate():
     assert c._power.shape != power_trials_tapers.shape
 
 
-def test_phase_lag_index_family_matches_per_fcn_reference():
+@pytest.mark.parametrize("expectation_type", ["trials_tapers", "tapers"])
+def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     """The fused phase-lag-index family matches the per-fcn cross-spectrum path.
 
     phase_lag_index, weighted_phase_lag_index and
     debiased_squared_weighted_phase_lag_index now share one observation-level
     imaginary cross-spectrum (four cached moments) instead of re-forming it per
-    ``fcn``. Each must equal the original per-fcn computation. Also checks that
+    ``fcn``. Each must equal the original per-fcn computation. Parametrized over
+    ``expectation_type`` because ``debiased_squared_weighted_phase_lag_index``
+    scales by ``n_observations``, which changes with it. Also checks that
     computing one measure does not corrupt a cached moment another relies on.
     """
     rng = np.random.default_rng(0)
@@ -892,7 +910,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference():
     def non_negative(a):  # mirror the @_non_negative_frequencies(-3) decorator
         return a[..., : a.shape[-3] // 2 + 1, :, :]
 
-    conn = Connectivity(fc)
+    conn = Connectivity(fc, expectation_type=expectation_type)
     n_observations = conn.n_observations
     # Reference moments via independent per-fcn expectation calls.
     mean_sign = conn._expectation_cross_spectral_matrix(
@@ -925,7 +943,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference():
 
     # Computing wpli (which guards its weights in place on a copy) must not
     # change a later debiased_squared_weighted_phase_lag_index result.
-    warm = Connectivity(fc)
+    warm = Connectivity(fc, expectation_type=expectation_type)
     warm.weighted_phase_lag_index()
     np.testing.assert_array_equal(
         warm.debiased_squared_weighted_phase_lag_index(), expected_dwpli

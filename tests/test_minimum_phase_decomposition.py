@@ -121,7 +121,16 @@ def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
         coeffs, coeffs.conj().swapaxes(-1, -2)
     ) + 2 * np.eye(2)
 
-    factor_default = minimum_phase_decomposition(cross_spectral_matrix)
+    import warnings
+
+    # A clean, well-conditioned input converges, so the loop must take the
+    # early-return path -- no "did not converge" warning. This also pins that
+    # the merged early-exit returns (rather than breaking into the post-loop
+    # NaN-marking/warning path) when every sub-spectrum converges.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor_default = minimum_phase_decomposition(cross_spectral_matrix)
+
     with caplog.at_level(
         logging.DEBUG, logger="spectral_connectivity.minimum_phase_decomposition"
     ):
