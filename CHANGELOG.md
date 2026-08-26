@@ -212,6 +212,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only added overhead); `blocks` still reduces memory for the transform-based
   measures (e.g. coherence magnitude, imaginary coherence) that must form the
   outer product.
+- `multitaper_connectivity` now builds a single `Connectivity` from the
+  multitaper transform and reuses it across every requested measure, instead of
+  reconstructing one (and recomputing the uncached FFT) per measure. Results are
+  bit-for-bit identical. `connectivity_to_xarray` gained an optional
+  `connectivity=` argument to accept the shared instance (validated against the
+  `Multitaper` to prevent mislabeled output). The realized benefit is avoiding
+  the repeated FFTs; it is modest on its own, because the tapers are already
+  memoized on the `Multitaper` (so the dominant taper cost was not repeated) and
+  the wrapper's measures do not yet share any cached intermediate. Sharing one
+  instance is a prerequisite for cross-measure reuse of intermediates once the
+  reduced cross-spectrum is cached.
 
 ## [2.0.1] - 2026-05-12
 

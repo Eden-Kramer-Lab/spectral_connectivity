@@ -15,11 +15,57 @@ from spectral_connectivity.transforms import Multitaper
 logger = getLogger(__name__)
 
 
+def _to_host_array(x: Any) -> NDArray:
+    """Return a NumPy view of ``x``, moving it off the GPU if needed.
+
+    Under GPU mode ``Multitaper`` coordinates are CuPy arrays, which NumPy will
+    not implicitly convert. CuPy arrays expose ``.get()`` to copy to host;
+    NumPy arrays have no such method and pass through unchanged.
+    """
+    to_host = getattr(x, "get", None)
+    return np.asarray(to_host() if callable(to_host) else x)
+
+
+def _validate_connectivity_matches_multitaper(
+    connectivity: Connectivity, m: Multitaper
+) -> None:
+    """Raise if an injected ``Connectivity`` was not built from ``m``.
+
+    ``connectivity_to_xarray`` takes the data and coordinates from
+    ``connectivity`` but the metadata attributes from ``m``. If the two describe
+    different transforms (e.g. a different sampling frequency or channel count),
+    the result would be silently mislabeled — real values on one frequency grid
+    tagged with another transform's parameters. Enforce that they agree on the
+    geometry the output depends on: channel count, the (two-sided) frequency
+    grid, and the time bins.
+    """
+    n_signals = connectivity.fourier_coefficients.shape[-1]
+    mismatches = []
+    if n_signals != m.n_signals:
+        mismatches.append(f"n_signals ({n_signals} != {m.n_signals})")
+    if not np.array_equal(
+        _to_host_array(connectivity.all_frequencies), _to_host_array(m.frequencies)
+    ):
+        mismatches.append("frequencies")
+    if not np.array_equal(_to_host_array(connectivity.time), _to_host_array(m.time)):
+        mismatches.append("time")
+    if mismatches:
+        raise ValueError(
+            "The provided `connectivity` was not built from this `Multitaper`; "
+            f"they disagree on: {', '.join(mismatches)}. `connectivity_to_xarray` "
+            "labels results with `m`'s coordinates and metadata, so a mismatched "
+            "instance would produce silently mislabeled output. Pass a "
+            "`Connectivity` built from `m` (e.g. `Connectivity.from_multitaper(m)`)"
+            " or leave `connectivity=None` to build one automatically."
+        )
+
+
 def connectivity_to_xarray(
     m: Multitaper,
     method: str = "coherence_magnitude",
     signal_names: Sequence[str] | None = None,
     squeeze: bool = False,
+    connectivity: Connectivity | None = None,
     **kwargs: Any,
 ) -> xr.DataArray:
     """
@@ -41,6 +87,18 @@ def connectivity_to_xarray(
     squeeze : bool, default=False
         If True and only 2 signals, return connectivity between first and last
         signal only. Only meaningful for symmetric measures.
+    connectivity : Connectivity, optional
+        A ``Connectivity`` already built from ``m``. When computing several
+        measures from the same transform, pass a shared instance to avoid
+        recomputing the (uncached) FFT for each measure. (No wrapper-supported
+        measure currently shares a cached intermediate, so this only saves the
+        FFT for now.) When ``None`` (the default) one is constructed from ``m``
+        via
+        ``Connectivity.from_multitaper``. It must be built from ``m`` — ``m`` is
+        still used for the output coordinates/metadata, so a mismatched
+        ``connectivity`` would mislabel the result. This is enforced: an instance
+        whose channel count, frequency grid, or time bins disagree with ``m``
+        raises ``ValueError``.
     **kwargs : dict
         Additional keyword arguments passed to connectivity method.
 
@@ -92,7 +150,10 @@ def connectivity_to_xarray(
     else:
         signal_names_list = signal_names
 
-    connectivity = Connectivity.from_multitaper(m)
+    if connectivity is None:
+        connectivity = Connectivity.from_multitaper(m)
+    else:
+        _validate_connectivity_matches_multitaper(connectivity, m)
     connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
     if (m.time_series.shape[-1] > 2) and squeeze:
@@ -313,11 +374,22 @@ def multitaper_connectivity(
         time_window_duration=time_window_duration,
         **kwargs,
     )
+    # Build the Connectivity once and share it across every requested measure:
+    # from_multitaper recomputes the (uncached) FFT on each call, and a fresh
+    # instance would also discard cached intermediates. connectivity_kwargs are
+    # passed to the measure methods, not the constructor, so a single
+    # default-constructed instance matches the previous per-method construction.
+    shared_connectivity = Connectivity.from_multitaper(m)
     cons = xr.Dataset()  # Initialize
     for this_method in method:
         try:
             con = connectivity_to_xarray(
-                m, this_method, signal_names, squeeze, **connectivity_kwargs
+                m,
+                this_method,
+                signal_names,
+                squeeze,
+                connectivity=shared_connectivity,
+                **connectivity_kwargs,
             )
             cons[this_method] = con  # Add data variable
         except NotImplementedError as e:

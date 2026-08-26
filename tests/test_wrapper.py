@@ -1,6 +1,7 @@
 import inspect
 
 import numpy as np
+import pytest
 from pytest import mark
 
 from spectral_connectivity.connectivity import Connectivity
@@ -322,6 +323,101 @@ def test_result_netcdf_serializable_with_detrend_none(tmp_path):
     path = tmp_path / "conn.nc"
     result.to_netcdf(path)
     assert path.exists()
+
+
+def test_to_host_array_handles_device_arrays():
+    """Coordinate validation must not implicitly convert GPU arrays.
+
+    Under GPU mode ``Multitaper`` coordinates are CuPy arrays, which raise on
+    implicit ``np.asarray`` conversion. ``_to_host_array`` must route through
+    ``.get()`` for such arrays while leaving NumPy arrays untouched, so the
+    injected-``Connectivity`` validation works on both backends.
+    """
+    from spectral_connectivity.wrapper import _to_host_array
+
+    host = np.arange(5.0)
+    np.testing.assert_array_equal(_to_host_array(host), host)
+
+    class _DeviceLike:
+        """Mimics cupy.ndarray: no implicit conversion, but ``.get()`` works."""
+
+        def __init__(self, host_array):
+            self._host = host_array
+
+        def get(self):
+            return self._host
+
+        def __array__(self, dtype=None):
+            raise TypeError("Implicit conversion to a NumPy array is not allowed.")
+
+    device = _DeviceLike(np.arange(5.0))
+    with pytest.raises(TypeError):
+        np.asarray(device)  # guards the premise: implicit conversion fails
+    np.testing.assert_array_equal(_to_host_array(device), np.arange(5.0))
+
+
+def test_multi_method_shares_single_fft():
+    """A multi-method call computes the FFT once, not once per measure.
+
+    ``multitaper_connectivity`` builds one shared ``Connectivity`` and reuses it
+    across every requested measure. Since ``Connectivity.from_multitaper`` calls
+    the (uncached) ``Multitaper.fft``, the FFT must run exactly once regardless
+    of how many measures are requested.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((512, 4, 3))
+    methods = ["coherence_magnitude", "coherence_phase", "imaginary_coherence"]
+
+    original_fft = Multitaper.fft
+    calls = {"n": 0}
+
+    def counting_fft(self):
+        calls["n"] += 1
+        return original_fft(self)
+
+    Multitaper.fft = counting_fft
+    try:
+        multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
+    finally:
+        Multitaper.fft = original_fft
+
+    assert calls["n"] == 1, (
+        f"FFT computed {calls['n']} times for {len(methods)} methods"
+    )
+
+
+def test_shared_connectivity_matches_per_method_construction():
+    """Sharing one Connectivity yields identical results to building per method.
+
+    Reusing a single instance only avoids recomputation; it must not change any
+    numbers. Results must match a fresh ``Connectivity.from_multitaper`` per
+    measure bit-for-bit.
+    """
+    import xarray as xr
+
+    from spectral_connectivity.transforms import Multitaper
+    from spectral_connectivity.wrapper import connectivity_to_xarray
+
+    rng = np.random.default_rng(1)
+    time_series = rng.standard_normal((512, 4, 3))
+    methods = ["coherence_magnitude", "coherence_phase", "imaginary_coherence"]
+
+    shared = multitaper_connectivity(
+        time_series, sampling_frequency=500, method=methods
+    )
+
+    m = Multitaper(time_series, sampling_frequency=500)
+    per_method = xr.Dataset()
+    for meth in methods:
+        # connectivity=None forces a fresh Connectivity (and FFT) each call.
+        per_method[meth] = connectivity_to_xarray(m, meth)
+
+    for meth in methods:
+        np.testing.assert_array_equal(
+            shared[meth].values, per_method[meth].values, err_msg=meth
+        )
 
 
 def test_default_result_is_netcdf_serializable(tmp_path):
