@@ -270,6 +270,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   processed in bounded chunks (with `int32` run-length temporaries) so peak
   memory stays independent of their number.
 
+### Added
+
+- `Multitaper` gained an `fft_workers` argument (also accepted by
+  `multitaper_connectivity` via `**kwargs`) that sets the number of parallel
+  worker threads for SciPy's CPU FFT (`-1` uses all cores). It defaults to
+  `None` (SciPy's single-threaded default), so existing behavior and results are
+  unchanged; enabling it speeds up the FFT stage on multi-core CPUs (measured
+  ~1.4× for the transform on an 18-core machine; larger on some SciPy builds).
+  It is opt-in to avoid oversubscribing CPUs when the analysis is already
+  parallelized at a higher level, and is ignored on the GPU backend (whose FFT
+  has no such parameter and is already parallel).
+
 ## [2.0.1] - 2026-05-12
 
 ### Fixed

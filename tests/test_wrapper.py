@@ -325,6 +325,38 @@ def test_result_netcdf_serializable_with_detrend_none(tmp_path):
     assert path.exists()
 
 
+def test_fft_workers_does_not_change_results():
+    """The `fft_workers` FFT-parallelism option must not change the output.
+
+    `fft_workers` only sets SciPy's CPU FFT thread count; the transform is
+    identical regardless of the worker count, and the wrapper forwards the
+    argument to `Multitaper` via **kwargs.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((1024, 6, 3))
+
+    reference = Multitaper(time_series, sampling_frequency=500).fft()
+    for workers in (1, 2, -1):
+        result = Multitaper(
+            time_series, sampling_frequency=500, fft_workers=workers
+        ).fft()
+        np.testing.assert_array_equal(result, reference)
+
+    # The wrapper forwards fft_workers via **kwargs; results are unchanged.
+    baseline = multitaper_connectivity(
+        time_series, sampling_frequency=500, method="coherence_magnitude"
+    )
+    parallel = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method="coherence_magnitude",
+        fft_workers=-1,
+    )
+    np.testing.assert_array_equal(baseline.values, parallel.values)
+
+
 def test_to_host_array_handles_device_arrays():
     """Coordinate validation must not implicitly convert GPU arrays.
 

@@ -520,6 +520,13 @@ class Multitaper:
         time_window_step if not provided.
     is_low_bias : bool, default=True
         If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
+    fft_workers : int, optional
+        Number of parallel worker threads for the CPU FFT (forwarded to
+        ``scipy.fft.fft``; ``-1`` uses all cores). ``None`` (the default) keeps
+        SciPy's single-threaded default, which avoids oversubscribing CPUs when
+        the analysis is already parallelized at a higher level (e.g. across
+        trials or subjects). This is a CPU-only option; it is ignored on the GPU
+        backend, whose FFT is already parallel.
 
     Attributes
     ----------
@@ -594,8 +601,10 @@ class Multitaper:
         n_time_samples_per_window: int | None = None,
         n_time_samples_per_step: int | None = None,
         is_low_bias: bool = True,
+        fft_workers: int | None = None,
     ) -> None:
         self.time_series = xp.asarray(time_series)
+        self.fft_workers = fft_workers
 
         # Validate that time_series is 3D
         if self.time_series.ndim != 3:
@@ -1233,7 +1242,11 @@ FFT samples:          {self.n_fft_samples}
         logger.info(self)
 
         return _multitaper_fft(
-            self.tapers, time_series, self.n_fft_samples, self.sampling_frequency
+            self.tapers,
+            time_series,
+            self.n_fft_samples,
+            self.sampling_frequency,
+            workers=self.fft_workers,
         ).swapaxes(2, -1)
 
 
@@ -1447,6 +1460,7 @@ def _multitaper_fft(
     n_fft_samples: int,
     sampling_frequency: float,
     axis: int = -2,
+    workers: int | None = None,
 ) -> NDArray[np.complexfloating]:
     """Project data onto tapers and compute discrete Fourier transform.
 
@@ -1459,6 +1473,11 @@ def _multitaper_fft(
     time_series : array_like, shape (n_windows, n_trials, n_time_samples_per_window)
     n_fft_samples : int
     sampling_frequency : int
+    workers : int, optional
+        Number of parallel worker threads for SciPy's CPU FFT (see
+        ``scipy.fft.fft``; ``-1`` uses all cores). ``None`` keeps SciPy's default
+        (single-threaded). Ignored on the GPU backend, whose FFT has no such
+        parameter and is already parallel.
 
     Returns
     -------
@@ -1469,7 +1488,15 @@ def _multitaper_fft(
     projected_time_series = (
         time_series[..., xp.newaxis] * tapers[xp.newaxis, xp.newaxis, ...]
     )
-    return fft(projected_time_series, n=n_fft_samples, axis=axis) / sampling_frequency
+    # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
+    # only when a worker count is requested and we are on the CPU backend.
+    fft_kwargs = {}
+    if workers is not None and not is_gpu_enabled():
+        fft_kwargs["workers"] = workers
+    return (
+        fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
+        / sampling_frequency
+    )
 
 
 def _make_tapers(
