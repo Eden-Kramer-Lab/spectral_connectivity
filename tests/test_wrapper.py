@@ -21,6 +21,10 @@ def test_multitaper_coherence_magnitude(time_window_duration, dtype):
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    # Windows are labeled by their center time, not their start.
+    expected_time = expected_time + (
+        round(time_window_duration * sampling_frequency) - 1
+    ) / (2 * sampling_frequency)
 
     m = multitaper_connectivity(
         time_series,
@@ -98,12 +102,18 @@ def test_multitaper_n_signals(n_signals):
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    # Windows are labeled by their center time, not their start.
+    expected_time = expected_time + (
+        round(time_window_duration * sampling_frequency) - 1
+    ) / (2 * sampling_frequency)
 
     bad_methods = [
         "delay",
         "n_observations",
         "frequencies",
         "all_frequencies",
+        "fourier_coefficients",
+        "expectation_type",
         "global_coherence",
         "from_multitaper",
         "phase_slope_index",
@@ -142,6 +152,10 @@ def test_multitaper_connectivities_n_signals(n_signals):
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    # Windows are labeled by their center time, not their start.
+    expected_time = expected_time + (
+        round(time_window_duration * sampling_frequency) - 1
+    ) / (2 * sampling_frequency)
 
     cons = multitaper_connectivity(
         time_series,
@@ -166,11 +180,12 @@ def test_multitaper_connectivities_n_signals(n_signals):
 
 
 def test_frequencies():
-    np.random.default_rng(42)
-    n_time_samples, n_trials, n_signals = 100, 10, 2
-    time_series = np.random.random((n_time_samples, n_trials, n_signals))
-    # time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    n_fft_samples = 4
+    rng = np.random.default_rng(42)
+    n_time_samples, n_trials, n_signals = 64, 10, 2
+    time_series = rng.random((n_time_samples, n_trials, n_signals))
+    # n_fft_samples must be >= the window length (here the full 64 samples),
+    # otherwise the FFT would silently truncate the signal.
+    n_fft_samples = 64
     sampling_frequency = 1000
 
     cons = multitaper_connectivity(
@@ -180,13 +195,13 @@ def test_frequencies():
         n_fft_samples=n_fft_samples,
     )
 
+    # Non-negative frequency grid, 0 .. Nyquist (n_fft // 2 + 1 bins).
+    expected_frequencies = (
+        sampling_frequency * np.arange(0, n_fft_samples // 2 + 1) / n_fft_samples
+    )
     for mea in cons.data_vars:
         assert not (cons[mea].values == 0).all()
         assert not (np.isnan(cons[mea].values)).all()
-
-        expected_frequencies = np.array(
-            [0, 250, 500]
-        )  # Nyquist bin (positive for even N)
         assert np.allclose(cons[mea].frequency, expected_frequencies)
 
 
@@ -203,6 +218,8 @@ def test_method_discovery_with_inspect():
         "n_observations",
         "frequencies",
         "all_frequencies",
+        "fourier_coefficients",
+        "expectation_type",
         "global_coherence",
         "from_multitaper",
         "phase_slope_index",
@@ -250,3 +267,75 @@ def test_method_discovery_with_inspect():
     # Verify excluded methods are not included
     found_methods_set = set(methods_via_inspect)
     assert not excluded_methods.intersection(found_methods_set)
+
+
+def test_result_is_netcdf_serializable(tmp_path):
+    """The xarray result must round-trip through NetCDF.
+
+    Copying callable Multitaper members (e.g. the bound ``summarize_parameters``
+    method) into ``attrs`` makes ``to_netcdf`` raise.
+    """
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((512, 3, 2))
+    result = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method="coherence_magnitude",
+    )
+    # No attribute value may be a callable.
+    assert not any(callable(v) for v in result.attrs.values())
+    path = tmp_path / "conn.nc"
+    result.to_netcdf(path)
+    assert path.exists()
+
+
+def test_accepts_documented_2d_input():
+    """The documented (n_times, n_channels) 2-D form must work.
+
+    It is promoted to a single-trial 3-D array internally and must match the
+    explicit 3-D form.
+    """
+    rng = np.random.default_rng(0)
+    data_2d = rng.standard_normal((512, 2))
+    data_3d = data_2d[:, np.newaxis, :]
+    result_2d = multitaper_connectivity(
+        data_2d, sampling_frequency=500, method="coherence_magnitude"
+    )
+    result_3d = multitaper_connectivity(
+        data_3d, sampling_frequency=500, method="coherence_magnitude"
+    )
+    np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
+
+
+def test_result_netcdf_serializable_with_detrend_none(tmp_path):
+    """to_netcdf must work even when a Multitaper option is None (detrend_type)."""
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((512, 3, 2))
+    result = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method="coherence_magnitude",
+        detrend_type=None,
+    )
+    # None is encoded as a string so the attribute is still recorded.
+    assert result.attrs["mt_detrend_type"] == "None"
+    path = tmp_path / "conn.nc"
+    result.to_netcdf(path)
+    assert path.exists()
+
+
+def test_default_result_is_netcdf_serializable(tmp_path):
+    """The documented default (method=None) result must save to NetCDF.
+
+    method discovery must not include complex-valued coherency, which NetCDF
+    cannot store.
+    """
+    rng = np.random.default_rng(0)
+    ds = multitaper_connectivity(
+        rng.standard_normal((512, 5, 2)), sampling_frequency=500
+    )
+    assert "coherency" not in ds.data_vars
+    assert not any(np.iscomplexobj(da.values) for da in ds.data_vars.values())
+    path = tmp_path / "default.nc"
+    ds.to_netcdf(path)
+    assert path.exists()

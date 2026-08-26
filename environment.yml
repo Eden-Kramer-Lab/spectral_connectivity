@@ -16,8 +16,7 @@ dependencies:
 - "pytest-cov >= 4.1"
 - "mypy >= 1.8"
 
-# Code formatting and linting
-- "black >= 24.0"
+# Code formatting and linting (ruff handles both format and lint)
 - "ruff >= 0.8.0"
 
 # Documentation
@@ -31,7 +30,6 @@ dependencies:
 - jupyterlab
 
 # CI/Build tools
-- coveralls
 - hatch
 - build
 - twine

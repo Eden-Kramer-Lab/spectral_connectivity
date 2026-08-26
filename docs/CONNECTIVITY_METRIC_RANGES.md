@@ -13,7 +13,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 | **Global coherence** | [0, ∞) | Squared singular values; no upper bound. |
 | **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
 | **PLI (Phase‑Lag Index)** | [−1, 1] | Signed version; unsigned in [0, 1]. |
-| **wPLI (Weighted PLI)** | [0, 1] | Weights by \|Im(Sxy)\|. |
+| **wPLI (Weighted PLI)** | [−1, 1] | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value. |
 | **dwPLI (Debiased PLI²)** | [0, 1] | Bias‑corrected squared PLI. |
 | **dwPLI² (Debiased squared wPLI)** | [0, 1] | Bias‑corrected weighted PLI squared. |
 | **PPC (Pairwise Phase Consistency)** | [0, 1] | Unbiased phase consistency; bounded as PLV. |

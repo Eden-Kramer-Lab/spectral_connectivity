@@ -2,7 +2,44 @@
 
 import os
 import sys
+import warnings
 from typing import Any
+
+GPU_ENV_VAR = "SPECTRAL_CONNECTIVITY_ENABLE_GPU"
+_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+_FALSE_VALUES = frozenset({"false", "0", "no", "off", ""})
+
+
+def is_gpu_enabled() -> bool:
+    """Return whether GPU acceleration was requested via the environment.
+
+    The ``SPECTRAL_CONNECTIVITY_ENABLE_GPU`` environment variable is parsed
+    case-insensitively: ``"true"``, ``"1"``, ``"yes"``, and ``"on"`` all enable
+    GPU. If the variable is set to an unrecognized value the package falls back
+    to CPU and emits a ``UserWarning`` (previously such values were silently
+    ignored, e.g. ``"True"`` would run on CPU with no indication).
+
+    Returns
+    -------
+    bool
+        True if GPU acceleration was requested.
+    """
+    raw = os.environ.get(GPU_ENV_VAR)
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    warnings.warn(
+        f"{GPU_ENV_VAR} is set to {raw!r}, which is not a recognized value; "
+        f"falling back to CPU. Set it to one of {sorted(_TRUE_VALUES)} to enable "
+        f"GPU acceleration.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return False
 
 
 def get_compute_backend() -> dict[str, Any]:
@@ -38,26 +75,25 @@ def get_compute_backend() -> dict[str, Any]:
 
     Examples
     --------
-    Check if GPU acceleration is available and enabled:
+    Inspect the active compute backend (the exact ``message`` and
+    ``device_name`` depend on the machine, so only the structure is shown here):
 
     >>> import spectral_connectivity
     >>> backend = spectral_connectivity.get_compute_backend()
-    >>> print(backend['message'])
-    Using CPU backend with NumPy. To enable GPU, install CuPy and set...
+    >>> backend["backend"] in ("cpu", "gpu")
+    True
+    >>> sorted(backend)
+    ['backend', 'device_name', 'gpu_available', 'gpu_enabled', 'message']
+    >>> isinstance(backend["message"], str)
+    True
 
-    In a script, check GPU status before heavy computation:
+    In a script, branch on the backend before a heavy computation::
 
-    >>> backend = spectral_connectivity.get_compute_backend()
-    >>> if backend['backend'] == 'gpu':
-    ...     print(f"GPU acceleration enabled on {backend['device_name']}")
-    ... else:
-    ...     print("Running on CPU - consider enabling GPU for large datasets")
-
-    In a Jupyter notebook, display compute configuration:
-
-    >>> backend = spectral_connectivity.get_compute_backend()
-    >>> for key, value in backend.items():
-    ...     print(f"{key}: {value}")
+        backend = spectral_connectivity.get_compute_backend()
+        if backend["backend"] == "gpu":
+            print(f"GPU acceleration enabled on {backend['device_name']}")
+        else:
+            print("Running on CPU - consider enabling GPU for large datasets")
 
     Notes
     -----
@@ -78,7 +114,7 @@ def get_compute_backend() -> dict[str, Any]:
     Connectivity : Uses the configured compute backend for connectivity calculations
     """
     # Check if GPU was requested via environment variable
-    gpu_enabled = os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true"
+    gpu_enabled = is_gpu_enabled()
 
     # Check if CuPy is available (either already imported or can be imported)
     cupy_available = False
@@ -128,10 +164,12 @@ def get_compute_backend() -> dict[str, Any]:
     backend = "cpu"
     if "spectral_connectivity.transforms" in sys.modules:
         transforms_module = sys.modules["spectral_connectivity.transforms"]
-        # Check if xp is cupy
-        if hasattr(transforms_module, "xp"):
-            if "cupy" in str(type(transforms_module.xp)):
-                backend = "gpu"
+        # transforms.xp is a module (numpy or cupy). type(module) is always
+        # <class 'module'>, so the backend must be identified from the module's
+        # own name rather than the type of the module object.
+        xp_module = getattr(transforms_module, "xp", None)
+        if xp_module is not None and "cupy" in getattr(xp_module, "__name__", ""):
+            backend = "gpu"
 
     # Generate helpful message
     if backend == "gpu":

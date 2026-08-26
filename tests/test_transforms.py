@@ -122,7 +122,7 @@ def test_n_time_samples(
 
 @mark.parametrize(
     ("sampling_frequency, time_window_duration, n_fft_samples,expected_n_fft_samples"),
-    [(1000, None, 5, 5), (1000, 0.1, None, 100)],
+    [(1000, None, 128, 128), (1000, 0.1, None, 100)],
 )
 def test_n_fft_samples(
     sampling_frequency, time_window_duration, n_fft_samples, expected_n_fft_samples
@@ -138,8 +138,22 @@ def test_n_fft_samples(
     assert m.n_fft_samples == expected_n_fft_samples
 
 
-def test_frequencies():
+def test_n_fft_samples_smaller_than_window_raises():
+    """n_fft_samples < window length would silently truncate the signal."""
     n_time_samples, n_trials, n_signals = 100, 10, 2
+    time_series = np.zeros((n_time_samples, n_trials, n_signals))
+    m = Multitaper(
+        time_series=time_series,
+        sampling_frequency=1000,
+        n_fft_samples=5,  # window is 100 samples
+    )
+    with pytest.raises(ValueError, match="n_fft_samples"):
+        _ = m.n_fft_samples
+
+
+def test_frequencies():
+    # Window length must not exceed n_fft_samples, so use a 4-sample window.
+    n_time_samples, n_trials, n_signals = 4, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     n_fft_samples = 4
     sampling_frequency = 1000
@@ -220,6 +234,10 @@ def test_time(time_window_duration):
     expected_time = np.arange(start_time, end_time, time_window_duration)
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    # Windows are labeled by their center time, not their start.
+    expected_time = expected_time + (
+        round(time_window_duration * sampling_frequency) - 1
+    ) / (2 * sampling_frequency)
     m = Multitaper(
         sampling_frequency=sampling_frequency,
         time_series=time_series,

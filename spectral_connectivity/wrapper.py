@@ -1,5 +1,6 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import warnings
 from collections.abc import Sequence
 from logging import getLogger
 from typing import Any
@@ -67,10 +68,19 @@ def connectivity_to_xarray(
     >>> coherence.dims
     ('time', 'frequency', 'source', 'target')
     """
-    if (method in ["group_delay", "canonical_coherence"]) or ("directed" in method):
+    if (
+        method
+        in [
+            "group_delay",
+            "canonical_coherence",
+            "global_coherence",
+            "phase_slope_index",
+        ]
+    ) or ("directed" in method):
         raise ValueError(
-            f"The method '{method}' is not supported by the xarray interface. "
-            f"Please use the Connectivity class directly instead:\n\n"
+            f"The method '{method}' is not supported by the xarray interface "
+            f"(it does not return a plain (time, frequency, source, target) "
+            f"array). Please use the Connectivity class directly instead:\n\n"
             f"from spectral_connectivity import Connectivity\n"
             f"conn = Connectivity.from_multitaper(m)\n"
             f"result = conn.{method}()\n"
@@ -83,13 +93,16 @@ def connectivity_to_xarray(
         signal_names_list = signal_names
 
     connectivity = Connectivity.from_multitaper(m)
-    if method == "canonical_coherence":
-        connectivity_mat, _labels = getattr(connectivity, method)(**kwargs)
-    else:
-        connectivity_mat = getattr(connectivity, method)(**kwargs)
+    connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
     if (m.time_series.shape[-1] > 2) and squeeze:
-        logger.warning(f"Squeeze is on, but there are {m.time_series.shape[-1]} pairs!")
+        warnings.warn(
+            f"squeeze=True but there are {m.time_series.shape[-1]} signals "
+            f"(more than 2 pairs); ignoring squeeze and returning the full "
+            f"(source, target) matrix.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if method == "power":
         xar = xr.DataArray(
@@ -125,11 +138,28 @@ def connectivity_to_xarray(
             attr in ["time_series", "fft", "tapers", "frequencies", "time"]
         ):
             continue
+        value = getattr(m, attr)
+        # NetCDF attributes must be strings, numbers, or (non-complex) numeric
+        # arrays. Skip callables (e.g. the bound ``summarize_parameters``
+        # method); encode None (e.g. ``detrend_type=None``) as a string so the
+        # parameter is still recorded; and skip any other unsupported type.
+        # Storing an unsupported value would make ``to_netcdf`` raise.
+        if callable(value):
+            continue
+        if value is None:
+            value = "None"
+        elif isinstance(value, np.ndarray):
+            if value.dtype.kind not in "biufSU":  # exclude complex/object arrays
+                continue
+        elif not isinstance(
+            value, (str, bytes, bool, int, float, np.integer, np.floating, np.bool_)
+        ):
+            continue
         # If we don't add 'mt_', get:
         # TypeError: '.dt' accessor only available for DataArray with
         # datetime64 timedelta64 dtype
         # or for arrays containing cftime datetime objects.
-        xar.attrs["mt_" + attr] = getattr(m, attr)
+        xar.attrs["mt_" + attr] = value
 
     return xar
 
@@ -172,9 +202,8 @@ def multitaper_connectivity(
     connectivity_kwargs : dict, optional
         Additional keyword arguments passed to connectivity methods.
     **kwargs : dict
-        Additional arguments passed to Multitaper constructor
-        (e.g., time_bandwidth_product,
-        n_tapers, n_fft_samples).
+        Additional arguments passed to the Multitaper constructor
+        (e.g., time_halfbandwidth_product, n_tapers, n_fft_samples).
 
     Returns
     -------
@@ -186,11 +215,14 @@ def multitaper_connectivity(
     Examples
     --------
     >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
     >>> # Generate coupled oscillator data
     >>> t = np.arange(0, 1, 1/500)  # 500 Hz, 1 second
-    >>> sig1 = np.sin(2*np.pi*10*t) + 0.1*np.random.randn(len(t))
-    >>> sig2 = np.sin(2*np.pi*10*t + np.pi/4) + 0.1*np.random.randn(len(t))
-    >>> data = np.column_stack([sig1, sig2])  # Shape: (500, 2)
+    >>> sig1 = np.sin(2*np.pi*10*t) + 0.1*rng.standard_normal(len(t))
+    >>> sig2 = np.sin(2*np.pi*10*t + np.pi/4) + 0.1*rng.standard_normal(len(t))
+    >>> # Shape (n_time, n_channels); a single trial of 2 signals. The 2-D form
+    >>> # is promoted to a single-trial 3-D array internally.
+    >>> data = np.stack([sig1, sig2], axis=-1)  # (500, 2)
     >>>
     >>> # Compute coherence
     >>> coherence = multitaper_connectivity(
@@ -236,10 +268,17 @@ def multitaper_connectivity(
             "n_observations",
             "frequencies",
             "all_frequencies",
+            "fourier_coefficients",
+            "expectation_type",
             "global_coherence",
             "from_multitaper",
             "phase_slope_index",
             "subset_pairwise_spectral_granger_prediction",
+            # Complex-valued: NetCDF cannot store complex arrays, so it is
+            # excluded from the default so the default result stays serializable.
+            # Its information is covered by coherence_magnitude + coherence_phase
+            # (+ imaginary_coherence); request "coherency" explicitly if needed.
+            "coherency",
             # Methods not supported by xarray interface
             "group_delay",
             "canonical_coherence",
@@ -249,6 +288,7 @@ def multitaper_connectivity(
             "generalized_partial_directed_coherence",
             "direct_directed_transfer_function",
             "blockwise_spectral_granger_prediction",
+            "conditional_spectral_granger_prediction",
         }
 
         # Get all public callable methods using inspect
@@ -262,6 +302,11 @@ def multitaper_connectivity(
     elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
+    # Accept the documented (n_times, n_channels) 2-D form by inserting a
+    # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
+    # n_signals).
+    if getattr(time_series, "ndim", None) == 2:
+        time_series = time_series[:, np.newaxis, :]
     m = Multitaper(
         time_series=time_series,
         sampling_frequency=sampling_frequency,

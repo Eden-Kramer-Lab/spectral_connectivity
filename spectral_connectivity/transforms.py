@@ -1,6 +1,5 @@
 """Transforms time domain signals to the frequency domain."""
 
-import os
 from logging import getLogger
 from typing import TypedDict
 
@@ -8,6 +7,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import interpolate
 from scipy.linalg import eigvals_banded
+
+from spectral_connectivity.utils import is_gpu_enabled
 
 logger = getLogger(__name__)
 
@@ -274,9 +275,13 @@ def suggest_parameters(
     ...     signal_duration=60.0,
     ... )
     >>> print(f"Suggested NW: {params['time_halfbandwidth_product']}")
+    Suggested NW: 3.0
     >>> print(f"Window duration: {params['time_window_duration']:.2f}s")
+    Window duration: 12.00s
     >>> print(f"Frequency resolution: {params['frequency_resolution']:.2f} Hz")
+    Frequency resolution: 0.50 Hz
     >>> print(f"Number of tapers: {params['n_tapers']}")
+    Number of tapers: 5
 
     Target specific frequency resolution:
 
@@ -402,7 +407,7 @@ def suggest_parameters(
     }
 
 
-if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
+if is_gpu_enabled():
     try:
         import cupy as xp
         from cupy.linalg import lstsq
@@ -537,7 +542,9 @@ class Multitaper:
     >>> eeg_3d = prepare_time_series(eeg_data, axis='signals')
     >>> mt = Multitaper(eeg_3d, sampling_frequency=1000, time_halfbandwidth_product=4)
     >>> print(f"FFT shape: {mt.fft().shape}")
-    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies[-1]:.1f} Hz")
+    FFT shape: (1, 1, 7, 5000, 64)
+    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies.max():.1f} Hz")
+    Frequencies: 5000 bins, max = 499.8 Hz
 
     Manual reshaping with np.newaxis (advanced):
 
@@ -554,7 +561,8 @@ class Multitaper:
     >>> # Epoched data: 100 trials, 5 channels, 1 second each at 1000 Hz
     >>> epoched_data = np.random.randn(1000, 100, 5)  # (n_time, n_trials, n_signals)
     >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
-    >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")  # Trials: 100, Signals: 5
+    >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")
+    Trials: 100, Signals: 5
 
     Notes
     -----
@@ -782,6 +790,12 @@ class Multitaper:
         self.start_time = xp.asarray(start_time)
         self._n_fft_samples = n_fft_samples
         self._tapers = tapers
+        # Reject a fractional n_tapers at construction so the reported
+        # n_tapers metadata cannot disagree with the (integer) taper count used.
+        if n_tapers is not None and (
+            not np.isfinite(n_tapers) or int(n_tapers) != n_tapers
+        ):
+            raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
@@ -846,8 +860,8 @@ class Multitaper:
         <BLANKLINE>
         Spectral Parameters
         -------------------
-        Sampling frequency:            1000.0 Hz
-        Time-halfbandwidth product:    3.0
+        Sampling frequency:            1000 Hz
+        Time-halfbandwidth product:    3
         Number of tapers:              5
         <BLANKLINE>
         Time Windowing
@@ -861,7 +875,8 @@ class Multitaper:
         Frequency resolution: 6.0 Hz
         Nyquist frequency:    500.0 Hz
         Frequency range:      0.0 - 500.0 Hz
-        FFT samples:          1024
+        FFT samples:          1000
+        <BLANKLINE>
 
         See Also
         --------
@@ -1017,8 +1032,31 @@ FFT samples:          {self.n_fft_samples}
             self._n_time_samples_per_window = int(
                 xp.around(self.time_window_duration * self.sampling_frequency)
             )
-        # If _n_time_samples_per_window is already set, just use it
+        # Otherwise n_time_samples_per_window was set explicitly.
         assert self._n_time_samples_per_window is not None
+        # Validate the resolved window length regardless of which input path set
+        # it: an explicit n_time_samples_per_window=0 (or a duration rounding to
+        # 0) would divide by zero downstream, and an oversized window yields an
+        # empty transform.
+        n_time_samples = self.time_series.shape[0]
+        if self._n_time_samples_per_window < 1:
+            raise ValueError(
+                f"n_time_samples_per_window resolved to "
+                f"{self._n_time_samples_per_window}, but each window needs at "
+                f"least 1 sample. If you set time_window_duration "
+                f"({self._time_window_duration}), it is too short for "
+                f"sampling_frequency ({self.sampling_frequency}); use a duration "
+                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
+                f"n_time_samples_per_window."
+            )
+        if self._n_time_samples_per_window > n_time_samples:
+            raise ValueError(
+                f"n_time_samples_per_window ({self._n_time_samples_per_window}) is "
+                f"larger than the signal length ({n_time_samples}); no window fits, "
+                f"which would yield an empty transform. Use a smaller window "
+                f"(time_window_duration <= "
+                f"{n_time_samples / self.sampling_frequency} s)."
+            )
         return self._n_time_samples_per_window
 
     @property
@@ -1033,6 +1071,19 @@ FFT samples:          {self.n_fft_samples}
         """
         if self._n_fft_samples is None:
             self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
+        elif self._n_fft_samples < self.n_time_samples_per_window:
+            # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
+            # a too-small n_fft_samples silently discards most of each window.
+            raise ValueError(
+                f"n_fft_samples ({self._n_fft_samples}) must be >= the number "
+                f"of time samples per window ({self.n_time_samples_per_window}).\n"
+                f"n_fft_samples is the FFT length (used for zero-padding), not "
+                f"the number of output frequency bins. A value smaller than the "
+                f"window length would silently truncate the signal before the "
+                f"FFT.\n"
+                f"Either omit n_fft_samples (it defaults to a fast length >= the "
+                f"window length) or set it >= {self.n_time_samples_per_window}."
+            )
         return self._n_fft_samples
 
     @property
@@ -1068,8 +1119,21 @@ FFT samples:          {self.n_fft_samples}
             self._n_samples_per_time_step = int(
                 self.time_window_step * self.sampling_frequency
             )
-        # Ensure we always return an int
+        # Otherwise n_time_samples_per_step was set explicitly.
         assert self._n_samples_per_time_step is not None
+        # Validate the resolved step regardless of which input path set it: an
+        # explicit n_time_samples_per_step=0 (or a step truncating to 0) would
+        # divide by zero when building the sliding windows.
+        if self._n_samples_per_time_step < 1:
+            raise ValueError(
+                f"n_time_samples_per_step resolved to "
+                f"{self._n_samples_per_time_step}, but each step must advance at "
+                f"least 1 sample. If you set time_window_step "
+                f"({self._time_window_step}), it is too short for sampling_frequency "
+                f"({self.sampling_frequency}); use a step "
+                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
+                f"n_time_samples_per_step."
+            )
         return self._n_samples_per_time_step
 
     @property
@@ -1085,10 +1149,12 @@ FFT samples:          {self.n_fft_samples}
         original_time = (
             xp.arange(0, self.time_series.shape[0]) / self.sampling_frequency
         )
-        window_start_time = _sliding_window(
+        # Label each window by its center time, as documented (the mean of the
+        # window's sample times equals the center for uniformly spaced samples).
+        window_center_time = _sliding_window(
             original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
-        )[:, 0]
-        return self.start_time + window_start_time
+        ).mean(axis=-1)
+        return self.start_time + window_center_time
 
     @property
     def n_signals(self) -> int:
@@ -1211,7 +1277,7 @@ def prepare_time_series(
     >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis="signals")
     >>> eeg_3d.shape
-    (5000, 1, 64)  # (n_time, 1 trial, 64 channels)
+    (5000, 1, 64)
 
     Multiple trials of a single electrode:
 
@@ -1219,7 +1285,7 @@ def prepare_time_series(
     >>> lfp_trials = np.random.randn(2000, 20)  # Shape: (n_time, n_trials)
     >>> lfp_3d = prepare_time_series(lfp_trials, axis="trials")
     >>> lfp_3d.shape
-    (2000, 20, 1)  # (n_time, 20 trials, 1 channel)
+    (2000, 20, 1)
 
     Single time series (e.g., spike times converted to continuous):
 
@@ -1227,7 +1293,7 @@ def prepare_time_series(
     >>> firing_rate = np.random.randn(1000)
     >>> firing_rate_3d = prepare_time_series(firing_rate)
     >>> firing_rate_3d.shape
-    (1000, 1, 1)  # (n_time, 1 trial, 1 signal)
+    (1000, 1, 1)
 
     Already properly formatted (pass-through):
 
@@ -1235,7 +1301,7 @@ def prepare_time_series(
     >>> epoched_data = np.random.randn(100, 10, 5)
     >>> result = prepare_time_series(epoched_data)
     >>> result.shape
-    (100, 10, 5)  # Unchanged
+    (100, 10, 5)
 
     Notes
     -----
@@ -1344,7 +1410,8 @@ def _sliding_window(
 
     Examples
     --------
-    >>> a = numpy.array([1, 2, 3, 4, 5])
+    >>> import numpy as np
+    >>> a = np.array([1, 2, 3, 4, 5])
     >>> _sliding_window(a, window_size=3)
     array([[1, 2, 3],
            [2, 3, 4],
@@ -1472,17 +1539,37 @@ def tridisolve(
         x = b
     else:
         x = b.copy()
+
+    # This solver is used for inverse iteration, where the matrix (A - wI) is
+    # singular by construction (w is an exact eigenvalue). A pivot can then be
+    # exactly zero and the unpivoted elimination would divide by it, propagating
+    # NaN into the taper (e.g. dpss_windows(8, 2, 3)). Floor the pivot magnitude
+    # by a value tiny relative to the matrix scale: non-degenerate solves (whose
+    # pivots are orders of magnitude larger) are unchanged, while a (near-)zero
+    # pivot becomes a small finite number and inverse iteration still converges
+    # to the eigenvector.
+    pivot_floor = float(
+        np.finfo(dw.dtype).eps * (float(np.abs(dw).max()) + float(np.abs(ew).max()))
+    )
+    if pivot_floor == 0:
+        pivot_floor = float(np.finfo(dw.dtype).tiny)
+
+    def _nonzero_pivot(pivot: float) -> float:
+        if abs(pivot) >= pivot_floor:
+            return pivot
+        return pivot_floor if pivot >= 0 else -pivot_floor
+
     for k in range(1, N):
         # e^(k-1) = e(k-1) / d(k-1)
         # d(k) = d(k) - e^(k-1)e(k-1) / d(k-1)
         t = ew[k - 1]
-        ew[k - 1] = t / dw[k - 1]
+        ew[k - 1] = t / _nonzero_pivot(dw[k - 1])
         dw[k] = dw[k] - t * ew[k - 1]
     for k in range(1, N):
         x[k] = x[k] - ew[k - 1] * x[k - 1]
-    x[N - 1] = x[N - 1] / dw[N - 1]
+    x[N - 1] = x[N - 1] / _nonzero_pivot(dw[N - 1])
     for k in range(N - 2, -1, -1):
-        x[k] = x[k] / dw[k] - ew[k] * x[k + 1]
+        x[k] = x[k] / _nonzero_pivot(dw[k]) - ew[k] * x[k + 1]
 
     if not overwrite_b:
         return x
@@ -1586,7 +1673,31 @@ def dpss_windows(
     Volume 57 (1978), 1371430
 
     """
+    # Reject a fractional n_tapers before coercion: silently truncating (e.g.
+    # 2.9 -> 2) would disagree with the reported Multitaper.n_tapers metadata.
+    if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers:
+        raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
     n_tapers = int(n_tapers)
+    if n_time_samples_per_window < 2:
+        raise ValueError(
+            f"n_time_samples_per_window must be >= 2 for a multitaper "
+            f"decomposition, got {n_time_samples_per_window}. A single-sample "
+            f"window carries no spectral information."
+        )
+    if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
+        raise ValueError(
+            f"time_halfbandwidth_product (NW={time_halfbandwidth_product}) must "
+            f"satisfy 0 < NW < n_time_samples_per_window / 2 "
+            f"(= {n_time_samples_per_window / 2}). Otherwise the concentration "
+            f"bandwidth reaches or exceeds Nyquist and the result is not a valid "
+            f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
+            f"longer window or a smaller time_halfbandwidth_product."
+        )
+    if not 1 <= n_tapers <= n_time_samples_per_window:
+        raise ValueError(
+            f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
+            f"(= {n_time_samples_per_window}), got {n_tapers}."
+        )
     half_bandwidth = float(time_halfbandwidth_product) / n_time_samples_per_window
     time_index = xp.arange(n_time_samples_per_window, dtype="d")
 
@@ -1834,14 +1945,15 @@ def detrend(
 
     Examples
     --------
+    >>> import numpy as np
     >>> from scipy import signal
-    >>> from numpy.random import default_rng
-    >>> rng = default_rng()
+    >>> rng = np.random.default_rng(0)
     >>> npoints = 1000
     >>> noise = rng.standard_normal(npoints)
-    >>> x = 3 + 2*np.linspace(0, 1, npoints) + noise
-    >>> (signal.detrend(x) - noise).max()
-    0.06  # random
+    >>> x = 3 + 2 * np.linspace(0, 1, npoints) + noise
+    >>> # Removing the linear trend leaves (approximately) the original noise.
+    >>> bool(np.abs(signal.detrend(x) - noise).max() < 0.2)
+    True
     """
     if type not in ["linear", "l", "constant", "c"]:
         raise ValueError(

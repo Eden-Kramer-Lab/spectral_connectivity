@@ -7,7 +7,7 @@
 [![PyPI version](https://badge.fury.io/py/spectral_connectivity.svg)](https://badge.fury.io/py/spectral_connectivity)
 [![Anaconda-Server Badge](https://anaconda.org/edeno/spectral_connectivity/badges/version.svg)](https://anaconda.org/edeno/spectral_connectivity)
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
-[![Coverage Status](https://coveralls.io/repos/github/Eden-Kramer-Lab/spectral_connectivity/badge.svg?branch=master)](https://coveralls.io/github/Eden-Kramer-Lab/spectral_connectivity?branch=master)
+[![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
 [**Tutorials**](#tutorials)
 | [**Documentation**](#documentation)
@@ -40,6 +40,55 @@ See the following notebooks for more information on how to use the package:
 + [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
 ### Usage Example
+
+The quickest way to get connectivity measures is the high-level
+`multitaper_connectivity` function, which runs the multitaper transform and
+returns labeled [xarray](https://docs.xarray.dev/) objects (dimensions such as
+`time`, `frequency`, `source`, `target`):
+
+```python
+from spectral_connectivity import multitaper_connectivity
+
+# time_series has shape (n_time_samples, n_trials, n_signals)
+coherence = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method="coherence_magnitude",
+    time_halfbandwidth_product=3,
+)
+
+# Ask for several measures at once (returns an xarray.Dataset)
+measures = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method=["coherence_magnitude", "imaginary_coherence", "phase_locking_value"],
+)
+```
+
+#### Choosing parameters
+
+Not sure what `time_halfbandwidth_product`, number of tapers, or window
+duration to use? `suggest_parameters` picks reasonable values from your
+sampling rate, signal duration, and desired frequency resolution:
+
+```python
+from spectral_connectivity import suggest_parameters
+
+params = suggest_parameters(
+    sampling_frequency=1000,
+    signal_duration=2.0,          # seconds
+    desired_freq_resolution=4.0,  # Hz
+)
+print(params)  # -> time_halfbandwidth_product, time_window_duration, n_tapers, ...
+```
+
+See also `estimate_frequency_resolution`, `estimate_n_tapers`, and
+`Multitaper.summarize_parameters()` for related helpers.
+
+#### Lower-level API
+
+For finer control (or if you already have Fourier coefficients from another
+method), use the `Multitaper` and `Connectivity` classes directly:
 
 ```python
 from spectral_connectivity import Multitaper, Connectivity

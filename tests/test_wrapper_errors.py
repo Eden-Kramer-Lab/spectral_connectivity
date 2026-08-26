@@ -2,7 +2,10 @@ import numpy as np
 import pytest
 
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.wrapper import connectivity_to_xarray
+from spectral_connectivity.wrapper import (
+    connectivity_to_xarray,
+    multitaper_connectivity,
+)
 
 
 def test_unsupported_method_error_message():
@@ -43,3 +46,32 @@ def test_unsupported_method_error_message():
     error_msg = str(exc_info.value)
     assert "group_delay" in error_msg
     assert "result = conn.group_delay()" in error_msg
+
+    # global_coherence returns a tuple; the wrapper must give the friendly
+    # message rather than a cryptic xarray "coords is not dict-like" error.
+    with pytest.raises(ValueError) as exc_info:
+        connectivity_to_xarray(m, method="global_coherence")
+    error_msg = str(exc_info.value)
+    assert "is not supported by the xarray interface" in error_msg
+    assert "result = conn.global_coherence()" in error_msg
+
+
+def test_time_halfbandwidth_product_kwarg_passthrough():
+    """The documented Multitaper kwarg name works through the wrapper."""
+    rng = np.random.default_rng(0)
+    time_series = rng.random((200, 5, 2))
+    result = multitaper_connectivity(
+        time_series,
+        sampling_frequency=1000,
+        method="coherence_magnitude",
+        time_halfbandwidth_product=3,
+    )
+    assert result.name == "coherence_magnitude"
+    # The (misspelled) name from the old docstring must not silently work.
+    with pytest.raises(TypeError):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=1000,
+            method="coherence_magnitude",
+            time_bandwidth_product=3,
+        )

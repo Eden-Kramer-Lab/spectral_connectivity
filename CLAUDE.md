@@ -88,10 +88,13 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
 ## Testing Strategy
 
 - Unit tests in `tests/` directory mirror the source structure
-- CI runs tests on Python 3.9+ and Ubuntu
-- Coverage reporting via Coveralls
+- CI (`.github/workflows/release.yml`) runs the quality gate (ruff format check,
+  ruff check, mypy) and a test matrix on Python 3.10–3.13 across Ubuntu, macOS,
+  and Windows, followed by build/install checks and (on tag) trusted PyPI publish
+- Coverage reporting via Codecov (Linux, Python 3.12)
 - Notebook integration tests execute tutorial examples
-- Tests include both CPU and GPU code paths when available
+- Tests include both CPU and GPU code paths when available (GPU paths run only
+  where CuPy is installed)
 
 ## File Structure
 

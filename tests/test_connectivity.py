@@ -1,6 +1,8 @@
+import warnings
 from unittest.mock import PropertyMock, patch
 
 import numpy as np
+import pytest
 from pytest import mark
 
 from spectral_connectivity.connectivity import (
@@ -12,7 +14,7 @@ from spectral_connectivity.connectivity import (
     _find_largest_significant_group,
     _get_independent_frequencies,
     _get_independent_frequency_step,
-    _inner_combination,
+    _max_psd_discrepancy,
     _remove_instantaneous_causality,
     _reshape,
     _set_diagonal_to_zero,
@@ -551,17 +553,6 @@ def test__remove_instantaneous_causality():
     )
 
 
-def test__inner_combination():
-    n_time_samples, n_fft_samples, n_signals = (2, 3, 2)
-    test_data = np.arange(0, n_time_samples * n_fft_samples * n_signals).reshape(
-        (n_time_samples, n_fft_samples, n_signals)
-    )
-
-    expected_combination = np.array([[8, 23], [188, 239]])
-
-    assert np.allclose(_inner_combination(test_data, axis=-2), expected_combination)
-
-
 def test_directed_transfer_function():
     # Use proper 5D shape for fourier_coefficients
     c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
@@ -586,6 +577,194 @@ def test_partial_directed_coherence():
         pdc = c.partial_directed_coherence()
         assert np.allclose(pdc.sum(axis=-2), 1.0)
         assert np.all((pdc >= 0.0) & (pdc <= 1.0))
+
+
+def test_directed_coherence_is_bounded_and_normalized():
+    """Directed coherence must stay in [0, 1] and normalize over sources.
+
+    Regression test for a noise-variance broadcasting bug: the source noise
+    variance was applied on the target axis (-2) instead of the source axis
+    (-1), producing values > 1 whenever channels had unequal noise variances.
+    The squared directed coherence sums to 1 over sources (like DTF).
+    """
+    c = Connectivity(fourier_coefficients=np.empty((1, 1, 1, 1, 2)))
+    transfer_function = np.arange(1, 5).reshape((2, 2)).astype(float)  # [target, src]
+    noise_covariance = np.diag([10.0, 1.0])  # unequal per-source noise variances
+    with (
+        patch.object(
+            Connectivity, "_transfer_function", new_callable=PropertyMock
+        ) as mock_transfer,
+        patch.object(
+            Connectivity, "_noise_covariance", new_callable=PropertyMock
+        ) as mock_noise,
+    ):
+        mock_transfer.return_value = transfer_function
+        mock_noise.return_value = noise_covariance
+        dc = c.directed_coherence()
+        assert np.all((dc >= 0.0) & (dc <= 1.0))
+        assert np.allclose(dc.sum(axis=-1), 1.0)
+        expected = np.array([[10 / 14, 4 / 14], [90 / 106, 16 / 106]])
+        assert np.allclose(np.squeeze(dc), expected)
+
+
+def test_max_psd_discrepancy():
+    """The helper reports the relative gap between the diagonal and true PSD."""
+    # Diagonal covariance: the diagonal denominator equals the true PSD.
+    dense_H = np.arange(1, 5).reshape((1, 1, 2, 2)).astype(float)
+    assert _max_psd_discrepancy(dense_H, np.diag([1.0, 2.0])[np.newaxis]) == 0.0
+    # Single signal: not assessable.
+    assert _max_psd_discrepancy(np.ones((1, 1, 1, 1)), np.array([[[3.0]]])) == 0.0
+    # Aggregate cross-power a pairwise-correlation threshold would miss: 20
+    # equicorrelated sources at rho=0.09 (every pair < 0.1) with an all-ones
+    # transfer row omit ~63% of the true PSD.
+    n, rho = 20, 0.09
+    equicorrelated = ((1 - rho) * np.eye(n) + rho * np.ones((n, n)))[np.newaxis]
+    all_ones = np.ones((1, 1, n, n))
+    assert np.isclose(_max_psd_discrepancy(all_ones, equicorrelated), 0.631, atol=0.01)
+    # True power exactly 0 (a rank-deficient but valid PSD covariance) with
+    # nonzero diagonal power: the diagonal formula is infinitely wrong, so the
+    # discrepancy is +inf and must not be dropped as unassessable.
+    singular_cov = np.array([[1.0, -1.0], [-1.0, 1.0]])[np.newaxis]
+    invertible_H = np.array([[1.0, 1.0], [1.0, 0.0]])[np.newaxis, np.newaxis]
+    assert _max_psd_discrepancy(invertible_H, singular_cov) == np.inf
+    # No power at all (0/0) is genuinely unassessable and stays 0.
+    assert _max_psd_discrepancy(np.zeros((1, 1, 2, 2)), np.eye(2)[np.newaxis]) == 0.0
+
+
+def test_directed_coherence_warns_on_material_cross_power():
+    """directed_coherence warns when the diagonal denominator omits material power.
+
+    The denominator ``sum_k nv_k|H_ik|^2`` equals the true PSD ``(H Cov H^H)_ii``
+    only for uncorrelated innovations. It must warn when the omitted cross-power
+    is a material fraction of the true PSD -- including the dimension-aware case
+    where every pairwise correlation is below any fixed threshold but the sources
+    jointly omit most of the power -- and stay silent for a diagonal covariance.
+    """
+    dense_H = np.arange(1, 5).reshape((1, 1, 2, 2)).astype(float)
+    n, rho = 20, 0.09
+    equicorrelated = ((1 - rho) * np.eye(n) + rho * np.ones((n, n)))[np.newaxis]
+    # (transfer_function, noise_covariance, should_warn)
+    cases = [
+        (dense_H, np.array([[1.0, 0.9], [0.9, 1.0]])[np.newaxis], True),
+        (dense_H, np.diag([1.0, 2.0])[np.newaxis], False),
+        (np.ones((1, 1, n, n)), equicorrelated, True),  # weak pairwise, large sum
+        # True power 0 vs diagonal power 2 -> infinite discrepancy -> must warn.
+        (
+            np.array([[1.0, 1.0], [1.0, 0.0]])[np.newaxis, np.newaxis],
+            np.array([[1.0, -1.0], [-1.0, 1.0]])[np.newaxis],
+            True,
+        ),
+    ]
+    for transfer_function, noise_covariance, should_warn in cases:
+        c = Connectivity(
+            fourier_coefficients=np.empty((1, 1, 1, 1, transfer_function.shape[-1]))
+        )
+        with (
+            patch.object(
+                Connectivity, "_transfer_function", new_callable=PropertyMock
+            ) as mock_transfer,
+            patch.object(
+                Connectivity, "_noise_covariance", new_callable=PropertyMock
+            ) as mock_noise,
+        ):
+            mock_transfer.return_value = transfer_function
+            mock_noise.return_value = noise_covariance
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                c.directed_coherence()
+            warned = any(
+                "uncorrelated MVAR innovations" in str(w.message) for w in caught
+            )
+            assert warned is should_warn
+
+
+def test_single_signal_connectivity_raises_but_power_works():
+    """Connectivity on a single signal raises; power() still works."""
+    c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 1), dtype=complex))
+    for method in (c.coherence_magnitude, c.phase_locking_value, c.global_coherence):
+        with pytest.raises(ValueError, match="at least 2 signals"):
+            method()
+    with pytest.raises(ValueError, match="at least 2 signals"):
+        c.canonical_coherence(group_labels=np.array([0]))
+    # Power is well-defined for a single signal.
+    power = c.power()
+    assert power.shape[-1] == 1
+    assert np.all(np.isfinite(power))
+
+
+def test_debiased_measures_require_multiple_observations():
+    """Debiased PLI / PPC divide by (n_obs - 1); reject n_observations == 1."""
+    # n_trials == n_tapers == 1 => n_observations == 1 with default expectation.
+    c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 2), dtype=complex))
+    assert c.n_observations == 1
+    with pytest.raises(ValueError, match="at least 2 observations"):
+        c.debiased_squared_phase_lag_index()
+    with pytest.raises(ValueError, match="at least 2 observations"):
+        c.pairwise_phase_consistency()
+
+
+def test_coherency_zero_power_returns_nan():
+    """A dead (all-zero) channel yields NaN coherency, not huge values."""
+    rng = np.random.default_rng(0)
+    fourier = rng.standard_normal((1, 1, 2, 4, 2)) + 1j * rng.standard_normal(
+        (1, 1, 2, 4, 2)
+    )
+    fourier[..., 1] = 0.0  # signal 1 is a flat/dead channel -> zero power
+    c = Connectivity(fourier_coefficients=fourier)
+    with pytest.warns(UserWarning, match="zero power"):
+        coherency = c.coherency()
+    # Pairs involving the dead channel are undefined -> NaN (not > 1).
+    assert np.all(np.isnan(coherency[..., 0, 1]))
+    assert np.all(np.isnan(coherency[..., 1, 0]))
+
+    # imaginary_coherence has the same guard and must also return NaN (not a
+    # clipped value) for the dead-channel pairs.
+    c_imag = Connectivity(fourier_coefficients=fourier)
+    with pytest.warns(UserWarning, match="zero power"):
+        imag_coh = c_imag.imaginary_coherence()
+    assert np.all(np.isnan(imag_coh[..., 0, 1]))
+    assert np.all(np.isnan(imag_coh[..., 1, 0]))
+
+
+def test_transfer_function_is_cached():
+    """Expensive directed-connectivity intermediates are cached per instance."""
+    rng = np.random.default_rng(1)
+    fourier = rng.standard_normal((1, 3, 2, 8, 2)) + 1j * rng.standard_normal(
+        (1, 3, 2, 8, 2)
+    )
+    c = Connectivity(fourier_coefficients=fourier)
+    assert c._minimum_phase_factor is c._minimum_phase_factor
+    assert c._transfer_function is c._transfer_function
+    assert c._noise_covariance is c._noise_covariance
+
+
+def test_changing_inputs_clears_cached_intermediates():
+    """Reassigning fourier_coefficients / expectation_type must not serve stale cache."""
+    rng = np.random.default_rng(2)
+    fourier = rng.standard_normal((1, 4, 2, 8, 2)) + 1j * rng.standard_normal(
+        (1, 4, 2, 8, 2)
+    )
+    c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+    transfer_default = c._transfer_function
+
+    # "tapers" retains the trials dimension, so the recomputed transfer function
+    # has a different shape -- proving the cache was invalidated, not reused.
+    c.expectation_type = "tapers"
+    transfer_tapers = c._transfer_function
+    assert transfer_tapers.shape != transfer_default.shape
+
+    # Reassigning fourier_coefficients also clears the cache.
+    minimum_phase = c._minimum_phase_factor
+    c.fourier_coefficients = fourier
+    assert c._minimum_phase_factor is not minimum_phase
+
+
+def test_debiased_weighted_pli_requires_multiple_observations():
+    """debiased_squared_weighted_phase_lag_index guards n_observations < 2."""
+    c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 2), dtype=complex))
+    assert c.n_observations == 1
+    with pytest.raises(ValueError, match="at least 2 observations"):
+        c.debiased_squared_weighted_phase_lag_index()
 
 
 def test_subset_pairwise_granger_prediction():
@@ -797,58 +976,46 @@ def test_spectrogram_frequency_alignment():
     )
 
 
-def test_mvar_regularized_inverse_near_singular():
-    """Test regularized inverse handles near-singular frequency bins."""
-    # Use seed 999 which produces a more well-behaved near-singular problem
-    rng = np.random.default_rng(999)
+def _near_singular_fourier(perturbation, seed=999):
+    """Build highly correlated (near-singular) Fourier coefficients."""
+    rng = np.random.default_rng(seed)
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 10, 1, 5, 3)
-
-    # Create nearly singular Fourier coefficients by making signals
-    # highly correlated
-    fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals),
-        dtype=complex,
-    )
-
-    # Base signal
-    base_signal = rng.standard_normal(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples)
-    ) + 1j * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
-
-    # Create near-singular cross-spectral matrix by making signals
-    # nearly dependent
+    shape = (n_time_samples, n_trials, n_tapers, n_fft_samples)
+    fourier_coefficients = np.zeros((*shape, n_signals), dtype=complex)
+    base_signal = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     fourier_coefficients[..., 0] = base_signal
-    fourier_coefficients[..., 1] = base_signal + 1e-10 * (
-        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
-        + 1j * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
-    )
-    fourier_coefficients[..., 2] = base_signal + 1e-10 * (
-        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
-        + 1j * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples))
-    )
+    for signal in (1, 2):
+        fourier_coefficients[..., signal] = base_signal + perturbation * (
+            rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        )
+    return fourier_coefficients
 
-    # This should not raise LinAlgError with regularized inverse
-    conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    # Test that MVAR coefficients are computed without error
+def test_mvar_regularized_inverse_ill_conditioned_is_finite():
+    """Tikhonov regularization keeps an ill-conditioned (full-rank) inverse finite."""
+    conn = Connectivity(fourier_coefficients=_near_singular_fourier(1e-2))
     mvar_coeffs = conn._MVAR_Fourier_coefficients
     assert mvar_coeffs is not None
     assert np.all(np.isfinite(mvar_coeffs))
+    assert np.all(np.isfinite(conn._transfer_function))
 
-    # Test that transfer function is computed without error
-    transfer_func = conn._transfer_function
-    assert transfer_func is not None
-    assert np.all(np.isfinite(transfer_func))
 
-    # Test connectivity measures that depend on MVAR work
-    # Note: For extremely ill-conditioned near-singular matrices,
-    # the minimum phase decomposition may not converge, resulting in
-    # unbounded DTF values. The important thing is that it doesn't crash.
-    dtf = conn.directed_transfer_function()
-    assert np.all(np.isfinite(dtf))
-    assert np.all(dtf >= 0)  # DTF should be non-negative
-    # For well-conditioned systems, DTF should be bounded by 1, but for
-    # near-singular matrices that don't converge, we just verify no crash
+def test_mvar_rank_deficient_fails_gracefully_without_linalg_error():
+    """A rank-deficient input must not raise LinAlgError.
+
+    With near-identical channels the cross-spectral matrix is singular and the
+    Wilson decomposition cannot converge; the result is NaN (with a convergence
+    warning), but the regularized solve must not crash.
+    """
+    conn = Connectivity(fourier_coefficients=_near_singular_fourier(1e-10))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mvar_coeffs = conn._MVAR_Fourier_coefficients  # must not raise LinAlgError
+        # Downstream directed measures must also not crash; for a rank-deficient
+        # input that fails to converge they propagate NaN rather than raising.
+        dtf = conn.directed_transfer_function()
+    assert mvar_coeffs is not None
+    assert dtf is not None
 
 
 def test_regularized_solve_rhs_matches_batched_lhs():
@@ -1256,3 +1423,450 @@ def test_blocks_reduce_memory():
         f"  Blocked:   {peak_blocked:,} bytes\n"
         f"  Ratio:     {memory_ratio:.2%}"
     )
+
+
+def test_default_coordinates_created_when_omitted():
+    """The constructor must populate frequencies/time defaults, as documented.
+
+    Directly constructing Connectivity without frequencies/time should yield
+    normalized frequencies and integer time indices rather than None, so that
+    coordinate-dependent methods (e.g. group_delay) do not crash.
+    """
+    n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals = 3, 1, 2, 8, 2
+    rng = np.random.default_rng(0)
+    fourier_coefficients = rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    ) + 1j * rng.standard_normal(
+        (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    )
+
+    conn = Connectivity(fourier_coefficients=fourier_coefficients)
+
+    assert conn.frequencies is not None
+    assert conn.time is not None
+    # Normalized frequencies: non-negative half of fftfreq(n_fft_samples).
+    np.testing.assert_allclose(
+        conn.frequencies,
+        np.abs(np.fft.fftfreq(n_fft_samples))[: n_fft_samples // 2 + 1],
+    )
+    np.testing.assert_array_equal(conn.time, np.arange(n_time_windows))
+    # A coordinate-dependent method must not raise.
+    conn.group_delay()
+
+
+@mark.parametrize(
+    "measure",
+    [
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+    ],
+)
+@mark.parametrize("blocks", [1, 2, 3])
+def test_phase_lag_family_rejects_block_mode(measure, blocks):
+    """Block mode is incompatible with the anti-symmetric PLI transforms.
+
+    The Hermitian block assembly would return silently wrong-signed
+    off-diagonal values, so these measures must raise rather than compute.
+    """
+    rng = np.random.default_rng(0)
+    fc = rng.standard_normal((2, 3, 4, 8, 3)) + 1j * rng.standard_normal(
+        (2, 3, 4, 8, 3)
+    )
+    conn = Connectivity(fourier_coefficients=fc, blocks=blocks)
+    with pytest.raises(NotImplementedError, match="does not support block mode"):
+        getattr(conn, measure)()
+
+
+@mark.parametrize("blocks", [2, 3])
+def test_coherence_magnitude_block_mode_matches_unblocked(blocks):
+    """Block mode uses the Hermitian identity path for coherence and must match."""
+    rng = np.random.default_rng(1)
+    fc = rng.standard_normal((2, 3, 4, 8, 4)) + 1j * rng.standard_normal(
+        (2, 3, 4, 8, 4)
+    )
+    unblocked = Connectivity(fourier_coefficients=fc).coherence_magnitude()
+    blocked = Connectivity(fourier_coefficients=fc, blocks=blocks).coherence_magnitude()
+    np.testing.assert_allclose(blocked, unblocked, atol=1e-12)
+
+
+@mark.parametrize(
+    "measure",
+    [
+        "directed_transfer_function",
+        "directed_coherence",
+        "partial_directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+    ],
+)
+def test_directed_measures_no_runtime_warning_on_nan_transfer_function(measure):
+    """Directed measures must propagate NaN silently, not emit divide warnings.
+
+    Force Wilson non-convergence with ``minimum_phase_max_iterations=1`` so the
+    transfer function is deterministically NaN; normalizing by the
+    inflow/outflow sum would emit ``invalid value encountered in divide`` unless
+    scoped. The NaN is already reported via the convergence UserWarning.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((256, 4, 3))
+    conn = Connectivity.from_multitaper(
+        Multitaper(time_series, sampling_frequency=256, time_halfbandwidth_product=3),
+        minimum_phase_max_iterations=1,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.simplefilter("error", RuntimeWarning)
+        result = getattr(conn, measure)()
+    # The forced non-convergence yields NaN; the point is it did so without a
+    # RuntimeWarning (which would have been raised as an error above).
+    assert np.isnan(result).any()
+
+
+def test_power_one_sided_preserves_total_power():
+    """The one-sided PSD must double interior bins to conserve total power.
+
+    Summing the returned one-sided power (over frequency) must equal summing the
+    full two-sided spectrum; otherwise integrating power() recovers only half
+    the variance.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    for n_time in (512, 511):  # even and odd FFT lengths
+        time_series = rng.standard_normal((n_time, 4, 2))
+        conn = Connectivity.from_multitaper(
+            Multitaper(time_series, sampling_frequency=256)
+        )
+        one_sided = conn.power()  # non-negative frequencies, interior doubled
+        two_sided = conn._power  # full spectrum
+        np.testing.assert_allclose(
+            one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10
+        )
+
+
+def test_power_preserves_float32_dtype():
+    """power() must not upcast a float32 (complex64) spectrum to float64.
+
+    Regression: the one-sided doubling multiplied by a float64 scale array,
+    silently widening a complex64 spectrum back to float64 and defeating the
+    memory/precision choice. The scale now matches the spectrum dtype.
+    """
+    rng = np.random.default_rng(0)
+    fourier_coefficients = (
+        rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal((2, 3, 2, 8, 2))
+    ).astype(np.complex64)
+    conn = Connectivity(fourier_coefficients=fourier_coefficients)
+    assert conn._power.dtype == np.float32  # spectrum is genuinely float32
+    assert conn.power().dtype == np.float32  # and power() must not widen it
+
+
+def test_phase_slope_index_uses_adjacent_frequency_bins():
+    """PSI must sum conj(C(f)) * C(f + df) over adjacent bins (Nolte 2008).
+
+    The previous implementation summed over all i<j frequency-pair combinations,
+    which is a different statistic. This checks the public result equals the
+    adjacent-bin reference and differs from the all-pairs sum.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((256, 12, 2))
+    conn = Connectivity.from_multitaper(
+        Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
+    )
+
+    # Reproduce the internal subsampling to build a faithful reference.
+    frequencies = conn.frequencies
+    bandpassed, band_freqs = _bandpass(conn.coherency(), frequencies, None)
+    step = _get_independent_frequency_step(frequencies[1] - frequencies[0], None)
+    idx = np.arange(0, band_freqs.shape[0], step)
+    bandpassed = bandpassed[..., idx, :, :]
+
+    adjacent_ref = (
+        (np.conj(bandpassed[..., :-1, :, :]) * bandpassed[..., 1:, :, :])
+        .sum(axis=-3)
+        .imag
+    )
+    # All-pairs sum (the previous, incorrect statistic) for contrast.
+    from itertools import combinations
+
+    pair_index = np.array(list(combinations(range(bandpassed.shape[-3]), 2)))
+    all_pairs_ref = (
+        (
+            np.conj(bandpassed[..., pair_index[:, 0], :, :])
+            * bandpassed[..., pair_index[:, 1], :, :]
+        )
+        .sum(axis=-3)
+        .imag
+    )
+
+    psi = conn.phase_slope_index()
+    np.testing.assert_allclose(psi, adjacent_ref, atol=1e-12)
+    # The two references genuinely differ, so this discriminates the fix.
+    assert not np.allclose(adjacent_ref, all_pairs_ref)
+    # PSI is antisymmetric in the signal pair.
+    np.testing.assert_allclose(psi[..., 0, 1], -psi[..., 1, 0], atol=1e-12)
+
+
+def _correlated_fixture():
+    """Ordinary near-singular LFP-like fixture (highly correlated channels)."""
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(42)
+    n_time, n_trials, n_signals, sf = 100, 5, 3, 500
+    t = np.arange(n_time) / sf
+    base = np.sin(2 * np.pi * 10 * t)
+    sig = np.zeros((n_time, n_trials, n_signals))
+    for k in range(n_trials):
+        sig[:, k, 0] = base + 0.1 * rng.standard_normal(n_time)
+        sig[:, k, 1] = np.sin(
+            2 * np.pi * 10 * t + np.pi / 4
+        ) + 0.1 * rng.standard_normal(n_time)
+        sig[:, k, 2] = 0.1 * base + 0.9 * rng.standard_normal(n_time)
+    return Multitaper(
+        sig, sampling_frequency=sf, time_halfbandwidth_product=2, n_tapers=3
+    )
+
+
+@mark.parametrize(
+    "measure",
+    [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "pairwise_spectral_granger_prediction",
+    ],
+)
+def test_directed_measures_finite_on_ordinary_correlated_data(measure):
+    """Directed measures must return finite values for realistic correlated data.
+
+    Regression: the Wilson relative-tolerance change with the old
+    max_iterations=60 returned an all-NaN minimum-phase factor for near-singular
+    cross-spectral matrices (highly correlated channels), which the range tests
+    accepted vacuously. This is a non-vacuous finiteness check.
+    """
+    conn = Connectivity.from_multitaper(_correlated_fixture())
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # no non-convergence warning
+        result = getattr(conn, measure)()
+    assert np.isfinite(result).mean() > 0.5
+
+
+def test_minimum_phase_max_iterations_is_configurable():
+    """Users can raise max_iterations to recover from Wilson non-convergence."""
+    import warnings
+
+    m = _correlated_fixture()
+    conn_low = Connectivity.from_multitaper(m, minimum_phase_max_iterations=1)
+    with pytest.warns(UserWarning, match="did not converge"):
+        dtf_low = conn_low.directed_transfer_function()
+    assert np.isnan(dtf_low).all()
+
+    conn_high = Connectivity.from_multitaper(m, minimum_phase_max_iterations=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        dtf_high = conn_high.directed_transfer_function()
+    assert np.isfinite(dtf_high).mean() > 0.5
+
+
+@mark.parametrize(
+    "measure",
+    ["directed_transfer_function", "pairwise_spectral_granger_prediction"],
+)
+def test_directed_measures_are_scale_invariant(measure):
+    """Rescaling the signal must not change these scale-invariant measures.
+
+    Regression: the Tikhonov diagonal loading used lambda proportional to
+    mean(|H|**2) (amplitude-squared units) added to H (amplitude units), so the
+    regularization strength was not scale-covariant. Rescaling the signal by a
+    large factor then changed the transfer-function inverse and shifted DTF /
+    spectral Granger by orders of magnitude. lambda now scales with the RMS
+    magnitude, restoring invariance.
+    """
+    from spectral_connectivity.simulate import simulate_MVAR
+    from spectral_connectivity.transforms import Multitaper
+
+    coeffs = np.array([[[0.5, 0.3], [0.0, 0.4]], [[-0.2, 0.0], [0.1, -0.3]]])
+    ts = simulate_MVAR(
+        coeffs,
+        noise_covariance=np.eye(2),
+        n_time_samples=600,
+        n_trials=8,
+        random_state=np.random.default_rng(0),
+    )
+
+    def compute(scale):
+        m = Multitaper(
+            ts * scale,
+            sampling_frequency=1.0,
+            time_halfbandwidth_product=3,
+            start_time=0,
+        )
+        return getattr(Connectivity.from_multitaper(m), measure)()
+
+    base = compute(1.0)
+    scaled = compute(1e12)
+    finite = np.isfinite(base) & np.isfinite(scaled)
+    assert finite.any()
+    np.testing.assert_allclose(scaled[finite], base[finite], rtol=1e-6, atol=1e-9)
+
+
+def test_reassigning_different_geometry_resets_coordinates():
+    """A geometry change on reassignment must reset (not silently keep) coords.
+
+    Reassigning 8 -> 10 FFT bins previously left 5 frequency coordinates for 6
+    power bins, so phase_slope_index silently dropped a bin and group_delay
+    could fail. The coordinates are now reset to the new geometry with a warning.
+    """
+    rng = np.random.default_rng(0)
+    fc8 = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
+        (2, 3, 2, 8, 2)
+    )
+    conn = Connectivity(fourier_coefficients=fc8)
+    assert conn.frequencies.size == 8 // 2 + 1
+    assert conn.time.size == 2
+
+    fc10 = rng.standard_normal((3, 3, 2, 10, 2)) + 1j * rng.standard_normal(
+        (3, 3, 2, 10, 2)
+    )
+    with pytest.warns(UserWarning, match="changed the FFT/time geometry"):
+        conn.fourier_coefficients = fc10
+    assert conn.frequencies.size == 10 // 2 + 1
+    assert conn.time.size == 3
+    # Coordinate-dependent methods are now consistent (no silent bin drop).
+    assert conn.group_delay()[0].shape[-2:] == (2, 2)
+
+
+def test_reassigning_same_geometry_keeps_coordinates_without_warning():
+    """Same-geometry reassignment (the reuse pattern) must not warn or reset."""
+    rng = np.random.default_rng(0)
+    fc = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
+        (2, 3, 2, 8, 2)
+    )
+    conn = Connectivity(fourier_coefficients=fc)
+    freqs_before = conn.frequencies.copy()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)  # no geometry warning
+        conn.fourier_coefficients = fc
+    np.testing.assert_array_equal(conn.frequencies, freqs_before)
+
+
+def test_global_coherence_sparse_branch_orders_strongest_first():
+    """global_coherence must order components strongest-first regardless of the
+    order svds returns (which SciPy does not guarantee)."""
+    from unittest.mock import patch
+
+    from spectral_connectivity import connectivity as conn_mod
+
+    real_svds = conn_mod.svds
+
+    def ascending_svds(matrix, k):
+        u, s, vh = real_svds(matrix, k)
+        order = np.argsort(s)  # force ascending
+        return u[:, order], s[order], vh[order]
+
+    def descending_svds(matrix, k):
+        u, s, vh = real_svds(matrix, k)
+        order = np.argsort(s)[::-1]  # force descending
+        return u[:, order], s[order], vh[order]
+
+    rng = np.random.default_rng(0)
+    fc = rng.standard_normal((1, 8, 1, 4, 6)) + 1j * rng.standard_normal(
+        (1, 8, 1, 4, 6)
+    )
+    with patch.object(conn_mod, "svds", ascending_svds):
+        gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
+    with patch.object(conn_mod, "svds", descending_svds):
+        gc_desc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
+    # Same result regardless of the order svds returned, and strongest-first.
+    np.testing.assert_allclose(gc_asc, gc_desc)
+    assert np.all(gc_asc[..., 0] >= gc_asc[..., 1] - 1e-9)
+    assert np.all(gc_asc[..., 1] >= gc_asc[..., 2] - 1e-9)
+
+
+def test_phase_slope_index_raises_with_fewer_than_two_bins():
+    """Fewer than 2 frequency bins in the band must raise, not return a false 0."""
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    conn = Connectivity.from_multitaper(
+        Multitaper(
+            rng.standard_normal((256, 6, 2)),
+            sampling_frequency=200,
+            time_halfbandwidth_product=3,
+        )
+    )
+    # A huge frequency_resolution subsamples the band to a single bin.
+    with pytest.raises(ValueError, match="at least 2 frequency bins"):
+        conn.phase_slope_index(frequency_resolution=1e6)
+
+
+def test_connectivity_rejects_mismatched_coordinate_lengths():
+    """Supplied frequencies/time must match the data geometry."""
+    fc = np.zeros((3, 2, 1, 8, 2), dtype=complex)  # n_time=3, n_fft=8
+    with pytest.raises(ValueError, match="frequencies must have length"):
+        Connectivity(fourier_coefficients=fc, frequencies=np.arange(4))
+    with pytest.raises(ValueError, match="time must have length"):
+        Connectivity(fourier_coefficients=fc, time=np.arange(5))
+
+
+@mark.parametrize("bad_resolution", [0.0, -1.0, np.nan, np.inf])
+def test_frequency_resolution_must_be_finite_positive(bad_resolution):
+    """delay/phase_slope_index reject an invalid frequency_resolution."""
+    from spectral_connectivity.transforms import Multitaper
+
+    conn = Connectivity.from_multitaper(
+        Multitaper(
+            np.random.default_rng(0).standard_normal((256, 6, 2)),
+            sampling_frequency=200,
+            time_halfbandwidth_product=3,
+        )
+    )
+    with pytest.raises(ValueError, match="frequency_resolution must be a finite"):
+        conn.phase_slope_index(frequency_resolution=bad_resolution)
+
+
+def test_connectivity_rejects_non_1d_or_nonfinite_coordinates():
+    """Coordinates must be exactly 1-D and finite, not merely the right length."""
+    fc = np.zeros((3, 2, 1, 8, 2), dtype=complex)  # n_time=3, n_fft=8
+    # (n, 1) frequency array has the right len but wrong shape.
+    with pytest.raises(ValueError, match=r"frequencies must be a 1-D array"):
+        Connectivity(fourier_coefficients=fc, frequencies=np.zeros((8, 1)))
+    with pytest.raises(ValueError, match=r"time must be a 1-D array"):
+        Connectivity(fourier_coefficients=fc, time=np.zeros((3, 1)))
+    # Non-finite coordinate.
+    bad_freqs = np.linspace(0, 1, 8)
+    bad_freqs[2] = np.nan
+    with pytest.raises(ValueError, match="frequencies must contain only finite"):
+        Connectivity(fourier_coefficients=fc, frequencies=bad_freqs)
+
+
+@mark.parametrize("measure", ["delay", "group_delay", "phase_slope_index"])
+def test_single_frequency_bin_raises_clear_error(measure):
+    """One frequency bin must raise a clear ValueError, not a raw IndexError."""
+    # n_fft_samples = 1 -> a single non-negative frequency bin.
+    fc = np.ones((2, 3, 2, 1, 2), dtype=complex)
+    conn = Connectivity(fourier_coefficients=fc)
+    assert conn.frequencies.size == 1
+    with pytest.raises(ValueError, match="at least 2 frequency bins"):
+        getattr(conn, measure)()
+
+
+@mark.parametrize("measure", ["phase_locking_value", "pairwise_phase_consistency"])
+def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
+    """A dead (zero) channel yields NaN with a UserWarning, not a RuntimeWarning."""
+    import warnings
+
+    fc = np.ones((1, 5, 2, 4, 2), dtype=complex)
+    fc[..., 1] = 0.0  # dead second channel
+    conn = Connectivity(fourier_coefficients=fc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)  # no leaked divide warning
+        with pytest.warns(UserWarning, match="zero magnitude"):
+            result = getattr(conn, measure)()
+    assert np.isnan(result).any()

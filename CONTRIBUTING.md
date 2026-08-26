@@ -14,7 +14,7 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
 2. Run code quality tools on your changes:
-   - Format with [black](https://github.com/psf/black): `black spectral_connectivity/ tests/`
+   - Format with [ruff](https://github.com/astral-sh/ruff): `ruff format spectral_connectivity/ tests/`
    - Lint with [ruff](https://github.com/astral-sh/ruff): `ruff check spectral_connectivity/ tests/`
    - Type check with [mypy](https://mypy.readthedocs.io/): `mypy spectral_connectivity/`
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
@@ -50,7 +50,7 @@ This project uses an automated release workflow. To create a new release:
 
 3. **Automated workflow** (`.github/workflows/release.yml`)
    The release workflow will automatically:
-   - Run code quality checks (black, ruff, mypy)
+   - Run code quality checks (ruff format, ruff check, mypy)
    - Run tests on Python 3.10, 3.11, 3.12, and 3.13
    - Build source distribution and wheel
    - Test the built packages

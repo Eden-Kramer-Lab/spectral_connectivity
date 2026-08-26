@@ -7,6 +7,7 @@ and non-parametric approaches for statistical inference in frequency domain
 connectivity analysis.
 """
 
+import warnings
 from collections.abc import Callable
 from typing import Literal
 
@@ -14,8 +15,6 @@ import numpy as np
 import scipy.special
 import scipy.stats
 from numpy.typing import NDArray
-
-np.seterr(invalid="ignore")
 
 
 def Benjamini_Hochberg_procedure(
@@ -176,27 +175,48 @@ def coherence_fisher_z_transform(
     Examples
     --------
     >>> import numpy as np
-    >>> # Test single coherence against zero
-    >>> coherence = np.array([0.1 + 0.05j, 0.3 + 0.2j, 0.8 + 0.1j])
-    >>> z_scores = coherence_fisher_z_transform(coherence, n_obs1=100)
-    >>>
-    >>> # Compare two coherences
+    >>> # Compare two coherences (the intended two-sample use).
     >>> coh1 = np.array([0.5 + 0.2j, 0.3 + 0.1j])
     >>> coh2 = np.array([0.3 + 0.15j, 0.4 + 0.05j])
     >>> diff_z = coherence_fisher_z_transform(coh1, 100, coh2, 120)
+    >>>
+    >>> # To test a single coherence against ZERO, use the exact null instead:
+    >>> from spectral_connectivity.statistics import coherence_significance_pvalue
+    >>> coherence = np.array([0.1 + 0.05j, 0.3 + 0.2j, 0.8 + 0.1j])
+    >>> p_values = coherence_significance_pvalue(coherence, n_observations=100)
 
     Notes
     -----
     The transformation uses bias correction based on the number of observations
     to improve the normal approximation for small sample sizes.
+
+    The Fisher approximation is derived around a non-zero operating point. To
+    test a single coherence against **zero** coherence, prefer
+    :func:`coherence_significance_pvalue`, which uses the exact null
+    distribution; the Fisher one-sample form (the ``coherency2=0, n_obs2=0``
+    default) is miscalibrated at that boundary and over-rejects the null.
     """
+    # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
+    # and non-finite/fractional counts give NaN with a runtime warning.
+    if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 2:
+        raise ValueError(f"n_obs1 must be a finite integer >= 2, got {n_obs1}.")
+    if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
+        raise ValueError(
+            f"n_obs2 must be a finite integer equal to 0 (one-sample test) or "
+            f">= 2, got {n_obs2}."
+        )
     coherence_magnitude1 = np.abs(coherency1)
     coherence_magnitude1[coherence_magnitude1 >= 1] = 1 - np.finfo(float).eps
 
     coherence_magnitude2 = np.array(np.abs(coherency2))
     coherence_magnitude2[coherence_magnitude2 >= 1] = 1 - np.finfo(float).eps
 
-    bias1, bias2 = coherence_bias(n_obs1), coherence_bias(n_obs2)
+    bias1 = coherence_bias(n_obs1)
+    # When there is no second sample (n_obs2 == 0) the comparison is against a
+    # fixed null value (coherency2, default 0), which carries no estimation
+    # bias or sampling variance. Evaluating ``coherence_bias(0) = -0.5`` here
+    # would instead make ``sqrt(bias1 + bias2)`` negative and return NaN.
+    bias2 = coherence_bias(n_obs2) if n_obs2 else 0.0
 
     z1 = np.arctanh(coherence_magnitude1) - bias1
     z2 = np.arctanh(coherence_magnitude2) - bias2
@@ -233,18 +253,81 @@ def get_normal_distribution_p_values(
     >>> import numpy as np
     >>> z_scores = np.array([-1.96, 0, 1.96, 2.58])
     >>> p_vals = get_normal_distribution_p_values(z_scores)
-    >>> p_vals
-    array([0.975, 0.5, 0.025, 0.005])
+    >>> np.round(p_vals, 3).tolist()
+    [0.975, 0.5, 0.025, 0.005]
 
     Notes
     -----
-    This function handles both NumPy and CuPy arrays automatically,
-    falling back to NumPy computation if CuPy fails.
+    This function handles both NumPy and CuPy arrays automatically: SciPy
+    cannot operate on a CuPy array directly, so such an array is moved to the
+    host with ``.get()`` before computing the CDF.
     """
+    # Use the survival function (sf = 1 - cdf) rather than ``1 - cdf`` so that
+    # far-tail p-values keep full precision: ``1 - norm.cdf(8.3)`` underflows to
+    # exactly 0, while ``norm.sf(8.3)`` returns ~5.2e-17.
     try:
-        return 1 - scipy.stats.norm.cdf(data, loc=mean, scale=std_deviation)
+        return scipy.stats.norm.sf(data, loc=mean, scale=std_deviation)
     except TypeError:
-        return 1 - scipy.stats.norm.cdf(data.get(), loc=mean, scale=std_deviation)  # type: ignore[attr-defined]
+        # SciPy raises TypeError on a CuPy array; move it to the host and retry.
+        # Any other TypeError is a genuine error and is re-raised with its
+        # original traceback rather than masked by an AttributeError on `.get`.
+        if hasattr(data, "get"):
+            return scipy.stats.norm.sf(data.get(), loc=mean, scale=std_deviation)
+        raise
+
+
+def coherence_significance_pvalue(
+    coherency: NDArray[np.complexfloating],
+    n_observations: int,
+) -> NDArray[np.floating]:
+    """P-value for testing squared coherence magnitude against zero.
+
+    Tests the null hypothesis that the true coherence is zero. Under this null,
+    for ``n`` independent complex-Gaussian observations the magnitude-squared
+    coherence estimate follows a Beta(1, n - 1) distribution, so the upper-tail
+    probability is ``P(|C|^2 >= c) = (1 - c)^(n - 1)``.
+
+    This exact boundary distribution should be used instead of the Fisher
+    z-transform (:func:`coherence_fisher_z_transform`) when testing against zero
+    coherence: the Fisher approximation is derived around a non-zero operating
+    point and is badly miscalibrated at ``coherence == 0`` (it over-rejects the
+    null by 3-4x, e.g. ~16-22% actual rejection at a nominal 5% level).
+
+    Parameters
+    ----------
+    coherency : NDArray[complexfloating], shape (...,)
+        Complex coherency values between signals.
+    n_observations : int
+        Number of independent observations used to estimate the coherency
+        (n_tapers * n_trials).
+
+    Returns
+    -------
+    p_values : NDArray[floating], shape (...,)
+        Upper-tail p-values for the test of zero coherence.
+
+    References
+    ----------
+    .. [1] Hannan, E. J. (1970). Multiple Time Series. Wiley. (Null
+           distribution of magnitude-squared coherence.)
+    .. [2] Thomson, D. J., & Chave, A. D. (1991). Jackknifed error estimates
+           for spectra, coherences, and transfer functions. In Advances in
+           Spectrum Analysis and Array Processing.
+    """
+    if (
+        not np.isfinite(n_observations)
+        or int(n_observations) != n_observations
+        or n_observations < 2
+    ):
+        raise ValueError(
+            f"n_observations must be a finite integer >= 2 for the "
+            f"zero-coherence null distribution (Beta(1, n_observations - 1)), "
+            f"got {n_observations}. With fewer observations the coherence "
+            f"estimate is degenerate; a non-finite or non-integer count gives a "
+            f"NaN or degenerate p-value."
+        )
+    magnitude_squared_coherence = np.clip(np.abs(coherency) ** 2, 0.0, 1.0)
+    return (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
 
 
 def coherence_bias(n_observations: int) -> float:
@@ -266,11 +349,9 @@ def coherence_bias(n_observations: int) -> float:
 
     Examples
     --------
-    >>> bias_100 = coherence_bias(100)
-    >>> bias_1000 = coherence_bias(1000)
-    >>> print(f"Bias with 100 obs: {bias_100:.6f}")
-    >>> print(f"Bias with 1000 obs: {bias_1000:.6f}")
+    >>> print(f"Bias with 100 obs: {coherence_bias(100):.6f}")
     Bias with 100 obs: 0.005051
+    >>> print(f"Bias with 1000 obs: {coherence_bias(1000):.6f}")
     Bias with 1000 obs: 0.000501
 
     References
@@ -326,10 +407,10 @@ def coherence_rate_adjustment(
     >>> # Simulate power spectrum and firing rates
     >>> freqs = np.linspace(1, 100, 50)
     >>> power_spec = 1 / (1 + freqs**2)  # 1/f-like spectrum
-    >>> rate1, rate2 = 10.0, 15.0  # Different firing rates
-    >>>
+    >>> rate1, rate2 = 15.0, 10.0  # firing rate decreases in condition 2
     >>> adjustment = coherence_rate_adjustment(rate1, rate2, power_spec)
     >>> print(f"Adjustment range: {adjustment.min():.3f} to {adjustment.max():.3f}")
+    Adjustment range: 0.004 to 0.250
 
     Notes
     -----
@@ -342,13 +423,47 @@ def coherence_rate_adjustment(
            Rate-adjusted spike-LFP coherence comparisons from spike-train
            statistics. Journal of Neuroscience Methods 240, 141-153.
     """
+    if not np.isfinite(firing_rate_condition1) or firing_rate_condition1 <= 0:
+        raise ValueError(
+            f"firing_rate_condition1 must be a finite positive number, got "
+            f"{firing_rate_condition1}."
+        )
+    if not np.isfinite(firing_rate_condition2) or firing_rate_condition2 <= 0:
+        raise ValueError(
+            f"firing_rate_condition2 must be a finite positive number, got "
+            f"{firing_rate_condition2}."
+        )
     # alpha in [1]
     firing_rate_ratio = firing_rate_condition2 / firing_rate_condition1
     adjusted_firing_rate = (
         (1 / firing_rate_ratio - 1) * firing_rate_condition1
         + homogeneous_poisson_noise / firing_rate_ratio**2
     ) * dt**2
-    return 1 / np.sqrt(1 + (adjusted_firing_rate / spike_power_spectrum))
+    # Spike power spectral density is non-negative by definition; a non-positive
+    # value is invalid input (not just undefined), so it is masked below.
+    spike_power = np.asarray(spike_power_spectrum, dtype=float)
+    # Compute the argument and the adjustment under a scoped errstate: zero
+    # spike power makes the division non-finite and a non-positive argument
+    # makes the sqrt undefined. Both are handled explicitly below rather than
+    # leaking a RuntimeWarning or a silent 0/inf.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        argument = 1 + (adjusted_firing_rate / spike_power)
+        adjustment = 1 / np.sqrt(argument)
+    # The adjustment is undefined wherever the spike power is non-positive
+    # (invalid input) or the argument is not strictly positive (a large rate
+    # increase relative to the spike power). Return NaN for those entries.
+    undefined = (spike_power <= 0) | ~(np.isfinite(argument) & (argument > 0))
+    if np.any(undefined):
+        warnings.warn(
+            "coherence_rate_adjustment is undefined at some frequencies "
+            "(non-positive spike power, or 1 + adjusted_rate / "
+            "spike_power_spectrum <= 0); those entries are returned as NaN. "
+            "This typically happens for a large firing-rate increase relative "
+            "to the spike power, or invalid (non-positive) spike power.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return np.where(undefined, np.nan, adjustment)
 
 
 def power_confidence_intervals(
@@ -368,7 +483,7 @@ def power_confidence_intervals(
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
     ci : float, default=0.95
-        Confidence level, must be in range [0.5, 1.0].
+        Confidence level, must be in range [0.5, 1.0).
 
     Returns
     -------
@@ -383,24 +498,66 @@ def power_confidence_intervals(
     >>> # Single power estimate with 5 tapers
     >>> lower, upper = power_confidence_intervals(n_tapers=5, power=1.0, ci=0.95)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
-    >>>
+    95% CI: [0.488, 3.080]
     >>> # Multiple power estimates
     >>> power_vals = np.array([0.5, 1.0, 2.0, 5.0])
     >>> lower, upper = power_confidence_intervals(5, power_vals, 0.95)
+    >>> np.round(lower, 3).tolist()
+    [0.244, 0.488, 0.976, 2.441]
 
     References
     ----------
     .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
            data analysis: a guide for the practicing neuroscientist (MIT Press).
     """
-    upper_bound = 2 * n_tapers / scipy.stats.chi2.ppf(1 - ci, 2 * n_tapers) * power
-    lower_bound = 2 * n_tapers / scipy.stats.chi2.ppf(ci, 2 * n_tapers) * power
+    if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers or n_tapers < 1:
+        raise ValueError(
+            f"n_tapers must be a finite positive integer, got {n_tapers}. It sets "
+            f"the chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
+            f"non-finite, or fractional value gives NaN or meaningless intervals."
+        )
+    if not 0.5 <= ci < 1.0:
+        raise ValueError(
+            f"Confidence level `ci` must be in the range [0.5, 1.0), got {ci}. "
+            "`ci` is the total probability mass inside the interval (e.g. 0.95 "
+            "for a 95% confidence interval)."
+        )
+    # Power spectral density is non-negative; a negative value scales the bounds
+    # negative and reversed (e.g. power=-1 -> ~(-0.488, -3.080)), and a
+    # non-finite value gives NaN/Inf bounds. Reject both explicitly.
+    power_values = np.asarray(power, dtype=float)
+    if not np.all(np.isfinite(power_values)) or np.any(power_values < 0):
+        raise ValueError(
+            "power must be finite and non-negative (it is a power spectral "
+            "density); got a non-finite or negative value."
+        )
+    # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
+    # evenly between the two tails, so the chi-squared quantiles are taken at
+    # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
+    # previous behavior) produces an interval with coverage 2 * ci - 1 (a
+    # requested 95% interval only covered ~90%).
+    degrees_of_freedom = 2 * n_tapers
+    alpha = 1 - ci
+    lower_bound = (
+        degrees_of_freedom
+        / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom)
+        * power
+    )
+    upper_bound = (
+        degrees_of_freedom / scipy.stats.chi2.ppf(alpha / 2, degrees_of_freedom) * power
+    )
 
     return lower_bound, upper_bound
 
 
 def power_bias(n_observations: int) -> float:
-    """Bias of the power spectrum.
+    """Bias of the log power spectrum.
+
+    A multitaper power estimate satisfies ``S_hat / S ~ chi2_nu / nu`` with
+    ``nu = 2 * n_observations`` degrees of freedom. Writing ``chi2_nu`` as
+    ``2 * Gamma(nu / 2)`` gives ``E[log(S_hat / S)] = psi(nu / 2) - log(nu / 2)``,
+    i.e. the digamma/log are evaluated at the chi-squared shape parameter
+    ``nu / 2 = n_observations`` (not at ``nu``).
 
     Parameters
     ----------
@@ -410,9 +567,15 @@ def power_bias(n_observations: int) -> float:
     Returns
     -------
     bias : float
+
+    Examples
+    --------
+    >>> print(f"Bias with 100 obs: {power_bias(100):.6f}")
+    Bias with 100 obs: -0.005008
+    >>> print(f"Bias with 1000 obs: {power_bias(1000):.6f}")
+    Bias with 1000 obs: -0.000500
     """
-    degrees_of_freedom = 2 * n_observations
-    return scipy.special.psi(degrees_of_freedom) - np.log(degrees_of_freedom)
+    return scipy.special.psi(n_observations) - np.log(n_observations)
 
 
 def power_variance(n_observations: int) -> float:
@@ -436,18 +599,23 @@ def power_variance(n_observations: int) -> float:
     >>> var_100 = power_variance(100)
     >>> var_1000 = power_variance(1000)
     >>> print(f"Variance with 100 obs: {var_100:.6f}")
+    Variance with 100 obs: 0.010050
     >>> print(f"Variance with 1000 obs: {var_1000:.6f}")
-    Variance with 100 obs: 0.005051
-    Variance with 1000 obs: 0.000501
+    Variance with 1000 obs: 0.001001
+
+    Notes
+    -----
+    With ``S_hat / S ~ chi2_nu / nu`` and ``nu = 2 * n_observations``, the
+    variance of ``log(S_hat)`` is the trigamma function evaluated at the
+    chi-squared shape parameter ``nu / 2 = n_observations``.
     """
-    degrees_of_freedom = 2 * n_observations
-    return scipy.special.polygamma(1, degrees_of_freedom)
+    return scipy.special.polygamma(1, n_observations)
 
 
 def power_fisher_z_transform(
     spectrum1: NDArray[np.floating],
     n_obs1: int,
-    spectrum2: NDArray[np.floating] | float = 0,
+    spectrum2: NDArray[np.floating] | float = 1.0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform power spectrum estimates for statistical testing.
@@ -462,11 +630,16 @@ def power_fisher_z_transform(
         Power spectrum estimates from first condition.
     n_obs1 : int
         Number of observations for spectrum1 (n_tapers * n_trials).
-    spectrum2 : NDArray[floating] or float, default=0
-        Power spectrum estimates from second condition for comparison.
-        If 0, performs one-sample test.
+    spectrum2 : NDArray[floating] or float, default=1.0
+        For a two-sample comparison (``n_obs2 > 0``), the power spectrum
+        estimates from the second condition. For a one-sample test
+        (``n_obs2 == 0``), a fixed positive baseline power against which
+        ``spectrum1`` is compared; must be > 0 because the test operates on
+        ``log(power)``.
     n_obs2 : int, default=0
-        Number of observations for spectrum2 (n_tapers * n_trials).
+        Number of observations for spectrum2 (n_tapers * n_trials). If 0,
+        performs a one-sample test of ``spectrum1`` against the fixed baseline
+        ``spectrum2``.
 
     Returns
     -------
@@ -476,9 +649,9 @@ def power_fisher_z_transform(
     Examples
     --------
     >>> import numpy as np
-    >>> # One-sample test against baseline
+    >>> # One-sample test against a fixed baseline power of 1.0
     >>> power1 = np.array([0.5, 1.0, 2.0, 0.8])
-    >>> z_one = power_fisher_z_transform(power1, n_obs1=100)
+    >>> z_one = power_fisher_z_transform(power1, n_obs1=100, spectrum2=1.0)
     >>>
     >>> # Two-sample comparison
     >>> power2 = np.array([0.3, 0.8, 1.5, 0.9])
@@ -489,8 +662,44 @@ def power_fisher_z_transform(
     Uses bias correction based on sample size to improve the normal
     approximation for statistical testing.
     """
-    bias1, bias2 = power_bias(n_obs1), power_bias(n_obs2)
-    variance1, variance2 = power_variance(n_obs1), power_variance(n_obs2)
+    # Observation counts must be valid: power_bias/power_variance evaluate
+    # digamma/trigamma at n_obs, which have poles at 0; non-finite or fractional
+    # counts would silently produce NaN z-scores.
+    if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 1:
+        raise ValueError(f"n_obs1 must be a finite integer >= 1, got {n_obs1}.")
+    if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or n_obs2 < 0:
+        raise ValueError(
+            f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), "
+            f"got {n_obs2}."
+        )
+    # The test operates on log(power); non-finite or non-positive inputs would
+    # produce silent -inf/nan z-scores. Fail loudly instead.
+    spectrum1_values = np.asarray(spectrum1, dtype=float)
+    if not np.all(np.isfinite(spectrum1_values)) or np.any(spectrum1_values <= 0):
+        raise ValueError(
+            "spectrum1 must be finite and strictly positive (the test uses "
+            "log(power)); got a non-finite or <= 0 value."
+        )
+    spectrum2_values = np.asarray(spectrum2, dtype=float)
+    if not np.all(np.isfinite(spectrum2_values)) or np.any(spectrum2_values <= 0):
+        raise ValueError(
+            "spectrum2 must be finite and strictly positive (the test uses "
+            "log(power)); got a non-finite or <= 0 value. For a one-sample test, "
+            "pass a positive baseline power as spectrum2 (default 1.0)."
+        )
+
+    bias1 = power_bias(n_obs1)
+    variance1 = power_variance(n_obs1)
+    # When there is no second sample (n_obs2 == 0) spectrum2 is a fixed
+    # baseline that carries no estimation bias or sampling variance. Evaluating
+    # power_bias(0)/power_variance(0) would instead hit the digamma/trigamma
+    # poles and return NaN.
+    if n_obs2:
+        bias2 = power_bias(n_obs2)
+        variance2 = power_variance(n_obs2)
+    else:
+        bias2 = 0.0
+        variance2 = 0.0
 
     # Bias correction
     z1 = np.log(spectrum1) - bias1

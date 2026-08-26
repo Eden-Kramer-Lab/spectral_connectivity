@@ -52,9 +52,8 @@ dev = [
     "pytest-cov>=4.1",
     "syrupy>=4.0",
     "nitime",
-    "black>=24.0",
     "ruff>=0.8.0",
-    "mypy>=1.8",
+    "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "numpydoc>=1.6",
 ]
 gpu = ["cupy-cuda12x>=12.0"]
@@ -80,11 +79,6 @@ markers = [
 ]
 
 # Tool configurations for linting/formatting
-[tool.black]
-target-version = ["py310", "py311", "py312", "py313"]
-line-length = 88
-skip-string-normalization = false
-
 [tool.ruff]
 target-version = "py310"
 line-length = 88
@@ -113,7 +107,7 @@ select = [
     "RUF",   # Ruff-specific rules
 ]
 ignore = [
-    "E501",  # line too long (handled by black)
+    "E501",  # line too long (handled by the formatter)
     "B008",  # do not perform function calls in argument defaults
     "B905",  # zip without explicit strict parameter
     "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
@@ -134,7 +128,11 @@ convention = "numpy"
 known-first-party = ["spectral_connectivity"]
 
 [tool.mypy]
-python_version = "3.10"
+# Target the Python version the quality/CI job runs on (3.12). NumPy's installed
+# stubs use PEP 695 `type` statements, which mypy only parses when the target is
+# >= 3.12; a 3.10 target makes mypy reject the stubs before checking the project.
+# Runtime compatibility with 3.10+ is verified by the test matrix.
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true
