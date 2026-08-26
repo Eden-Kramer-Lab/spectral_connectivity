@@ -1432,23 +1432,19 @@ def _sliding_window(
     array([[1, 2, 3],
            [3, 4, 5]])
 
-    References
-    ----------
-    .. [1] https://gist.github.com/nils-werner/9d321441006b112a4b116a8387c2
-    280c
-
     """
-    shape = list(data.shape)
-    shape[axis] = np.floor(
-        (data.shape[axis] / step_size) - (window_size / step_size) + 1
-    ).astype(int)
-    shape.append(window_size)
-
-    strides = list(data.strides)
-    strides[axis] *= step_size
-    strides.append(data.strides[axis])
-
-    strided = xp.lib.stride_tricks.as_strided(data, shape=shape, strides=strides)
+    # ``sliding_window_view`` appends the length-``window_size`` window axis at
+    # the end and validates bounds/shape, which NumPy recommends over the
+    # lower-level ``as_strided`` used previously. It only produces unit-step
+    # windows, so subsample the windowed axis to apply ``step_size``. Normalize
+    # a negative ``axis`` against the input rank first, because the view adds a
+    # trailing axis and would otherwise shift a negative index onto it.
+    axis = axis % data.ndim
+    strided = xp.lib.stride_tricks.sliding_window_view(data, window_size, axis=axis)
+    if step_size != 1:
+        subsample = [slice(None)] * strided.ndim
+        subsample[axis] = slice(None, None, step_size)
+        strided = strided[tuple(subsample)]
 
     return strided.copy() if is_copy else strided
 

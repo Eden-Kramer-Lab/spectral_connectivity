@@ -308,6 +308,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError` — SciPy's antisymmetric-taper sign heuristic degenerates for a
   length-two window and raises a bare `IndexError` there (on both scipy 1.10.x
   and current releases), and such a window cannot support a second taper anyway.
+- `transforms._sliding_window` now builds its windowed view with NumPy's
+  `sliding_window_view` (subsampled to apply the step) instead of a hand-rolled
+  `as_strided` call. NumPy recommends the higher-level helper: it validates
+  bounds and shape rather than trusting manually computed strides. Output is
+  bit-for-bit identical (verified on the multitaper transform and the window
+  center-time coordinate); timings were neutral. With `is_copy=False` the view
+  is now read-only (NumPy's default), which prevents the accidental in-place
+  aliasing the previous writable view allowed; both production call sites copy.
 
 ### Added
 

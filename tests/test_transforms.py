@@ -44,6 +44,24 @@ def test__add_axes():
             0,
             np.array([[[0, 3], [1, 4], [2, 5]]]),
         ),
+        # Negative axis on a 2-D array: windows run along the last axis and the
+        # window dimension is appended, so a negative index must be normalized
+        # before the step is applied.
+        (
+            np.arange(0, 6).reshape((2, 3)),
+            2,
+            1,
+            -1,
+            np.array([[[0, 1], [1, 2]], [[3, 4], [4, 5]]]),
+        ),
+        # Step larger than one along a non-default axis.
+        (
+            np.arange(0, 10),
+            3,
+            4,
+            0,
+            np.array([[0, 1, 2], [4, 5, 6]]),
+        ),
     ],
 )
 def test__sliding_window(test_array, window_size, step_size, axis, expected_array):
