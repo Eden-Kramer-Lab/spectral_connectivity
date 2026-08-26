@@ -446,34 +446,30 @@ class Connectivity:
         """Multitaper Fourier coefficients.
 
         Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-        Stored as an immutable snapshot: the setter keeps a private copy so the
-        cached intermediates (power, cross-spectrum, directed factors) cannot be
-        silently made stale by in-place edits to the caller's array. This
-        accessor never hands out a writable alias of that private copy — on
-        NumPy a read-only *view* of the copy is returned (an in-place edit
-        raises, and the view cannot re-enable writeability because its base is
-        read-only); on backends without a writeable flag (e.g. CuPy) a fresh copy
-        is returned, so editing it has no effect on the cache. Either way, to
-        change the data assign a new array (which clears the caches) rather than
-        mutating the returned one. Internal computations read
-        ``self._fourier_coefficients`` directly to avoid this copy.
+        Stored as an immutable snapshot so the cached intermediates (power,
+        cross-spectrum, directed factors) cannot be silently made stale by
+        in-place edits. This accessor always returns an independent **copy**, so a
+        caller can use and mutate it freely without touching the instance. A
+        read-only view is not enough: its owning base is reachable through
+        ``.base``, and a caller can re-enable the owning array's ``writeable``
+        flag (NumPy permits it on an array that owns its data), then re-enable and
+        mutate the view — corrupting the snapshot behind the caches. To change the
+        data, assign a new array (which clears the caches) rather than mutating
+        the returned copy. Internal computations read
+        ``self._fourier_coefficients`` directly, so the copy is paid only on
+        explicit external access, not on the hot paths.
 
-        ``from_multitaper`` skips the copy: the ``Multitaper.fft()`` output is
-        freshly built and unshared, so it is frozen in place (the whole ``.base``
-        chain, since ``fft()`` returns a view) rather than duplicated, avoiding a
-        transient doubling of the largest array. The read-only guarantee above is
-        unchanged.
+        ``from_multitaper`` skips the *construction-time* copy: the
+        ``Multitaper.fft()`` output is freshly built and unshared, so it is frozen
+        in place (the whole ``.base`` chain, since ``fft()`` returns a view)
+        rather than duplicated, avoiding a transient doubling of the largest
+        array. That is independent of this getter, which still copies on access.
         """
-        coefficients = self._fourier_coefficients
-        # If the backing copy could not be frozen (e.g. CuPy has no settable
-        # writeable flag) return a defensive copy so an external in-place edit
-        # cannot corrupt the caches. Otherwise (NumPy) return a read-only *view*,
-        # not the owning array itself: a caller can re-enable writeability on an
-        # array that owns its data, but not on a view whose base is read-only, so
-        # the view cannot be turned back into a writable alias of the snapshot.
-        if getattr(coefficients.flags, "writeable", True):
-            return coefficients.copy()
-        return coefficients.view()
+        # Always hand out an independent copy -- see the note above on why a
+        # read-only view is insufficient (the owning base's writeable flag can be
+        # re-enabled). copy() severs that link: mutating the result cannot reach
+        # the snapshot or its base chain on any backend (NumPy or CuPy).
+        return self._fourier_coefficients.copy()
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
@@ -1367,10 +1363,18 @@ class Connectivity:
         # matrix with few estimates is cheap even for many signals, while a large
         # square matrix is better served by the per-bin svds fallback.
         n_estimates = n_trials * n_tapers
-        if max_workspace_elements < 1:
+        # Must be a genuine positive integer: it is a floor-divided into a chunk
+        # size, so a float (NaN/inf included) or bool would either pick a
+        # nonsensical chunk or blow up later inside range(). bool is an int
+        # subclass, so reject it explicitly.
+        if (
+            isinstance(max_workspace_elements, bool)
+            or not isinstance(max_workspace_elements, (int, np.integer))
+            or max_workspace_elements < 1
+        ):
             raise ValueError(
                 f"max_workspace_elements must be a positive integer, got "
-                f"{max_workspace_elements}."
+                f"{max_workspace_elements!r}."
             )
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
             global_coherence, unnormalized_global_coherence = _batched_global_coherence(

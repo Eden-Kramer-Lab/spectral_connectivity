@@ -1047,28 +1047,13 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
     np.testing.assert_array_equal(c.power(), power_before)
     np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
 
-    # Mutating the returned array must not reach the instance either. On NumPy
-    # the returned array is read-only, so the edit raises; on backends without a
-    # writeable flag (e.g. CuPy) the accessor returns a fresh copy, so the edit
-    # succeeds but is harmless. Both outcomes leave the cached results correct.
+    # The getter returns an independent copy, so mutating it -- freely, since it
+    # is writable and owns its data -- cannot reach the instance.
     returned = c.fourier_coefficients
-    try:
-        returned[...] = 0.0
-    except ValueError:
-        pass  # read-only snapshot (NumPy)
+    assert returned.base is None  # an owning copy, not a view of the snapshot
+    returned[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
     np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
-
-    # The returned array must not be re-enabled for writing. On NumPy the
-    # accessor returns a *view* whose base is read-only, so re-enabling
-    # writeability raises; a bare owning array would allow it and corrupt the
-    # cache. (Guarded: CuPy returns a writable copy, which is harmless anyway.)
-    returned = c.fourier_coefficients
-    if getattr(returned.flags, "writeable", True) is False:
-        with pytest.raises(ValueError):
-            returned.flags.writeable = True
-        np.testing.assert_array_equal(c.power(), power_before)
-        np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
 
 
 def test_fourier_coefficients_getter_copies_when_backing_not_frozen():
@@ -1148,26 +1133,47 @@ def test_from_multitaper_adopts_without_copying():
         base[(0,) * base.ndim] = 0.0
 
 
-def test_from_multitaper_adopted_getter_cannot_be_made_writable():
-    """The getter over an adopted array must not expose a writable alias."""
+@mark.parametrize(
+    "make",
+    [
+        lambda m: Connectivity.from_multitaper(m),  # adoption path (frozen view)
+        lambda m: Connectivity(np.asarray(m.fft())),  # defensive-copy path
+    ],
+    ids=["adopt", "copy"],
+)
+def test_getter_copy_defeats_base_reenable_attack(make):
+    """The getter must not expose any writable path to the internal snapshot.
+
+    A read-only view would still let a caller reach the owning base through
+    ``.base``, re-enable its ``writeable`` flag (NumPy allows this on an array
+    that owns its data), then re-enable and mutate the view -- corrupting the
+    snapshot behind the warmed caches. The getter therefore returns an
+    independent copy; walking to the root base and re-enabling it must not reach
+    ``c._fourier_coefficients``.
+    """
     rng = np.random.default_rng(23)
     m = Multitaper(
         rng.standard_normal((400, 6, 3)),
         sampling_frequency=400,
         time_halfbandwidth_product=3,
     )
-    c = Connectivity.from_multitaper(m)
+    c = make(m)
+    internal_before = np.asarray(c._fourier_coefficients).copy()
     power_before = c.power().copy()
 
     returned = c.fourier_coefficients
-    assert returned.flags.writeable is False
-    with pytest.raises(ValueError):
-        returned.flags.writeable = True
-    # Its base chain (the adopted storage) also stays frozen.
-    obj = returned
-    while obj is not None:
-        assert obj.flags.writeable is False
-        obj = obj.base
+    assert returned.base is None  # an owning copy: no reachable snapshot base
+
+    # Even performing the full attack on the returned copy's own root base leaves
+    # the instance untouched, because the copy shares no buffer with the snapshot.
+    root = returned
+    while root.base is not None:
+        root = root.base
+    root.flags.writeable = True
+    returned.flags.writeable = True
+    returned[...] = 0.0
+
+    np.testing.assert_array_equal(c._fourier_coefficients, internal_before)
     np.testing.assert_array_equal(c.power(), power_before)
 
 
@@ -2403,8 +2409,14 @@ def test_global_coherence_workspace_budget_is_configurable_and_result_invariant(
     np.testing.assert_array_equal(vec_default, vec_tiny)
     np.testing.assert_array_equal(vec_default, vec_huge)
 
-    with pytest.raises(ValueError, match="max_workspace_elements must be a positive"):
-        c.global_coherence(max_workspace_elements=0)
+    # Must be a genuine positive integer: reject non-positive, fractional,
+    # non-finite, and boolean budgets (a float would corrupt the chunk size and
+    # crash later inside range(); bool is an int subclass).
+    for bad in [0, -1, 2.5, np.nan, np.inf, True]:
+        with pytest.raises(
+            ValueError, match="max_workspace_elements must be a positive"
+        ):
+            c.global_coherence(max_workspace_elements=bad)
 
 
 def test_global_coherence_vectors_are_orthonormal_eigenvectors():
