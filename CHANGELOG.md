@@ -57,11 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Wishart draws — so a pathological spectrum's factorization depended on
   unrelated random calls and required reseeding for reproducibility. It now uses
   the fixed positive-definite start `n_signals * I` (exactly the expectation of
-  that average). Wilson's iteration converges to the same unique minimum-phase
-  factor from any positive-definite start, so converged results are unchanged;
-  the difference is that the fallback no longer touches the global NumPy random
-  state (following the spirit of Scientific Python SPEC 7). The test suite no
-  longer needs to reset the global random state before each test.
+  that average). Ordinary inputs whose zero-lag matrix is positive-definite never
+  reach this fallback and are unchanged; the pathological fallback results are
+  now deterministic instead of depending on the global NumPy random state
+  (following the spirit of Scientific Python SPEC 7). This is a NumPy-backend
+  concern only — CuPy's Cholesky returns NaN rather than raising, so the GPU path
+  never enters this branch.
 - **`statistics.Benjamini_Hochberg_procedure` — undefined tests no longer
   penalize the valid ones**: non-finite p-values (a coherence pair involving a
   dead/zero-power channel yields `NaN`) were counted toward the number of tests,

@@ -7,11 +7,11 @@ package:
 
 source:
   url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/spectral_connectivity-{{ version }}.tar.gz
-  # Fill with the released sdist's SHA-256 before building (conda-build does NOT
-  # fetch it automatically). Regenerate the recipe with `grayskull pypi
-  # spectral_connectivity`, or take the hash from the PyPI release's "Download
-  # files" page. An empty value here makes conda-build fail.
-  sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  # SHA-256 of the PyPI sdist for {{ version }}. conda-build verifies this against
+  # the downloaded archive, so it must match the `version` above. On a version
+  # bump, update it from the PyPI release's "Download files" page or regenerate
+  # the recipe with `grayskull pypi spectral_connectivity`.
+  sha256: 1cf62cab9cfd2abd004be176b0c30695dc885e675d8c126f6421172550281046
 
 build:
   number: 0

@@ -155,7 +155,11 @@ jobs:
           assert (offdiag >= 0).all() and (offdiag <= 1 + 1e-8).all()
 
           granger = np.asarray(c.pairwise_spectral_granger_prediction())
-          assert np.isfinite(np.nan_to_num(granger)).all()
+          # The diagonal (self-Granger) is NaN by construction, so check an
+          # off-diagonal directly -- np.nan_to_num would mask an all-NaN result.
+          granger_off_diagonal = granger[..., 0, 1]
+          assert np.isfinite(granger_off_diagonal).all()
+          assert (granger_off_diagonal >= 0).all()
 
           ds = multitaper_connectivity(signals, sampling_frequency=500)
           assert "coherence_magnitude" in ds.data_vars

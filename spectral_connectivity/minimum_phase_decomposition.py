@@ -73,9 +73,10 @@ def _get_initial_conditions(
     If the zero-lag matrix of a sub-spectrum is not positive-definite (Cholesky
     fails), only that sub-spectrum falls back to a fixed positive-definite start
     (``n_signals * I``); the healthy sub-spectra keep their Cholesky start. The
-    fallback is deterministic — the Wilson iteration converges to the same
-    minimum-phase factor from any positive-definite start — so the result no
-    longer depends on the global NumPy random state.
+    fallback start is now deterministic instead of a random draw, so the result
+    for such a pathological sub-spectrum no longer depends on the global NumPy
+    random state. This is a NumPy-backend detail: on CuPy the batched Cholesky
+    above returns NaN rather than raising, so this branch is never taken.
     """
     zero_lag = ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
     try:
@@ -109,14 +110,14 @@ def _get_initial_conditions(
         # Deterministic well-conditioned PD start for the failed units. The
         # previous code averaged N_RAND=1000 random Wishart draws
         # (mean of R @ Rᴴ), whose expectation is exactly n_signals * I; use that
-        # expectation directly. Wilson's iteration converges to the same unique
-        # minimum-phase factor from any PD starting point, so a fixed start does
-        # not change the converged result -- but it removes the dependence on the
-        # global RNG state (a pathological spectrum's factorization no longer
-        # depends on unrelated random calls, and it is reproducible without
-        # reseeding). Built in the zero-lag's own dtype so a float32 spectrum is
-        # not promoted to float64; only the failed units are replaced, so the
-        # healthy ones keep their exact Cholesky start.
+        # expectation directly as a fixed starting point. This only sets the
+        # iteration's initial guess for the pathological units, so their result
+        # no longer depends on unrelated global-RNG calls and is reproducible
+        # without reseeding (it does not otherwise guarantee a particular
+        # converged value for a non-positive-definite input). Built in the
+        # zero-lag's own dtype so a float32 spectrum is not promoted to float64;
+        # only the failed units are replaced, so the healthy ones keep their
+        # exact Cholesky start.
         failed_indices = xp.nonzero(not_positive_definite)[0]
         n_signals = zero_lag.shape[-1]
         deterministic_start = n_signals * xp.eye(n_signals, dtype=zero_lag.dtype)
