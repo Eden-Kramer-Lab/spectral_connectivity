@@ -198,14 +198,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`statistics.coherence_significance_pvalue`**: requires `n_observations >= 2`
   (the Beta(1, n-1) null); smaller counts previously returned values outside
   `[0, 1]` (e.g. `1.33` for `n_observations=0`).
-- **`Connectivity` phase-lag family** (`phase_lag_index`,
-  `weighted_phase_lag_index`, `debiased_squared_phase_lag_index`,
-  `debiased_squared_weighted_phase_lag_index`): raise a clear
-  `NotImplementedError` under block mode (`blocks>=1`) instead of an
-  `IndexError` — the Hermitian block assembly is incompatible with these
-  measures' anti-symmetric transform and would otherwise return wrong-signed
-  off-diagonals. The block accumulator also uses the active array namespace so
-  it stays on-device under the CuPy backend.
 - **`Connectivity.directed_coherence`**: corrected the noise-variance normalization. The per-source noise variance was broadcast on the target axis instead of the source axis and combined with a malformed `sqrt`/denominator, producing values greater than 1 for channels with unequal noise variances. It now returns the squared directed coherence `nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2`, bounded in [0, 1] and summing to 1 over sources. **Values computed with earlier versions were incorrect whenever channel noise variances differed.**
 - **`Connectivity.group_delay` / `Connectivity.delay`**: the frequency-significance test now uses the exact zero-coherence null distribution (`statistics.coherence_significance_pvalue`, magnitude-squared coherence ~ Beta(1, n-1)). The previous Fisher one-sample z-transform both returned all-NaN (so `group_delay` raised a `zero-size array` error) and, once that was patched, was badly miscalibrated at the zero-coherence boundary — it over-rejected the null by 3-4x (~16-22% actual rejection at a nominal 5%), yielding spurious "significant" frequencies. `coherence_fisher_z_transform` is retained for two-sample comparisons; it now validates that `n_obs1` is a finite integer `>= 2` and `n_obs2` is a finite integer equal to `0` (one-sample) or `>= 2` (`n_obs=1` previously raised `ZeroDivisionError`, and non-finite/fractional counts gave NaN with a runtime warning).
 - **`statistics.power_confidence_intervals`**: split the tail mass evenly between the two tails. A requested 95% interval previously covered only ~90% (coverage was `2*ci - 1`). Added validation that `ci` is in `[0.5, 1.0)`, that `n_tapers` is a finite positive integer (zero/negative/NaN previously returned `(nan, nan)` and fractional values used meaningless non-integer degrees of freedom), and that `power` is finite and non-negative (a negative power previously returned negative, reversed bounds, e.g. `power=-1` -> ~`(-0.488, -3.080)`).
@@ -285,6 +277,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the old interpolation path anyway. Relatedly, `dpss_windows(2, NW, 2)` (a
   two-sample window with two tapers) now raises a clear `ValueError` rather than
   returning degenerate tapers.
+- **The `blocks` parameter of `Connectivity` and `Connectivity.from_multitaper`
+  is removed.** It chunked the per-observation cross-spectral outer product for
+  memory, but every measure now uses the batched reduced matmul (the coherence
+  family and directed measures already did, and `phase_locking_value` /
+  `pairwise_phase_consistency` now do too via unit-normalized coefficients — see
+  **Performance**), so nothing forms that outer product any longer and `blocks`
+  had no remaining effect (it was also unvalidated, and its block-assembly path
+  was broken under the CuPy backend). Drop the `blocks=` argument; results are
+  unchanged. The associated internal helpers (`_reject_block_mode`,
+  `_nonsorted_unique`, and the transformed-block branch of
+  `_expectation_cross_spectral_matrix`) were removed with it.
 
 ### Performance
 
@@ -294,14 +297,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of materializing the full per-observation
   `(..., n_signals, n_signals)` outer product and then averaging. Results are
   unchanged to floating-point tolerance. On a representative case this was
-  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). As a consequence, the
-  default computation now bypasses the `blocks` parameter entirely (it never
-  forms the large intermediate that `blocks` was meant to chunk, so blocking it
-  only added overhead). The coherence family and directed measures reduce the
-  cross-spectral matrix directly and ignore `blocks`; the phase-lag-index family
-  rejects it. `blocks` now affects only `phase_locking_value`, which applies a
-  per-observation normalization before averaging and so must materialize the
-  outer product.
+  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). Every measure now uses
+  this reduction, so the per-observation outer product (and the `blocks`
+  parameter that chunked it) is gone entirely (see **Removed**).
+- **`Connectivity.phase_locking_value` / `pairwise_phase_consistency`** now
+  unit-normalize each Fourier coefficient and reuse the batched reduced
+  cross-spectral matmul, using
+  `(z_i conj(z_j)) / |z_i conj(z_j)| = (z_i/|z_i|) conj(z_j/|z_j|)`. This avoids
+  the per-observation outer product these were the last measures to form, so
+  peak memory drops from `O(observations · signals²)` to
+  `O(observations · signals)`; measured ~12–23× faster on CPU (`complex128`,
+  16–64 signals). Results match the previous implementation to floating-point
+  tolerance (~4e-16 for `complex128`), including the dead-channel NaN placement.
+  A latent GPU-boundary bug is also fixed: intermediates now stay on the active
+  array namespace, and only the public return value is converted to NumPy (the
+  old `phase_locking_value` called `xp.abs` on an already-host array).
 - `multitaper_connectivity` now builds a single `Connectivity` from the
   multitaper transform and reuses it across every requested measure, instead of
   reconstructing one (and recomputing the uncached FFT) per measure. Results are

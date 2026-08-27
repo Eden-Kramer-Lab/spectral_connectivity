@@ -199,25 +199,6 @@ def _non_negative_frequencies(axis: int) -> Callable:
     return decorator
 
 
-def _nonsorted_unique(x: NDArray[Any]) -> NDArray[Any]:
-    """Return non-sorted and unique list of elements.
-
-    Parameters
-    ----------
-    x : array_like
-        Input array.
-
-    Returns
-    -------
-    array_like
-        Unique elements preserving original order.
-
-    """
-    x = np.asarray(x)
-    _, u_idx = np.unique(x, return_index=True)
-    return x[np.sort(u_idx)]
-
-
 def _freeze_writeable_chain(array: NDArray) -> None:
     """Mark ``array`` and every array in its ``.base`` chain read-only (NumPy).
 
@@ -269,27 +250,6 @@ class Connectivity:
         normalized frequencies.
     time : NDArray[floating], shape (n_time_windows,), optional
         Time values in seconds for each time window. If None, uses indices.
-    blocks : int, optional
-        Number of signal-pair blocks for memory-efficient computation of a
-        per-observation cross-spectral matrix transform, computing it in chunks
-        rather than all at once.
-
-        **Applies to a narrow set of measures.** Most measures no longer form a
-        per-observation outer product: the coherence family (``coherency``,
-        ``coherence_magnitude``, ``coherence_phase``, ``imaginary_coherence``),
-        spectral Granger, and the directed measures reduce the expected
-        cross-spectral matrix directly with a batched matmul and ignore
-        ``blocks`` (there is nothing to chunk). The phase-lag-index family
-        (``phase_lag_index`` and relatives) rejects ``blocks`` with an error. As
-        of this design, ``blocks`` therefore only affects ``phase_locking_value``,
-        which applies a per-observation normalization before averaging and so
-        must materialize that outer product.
-
-        For ``phase_locking_value`` on many signals (a rough guideline:
-        ``n_signals >= 50``), a small value such as ``blocks=5`` or ``blocks=10``
-        reduces peak memory by chunking the signal-pair dimension, at a minor
-        speed cost; increase it if you still hit out-of-memory errors. Results
-        are numerically identical whether or not ``blocks`` is used.
     dtype : np.dtype, default=complex128
         Data type for internal computations. Should match input precision.
     minimum_phase_tolerance : float, default=1e-8
@@ -366,7 +326,6 @@ class Connectivity:
         expectation_type: str = "trials_tapers",
         frequencies: NDArray[np.floating] | None = None,
         time: NDArray[np.floating] | None = None,
-        blocks: int | None = None,
         dtype: np.dtype = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
@@ -425,7 +384,6 @@ class Connectivity:
         if time is None:
             time = xp.arange(n_time_windows)
         self._frequencies = frequencies
-        self._blocks = blocks
         self._dtype = dtype
         # Set by from_multitaper to a weakref to the source Multitaper, so
         # consumers can verify provenance by identity (see from_multitaper).
@@ -719,7 +677,6 @@ class Connectivity:
         cls,
         multitaper_instance: "Multitaper",
         expectation_type: str = "trials_tapers",
-        blocks: int | None = None,
         dtype: Any = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
@@ -732,14 +689,6 @@ class Connectivity:
             Instance of Multitaper class.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
-        blocks : int, optional
-            Number of signal-pair blocks for memory-efficient computation. In
-            practice this only affects ``phase_locking_value`` (a rough
-            guideline: use ``blocks=5``-``10`` for ``n_signals >= 50`` to reduce
-            peak memory); the coherence family and directed measures ignore it,
-            and the phase-lag-index family rejects it. Results are numerically
-            identical whether or not it is used. See :class:`Connectivity` for
-            the full explanation.
         dtype : np.dtype, default=complex128
             Data type for computations.
         minimum_phase_tolerance : float, default=1e-8
@@ -760,7 +709,6 @@ class Connectivity:
             "expectation_type": expectation_type,
             "time": multitaper_instance.time,
             "frequencies": multitaper_instance.frequencies,
-            "blocks": blocks,
             "dtype": dtype,
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
@@ -847,29 +795,6 @@ class Connectivity:
                 f"n_time_samples_per_window)."
             )
 
-    def _reject_block_mode(self, measure: str) -> None:
-        """Raise if a phase-lag-index measure is used with block mode.
-
-        Block mode (``Connectivity(blocks=...)``) assembles the cross-spectral
-        matrix from upper-triangular blocks and fills the lower triangle by
-        Hermitian symmetry (``csm[j, i] = conj(csm[i, j])``). That identity
-        holds for the raw cross-spectral matrix, but the phase-lag-index family
-        first applies an anti-symmetric transform (``sign(Im)`` / ``Im``) for
-        which the lower triangle is the *negative*, not the conjugate, of the
-        upper triangle. Reusing the Hermitian fill would silently return
-        wrong-signed off-diagonal values, so block mode is rejected here rather
-        than producing incorrect results.
-        """
-        if isinstance(self._blocks, int) and self._blocks >= 1:
-            raise NotImplementedError(
-                f"{measure} does not support block mode (blocks="
-                f"{self._blocks}). The phase-lag-index family relies on an "
-                f"anti-symmetric transform of the cross-spectral matrix, which "
-                f"is incompatible with the Hermitian block assembly and would "
-                f"otherwise return silently incorrect values. Recompute this "
-                f"measure with blocks=None."
-            )
-
     @property
     @_asnumpy
     def frequencies(self) -> NDArray[np.floating] | None:
@@ -935,80 +860,25 @@ class Connectivity:
             fourier_coefficients, fourier_coefficients, dtype=self._dtype
         )
 
-    def _expectation_cross_spectral_matrix(
-        self, fcn: Callable | None = None, dtype: np.dtype | None = None
-    ) -> NDArray[np.complexfloating]:
-        """Compute full or block-wise cross-spectral matrix.
+    def _expectation_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+        """Expected cross-spectral matrix, reduced over the averaged observations.
 
-        Parameters
-        ----------
-        fcn : callable, optional
-            Function to apply to cross-spectral matrix.
-        dtype : np.dtype, optional
-            Data type for output.
+        Validates that at least two signals are present, then returns the cached
+        reduced cross-spectral matrix -- a single batched matmul over the
+        averaged time/trials/tapers axes (see ``_reduced_cross_spectral_matrix``)
+        rather than a per-observation outer product.
 
         Returns
         -------
-        array
+        array, shape (..., n_frequencies, n_signals, n_signals)
             Expected cross-spectral matrix.
-
         """
         self._validate_multiple_signals()
-        # The identity (``fcn=None``) path is reduced directly over the averaged
-        # observation axes, regardless of ``blocks``: it never forms the large
-        # per-observation outer product that ``blocks`` exists to chunk, so
-        # blocking it would only add overhead (see
-        # ``_reduced_cross_spectral_matrix``). ``blocks`` still applies to the
-        # transformed (``fcn`` given) paths below, which must materialize that
-        # outer product before averaging.
-        if fcn is None:
-            return self._cached_reduced_cross_spectral_matrix
+        return self._cached_reduced_cross_spectral_matrix
 
-        if not isinstance(self._blocks, int) or (self._blocks < 1):
-            # compute all connections at once
-            return self._expectation(fcn(self._cross_spectral_matrix))
-        else:  # compute blocks of connections
-            # get fourier coefficients
-            fourier_coefficients = self._fourier_coefficients[..., xp.newaxis]
-            fourier_coefficients = fourier_coefficients.astype(self._dtype)
-
-            # define sections
-            n_signals = fourier_coefficients.shape[-2]
-            _is, _it = xp.triu_indices(n_signals, k=0)
-            sections = xp.array_split(xp.c_[_is, _it], self._blocks)
-
-            # prepare final output
-            csm_shape = list(self._power.shape)
-            csm_shape += [csm_shape[-1]]
-            dtype = self._dtype if dtype is None else dtype
-            # Use the active array namespace (xp) so the block accumulator lives
-            # on the same device as the CuPy/NumPy blocks assigned into it below;
-            # np.zeros would force a host array under the CuPy backend.
-            csm = xp.zeros(csm_shape, dtype=dtype)
-
-            for sec in sections:
-                # get unique indices
-                _sxu = _nonsorted_unique(sec[:, 0])
-                _syu = _nonsorted_unique(sec[:, 1])
-
-                # computes block of connections
-                _out = self._expectation(
-                    fcn(
-                        _complex_inner_product(
-                            fourier_coefficients[..., _sxu, :],
-                            fourier_coefficients[..., _syu, :],
-                            dtype=self._dtype,
-                        )
-                    )
-                )
-
-                # fill the output array (Hermitian symmetric filling)
-                csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
-                csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = xp.conj(_out)
-
-        return csm
-
-    def _reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+    def _reduced_cross_spectral_matrix(
+        self, fourier_coefficients: NDArray[np.complexfloating] | None = None
+    ) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix via a single batched matmul.
 
         Numerically equivalent (to floating-point tolerance) to
@@ -1019,6 +889,15 @@ class Connectivity:
         observation. For the default ``trials_tapers`` expectation this replaces
         a large intermediate with a small result and is markedly faster.
 
+        Parameters
+        ----------
+        fourier_coefficients : array, optional
+            Coefficients of shape
+            ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``
+            to reduce; defaults to this instance's coefficients.
+            ``phase_locking_value`` passes unit-normalized coefficients so the
+            same batched matmul yields its normalized cross-spectrum.
+
         Returns
         -------
         array, shape (..., n_frequencies, n_signals, n_signals)
@@ -1027,7 +906,8 @@ class Connectivity:
             by the equivalent expectation over the full outer product.
 
         """
-        fourier_coefficients = self._fourier_coefficients
+        if fourier_coefficients is None:
+            fourier_coefficients = self._fourier_coefficients
         # Reuse the same axis metadata that ``n_observations`` reads, so this
         # stays correct for every expectation_type without a parallel mapping.
         axes = signature(self._expectation).parameters["axis"].default
@@ -1574,31 +1454,41 @@ class Connectivity:
         except AttributeError:
             return global_coherence, unnormalized_global_coherence
 
-    @_asnumpy
     @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self) -> NDArray[np.complexfloating]:
-        def fcn(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-            magnitude = xp.abs(x)
-            zero_magnitude = magnitude == 0
-            if bool(xp.any(zero_magnitude)):
-                warnings.warn(
-                    "Some cross-spectrum entries have zero magnitude (e.g. a "
-                    "flat/dead channel or all-zero input at a taper/trial), so "
-                    "the phase-locking normalization x / |x| is undefined there "
-                    "and is returned as NaN.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            # x / |x| is undefined where |x| == 0; divide under a scoped errstate
-            # and set those entries to NaN explicitly rather than leaking a
-            # RuntimeWarning now that NumPy warnings are no longer suppressed.
-            with np.errstate(invalid="ignore", divide="ignore"):
-                normalized = x / magnitude
-            normalized[zero_magnitude] = xp.nan
-            return normalized
+        # Normalize each Fourier coefficient to unit magnitude, then reuse the
+        # batched reduced cross-spectral matmul: because
+        #   (z_i conj(z_j)) / |z_i conj(z_j)| = (z_i / |z_i|) conj(z_j / |z_j|),
+        # the mean over observations of the normalized per-observation
+        # cross-spectrum equals the reduced cross-spectral matrix of the
+        # unit-normalized coefficients -- with no per-observation outer product,
+        # so peak memory is O(observations * signals) rather than
+        # O(observations * signals**2). Kept on the active namespace (xp); the
+        # public ``phase_locking_value`` wrapper converts to NumPy.
+        self._validate_multiple_signals()
+        coefficients = self._fourier_coefficients
+        magnitude = xp.abs(coefficients)
+        zero_magnitude = magnitude == 0
+        if bool(xp.any(zero_magnitude)):
+            warnings.warn(
+                "Some cross-spectrum entries have zero magnitude (e.g. a "
+                "flat/dead channel or all-zero input at a taper/trial), so "
+                "the phase-locking normalization z / |z| is undefined there "
+                "and is returned as NaN.",
+                UserWarning,
+                stacklevel=2,
+            )
+        # z / |z| is undefined where |z| == 0; divide under a scoped errstate and
+        # set those coefficients to NaN explicitly (rather than leaking a
+        # RuntimeWarning). A NaN coefficient at any observation makes every pair
+        # involving it reduce to NaN, matching the previous per-observation path
+        # where a zero-magnitude cross-spectrum entry became NaN before averaging.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            normalized = coefficients / magnitude
+        normalized[zero_magnitude] = xp.nan
+        return self._reduced_cross_spectral_matrix(normalized)
 
-        return self._expectation_cross_spectral_matrix(fcn=fcn)
-
+    @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
         """Return the cross-spectrum with power scaled to magnitude 1.
 
@@ -1721,7 +1611,6 @@ class Connectivity:
 
         """
 
-        self._reject_block_mode("phase_lag_index")
         # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
         # array is disconnected from the cached moment.
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
@@ -1761,7 +1650,6 @@ class Connectivity:
 
         """
 
-        self._reject_block_mode("weighted_phase_lag_index")
         mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "absolute"
         )
@@ -1796,7 +1684,6 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
-        self._reject_block_mode("debiased_squared_phase_lag_index")
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
         return (n_observations * self.phase_lag_index() ** 2 - 1.0) / (
@@ -1831,7 +1718,6 @@ class Connectivity:
                NeuroImage 55, 1548-1565.
 
         """
-        self._reject_block_mode("debiased_squared_weighted_phase_lag_index")
         self._validate_debiasing_observations(
             "debiased_squared_weighted_phase_lag_index"
         )

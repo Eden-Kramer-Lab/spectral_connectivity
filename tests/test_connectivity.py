@@ -913,17 +913,17 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
 
     conn = Connectivity(fc, expectation_type=expectation_type)
     n_observations = conn.n_observations
-    # Reference moments via independent per-fcn expectation calls.
-    mean_sign = conn._expectation_cross_spectral_matrix(
-        fcn=lambda x: np.sign(zero_diagonal_imag(x))
+    # Reference moments computed independently by averaging a transform of the
+    # per-observation cross-spectral matrix (a fresh matrix per call, since
+    # zero_diagonal_imag mutates the imaginary view in place).
+    mean_sign = conn._expectation(
+        np.sign(zero_diagonal_imag(conn._cross_spectral_matrix))
     )
-    mean_imag = conn._expectation_cross_spectral_matrix(fcn=zero_diagonal_imag)
-    mean_abs = conn._expectation_cross_spectral_matrix(
-        fcn=lambda x: np.abs(zero_diagonal_imag(x))
+    mean_imag = conn._expectation(zero_diagonal_imag(conn._cross_spectral_matrix))
+    mean_abs = conn._expectation(
+        np.abs(zero_diagonal_imag(conn._cross_spectral_matrix))
     )
-    mean_sq = conn._expectation_cross_spectral_matrix(
-        fcn=lambda x: zero_diagonal_imag(x) ** 2
-    )
+    mean_sq = conn._expectation(zero_diagonal_imag(conn._cross_spectral_matrix) ** 2)
 
     expected_pli = non_negative(mean_sign.real)
     weights = mean_abs.copy()
@@ -1634,9 +1634,9 @@ def test_connectivity_warns_on_nan():
 def test_reduced_cross_spectral_matrix_matches_outer_product():
     """The reduced (batched-matmul) CSM matches the full outer-product mean.
 
-    ``_expectation_cross_spectral_matrix(fcn=None)`` now contracts the averaged
-    observation axes directly instead of materializing the per-observation outer
-    product. It must agree, to floating-point tolerance, with the explicit
+    ``_expectation_cross_spectral_matrix`` contracts the averaged observation
+    axes directly instead of materializing the per-observation outer product. It
+    must agree, to floating-point tolerance, with the explicit
     ``self._expectation(self._cross_spectral_matrix)`` for every expectation
     type, and must propagate NaNs the same way.
     """
@@ -1679,287 +1679,88 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
     np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
 
 
-def test_expectation_cross_spectral_matrix_blocks():
-    """Test that blocked computation produces identical results to unblocked.
+def _reference_normalized_cross_spectrum(conn):
+    """Honest per-observation phase-locking cross-spectrum (materialized).
 
-    The blocks parameter enables memory-efficient computation of large
-    connectivity matrices by processing signal pairs in chunks. This test
-    verifies that using blocks produces identical results to computing all
-    connections at once.
-
-    An explicit ``fcn`` is passed so the call actually exercises the
-    block-chunking branch: the ``fcn=None`` identity path is reduced directly
-    with a batched matmul that ignores ``blocks`` (so it would compare the
-    reduced path against itself and prove nothing about chunking). ``np.abs`` is
-    Hermitian-preserving, so the chunked upper-triangle-plus-conjugate-fill
-    assembly must reproduce the unchunked result.
+    Normalizes each per-observation cross-spectrum entry ``z_i conj(z_j)`` by its
+    magnitude and averages, then restricts to non-negative frequencies -- the
+    original implementation the factorized ``_phase_locking_value`` replaced.
     """
-    # Create test data with known structure
-    # Use realistic dimensions: 10 time windows, 3 trials, 5 tapers, 50 frequencies, 10 signals
-    n_time_windows = 10
-    n_trials = 3
-    n_tapers = 5
-    n_frequencies = 50
-    n_signals = 10
-
-    # Create Fourier coefficients with some structure
-    rng = np.random.default_rng(42)
-    fourier_coefficients = rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    ) + 1j * rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    )
-    fourier_coefficients = fourier_coefficients.astype(np.complex128)
-
-    # Test with different expectation types
-    expectation_types = ["trials_tapers", "trials", "tapers"]
-
-    for expectation_type in expectation_types:
-        # Compute without blocks (all connections at once)
-        conn_unblocked = Connectivity(
-            fourier_coefficients=fourier_coefficients,
-            expectation_type=expectation_type,
-            blocks=None,
-        )
-        csm_unblocked = conn_unblocked._expectation_cross_spectral_matrix(fcn=np.abs)
-
-        # Test with different numbers of blocks
-        for n_blocks in [2, 3, 5]:
-            conn_blocked = Connectivity(
-                fourier_coefficients=fourier_coefficients,
-                expectation_type=expectation_type,
-                blocks=n_blocks,
-            )
-            csm_blocked = conn_blocked._expectation_cross_spectral_matrix(fcn=np.abs)
-
-            # Verify shapes match
-            assert csm_blocked.shape == csm_unblocked.shape, (
-                f"Shape mismatch with blocks={n_blocks}, "
-                f"expectation_type={expectation_type}: "
-                f"{csm_blocked.shape} vs {csm_unblocked.shape}"
-            )
-
-            # Verify values match within floating-point tolerance
-            assert np.allclose(csm_blocked, csm_unblocked, rtol=1e-10, atol=1e-12), (
-                f"Values mismatch with blocks={n_blocks}, "
-                f"expectation_type={expectation_type}. "
-                f"Max difference: {np.max(np.abs(csm_blocked - csm_unblocked))}"
-            )
+    csm = np.asarray(conn._cross_spectral_matrix)
+    magnitude = np.abs(csm)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        normalized = csm / magnitude
+    normalized[magnitude == 0] = np.nan
+    reduced = np.asarray(conn._expectation(normalized))
+    return reduced[..., : reduced.shape[-3] // 2 + 1, :, :]
 
 
-def test_expectation_cross_spectral_matrix_blocks_coherence():
-    """Test that blocked computation produces identical coherence results.
+@mark.parametrize("dtype", [np.complex64, np.complex128])
+@mark.parametrize("dead", [False, True])
+@mark.parametrize(
+    "expectation_type",
+    [
+        "time",
+        "trials",
+        "tapers",
+        "time_trials",
+        "time_tapers",
+        "trials_tapers",
+        "time_trials_tapers",
+    ],
+)
+def test_phase_locking_value_matches_per_observation_reference(
+    dtype, dead, expectation_type
+):
+    """Factorized PLV/PPC equal the materialized per-observation reference.
 
-    This test verifies that coherence, a normalized connectivity measure,
-    produces identical results whether computed with or without blocks.
+    ``phase_locking_value`` now unit-normalizes each Fourier coefficient and
+    reuses the batched reduced cross-spectral matmul, using
+    ``(z_i conj(z_j)) / |z_i conj(z_j)| = (z_i/|z_i|) conj(z_j/|z_j|)``. It must
+    match the honest per-observation normalization-then-average across every
+    expectation mode, both dtypes, and a dead (all-zero) channel that makes the
+    normalization undefined (NaN) -- the case ``blocks`` used to serve.
     """
-    # Create test data
-    n_time_windows = 5
-    n_trials = 2
-    n_tapers = 3
-    n_frequencies = 20
-    n_signals = 8
+    rng = np.random.default_rng(0)
+    shape = (3, 4, 5, 8, 4)
+    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(dtype)
+    if dead:
+        fc[:, 1, :, :, 0] = 0.0  # dead channel 0 on trial 1
 
-    rng = np.random.default_rng(123)
-    fourier_coefficients = rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    ) + 1j * rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    )
-    fourier_coefficients = fourier_coefficients.astype(np.complex128)
-
-    # Compute coherence without blocks
-    conn_unblocked = Connectivity(
-        fourier_coefficients=fourier_coefficients, blocks=None
-    )
-    coherence_unblocked = conn_unblocked.coherence_magnitude()
-
-    # Compute coherence with blocks
-    for n_blocks in [2, 4]:
-        conn_blocked = Connectivity(
-            fourier_coefficients=fourier_coefficients, blocks=n_blocks
-        )
-        coherence_blocked = conn_blocked.coherence_magnitude()
-
-        # Verify shapes match
-        assert coherence_blocked.shape == coherence_unblocked.shape
-
-        # Verify NaN locations match (diagonal elements)
-        assert np.array_equal(
-            np.isnan(coherence_blocked), np.isnan(coherence_unblocked)
-        ), f"NaN pattern mismatch with blocks={n_blocks}"
-
-        # Verify non-NaN values match
-        mask = ~np.isnan(coherence_unblocked)
-        assert np.allclose(
-            coherence_blocked[mask], coherence_unblocked[mask], rtol=1e-10, atol=1e-12
-        ), (
-            f"Coherence mismatch with blocks={n_blocks}. "
-            f"Max difference: {np.max(np.abs(coherence_blocked[mask] - coherence_unblocked[mask]))}"
-        )
-
-
-def test_expectation_cross_spectral_matrix_blocks_edge_cases():
-    """Test edge cases for blocked computation.
-
-    This test verifies that blocks parameter handles edge cases correctly:
-    - blocks=1 (equivalent to unblocked)
-    - blocks > number of signal pairs (more blocks than needed)
-    - Very small datasets
-
-    An explicit ``fcn`` (``np.abs``) is used so the block-chunking branch is
-    actually taken; the ``fcn=None`` identity path ignores ``blocks``.
-    """
-    # Small dataset
-    n_time_windows = 2
-    n_trials = 2
-    n_tapers = 2
-    n_frequencies = 5
-    n_signals = 3  # Only 3 signals = 3 unique pairs in upper triangle
-
-    rng = np.random.default_rng(456)
-    fourier_coefficients = rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    ) + 1j * rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    )
-    fourier_coefficients = fourier_coefficients.astype(np.complex128)
-
-    # Compute reference (unblocked)
-    conn_ref = Connectivity(fourier_coefficients=fourier_coefficients, blocks=None)
-    csm_ref = conn_ref._expectation_cross_spectral_matrix(fcn=np.abs)
-
-    # Test blocks=1 (should work like unblocked)
-    conn_block1 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=1)
-    csm_block1 = conn_block1._expectation_cross_spectral_matrix(fcn=np.abs)
-    assert np.allclose(csm_block1, csm_ref, rtol=1e-10, atol=1e-12)
-
-    # Test blocks > number of pairs (should handle gracefully)
-    # With 3 signals, there are 3 pairs: (0,1), (0,2), (1,2)
-    conn_block10 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=10)
-    csm_block10 = conn_block10._expectation_cross_spectral_matrix(fcn=np.abs)
-    assert np.allclose(csm_block10, csm_ref, rtol=1e-10, atol=1e-12)
-
-
-def test_blocks_parameter_symmetry():
-    """Test that blocked computation maintains matrix symmetry.
-
-    The cross-spectral matrix should be symmetric (csm[i,j] = csm[j,i]*).
-    This test verifies that blocked computation properly fills both
-    upper and lower triangles.
-    """
-    n_time_windows = 3
-    n_trials = 2
-    n_tapers = 2
-    n_frequencies = 10
-    n_signals = 6
-
-    rng = np.random.default_rng(789)
-    fourier_coefficients = rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    ) + 1j * rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    )
-    fourier_coefficients = fourier_coefficients.astype(np.complex128)
-
-    # Test with blocks
-    conn_blocked = Connectivity(fourier_coefficients=fourier_coefficients, blocks=3)
-    csm_blocked = conn_blocked._expectation_cross_spectral_matrix()
-
-    # Verify symmetry: csm[..., i, j] should equal conj(csm[..., j, i])
-    csm_transpose_conj = np.conj(np.swapaxes(csm_blocked, -2, -1))
-
-    assert np.allclose(csm_blocked, csm_transpose_conj, rtol=1e-10, atol=1e-12), (
-        "Cross-spectral matrix is not symmetric with blocked computation. "
-        f"Max difference: {np.max(np.abs(csm_blocked - csm_transpose_conj))}"
+    conn = Connectivity(fourier_coefficients=fc, expectation_type=expectation_type)
+    tol = (
+        {"rtol": 2e-6, "atol": 2e-6}
+        if dtype == np.complex64
+        else {"rtol": 1e-9, "atol": 1e-11}
     )
 
+    ref_complex = _reference_normalized_cross_spectrum(conn)
+    ref_plv = np.abs(ref_complex)
+    plv = conn.phase_locking_value()
+    raw = np.asarray(conn._phase_locking_value())
 
-def test_blocks_reduce_memory():
-    """Test that blocked computation reduces peak memory usage.
+    # NaN placement identical, values equal off the NaNs.
+    np.testing.assert_array_equal(np.isnan(plv), np.isnan(ref_plv))
+    np.testing.assert_array_equal(np.isnan(raw), np.isnan(ref_complex))
+    finite = ~np.isnan(ref_plv)
+    np.testing.assert_allclose(plv[finite], ref_plv[finite], **tol)
+    np.testing.assert_allclose(raw[finite], ref_complex[finite], **tol)
+    # Diagonal (self-consistency) is 1 where defined.
+    diag = np.diagonal(plv, axis1=-2, axis2=-1)
+    np.testing.assert_allclose(diag[~np.isnan(diag)], 1.0, **tol)
 
-    The blocks parameter is designed to reduce memory consumption for large
-    connectivity matrices by computing signal pairs in chunks. It helps
-    whenever a per-observation transform ``fcn`` must be applied before
-    averaging (e.g. coherence magnitude, imaginary coherence), because that
-    forces the full per-observation outer product to be materialized.
-
-    Memory Reduction Mechanism:
-    - Without blocks: Materializes the full (n_time, n_trials, n_tapers,
-      n_frequencies, n_signals, n_signals) outer product, applies ``fcn``,
-      then averages.
-    - With blocks: Applies ``fcn`` to smaller signal-pair chunks at a time,
-      reducing peak memory.
-
-    Note: the default ``fcn=None`` path no longer benefits from blocks; it is
-    reduced directly with a single batched matmul (see
-    ``_reduced_cross_spectral_matrix``), so it never forms the large
-    intermediate that blocks was designed to chunk. This test therefore
-    exercises an ``fcn`` path, which is where blocks still saves memory.
-
-    Expected memory reduction is most noticeable for large n_signals
-    (e.g., n_signals >= 50).
-    """
-    import tracemalloc
-
-    # Keep dimensions small: the unblocked fcn path materializes a full
-    # (..., n_signals, n_signals) complex outer product plus a transformed
-    # copy, so large sizes risk OOM on the CI matrix. These dimensions still
-    # show the blocked path using less peak memory.
-    n_time_windows = 5
-    n_trials = 4
-    n_tapers = 4
-    n_frequencies = 30
-    n_signals = 20  # Large enough to see the block memory benefit
-
-    rng = np.random.default_rng(999)
-    fourier_coefficients = rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    ) + 1j * rng.standard_normal(
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
-    )
-    fourier_coefficients = fourier_coefficients.astype(np.complex128)
-
-    # A per-observation transform forces the full outer product to be built,
-    # which is exactly the case blocks is designed to chunk.
-    def fcn(x):
-        return np.abs(x)
-
-    # Measure memory for unblocked computation
-    tracemalloc.start()
-    conn_unblocked = Connectivity(
-        fourier_coefficients=fourier_coefficients, blocks=None
-    )
-    _ = conn_unblocked._expectation_cross_spectral_matrix(fcn=fcn)
-    _, peak_unblocked = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
-    # Measure memory for blocked computation
-    tracemalloc.start()
-    conn_blocked = Connectivity(fourier_coefficients=fourier_coefficients, blocks=5)
-    _ = conn_blocked._expectation_cross_spectral_matrix(fcn=fcn)
-    _, peak_blocked = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-
-    # Verify that blocked uses less or equal memory
-    # Note: In practice, blocked computation should use less memory for large arrays,
-    # but the benefit may be small for moderate sizes. We check that it doesn't
-    # use significantly MORE memory (within 20% overhead for block management).
-    memory_ratio = peak_blocked / peak_unblocked
-    assert memory_ratio <= 1.2, (
-        f"Blocked computation uses significantly more memory than unblocked. "
-        f"Ratio: {memory_ratio:.2f} (peak_blocked={peak_blocked:,}, "
-        f"peak_unblocked={peak_unblocked:,})"
-    )
-
-    # Document the actual memory usage for reference
-    # (this helps users understand the benefit)
-    print(
-        f"\nMemory usage comparison (n_signals={n_signals}):\n"
-        f"  Unblocked: {peak_unblocked:,} bytes\n"
-        f"  Blocked:   {peak_blocked:,} bytes\n"
-        f"  Ratio:     {memory_ratio:.2%}"
-    )
+    # Pairwise phase consistency built from the same complex reference.
+    n = conn.n_observations
+    if n >= 2:
+        plv_sum = ref_complex * n
+        ref_ppc = ((plv_sum * plv_sum.conjugate() - n) / (n**2 - n)).real
+        ppc = conn.pairwise_phase_consistency()
+        np.testing.assert_array_equal(np.isnan(ppc), np.isnan(ref_ppc))
+        fppc = ~np.isnan(ref_ppc)
+        np.testing.assert_allclose(ppc[fppc], ref_ppc[fppc], **tol)
+    else:
+        with pytest.raises(ValueError, match="at least 2 observations"):
+            conn.pairwise_phase_consistency()
 
 
 def test_default_coordinates_created_when_omitted():
@@ -1989,75 +1790,6 @@ def test_default_coordinates_created_when_omitted():
     np.testing.assert_array_equal(conn.time, np.arange(n_time_windows))
     # A coordinate-dependent method must not raise.
     conn.group_delay()
-
-
-@mark.parametrize(
-    "measure",
-    [
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    ],
-)
-@mark.parametrize("blocks", [1, 2, 3])
-def test_phase_lag_family_rejects_block_mode(measure, blocks):
-    """Block mode is incompatible with the anti-symmetric PLI transforms.
-
-    The Hermitian block assembly would return silently wrong-signed
-    off-diagonal values, so these measures must raise rather than compute.
-    """
-    rng = np.random.default_rng(0)
-    fc = rng.standard_normal((2, 3, 4, 8, 3)) + 1j * rng.standard_normal(
-        (2, 3, 4, 8, 3)
-    )
-    conn = Connectivity(fourier_coefficients=fc, blocks=blocks)
-    with pytest.raises(NotImplementedError, match="does not support block mode"):
-        getattr(conn, measure)()
-
-
-@mark.parametrize("blocks", [2, 3])
-def test_coherence_magnitude_block_mode_matches_unblocked(blocks):
-    """Block mode uses the Hermitian identity path for coherence and must match."""
-    rng = np.random.default_rng(1)
-    fc = rng.standard_normal((2, 3, 4, 8, 4)) + 1j * rng.standard_normal(
-        (2, 3, 4, 8, 4)
-    )
-    unblocked = Connectivity(fourier_coefficients=fc).coherence_magnitude()
-    blocked = Connectivity(fourier_coefficients=fc, blocks=blocks).coherence_magnitude()
-    np.testing.assert_allclose(blocked, unblocked, atol=1e-12)
-
-
-@mark.parametrize("blocks", [1, 2, 3, 10])
-def test_phase_locking_value_block_mode_matches_unblocked(blocks):
-    """phase_locking_value is the one measure that still honors ``blocks``.
-
-    It applies a per-observation magnitude normalization before averaging, so
-    (unlike the coherence family) it routes through the block-chunking assembly:
-    upper-triangle signal-pair blocks plus a Hermitian conjugate fill of the
-    lower triangle. Blocked and unblocked results must be identical, including
-    the NaN placement produced by a zero-magnitude (dead-channel) entry whose
-    normalization divides by zero -- a wrong pair index or a non-conjugate fill
-    would show up here.
-    """
-    rng = np.random.default_rng(7)
-    fc = rng.standard_normal((2, 3, 4, 6, 5)) + 1j * rng.standard_normal(
-        (2, 3, 4, 6, 5)
-    )
-    # A dead channel (all-zero) makes every cross-spectrum involving it zero, so
-    # its normalized phase-locking value is NaN -- exercises the NaN path through
-    # the block assembly and its Hermitian fill.
-    fc[..., 0] = 0.0
-
-    unblocked = Connectivity(fourier_coefficients=fc).phase_locking_value()
-    blocked = Connectivity(fourier_coefficients=fc, blocks=blocks).phase_locking_value()
-
-    assert blocked.shape == unblocked.shape
-    assert np.array_equal(np.isnan(blocked), np.isnan(unblocked)), (
-        f"NaN placement differs between blocks={blocks} and unblocked"
-    )
-    mask = ~np.isnan(unblocked)
-    np.testing.assert_allclose(blocked[mask], unblocked[mask], rtol=1e-10, atol=1e-12)
 
 
 @mark.parametrize(
