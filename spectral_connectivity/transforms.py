@@ -618,6 +618,23 @@ class Multitaper:
         fft_workers: int | None = None,
     ) -> None:
         self.time_series = xp.asarray(time_series)
+        # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
+        # be a nonzero integer (a negative value counts back from os.cpu_count(),
+        # so -1 uses all cores) or None (SciPy's single-threaded default).
+        # Validate here so a bad value names this parameter, instead of surfacing
+        # a bare "workers must not be zero" ValueError or an opaque TypeError from
+        # deep inside fft(). bool is an int subclass, so reject it explicitly.
+        if fft_workers is not None and (
+            isinstance(fft_workers, bool)
+            or not isinstance(fft_workers, (int, np.integer))
+            or fft_workers == 0
+        ):
+            raise ValueError(
+                f"fft_workers must be None or a nonzero integer (the number of "
+                f"parallel FFT threads; -1 uses all cores), got {fft_workers!r}. "
+                f"It is forwarded to scipy.fft.fft(workers=...). Use None (the "
+                f"default) for SciPy's single-threaded FFT."
+            )
         self.fft_workers = fft_workers
 
         # Validate that time_series is 3D
@@ -1735,29 +1752,27 @@ def detrend(
     # offending value and the data length; the backend raises a terser message.
     if type == "linear":
         N = data.shape[axis]
-        bp_array = xp.sort(xp.unique(xp.r_[0, bp, N]))
-        if xp.any(bp_array > N):
-            invalid_bp = bp_array[bp_array > N]
-            # Convert to list for display (works with both numpy and cupy).
-            if hasattr(invalid_bp, "get"):  # CuPy array
-                invalid_bp_list = xp.asnumpy(invalid_bp).tolist()
-            else:  # NumPy array
-                invalid_bp_list = invalid_bp.tolist()
+        # Breakpoints are indices into the detrended axis; the documented valid
+        # range is [0, N). Normalize the user's input (int, list, tuple, or
+        # numpy/cupy array) to a single array up front, then validate BOTH bounds
+        # against it directly -- rather than the 0/N-padded array previously used
+        # to build segments, whose padding always contained N (so a breakpoint at
+        # exactly N slipped past a ``> N`` check) and which never rejected
+        # negative indices (they reached the backend as a cryptic error).
+        bp_values = xp.atleast_1d(xp.asarray(bp))
 
-            if isinstance(bp, int):
-                bp_list = [bp]  # Wrap single int in list for display
-            elif isinstance(bp, list):
-                bp_list = bp  # Already a list
-            elif hasattr(bp, "get"):  # CuPy array
-                bp_list = xp.asnumpy(bp).tolist()
-            else:  # NumPy array
-                bp_list = bp.tolist()
+        def _to_list(a: NDArray) -> list:
+            # Works for both numpy and cupy arrays.
+            return xp.asnumpy(a).tolist() if hasattr(a, "get") else a.tolist()
 
+        out_of_range = bp_values[(bp_values < 0) | (bp_values >= N)]
+        if out_of_range.size:
             raise ValueError(
-                f"Breakpoint value(s) {invalid_bp_list} exceed data length.\n"
-                f"Data has {N} samples along axis {axis}, but breakpoint(s) are beyond this range.\n"
-                f"Breakpoints must be in the range [0, {N}).\n"
-                f"Check your breakpoint array: {bp_list}"
+                f"Breakpoint value(s) {_to_list(out_of_range)} are outside the "
+                f"valid range [0, {N}).\n"
+                f"Data has {N} samples along axis {axis}; breakpoints are indices "
+                f"into that axis and must satisfy 0 <= breakpoint < {N}.\n"
+                f"Check your breakpoints: {_to_list(bp_values)}"
             )
     # Delegate the least-squares/mean removal to SciPy (CPU) or CuPy (GPU),
     # which implement the same computation. Their detrend signatures match.
