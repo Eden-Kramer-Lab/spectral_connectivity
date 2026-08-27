@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > coordinate of multitaper/connectivity outputs will differ from earlier 2.x
 > releases.
 
-> **Upgrading — raised dependency floors:** this release requires `scipy>=1.11`
+> **Upgrading — raised dependency floors:** this release requires `scipy>=1.11.1`
 > (was 1.10). If you use the GPU backend, upgrade `cupy-cuda12x` to `>=13.0`
 > (was 12.0) **before** upgrading `spectral_connectivity` — `pip install -U
 > spectral_connectivity` will not force-upgrade an already-installed
@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finite p-values (the usual case, all channels live) are unchanged
   (bit-for-bit over 3000 randomized trials). The procedure now delegates to
   `scipy.stats.false_discovery_control`, which additionally rejects finite
-  p-values outside `[0, 1]`. **Dependency floor raised:** `scipy>=1.11` (was
+  p-values outside `[0, 1]`. **Dependency floor raised:** `scipy>=1.11.1` (was
   `>=1.10`), the release that added `false_discovery_control`.
 - **Wilson minimum-phase decomposition — one singular sub-spectrum no longer
   poisons the whole batch**: a single rank-deficient window (e.g. duplicated /

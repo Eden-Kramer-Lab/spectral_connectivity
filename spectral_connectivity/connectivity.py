@@ -3129,6 +3129,12 @@ def _find_largest_independent_group(
     Find the largest significant cluster of frequency points and
     return the independent frequency points of that cluster.
 
+    .. note::
+        Retained as the scalar reference implementation for the vectorized
+        ``_select_largest_independent_cluster`` used in production; it is not
+        called on the hot path, but pins that vectorization's behavior in
+        ``test_largest_independent_group_vectorized_matches_reference``.
+
     Parameters
     ----------
     is_significant : bool array
