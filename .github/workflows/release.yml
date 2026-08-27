@@ -14,15 +14,20 @@ defaults:
   run:
     shell: bash
 
+# Read-only by default (Scientific Python SPEC 8); the publish, release, and
+# attestation jobs elevate only the scopes they need.
+permissions:
+  contents: read
+
 jobs:
   quality:
     name: Code Quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -45,10 +50,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
@@ -65,7 +70,7 @@ jobs:
         run: pytest tests/test_notebooks.py -k "not executes"
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5
         continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -86,10 +91,10 @@ jobs:
     name: Test minimum dependencies (Python 3.10)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.10"
       - name: Install minimum-supported dependency versions
@@ -128,10 +133,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [quality, test, test-min-deps]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0  # Needed for hatch-vcs to determine version from git tags
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: Install build tools
@@ -141,7 +146,7 @@ jobs:
       - name: Check distribution
         run: twine check dist/*
       - name: Upload distribution artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: dist
           path: dist/
@@ -155,11 +160,11 @@ jobs:
         package: ['wheel', 'sdist']
     steps:
       - name: Download distribution artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: dist
           path: dist/
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - name: Install wheel
@@ -216,19 +221,31 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test-package]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # `environment: pypi` is the hook for a protected environment (SPEC 8);
+    # configure required reviewers / branch restrictions on it in the repo's
+    # Settings -> Environments so a publish needs manual approval.
     environment:
       name: pypi
       url: https://pypi.org/project/spectral-connectivity/
     permissions:
-      id-token: write  # Required for trusted publishing
+      id-token: write  # Trusted publishing (OIDC) + attestation signing
+      attestations: write  # Generate build-provenance attestations (SPEC 8)
+      contents: read
     steps:
       - name: Download distribution artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           name: dist
           path: dist/
+      - name: Attest build provenance for the distributions
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-path: "dist/*"
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+        with:
+          # Upload PEP 740 attestations to PyPI alongside the artifacts.
+          attestations: true
 
   create-release:
     name: Create GitHub Release
@@ -238,7 +255,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           fetch-depth: 0
       - name: Extract version from tag
@@ -256,7 +273,7 @@ jobs:
             echo "See [CHANGELOG.md](CHANGELOG.md) for details." >> release_notes.md
           fi
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           body_path: release_notes.md
           draft: false
