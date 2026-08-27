@@ -19,7 +19,7 @@ from spectral_connectivity.statistics import (
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
 )
-from spectral_connectivity.utils import is_gpu_enabled, to_numpy
+from spectral_connectivity.utils import freeze_readonly, is_gpu_enabled, to_numpy
 
 if TYPE_CHECKING:
     from spectral_connectivity.transforms import Multitaper
@@ -513,12 +513,7 @@ class Connectivity:
         # read-only flag makes an in-place edit raise loudly instead of silently
         # vanishing against a discarded copy. On CuPy the freeze is a no-op; the
         # copy is still independent, so a write to it is harmless.
-        snapshot = self._fourier_coefficients.copy()
-        try:
-            snapshot.flags.writeable = False
-        except (AttributeError, ValueError):
-            pass
-        return snapshot
+        return freeze_readonly(self._fourier_coefficients.copy())
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
@@ -595,11 +590,7 @@ class Connectivity:
             # by ~1e-16). CuPy may not support the writeable flag; the copy alone
             # still decouples the instance from later mutation of the caller's
             # array there.
-            owned = value.copy(order="K")
-            try:
-                owned.flags.writeable = False
-            except (AttributeError, ValueError):
-                pass
+            owned = freeze_readonly(value.copy(order="K"))
         value = owned
         self._fourier_coefficients = value
         self._clear_cached_intermediates()

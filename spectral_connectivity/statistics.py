@@ -51,6 +51,24 @@ def _validate_alpha(alpha: float) -> None:
         )
 
 
+def _warn_all_p_values_nonfinite(procedure_name: str) -> None:
+    """Warn that a multiple-comparison family is entirely undefined.
+
+    Shared by the BH and Bonferroni procedures: when every p-value is non-finite
+    the all-False result is indistinguishable from a valid family with no true
+    effects, so it must be surfaced rather than returned silently.
+    """
+    warnings.warn(
+        f"{procedure_name}: every p-value is non-finite (NaN/inf), so no test "
+        "is defined and nothing is flagged significant. This usually means "
+        "every tested pair involves a dead/zero-power channel. Returning "
+        "all-False; check your inputs rather than reading this as 'no "
+        "significant effects'.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def Benjamini_Hochberg_procedure(
     p_values: NDArray[np.floating], alpha: float = 0.05
 ) -> NDArray[np.bool_]:
@@ -125,19 +143,7 @@ def Benjamini_Hochberg_procedure(
             ) from exc
         is_significant[valid] = adjusted <= alpha
     elif p_values.size > 0:
-        # Every p-value is non-finite: the whole family is undefined (e.g. every
-        # tested pair involves a dead/zero-power channel). Returning a clean
-        # all-False is indistinguishable from "valid family, no true effects",
-        # so warn rather than fail silently.
-        warnings.warn(
-            "Benjamini_Hochberg_procedure: every p-value is non-finite "
-            "(NaN/inf), so no test is defined and nothing is flagged "
-            "significant. This usually means every tested pair involves a "
-            "dead/zero-power channel. Returning all-False; check your inputs "
-            "rather than reading this as 'no significant effects'.",
-            UserWarning,
-            stacklevel=2,
-        )
+        _warn_all_p_values_nonfinite("Benjamini_Hochberg_procedure")
     return is_significant
 
 
@@ -187,17 +193,7 @@ def Bonferroni_correction(
         # implementation above, and remain False in the returned mask.
         is_significant[valid] = finite_values <= alpha / finite_values.size
     elif p_values.size > 0:
-        # Every p-value is non-finite: the whole family is undefined. Warn rather
-        # than return a clean all-False silently, matching Benjamini_Hochberg.
-        warnings.warn(
-            "Bonferroni_correction: every p-value is non-finite (NaN/inf), so no "
-            "test is defined and nothing is flagged significant. This usually "
-            "means every tested pair involves a dead/zero-power channel. "
-            "Returning all-False; check your inputs rather than reading this as "
-            "'no significant effects'.",
-            UserWarning,
-            stacklevel=2,
-        )
+        _warn_all_p_values_nonfinite("Bonferroni_correction")
     return is_significant
 
 

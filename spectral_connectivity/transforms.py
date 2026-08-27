@@ -7,7 +7,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 
-from spectral_connectivity.utils import is_gpu_enabled
+from spectral_connectivity.utils import freeze_readonly, is_gpu_enabled, to_numpy
 
 logger = getLogger(__name__)
 
@@ -453,26 +453,12 @@ else:
 
 def _immutable_array_snapshot(value: Any) -> NDArray:
     """Copy an input array and make the owned snapshot read-only when supported."""
-    snapshot = xp.array(value, copy=True)
-    try:
-        snapshot.flags.writeable = False
-    except (AttributeError, ValueError):
-        # Some array backends do not expose NumPy's writeable flag. Ownership is
-        # still detached from the caller by the copy above.
-        pass
-    return snapshot
+    return freeze_readonly(xp.array(value, copy=True))
 
 
 def _readonly_array_copy(array: NDArray) -> NDArray:
     """Return a detached read-only copy of an internal array snapshot."""
-    copy = array.copy()
-    try:
-        copy.flags.writeable = False
-    except (AttributeError, ValueError):
-        # A backend without a writeable flag still returns detached storage, so
-        # caller mutation cannot affect the transform.
-        pass
-    return copy
+    return freeze_readonly(array.copy())
 
 
 class Multitaper:
@@ -1885,7 +1871,7 @@ def detrend(
 
         def _to_list(a: NDArray) -> list:
             # Works for both numpy and cupy arrays.
-            return xp.asnumpy(a).tolist() if hasattr(a, "get") else a.tolist()
+            return to_numpy(a).tolist()
 
         out_of_range = bp_values[(bp_values < 0) | (bp_values >= N)]
         if out_of_range.size:

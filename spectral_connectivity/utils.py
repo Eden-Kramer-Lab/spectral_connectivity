@@ -23,6 +23,21 @@ def to_numpy(array: Any) -> NDArray:
     return np.asarray(get() if callable(get) else array)
 
 
+def freeze_readonly(array: NDArray) -> NDArray:
+    """Mark ``array`` read-only in place and return it.
+
+    Setting ``writeable = False`` makes an accidental in-place edit raise loudly
+    rather than silently corrupt shared/cached state. Array backends without a
+    settable writeable flag (e.g. CuPy) are left as-is; callers rely on an
+    already-detached copy for ownership there, not on the flag.
+    """
+    try:
+        array.flags.writeable = False
+    except (AttributeError, ValueError):
+        pass
+    return array
+
+
 def is_gpu_enabled() -> bool:
     """Return whether GPU acceleration was requested via the environment.
 
