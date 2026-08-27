@@ -545,6 +545,25 @@ class Multitaper:
     time : NDArray[float64], shape (n_time_windows,)
         Time values in seconds for center of each time window.
 
+    See Also
+    --------
+    Connectivity : Compute connectivity measures from a Multitaper transform.
+    prepare_time_series : Reshape 1-D/2-D input to the required 3-D format.
+
+    Notes
+    -----
+    The multitaper method uses discrete prolate spheroidal sequences (DPSS)
+    as tapers, which are optimal for spectral analysis in the sense of minimizing
+    spectral leakage while maximizing energy concentration in the frequency band
+    of interest.
+
+    References
+    ----------
+    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
+           Proceedings of the IEEE, 70(9), 1055-1096.
+    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
+           Physical Applications. Cambridge University Press.
+
     Examples
     --------
     Using the helper function (recommended for 2D data):
@@ -577,20 +596,6 @@ class Multitaper:
     >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
     >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")
     Trials: 100, Signals: 5
-
-    Notes
-    -----
-    The multitaper method uses discrete prolate spheroidal sequences (DPSS)
-    as tapers, which are optimal for spectral analysis in the sense of minimizing
-    spectral leakage while maximizing energy concentration in the frequency band
-    of interest.
-
-    References
-    ----------
-    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
-           Proceedings of the IEEE, 70(9), 1055-1096.
-    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
-           Physical Applications. Cambridge University Press.
     """
 
     def __init__(

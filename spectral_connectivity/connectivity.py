@@ -248,8 +248,7 @@ class Connectivity:
 
     Parameters
     ----------
-    fourier_coefficients : NDArray[complexfloating],
-        shape (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
+    fourier_coefficients : NDArray[complexfloating], shape (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals)
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
@@ -309,26 +308,11 @@ class Connectivity:
         Effective number of independent observations after averaging,
         used for statistical inference.
 
-    Examples
+    See Also
     --------
-    >>> import numpy as np
-    >>> from spectral_connectivity import Connectivity
-    >>> rng = np.random.default_rng(0)
-    >>> n_times, n_trials, n_tapers, n_freqs, n_signals = 50, 10, 5, 100, 2
-    >>> # Create complex coefficients with coherence injected at frequency bin 10
-    >>> phase_diff = np.pi / 4  # 45 degree phase difference
-    >>> coeffs = (
-    ...     rng.standard_normal((n_times, n_trials, n_tapers, n_freqs, n_signals))
-    ...     + 1j
-    ...     * rng.standard_normal((n_times, n_trials, n_tapers, n_freqs, n_signals))
-    ... )
-    >>> coeffs[:, :, :, 10, 1] = coeffs[:, :, :, 10, 0] * np.exp(1j * phase_diff)
-    >>> conn = Connectivity(coeffs, expectation_type="trials_tapers")
-    >>> coherence = conn.coherence_magnitude()
-    >>> coherence.shape  # (n_times, non-negative freqs, n_signals, n_signals)
-    (50, 51, 2, 2)
-    >>> print(f"Peak coherence: {np.max(coherence[:, 10, 0, 1]):.3f}")
-    Peak coherence: 1.000
+    Multitaper : Produce the Fourier coefficients this class consumes.
+    spectral_connectivity.wrapper.multitaper_connectivity : High-level interface
+        returning labeled xarray results.
 
     Notes
     -----
@@ -351,6 +335,27 @@ class Connectivity:
     .. [2] Bastos, A. M., & Schoffelen, J. M. (2016). A tutorial review of
            functional connectivity analysis methods and their interpretational
            pitfalls. Frontiers in systems neuroscience, 9, 175.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from spectral_connectivity import Connectivity
+    >>> rng = np.random.default_rng(0)
+    >>> n_times, n_trials, n_tapers, n_freqs, n_signals = 50, 10, 5, 100, 2
+    >>> # Create complex coefficients with coherence injected at frequency bin 10
+    >>> phase_diff = np.pi / 4  # 45 degree phase difference
+    >>> coeffs = (
+    ...     rng.standard_normal((n_times, n_trials, n_tapers, n_freqs, n_signals))
+    ...     + 1j
+    ...     * rng.standard_normal((n_times, n_trials, n_tapers, n_freqs, n_signals))
+    ... )
+    >>> coeffs[:, :, :, 10, 1] = coeffs[:, :, :, 10, 0] * np.exp(1j * phase_diff)
+    >>> conn = Connectivity(coeffs, expectation_type="trials_tapers")
+    >>> coherence = conn.coherence_magnitude()
+    >>> coherence.shape  # (n_times, non-negative freqs, n_signals, n_signals)
+    (50, 51, 2, 2)
+    >>> print(f"Peak coherence: {np.max(coherence[:, 10, 0, 1]):.3f}")
+    Peak coherence: 1.000
     """
 
     def __init__(
