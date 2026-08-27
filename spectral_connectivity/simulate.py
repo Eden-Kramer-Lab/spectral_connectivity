@@ -79,8 +79,12 @@ def simulate_MVAR(
 
     for time_ind in np.arange(n_lags, n_time_samples + n_burnin_samples):
         for lag_ind in np.arange(n_lags):
-            time_series[time_ind, ...] += np.matmul(
-                coefficients[np.newaxis, np.newaxis, lag_ind, ...],
-                time_series[time_ind - (lag_ind + 1), ..., np.newaxis],
-            ).squeeze()
+            # For each trial, add A_k @ X(t - k). With X_prev of shape
+            # (n_trials, n_signals), ``X_prev @ A_k.T`` computes this for all
+            # trials at once and preserves the (n_trials, n_signals) shape.
+            # (The previous ``matmul(...).squeeze()`` collapsed the signal axis
+            # when n_signals == 1, crashing univariate multi-trial simulations.)
+            time_series[time_ind] += (
+                time_series[time_ind - (lag_ind + 1)] @ coefficients[lag_ind].T
+            )
     return time_series[n_burnin_samples:, ...]

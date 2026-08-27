@@ -1,13 +1,18 @@
 """Transforms time domain signals to the frequency domain."""
 
-import os
 from logging import getLogger
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy import interpolate
-from scipy.linalg import eigvals_banded
+from scipy.signal.windows import dpss as scipy_dpss
+
+from spectral_connectivity.utils import (
+    BackendArray,
+    is_gpu_enabled,
+    mark_readonly_if_supported,
+    to_numpy,
+)
 
 logger = getLogger(__name__)
 
@@ -274,9 +279,13 @@ def suggest_parameters(
     ...     signal_duration=60.0,
     ... )
     >>> print(f"Suggested NW: {params['time_halfbandwidth_product']}")
+    Suggested NW: 3.0
     >>> print(f"Window duration: {params['time_window_duration']:.2f}s")
+    Window duration: 12.00s
     >>> print(f"Frequency resolution: {params['frequency_resolution']:.2f} Hz")
+    Frequency resolution: 0.50 Hz
     >>> print(f"Number of tapers: {params['n_tapers']}")
+    Number of tapers: 5
 
     Target specific frequency resolution:
 
@@ -402,41 +411,59 @@ def suggest_parameters(
     }
 
 
-if os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU") == "true":
+if is_gpu_enabled():
     try:
         import cupy as xp
-        from cupy.linalg import lstsq
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-
-        # Log GPU device information
-        try:
-            device = xp.cuda.Device()
-            # Try to get the actual GPU model name first
-            try:
-                device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
-                    "name"
-                ].decode()
-                device_name = device_name.strip("\x00")
-            except Exception:
-                # Fallback to compute capability
-                compute_cap = device.compute_capability
-                device_name = (
-                    f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-                )
-            logger.info(f"Using GPU for spectral_connectivity on {device_name}")
-        except Exception:
-            logger.info("Using GPU for spectral_connectivity...")
+        from cupyx.scipy.fft import fft, fftfreq, next_fast_len
     except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
         ) from exc
+    try:
+        # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
+        # imports cupy fine but fails here, which must not be reported as
+        # "CuPy is not installed".
+        from cupyx.scipy.signal import detrend as _backend_detrend
+    except ImportError as exc:
+        raise RuntimeError(
+            f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
+            f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
+            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
+        ) from exc
+
+    # Log GPU device information
+    try:
+        device = xp.cuda.Device()
+        # Try to get the actual GPU model name first
+        try:
+            device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
+                "name"
+            ].decode()
+            device_name = device_name.strip("\x00")
+        except Exception:
+            # Fallback to compute capability
+            compute_cap = device.compute_capability
+            device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
+        logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+    except Exception:
+        logger.info("Using GPU for spectral_connectivity...")
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
-    from scipy.linalg import lstsq
+    from scipy.fft import fft, fftfreq, next_fast_len
+    from scipy.signal import detrend as _backend_detrend
+
+
+def _immutable_array_snapshot(value: Any) -> BackendArray:
+    """Copy an input array and make the owned snapshot read-only when supported."""
+    return mark_readonly_if_supported(xp.array(value, copy=True))
+
+
+def _readonly_array_copy(array: BackendArray) -> BackendArray:
+    """Return a detached read-only copy of an internal array snapshot."""
+    return mark_readonly_if_supported(array.copy())
 
 
 class Multitaper:
@@ -515,6 +542,13 @@ class Multitaper:
         time_window_step if not provided.
     is_low_bias : bool, default=True
         If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
+    fft_workers : int, optional
+        Number of parallel worker threads for the CPU FFT (forwarded to
+        ``scipy.fft.fft``; ``-1`` uses all cores). ``None`` (the default) keeps
+        SciPy's single-threaded default, which avoids oversubscribing CPUs when
+        the analysis is already parallelized at a higher level (e.g. across
+        trials or subjects). This is a CPU-only option; it is ignored on the GPU
+        backend, whose FFT is already parallel.
 
     Attributes
     ----------
@@ -525,6 +559,31 @@ class Multitaper:
         Frequency values in Hz corresponding to FFT bins.
     time : NDArray[float64], shape (n_time_windows,)
         Time values in seconds for center of each time window.
+
+    See Also
+    --------
+    spectral_connectivity.connectivity.Connectivity : Compute connectivity
+        measures from a Multitaper transform.
+    spectral_connectivity.transforms.prepare_time_series : Reshape 1-D/2-D input
+        to the required 3-D format.
+
+    Notes
+    -----
+    A ``Multitaper`` represents one immutable transform configuration. Constructor
+    arrays are copied, and array properties return detached read-only copies. To
+    change the data or a parameter, create a new instance.
+
+    The multitaper method uses discrete prolate spheroidal sequences (DPSS)
+    as tapers, which are optimal for spectral analysis in the sense of minimizing
+    spectral leakage while maximizing energy concentration in the frequency band
+    of interest.
+
+    References
+    ----------
+    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
+           Proceedings of the IEEE, 70(9), 1055-1096.
+    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
+           Physical Applications. Cambridge University Press.
 
     Examples
     --------
@@ -537,7 +596,9 @@ class Multitaper:
     >>> eeg_3d = prepare_time_series(eeg_data, axis='signals')
     >>> mt = Multitaper(eeg_3d, sampling_frequency=1000, time_halfbandwidth_product=4)
     >>> print(f"FFT shape: {mt.fft().shape}")
-    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies[-1]:.1f} Hz")
+    FFT shape: (1, 1, 7, 5000, 64)
+    >>> print(f"Frequencies: {len(mt.frequencies)} bins, max = {mt.frequencies.max():.1f} Hz")
+    Frequencies: 5000 bins, max = 499.8 Hz
 
     Manual reshaping with np.newaxis (advanced):
 
@@ -554,22 +615,49 @@ class Multitaper:
     >>> # Epoched data: 100 trials, 5 channels, 1 second each at 1000 Hz
     >>> epoched_data = np.random.randn(1000, 100, 5)  # (n_time, n_trials, n_signals)
     >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
-    >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")  # Trials: 100, Signals: 5
-
-    Notes
-    -----
-    The multitaper method uses discrete prolate spheroidal sequences (DPSS)
-    as tapers, which are optimal for spectral analysis in the sense of minimizing
-    spectral leakage while maximizing energy concentration in the frequency band
-    of interest.
-
-    References
-    ----------
-    .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
-           Proceedings of the IEEE, 70(9), 1055-1096.
-    .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
-           Physical Applications. Cambridge University Press.
+    >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")
+    Trials: 100, Signals: 5
     """
+
+    _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
+        {
+            "sampling_frequency",
+            "time_halfbandwidth_product",
+            "detrend_type",
+            "is_low_bias",
+            "fft_workers",
+        }
+    )
+    _PROVENANCE_FIELDS = (
+        "detrend_type",
+        "fft_workers",
+        "frequency_resolution",
+        "is_low_bias",
+        "n_fft_samples",
+        "n_signals",
+        "n_tapers",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "nyquist_frequency",
+        "sampling_frequency",
+        "start_time",
+        "time_halfbandwidth_product",
+        "time_window_duration",
+        "time_window_step",
+    )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Keep transform parameters immutable once construction has completed."""
+        if (
+            getattr(self, "_initialized", False)
+            and name in self._IMMUTABLE_PUBLIC_PARAMETERS
+        ):
+            raise AttributeError(
+                f"Multitaper.{name} is immutable after construction; create a new "
+                "Multitaper instance with the desired parameters."
+            )
+        object.__setattr__(self, name, value)
 
     def __init__(
         self,
@@ -586,18 +674,38 @@ class Multitaper:
         n_time_samples_per_window: int | None = None,
         n_time_samples_per_step: int | None = None,
         is_low_bias: bool = True,
+        fft_workers: int | None = None,
     ) -> None:
-        self.time_series = xp.asarray(time_series)
+        object.__setattr__(self, "_initialized", False)
+        self._time_series = _immutable_array_snapshot(time_series)
+        # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
+        # be a nonzero integer (a negative value counts back from os.cpu_count(),
+        # so -1 uses all cores) or None (SciPy's single-threaded default).
+        # Validate here so a bad value names this parameter, instead of surfacing
+        # a bare "workers must not be zero" ValueError or an opaque TypeError from
+        # deep inside fft(). bool is an int subclass, so reject it explicitly.
+        if fft_workers is not None and (
+            isinstance(fft_workers, bool)
+            or not isinstance(fft_workers, (int, np.integer))
+            or fft_workers == 0
+        ):
+            raise ValueError(
+                f"fft_workers must be None or a nonzero integer (the number of "
+                f"parallel FFT threads; -1 uses all cores), got {fft_workers!r}. "
+                f"It is forwarded to scipy.fft.fft(workers=...). Use None (the "
+                f"default) for SciPy's single-threaded FFT."
+            )
+        self.fft_workers = fft_workers
 
         # Validate that time_series is 3D
-        if self.time_series.ndim != 3:
+        if self._time_series.ndim != 3:
             error_msg = (
                 f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
-                f"but got {self.time_series.ndim}D array with shape {self.time_series.shape}.\n"
+                f"but got {self._time_series.ndim}D array with shape {self._time_series.shape}.\n"
                 "\n"
             )
 
-            if self.time_series.ndim == 1:
+            if self._time_series.ndim == 1:
                 error_msg += (
                     "For a single time series, use:\n"
                     "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
@@ -605,7 +713,7 @@ class Multitaper:
                     "Or manually:\n"
                     "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
                 )
-            elif self.time_series.ndim == 2:
+            elif self._time_series.ndim == 2:
                 error_msg += (
                     "For 2D data, you must clarify the meaning of the second dimension.\n"
                     "\n"
@@ -624,7 +732,7 @@ class Multitaper:
                 )
             else:
                 error_msg += (
-                    f"Arrays with {self.time_series.ndim} dimensions are not supported.\n"
+                    f"Arrays with {self._time_series.ndim} dimensions are not supported.\n"
                     "Expected shape: (n_time_samples, n_trials, n_signals)"
                 )
 
@@ -731,7 +839,7 @@ class Multitaper:
             )
 
         # Warn if data appears to be transposed (very few time points, many signals)
-        n_time, _, n_signals = self.time_series.shape
+        n_time, _, n_signals = self._time_series.shape
         if n_time < n_signals:
             import warnings
 
@@ -740,7 +848,7 @@ class Multitaper:
                 "This seems unusual and your data may be transposed.\n"
                 "\n"
                 "Expected shape: (n_time_samples, n_trials, n_signals)\n"
-                f"Your shape: {self.time_series.shape}\n"
+                f"Your shape: {self._time_series.shape}\n"
                 "\n"
                 "If your data is transposed, use:\n"
                 "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
@@ -751,7 +859,7 @@ class Multitaper:
             )
 
         # Warn if data contains NaN or Inf
-        if not xp.all(xp.isfinite(self.time_series)):
+        if not xp.all(xp.isfinite(self._time_series)):
             import warnings
 
             warnings.warn(
@@ -779,12 +887,29 @@ class Multitaper:
         self._time_window_duration = time_window_duration
         self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
-        self.start_time = xp.asarray(start_time)
+        self._start_time = _immutable_array_snapshot(start_time)
         self._n_fft_samples = n_fft_samples
-        self._tapers = tapers
+        self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
+        # Reject a fractional n_tapers at construction so the reported
+        # n_tapers metadata cannot disagree with the (integer) taper count used.
+        if n_tapers is not None and (
+            not np.isfinite(n_tapers) or int(n_tapers) != n_tapers
+        ):
+            raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        object.__setattr__(self, "_initialized", True)
+
+    @property
+    def time_series(self) -> BackendArray:
+        """Independent read-only copy of the input time-series snapshot."""
+        return _readonly_array_copy(self._time_series)
+
+    @property
+    def start_time(self) -> BackendArray:
+        """Independent read-only copy of the transform's start-time coordinate."""
+        return _readonly_array_copy(self._start_time)
 
     def __repr__(self) -> str:
         """Return string representation of Multitaper object.
@@ -806,6 +931,34 @@ class Multitaper:
             f"n_tapers={self.n_tapers}"
             ")"
         )
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        """Public scalar parameters of this transform, for provenance metadata.
+
+        Collects the public, non-callable attributes whose values NetCDF can
+        store (strings, numbers, bools, and real numeric/string arrays),
+        encoding ``None`` as ``"None"`` and skipping the large coordinate/data
+        arrays (``time_series``, ``fft``, ``tapers``, ``frequencies``,
+        ``time``). Used to label results with ``mt_*`` attributes in
+        :func:`spectral_connectivity.wrapper.connectivity_to_xarray`.
+        """
+        metadata: dict[str, Any] = {}
+        for attr in self._PROVENANCE_FIELDS:
+            value = getattr(self, attr)
+            if value is None:
+                value = "None"
+            else:
+                value = to_numpy(value) if hasattr(value, "shape") else value
+            if isinstance(value, np.ndarray):
+                if value.dtype.kind not in "biufSU":  # exclude complex/object
+                    continue
+            elif not isinstance(
+                value,
+                (str, bytes, bool, int, float, np.integer, np.floating, np.bool_),
+            ):
+                continue
+            metadata[attr] = value
+        return metadata
 
     def summarize_parameters(self) -> str:
         """
@@ -846,8 +999,8 @@ class Multitaper:
         <BLANKLINE>
         Spectral Parameters
         -------------------
-        Sampling frequency:            1000.0 Hz
-        Time-halfbandwidth product:    3.0
+        Sampling frequency:            1000 Hz
+        Time-halfbandwidth product:    3
         Number of tapers:              5
         <BLANKLINE>
         Time Windowing
@@ -861,7 +1014,8 @@ class Multitaper:
         Frequency resolution: 6.0 Hz
         Nyquist frequency:    500.0 Hz
         Frequency range:      0.0 - 500.0 Hz
-        FFT samples:          1024
+        FFT samples:          1000
+        <BLANKLINE>
 
         See Also
         --------
@@ -870,7 +1024,7 @@ class Multitaper:
         estimate_n_tapers : Estimate number of tapers
         """
         # Calculate time windows info
-        n_time_samples = self.time_series.shape[0]
+        n_time_samples = self._time_series.shape[0]
         signal_duration = n_time_samples / self.sampling_frequency
         n_windows = int(
             xp.floor(
@@ -942,7 +1096,8 @@ FFT samples:          {self.n_fft_samples}
                 self.n_tapers,
                 is_low_bias=self.is_low_bias,
             )
-        return self._tapers
+            self._tapers = _immutable_array_snapshot(self._tapers)
+        return _readonly_array_copy(self._tapers)
 
     @property
     def time_window_duration(self) -> float:
@@ -1012,13 +1167,36 @@ FFT samples:          {self.n_fft_samples}
             self._n_time_samples_per_window is None
             and self._time_window_duration is None
         ):
-            self._n_time_samples_per_window = self.time_series.shape[0]
+            self._n_time_samples_per_window = self._time_series.shape[0]
         elif self._time_window_duration is not None:
             self._n_time_samples_per_window = int(
                 xp.around(self.time_window_duration * self.sampling_frequency)
             )
-        # If _n_time_samples_per_window is already set, just use it
+        # Otherwise n_time_samples_per_window was set explicitly.
         assert self._n_time_samples_per_window is not None
+        # Validate the resolved window length regardless of which input path set
+        # it: an explicit n_time_samples_per_window=0 (or a duration rounding to
+        # 0) would divide by zero downstream, and an oversized window yields an
+        # empty transform.
+        n_time_samples = self._time_series.shape[0]
+        if self._n_time_samples_per_window < 1:
+            raise ValueError(
+                f"n_time_samples_per_window resolved to "
+                f"{self._n_time_samples_per_window}, but each window needs at "
+                f"least 1 sample. If you set time_window_duration "
+                f"({self._time_window_duration}), it is too short for "
+                f"sampling_frequency ({self.sampling_frequency}); use a duration "
+                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
+                f"n_time_samples_per_window."
+            )
+        if self._n_time_samples_per_window > n_time_samples:
+            raise ValueError(
+                f"n_time_samples_per_window ({self._n_time_samples_per_window}) is "
+                f"larger than the signal length ({n_time_samples}); no window fits, "
+                f"which would yield an empty transform. Use a smaller window "
+                f"(time_window_duration <= "
+                f"{n_time_samples / self.sampling_frequency} s)."
+            )
         return self._n_time_samples_per_window
 
     @property
@@ -1033,6 +1211,19 @@ FFT samples:          {self.n_fft_samples}
         """
         if self._n_fft_samples is None:
             self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
+        elif self._n_fft_samples < self.n_time_samples_per_window:
+            # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
+            # a too-small n_fft_samples silently discards most of each window.
+            raise ValueError(
+                f"n_fft_samples ({self._n_fft_samples}) must be >= the number "
+                f"of time samples per window ({self.n_time_samples_per_window}).\n"
+                f"n_fft_samples is the FFT length (used for zero-padding), not "
+                f"the number of output frequency bins. A value smaller than the "
+                f"window length would silently truncate the signal before the "
+                f"FFT.\n"
+                f"Either omit n_fft_samples (it defaults to a fast length >= the "
+                f"window length) or set it >= {self.n_time_samples_per_window}."
+            )
         return self._n_fft_samples
 
     @property
@@ -1068,8 +1259,21 @@ FFT samples:          {self.n_fft_samples}
             self._n_samples_per_time_step = int(
                 self.time_window_step * self.sampling_frequency
             )
-        # Ensure we always return an int
+        # Otherwise n_time_samples_per_step was set explicitly.
         assert self._n_samples_per_time_step is not None
+        # Validate the resolved step regardless of which input path set it: an
+        # explicit n_time_samples_per_step=0 (or a step truncating to 0) would
+        # divide by zero when building the sliding windows.
+        if self._n_samples_per_time_step < 1:
+            raise ValueError(
+                f"n_time_samples_per_step resolved to "
+                f"{self._n_samples_per_time_step}, but each step must advance at "
+                f"least 1 sample. If you set time_window_step "
+                f"({self._time_window_step}), it is too short for sampling_frequency "
+                f"({self.sampling_frequency}); use a step "
+                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
+                f"n_time_samples_per_step."
+            )
         return self._n_samples_per_time_step
 
     @property
@@ -1083,12 +1287,14 @@ FFT samples:          {self.n_fft_samples}
 
         """
         original_time = (
-            xp.arange(0, self.time_series.shape[0]) / self.sampling_frequency
+            xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
         )
-        window_start_time = _sliding_window(
+        # Label each window by its center time, as documented (the mean of the
+        # window's sample times equals the center for uniformly spaced samples).
+        window_center_time = _sliding_window(
             original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
-        )[:, 0]
-        return self.start_time + window_start_time
+        ).mean(axis=-1)
+        return self._start_time + window_center_time
 
     @property
     def n_signals(self) -> int:
@@ -1100,7 +1306,7 @@ FFT samples:          {self.n_fft_samples}
             Number of signals in the time series.
 
         """
-        return 1 if len(self.time_series.shape) < 2 else self.time_series.shape[-1]
+        return 1 if len(self._time_series.shape) < 2 else self._time_series.shape[-1]
 
     @property
     def n_trials(self) -> int:
@@ -1112,7 +1318,7 @@ FFT samples:          {self.n_fft_samples}
             Number of trials in the time series.
 
         """
-        return 1 if len(self.time_series.shape) < 3 else self.time_series.shape[1]
+        return 1 if len(self._time_series.shape) < 3 else self._time_series.shape[1]
 
     @property
     def frequency_resolution(self) -> float:
@@ -1154,7 +1360,7 @@ FFT samples:          {self.n_fft_samples}
             Complex-valued Fourier coefficients.
 
         """
-        time_series = _add_axes(self.time_series)
+        time_series = _add_axes(self._time_series)
         time_series = _sliding_window(
             time_series,
             window_size=self.n_time_samples_per_window,
@@ -1167,8 +1373,21 @@ FFT samples:          {self.n_fft_samples}
         logger.info(self)
 
         return _multitaper_fft(
-            self.tapers, time_series, self.n_fft_samples, self.sampling_frequency
+            self._tapers_for_fft(),
+            time_series,
+            self.n_fft_samples,
+            self.sampling_frequency,
+            workers=self.fft_workers,
         ).swapaxes(2, -1)
+
+    def _tapers_for_fft(self) -> NDArray[np.floating]:
+        """Return the internal taper snapshot without an unnecessary public view."""
+        if self._tapers is None:
+            # Populate through the public property so generation and freezing have
+            # one implementation, then use the owned internal snapshot.
+            _ = self.tapers
+        assert self._tapers is not None
+        return self._tapers
 
 
 def prepare_time_series(
@@ -1211,7 +1430,7 @@ def prepare_time_series(
     >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis="signals")
     >>> eeg_3d.shape
-    (5000, 1, 64)  # (n_time, 1 trial, 64 channels)
+    (5000, 1, 64)
 
     Multiple trials of a single electrode:
 
@@ -1219,7 +1438,7 @@ def prepare_time_series(
     >>> lfp_trials = np.random.randn(2000, 20)  # Shape: (n_time, n_trials)
     >>> lfp_3d = prepare_time_series(lfp_trials, axis="trials")
     >>> lfp_3d.shape
-    (2000, 20, 1)  # (n_time, 20 trials, 1 channel)
+    (2000, 20, 1)
 
     Single time series (e.g., spike times converted to continuous):
 
@@ -1227,7 +1446,7 @@ def prepare_time_series(
     >>> firing_rate = np.random.randn(1000)
     >>> firing_rate_3d = prepare_time_series(firing_rate)
     >>> firing_rate_3d.shape
-    (1000, 1, 1)  # (n_time, 1 trial, 1 signal)
+    (1000, 1, 1)
 
     Already properly formatted (pass-through):
 
@@ -1235,7 +1454,7 @@ def prepare_time_series(
     >>> epoched_data = np.random.randn(100, 10, 5)
     >>> result = prepare_time_series(epoched_data)
     >>> result.shape
-    (100, 10, 5)  # Unchanged
+    (100, 10, 5)
 
     Notes
     -----
@@ -1344,7 +1563,8 @@ def _sliding_window(
 
     Examples
     --------
-    >>> a = numpy.array([1, 2, 3, 4, 5])
+    >>> import numpy as np
+    >>> a = np.array([1, 2, 3, 4, 5])
     >>> _sliding_window(a, window_size=3)
     array([[1, 2, 3],
            [2, 3, 4],
@@ -1353,23 +1573,30 @@ def _sliding_window(
     array([[1, 2, 3],
            [3, 4, 5]])
 
-    References
-    ----------
-    .. [1] https://gist.github.com/nils-werner/9d321441006b112a4b116a8387c2
-    280c
-
     """
-    shape = list(data.shape)
-    shape[axis] = np.floor(
-        (data.shape[axis] / step_size) - (window_size / step_size) + 1
-    ).astype(int)
-    shape.append(window_size)
-
-    strides = list(data.strides)
-    strides[axis] *= step_size
-    strides.append(data.strides[axis])
-
-    strided = xp.lib.stride_tricks.as_strided(data, shape=shape, strides=strides)
+    # Validate before normalizing: ``axis % data.ndim`` would otherwise wrap an
+    # out-of-range axis onto a real one (e.g. axis=2 -> 0 on a 2-D array),
+    # windowing the wrong dimension silently instead of raising.
+    if not -data.ndim <= axis < data.ndim:
+        raise ValueError(
+            f"axis {axis} is out of bounds for an array of rank {data.ndim}."
+        )
+    # A non-positive step would pass a negative slice step below (reversing the
+    # windows) or an empty step, neither of which is a forward slide.
+    if step_size < 1:
+        raise ValueError(f"step_size must be a positive integer, got {step_size}.")
+    # ``sliding_window_view`` appends the length-``window_size`` window axis at
+    # the end and validates bounds/shape, which NumPy recommends over the
+    # lower-level ``as_strided`` used previously. It only produces unit-step
+    # windows, so subsample the windowed axis to apply ``step_size``. Normalize
+    # a negative ``axis`` against the input rank first, because the view adds a
+    # trailing axis and would otherwise shift a negative index onto it.
+    axis = axis % data.ndim
+    strided = xp.lib.stride_tricks.sliding_window_view(data, window_size, axis=axis)
+    if step_size != 1:
+        subsample = [slice(None)] * strided.ndim
+        subsample[axis] = slice(None, None, step_size)
+        strided = strided[tuple(subsample)]
 
     return strided.copy() if is_copy else strided
 
@@ -1380,6 +1607,7 @@ def _multitaper_fft(
     n_fft_samples: int,
     sampling_frequency: float,
     axis: int = -2,
+    workers: int | None = None,
 ) -> NDArray[np.complexfloating]:
     """Project data onto tapers and compute discrete Fourier transform.
 
@@ -1392,6 +1620,11 @@ def _multitaper_fft(
     time_series : array_like, shape (n_windows, n_trials, n_time_samples_per_window)
     n_fft_samples : int
     sampling_frequency : int
+    workers : int, optional
+        Number of parallel worker threads for SciPy's CPU FFT (see
+        ``scipy.fft.fft``; ``-1`` uses all cores). ``None`` keeps SciPy's default
+        (single-threaded). Ignored on the GPU backend, whose FFT has no such
+        parameter and is already parallel.
 
     Returns
     -------
@@ -1402,7 +1635,15 @@ def _multitaper_fft(
     projected_time_series = (
         time_series[..., xp.newaxis] * tapers[xp.newaxis, xp.newaxis, ...]
     )
-    return fft(projected_time_series, n=n_fft_samples, axis=axis) / sampling_frequency
+    # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
+    # only when a worker count is requested and we are on the CPU backend.
+    fft_kwargs = {}
+    if workers is not None and not is_gpu_enabled():
+        fft_kwargs["workers"] = workers
+    return (
+        fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
+        / sampling_frequency
+    )
 
 
 def _make_tapers(
@@ -1440,143 +1681,43 @@ def _make_tapers(
     return tapers.T * xp.sqrt(sampling_frequency)
 
 
-def tridisolve(
-    d: NDArray[np.floating],
-    e: NDArray[np.floating],
-    b: NDArray[np.floating],
-    overwrite_b: bool = True,
-) -> NDArray[np.floating]:
-    """Symmetric tridiagonal system solver, from Golub and Van Loan p157.
-
-    .. note:: Copied from NiTime.
-
-    Parameters
-    ----------
-    d : ndarray
-      main diagonal stored in d[:]
-    e : ndarray
-      superdiagonal stored in e[:-1]
-    b : ndarray
-      RHS vector
-    Returns
-    -------
-    x : ndarray
-      Solution to Ax = b (if overwrite_b is False). Otherwise solution is
-      stored in previous RHS vector b
-    """
-    N = len(b)
-    # work vectors
-    dw = d.copy()
-    ew = e.copy()
-    if overwrite_b:
-        x = b
-    else:
-        x = b.copy()
-    for k in range(1, N):
-        # e^(k-1) = e(k-1) / d(k-1)
-        # d(k) = d(k) - e^(k-1)e(k-1) / d(k-1)
-        t = ew[k - 1]
-        ew[k - 1] = t / dw[k - 1]
-        dw[k] = dw[k] - t * ew[k - 1]
-    for k in range(1, N):
-        x[k] = x[k] - ew[k - 1] * x[k - 1]
-    x[N - 1] = x[N - 1] / dw[N - 1]
-    for k in range(N - 2, -1, -1):
-        x[k] = x[k] / dw[k] - ew[k] * x[k + 1]
-
-    if not overwrite_b:
-        return x
-    return x
-
-
-def tridi_inverse_iteration(
-    d: NDArray[np.floating],
-    e: NDArray[np.floating],
-    w: float,
-    x0: NDArray[np.floating] | None = None,
-    rtol: float = 1e-8,
-) -> NDArray[np.floating]:
-    """Perform an inverse iteration.
-
-    This will find the eigenvector corresponding to the given eigenvalue
-    in a symmetric tridiagonal system.
-
-    .. note:: Copied from NiTime.
-
-    Parameters
-    ----------
-    d : array
-      main diagonal of the tridiagonal system
-    e : array
-      offdiagonal stored in e[:-1]
-    w : float
-      eigenvalue of the eigenvector
-    x0 : array
-      initial point to start the iteration
-    rtol : float
-      tolerance for the norm of the difference of iterates
-    Returns
-    -------
-    e: array
-      The converged eigenvector
-    """
-    eig_diag = d - w
-    if x0 is None:
-        x0 = np.random.randn(len(d))
-    x_prev = np.zeros_like(x0)
-    norm_x = np.linalg.norm(x0)
-    # the eigenvector is unique up to sign change, so iterate
-    # until || |x^(n)| - |x^(n-1)| ||^2 < rtol
-    x0 /= norm_x
-    while np.linalg.norm(np.abs(x0) - np.abs(x_prev)) > rtol:
-        x_prev = x0.copy()
-        tridisolve(eig_diag, e, x0)
-        norm_x = np.linalg.norm(x0)
-        x0 /= norm_x
-    return x0
-
-
 def dpss_windows(
     n_time_samples_per_window: int,
     time_halfbandwidth_product: float,
     n_tapers: int,
     is_low_bias: bool = True,
-    interp_from: int | None = None,
-    interp_kind: str = "linear",
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Compute Discrete Prolate Spheroidal Sequences.
 
-    Will give of orders [0, n_tapers-1] for a given frequency-spacing
-    multiple NW and sequence length `n_time_samples_per_window`.
+    Returns the DPSS (Slepian) tapers of orders [0, n_tapers-1] for a given
+    time-halfbandwidth product NW and window length
+    ``n_time_samples_per_window``, together with their spectral-concentration
+    ratios (eigenvalues).
 
-    Copied from NiTime and MNE-Python
+    Delegates to :func:`scipy.signal.windows.dpss`, which solves the same
+    symmetric tridiagonal eigenproblem (Percival & Walden 1993) via LAPACK. The
+    ``sym=True`` / ``norm=2`` options reproduce the symmetric, unit-L2-norm
+    convention used here, matching the previous vendored NiTime/MNE
+    implementation to floating-point tolerance. It is CPU-only (banded linear
+    algebra); the result is moved to the active array namespace afterward, as
+    before.
 
     Parameters
     ----------
     n_time_samples_per_window : int
-        Sequence length
+        Sequence length.
     time_halfbandwidth_product : float, unitless
-        Standardized half bandwidth corresponding to 2 * half_bw = BW * f0
-        = BW * `n_time_samples_per_window` / dt but with dt taken as 1
+        Standardized half bandwidth NW.
     n_tapers : int
-        Number of DPSS windows to return
+        Number of DPSS windows to return.
     is_low_bias : bool
-        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
-    interp_from : int (optional)
-        The tapers can be calculated using interpolation from a set of
-        tapers with the same NW and n_tapers, but shorter
-        n_time_samples_per_window.
-        This is the length of the shorter set of tapers.
-    interp_kind : str (optional)
-        This ixput variable is passed to scipy.interpolate.interp1d and
-        specifies the kind of interpolation as a string ('linear',
-        'nearest', 'zero', 'slinear', 'quadratic, 'cubic') or as an integer
-        specifying the order of the spline interpolator to use.
+        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9).
 
     Returns
     -------
     tapers, eigenvalues : tuple
-        tapers is an array, shape (n_tapers, n_time_samples_per_window)
+        ``tapers`` has shape (n_tapers, n_time_samples_per_window);
+        ``eigenvalues`` has shape (n_tapers,).
 
     Notes
     -----
@@ -1584,175 +1725,62 @@ def dpss_windows(
     Slepian, D. Prolate spheroidal wave functions, Fourier analysis, and
     uncertainty V: The discrete case. Bell System Technical Journal,
     Volume 57 (1978), 1371430
-
     """
+    # Reject a fractional n_tapers before coercion: silently truncating (e.g.
+    # 2.9 -> 2) would disagree with the reported Multitaper.n_tapers metadata.
+    if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers:
+        raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
     n_tapers = int(n_tapers)
-    half_bandwidth = float(time_halfbandwidth_product) / n_time_samples_per_window
-    time_index = xp.arange(n_time_samples_per_window, dtype="d")
-
-    if interp_from is not None:
-        tapers = _find_tapers_from_interpolation(
-            interp_from,
-            time_halfbandwidth_product,
-            n_tapers,
-            n_time_samples_per_window,
-            interp_kind,
+    if n_time_samples_per_window < 2:
+        raise ValueError(
+            f"n_time_samples_per_window must be >= 2 for a multitaper "
+            f"decomposition, got {n_time_samples_per_window}. A single-sample "
+            f"window carries no spectral information."
         )
-    else:
-        tapers = _find_tapers_from_optimization(
-            n_time_samples_per_window, time_index, half_bandwidth, n_tapers
+    if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
+        raise ValueError(
+            f"time_halfbandwidth_product (NW={time_halfbandwidth_product}) must "
+            f"satisfy 0 < NW < n_time_samples_per_window / 2 "
+            f"(= {n_time_samples_per_window / 2}). Otherwise the concentration "
+            f"bandwidth reaches or exceeds Nyquist and the result is not a valid "
+            f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
+            f"longer window or a smaller time_halfbandwidth_product."
+        )
+    if not 1 <= n_tapers <= n_time_samples_per_window:
+        raise ValueError(
+            f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
+            f"(= {n_time_samples_per_window}), got {n_tapers}."
+        )
+    if n_time_samples_per_window == 2 and n_tapers == 2:
+        # scipy.signal.windows.dpss cannot disambiguate the sign of the second
+        # (antisymmetric) taper for a two-sample window: its heuristic keeps the
+        # first sample with |value|^2 above max(1e-7, 1 / n_time_samples) = 0.5,
+        # but the length-two antisymmetric taper is [1, -1] / sqrt(2), whose
+        # samples are exactly 0.5, so none clear the threshold and SciPy raises a
+        # bare IndexError (both 1.10.x and current releases). A two-sample window
+        # cannot support a second taper usefully anyway, so reject the pair with
+        # an actionable message rather than surface SciPy's internal error.
+        raise ValueError(
+            "A two-sample window (n_time_samples_per_window=2) supports only a "
+            "single DPSS taper; request n_tapers=1 or use a longer window."
         )
 
-    _fix_taper_sign(tapers, n_time_samples_per_window)
-    eigenvalues = _get_taper_eigenvalues(tapers, half_bandwidth, time_index)
+    tapers, eigenvalues = scipy_dpss(
+        n_time_samples_per_window,
+        time_halfbandwidth_product,
+        n_tapers,
+        sym=True,
+        norm=2,
+        return_ratios=True,
+    )
+    tapers = xp.asarray(tapers)
+    eigenvalues = xp.asarray(eigenvalues)
 
     return (
         _get_low_bias_tapers(tapers, eigenvalues)
         if is_low_bias
         else (tapers, eigenvalues)
     )
-
-
-def _find_tapers_from_interpolation(
-    interp_from: int,
-    time_halfbandwidth_product: float,
-    n_tapers: int,
-    n_time_samples_per_window: int,
-    interp_kind: str,
-) -> NDArray[np.floating]:
-    """Create tapers of smaller size and interpolate to larger size.
-
-    Create the tapers of the smaller size `interp_from` and then
-    interpolate to the larger size `n_time_samples_per_window`.
-    """
-    smaller_tapers, _ = dpss_windows(
-        interp_from, time_halfbandwidth_product, n_tapers, is_low_bias=False
-    )
-
-    return xp.array(
-        [
-            _interpolate_taper(taper, interp_kind, n_time_samples_per_window)
-            for taper in smaller_tapers
-        ]
-    )
-
-
-def _interpolate_taper(
-    taper: NDArray[np.floating],
-    interp_kind: str,
-    n_time_samples_per_window: int,
-) -> NDArray[np.floating]:
-    interpolation_function = interpolate.interp1d(
-        xp.arange(taper.shape[-1]), taper, kind=interp_kind
-    )
-    interpolated_taper = interpolation_function(
-        xp.linspace(0, taper.shape[-1] - 1, n_time_samples_per_window, endpoint=False)
-    )
-    return interpolated_taper / xp.sqrt(xp.sum(interpolated_taper**2))
-
-
-def _find_tapers_from_optimization(
-    n_time_samples_per_window: int,
-    time_index: NDArray[np.floating],
-    half_bandwidth: float,
-    n_tapers: int,
-) -> NDArray[np.floating]:
-    """Set up optimization problem to find sequence with concentrated energy.
-
-    Set up an optimization problem to find a sequence
-    whose energy is maximally concentrated within band
-    [-half_bandwidth, half_bandwidth]. Thus,
-    the measure lambda(T, half_bandwidth) is the ratio between the
-    energy within that band, and the total energy. This leads to the
-    eigen-system (A - (l1)I)v = 0, where the eigenvector corresponding
-    to the largest eigenvalue is the sequence with maximally
-    concentrated energy. The collection of eigenvectors of this system
-    are called Slepian sequences, or discrete prolate spheroidal
-    sequences (DPSS). Only the first K, K = 2NW/dt orders of DPSS will
-    exhibit good spectral concentration
-    [see http://en.wikipedia.org/wiki/Spectral_concentration_problem]
-
-    Here I set up an alternative symmetric tri-diagonal eigenvalue
-    problem such that
-    (B - (l2)I)v = 0, and v are our DPSS (but eigenvalues l2 != l1)
-    the main diagonal = ([n_time_samples_per_window-1-2*t]/2)**2 cos(2PIW),
-    t=[0,1,2,...,n_time_samples_per_window-1] and the first off-diagonal =
-    t(n_time_samples_per_window-t)/2, t=[1,2,...,
-    n_time_samples_per_window-1] [see Percival and Walden, 1993]
-    """
-    try:
-        time_index = xp.asnumpy(time_index)
-    except AttributeError:
-        pass
-    diagonal = ((n_time_samples_per_window - 1 - 2 * time_index) / 2.0) ** 2 * np.cos(
-        2 * np.pi * half_bandwidth
-    )
-    off_diag = np.zeros_like(time_index)
-    off_diag[:-1] = time_index[1:] * (n_time_samples_per_window - time_index[1:]) / 2.0
-    # put the diagonals in LAPACK 'packed' storage
-    ab = np.zeros((2, n_time_samples_per_window), dtype=float)
-    ab[1] = diagonal
-    ab[0, 1:] = off_diag[:-1]
-    # only calculate the highest n_tapers eigenvalues
-    w = eigvals_banded(
-        ab,
-        select="i",
-        select_range=(
-            n_time_samples_per_window - n_tapers,
-            n_time_samples_per_window - 1,
-        ),
-    )
-    w = w[::-1]
-
-    # find the corresponding eigenvectors via inverse iteration
-    t = np.linspace(0, np.pi, n_time_samples_per_window)
-    tapers = np.zeros((n_tapers, n_time_samples_per_window), dtype=float)
-    for taper_ind in range(n_tapers):
-        tapers[taper_ind, :] = tridi_inverse_iteration(
-            diagonal, off_diag, w[taper_ind], x0=np.sin((taper_ind + 1) * t)
-        )
-    return xp.asarray(tapers)
-
-
-def _fix_taper_sign(
-    tapers: NDArray[np.floating], n_time_samples_per_window: int
-) -> NDArray[np.floating]:
-    """Fix taper signs according to convention.
-
-    By convention (Percival and Walden, 1993 pg 379)
-    symmetric tapers (k=0,2,4,...) should have a positive average and
-    antisymmetric tapers should begin with a positive lobe.
-
-    Parameters
-    ----------
-    tapers : array, shape (n_tapers, n_time_samples_per_window)
-    """
-    # Fix sign of symmetric tapers
-    is_not_symmetric = tapers[::2, :].sum(axis=1) < 0
-    fix_sign = is_not_symmetric * -1
-    fix_sign[fix_sign == 0] = 1
-    tapers[::2, :] *= fix_sign[:, xp.newaxis]
-
-    # Fix sign of antisymmetric tapers.
-    # rather than test the sign of one point, test the sign of the
-    # linear slope up to the first (largest) peak
-    largest_peak_ind = xp.argmax(
-        xp.abs(tapers[1::2, : n_time_samples_per_window // 2]), axis=1
-    )
-    for taper_ind, peak_ind in enumerate(largest_peak_ind):
-        if xp.sum(tapers[2 * taper_ind + 1, :peak_ind]) < 0:
-            tapers[2 * taper_ind + 1, :] *= -1
-    return tapers
-
-
-def _auto_correlation(
-    data: NDArray[np.floating], axis: int = -1
-) -> NDArray[np.floating]:
-    n_time_samples_per_window = data.shape[axis]
-    n_fft_samples = next_fast_len(2 * n_time_samples_per_window - 1)
-    dpss_fft = fft(data, n_fft_samples, axis=axis)
-    power = dpss_fft * dpss_fft.conj()
-    return xp.real(ifft(power, axis=axis))
 
 
 def _get_low_bias_tapers(
@@ -1765,36 +1793,6 @@ def _get_low_bias_tapers(
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
 
-def _get_taper_eigenvalues(
-    tapers: NDArray[np.floating],
-    half_bandwidth: float,
-    time_index: NDArray[np.floating],
-) -> NDArray[np.floating]:
-    """Find eigenvalues of spectral concentration problem.
-
-    Find the eigenvalues of the original spectral concentration
-    problem using the autocorr sequence technique from Percival and Walden,
-    1993 pg 390.
-
-    Parameters
-    ----------
-    tapers : array, shape (n_tapers, n_time_samples_per_window)
-    half_bandwidth : float
-    time_index : array, (n_time_samples_per_window,)
-
-    Returns
-    -------
-    eigenvalues : array, shape (n_tapers,)
-
-    """
-    ideal_filter = 4 * half_bandwidth * xp.sinc(2 * half_bandwidth * time_index)
-    ideal_filter[0] = 2 * half_bandwidth
-    n_time_samples_per_window = len(time_index)
-    return xp.dot(
-        _auto_correlation(tapers)[:, :n_time_samples_per_window], ideal_filter
-    )
-
-
 def detrend(
     data: NDArray[np.floating],
     axis: int = -1,
@@ -1805,7 +1803,9 @@ def detrend(
     """
     Remove linear trend along axis from data.
 
-    Copied from scipy and now uses cupy or numpy functions.
+    Thin wrapper that validates ``type``/``bp`` (raising actionable errors) and
+    delegates the computation to ``scipy.signal.detrend`` on CPU or
+    ``cupyx.scipy.signal.detrend`` on GPU.
 
     Parameters
     ----------
@@ -1834,14 +1834,15 @@ def detrend(
 
     Examples
     --------
+    >>> import numpy as np
     >>> from scipy import signal
-    >>> from numpy.random import default_rng
-    >>> rng = default_rng()
+    >>> rng = np.random.default_rng(0)
     >>> npoints = 1000
     >>> noise = rng.standard_normal(npoints)
-    >>> x = 3 + 2*np.linspace(0, 1, npoints) + noise
-    >>> (signal.detrend(x) - noise).max()
-    0.06  # random
+    >>> x = 3 + 2 * np.linspace(0, 1, npoints) + noise
+    >>> # Removing the linear trend leaves (approximately) the original noise.
+    >>> bool(np.abs(signal.detrend(x) - noise).max() < 0.2)
+    True
     """
     if type not in ["linear", "l", "constant", "c"]:
         raise ValueError(
@@ -1852,64 +1853,38 @@ def detrend(
             f"  - 'constant' or 'c': Remove mean (DC offset)\n"
             f"Example: detrend(data, type='linear')"
         )
+    # Normalize the short aliases so the backend (which documents only the long
+    # forms) is never handed 'l'/'c'.
+    type = "linear" if type in ["linear", "l"] else "constant"
     data = xp.asarray(data)
-    dtype = data.dtype.char
-    if dtype not in "dfDF":
-        dtype = "d"
-    if type in ["constant", "c"]:
-        return data - xp.mean(data, axis, keepdims=True)
-    else:
-        dshape = data.shape
-        N = dshape[axis]
-        bp_array = xp.sort(xp.unique(xp.r_[0, bp, N]))
-        if xp.any(bp_array > N):
-            invalid_bp = bp_array[bp_array > N]
-            # Convert to list for display (works with both numpy and cupy)
-            if hasattr(invalid_bp, "get"):  # CuPy array
-                invalid_bp_list = xp.asnumpy(invalid_bp).tolist()
-            else:  # NumPy array or already a list
-                invalid_bp_list = invalid_bp.tolist()
+    # Validate breakpoints up front (linear only) so the error names the
+    # offending value and the data length; the backend raises a terser message.
+    if type == "linear":
+        N = data.shape[axis]
+        # Breakpoints are indices into the detrended axis; the documented valid
+        # range is [0, N). Normalize the user's input (int, list, tuple, or
+        # numpy/cupy array) to a single array up front, then validate BOTH bounds
+        # against it directly -- rather than the 0/N-padded array previously used
+        # to build segments, whose padding always contained N (so a breakpoint at
+        # exactly N slipped past a ``> N`` check) and which never rejected
+        # negative indices (they reached the backend as a cryptic error).
+        bp_values = xp.atleast_1d(xp.asarray(bp))
 
-            if isinstance(bp, int):
-                bp_list = [bp]  # Wrap single int in list for display
-            elif isinstance(bp, list):
-                bp_list = bp  # Already a list
-            elif hasattr(bp, "get"):  # CuPy array
-                bp_list = xp.asnumpy(bp).tolist()
-            else:  # NumPy array
-                bp_list = bp.tolist()
+        def _to_list(a: NDArray) -> list:
+            # Works for both numpy and cupy arrays.
+            return to_numpy(a).tolist()
 
+        out_of_range = bp_values[(bp_values < 0) | (bp_values >= N)]
+        if out_of_range.size:
             raise ValueError(
-                f"Breakpoint value(s) {invalid_bp_list} exceed data length.\n"
-                f"Data has {N} samples along axis {axis}, but breakpoint(s) are beyond this range.\n"
-                f"Breakpoints must be in the range [0, {N}).\n"
-                f"Check your breakpoint array: {bp_list}"
+                f"Breakpoint value(s) {_to_list(out_of_range)} are outside the "
+                f"valid range [0, {N}).\n"
+                f"Data has {N} samples along axis {axis}; breakpoints are indices "
+                f"into that axis and must satisfy 0 <= breakpoint < {N}.\n"
+                f"Check your breakpoints: {_to_list(bp_values)}"
             )
-        Nreg = len(bp_array) - 1
-        # Restructure data so that axis is along first dimension and
-        #  all other dimensions are collapsed into second dimension
-        rnk = len(dshape)
-        if axis < 0:
-            axis = axis + rnk
-        newdims = xp.r_[axis, 0:axis, axis + 1 : rnk]
-        newdata = xp.reshape(
-            xp.transpose(data, tuple(newdims)), (N, np.prod(dshape) // N)
-        )
-        if not overwrite_data:
-            newdata = newdata.copy()  # make sure we have a copy
-        if newdata.dtype.char not in "dfDF":
-            newdata = newdata.astype(dtype)
-        # Find leastsq fit and remove it for each piece
-        for m in range(Nreg):
-            Npts = bp_array[m + 1] - bp_array[m]
-            A = xp.ones((Npts, 2), dtype)
-            A[:, 0] = xp.asarray(np.arange(1, Npts + 1) * 1.0 / Npts, dtype=dtype)
-            sl = slice(bp_array[m], bp_array[m + 1])
-            coef, _resids, _rank, _s = lstsq(A, newdata[sl])
-            newdata[sl] = newdata[sl] - A @ coef
-        # Put data back in original shape.
-        tdshape = xp.take(dshape, newdims, 0)
-        ret = xp.reshape(newdata, tuple(tdshape))
-        vals = list(range(1, rnk))
-        olddims = [*vals[:axis], 0, *vals[axis:]]
-        return xp.transpose(ret, tuple(olddims))
+    # Delegate the least-squares/mean removal to SciPy (CPU) or CuPy (GPU),
+    # which implement the same computation. Their detrend signatures match.
+    return _backend_detrend(
+        data, axis=axis, type=type, bp=bp, overwrite_data=overwrite_data
+    )

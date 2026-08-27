@@ -1,11 +1,143 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+This release includes corrected numerical definitions and therefore requires a
+major version bump. Recompute affected results rather than comparing them
+directly with results from 2.x.
+
+### Migration guide
+
+| Previous behavior | New behavior / required action |
+| --- | --- |
+| `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
+| `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
+| `delay` returned cycles | Returns seconds; DC is `NaN` |
+| Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
+| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
+| `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
+| `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
+| `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
+| `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
+| `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
+| SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
+
+### Added
+
+- `multitaper_connectivity` now accepts the directed-transfer-function family
+  (`directed_transfer_function`, `directed_coherence`,
+  `partial_directed_coherence`, `generalized_partial_directed_coherence`,
+  `direct_directed_transfer_function`) by name. They are opt-in (not in the
+  default set) and, like the spectral Granger measures, are oriented so
+  `sel(source=a, target=b)` is the influence from `a` to `b`.
+- A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
+  provenance (package, version, backend, expectation type, and the `mt_*`
+  multitaper parameters) as top-level `Dataset.attrs`, not only on each
+  variable.
+- Wrapper results carry CF-style time/frequency metadata plus NetCDF-safe
+  measure, package-version, backend, expectation, transform, and method-argument
+  provenance.
+- `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
+- Independent analytic-oracle, failure-mode, backend-boundary, serialization,
+  minimum-dependency, artifact, doctest, and notebook checks cover the corrected
+  behavior.
+
+### Changed
+
+- `global_coherence`, `power`, `phase_slope_index`, `delay`, and
+  `Multitaper.time` now follow the definitions in the migration table.
+- Public connectivity methods reject single-signal inputs with an actionable
+  error; `power` remains available for one signal.
+- Bias-corrected phase measures require at least two observations.
+- `Multitaper` parameters and owned input snapshots are immutable after
+  construction. Array accessors return detached copies so cached calculations
+  cannot become stale through external mutation.
+- `multitaper_connectivity(method=None)` uses the stable, exported
+  `DEFAULT_METHODS` allowlist. Measures with incompatible result shapes point
+  users to `Connectivity` directly.
+
+### Fixed
+
+- Directed measures use at least complex128 working precision, so complex64
+  inputs can satisfy the Wilson factorization's default tolerance.
+- Subset spectral Granger restores `NaN` on the global self-Granger diagonal.
+- Wilson initialization and solves isolate rank-deficient sub-spectra instead of
+  poisoning a whole batch. Failed Cholesky units use the deterministic
+  `n_signals * I` fallback; healthy units retain their Cholesky starts.
+- Wilson convergence is relative and scale-invariant, and non-converged units
+  return `NaN` with a targeted warning.
+- Directed-measure regularization is scale-invariant, directed coherence uses
+  the correct source-axis noise variance, and it warns when correlated
+  innovations materially violate its diagonal-covariance assumption.
+- GPU boundaries for `group_delay`, `delay`, statistics, metadata, and public
+  returns now use explicit device-to-host conversion.
+- `power` preserves float32 precision, and global coherence avoids overflow or
+  underflow for extreme input scales.
+- Phase-locking and phase-lag measures handle dead channels without leaking
+  runtime warnings; their documented finite-sample ranges are corrected.
+- Group delay and delay use the exact zero-coherence significance distribution.
+  Undefined p-values are excluded consistently from BH and Bonferroni families.
+- Statistical helpers validate observation counts, confidence levels, spectra,
+  firing rates, p-values, and correction methods. Power confidence intervals
+  and log-power bias/variance use the corrected formulas.
+- Multitaper, DPSS, detrending, coordinate, FFT-size, window-size, frequency-step,
+  and `fft_workers` inputs now fail early with parameter-specific errors.
+- The wrapper accepts documented 2-D `(time, channels)` input and produces
+  NetCDF-serializable metadata. Unsupported batch measures are skipped without
+  swallowing genuine computation errors.
+- The documentation build installs the current checkout on Read the Docs,
+  confines generated sources to ignored directories, and the introductory
+  tutorial no longer uses the removed `blocks` argument.
+- The xarray wrapper now labels directed measures (e.g.
+  `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
+  the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
+  transposed, silently returning the reverse direction. Recompute any directed
+  results obtained through `multitaper_connectivity`. The underlying
+  `Connectivity` methods are unchanged (they keep the `output[i, j] = j -> i`
+  convention).
+- The wrapper rejects an empty `method` list, duplicate `signal_names`, and
+  requests where no method yields a compatible result, instead of silently
+  returning an empty or mislabeled `Dataset`.
+- `multitaper_connectivity(..., squeeze=True)` keeps the selected `source` and
+  `target` as scalar coordinates instead of dropping them, so the squeezed
+  `(time, frequency)` result still records which pair (and, for directed
+  measures, which direction) it represents. `squeeze=True` is now honored only
+  for single-method (DataArray) requests -- because those scalar coordinates
+  are Dataset-wide, applying them in a multi-measure Dataset would collide with
+  a sibling `power` variable's `source` dimension -- and is ignored, with a
+  warning, for multi-measure requests. It is a no-op for `power`.
+- Importing the package no longer changes NumPy's global floating-point warning
+  state, and backend reporting now reflects the backend actually imported.
+- `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
+  simulations.
+
+### Performance
+
+- Reduced cross-spectral matrices use a batched matrix multiplication rather
+  than materializing the observation-level signal-by-signal outer product.
+- Phase locking uses unit-normalized coefficients with the same batched
+  reduction. Phase-lag measures use bounded signal-row tiles and cache only
+  reduced moments.
+- Compact subset spectral-Granger factors only the requested 2-by-2 spectra.
+- Global coherence uses chunked batched eigendecomposition/SVD for modest
+  decomposition dimensions and retains a per-bin sparse fallback for large
+  square problems. `max_workspace_elements` controls its working-set target.
+- Group delay regression and significant-frequency cluster selection are
+  vectorized and processed in bounded chunks.
+- Wilson iteration reduces GPU synchronization, DPSS delegates to SciPy's
+  compiled solver, detrending delegates to SciPy/CuPy, and sliding windows use
+  `sliding_window_view`.
+- Multi-measure wrapper calls build one `Connectivity` and reuse its cached
+  power, cross-spectrum, directed factors, and phase-lag moments.
+- `Connectivity.from_multitaper` adopts the transform's fresh FFT output
+  without a redundant full-size copy. CPU FFT parallelism is available through
+  the opt-in `fft_workers` argument.
 
 ## [2.0.1] - 2026-05-12
 
@@ -35,7 +167,8 @@ mt = Multitaper(eeg_data, sampling_frequency=1000)
 
 # After (explicit)
 from spectral_connectivity.transforms import prepare_time_series
-eeg_3d = prepare_time_series(eeg_data, axis='signals')  # or axis='trials'
+
+eeg_3d = prepare_time_series(eeg_data, axis="signals")  # or axis='trials'
 mt = Multitaper(eeg_3d, sampling_frequency=1000)
 ```
 
@@ -404,7 +537,8 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 
 ---
 
-[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.0...v1.1.1

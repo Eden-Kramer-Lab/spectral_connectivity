@@ -1,5 +1,5 @@
 {% set name = "spectral_connectivity" %}
-{% set version = "1.1.2" %}
+{% set version = "2.0.1" %}
 
 package:
   name: {{ name|lower }}
@@ -7,7 +7,11 @@ package:
 
 source:
   url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/spectral_connectivity-{{ version }}.tar.gz
-  sha256: # This will be automatically filled by conda-build from PyPI
+  # SHA-256 of the PyPI sdist for {{ version }}. conda-build verifies this against
+  # the downloaded archive, so it must match the `version` above. On a version
+  # bump, update it from the PyPI release's "Download files" page or regenerate
+  # the recipe with `grayskull pypi spectral_connectivity`.
+  sha256: 1cf62cab9cfd2abd004be176b0c30695dc885e675d8c126f6421172550281046
 
 build:
   number: 0
@@ -18,16 +22,16 @@ build:
 
 requirements:
   host:
-    - python >=3.9
+    - python >=3.10
     - pip
     - hatchling
     - hatch-vcs
   run:
-    - python >=3.9
-    - numpy >=1.21
-    - scipy >=1.7
-    - xarray >=0.20
-    - matplotlib >=3.4
+    - python >=3.10
+    - numpy >=1.24,<3.0
+    - scipy >=1.11.1
+    - xarray >=2023.1
+    - matplotlib >=3.7
 
 test:
   imports:

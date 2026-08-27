@@ -2,15 +2,11 @@ import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from pytest import mark
-from scipy.signal import correlate
 
 from spectral_connectivity.transforms import (
     Multitaper,
     _add_axes,
-    _auto_correlation,
-    _fix_taper_sign,
     _get_low_bias_tapers,
-    _get_taper_eigenvalues,
     _multitaper_fft,
     _sliding_window,
     dpss_windows,
@@ -48,6 +44,24 @@ def test__add_axes():
             0,
             np.array([[[0, 3], [1, 4], [2, 5]]]),
         ),
+        # Negative axis on a 2-D array: windows run along the last axis and the
+        # window dimension is appended, so a negative index must be normalized
+        # before the step is applied.
+        (
+            np.arange(0, 6).reshape((2, 3)),
+            2,
+            1,
+            -1,
+            np.array([[[0, 1], [1, 2]], [[3, 4], [4, 5]]]),
+        ),
+        # Step larger than one along a non-default axis.
+        (
+            np.arange(0, 10),
+            3,
+            4,
+            0,
+            np.array([[0, 1, 2], [4, 5, 6]]),
+        ),
     ],
 )
 def test__sliding_window(test_array, window_size, step_size, axis, expected_array):
@@ -57,6 +71,28 @@ def test__sliding_window(test_array, window_size, step_size, axis, expected_arra
         ),
         expected_array,
     )
+
+
+@mark.parametrize("axis", [2, 3, -3, -4])
+def test__sliding_window_rejects_out_of_range_axis(axis):
+    """An out-of-range axis must raise, not wrap onto a real dimension.
+
+    ``axis % data.ndim`` would silently window the wrong dimension (e.g.
+    ``axis=2`` -> 0 on a 2-D array) instead of raising.
+    """
+    data = np.arange(6).reshape((2, 3))
+    with pytest.raises(ValueError, match="out of bounds"):
+        _sliding_window(data, window_size=2, axis=axis)
+
+
+@mark.parametrize("step_size", [0, -1, -2])
+def test__sliding_window_rejects_non_positive_step(step_size):
+    """A non-positive step is not a forward slide and must raise.
+
+    A negative step would otherwise reverse the window order via the slice.
+    """
+    with pytest.raises(ValueError, match="step_size must be a positive integer"):
+        _sliding_window(np.arange(6), window_size=2, step_size=step_size)
 
 
 @mark.parametrize(
@@ -122,7 +158,7 @@ def test_n_time_samples(
 
 @mark.parametrize(
     ("sampling_frequency, time_window_duration, n_fft_samples,expected_n_fft_samples"),
-    [(1000, None, 5, 5), (1000, 0.1, None, 100)],
+    [(1000, None, 128, 128), (1000, 0.1, None, 100)],
 )
 def test_n_fft_samples(
     sampling_frequency, time_window_duration, n_fft_samples, expected_n_fft_samples
@@ -138,8 +174,22 @@ def test_n_fft_samples(
     assert m.n_fft_samples == expected_n_fft_samples
 
 
-def test_frequencies():
+def test_n_fft_samples_smaller_than_window_raises():
+    """n_fft_samples < window length would silently truncate the signal."""
     n_time_samples, n_trials, n_signals = 100, 10, 2
+    time_series = np.zeros((n_time_samples, n_trials, n_signals))
+    m = Multitaper(
+        time_series=time_series,
+        sampling_frequency=1000,
+        n_fft_samples=5,  # window is 100 samples
+    )
+    with pytest.raises(ValueError, match="n_fft_samples"):
+        _ = m.n_fft_samples
+
+
+def test_frequencies():
+    # Window length must not exceed n_fft_samples, so use a 4-sample window.
+    n_time_samples, n_trials, n_signals = 4, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     n_fft_samples = 4
     sampling_frequency = 1000
@@ -220,6 +270,10 @@ def test_time(time_window_duration):
     expected_time = np.arange(start_time, end_time, time_window_duration)
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
+    # Windows are labeled by their center time, not their start.
+    expected_time = expected_time + (
+        round(time_window_duration * sampling_frequency) - 1
+    ) / (2 * sampling_frequency)
     m = Multitaper(
         sampling_frequency=sampling_frequency,
         time_series=time_series,
@@ -255,19 +309,6 @@ def test__get_low_bias_tapers(eigenvalues, expected_n_tapers):
     )
 
 
-def test__fix_taper_sign():
-    n_time_samples, n_tapers = 100, 4
-    tapers = -3 * np.ones((n_tapers, n_time_samples))
-    tapers[1, :3] = -1 * np.arange(0, 3)  # Begin with negative lobe
-    tapers[2, :] = 2
-    tapers[3, :3] = np.arange(0, 3)  # Begin with positive lobe
-    fixed_tapers = _fix_taper_sign(tapers, n_time_samples)
-    assert np.all(fixed_tapers[::2, :].sum(axis=1) >= 0)
-    assert np.all(fixed_tapers[2, :] == 2)
-    assert np.all(fixed_tapers[1, :].sum() >= 0)
-    assert ~np.all(fixed_tapers[3, :].sum() >= 0)
-
-
 @mark.parametrize(
     "n_time_samples, time_halfbandwidth_product, n_tapers",
     [(1000, 3, 5), (31, 6, 4), (31, 7, 4)],
@@ -282,33 +323,6 @@ def test_dpss_windows(n_time_samples, time_halfbandwidth_product, n_tapers):
     assert np.allclose(np.sum(tapers**2, axis=1), 1.0)
     assert np.allclose(tapers, nitime_tapers)
     assert np.allclose(eigenvalues, nitime_eigenvalues)
-
-
-@mark.parametrize(
-    "n_time_samples, time_halfbandwidth_product, n_tapers",
-    [(31, 6, 4), (31, 7, 4), (31, 8, 4), (31, 8, 4.2)],
-)
-def test__get_taper_eigenvalues(n_time_samples, time_halfbandwidth_product, n_tapers):
-    time_index = np.arange(n_time_samples, dtype="d")
-    half_bandwidth = float(time_halfbandwidth_product) / n_time_samples
-    nitime_tapers, _ = nitime_dpss_windows(
-        n_time_samples, time_halfbandwidth_product, n_tapers
-    )
-    eigenvalues = _get_taper_eigenvalues(nitime_tapers, half_bandwidth, time_index)
-    assert np.allclose(eigenvalues, 1.0)
-
-
-def test__auto_correlation():
-    np.random.default_rng(42)
-    n_time_samples, n_tapers = 100, 3
-    test_data = np.random.rand(n_tapers, n_time_samples)
-    rxx = _auto_correlation(test_data)[:, :n_time_samples]
-
-    for taper_ind in np.arange(n_tapers):
-        expected_correlation = correlate(
-            test_data[taper_ind, :], test_data[taper_ind, :]
-        )[n_time_samples - 1 :]
-        assert np.allclose(rxx[taper_ind], expected_correlation)
 
 
 def test__multitaper_fft():
@@ -584,3 +598,49 @@ def test_multitaper_warns_on_step_larger_than_duration():
             time_window_duration=0.5,
             time_window_step=1.0,
         )
+
+
+def test_multitaper_configuration_and_array_snapshots_are_immutable():
+    """Derived state cannot become stale through public mutation."""
+    source = np.arange(200.0).reshape(100, 1, 2)
+    custom_tapers = np.ones((100, 3))
+    m = Multitaper(
+        source,
+        sampling_frequency=100,
+        time_halfbandwidth_product=2,
+        n_tapers=3,
+        tapers=custom_tapers,
+    )
+
+    source[0, 0, 0] = -1
+    custom_tapers[0, 0] = -1
+    assert m.time_series[0, 0, 0] == 0
+    assert m.tapers[0, 0] == 1
+
+    with pytest.raises(ValueError, match="read-only"):
+        m.time_series[0, 0, 0] = 5
+    with pytest.raises(ValueError, match="read-only"):
+        m.tapers[0, 0] = 5
+    exposed_time_series = m.time_series
+    exposed_time_series.flags.writeable = True
+    exposed_time_series[0, 0, 0] = 99
+    exposed_tapers = m.tapers
+    exposed_tapers.flags.writeable = True
+    exposed_tapers[0, 0] = 99
+    assert m.time_series[0, 0, 0] == 0
+    assert m.tapers[0, 0] == 1
+    with pytest.raises(AttributeError, match="immutable after construction"):
+        m.time_halfbandwidth_product = 4
+    with pytest.raises(AttributeError, match="immutable after construction"):
+        m.sampling_frequency = 200
+
+
+def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
+    """Unrelated public attributes do not silently alter serialized metadata."""
+    m = Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100)
+    m.unrelated_extension_attribute = 42
+    metadata = m._provenance_metadata()
+
+    assert tuple(metadata) == m._PROVENANCE_FIELDS
+    assert "unrelated_extension_attribute" not in metadata
+    assert isinstance(metadata["start_time"], np.ndarray)

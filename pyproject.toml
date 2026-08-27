@@ -39,9 +39,14 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+# Dependency-floor policy: each lower bound is the oldest version the code is
+# actually tested against. The `test-min-deps` CI job installs exactly these
+# minimums (and the minimum Python) and runs the suite, so a floor cannot drift
+# out of sync with the code. Raise a floor only when a feature requires it (with
+# a comment saying why) or to follow the Scientific Python SPEC 0 support window.
 dependencies = [
     "numpy>=1.24,<3.0",
-    "scipy>=1.10",
+    "scipy>=1.11.1",  # false_discovery_control (statistics.py); 1.11.0 is yanked
     "xarray>=2023.1",
     "matplotlib>=3.7"
 ]
@@ -52,12 +57,12 @@ dev = [
     "pytest-cov>=4.1",
     "syrupy>=4.0",
     "nitime",
-    "black>=24.0",
     "ruff>=0.8.0",
-    "mypy>=1.8",
+    "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "numpydoc>=1.6",
 ]
-gpu = ["cupy-cuda12x>=12.0"]
+# CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
+gpu = ["cupy-cuda12x>=13.0"]
 
 [project.urls]
 Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
@@ -77,14 +82,10 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: requires a working CUDA device and CuPy installation",
 ]
 
 # Tool configurations for linting/formatting
-[tool.black]
-target-version = ["py310", "py311", "py312", "py313"]
-line-length = 88
-skip-string-normalization = false
-
 [tool.ruff]
 target-version = "py310"
 line-length = 88
@@ -113,7 +114,7 @@ select = [
     "RUF",   # Ruff-specific rules
 ]
 ignore = [
-    "E501",  # line too long (handled by black)
+    "E501",  # line too long (handled by the formatter)
     "B008",  # do not perform function calls in argument defaults
     "B905",  # zip without explicit strict parameter
     "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
@@ -126,6 +127,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "tests/*.py" = ["D"]      # Don't require docstrings in tests
+# examples/ are Jupytext notebook scripts, not modules: cells legitimately
+# import after markdown/code cells (E402), bare expressions display values in a
+# cell (B018), and narrative comments contain unicode such as non-breaking
+# spaces (RUF003, mirroring the already-ignored RUF002 for docstrings).
+"examples/*.py" = ["E402", "B018", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -134,7 +140,11 @@ convention = "numpy"
 known-first-party = ["spectral_connectivity"]
 
 [tool.mypy]
-python_version = "3.10"
+# Target the Python version the quality/CI job runs on (3.12). NumPy's installed
+# stubs use PEP 695 `type` statements, which mypy only parses when the target is
+# >= 3.12; a 3.10 target makes mypy reject the stubs before checking the project.
+# Runtime compatibility with 3.10+ is verified by the test matrix.
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true

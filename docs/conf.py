@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import os
 import re
 import shutil
+from pathlib import Path
 
 import spectral_connectivity
 
@@ -22,7 +22,7 @@ version = re.sub(r"(\d+\.\d+)\.\d+(.*)", r"\1\2", spectral_connectivity.__versio
 version = re.sub(r"(\.dev\d+).*?$", r"\1", version)
 # The full version, including alpha/beta/rc tags.
 release = spectral_connectivity.__version__
-print("%s %s" % (version, release))
+print(f"{version} {release}")
 
 # -- General configuration ------------------------------------------------
 
@@ -126,4 +126,5 @@ def copy_tree(src, tar):
     shutil.copytree(src, tar)
 
 
-copy_tree("../examples", "./examples")
+docs_directory = Path(__file__).resolve().parent
+copy_tree(docs_directory.parent / "examples", docs_directory / "examples")

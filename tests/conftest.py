@@ -1,15 +1,18 @@
 """Pytest configuration and fixtures for spectral_connectivity tests.
 
-This module has been modernized to use np.random.default_rng() throughout the
-test suite, which provides better test isolation than the legacy np.random.seed()
-approach. Each test now creates its own independent RNG instance.
+Newer tests create their own ``np.random.default_rng(seed)`` instances, but many
+existing tests still draw from the global NumPy generator (``np.random.random``,
+``np.random.randn``, ...). To keep those reproducible regardless of test
+execution order, the autouse fixture below reseeds the global generator before
+each test.
 
-However, we still reset the global NumPy random state before each test because:
-1. The production code (minimum_phase_decomposition.py) uses xp.random.standard_normal()
-   which pulls from global state when using the numpy backend
-2. This ensures reproducible test results across different test execution orders
+Note this is now purely a *test* concern: the production code no longer touches
+the global random state (the Wilson minimum-phase fallback in
+``minimum_phase_decomposition`` became a deterministic positive-definite start).
+The fixture can be removed once the remaining tests are migrated to local
+generators.
 
-For more information on the modern numpy random API, see:
+For the modern NumPy random API, see:
 https://numpy.org/doc/stable/reference/random/generator.html
 """
 
@@ -19,12 +22,11 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reset_global_random_state():
-    """Reset global numpy random state before each test for reproducibility.
+    """Reseed the global NumPy generator before each test for reproducibility.
 
-    Even though tests use isolated RNG instances (np.random.default_rng(seed)),
-    the production code may still use global random state, so we reset it here.
+    Tests that use their own ``np.random.default_rng`` are unaffected; tests that
+    still draw from the global generator become order-independent.
     """
     np.random.seed(42)
     yield
-    # Cleanup optional
     np.random.seed(None)

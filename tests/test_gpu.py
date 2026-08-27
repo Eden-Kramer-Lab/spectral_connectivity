@@ -166,3 +166,70 @@ class TestGPUModeConsistency:
                     "cpu" in result["device_name"].lower()
                     or result["device_name"] == "CPU"
                 )
+
+
+class TestIsGpuEnabled:
+    """Test is_gpu_enabled() environment-variable parsing."""
+
+    @pytest.mark.parametrize(
+        "value", ["true", "True", "TRUE", "1", "yes", "on", " true "]
+    )
+    def test_recognized_true_values(self, value):
+        from spectral_connectivity.utils import is_gpu_enabled
+
+        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": value}):
+            assert is_gpu_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
+    def test_recognized_false_values(self, value):
+        from spectral_connectivity.utils import is_gpu_enabled
+
+        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": value}):
+            assert is_gpu_enabled() is False
+
+    def test_unset_is_false(self):
+        from spectral_connectivity.utils import is_gpu_enabled
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
+            assert is_gpu_enabled() is False
+
+    def test_unrecognized_value_warns_and_falls_back(self):
+        from spectral_connectivity.utils import is_gpu_enabled
+
+        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "maybe"}):
+            with pytest.warns(UserWarning, match="not a recognized value"):
+                assert is_gpu_enabled() is False
+
+
+class TestBackendDetection:
+    """Test that get_compute_backend reports 'gpu' when xp is the cupy module."""
+
+    def test_reports_gpu_when_transforms_xp_is_cupy(self):
+        import types
+
+        fake_cupy = types.ModuleType("cupy")  # __name__ == "cupy"
+        fake_transforms = types.ModuleType("spectral_connectivity.transforms")
+        fake_transforms.xp = fake_cupy
+
+        with patch.dict(
+            sys.modules,
+            {"spectral_connectivity.transforms": fake_transforms},
+        ):
+            result = get_compute_backend()
+            assert result["backend"] == "gpu"
+
+    def test_reports_cpu_when_transforms_xp_is_numpy(self):
+        import types
+
+        import numpy as np
+
+        fake_transforms = types.ModuleType("spectral_connectivity.transforms")
+        fake_transforms.xp = np  # __name__ == "numpy"
+
+        with patch.dict(
+            sys.modules,
+            {"spectral_connectivity.transforms": fake_transforms},
+        ):
+            result = get_compute_backend()
+            assert result["backend"] == "cpu"

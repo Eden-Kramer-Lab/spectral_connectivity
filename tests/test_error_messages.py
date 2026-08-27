@@ -142,6 +142,45 @@ class TestMultitaperParameterErrorMessages:
         # The error should be educational about this parameter
         assert "0.5" in error_msg or str(0.5) in error_msg
 
+    def test_window_duration_rounding_to_zero_is_rejected(self):
+        """A positive duration that rounds to 0 samples must raise, not divide by 0."""
+        time_series = np.random.randn(1000, 1, 2)
+        # 0.0004 s * 1000 Hz = 0.4 samples -> rounds to 0.
+        mt = Multitaper(
+            time_series, sampling_frequency=1000.0, time_window_duration=0.0004
+        )
+        with pytest.raises(ValueError) as excinfo:
+            mt.fft()
+        error_msg = str(excinfo.value)
+        assert "time_window_duration" in error_msg
+        assert "1 sample" in error_msg
+
+    def test_window_step_truncating_to_zero_is_rejected(self):
+        """A positive step that truncates to 0 samples must raise, not divide by 0."""
+        time_series = np.random.randn(1000, 1, 2)
+        mt = Multitaper(
+            time_series,
+            sampling_frequency=1000.0,
+            time_window_duration=0.05,
+            time_window_step=0.0004,  # -> 0 samples
+        )
+        with pytest.raises(ValueError) as excinfo:
+            mt.fft()
+        error_msg = str(excinfo.value)
+        assert "time_window_step" in error_msg
+
+    def test_oversized_window_is_rejected(self):
+        """A window longer than the signal must raise instead of returning empty."""
+        time_series = np.random.randn(1000, 1, 2)  # 1 s at 1000 Hz
+        mt = Multitaper(
+            time_series, sampling_frequency=1000.0, time_window_duration=5.0
+        )
+        with pytest.raises(ValueError) as excinfo:
+            mt.fft()
+        error_msg = str(excinfo.value)
+        assert "time_window_duration" in error_msg
+        assert "larger than the signal" in error_msg
+
 
 class TestGPUErrorMessages:
     """Test GPU-related error messages."""
@@ -201,3 +240,30 @@ class TestErrorMessagePatterns:
 
         # Should suggest the correct approach
         assert "Multitaper" in error_msg or "transform" in error_msg.lower()
+
+
+class TestExplicitSampleCountGuards:
+    """Explicit n_time_samples_per_window/step must be validated like durations."""
+
+    def test_explicit_zero_window_is_rejected(self):
+        ts = np.random.randn(1000, 1, 2)
+        mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=0)
+        with pytest.raises(ValueError, match="at least 1 sample"):
+            mt.fft()
+
+    def test_explicit_oversized_window_is_rejected(self):
+        ts = np.random.randn(100, 1, 2)
+        mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=500)
+        with pytest.raises(ValueError, match="larger than the signal"):
+            mt.fft()
+
+    def test_explicit_zero_step_is_rejected(self):
+        ts = np.random.randn(1000, 1, 2)
+        mt = Multitaper(
+            ts,
+            sampling_frequency=1000.0,
+            n_time_samples_per_window=50,
+            n_time_samples_per_step=0,
+        )
+        with pytest.raises(ValueError, match="at least 1 sample"):
+            mt.fft()

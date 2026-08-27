@@ -6,6 +6,39 @@ import pytest
 from spectral_connectivity import Connectivity, Multitaper
 
 
+@pytest.mark.parametrize("method", ["group_delay", "delay"])
+def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkeypatch):
+    """NumPy-only delay code must cross the device boundary through ``get``."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    class DeviceLike:
+        """Minimal CuPy-like object that rejects implicit NumPy conversion."""
+
+        def __init__(self, array):
+            self._array = np.asarray(array)
+
+        def __array__(self, *args, **kwargs):
+            raise TypeError("implicit device-to-host conversion is forbidden")
+
+        def get(self):
+            return self._array.copy()
+
+    rng = np.random.default_rng(11)
+    shape = (1, 4, 3, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+    original_bandpass = connectivity_module._bandpass
+
+    def device_bandpass(*args, **kwargs):
+        data, frequencies = original_bandpass(*args, **kwargs)
+        return DeviceLike(data), DeviceLike(frequencies)
+
+    monkeypatch.setattr(connectivity_module, "_bandpass", device_bandpass)
+    result = getattr(conn, method)()
+    arrays = result if isinstance(result, tuple) else (result,)
+    assert all(isinstance(array, np.ndarray) for array in arrays)
+
+
 class TestCanonicalCoherence:
     """Test canonical_coherence() method."""
 
@@ -345,6 +378,75 @@ class TestGlobalCoherence:
         # At least check that means are in descending order
         assert np.mean(global_coh[..., :]) > 0  # All should be positive
 
+    def test_global_coherence_is_scale_invariant(self):
+        """Global coherence is an eigenvalue fraction and must not depend on gain.
+
+        Scaling the input signals by a constant must leave the (normalized)
+        global coherence unchanged.
+        """
+        time_series = self.rng.standard_normal((80, 8, 5))
+        m = Multitaper(
+            time_series=time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        m_scaled = Multitaper(
+            time_series=10.0 * time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
+        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(
+            max_rank=1
+        )
+        np.testing.assert_allclose(gc, gc_scaled, rtol=1e-6)
+
+    def test_global_coherence_dense_branch_bounded_and_scale_invariant(self):
+        """max_rank >= n_signals - 1 uses the dense SVD branch; verify it too.
+
+        The sparse-branch tests do not cover the dense normalization path.
+        """
+        n_signals = 3
+        time_series = self.rng.standard_normal((80, 8, n_signals))
+        m = Multitaper(
+            time_series=time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        m_scaled = Multitaper(
+            time_series=7.0 * time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        # max_rank == n_signals -> dense branch (max_rank >= n_signals - 1).
+        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=n_signals)
+        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(
+            max_rank=n_signals
+        )
+        assert np.all(gc >= 0) and np.all(gc <= 1.0 + 1e-9)
+        assert np.all(gc[..., 0] >= gc[..., 1] - 1e-9)  # strongest first
+        np.testing.assert_allclose(gc, gc_scaled, rtol=1e-6)
+
+    def test_global_coherence_bounded_and_descending(self):
+        """Global coherence is a fraction in [0, 1] with descending components.
+
+        Uses max_rank < n_signals - 1 to exercise the sparse (svds) branch,
+        which must return components strongest-first like the dense branch.
+        """
+        n_signals = 6
+        time_series = self.rng.standard_normal((80, 8, n_signals))
+        m = Multitaper(
+            time_series=time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        # max_rank=3 < n_signals - 1 = 5 -> sparse branch.
+        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=3)
+        assert np.all(gc >= 0) and np.all(gc <= 1.0 + 1e-9)
+        # Component 0 is the strongest at every time/frequency.
+        assert np.all(gc[..., 0] >= gc[..., 1] - 1e-9)
+        assert np.all(gc[..., 1] >= gc[..., 2] - 1e-9)
+
     def test_global_coherence_max_rank_edge_cases(self):
         """Test global coherence with edge case max_rank values."""
         n_time = 50
@@ -438,33 +540,34 @@ class TestGroupDelay:
         self.rng = np.random.default_rng(42)
 
     def test_group_delay_basic(self):
-        """Test basic group delay computation with known phase relationship."""
-        # Create two signals with known time delay
-        n_time = 500
-        n_trials = 5
-        sampling_frequency = 500
-        time = np.arange(n_time) / sampling_frequency
+        """Group delay recovers a known broadband time delay between two signals.
 
-        # Signal 1: sine wave
-        freq = 20  # Hz
-        signal1 = np.sin(2 * np.pi * freq * time)
+        Group delay is the slope of the coherence phase across frequency, so it
+        is only well-defined when two signals are coherent across a *band*. We
+        build a broadband common source and delay it by a known integer number
+        of samples; the recovered delay magnitude must match the imposed lag.
 
-        # Signal 2: delayed version of signal 1
-        time_delay = 0.02  # 20 ms delay
-        signal2 = np.sin(2 * np.pi * freq * (time - time_delay))
+        Regression test: previously this path returned all-NaN z-scores (the
+        one-sample Fisher z-transform evaluated ``coherence_bias(0)``), so no
+        frequency was ever significant and ``group_delay`` raised a
+        ``zero-size array`` ``ValueError`` regardless of the data.
+        """
+        n_time = 2000
+        n_trials = 30
+        sampling_frequency = 500  # Hz
+        lag_samples = 10  # signal2 lags signal1 by 10 samples == 20 ms
+        expected_delay = lag_samples / sampling_frequency
 
-        # Add trials
-        signal1_trials = signal1[np.newaxis, :] + 0.05 * self.rng.standard_normal(
-            (n_trials, n_time)
+        # Broadband common source shared by both signals, plus independent noise.
+        common = self.rng.standard_normal((n_time, n_trials))
+        signal1 = common + 0.2 * self.rng.standard_normal((n_time, n_trials))
+        signal2 = np.roll(common, lag_samples, axis=0) + 0.2 * self.rng.standard_normal(
+            (n_time, n_trials)
         )
-        signal2_trials = signal2[np.newaxis, :] + 0.05 * self.rng.standard_normal(
-            (n_trials, n_time)
-        )
 
-        # Combine: shape (n_time, n_trials, n_signals)
-        time_series = np.stack([signal1_trials, signal2_trials], axis=-1)
+        # Shape (n_time, n_trials, n_signals)
+        time_series = np.stack([signal1, signal2], axis=-1)
 
-        # Compute multitaper transform
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=sampling_frequency,
@@ -472,39 +575,28 @@ class TestGroupDelay:
         )
         conn = Connectivity.from_multitaper(m)
 
-        # Compute group delay with very relaxed significance threshold
-        # Note: group_delay can fail with zero-size arrays if no frequencies are significant
-        # We'll use a try/except to handle this case gracefully
-        try:
-            delay, slope, r_value = conn.group_delay(
-                frequencies_of_interest=[15, 25],  # Around target frequency
-                frequency_resolution=2.0,
-                significance_threshold=0.99,  # Very relaxed to allow frequencies through
-            )
+        # Standard (not relaxed) significance threshold: real coherence must be
+        # detected for this to return anything.
+        delay, slope, r_value = conn.group_delay(
+            frequencies_of_interest=[20, 80],
+            frequency_resolution=2.0,
+            significance_threshold=0.05,
+        )
 
-            # Validate output shapes (n_time_windows, n_signals, n_signals)
-            expected_shape = (m.time.size, 2, 2)
-            assert delay.shape == expected_shape
-            assert slope.shape == expected_shape
-            assert r_value.shape == expected_shape
+        expected_shape = (m.time.size, 2, 2)
+        assert delay.shape == expected_shape
+        assert slope.shape == expected_shape
+        assert r_value.shape == expected_shape
 
-            # Check diagonal is NaN (self-delay not defined)
-            assert np.all(np.isnan(delay[..., 0, 0]))
-            assert np.all(np.isnan(delay[..., 1, 1]))
+        # Diagonal (self-delay) is undefined.
+        assert np.all(np.isnan(delay[..., 0, 0]))
+        assert np.all(np.isnan(delay[..., 1, 1]))
 
-            # Extract delay from signal 1 to signal 2
-            estimated_delay = delay[0, 0, 1]  # First time window, signal 0 to signal 1
-
-            # The delay should be approximately the time_delay we introduced
-            # Note: group delay can be noisy, so we use a loose tolerance
-            if not np.isnan(estimated_delay):
-                # Delay should be in the right direction (negative means signal2 lags)
-                assert np.abs(estimated_delay - (-time_delay)) < 0.1
-        except ValueError as e:
-            # If we get a zero-size array error, it means no frequencies were significant
-            # This is acceptable behavior for group_delay
-            assert "zero-size array" in str(e)
-            # Test still counts as passed - group_delay is working as designed
+        # A genuine, near-linear phase-frequency relationship must be recovered.
+        estimated_delay = delay[0, 0, 1]
+        assert np.isfinite(estimated_delay)
+        assert np.abs(np.abs(estimated_delay) - expected_delay) < 5e-3
+        assert np.abs(r_value[0, 0, 1]) > 0.9
 
     def test_group_delay_no_frequency_filter(self):
         """Test group delay without frequency bandpass."""
@@ -640,6 +732,161 @@ class TestGroupDelay:
         # Just check they're finite where not NaN
         assert np.all(np.isfinite(delay) | np.isnan(delay))
         assert np.all(np.isfinite(slope) | np.isnan(slope))
+
+    def test_group_delay_zero_power_bin_does_not_poison_slice(self):
+        """A masked (zero-power) frequency must not NaN-poison a pair's fit.
+
+        A zero-power frequency makes that bin's coherency NaN (0/0), which is
+        masked out. The vectorized regression must exclude it rather than let
+        ``0 * NaN`` propagate NaN through the whole slice's sums, so a pair that
+        is coherent at the remaining frequencies still gets a finite slope/r.
+        """
+        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 20, 1, 16, 3
+        delay = 0.3
+        bins = np.arange(n_fft)
+        fourier = np.zeros(
+            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
+        )
+        for trial in range(n_trials):
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
+                n_fft
+            )
+            fourier[0, trial, 0, :, 0] = base
+            # Signal 1 is signal 0 with a linear phase ramp (a broadband delay).
+            fourier[0, trial, 0, :, 1] = base * np.exp(
+                -1j * 2 * np.pi * bins * delay / n_fft
+            )
+            fourier[0, trial, 0, :, 2] = self.rng.standard_normal(
+                n_fft
+            ) + 1j * self.rng.standard_normal(n_fft)
+        fourier[..., 5, :] = 0.0  # a zero-power frequency -> NaN coherency, masked
+
+        _delay, slope, r_value = Connectivity(
+            fourier_coefficients=fourier
+        ).group_delay()
+
+        # The coherent pair (0, 1) keeps a finite fit despite the masked bin.
+        assert np.isfinite(slope[..., 0, 1]).all()
+        assert np.isfinite(r_value[..., 0, 1]).all()
+
+    def test_group_delay_stable_for_large_frequency_offset(self):
+        """Group delay stays accurate when frequencies dwarf their spacing.
+
+        With a large absolute-frequency offset, the naive raw-moment variance
+        (``count * sum_xx - sum_x**2``) cancels to exactly zero in float64 and
+        the slope blows up to inf/NaN. The mean-centered computation must still
+        recover the injected phase slope. This is the case the centering exists
+        for; comparing to ``linregress`` (which also centers) would not exercise
+        it.
+        """
+        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 30, 1, 32, 3
+        expected_slope = -0.7
+        # Frequency labels offset far from zero relative to their 0.001 spacing.
+        frequencies = 1e6 + np.arange(n_fft) * 0.001
+        # group_delay regresses over the non-negative frequencies; the raw-moment
+        # variance genuinely cancels to zero on that grid in float64 (the old
+        # failure the centering fixes).
+        band = frequencies[: n_fft // 2 + 1]
+        assert len(band) * (band @ band) - band.sum() ** 2 == 0.0
+
+        fourier = np.zeros(
+            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
+        )
+        for trial in range(n_trials):
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
+                n_fft
+            )
+            fourier[0, trial, 0, :, 0] = base
+            # coherency(0, 1) phase == angle(f0 * conj(f1)) == slope * (f - f0).
+            fourier[0, trial, 0, :, 1] = base * np.exp(
+                -1j * expected_slope * (frequencies - frequencies[0])
+            )
+            fourier[0, trial, 0, :, 2] = self.rng.standard_normal(
+                n_fft
+            ) + 1j * self.rng.standard_normal(n_fft)
+
+        _delay, slope, r_value = Connectivity(
+            fourier_coefficients=fourier, frequencies=frequencies
+        ).group_delay()
+
+        assert np.isfinite(slope[..., 0, 1]).all()
+        np.testing.assert_allclose(slope[..., 0, 1], expected_slope, atol=1e-9)
+        np.testing.assert_allclose(np.abs(r_value[..., 0, 1]), 1.0, atol=1e-9)
+
+    def test_group_delay_matches_scipy_linregress(self):
+        """The vectorized masked regression matches a per-slice scipy linregress.
+
+        group_delay fits the unwrapped coherence phase against frequency per
+        (time, signal pair) with vectorized masked sums. This must reproduce the
+        slope and r-value that ``scipy.stats.mstats.linregress`` returns slice by
+        slice, including NaN for slices with fewer than two significant
+        frequencies.
+        """
+        from itertools import combinations
+
+        from scipy.stats.mstats import linregress
+
+        n_time, n_trials, n_signals, sampling_frequency = 400, 10, 4, 250
+        time = np.arange(n_time) / sampling_frequency
+        base = np.sin(2 * np.pi * 20 * time)
+        signals = []
+        for shift in range(n_signals):
+            signal = np.roll(base, shift) + 0.2 * self.rng.standard_normal(n_time)
+            trials = signal[:, np.newaxis] + 0.1 * self.rng.standard_normal(
+                (n_time, n_trials)
+            )
+            signals.append(trials)
+        time_series = np.stack(signals, axis=-1)  # (n_time, n_trials, n_signals)
+
+        conn = Connectivity.from_multitaper(
+            Multitaper(
+                time_series=time_series,
+                sampling_frequency=sampling_frequency,
+                time_window_duration=0.4,
+                time_halfbandwidth_product=3,
+            )
+        )
+        _delay, slope, r_value = conn.group_delay()
+
+        # Recompute a reference with the previous per-slice approach.
+        frequencies = conn.frequencies
+        from spectral_connectivity.connectivity import (
+            _bandpass,
+            _find_significant_frequencies,
+            _get_independent_frequency_step,
+        )
+
+        step = _get_independent_frequency_step(frequencies[1] - frequencies[0], None)
+        bandpassed, band_frequencies = _bandpass(conn.coherency(), frequencies, None)
+        pairs = np.asarray(list(combinations(range(n_signals), 2)))
+        bandpassed = bandpassed[..., pairs[:, 0], pairs[:, 1]]
+        significant = _find_significant_frequencies(
+            bandpassed, conn.n_observations, step, significance_threshold=0.05
+        )
+        phase = np.ma.masked_array(
+            np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant
+        )
+
+        reference_slope = np.full(slope.shape, np.nan)
+        reference_r = np.ones(r_value.shape)
+        it = np.ndindex(phase.shape[:-2])
+        for lead in it:
+            for pair_index, (i, j) in enumerate(pairs):
+                fit = linregress(
+                    band_frequencies, y=phase[(*lead, slice(None), pair_index)]
+                )
+                reference_slope[(*lead, i, j)] = fit[0]
+                reference_slope[(*lead, j, i)] = -fit[0]
+                reference_r[(*lead, i, j)] = fit[2]
+                reference_r[(*lead, j, i)] = fit[2]
+
+        np.testing.assert_array_equal(np.isnan(slope), np.isnan(reference_slope))
+        np.testing.assert_allclose(
+            slope, reference_slope, rtol=1e-9, atol=1e-11, equal_nan=True
+        )
+        np.testing.assert_allclose(
+            r_value, reference_r, rtol=1e-9, atol=1e-11, equal_nan=True
+        )
 
     def test_group_delay_antisymmetry(self):
         """Test that group delay shows antisymmetry: delay[i,j] = -delay[j,i]."""
@@ -806,3 +1053,109 @@ class TestAdvancedConnectivityIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDelay:
+    """Test the delay() method returns a time delay, not phase cycles."""
+
+    @pytest.fixture(autouse=True)
+    def setup_rng(self):
+        self.rng = np.random.default_rng(3)
+
+    def test_delay_recovers_frequency_independent_time_delay(self):
+        """A constant physical delay must be frequency-independent (in seconds).
+
+        delay() previously returned phase/(2*pi) (cycles), which scales with
+        frequency for a fixed physical delay. After dividing by frequency the
+        zero-wrap candidate is ~constant across the band and equals lag/fs.
+        """
+        n_time = 2000
+        n_trials = 30
+        sampling_frequency = 500  # Hz
+        lag_samples = 2  # small so phase does not wrap over the analysis band
+        expected_delay = lag_samples / sampling_frequency  # 0.004 s
+
+        common = self.rng.standard_normal((n_time, n_trials))
+        signal1 = common + 0.2 * self.rng.standard_normal((n_time, n_trials))
+        signal2 = np.roll(common, lag_samples, axis=0) + 0.2 * self.rng.standard_normal(
+            (n_time, n_trials)
+        )
+        time_series = np.stack([signal1, signal2], axis=-1)
+
+        m = Multitaper(
+            time_series=time_series,
+            sampling_frequency=sampling_frequency,
+            time_halfbandwidth_product=3,
+        )
+        conn = Connectivity.from_multitaper(m)
+        n_range = 3
+        possible_delays = conn.delay(
+            frequencies_of_interest=[20, 80],
+            frequency_resolution=2.0,
+            significance_threshold=0.05,
+            n_range=n_range,
+        )
+        # Shape (n_time, n_freq, 2*n_range+1, n_signals, n_signals).
+        # The zero-wrap candidate is the middle one (k=0).
+        zero_wrap = possible_delays[0, :, n_range, 0, 1]
+        # Non-significant frequencies (and DC) are NaN, not a spurious 0.0.
+        assert np.isnan(zero_wrap).any()
+        estimated = zero_wrap[np.isfinite(zero_wrap)]
+        assert estimated.size >= 3
+        # Frequency-independent (constant) and equal in magnitude to lag/fs.
+        assert np.allclose(np.abs(estimated), expected_delay, atol=1e-3)
+        assert np.std(estimated) < 1e-3
+
+    def test_global_coherence_zero_power_bin_warns_and_nans(self):
+        """A dead (zero-power) channel must yield NaN with a warning, not 0."""
+        # Build fourier coefficients with an all-zero bin across every channel.
+        rng = np.random.default_rng(0)
+        shape = (1, 8, 1, 4, 3)  # (time, trials, tapers, freq, signals)
+        fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        fc[:, :, :, 2, :] = 0.0  # zero total power at frequency bin 2
+        conn = Connectivity(fourier_coefficients=fc)
+        with pytest.warns(UserWarning, match="zero total power"):
+            gc, _ = conn.global_coherence(max_rank=1)
+        assert np.all(np.isnan(gc[:, 2, :]))
+        assert np.all(np.isfinite(gc[:, [0, 1, 3], :]))
+
+    def test_global_coherence_single_estimate_does_not_crash(self):
+        """One trial/taper (n_estimates=1) must not crash svds at default rank."""
+        rng = np.random.default_rng(0)
+        # (n_time, n_trials, n_tapers, n_fft, n_signals) with n_trials*n_tapers = 1
+        fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal(
+            (1, 1, 1, 4, 3)
+        )
+        gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
+        assert gc.shape == (1, 4, 1)
+        assert np.all(np.isfinite(gc))
+
+    def test_global_coherence_over_requested_rank_is_clamped(self):
+        """Requesting more components than exist clamps (no duplicate broadcast)."""
+        rng = np.random.default_rng(2)
+        # n_signals=3, n_estimates = n_trials * n_tapers = 8 -> at most 3 components
+        fc = rng.standard_normal((1, 4, 2, 4, 3)) + 1j * rng.standard_normal(
+            (1, 4, 2, 4, 3)
+        )
+        with pytest.warns(UserWarning, match="clamping"):
+            gc, vectors = Connectivity(fourier_coefficients=fc).global_coherence(
+                max_rank=5
+            )
+        assert gc.shape[-1] == 3  # min(n_signals, n_estimates)
+        assert vectors.shape[-1] == 3
+        # Components are distinct, not one value broadcast into several.
+        assert np.unique(np.round(gc[0, 0], 8)).size == 3
+
+    def test_global_coherence_is_stable_at_extreme_magnitudes(self):
+        """Extreme coefficient magnitudes must not underflow/overflow to NaN."""
+        rng = np.random.default_rng(0)
+        fc = rng.standard_normal((1, 8, 1, 4, 4)) + 1j * rng.standard_normal(
+            (1, 8, 1, 4, 4)
+        )
+        base, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
+        for scale in (1e-200, 1e200):
+            gc, _ = Connectivity(fourier_coefficients=fc * scale).global_coherence(
+                max_rank=1
+            )
+            assert np.all(np.isfinite(gc))
+            np.testing.assert_allclose(gc, base, rtol=1e-6)

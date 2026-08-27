@@ -1,5 +1,12 @@
 # Connectivity Metric Ranges
 
+## Direction convention
+
+For xarray results returned by `multitaper_connectivity`,
+`result.sel(source="a", target="b")` is the influence from `a` to `b`. The
+lower-level `Connectivity` methods retain their historical array convention:
+`result[..., i, j]` represents `j -> i`.
+
 The following summarizes the theoretical value ranges for common connectivity metrics.
 
 | Metric | Range | Notes |
@@ -10,13 +17,13 @@ The following summarizes the theoretical value ranges for common connectivity me
 | **Coherence magnitude** | [0, 1] | 0: none; 1: perfect linear dependence at frequency f. |
 | **Imaginary coherence** | [0, 1] (magnitude) | Raw imaginary part ranges [−1, 1]; magnitude version. |
 | **Canonical coherence** | [0, 1] | Maximal coherence between groups. |
-| **Global coherence** | [0, ∞) | Squared singular values; no upper bound. |
+| **Global coherence** | [0, 1] | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
 | **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
 | **PLI (Phase‑Lag Index)** | [−1, 1] | Signed version; unsigned in [0, 1]. |
-| **wPLI (Weighted PLI)** | [0, 1] | Weights by \|Im(Sxy)\|. |
-| **dwPLI (Debiased PLI²)** | [0, 1] | Bias‑corrected squared PLI. |
-| **dwPLI² (Debiased squared wPLI)** | [0, 1] | Bias‑corrected weighted PLI squared. |
-| **PPC (Pairwise Phase Consistency)** | [0, 1] | Unbiased phase consistency; bounded as PLV. |
+| **wPLI (Weighted PLI)** | [−1, 1] | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value. |
+| **dwPLI (Debiased PLI²)** | [−1/(N−1), 1] | Unbiased squared PLI estimate; finite-sample values can be negative. |
+| **dwPLI² (Debiased squared wPLI)** | [−1, 1] | Unbiased weighted PLI² estimate; finite-sample values can be negative. |
+| **PPC (Pairwise Phase Consistency)** | [−1/(N−1), 1] | Unbiased phase consistency; finite-sample values can be negative. |
 | **Spectral Granger causality** | [0, ∞) | Non‑negative; no finite upper bound. |
 | **DTF (Directed Transfer Function)** | [0, 1] (normalized) | Proportion of inflow via transfer function. |
 | **Directed coherence** | [0, 1] (normalized) | DTF scaled by noise variance. |
@@ -28,7 +35,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 
 ## Notes
 
-- For metrics bounded in [0, 1], numerical implementations should clamp to the interval after computation to avoid tiny overflows (e.g., 1 ± 1e−12).
+- For metrics theoretically bounded in [0, 1], numerical implementations should clamp to the interval after computation to avoid tiny overflows (e.g., 1 ± 1e−12). Unbiased estimators such as PPC and the debiased PLI variants must retain legitimate negative finite-sample values.
 - For phase‑based metrics, choose an expectation (sample) axis (trials/tapers/segments) and aggregate **only** across that axis.
 - Document the shapes/dtypes of inputs and outputs in each docstring per NumPy style.
 - Also document that for granger causality output [i,j] (row i, column j) corresponds to j --> i.
@@ -41,19 +48,23 @@ The following summarizes the theoretical value ranges for common connectivity me
 - **imaginary_coherence**: Magnitude of imaginary coherency
 - **canonical_coherence**: Maximal coherence between groups
 - **phase_locking_value**: Phase consistency measure
-- **weighted_phase_lag_index**: Weighted by imaginary coherency magnitude
-- **debiased_squared_phase_lag_index**: Bias-corrected squared PLI
-- **debiased_squared_weighted_phase_lag_index**: Bias-corrected wPLI²
-- **pairwise_phase_consistency**: Unbiased phase consistency
 - **directed_transfer_function**: Normalized directional influence
 - **directed_coherence**: DTF scaled by noise variance
 - **partial_directed_coherence**: Normalized causal influence
 - **generalized_partial_directed_coherence**: PDC scaled by noise variance
 - **direct_directed_transfer_function**: DTF with partial coherence normalization
+- **global_coherence**: Fraction of total coherent power per component (eigenvalue of the cross-spectral matrix over the sum of all eigenvalues, Cimenser et al. 2011); scale-invariant
 
 ### Bounded Metrics [−1, 1]
 
 - **phase_lag_index**: Signed phase consistency (unsigned version in [0, 1])
+- **weighted_phase_lag_index**: Signed weighted phase consistency
+- **debiased_squared_weighted_phase_lag_index**: Unbiased weighted PLI² estimate
+
+### Finite-sample unbiased metrics [−1/(N−1), 1]
+
+- **debiased_squared_phase_lag_index**: Unbiased squared PLI estimate
+- **pairwise_phase_consistency**: Unbiased phase consistency
 
 ### Phase Metrics [−π, π]
 
@@ -62,7 +73,6 @@ The following summarizes the theoretical value ranges for common connectivity me
 ### Unbounded Metrics [0, ∞)
 
 - **power**: Power spectral density
-- **global_coherence**: Squared singular values
 - **pairwise_spectral_granger_prediction**: Spectral Granger causality
 
 ### Unbounded Metrics (−∞, ∞)

@@ -46,6 +46,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.lcov
 *.cover
 .hypothesis/
 
@@ -66,6 +67,8 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/_autosummary/
+docs/examples/
 
 # PyBuilder
 target/

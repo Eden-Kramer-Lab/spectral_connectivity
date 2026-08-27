@@ -6,7 +6,7 @@ dependencies:
 # Core dependencies (match pyproject.toml)
 - python>=3.10
 - "numpy >= 1.24, <3.0"
-- "scipy >= 1.10"
+- "scipy >= 1.11.1"
 - "xarray >= 2023.1"
 - "matplotlib >= 3.7"
 - nitime
@@ -16,8 +16,7 @@ dependencies:
 - "pytest-cov >= 4.1"
 - "mypy >= 1.8"
 
-# Code formatting and linting
-- "black >= 24.0"
+# Code formatting and linting (ruff handles both format and lint)
 - "ruff >= 0.8.0"
 
 # Documentation
@@ -31,7 +30,6 @@ dependencies:
 - jupyterlab
 
 # CI/Build tools
-- coveralls
 - hatch
 - build
 - twine

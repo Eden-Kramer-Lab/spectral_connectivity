@@ -1,0 +1,3 @@
+# Syrupy snapshot files are generated; their amber format contains formatting
+# whitespace, so exempt them from whitespace linting (git diff --check).
+tests/__snapshots__/*.ambr -whitespace

@@ -13,8 +13,11 @@ Please note that we **cannot**, in general, answer questions about particular co
 Code contributions are always welcome, from simple bug fixes to new features. To contribute code:
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
-2. Run [black](https://github.com/python/black) and [flake8](http://flake8.pycqa.org/en/latest/) on your code.
-3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through github actions.
+2. Format, lint, and type-check your code with [ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy-lang.org/) (the same checks CI runs): `ruff format spectral_connectivity/ tests/`, `ruff check spectral_connectivity/ tests/`, and `mypy spectral_connectivity/`.
+3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
+   Changes to backend-specific code must also pass the real-device smoke test on
+   a CUDA machine: `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu
+   pytest -m gpu`. Device-like mocks do not replace this release gate.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Submit a pull request.
@@ -23,24 +26,63 @@ If you are fixing a known issue, please add the issue number to the PR message.
 
 If you are fixing a new issue, file an issue and then reference it in the PR.
 
-### How to build the documenation
+### How to build the documentation
 
-1. Change directory to `spectral_connectivity/docs`
-2. Run `make html` to preview the docs.
-3. A commit to the master branch will automatically build the docs on readthedocs.
+1. From the repository root, install the documentation dependencies with
+   `pip install -r docs/requirements-docs.txt`.
+2. Run `make -C docs html` to build the site.
+3. Preview `docs/_build/html/index.html`. A commit to the master branch will
+   automatically build the docs on Read the Docs.
 
 ### How to make a release
 
-1. Bump the version number and tag the commit
-2. Upload to pypi
+Releases are **automated**: pushing a `v*` tag runs the *Test, Build, and
+Publish* workflow (`.github/workflows/release.yml`), which tests, builds the
+sdist and wheel, generates build-provenance attestations, and publishes to PyPI
+via PyPI **trusted publishing** (OIDC). No API token is stored in the
+repository, and the default workflow token is read-only; only the publish and
+release jobs elevate their permissions. Do **not** run `twine upload` by
+hand — that bypasses the tests, attestations, and approval gate below.
 
-```bash
-git clean -xfd
-python -m build
-twine upload dist/*
-```
+To cut a release:
 
-3. Upload to conda. This requires anaconda-client and conda-build.
+1. Update `CHANGELOG.md`: move the `[Unreleased]` entries under a new
+   `## [X.Y.Z]` heading.
+2. If the release changes GPU code or dependencies, record a passing
+   `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest -m gpu` run
+   from a CUDA machine in the release PR.
+3. Create and push an annotated tag. The version is derived from the tag by
+   `hatch-vcs`, so there is no version file to edit:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+4. The tagged run pauses at the protected `pypi` environment. An authorized
+   maintainer approves it from the workflow run page; the artifacts then publish
+   to PyPI (with attestations) and a GitHub Release is created from the
+   changelog.
+
+**One-time setup (required for the automated release to work):**
+
+- On PyPI, configure a *trusted publisher* for this repository (PyPI project →
+  Settings → Publishing), authorizing the OIDC publish without a stored token.
+  Set the workflow to `release.yml` and the **environment name to `pypi`** to
+  match the workflow's `environment: pypi`; the publish is rejected if they
+  differ.
+- In the GitHub repository (Settings → Environments → `pypi`), add protection
+  rules — required reviewers, and optionally a tag/branch restriction. Naming
+  the environment in the workflow is **not** sufficient on its own; the
+  protection rules must be configured here so a publish needs manual approval.
+
+Conda packages are published separately and manually. This requires
+anaconda-client and conda-build.
+
+Before building, update `conda-recipe/meta.yaml` for the new release, or it will
+rebuild the previous version: set `version` to `X.Y.Z` and replace `sha256` with
+the SHA-256 of the new PyPI sdist (from the release's "Download files" page, or
+`openssl dgst -sha256 spectral_connectivity-X.Y.Z.tar.gz`), then commit it.
 
 ```bash
 # Build conda package using recipe
@@ -77,4 +119,4 @@ This package is not currently on conda-forge. To add it:
 
 ## Authorship on manuscripts
 
-Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not soley determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).
+Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not solely determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).

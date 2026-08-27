@@ -7,7 +7,7 @@
 [![PyPI version](https://badge.fury.io/py/spectral_connectivity.svg)](https://badge.fury.io/py/spectral_connectivity)
 [![Anaconda-Server Badge](https://anaconda.org/edeno/spectral_connectivity/badges/version.svg)](https://anaconda.org/edeno/spectral_connectivity)
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
-[![Coverage Status](https://coveralls.io/repos/github/Eden-Kramer-Lab/spectral_connectivity/badge.svg?branch=master)](https://coveralls.io/github/Eden-Kramer-Lab/spectral_connectivity?branch=master)
+[![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
 [**Tutorials**](#tutorials)
 | [**Documentation**](#documentation)
@@ -29,7 +29,9 @@
 + it implements the canonical coherence, which can
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
-+ all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
++ core transforms and connectivity calculations support GPU acceleration when
+  `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
+  importing the package. Public results are returned as NumPy arrays.
 
 ### Tutorials
 
@@ -41,22 +43,79 @@ See the following notebooks for more information on how to use the package:
 
 ### Usage Example
 
+The quickest way to get connectivity measures is the high-level
+`multitaper_connectivity` function, which runs the multitaper transform and
+returns labeled [xarray](https://docs.xarray.dev/) objects (dimensions such as
+`time`, `frequency`, `source`, `target`):
+
+```python
+from spectral_connectivity import multitaper_connectivity
+
+# time_series has shape (n_time_samples, n_trials, n_signals)
+coherence = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method="coherence_magnitude",
+    time_halfbandwidth_product=3,
+)
+
+# Ask for several measures at once (returns an xarray.Dataset)
+measures = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method=["coherence_magnitude", "imaginary_coherence", "phase_locking_value"],
+)
+```
+
+For directed measures, `result.sel(source="a", target="b")` means influence
+from `a` to `b`. The directed-transfer-function family is available by name as
+an opt-in method. The lower-level `Connectivity` methods retain their historical
+array convention: `result[..., i, j]` represents `j -> i`.
+
+#### Choosing parameters
+
+Not sure what `time_halfbandwidth_product`, number of tapers, or window
+duration to use? `suggest_parameters` picks reasonable values from your
+sampling rate, signal duration, and desired frequency resolution:
+
+```python
+from spectral_connectivity import suggest_parameters
+
+params = suggest_parameters(
+    sampling_frequency=1000,
+    signal_duration=2.0,  # seconds
+    desired_freq_resolution=4.0,  # Hz
+)
+print(params)  # -> time_halfbandwidth_product, time_window_duration, n_tapers, ...
+```
+
+See also `estimate_frequency_resolution`, `estimate_n_tapers`, and
+`Multitaper.summarize_parameters()` for related helpers.
+
+#### Lower-level API
+
+For finer control (or if you already have Fourier coefficients from another
+method), use the `Multitaper` and `Connectivity` classes directly:
+
 ```python
 from spectral_connectivity import Multitaper, Connectivity
 
 # Compute multitaper spectral estimate
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
+m = Multitaper(
+    time_series=signals,
+    sampling_frequency=sampling_frequency,
+    time_halfbandwidth_product=time_halfbandwidth_product,
+    time_window_duration=0.060,
+    time_window_step=0.060,
+    start_time=time[0],
+    # fft_workers=-1,  # optional: parallelize the CPU FFT across all cores
+)
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
 c = Connectivity.from_multitaper(m)
 
 # Here are a couple of examples
-power = c.power() # spectral power
+power = c.power()  # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
@@ -108,7 +167,9 @@ See [environment.yml](environment.yml) for the most current list of dependencies
 
 ### GPU Acceleration
 
-`spectral_connectivity` supports GPU acceleration using [CuPy](https://cupy.dev/), which can provide significant speedups for large datasets (10-100x faster depending on data size and GPU hardware).
+`spectral_connectivity` supports GPU acceleration using
+[CuPy](https://cupy.dev/), which can accelerate large workloads when a suitable
+CUDA device is available.
 
 #### GPU Setup Options
 
@@ -125,16 +186,18 @@ python your_script.py
 
 ```python
 import os
+
 # IMPORTANT: Must set BEFORE importing spectral_connectivity
 # (Python loads modules once; changing the variable after import has no effect)
-os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'
+os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
 
 from spectral_connectivity import Multitaper, Connectivity
 
 # Verify GPU is active
 import spectral_connectivity as sc
+
 backend = sc.get_compute_backend()
-print(backend['message'])
+print(backend["message"])
 # Should print: "Using GPU backend with CuPy on <your GPU name>"
 ```
 
@@ -167,18 +230,19 @@ print(f"Device: {backend['device_name']}")
 conda install -c conda-forge cupy
 ```
 
-**Alternative (pip - auto-detect, may be slower on first run):**
+**Recommended pip installation (CUDA 12):**
 
 ```bash
-pip install cupy
+pip install "spectral-connectivity[gpu]"
 ```
 
-**Advanced (pip - specify CUDA version for faster install):**
+The package's GPU extra installs `cupy-cuda12x>=13.0`. For another CUDA version,
+install the corresponding CuPy 13+ distribution directly instead of the extra.
 
 ```bash
 # Check your CUDA version first: nvidia-smi
-pip install cupy-cuda11x  # For CUDA 11.x
-pip install cupy-cuda12x  # For CUDA 12.x
+pip install "cupy-cuda11x>=13.0"  # CUDA 11.x
+pip install "cupy-cuda12x>=13.0"  # CUDA 12.x
 ```
 
 See [CuPy Installation Guide](https://docs.cupy.dev/en/stable/install.html) for detailed instructions and GPU-specific requirements.
@@ -191,13 +255,14 @@ Use `get_compute_backend()` to check if GPU acceleration is enabled:
 import spectral_connectivity as sc
 
 backend = sc.get_compute_backend()
-print(backend['message'])
+print(backend["message"])
 # Example output (GPU enabled):
 # "Using GPU backend with CuPy on NVIDIA Tesla V100-SXM2-16GB."
 
 # Or if GPU not available:
 # "Using CPU backend with NumPy. To enable GPU acceleration:
-#   1. Install CuPy: 'conda install -c conda-forge cupy' or 'pip install cupy'
+#   1. Install CuPy: 'conda install -c conda-forge cupy' or
+#      'pip install "spectral-connectivity[gpu]"'
 #   2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing
 # See documentation for detailed setup instructions."
 
@@ -238,7 +303,7 @@ Possible causes:
 Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
 ```python
 # Remove or unset the environment variable
-os.environ.pop('SPECTRAL_CONNECTIVITY_ENABLE_GPU', None)
+os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
 ```
 
 **Issue: Need to check GPU vs CPU performance**
@@ -309,18 +374,22 @@ This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based 
 
 ### Making a Release
 
-To create a new release:
+Releases are published **automatically by CI**: pushing a `v*` tag runs the
+*Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
+to PyPI via trusted publishing (after approval in the protected `pypi`
+environment). Do **not** run `twine upload` by hand — that bypasses the tests,
+attestations, and approval gate. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+full process and the required one-time setup.
 
 ```bash
-# 1. Update version tag
-git tag v1.2.0
+# Update CHANGELOG.md, then tag and push -- CI does the rest.
+git tag -a v1.2.0 -m "v1.2.0"
 git push origin v1.2.0
+```
 
-# 2. Build and publish to PyPI
-hatch build
-twine upload dist/*
+Conda packages are published separately and manually:
 
-# 3. Build and publish to conda
+```bash
 conda build conda-recipe/ --output-folder ./conda-builds
 anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
 ```
