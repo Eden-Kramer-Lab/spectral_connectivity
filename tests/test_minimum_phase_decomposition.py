@@ -204,6 +204,36 @@ def test_get_initial_conditions_keeps_valid_ill_conditioned_units(dtype, small):
     assert batched.dtype == np.empty(0, dtype=dtype).real.dtype
 
 
+def test_initial_conditions_fallback_is_deterministic():
+    """The non-PD fallback must not depend on the global NumPy random state.
+
+    It previously seeded the failed unit from ``np.random.standard_normal``, so a
+    pathological spectrum's initialization depended on unrelated random calls
+    (the test suite had to reset the global state). The fallback is now a fixed
+    positive-definite start, so the result is identical regardless of global
+    state, and the failed unit's start is the Cholesky of ``n_signals * I``.
+    """
+    import warnings
+
+    n_freq, n_signals = 16, 2
+    # A truly singular (rank-one, frequency-constant) unit forces the fallback.
+    v = np.array([[1.0], [0.5]])
+    singular = np.broadcast_to(
+        (v @ v.T).astype(complex), (n_freq, n_signals, n_signals)
+    ).copy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the logger.warning is not a UserWarning
+        np.random.seed(1)
+        first = _get_initial_conditions(singular[np.newaxis])
+        np.random.seed(123456)
+        second = _get_initial_conditions(singular[np.newaxis])
+
+    np.testing.assert_array_equal(first, second)
+    # The fixed start n_signals * I has Cholesky sqrt(n_signals) * I.
+    np.testing.assert_allclose(first[0, 0], np.sqrt(n_signals) * np.eye(n_signals))
+
+
 def test__check_convergence():
     # Realistic shape (n_time, n_fft, n_signals, n_signals); one flag per time.
     # Convergence is relative to the factor magnitude, so use a unit-magnitude

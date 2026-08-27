@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wilson minimum-phase fallback is now deterministic (no global RNG state)**:
+  when a sub-spectrum's zero-lag matrix is not positive-definite (rank-deficient
+  / duplicated channels), `_get_initial_conditions` used to seed that unit's
+  starting point from `np.random.standard_normal` — averaging 1000 random
+  Wishart draws — so a pathological spectrum's factorization depended on
+  unrelated random calls and required reseeding for reproducibility. It now uses
+  the fixed positive-definite start `n_signals * I` (exactly the expectation of
+  that average). Wilson's iteration converges to the same unique minimum-phase
+  factor from any positive-definite start, so converged results are unchanged;
+  the difference is that the fallback no longer touches the global NumPy random
+  state (following the spirit of Scientific Python SPEC 7). The test suite no
+  longer needs to reset the global random state before each test.
 - **`statistics.Benjamini_Hochberg_procedure` — undefined tests no longer
   penalize the valid ones**: non-finite p-values (a coherence pair involving a
   dead/zero-power channel yields `NaN`) were counted toward the number of tests,

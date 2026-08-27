@@ -54,7 +54,7 @@ def _get_initial_conditions(
 
     Provides an initial estimate for the Wilson algorithm by taking the Cholesky
     decomposition of the zero-lag cross-spectral matrix (real part of inverse FFT).
-    Falls back to random initialization if Cholesky fails.
+    Falls back to a deterministic positive-definite start if Cholesky fails.
 
     Parameters
     ----------
@@ -71,22 +71,25 @@ def _get_initial_conditions(
     Notes
     -----
     If the zero-lag matrix of a sub-spectrum is not positive-definite (Cholesky
-    fails), only that sub-spectrum falls back to a random positive-definite
-    matrix; the healthy sub-spectra keep their deterministic Cholesky start.
+    fails), only that sub-spectrum falls back to a fixed positive-definite start
+    (``n_signals * I``); the healthy sub-spectra keep their Cholesky start. The
+    fallback is deterministic — the Wilson iteration converges to the same
+    minimum-phase factor from any positive-definite start — so the result no
+    longer depends on the global NumPy random state.
     """
     zero_lag = ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
     try:
         return xp.linalg.cholesky(zero_lag).swapaxes(-1, -2)
     except xp.linalg.LinAlgError:
         # One or more sub-spectra are not positive-definite (rank-deficient /
-        # duplicated channels). Replace ONLY those with a random PD start so the
-        # healthy sub-spectra keep their deterministic Cholesky initialization,
-        # rather than the whole batch falling back to random (which can stop
+        # duplicated channels). Replace ONLY those with a deterministic PD start
+        # so the healthy sub-spectra keep their exact Cholesky initialization,
+        # rather than the whole batch falling back (which can stop
         # otherwise-convergent units from converging). This matches the GPU path,
         # where cholesky returns NaN for the bad unit instead of raising.
         logger.warning(
             "Computing the initial conditions using the Cholesky failed for "
-            "some sub-spectra; using a random initial condition for those."
+            "some sub-spectra; using a deterministic fallback for those."
         )
         # Determine exactly which sub-spectra Cholesky cannot factor by
         # attempting it per unit. Any numerical-rank threshold is only an
@@ -103,20 +106,22 @@ def _get_initial_conditions(
                 xp.linalg.cholesky(flat_zero_lag[index])
             except xp.linalg.LinAlgError:
                 not_positive_definite[index] = True
-        # Build a random positive-definite start ONLY for the failed units, in
-        # the zero-lag's own dtype. Allocating over the whole batch would waste
-        # memory proportional to the batch size (a single bad unit in a large
-        # batch could OOM) and promote a float32 initialization to float64.
+        # Deterministic well-conditioned PD start for the failed units. The
+        # previous code averaged N_RAND=1000 random Wishart draws
+        # (mean of R @ Rᴴ), whose expectation is exactly n_signals * I; use that
+        # expectation directly. Wilson's iteration converges to the same unique
+        # minimum-phase factor from any PD starting point, so a fixed start does
+        # not change the converged result -- but it removes the dependence on the
+        # global RNG state (a pathological spectrum's factorization no longer
+        # depends on unrelated random calls, and it is reproducible without
+        # reseeding). Built in the zero-lag's own dtype so a float32 spectrum is
+        # not promoted to float64; only the failed units are replaced, so the
+        # healthy ones keep their exact Cholesky start.
         failed_indices = xp.nonzero(not_positive_definite)[0]
         n_signals = zero_lag.shape[-1]
-        N_RAND = 1000
-        random = xp.random.standard_normal(
-            size=(failed_indices.size, N_RAND, n_signals, n_signals)
-        ).astype(zero_lag.dtype)
+        deterministic_start = n_signals * xp.eye(n_signals, dtype=zero_lag.dtype)
         safe_flat = flat_zero_lag.copy()
-        safe_flat[failed_indices] = xp.matmul(
-            random, _conjugate_transpose(random)
-        ).mean(axis=-3)
+        safe_flat[failed_indices] = deterministic_start
         return xp.linalg.cholesky(safe_flat.reshape(zero_lag.shape)).swapaxes(-1, -2)
 
 
