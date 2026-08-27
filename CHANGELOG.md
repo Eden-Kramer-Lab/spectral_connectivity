@@ -50,6 +50,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Directed measures with `complex64` inputs**: Wilson minimum-phase
+  factorization now uses `complex128` working precision (or better). Its default
+  relative convergence tolerance, `1e-8`, is below float32 epsilon, so retaining
+  complex64 working buffers caused valid correlated spectra to exhaust the
+  iteration limit and return all-NaN directed measures.
+- **Subset spectral-Granger diagonal**: the compact pairwise implementation now
+  restores the public invariant that self-Granger entries are NaN after
+  scattering the requested 2×2 pair blocks into the full output matrix.
+- **GPU `group_delay` / `delay` backend boundary**: both methods now transfer
+  coherency to NumPy explicitly before entering their NumPy-only significance,
+  masked-array, and regression code. They previously passed a CuPy array into
+  `np.abs` / `np.asarray`, which rejects implicit device-to-host conversion.
+- **Unbiased phase-estimator ranges**: the docs now retain the legitimate
+  negative finite-sample range of PPC and the debiased PLI variants instead of
+  incorrectly describing all three as `[0, 1]`.
+- **Multiple-comparison validation**: BH and Bonferroni now validate `alpha`;
+  Bonferroni handles empty/non-finite families without division by zero and
+  excludes undefined tests consistently with BH, including emitting the same
+  `UserWarning` when the *entire* family is undefined (all p-values non-finite),
+  so an all-not-significant result cannot be silently mistaken for "no true
+  effects"; an unknown correction method raises an actionable `ValueError`
+  instead of leaking a dictionary `KeyError`.
 - **Wilson minimum-phase fallback is now deterministic (no global RNG state)**:
   when a sub-spectrum's zero-lag matrix is not positive-definite (rank-deficient
   / duplicated channels), `_get_initial_conditions` used to seed that unit's
@@ -218,6 +240,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`Multitaper` configurations are immutable after construction.** Input time
+  series, start times, and custom tapers are detached snapshots, exposed through
+  detached read-only copies; computational parameters cannot be reassigned. This prevents
+  lazy derived state from disagreeing internally (for example, changing the
+  time-halfbandwidth product could report seven tapers while the cached taper
+  matrix still contained five). Create a new `Multitaper` to change a transform
+  configuration. Provenance now comes from an explicit field registry rather
+  than reflecting over every public property, and CuPy array metadata is copied
+  to the host explicitly.
 - **`Connectivity.weighted_phase_lag_index`** is now documented as the *signed* index (range [-1, 1], like `phase_lag_index`); take the absolute value for the unsigned [0, 1] version. This is a documentation correction — the numeric output is unchanged.
 - The `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable is parsed case-insensitively (`"true"`, `"1"`, `"yes"`, `"on"`) and warns on unrecognized values instead of silently falling back to CPU.
 - Expensive directed-connectivity intermediates (minimum-phase factor, transfer function, noise covariance, MVAR coefficients) are cached per `Connectivity` instance and are automatically invalidated when `fourier_coefficients` or `expectation_type` is reassigned (they are now validated properties), so a reused instance cannot serve stale results. Reassigning `fourier_coefficients` with a different FFT-bin or time-window count now also resets the frequency/time coordinates to geometry-matching defaults (with a `UserWarning`), instead of leaving stale coordinates that silently dropped or misaligned bins in coordinate-dependent methods. Tikhonov regularization is scaled per (time-window, frequency) matrix rather than by a single global scalar.
@@ -248,16 +279,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measure.
 - The `Connectivity`-sharing hook used by `multitaper_connectivity` is now an
   **internal, keyword-only `_connectivity` argument** to `connectivity_to_xarray`
-  rather than a public `connectivity=` parameter. Tying results to a live,
-  mutable `Multitaper` is a provenance footgun (the source's data or parameters
-  can change after the `Connectivity` is built), so the injection is no longer
+  rather than a public `connectivity=` parameter. Tying results to a separate
+  live object is a provenance footgun, so the injection is no longer
   part of the public API; reuse a transform by calling the `Connectivity`
   methods directly (the instance caches shared intermediates) or by requesting
   several measures from `multitaper_connectivity`. The internal hook is still
   validated defensively: only a `Connectivity.from_multitaper(m)` instance whose
   recorded source is that `Multitaper` (verified by identity, with the default
   `expectation_type`) is accepted, results are labeled from a parameter snapshot
-  taken at build time (so a mutated source cannot mislabel them), and a mismatch
+  taken at build time, and a mismatch
   raises an actionable error rather than a cryptic xarray dimension mismatch.
 - `Connectivity` is now picklable and copyable when built via `from_multitaper`:
   the provenance weakref is dropped during serialization, and state is
@@ -278,19 +308,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two-sample window with two tapers) now raises a clear `ValueError` rather than
   returning degenerate tapers.
 - **The `blocks` parameter of `Connectivity` and `Connectivity.from_multitaper`
-  is removed.** It chunked the per-observation cross-spectral outer product for
-  memory, but every measure now uses the batched reduced matmul (the coherence
-  family and directed measures already did, and `phase_locking_value` /
-  `pairwise_phase_consistency` now do too via unit-normalized coefficients — see
-  **Performance**), so nothing forms that outer product any longer and `blocks`
-  had no remaining effect (it was also unvalidated, and its block-assembly path
-  was broken under the CuPy backend). Drop the `blocks=` argument; results are
-  unchanged. The associated internal helpers (`_reject_block_mode`,
+  is removed.** It chunked the reduced cross-spectral path, whose consumers now
+  use a direct batched matmul (`phase_locking_value` /
+  `pairwise_phase_consistency` do so via unit-normalized coefficients — see
+  **Performance**). The phase-lag-index family still forms an observation-level
+  outer product, but it never supported block mode, so `blocks` had no remaining
+  consumer or effect (and its assembly path was broken under CuPy). Drop the
+  `blocks=` argument; results are unchanged. The associated internal helpers (`_reject_block_mode`,
   `_nonsorted_unique`, and the transformed-block branch of
   `_expectation_cross_spectral_matrix`) were removed with it.
+- **`Connectivity.partial_directed_coherence(keep_cupy=...)` is removed.** Public
+  connectivity measures consistently return NumPy arrays; device-native reuse by
+  `direct_directed_transfer_function` now goes through a private primitive.
 
 ### Performance
 
+- **Subset pairwise spectral Granger** now carries and factors one compact 2×2
+  spectrum per requested pair as a batch. It no longer allocates a full
+  signal-by-signal observation-level matrix while leaving unrequested entries
+  uninitialized.
+- **The phase-lag-index family** now forms signal-row tiles of its nonlinear
+  observation-level cross-spectrum, reduces each tile immediately, and caches
+  only the final moments. The tile size is derived from an internal element
+  budget, so transient workspace no longer necessarily scales as
+  `observations × frequencies × n_signals²`; no public `blocks` mode is needed.
 - The expected cross-spectral matrix (used by coherence, spectral Granger, and
   most other measures) is now computed with a single batched matrix
   multiplication that contracts the averaged trial/taper/time axes directly,
@@ -302,11 +343,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pairwise_phase_consistency` all use this reduction now. The only measures
   that still materialize the per-observation outer product are the phase-lag-index
   family (`phase_lag_index`, `weighted_phase_lag_index`, and the two debiased
-  variants), which average an anti-symmetric transform of it and so cannot;
-  they remain `O(observations · signals²)`. Because that path was the only
-  remaining consumer of the outer product that `blocks` chunked — and `blocks`
-  never supported the phase-lag family anyway — the `blocks` parameter is
-  removed (see **Removed**).
+  variants) cannot contract before applying their nonlinear transform, so they
+  now use the signal-tiled reduction described above. Because `blocks` never
+  supported the phase-lag family anyway, the parameter is removed (see
+  **Removed**).
 - **`Connectivity.phase_locking_value` / `pairwise_phase_consistency`** now
   unit-normalize each Fourier coefficient and reuse the batched reduced
   cross-spectral matmul, using
