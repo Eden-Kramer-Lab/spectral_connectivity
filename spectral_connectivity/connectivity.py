@@ -431,12 +431,15 @@ class Connectivity:
         # consumers can verify provenance by identity (see from_multitaper).
         # None for a directly-constructed instance, whose source is unknown.
         self._source_multitaper: weakref.ref | None = None
+        # Snapshot of the source Multitaper's parameters at build time (see
+        # from_multitaper); None for a directly-constructed instance.
+        self._source_parameters: dict[str, Any] | None = None
         try:
             self.time = xp.asnumpy(time)
         except AttributeError:
             self.time = time
 
-    def __getstate__(self) -> dict[str, Any]:
+    def __getstate__(self) -> tuple[dict[str, Any], dict[str, Any]]:
         """Return picklable state, dropping the transient provenance weakref.
 
         ``from_multitaper`` stores a ``weakref`` to its source ``Multitaper`` in
@@ -446,10 +449,33 @@ class Connectivity:
         that cannot survive serialization anyway, so clear it: an unpickled
         instance behaves like a directly constructed one (usable everywhere
         except as an identity-verified injected ``connectivity=`` argument).
+
+        The state is returned as a ``(dict_state, slot_state)`` pair (paired with
+        :meth:`__setstate__`) so attributes declared through a subclass'
+        ``__slots__`` are preserved — returning only ``__dict__`` would silently
+        drop them on pickle / ``copy.copy`` / ``copy.deepcopy``. The base class
+        keeps its data in ``__dict__``; the slot walk covers slotted subclasses.
         """
-        state = self.__dict__.copy()
-        state["_source_multitaper"] = None
-        return state
+        dict_state = dict(getattr(self, "__dict__", {}))
+        dict_state["_source_multitaper"] = None
+        slot_state: dict[str, Any] = {}
+        for klass in type(self).__mro__:
+            for slot in getattr(klass, "__slots__", ()):
+                if slot in ("__dict__", "__weakref__"):
+                    continue
+                try:
+                    slot_state[slot] = getattr(self, slot)
+                except AttributeError:
+                    pass  # an unset slot has no value to serialize
+        return dict_state, slot_state
+
+    def __setstate__(self, state: tuple[dict[str, Any], dict[str, Any]]) -> None:
+        """Restore state produced by :meth:`__getstate__` (``__dict__`` + slots)."""
+        dict_state, slot_state = state
+        if dict_state:
+            self.__dict__.update(dict_state)
+        for name, value in (slot_state or {}).items():
+            setattr(self, name, value)
 
     # Cached quantities that depend on fourier_coefficients / expectation_type
     # and must be invalidated when either changes (see the setters below).
@@ -518,8 +544,9 @@ class Connectivity:
         self._set_fourier_coefficients(value, adopt=False)
         # Replacing the data breaks any provenance link recorded by
         # from_multitaper: the instance no longer holds the source transform's
-        # coefficients, so it must not still claim that source.
+        # coefficients, so it must not still claim that source or its parameters.
         self._source_multitaper = None
+        self._source_parameters = None
 
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
@@ -731,6 +758,13 @@ class Connectivity:
         # extending the lifetime of the source Multitaper (and its raw
         # time_series); a dropped reference simply fails the identity check.
         instance._source_multitaper = weakref.ref(multitaper_instance)
+        # Snapshot the source transform's parameters as they were at build time.
+        # The coefficients are a fixed snapshot, but a Multitaper is mutable; the
+        # wrapper labels results with these parameters, so capturing them here
+        # (rather than reading the live, possibly-mutated Multitaper later) keeps
+        # the metadata consistent with the coefficients and lets the wrapper
+        # detect a source mutated after construction.
+        instance._source_parameters = multitaper_instance._provenance_metadata()
         return instance
 
     def _validate_multiple_signals(self) -> None:

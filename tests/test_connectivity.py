@@ -2658,3 +2658,38 @@ def test_from_multitaper_connectivity_is_picklable():
         restored.coherence_magnitude(), conn.coherence_magnitude()
     )
     assert restored._source_multitaper is None
+
+
+class _SlottedConnectivity(Connectivity):
+    """Module-level slotted subclass so pickle can reference it by qualified name."""
+
+    __slots__ = ("extra_metadata",)
+
+
+def test_pickle_and_copy_preserve_subclass_slots():
+    """__getstate__/__setstate__ must not drop subclass __slots__ state.
+
+    The base Connectivity keeps its state in __dict__, but a subclass may declare
+    __slots__. Returning only __dict__ would silently lose those attributes on
+    pickle / copy.copy / copy.deepcopy; the (dict, slots) state pair preserves
+    them while still clearing the unpicklable provenance weakref.
+    """
+    import copy
+    import pickle
+
+    SlottedConnectivity = _SlottedConnectivity
+    rng = np.random.default_rng(1)
+    m = Multitaper(rng.standard_normal((128, 2, 3)), sampling_frequency=500)
+    conn = SlottedConnectivity.from_multitaper(m)
+    conn.extra_metadata = {"subject": "s1"}
+
+    for clone in (
+        pickle.loads(pickle.dumps(conn)),
+        copy.copy(conn),
+        copy.deepcopy(conn),
+    ):
+        assert clone.extra_metadata == {"subject": "s1"}
+        np.testing.assert_allclose(
+            clone.coherence_magnitude(), conn.coherence_magnitude()
+        )
+        assert clone._source_multitaper is None

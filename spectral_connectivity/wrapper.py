@@ -135,7 +135,10 @@ def _validate_connectivity_matches_multitaper(
             "to build one automatically."
         )
     # Geometry alone cannot prove provenance (two recordings can share it), so
-    # additionally require an identity link to m.
+    # additionally require an identity link to m. Checked before the parameter
+    # drift below: a reassigned-coefficients instance clears both the identity
+    # link and the parameter snapshot, and the identity failure is the accurate
+    # diagnosis there.
     source = connectivity._source_multitaper
     if source is None or source() is not m:
         raise ValueError(
@@ -148,6 +151,32 @@ def _validate_connectivity_matches_multitaper(
             "and metadata, which would silently mislabel it. Build it with "
             "`Connectivity.from_multitaper(m)`, or leave `connectivity=None` to "
             "build one automatically."
+        )
+    # Identity does not detect a change to the (mutable) Multitaper's parameters
+    # after conn was built: conn holds a snapshot of the coefficients, but the
+    # result is labeled with mt_* metadata. Reject if the source's current
+    # parameters differ from the snapshot taken at build time, so a mutated
+    # source (e.g. a changed detrend_type or time_halfbandwidth_product) cannot
+    # mislabel the result. Reaching here implies identity held, so a snapshot
+    # exists (from_multitaper set it and reassignment would have cleared both).
+    snapshot = connectivity._source_parameters or {}
+    current = m._provenance_metadata()
+    if current.keys() != snapshot.keys() or any(
+        not np.array_equal(current[key], snapshot[key]) for key in current
+    ):
+        unchanged = {
+            key
+            for key in current.keys() & snapshot.keys()
+            if np.array_equal(current[key], snapshot[key])
+        }
+        changed = sorted((current.keys() | snapshot.keys()) - unchanged)
+        raise ValueError(
+            "The source `Multitaper` was modified after this `connectivity` was "
+            f"built from it; its parameters now differ on: {', '.join(changed)}. "
+            "`connectivity` holds a snapshot of the old coefficients, but the "
+            "result would be labeled with the Multitaper's current parameters, "
+            "mislabeling it. Rebuild it with `Connectivity.from_multitaper(m)` "
+            "after changing `m`, or leave `connectivity=None`."
         )
     if connectivity.expectation_type != "trials_tapers":
         raise ValueError(
@@ -303,32 +332,14 @@ def connectivity_to_xarray(
 
     xar.name = method
 
-    for attr in dir(m):
-        if (attr[0] == "_") or (
-            attr in ["time_series", "fft", "tapers", "frequencies", "time"]
-        ):
-            continue
-        value = getattr(m, attr)
-        # NetCDF attributes must be strings, numbers, or (non-complex) numeric
-        # arrays. Skip callables (e.g. the bound ``summarize_parameters``
-        # method); encode None (e.g. ``detrend_type=None``) as a string so the
-        # parameter is still recorded; and skip any other unsupported type.
-        # Storing an unsupported value would make ``to_netcdf`` raise.
-        if callable(value):
-            continue
-        if value is None:
-            value = "None"
-        elif isinstance(value, np.ndarray):
-            if value.dtype.kind not in "biufSU":  # exclude complex/object arrays
-                continue
-        elif not isinstance(
-            value, (str, bytes, bool, int, float, np.integer, np.floating, np.bool_)
-        ):
-            continue
-        # If we don't add 'mt_', get:
-        # TypeError: '.dt' accessor only available for DataArray with
-        # datetime64 timedelta64 dtype
-        # or for arrays containing cftime datetime objects.
+    # Label with the source transform's parameters taken from the snapshot
+    # recorded when the Connectivity was built (Connectivity._source_parameters),
+    # NOT the live Multitaper: `m` is mutable, and the snapshot is guaranteed
+    # (by the validation above) to match `connectivity`'s coefficients. The
+    # snapshot already applied the NetCDF-serializable filtering (see
+    # Multitaper._provenance_metadata). The 'mt_' prefix avoids xarray's '.dt'
+    # accessor treating a bare attribute name as a datetime coordinate.
+    for attr, value in (connectivity._source_parameters or {}).items():
         xar.attrs["mt_" + attr] = value
 
     # CF-style coordinate metadata so the result is self-describing (plotting

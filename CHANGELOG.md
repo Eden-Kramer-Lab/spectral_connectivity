@@ -267,7 +267,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance must also use the default `expectation_type` (`"trials_tapers"`);
   other types do not fit the fixed `(time, frequency, source, target)` layout
   and now raise an actionable error instead of a cryptic xarray dimension
-  mismatch.
+  mismatch. Because a `Multitaper` is mutable, `from_multitaper` also snapshots
+  the source transform's parameters: the result is labeled from that snapshot
+  (consistent with the snapshotted coefficients) rather than the live transform,
+  and if the source's parameters were changed after the `Connectivity` was built
+  (e.g. `detrend_type` or `time_halfbandwidth_product`) the injected use is
+  rejected, so a mutated source cannot silently mislabel the result.
+- `Connectivity` is now picklable and copyable when built via `from_multitaper`:
+  the provenance weakref is dropped during serialization, and state is
+  serialized as a `(__dict__, __slots__)` pair so attributes declared through a
+  subclass' `__slots__` survive `pickle` / `copy.copy` / `copy.deepcopy`.
 
 ### Removed
 

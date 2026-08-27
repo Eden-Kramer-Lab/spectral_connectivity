@@ -1,7 +1,7 @@
 """Transforms time domain signals to the frequency domain."""
 
 from logging import getLogger
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -860,6 +860,44 @@ class Multitaper:
             f"n_tapers={self.n_tapers}"
             ")"
         )
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        """Public scalar parameters of this transform, for provenance metadata.
+
+        Collects the public, non-callable attributes whose values NetCDF can
+        store (strings, numbers, bools, and real numeric/string arrays),
+        encoding ``None`` as ``"None"`` and skipping the large coordinate/data
+        arrays (``time_series``, ``fft``, ``tapers``, ``frequencies``,
+        ``time``). Used to label results (the ``mt_*`` attributes in
+        :func:`spectral_connectivity.wrapper.connectivity_to_xarray`) and, via a
+        snapshot taken by :meth:`Connectivity.from_multitaper`, to detect a
+        source transform mutated after a ``Connectivity`` was built from it.
+        """
+        metadata: dict[str, Any] = {}
+        for attr in dir(self):
+            if attr[0] == "_" or attr in (
+                "time_series",
+                "fft",
+                "tapers",
+                "frequencies",
+                "time",
+            ):
+                continue
+            value = getattr(self, attr)
+            if callable(value):
+                continue
+            if value is None:
+                value = "None"
+            elif isinstance(value, np.ndarray):
+                if value.dtype.kind not in "biufSU":  # exclude complex/object
+                    continue
+            elif not isinstance(
+                value,
+                (str, bytes, bool, int, float, np.integer, np.floating, np.bool_),
+            ):
+                continue
+            metadata[attr] = value
+        return metadata
 
     def summarize_parameters(self) -> str:
         """
