@@ -13,7 +13,7 @@ Please note that we **cannot**, in general, answer questions about particular co
 Code contributions are always welcome, from simple bug fixes to new features. To contribute code:
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
-2. Run [black](https://github.com/python/black) and [flake8](http://flake8.pycqa.org/en/latest/) on your code.
+2. Format, lint, and type-check your code with [ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy-lang.org/) (the same checks CI runs): `ruff format spectral_connectivity/ tests/`, `ruff check spectral_connectivity/ tests/`, and `mypy spectral_connectivity/`.
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through github actions.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
