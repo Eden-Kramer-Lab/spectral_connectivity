@@ -964,7 +964,7 @@ class Connectivity:
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
         )
-        complex_coherencey = _divide_masking_zero_denominator(
+        complex_coherency = _divide_masking_zero_denominator(
             self._expectation_cross_spectral_matrix(),
             norm,
             "Some signals have (near-)zero power, so coherency is undefined "
@@ -973,8 +973,8 @@ class Connectivity:
         )
         n_signals = self._fourier_coefficients.shape[-1]
         diagonal_ind = xp.arange(0, n_signals)
-        complex_coherencey[..., diagonal_ind, diagonal_ind] = xp.nan
-        return complex_coherencey
+        complex_coherency[..., diagonal_ind, diagonal_ind] = xp.nan
+        return complex_coherency
 
     @_asnumpy
     def coherence_phase(self) -> NDArray[np.floating]:
