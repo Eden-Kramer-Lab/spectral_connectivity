@@ -310,7 +310,8 @@ class Connectivity:
 
     See Also
     --------
-    Multitaper : Produce the Fourier coefficients this class consumes.
+    spectral_connectivity.transforms.Multitaper : Produce the Fourier
+        coefficients this class consumes.
     spectral_connectivity.wrapper.multitaper_connectivity : High-level interface
         returning labeled xarray results.
 

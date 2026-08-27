@@ -547,8 +547,10 @@ class Multitaper:
 
     See Also
     --------
-    Connectivity : Compute connectivity measures from a Multitaper transform.
-    prepare_time_series : Reshape 1-D/2-D input to the required 3-D format.
+    spectral_connectivity.connectivity.Connectivity : Compute connectivity
+        measures from a Multitaper transform.
+    spectral_connectivity.transforms.prepare_time_series : Reshape 1-D/2-D input
+        to the required 3-D format.
 
     Notes
     -----

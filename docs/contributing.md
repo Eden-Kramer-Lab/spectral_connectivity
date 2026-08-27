@@ -31,16 +31,43 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ### How to make a release
 
-1. Bump the version number and tag the commit
-2. Upload to pypi
+Releases are **automated**: pushing a `v*` tag runs the *Test, Build, and
+Publish* workflow (`.github/workflows/release.yml`), which tests, builds the
+sdist and wheel, generates build-provenance attestations, and publishes to PyPI
+via PyPI **trusted publishing** (OIDC). No API token is stored in the
+repository, and the default workflow token is read-only; only the publish and
+release jobs elevate their permissions. Do **not** run `twine upload` by
+hand — that bypasses the tests, attestations, and approval gate below.
 
-```bash
-git clean -xfd
-python -m build
-twine upload dist/*
-```
+To cut a release:
 
-3. Upload to conda. This requires anaconda-client and conda-build.
+1. Update `CHANGELOG.md`: move the `[Unreleased]` entries under a new
+   `## [X.Y.Z]` heading.
+2. Create and push an annotated tag. The version is derived from the tag by
+   `hatch-vcs`, so there is no version file to edit:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+3. The tagged run pauses at the protected `pypi` environment. An authorized
+   maintainer approves it from the workflow run page; the artifacts then publish
+   to PyPI (with attestations) and a GitHub Release is created from the
+   changelog.
+
+**One-time setup (required for the automated release to work):**
+
+- On PyPI, configure a *trusted publisher* for this repository and the
+  `release.yml` workflow (PyPI project → Settings → Publishing), authorizing the
+  OIDC publish without a stored token.
+- In the GitHub repository (Settings → Environments → `pypi`), add protection
+  rules — required reviewers, and optionally a tag/branch restriction. Naming
+  the environment in the workflow is **not** sufficient on its own; the
+  protection rules must be configured here so a publish needs manual approval.
+
+Conda packages are published separately and manually. This requires
+anaconda-client and conda-build.
 
 ```bash
 # Build conda package using recipe
