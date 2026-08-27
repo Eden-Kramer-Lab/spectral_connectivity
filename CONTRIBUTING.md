@@ -18,6 +18,8 @@ Code contributions are always welcome, from simple bug fixes to new features. To
    - Lint with [ruff](https://github.com/astral-sh/ruff): `ruff check spectral_connectivity/ tests/`
    - Type check with [mypy](https://mypy.readthedocs.io/): `mypy spectral_connectivity/`
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
+   For GPU-specific changes, also run `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv
+   run --extra gpu pytest -m gpu` on a CUDA machine.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Update [CHANGELOG.md](CHANGELOG.md) with your changes under the "Unreleased" section.

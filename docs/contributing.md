@@ -15,6 +15,9 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
 2. Format, lint, and type-check your code with [ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy-lang.org/) (the same checks CI runs): `ruff format spectral_connectivity/ tests/`, `ruff check spectral_connectivity/ tests/`, and `mypy spectral_connectivity/`.
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through github actions.
+   Changes to backend-specific code must also pass the real-device smoke test on
+   a CUDA machine: `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu
+   pytest -m gpu`. Device-like mocks do not replace this release gate.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Submit a pull request.
@@ -43,7 +46,10 @@ To cut a release:
 
 1. Update `CHANGELOG.md`: move the `[Unreleased]` entries under a new
    `## [X.Y.Z]` heading.
-2. Create and push an annotated tag. The version is derived from the tag by
+2. If the release changes GPU code or dependencies, record a passing
+   `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest -m gpu` run
+   from a CUDA machine in the release PR.
+3. Create and push an annotated tag. The version is derived from the tag by
    `hatch-vcs`, so there is no version file to edit:
 
    ```bash
@@ -51,7 +57,7 @@ To cut a release:
    git push origin vX.Y.Z
    ```
 
-3. The tagged run pauses at the protected `pypi` environment. An authorized
+4. The tagged run pauses at the protected `pypi` environment. An authorized
    maintainer approves it from the workflow run page; the artifacts then publish
    to PyPI (with attestations) and a GitHub Release is created from the
    changelog.
