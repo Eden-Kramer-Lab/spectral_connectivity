@@ -823,3 +823,35 @@ def test_multitaper_connectivity_rejects_duplicate_signal_names():
             method="coherence_magnitude",
             signal_names=["a", "a"],
         )
+
+
+def test_multitaper_connectivity_squeeze_retains_pair_labels():
+    """squeeze=True reduces to (time, frequency) but keeps the pair as coords.
+
+    The old behavior dropped the source/target labels entirely, so a squeezed
+    result no longer recorded which pair (or, for directed measures, which
+    direction) it represented. isel(drop=False) keeps them as scalar coords.
+    """
+    rng = np.random.default_rng(0)
+    da = multitaper_connectivity(
+        rng.standard_normal((256, 5, 2)),
+        sampling_frequency=256,
+        method="coherence_magnitude",
+        signal_names=["x", "y"],
+        squeeze=True,
+    )
+    assert da.dims == ("time", "frequency")
+    assert da.coords["source"].item() == "x"
+    assert da.coords["target"].item() == "y"
+
+
+def test_multitaper_connectivity_squeeze_warns_and_keeps_matrix_for_many_signals():
+    rng = np.random.default_rng(0)
+    with pytest.warns(UserWarning, match="squeeze=True"):
+        da = multitaper_connectivity(
+            rng.standard_normal((256, 5, 3)),
+            sampling_frequency=256,
+            method="coherence_magnitude",
+            squeeze=True,
+        )
+    assert da.dims == ("time", "frequency", "source", "target")

@@ -192,14 +192,6 @@ def _connectivity_result_to_xarray(
             coords=[connectivity.time, connectivity.frequencies, signal_names],
             dims=["time", "frequency", "source"],
         )
-    elif connectivity.n_signals == 2 and squeeze:
-        connectivity_mat = connectivity_mat[..., 0, -1]
-        xar = xr.DataArray(
-            connectivity_mat,
-            coords=[connectivity.time, connectivity.frequencies],
-            dims=["time", "frequency"],
-        )
-
     else:
         xar = xr.DataArray(
             connectivity_mat,
@@ -211,6 +203,12 @@ def _connectivity_result_to_xarray(
             ],
             dims=["time", "frequency", "source", "target"],
         )
+        if connectivity.n_signals == 2 and squeeze:
+            # Reduce to the single ordered pair (first source, last target).
+            # drop=False keeps ``source`` and ``target`` as scalar coordinates so
+            # the returned (time, frequency) array still records which pair -- and
+            # for directed measures, which direction -- it represents.
+            xar = xar.isel(source=0, target=-1, drop=False)
 
     xar.name = method
 
@@ -327,8 +325,12 @@ def multitaper_connectivity(
     signal_names : sequence of str, optional
         Names for signal channels used to label dimensions. If None, uses indices.
     squeeze : bool, default=False
-        If True and n_channels=2, return connectivity between first and last
-        channel only for symmetric measures.
+        If True and there are exactly 2 channels, reduce to the single ordered
+        pair (first source, last target), returning a ``(time, frequency)``
+        array. The selected ``source`` and ``target`` are retained as scalar
+        coordinates, so the pair -- and, for directed measures, the direction --
+        is still recorded. With more than 2 channels a warning is issued and the
+        full matrix is returned.
     connectivity_kwargs : dict, optional
         Additional keyword arguments passed to connectivity methods.
     **kwargs : dict

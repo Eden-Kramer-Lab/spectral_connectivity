@@ -81,6 +81,10 @@ directly with results from 2.x.
 - The wrapper rejects an empty `method` list, duplicate `signal_names`, and
   requests where no method yields a compatible result, instead of silently
   returning an empty or mislabeled `Dataset`.
+- `multitaper_connectivity(..., squeeze=True)` keeps the selected `source` and
+  `target` as scalar coordinates instead of dropping them, so the squeezed
+  `(time, frequency)` result still records which pair (and, for directed
+  measures, which direction) it represents.
 - Importing the package no longer changes NumPy's global floating-point warning
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
