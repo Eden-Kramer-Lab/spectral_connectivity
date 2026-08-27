@@ -17,6 +17,27 @@ import scipy.stats
 from numpy.typing import NDArray
 
 
+def _require_scipy_false_discovery_control() -> None:
+    """Raise an actionable error if SciPy is too old for ``false_discovery_control``.
+
+    ``scipy.stats.false_discovery_control`` was added in SciPy 1.11. The project
+    declares ``scipy>=1.11``, but an environment can still resolve an older
+    SciPy (a conda pin held back by another package, or an editable install that
+    did not re-resolve its dependencies). Without this guard the call fails with
+    a bare ``AttributeError`` that never names the cause; mirror the CuPy
+    version gate in :mod:`spectral_connectivity.transforms` with a message that
+    states the requirement, the installed version, and the fix.
+    """
+    if not hasattr(scipy.stats, "false_discovery_control"):
+        raise RuntimeError(
+            f"scipy.stats.false_discovery_control is unavailable: "
+            f"spectral_connectivity requires scipy>=1.11 for the "
+            f"Benjamini-Hochberg procedure, but scipy {scipy.__version__} is "
+            f"installed. Upgrade with `pip install -U 'scipy>=1.11'` (or the "
+            f"conda/mamba equivalent)."
+        )
+
+
 def Benjamini_Hochberg_procedure(
     p_values: NDArray[np.floating], alpha: float = 0.05
 ) -> NDArray[np.bool_]:
@@ -52,29 +73,57 @@ def Benjamini_Hochberg_procedure(
     Non-finite p-values (``NaN``/``inf``) mark undefined tests — for example a
     coherence pair involving a dead/zero-power channel — and are excluded from
     the family: they neither count toward the number of tests nor tighten the
-    threshold for the valid ones, and are returned as ``False``. All input
-    dimensions are pooled into a single family (the array is raveled); the
-    result has the input shape. Delegates to
-    :func:`scipy.stats.false_discovery_control`, which rejects finite p-values
+    threshold for the valid ones, and are returned as ``False``. If *every*
+    p-value is non-finite (the whole family is undefined, e.g. every tested pair
+    involves a dead channel) a ``UserWarning`` is emitted, because the all-False
+    result would otherwise be indistinguishable from a valid family with no true
+    effects. All input dimensions are pooled into a single family (the array is
+    raveled); the result has the input shape. Delegates to
+    :func:`scipy.stats.false_discovery_control` (SciPy >= 1.11; a clear
+    ``RuntimeError`` is raised on older SciPy), which rejects finite p-values
     outside ``[0, 1]``.
     """
     p_values = np.asarray(p_values, dtype=float)
     is_significant = np.zeros(p_values.shape, dtype=bool)
     valid = np.isfinite(p_values)
     if valid.any():
+        _require_scipy_false_discovery_control()
         try:
             adjusted = scipy.stats.false_discovery_control(p_values[valid], method="bh")
         except ValueError as exc:
             # SciPy raises about its own parameter name ("ps"); restate with this
             # function's parameter and a domain hint, since out-of-range values
             # usually mean a non-p-value (e.g. a coherence magnitude) was passed.
+            # Name the offending values so the caller can spot the bad input.
+            finite_values = p_values[valid]
+            out_of_range = finite_values[(finite_values < 0) | (finite_values > 1)]
+            detail = (
+                f"got {out_of_range.size} value(s) outside that range "
+                f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g}). "
+                if out_of_range.size
+                else "got a value outside that range. "
+            )
             raise ValueError(
-                "p_values must all be in [0, 1]; got a value outside that range. "
-                "If these came from a connectivity measure, pass p-values (e.g. "
-                "from coherence_significance_pvalue), not coherence magnitudes or "
+                "p_values must all be in [0, 1]; " + detail + "If these came "
+                "from a connectivity measure, pass p-values (e.g. from "
+                "coherence_significance_pvalue), not coherence magnitudes or "
                 "correlations."
             ) from exc
         is_significant[valid] = adjusted <= alpha
+    elif p_values.size > 0:
+        # Every p-value is non-finite: the whole family is undefined (e.g. every
+        # tested pair involves a dead/zero-power channel). Returning a clean
+        # all-False is indistinguishable from "valid family, no true effects",
+        # so warn rather than fail silently.
+        warnings.warn(
+            "Benjamini_Hochberg_procedure: every p-value is non-finite "
+            "(NaN/inf), so no test is defined and nothing is flagged "
+            "significant. This usually means every tested pair involves a "
+            "dead/zero-power channel. Returning all-False; check your inputs "
+            "rather than reading this as 'no significant effects'.",
+            UserWarning,
+            stacklevel=2,
+        )
     return is_significant
 
 

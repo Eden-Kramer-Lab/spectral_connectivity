@@ -74,10 +74,56 @@ def test_Benjamini_Hochberg_excludes_nan_from_family():
     assert not result_padded[4:].any()
     # The finite entries are unaffected by the presence of NaN.
     assert np.array_equal(result_padded[:4], result_valid)
-    # All-NaN input yields all-False (no valid tests), same input shape.
-    all_nan = Benjamini_Hochberg_procedure(np.full((2, 3), np.nan), alpha)
+    # All-NaN input yields all-False (no valid tests), same input shape, and
+    # warns because the whole family is undefined (see the dedicated test below).
+    with pytest.warns(UserWarning, match="every p-value is non-finite"):
+        all_nan = Benjamini_Hochberg_procedure(np.full((2, 3), np.nan), alpha)
     assert all_nan.shape == (2, 3)
     assert not all_nan.any()
+
+
+def test_Benjamini_Hochberg_warns_when_whole_family_undefined():
+    """An all-non-finite family returns all-False but must warn, not fail silently.
+
+    Otherwise "nothing significant" is indistinguishable from a valid family
+    with no true effects, when in fact every test was undefined (e.g. every
+    tested pair involves a dead/zero-power channel).
+    """
+    with pytest.warns(UserWarning, match="every p-value is non-finite"):
+        result = Benjamini_Hochberg_procedure(np.array([np.nan, np.inf]), alpha=0.05)
+    assert not result.any()
+    # A family with at least one finite p-value must NOT warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Benjamini_Hochberg_procedure(np.array([0.01, np.nan]), alpha=0.05)
+    # An empty family is not "undefined"; it must not warn either.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        empty = Benjamini_Hochberg_procedure(np.array([]), alpha=0.05)
+    assert empty.shape == (0,)
+
+
+def test_Benjamini_Hochberg_out_of_range_error_names_values():
+    """The out-of-range error reports how many values and their min/max."""
+    with pytest.raises(ValueError) as excinfo:
+        Benjamini_Hochberg_procedure(np.array([0.1, 1.5, -0.2, 0.3]), alpha=0.05)
+    message = str(excinfo.value)
+    assert "2 value(s) outside" in message
+    assert "coherence_significance_pvalue" in message  # keeps the domain hint
+
+
+def test_Benjamini_Hochberg_missing_scipy_raises_clear_error(monkeypatch):
+    """A SciPy too old for false_discovery_control must fail with a named error.
+
+    The project requires scipy>=1.11, but an environment can resolve an older
+    SciPy; without the guard the call raises a bare AttributeError. Simulate the
+    missing attribute and require an actionable RuntimeError instead.
+    """
+    import scipy.stats
+
+    monkeypatch.delattr(scipy.stats, "false_discovery_control", raising=False)
+    with pytest.raises(RuntimeError, match=r"scipy>=1\.11"):
+        Benjamini_Hochberg_procedure(np.array([0.01, 0.2, 0.5]), alpha=0.05)
 
 
 def test_Benjamini_Hochberg_rejects_out_of_range_pvalues():
