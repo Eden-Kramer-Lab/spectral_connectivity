@@ -38,6 +38,19 @@ def _require_scipy_false_discovery_control() -> None:
         )
 
 
+def _validate_alpha(alpha: float) -> None:
+    """Validate a significance level shared by correction procedures."""
+    if (
+        isinstance(alpha, (bool, np.bool_))
+        or not isinstance(alpha, (int, float, np.integer, np.floating))
+        or not np.isfinite(alpha)
+        or not 0 < alpha < 1
+    ):
+        raise ValueError(
+            f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
+        )
+
+
 def Benjamini_Hochberg_procedure(
     p_values: NDArray[np.floating], alpha: float = 0.05
 ) -> NDArray[np.bool_]:
@@ -83,6 +96,7 @@ def Benjamini_Hochberg_procedure(
     ``RuntimeError`` is raised on older SciPy), which rejects finite p-values
     outside ``[0, 1]``.
     """
+    _validate_alpha(alpha)
     p_values = np.asarray(p_values, dtype=float)
     is_significant = np.zeros(p_values.shape, dtype=bool)
     valid = np.isfinite(p_values)
@@ -97,16 +111,16 @@ def Benjamini_Hochberg_procedure(
             # Name the offending values so the caller can spot the bad input.
             finite_values = p_values[valid]
             out_of_range = finite_values[(finite_values < 0) | (finite_values > 1)]
-            detail = (
+            if not out_of_range.size:
+                # A ValueError not caused by out-of-range p-values: don't
+                # misattribute it -- surface the original error unchanged.
+                raise
+            raise ValueError(
+                "p_values must all be in [0, 1]; "
                 f"got {out_of_range.size} value(s) outside that range "
                 f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g}). "
-                if out_of_range.size
-                else "got a value outside that range. "
-            )
-            raise ValueError(
-                "p_values must all be in [0, 1]; " + detail + "If these came "
-                "from a connectivity measure, pass p-values (e.g. from "
-                "coherence_significance_pvalue), not coherence magnitudes or "
+                "If these came from a connectivity measure, pass p-values (e.g. "
+                "from coherence_significance_pvalue), not coherence magnitudes or "
                 "correlations."
             ) from exc
         is_significant[valid] = adjusted <= alpha
@@ -156,8 +170,35 @@ def Bonferroni_correction(
     >>> significant
     array([ True, False, False, False, False])
     """
-    p_values = np.asarray(p_values)
-    return p_values <= alpha / p_values.size
+    _validate_alpha(alpha)
+    p_values = np.asarray(p_values, dtype=float)
+    is_significant = np.zeros(p_values.shape, dtype=bool)
+    valid = np.isfinite(p_values)
+    finite_values = p_values[valid]
+    out_of_range = finite_values[(finite_values < 0) | (finite_values > 1)]
+    if out_of_range.size:
+        raise ValueError(
+            "p_values must all be in [0, 1]; "
+            f"got {out_of_range.size} value(s) outside that range "
+            f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g})."
+        )
+    if finite_values.size:
+        # Undefined (NaN/inf) tests are excluded from the family, matching the BH
+        # implementation above, and remain False in the returned mask.
+        is_significant[valid] = finite_values <= alpha / finite_values.size
+    elif p_values.size > 0:
+        # Every p-value is non-finite: the whole family is undefined. Warn rather
+        # than return a clean all-False silently, matching Benjamini_Hochberg.
+        warnings.warn(
+            "Bonferroni_correction: every p-value is non-finite (NaN/inf), so no "
+            "test is defined and nothing is flagged significant. This usually "
+            "means every tested pair involves a dead/zero-power channel. "
+            "Returning all-False; check your inputs rather than reading this as "
+            "'no significant effects'.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return is_significant
 
 
 MULTIPLE_COMPARISONS: dict[str, Callable] = {
@@ -209,7 +250,14 @@ def adjust_for_multiple_comparisons(
     # comparison correction. An axis parameter could be added in the future if
     # there's a need to correct along specific dimensions independently, but
     # current use cases don't require this functionality.
-    return MULTIPLE_COMPARISONS[method](p_values, alpha=alpha)
+    try:
+        correction = MULTIPLE_COMPARISONS[method]
+    except KeyError as exc:
+        choices = ", ".join(sorted(MULTIPLE_COMPARISONS))
+        raise ValueError(
+            f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
+        ) from exc
+    return correction(p_values, alpha=alpha)
 
 
 def coherence_fisher_z_transform(

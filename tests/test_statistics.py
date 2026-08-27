@@ -9,6 +9,7 @@ from pytest import mark
 from spectral_connectivity.statistics import (
     Benjamini_Hochberg_procedure,
     Bonferroni_correction,
+    adjust_for_multiple_comparisons,
     coherence_bias,
     coherence_fisher_z_transform,
     coherence_rate_adjustment,
@@ -19,6 +20,42 @@ from spectral_connectivity.statistics import (
     power_fisher_z_transform,
     power_variance,
 )
+
+
+@pytest.mark.parametrize(
+    "correction", [Benjamini_Hochberg_procedure, Bonferroni_correction]
+)
+@pytest.mark.parametrize("bad_alpha", [0, 1, -0.1, np.nan, np.inf, True, "0.05"])
+def test_multiple_comparison_corrections_validate_alpha(correction, bad_alpha):
+    with pytest.raises(ValueError, match="alpha must be a finite number"):
+        correction(np.array([0.01, 0.2]), alpha=bad_alpha)
+
+
+def test_bonferroni_handles_empty_and_nonfinite_families():
+    assert Bonferroni_correction(np.array([])).shape == (0,)
+    result = Bonferroni_correction(np.array([0.01, np.nan, np.inf]), alpha=0.05)
+    np.testing.assert_array_equal(result, [True, False, False])
+
+
+def test_bonferroni_warns_when_whole_family_undefined():
+    """A fully non-finite Bonferroni family warns, matching Benjamini-Hochberg.
+
+    Both corrections exclude undefined tests; the all-undefined case must be
+    equally loud, or "nothing significant" hides that nothing was testable.
+    """
+    with pytest.warns(UserWarning, match="every p-value is non-finite"):
+        result = Bonferroni_correction(np.array([np.nan, np.inf]), alpha=0.05)
+    assert not result.any()
+    # A finite value in the family must NOT warn; an empty family must NOT warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Bonferroni_correction(np.array([0.01, np.nan]), alpha=0.05)
+        Bonferroni_correction(np.array([]), alpha=0.05)
+
+
+def test_adjust_for_multiple_comparisons_rejects_unknown_method():
+    with pytest.raises(ValueError, match="Unknown multiple-comparisons method"):
+        adjust_for_multiple_comparisons(np.array([0.1]), method="not-a-method")
 
 
 def test_get_normal_distribution_p_values():
