@@ -399,3 +399,11 @@ def test_minimum_phase_decomposition_rejects_invalid_max_iterations(bad_max_iter
     csm = np.tile(np.eye(2), (4, 1, 1))
     with pytest.raises(ValueError, match="max_iterations must be a positive integer"):
         minimum_phase_decomposition(csm, max_iterations=bad_max_iterations)
+
+
+def test_minimum_phase_decomposition_promotes_complex64_working_precision():
+    """The 1e-8 convergence target requires precision above complex64."""
+    factor = np.ones((8, 1, 1), dtype=np.complex64)
+    csm = factor @ factor.swapaxes(-1, -2).conj()
+    result = minimum_phase_decomposition(csm)
+    assert result.dtype == np.complex128

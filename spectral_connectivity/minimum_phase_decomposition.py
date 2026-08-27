@@ -49,7 +49,7 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 
 def _get_initial_conditions(
     cross_spectral_matrix: NDArray[np.complexfloating],
-) -> NDArray[np.complexfloating]:
+) -> NDArray[np.floating]:
     """Generate initial guess for minimum phase factor using Cholesky decomposition.
 
     Provides an initial estimate for the Wilson algorithm by taking the Cholesky
@@ -64,9 +64,11 @@ def _get_initial_conditions(
 
     Returns
     -------
-    minimum_phase_factor : NDArray[complexfloating],
+    minimum_phase_factor : NDArray[floating],
         shape (n_time_samples, ..., 1, n_signals, n_signals)
-        Initial guess for minimum phase square root matrix.
+        Initial guess for minimum phase square root matrix. Real-valued (the
+        Cholesky factor of the real zero-lag matrix); the caller promotes it to
+        the complex working dtype.
 
     Notes
     -----
@@ -461,15 +463,26 @@ def minimum_phase_decomposition(
             f"max_iterations must be a positive integer, got {max_iterations}."
         )
     n_signals = cross_spectral_matrix.shape[-1]
-    identity_matrix = xp.eye(n_signals)
+    # Wilson's default relative tolerance (1e-8) is below float32 epsilon. A
+    # complex64 iteration therefore stalls at its rounding floor and otherwise
+    # marks valid sub-spectra as unconverged/NaN. Directed-connectivity accuracy
+    # takes precedence over retaining the input storage dtype: perform the
+    # factorization at complex128 or better, matching the historical behavior.
+    working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
+    working_cross_spectral_matrix = cross_spectral_matrix.astype(
+        working_dtype, copy=False
+    )
+    identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
     # converge does not mask the others sharing its time point.
     batch_shape = cross_spectral_matrix.shape[:-3]
     n_units = int(np.prod(batch_shape))  # np.prod(()) == 1 for a single unit
     is_converged = xp.zeros(batch_shape, dtype=bool)
-    minimum_phase_factor = xp.zeros(cross_spectral_matrix.shape)
-    minimum_phase_factor[..., :, :, :] = _get_initial_conditions(cross_spectral_matrix)
+    initial = _get_initial_conditions(working_cross_spectral_matrix).astype(
+        working_dtype, copy=False
+    )
+    minimum_phase_factor = xp.broadcast_to(initial, cross_spectral_matrix.shape).copy()
 
     for iteration in range(max_iterations):
         # ``int(is_converged.sum())`` would sync the device (and reduce on CPU)
@@ -484,7 +497,9 @@ def minimum_phase_decomposition(
         # _get_linear_predictor singular; _solve_isolating_singular resolves only
         # that unit to NaN (matching the GPU path) instead of aborting the batch.
         linear_predictor = _get_linear_predictor(
-            minimum_phase_factor, cross_spectral_matrix, identity_matrix
+            minimum_phase_factor,
+            working_cross_spectral_matrix,
+            identity_matrix,
         )
         minimum_phase_factor = xp.matmul(
             minimum_phase_factor, _get_causal_signal(linear_predictor)
@@ -521,9 +536,6 @@ def minimum_phase_decomposition(
     # A singular sub-spectrum is the unconverged one whose factor is non-finite.
     singular_factor = bool(
         (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
-    )
-    minimum_phase_factor = minimum_phase_factor.astype(
-        xp.result_type(minimum_phase_factor.dtype, xp.complex128), copy=True
     )
     unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
     minimum_phase_factor = xp.where(
