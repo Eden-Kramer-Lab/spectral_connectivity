@@ -29,7 +29,7 @@ requirements:
   run:
     - python >=3.10
     - numpy >=1.24,<3.0
-    - scipy >=1.11
+    - scipy >=1.11.1
     - xarray >=2023.1
     - matplotlib >=3.7
 

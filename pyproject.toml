@@ -46,7 +46,7 @@ classifiers = [
 # a comment saying why) or to follow the Scientific Python SPEC 0 support window.
 dependencies = [
     "numpy>=1.24,<3.0",
-    "scipy>=1.11",  # scipy.stats.false_discovery_control (statistics.py)
+    "scipy>=1.11.1",  # false_discovery_control (statistics.py); 1.11.0 is yanked
     "xarray>=2023.1",
     "matplotlib>=3.7"
 ]

@@ -94,17 +94,32 @@ jobs:
           python-version: "3.10"
       - name: Install minimum-supported dependency versions
         # Pin each declared floor to its EXACT lowest installable release (a
-        # `1.24.*` glob would grab the newest 1.24 patch, not the 1.24.0 floor),
-        # then install the package (its ranges are satisfied by the pins, so pip
-        # does not upgrade them). scipy 1.11.0 is yanked, so 1.11.1 is the lowest
-        # a `>=1.11` user actually resolves. nitime (needed by test_transforms)
-        # requires numpy>=1.24, so it does not push numpy off the 1.24.0 floor.
+        # `1.24.*` glob would grab the newest 1.24 patch, not the 1.24.0 floor).
+        # scipy 1.11.0 is yanked, so 1.11.1 is the lowest a `>=1.11.1` user
+        # resolves. Install everything in ONE resolver invocation so a later
+        # dependency (nitime, pytest, ...) cannot silently upgrade a pinned floor
+        # -- a conflict fails the job instead. nitime requires numpy>=1.24, so it
+        # stays on the 1.24.0 floor.
         run: |
-          pip install numpy==1.24.0 scipy==1.11.1 xarray==2023.1.0 matplotlib==3.7.0
-          pip install -e . pytest pytest-cov nitime
+          pip install \
+            numpy==1.24.0 scipy==1.11.1 xarray==2023.1.0 matplotlib==3.7.0 \
+            -e . pytest pytest-cov nitime
           pip check
-      - name: Show resolved versions
-        run: python -c "import numpy, scipy, xarray, matplotlib; print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'xarray', xarray.__version__, 'matplotlib', matplotlib.__version__)"
+      - name: Assert the pinned floors were not upgraded
+        run: |
+          python - <<'PY'
+          import matplotlib, numpy, scipy, xarray
+          expected = {
+              "numpy": (numpy.__version__, "1.24.0"),
+              "scipy": (scipy.__version__, "1.11.1"),
+              "xarray": (xarray.__version__, "2023.1.0"),
+              "matplotlib": (matplotlib.__version__, "3.7.0"),
+          }
+          for name, (got, want) in expected.items():
+              print(f"{name}: {got} (want {want})")
+          mismatched = {n: g for n, (g, w) in expected.items() if g != w}
+          assert not mismatched, f"floors were upgraded: {mismatched}"
+          PY
       - name: Run tests against minimum dependencies
         run: pytest tests/ --ignore=tests/test_notebooks.py -p no:warnings
 

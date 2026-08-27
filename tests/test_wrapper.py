@@ -652,6 +652,6 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
         Multitaper(rng.standard_normal((256, 5, 3)), sampling_frequency=500),
         method="coherence_magnitude",
     )
-    # Matches the actually-imported backend (CPU in CI / this env), not the env var.
+    # Matches the actually-imported backend, not the toggled env var. (Left
+    # backend-agnostic so the suite can also run under the GPU backend.)
     assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
-    assert da.attrs["backend"] == "CPU"
