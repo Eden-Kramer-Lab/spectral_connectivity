@@ -71,6 +71,11 @@ To cut a release:
 Conda packages are published separately and manually. This requires
 anaconda-client and conda-build.
 
+Before building, update `conda-recipe/meta.yaml` for the new release, or it will
+rebuild the previous version: set `version` to `X.Y.Z` and replace `sha256` with
+the SHA-256 of the new PyPI sdist (from the release's "Download files" page, or
+`openssl dgst -sha256 spectral_connectivity-X.Y.Z.tar.gz`), then commit it.
+
 ```bash
 # Build conda package using recipe
 conda build conda-recipe/ --output-folder ./conda-builds

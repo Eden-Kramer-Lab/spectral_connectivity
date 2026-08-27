@@ -233,6 +233,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `multitaper_connectivity(method=None)` now selects an explicit default set of measures (the new `wrapper.DEFAULT_METHODS` allowlist) instead of discovering all public `Connectivity` methods and subtracting a denylist. The default set is unchanged (11 real-valued, NetCDF/xarray-compatible measures), but it is now stable and documented — a newly added `Connectivity` method can no longer silently join the default and break NetCDF serialization. The docstring no longer claims "all available methods": it names what the default excludes — `coherency` (complex; can still be requested by name), and `global_coherence` / `phase_slope_index` / `group_delay` / `canonical_coherence` / the directed-transfer-function family (which the wrapper does not support at all — request them via `Connectivity` directly). The default measure set and its variable order are unchanged (the allowlist is kept in the alphabetical order the previous discovery produced).
 - **Docs**: `docs/CONNECTIVITY_METRIC_RANGES.md` now lists `global_coherence` as bounded in `[0, 1]` (fraction of total coherent power, Cimenser et al. 2011), matching the corrected measure — it previously described the old unbounded squared-singular-value output.
 - `Connectivity` now stores its `fourier_coefficients` as a private immutable snapshot, so the per-instance caching cannot be silently corrupted by in-place edits (which would otherwise bypass cache invalidation and return stale power/coherence). The setter keeps a private copy that preserves the input's memory layout (`copy(order="K")`, so results are unchanged to the bit) and leaves the caller's original array untouched. The `fourier_coefficients` property never hands out a writable alias of that snapshot: it returns an independent, read-only copy. An in-place edit (`c.fourier_coefficients[...] = x`) therefore raises loudly instead of silently vanishing, and because the returned array is a copy (it owns its data) it is fully disconnected from the instance — re-enabling its `writeable` flag only affects the caller's throwaway copy. (A read-only *view* would not be safe: a caller could reach the owning base through `.base`, re-enable its `writeable` flag, and mutate the snapshot behind the caches.) On backends without a settable `writeable` flag (e.g. CuPy) the copy is returned writable but is still independent, so a write to it is harmless. Internal computations read the private snapshot directly, so the copy is paid only on explicit external access, not on the hot paths. To change the data, assign a new array to `fourier_coefficients`, which clears the caches, rather than editing in place.
+- `Multitaper` now validates `fft_workers` at construction (must be `None` or a
+  nonzero integer) and raises a message that names the parameter, instead of
+  forwarding a bad value into an opaque SciPy `ValueError`/`TypeError`.
+- `statistics.Benjamini_Hochberg_procedure` now emits a `UserWarning` when every
+  p-value in the family is non-finite (the whole family is undefined, e.g. every
+  tested pair involves a dead channel), so an all-not-significant result is not
+  mistaken for "no true effects". It also raises a clear `RuntimeError` if the
+  installed SciPy predates `false_discovery_control` (< 1.11), and its
+  out-of-range error now reports how many values were out of range and their
+  min/max.
+- `transforms.detrend` now rejects a breakpoint at exactly the data length
+  (validated against the documented `[0, N)` range) instead of silently
+  collapsing it into an empty trailing segment.
+- `multitaper_connectivity` now skips a measure that does not fit the xarray
+  layout (`global_coherence`, `phase_slope_index`, the directed family, …) in a
+  multi-measure call, logging the skip, instead of aborting the whole batch.
+  These are flagged with a dedicated `wrapper.UnsupportedMeasureError` (a
+  `ValueError` subclass), so a *genuine* computation error — e.g. a debiased
+  measure raising `ValueError` because the data has too few observations — is
+  **not** swallowed and still surfaces rather than silently dropping a requested
+  measure.
+- The optional `connectivity=` argument to `connectivity_to_xarray` is now
+  validated by **provenance identity**, not geometry alone. `from_multitaper`
+  records (a weakref to) its source transform, and only a `Connectivity` whose
+  recorded source is the passed `Multitaper` is accepted; matching channel
+  count, frequency grid, and time bins no longer suffice, because two different
+  recordings can share them and the result takes its coordinates/metadata from
+  the `Multitaper` (a silent mislabeling risk). A directly constructed
+  `Connectivity`, or one whose coefficients were reassigned after
+  `from_multitaper`, is now rejected — build it with
+  `Connectivity.from_multitaper(m)` or leave `connectivity=None`. The injected
+  instance must also use the default `expectation_type` (`"trials_tapers"`);
+  other types do not fit the fixed `(time, frequency, source, target)` layout
+  and now raise an actionable error instead of a cryptic xarray dimension
+  mismatch.
+
+### Removed
+
+- **`transforms.dpss_windows` no longer accepts `interp_from` / `interp_kind`.**
+  The Slepian tapers are now solved directly with SciPy's LAPACK routine (see
+  **Performance** below for the full rationale and equivalence evidence), so the
+  public interpolation fast-path and its helper functions were removed. Code
+  passing these keywords must drop them; the default exact computation is faster
+  than the old interpolation path anyway. Relatedly, `dpss_windows(2, NW, 2)` (a
+  two-sample window with two tapers) now raises a clear `ValueError` rather than
+  returning degenerate tapers.
 
 ### Performance
 
@@ -245,8 +291,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ~6× faster and cut peak memory ~9× (472 MB → 53 MB). As a consequence, the
   default computation now bypasses the `blocks` parameter entirely (it never
   forms the large intermediate that `blocks` was meant to chunk, so blocking it
-  only added overhead); `blocks` still reduces memory for the transform-based
-  measures (e.g. coherence magnitude, imaginary coherence) that must form the
+  only added overhead). The coherence family and directed measures reduce the
+  cross-spectral matrix directly and ignore `blocks`; the phase-lag-index family
+  rejects it. `blocks` now affects only `phase_locking_value`, which applies a
+  per-observation normalization before averaging and so must materialize the
   outer product.
 - `multitaper_connectivity` now builds a single `Connectivity` from the
   multitaper transform and reuses it across every requested measure, instead of
@@ -390,6 +438,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"GPU"`), and `expectation_type`, alongside the existing `mt_*` multitaper
   parameters and any measure keyword arguments (`arg_*`). All values are
   NetCDF-serializable and survive a `to_netcdf` round-trip.
+- **`DEFAULT_METHODS`** — the default measure allowlist used by
+  `multitaper_connectivity(method=None)` — is now exported from the top-level
+  package (`from spectral_connectivity import DEFAULT_METHODS`), so callers can
+  inspect or extend the default set without importing from the internal
+  `wrapper` module.
 - `Multitaper` gained an `fft_workers` argument (also accepted by
   `multitaper_connectivity` via `**kwargs`) that sets the number of parallel
   worker threads for SciPy's CPU FFT (`-1` uses all cores). It defaults to

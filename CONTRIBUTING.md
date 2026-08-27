@@ -67,6 +67,12 @@ This project uses an automated release workflow. To create a new release:
    documented in [docs/contributing.md](docs/contributing.md).
 
 4. **Conda release** (requires anaconda and conda-build)
+
+   First update `conda-recipe/meta.yaml` for the new release, or it will rebuild
+   the previous version: set `version` to `X.Y.Z` and replace `sha256` with the
+   SHA-256 of the new PyPI sdist (from the release's "Download files" page, or
+   `openssl dgst -sha256 spectral_connectivity-X.Y.Z.tar.gz`). Commit that
+   change. Then build and upload:
    ```bash
    conda build conda-recipe/ --output-folder ./conda-builds
    anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
