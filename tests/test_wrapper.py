@@ -8,6 +8,7 @@ from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
+    UnsupportedMeasureError,
     connectivity_to_xarray,
     multitaper_connectivity,
 )
@@ -44,51 +45,41 @@ def test_multitaper_coherence_magnitude(time_window_duration, dtype):
     assert not (np.isnan(m.values)).all()
 
 
-def test_multitaper_connectivity():
-    np.random.default_rng(42)
-    time_window_duration = 0.1
-    sampling_frequency = 1500
-    start_time, end_time = 0, 4.8
-    n_trials, n_signals = 10, 2
-    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+# Measures that do not fit the wrapper's (time, frequency, source, target) /
+# (time, frequency, source) xarray layouts. Requesting one raises
+# UnsupportedMeasureError with a pointer to use Connectivity directly.
+_WRAPPER_UNSUPPORTED_METHODS = [
+    "directed_transfer_function",
+    "directed_coherence",
+    "partial_directed_coherence",
+    "generalized_partial_directed_coherence",
+    "direct_directed_transfer_function",
+    "canonical_coherence",
+    "group_delay",
+    "delay",
+    "global_coherence",
+    "phase_slope_index",
+]
 
-    for method in [
-        "coherence_magnitude",
-        "coherency",
-        "coherence_magnitude",
-        "coherence_phase",
-        "imaginary_coherence",
-        "phase_locking_value",
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-        "pairwise_phase_consistency",
-        "phase_lag_index",
-        "pairwise_spectral_granger_prediction",
-        # Below measures are not implemented, will throw NotImplementedError
-        "directed_transfer_function",
-        "directed_coherence",
-        "partial_directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-        "canonical_coherence",
-        "group_delay",
-        "power",
-    ]:
-        try:
-            m = multitaper_connectivity(
-                time_series,
-                method=method,
-                sampling_frequency=sampling_frequency,
-                time_window_duration=time_window_duration,
-            )
-        except (NotImplementedError, ValueError):
-            pass
 
-        assert not (m.values == 0).all()
-        assert not (np.isnan(m.values)).all()
+@mark.parametrize("method", _WRAPPER_UNSUPPORTED_METHODS)
+def test_multitaper_connectivity_rejects_unsupported_methods(method):
+    """A measure without a plain xarray layout is rejected, not silently skipped.
+
+    Replaces an earlier loop that caught the errors and then asserted against the
+    *previous* iteration's result, so a raising regression in a supported measure
+    could pass unnoticed. Supported measures are exercised non-degenerately by
+    ``test_multitaper_n_signals`` / ``test_multitaper_connectivities_n_signals``.
+    """
+    rng = np.random.default_rng(42)
+    time_series = rng.random((7201, 10, 2))
+    with pytest.raises(UnsupportedMeasureError):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=1500,
+            method=method,
+            time_window_duration=0.1,
+        )
 
 
 @mark.parametrize("n_signals", range(2, 5))
