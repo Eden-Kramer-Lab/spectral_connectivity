@@ -67,6 +67,11 @@ measures = multitaper_connectivity(
 )
 ```
 
+`time_series` may also be an `xarray.DataArray` with the same positional axis
+order. If its final dimension has coordinate labels, the wrapper uses them for
+the output's `source` and `target` coordinates unless `signal_names` is passed
+explicitly.
+
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as
 an opt-in method. The lower-level `Connectivity` methods retain their historical

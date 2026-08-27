@@ -48,6 +48,10 @@ coherence = multitaper_connectivity(
 )
 ```
 
+`time_series` may also be an `xarray.DataArray` with the same positional axis
+order. Labels on its final dimension become the result's `source` and `target`
+coordinates unless `signal_names` is supplied explicitly.
+
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as
 an opt-in method. The lower-level `Connectivity` methods retain their historical

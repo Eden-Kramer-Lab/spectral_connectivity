@@ -1,7 +1,9 @@
 import inspect
+import json
 
 import numpy as np
 import pytest
+import xarray as xr
 from pytest import mark
 
 from spectral_connectivity import Multitaper
@@ -234,6 +236,55 @@ def test_accepts_documented_2d_input():
         data_3d, sampling_frequency=500, method="coherence_magnitude"
     )
     np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
+
+
+@pytest.mark.parametrize("with_trial_dimension", [False, True])
+def test_dataarray_input_preserves_signal_labels(with_trial_dimension):
+    """A DataArray's final dimension labels carry through to the result."""
+    rng = np.random.default_rng(4)
+    if with_trial_dimension:
+        data = rng.standard_normal((256, 3, 2))
+        dims = ("sample", "trial", "channel")
+    else:
+        data = rng.standard_normal((256, 2))
+        dims = ("sample", "channel")
+    labeled = xr.DataArray(
+        data,
+        dims=dims,
+        coords={"channel": ["left", "right"]},
+    )
+
+    actual = multitaper_connectivity(
+        labeled,
+        sampling_frequency=256,
+        method="coherence_magnitude",
+    )
+    expected = multitaper_connectivity(
+        data,
+        sampling_frequency=256,
+        method="coherence_magnitude",
+        signal_names=["left", "right"],
+    )
+
+    xr.testing.assert_identical(actual, expected)
+
+
+def test_explicit_signal_names_override_dataarray_coordinate():
+    data = xr.DataArray(
+        np.random.default_rng(5).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"channel": ["left", "right"]},
+    )
+
+    result = multitaper_connectivity(
+        data,
+        sampling_frequency=256,
+        method="coherence_magnitude",
+        signal_names=["first", "second"],
+    )
+
+    assert result.coords["source"].values.tolist() == ["first", "second"]
+    assert result.coords["target"].values.tolist() == ["first", "second"]
 
 
 def test_result_netcdf_serializable_with_detrend_none(tmp_path):
@@ -480,8 +531,8 @@ def test_shared_connectivity_matches_per_method_construction():
 def test_default_result_is_netcdf_serializable(tmp_path):
     """The documented default (method=None) result must save to NetCDF.
 
-    method discovery must not include complex-valued coherency, which NetCDF
-    cannot store.
+    Method discovery excludes complex-valued coherency so the default remains
+    portable across all supported xarray versions and NetCDF engines.
     """
     rng = np.random.default_rng(0)
     ds = multitaper_connectivity(
@@ -576,17 +627,18 @@ def test_from_multitaper_supports_subclass_overriding_init():
     assert base._fourier_coefficients.base is not None
 
 
-def test_result_carries_cf_coordinate_metadata():
-    """time/frequency coordinates get CF-style units and long_name."""
+def test_result_carries_descriptive_coordinate_metadata():
+    """Coordinates carry unambiguous axis labels and physical units."""
     rng = np.random.default_rng(0)
     ds = multitaper_connectivity(
         rng.standard_normal((512, 5, 3)), sampling_frequency=500
     )
     assert ds.coords["time"].attrs["units"] == "s"
-    assert ds.coords["time"].attrs["long_name"] == "Time"
+    assert ds.coords["time"].attrs["long_name"] == "Window center time"
     assert ds.coords["frequency"].attrs["units"] == "Hz"
     assert ds.coords["frequency"].attrs["long_name"] == "Frequency"
-    assert ds.coords["source"].attrs["long_name"] == "Signal"
+    assert ds.coords["source"].attrs["long_name"] == "Source signal"
+    assert ds.coords["target"].attrs["long_name"] == "Target signal"
 
 
 def test_result_carries_provenance_metadata():
@@ -610,13 +662,12 @@ def test_result_carries_provenance_metadata():
 def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
     """Measure keyword arguments are recorded as ``arg_<key>``.
 
-    A scalar kwarg is stored as-is; a non-scalar kwarg is stringified so it
-    cannot break ``to_netcdf``. Exercised through a stub measure that fits the
-    (time, frequency, source, target) layout and accepts kwargs, since none of
-    the default xarray-compatible measures take keyword arguments.
+    Scalar kwargs remain convenient individual attributes, while structured
+    values and the complete kwargs mapping use canonical JSON. Exercised through
+    a stub measure that fits the (time, frequency, source, target) layout and
+    accepts kwargs, since none of the default xarray-compatible measures take
+    keyword arguments.
     """
-    import xarray as xr  # noqa: F401
-
     rng = np.random.default_rng(3)
     m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
 
@@ -638,10 +689,14 @@ def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
         threshold=0.5,
         window=[1, 2, 3],
     )
-    # Scalar kwarg stored as-is; non-scalar kwarg stringified.
+    # Scalar kwarg stored as-is; non-scalar kwarg stored as parseable JSON.
     assert da.attrs["arg_threshold"] == 0.5
-    assert da.attrs["arg_window"] == str([1, 2, 3])
-    # The stringified non-scalar must not break NetCDF serialization.
+    assert json.loads(da.attrs["arg_window"]) == [1, 2, 3]
+    assert json.loads(da.attrs["measure_kwargs_json"]) == {
+        "threshold": 0.5,
+        "window": [1, 2, 3],
+    }
+    # Structured provenance must not break NetCDF serialization.
     da.to_netcdf(tmp_path / "args.nc")
 
 

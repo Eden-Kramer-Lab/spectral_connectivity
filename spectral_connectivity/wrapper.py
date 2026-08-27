@@ -1,5 +1,6 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import json
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -15,6 +16,49 @@ from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import get_compute_backend
 
 logger = getLogger(__name__)
+
+
+def _json_compatible(value: Any) -> Any:
+    """Convert provenance values to deterministic, JSON-compatible objects."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if np.isfinite(value):
+            return value
+        return {"nonfinite_float": repr(value)}
+    if isinstance(value, np.generic):
+        return _json_compatible(value.item())
+    if isinstance(value, np.ndarray):
+        return _json_compatible(value.tolist())
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_compatible(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [_json_compatible(item) for item in value]
+    return {
+        "python_type": f"{type(value).__module__}.{type(value).__qualname__}",
+        "repr": repr(value),
+    }
+
+
+def _canonical_json(value: Any) -> str:
+    """Serialize provenance as stable JSON suitable for a NetCDF attribute."""
+    return json.dumps(
+        _json_compatible(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    )
+
+
+def _netcdf_provenance_value(value: Any) -> Any:
+    """Return a NetCDF-safe scalar, using JSON for structured values."""
+    if isinstance(value, (str, int, float, np.integer, np.floating, np.bool_)):
+        return value
+    return _canonical_json(value)
 
 
 class UnsupportedMeasureError(ValueError):
@@ -182,23 +226,50 @@ def _connectivity_result_to_xarray(
         # applied below: sel(source=i, target=j) then reads "i drives j".
         connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
+    attrs = _shared_provenance_attrs(connectivity, multitaper_metadata)
+    attrs["measure"] = method
+    attrs["measure_kwargs_json"] = _canonical_json(kwargs)
+    for key, value in kwargs.items():
+        attrs["arg_" + key] = _netcdf_provenance_value(value)
+
+    coordinates: dict[str, Any] = {
+        "time": (
+            "time",
+            connectivity.time,
+            {"long_name": "Window center time", "units": "s"},
+        ),
+        "frequency": (
+            "frequency",
+            connectivity.frequencies,
+            {"long_name": "Frequency", "units": "Hz"},
+        ),
+        "source": (
+            "source",
+            signal_names,
+            {"long_name": "Source signal"},
+        ),
+    }
     if measure_spec.output_kind == "power":
         # squeeze has no meaning for power (no target axis); it is a no-op here.
         xar = xr.DataArray(
             connectivity_mat,
-            coords=[connectivity.time, connectivity.frequencies, signal_names],
-            dims=["time", "frequency", "source"],
+            coords=coordinates,
+            dims=("time", "frequency", "source"),
+            name=method,
+            attrs=attrs,
         )
     else:
+        coordinates["target"] = (
+            "target",
+            signal_names,
+            {"long_name": "Target signal"},
+        )
         xar = xr.DataArray(
             connectivity_mat,
-            coords=[
-                connectivity.time,
-                connectivity.frequencies,
-                signal_names,
-                signal_names,
-            ],
-            dims=["time", "frequency", "source", "target"],
+            coords=coordinates,
+            dims=("time", "frequency", "source", "target"),
+            name=method,
+            attrs=attrs,
         )
         if squeeze and connectivity.n_signals == 2:
             # Reduce to the single ordered pair (first source, last target).
@@ -217,35 +288,6 @@ def _connectivity_result_to_xarray(
                 stacklevel=2,
             )
 
-    xar.name = method
-
-    # CF-style coordinate metadata so the result is self-describing (plotting
-    # libraries and NetCDF readers use units / long_name for axis labels).
-    if "time" in xar.coords:
-        xar.coords["time"].attrs.setdefault("long_name", "Time")
-        xar.coords["time"].attrs.setdefault("units", "s")
-    if "frequency" in xar.coords:
-        xar.coords["frequency"].attrs.setdefault("long_name", "Frequency")
-        xar.coords["frequency"].attrs.setdefault("units", "Hz")
-    for signal_axis in ("source", "target"):
-        if signal_axis in xar.coords:
-            xar.coords[signal_axis].attrs.setdefault("long_name", "Signal")
-
-    # Provenance: enough to trace how the result was produced. All values are
-    # NetCDF-serializable strings/numbers. The shared attrs (package, backend,
-    # multitaper parameters) are also attached to the Dataset when several
-    # measures are returned together.
-    xar.attrs.update(_shared_provenance_attrs(connectivity, multitaper_metadata))
-    xar.attrs["measure"] = method
-    # Record the measure's keyword arguments; stringify anything that is not a
-    # plain NetCDF-serializable scalar so the record cannot break to_netcdf.
-    for key, value in kwargs.items():
-        xar.attrs["arg_" + key] = (
-            value
-            if isinstance(value, (str, int, float, np.integer, np.floating, np.bool_))
-            else str(value)
-        )
-
     return xar
 
 
@@ -256,11 +298,12 @@ def _shared_provenance_attrs(
 
     Covers the package/version, the imported backend, the expectation type, and
     the multitaper parameters (``mt_*``) -- everything that does not depend on
-    the specific measure. The per-measure attributes (``measure`` and the
-    ``arg_*`` keyword arguments) are added by the caller.
+    the specific measure. The per-measure attributes (``measure``,
+    ``measure_kwargs_json``, and the convenient ``arg_*`` views) are added by
+    the caller.
     """
-    # The ``mt_`` prefix avoids xarray's ``.dt`` accessor treating a bare
-    # attribute name as a datetime coordinate.
+    # Namespace transform settings so they cannot collide with measure-level or
+    # package-level provenance attributes.
     attrs: dict[str, Any] = {
         "mt_" + attr: value for attr, value in multitaper_metadata.items()
     }
@@ -304,8 +347,30 @@ def connectivity_to_xarray(
     )
 
 
+def _unwrap_xarray_input(
+    time_series: NDArray[np.floating] | xr.DataArray,
+    signal_names: Sequence[str] | None,
+) -> tuple[Any, Sequence[str] | None]:
+    """Extract array data and, when available, labels from a DataArray input."""
+    if not isinstance(time_series, xr.DataArray):
+        return time_series, signal_names
+
+    if signal_names is None and time_series.ndim >= 1:
+        signal_dimension = time_series.dims[-1]
+        if signal_dimension in time_series.coords:
+            signal_coordinate = time_series.coords[signal_dimension]
+            if signal_coordinate.dims == (signal_dimension,):
+                signal_names = [
+                    str(label) for label in signal_coordinate.to_numpy().tolist()
+                ]
+
+    # Use the wrapped NumPy/CuPy array so positional promotion below does not
+    # invoke xarray's labeled indexing with ``np.newaxis``.
+    return time_series.data, signal_names
+
+
 def multitaper_connectivity(
-    time_series: NDArray[np.floating],
+    time_series: NDArray[np.floating] | xr.DataArray,
     sampling_frequency: float,
     time_window_duration: float | None = None,
     method: str | list[str] | None = None,
@@ -323,9 +388,12 @@ def multitaper_connectivity(
 
     Parameters
     ----------
-    time_series : NDArray[floating],
+    time_series : NDArray[floating] or xarray.DataArray,
         shape (n_times, n_trials, n_channels) or (n_times, n_channels)
-        Time series data. For multiple trials, trials are averaged in spectral domain.
+        Time series data. For multiple trials, trials are averaged in spectral
+        domain. A DataArray uses the same axis order; when ``signal_names`` is
+        omitted, labels from its final dimension coordinate are carried to the
+        output's ``source`` and ``target`` coordinates.
     sampling_frequency : float
         Sampling rate in Hz of the time series data.
     time_window_duration : float, optional
@@ -335,8 +403,9 @@ def multitaper_connectivity(
         Connectivity method(s) to compute. If None, computes the default set of
         real-valued measures that fit the xarray/NetCDF interface (see
         ``DEFAULT_METHODS``) — not every measure. ``coherency`` is left out of the
-        default only because it is complex (NetCDF cannot store it), but it can be
-        requested by name. The directed-transfer-function family
+        default because complex arrays are not portably serializable across all
+        supported xarray versions and NetCDF engines, but it can be requested by
+        name. The directed-transfer-function family
         (``directed_transfer_function``, ``directed_coherence``,
         ``partial_directed_coherence``, ``generalized_partial_directed_coherence``,
         ``direct_directed_transfer_function``) is also opt-in by name (see the
@@ -423,14 +492,16 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
+    time_series_data, signal_names = _unwrap_xarray_input(time_series, signal_names)
     if connectivity_kwargs is None:
         connectivity_kwargs = {}
     return_dataarray = False  # Default: return dataset
     if method is None:
-        # The explicit NetCDF-safe / xarray-compatible default set (see
-        # DEFAULT_METHODS). Not every Connectivity method — coherency (complex),
-        # global_coherence / phase_slope_index, and the directed-transfer-function
-        # family are excluded from the default (the last is still opt-in by name).
+        # The explicit, portably serializable / xarray-compatible default set
+        # (see DEFAULT_METHODS). Not every Connectivity method — coherency
+        # (complex), global_coherence / phase_slope_index, and the directed-
+        # transfer-function family are excluded from the default (the last is
+        # still opt-in by name).
         method = list(DEFAULT_METHODS)
     elif isinstance(method, str):
         method = [method]  # Convert to list
@@ -457,10 +528,10 @@ def multitaper_connectivity(
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
-    if getattr(time_series, "ndim", None) == 2:
-        time_series = time_series[:, np.newaxis, :]
+    if getattr(time_series_data, "ndim", None) == 2:
+        time_series_data = time_series_data[:, np.newaxis, :]
     m = Multitaper(
-        time_series=time_series,
+        time_series=time_series_data,
         sampling_frequency=sampling_frequency,
         time_window_duration=time_window_duration,
         **kwargs,
@@ -470,10 +541,20 @@ def multitaper_connectivity(
     # Multitaper, so data and labels cannot be paired accidentally.
     metadata = m._provenance_metadata()
     shared_connectivity = Connectivity.from_multitaper(m)
-    cons = xr.Dataset()
+    if return_dataarray:
+        return _connectivity_result_to_xarray(
+            shared_connectivity,
+            metadata,
+            method[0],
+            signal_names,
+            squeeze,
+            **connectivity_kwargs,
+        )
+
+    data_vars: dict[str, xr.DataArray] = {}
     for this_method in method:
         try:
-            con = _connectivity_result_to_xarray(
+            data_vars[this_method] = _connectivity_result_to_xarray(
                 shared_connectivity,
                 metadata,
                 this_method,
@@ -481,21 +562,21 @@ def multitaper_connectivity(
                 squeeze,
                 **connectivity_kwargs,
             )
-            cons[this_method] = con
         except (NotImplementedError, UnsupportedMeasureError) as e:
             # Structural incompatibility can be skipped in a batch. Other
             # computation errors are intentionally not caught.
             if len(method) == 1:
                 raise
             logger.warning("Skipping %s: %s", this_method, e)
-    if len(cons.data_vars) == 0:
+    if not data_vars:
         raise UnsupportedMeasureError(
             "None of the requested methods produced a compatible result "
             f"for the xarray interface: {method!r}."
         )
-    if return_dataarray and method[0] in cons:
-        return cons[method[0]]
-    # Attach the shared provenance at the Dataset level too, so a multi-measure
-    # result is self-describing without having to inspect an individual variable.
-    cons.attrs.update(_shared_provenance_attrs(shared_connectivity, metadata))
-    return cons
+    # Shared coordinates are aligned once during construction. Dataset-level
+    # provenance makes a multi-measure result self-describing without requiring
+    # callers to inspect an individual variable.
+    return xr.Dataset(
+        data_vars=data_vars,
+        attrs=_shared_provenance_attrs(shared_connectivity, metadata),
+    )

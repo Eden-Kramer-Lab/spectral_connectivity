@@ -40,9 +40,13 @@ directly with results from 2.x.
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
   variable.
-- Wrapper results carry CF-style time/frequency metadata plus NetCDF-safe
+- Wrapper results carry descriptive time/frequency metadata plus NetCDF-safe
   measure, package-version, backend, expectation, transform, and method-argument
-  provenance.
+  provenance. Structured method arguments are recorded as canonical JSON.
+- `multitaper_connectivity` accepts an `xarray.DataArray` using the documented
+  positional axis order and, unless `signal_names` is supplied explicitly,
+  preserves its final-dimension labels as the result's `source` / `target`
+  coordinates.
 - `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
 - Independent analytic-oracle, failure-mode, backend-boundary, serialization,
   minimum-dependency, artifact, doctest, and notebook checks cover the corrected
