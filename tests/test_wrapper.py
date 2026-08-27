@@ -794,3 +794,32 @@ def test_multitaper_connectivity_directed_source_target_orientation():
     anti_causal = da.sel(source="y", target="x").values
     assert np.nanmax(causal) > np.nanmax(anti_causal)
     assert np.nanmax(causal) > 0.05
+
+
+def test_multitaper_connectivity_rejects_empty_method_list():
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="at least one connectivity measure"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)), sampling_frequency=256, method=[]
+        )
+
+
+def test_multitaper_connectivity_raises_when_no_method_is_compatible():
+    rng = np.random.default_rng(0)
+    with pytest.raises(UnsupportedMeasureError, match="None of the requested methods"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)),
+            sampling_frequency=256,
+            method=["global_coherence", "phase_slope_index"],
+        )
+
+
+def test_multitaper_connectivity_rejects_duplicate_signal_names():
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="signal_names must be unique"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)),
+            sampling_frequency=256,
+            method="coherence_magnitude",
+            signal_names=["a", "a"],
+        )

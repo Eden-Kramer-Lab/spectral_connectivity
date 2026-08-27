@@ -136,6 +136,14 @@ def _connectivity_result_to_xarray(
             f"signal_names must contain {connectivity.n_signals} names, "
             f"got {len(signal_names)}."
         )
+    elif len(set(signal_names)) != len(signal_names):
+        duplicates = sorted(
+            {n for n in signal_names if list(signal_names).count(n) > 1}
+        )
+        raise ValueError(
+            "signal_names must be unique to label the source/target axes; "
+            f"duplicates: {duplicates}."
+        )
     connectivity_mat = getattr(connectivity, method)(**kwargs)
 
     pairwise_shape = (
@@ -396,6 +404,12 @@ def multitaper_connectivity(
     elif isinstance(method, str):
         method = [method]  # Convert to list
         return_dataarray = True  # Return dataarray if methods was not an iterable
+    else:
+        method = list(method)
+    if len(method) == 0:
+        raise ValueError(
+            "method must name at least one connectivity measure; got an empty list."
+        )
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -430,6 +444,11 @@ def multitaper_connectivity(
             if len(method) == 1:
                 raise
             logger.warning("Skipping %s: %s", this_method, e)
+    if len(cons.data_vars) == 0:
+        raise UnsupportedMeasureError(
+            "None of the requested methods produced a compatible result "
+            f"for the xarray interface: {method!r}."
+        )
     if return_dataarray and method[0] in cons:
         return cons[method[0]]
     return cons

@@ -78,6 +78,9 @@ directly with results from 2.x.
   results obtained through `multitaper_connectivity`. The underlying
   `Connectivity` methods are unchanged (they keep the `output[i, j] = j -> i`
   convention).
+- The wrapper rejects an empty `method` list, duplicate `signal_names`, and
+  requests where no method yields a compatible result, instead of silently
+  returning an empty or mislabeled `Dataset`.
 - Importing the package no longer changes NumPy's global floating-point warning
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
