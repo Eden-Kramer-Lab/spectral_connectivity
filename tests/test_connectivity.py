@@ -72,14 +72,11 @@ def test_subset_cross_spectrum():
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     full_csm = this_Conn._cross_spectral_matrix
     subset_csm = this_Conn._subset_cross_spectral_matrix(pairs)
-    assert np.allclose(
-        subset_csm[..., pairs[:, 0], pairs[:, 1]],
-        full_csm[..., pairs[:, 0], pairs[:, 1]],
-    )
-    assert np.allclose(
-        subset_csm[..., pairs[:, 1], pairs[:, 0]],
-        full_csm[..., pairs[:, 1], pairs[:, 0]],
-    )
+    assert subset_csm.shape == (2, 2, 2, 2, 2, 2, 2)
+    for pair_number, pair in enumerate(pairs):
+        expected = full_csm[..., pair[:, None], pair[None, :]]
+        actual = np.take(subset_csm, pair_number, axis=-4)
+        assert np.allclose(actual, expected)
 
 
 @mark.parametrize("dtype", [np.complex64, np.complex128])
@@ -885,11 +882,11 @@ def test_power_and_cross_spectrum_caches_invalidate():
 
 @pytest.mark.parametrize("expectation_type", ["trials_tapers", "tapers"])
 def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
-    """The fused phase-lag-index family matches the per-fcn cross-spectrum path.
+    """The tiled phase-lag-index family matches the per-fcn reference path.
 
     phase_lag_index, weighted_phase_lag_index and
-    debiased_squared_weighted_phase_lag_index now share one observation-level
-    imaginary cross-spectrum (four cached moments) instead of re-forming it per
+    debiased_squared_weighted_phase_lag_index now share tiled, reduced imaginary
+    cross-spectrum moments instead of re-forming the full outer product per
     ``fcn``. Each must equal the original per-fcn computation. Parametrized over
     ``expectation_type`` because ``debiased_squared_weighted_phase_lag_index``
     scales by ``n_observations``, which changes with it. Also checks that
@@ -993,6 +990,44 @@ def test_phase_lag_index_moments_are_computed_lazily():
     cached_sign = reuse.__dict__["_imaginary_moment_cache"]["sign"]
     reuse.phase_lag_index()
     assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
+
+
+def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatch):
+    """Every PLI variant works when the full observation CSM is unavailable."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    rng = np.random.default_rng(19)
+    shape = (2, 5, 3, 12, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    expected_conn = Connectivity(coefficients)
+    expected = (
+        expected_conn.phase_lag_index(),
+        expected_conn.weighted_phase_lag_index(),
+        expected_conn.debiased_squared_phase_lag_index(),
+        expected_conn.debiased_squared_weighted_phase_lag_index(),
+    )
+
+    # Force one source signal per tile, then make any accidental access to the
+    # full observation-level outer product fail loudly.
+    monkeypatch.setattr(
+        connectivity_module, "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS", 1
+    )
+    tiled = Connectivity(coefficients)
+    with patch.object(
+        Connectivity,
+        "_cross_spectral_matrix",
+        new_callable=PropertyMock,
+        side_effect=AssertionError("full outer product was materialized"),
+    ):
+        actual = (
+            tiled.phase_lag_index(),
+            tiled.weighted_phase_lag_index(),
+            tiled.debiased_squared_phase_lag_index(),
+            tiled.debiased_squared_weighted_phase_lag_index(),
+        )
+
+    for actual_measure, expected_measure in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_measure, expected_measure)
 
 
 def test_phase_lag_index_family_fully_cached_path_matches_cold():
@@ -1251,6 +1286,93 @@ def test_subset_pairwise_granger_prediction():
     for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)
         assert np.allclose(gp_subset[..., j, i], gp_all[..., j, i], equal_nan=True)
+
+
+def test_subset_pairwise_granger_prediction_masks_global_diagonal():
+    """Scattering compact pair blocks must not expose numerical self-Granger."""
+    rng = np.random.default_rng(4)
+    shape = (1, 8, 3, 16, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+
+    subset = conn.subset_pairwise_spectral_granger_prediction(
+        np.array([[0, 1], [2, 3]])
+    )
+
+    assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
+
+
+def test_complex64_directed_measure_uses_viable_wilson_precision():
+    """Correlated complex64 spectra must converge at the default 1e-8 tolerance."""
+    rng = np.random.default_rng(0)
+    shape = (1, 10, 3, 32, 3)
+    shared = rng.standard_normal((*shape[:-1], 1)) + 1j * rng.standard_normal(
+        (*shape[:-1], 1)
+    )
+    noise = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients64 = (shared + 0.35 * noise).astype(np.complex64)
+
+    result64 = Connectivity(
+        coefficients64, dtype=np.complex64
+    ).pairwise_spectral_granger_prediction()
+    result128 = Connectivity(
+        coefficients64.astype(np.complex128), dtype=np.complex128
+    ).pairwise_spectral_granger_prediction()
+
+    off_diagonal = ~np.eye(shape[-1], dtype=bool)
+    assert np.isfinite(result64[..., off_diagonal]).all()
+    np.testing.assert_allclose(
+        result64[..., off_diagonal],
+        result128[..., off_diagonal],
+        rtol=1e-5,
+        atol=1e-7,
+    )
+
+
+def test_subset_cross_spectral_matrix_is_compact_and_fully_initialized():
+    """Subset computation carries one 2-by-2 matrix per pair, not a full CSM."""
+    rng = np.random.default_rng(12)
+    coefficients = rng.standard_normal((2, 3, 2, 8, 5)) + 1j * rng.standard_normal(
+        (2, 3, 2, 8, 5)
+    )
+    conn = Connectivity(coefficients)
+    pairs = np.array([[0, 3], [2, 4]])
+
+    compact = conn._subset_cross_spectral_matrix(pairs)
+    full = conn._cross_spectral_matrix
+    assert compact.shape == (2, 3, 2, 2, 8, 2, 2)
+    for pair_number, pair in enumerate(pairs):
+        expected = full[..., pair[:, None], pair[None, :]]
+        actual = np.take(compact, pair_number, axis=-4)
+        np.testing.assert_allclose(actual, expected)
+
+
+@mark.parametrize(
+    "expectation_type",
+    [
+        "time",
+        "trials",
+        "tapers",
+        "time_trials",
+        "time_tapers",
+        "trials_tapers",
+        "time_trials_tapers",
+    ],
+)
+def test_compact_subset_cross_spectrum_preserves_every_expectation(expectation_type):
+    rng = np.random.default_rng(17)
+    coefficients = rng.standard_normal((2, 3, 2, 8, 5)) + 1j * rng.standard_normal(
+        (2, 3, 2, 8, 5)
+    )
+    conn = Connectivity(coefficients, expectation_type=expectation_type)
+    pairs = np.array([[0, 3], [2, 4]])
+
+    compact = conn._expectation(conn._subset_cross_spectral_matrix(pairs))
+    full = conn._expectation(conn._cross_spectral_matrix)
+    for pair_number, pair in enumerate(pairs):
+        expected = full[..., pair[:, None], pair[None, :]]
+        actual = np.take(compact, pair_number, axis=-4)
+        np.testing.assert_allclose(actual, expected)
 
 
 def test_nyquist_bin_even_n():

@@ -6,6 +6,39 @@ import pytest
 from spectral_connectivity import Connectivity, Multitaper
 
 
+@pytest.mark.parametrize("method", ["group_delay", "delay"])
+def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkeypatch):
+    """NumPy-only delay code must cross the device boundary through ``get``."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    class DeviceLike:
+        """Minimal CuPy-like object that rejects implicit NumPy conversion."""
+
+        def __init__(self, array):
+            self._array = np.asarray(array)
+
+        def __array__(self, *args, **kwargs):
+            raise TypeError("implicit device-to-host conversion is forbidden")
+
+        def get(self):
+            return self._array.copy()
+
+    rng = np.random.default_rng(11)
+    shape = (1, 4, 3, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+    original_bandpass = connectivity_module._bandpass
+
+    def device_bandpass(*args, **kwargs):
+        data, frequencies = original_bandpass(*args, **kwargs)
+        return DeviceLike(data), DeviceLike(frequencies)
+
+    monkeypatch.setattr(connectivity_module, "_bandpass", device_bandpass)
+    result = getattr(conn, method)()
+    arrays = result if isinstance(result, tuple) else (result,)
+    assert all(isinstance(array, np.ndarray) for array in arrays)
+
+
 class TestCanonicalCoherence:
     """Test canonical_coherence() method."""
 

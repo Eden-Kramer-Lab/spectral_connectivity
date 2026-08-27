@@ -2,6 +2,7 @@
 
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
 
@@ -12,6 +13,7 @@ from numpy.typing import NDArray
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import get_compute_backend
+from spectral_connectivity.utils import to_numpy as _to_host_array
 
 logger = getLogger(__name__)
 
@@ -33,10 +35,12 @@ class UnsupportedMeasureError(ValueError):
 def _package_version() -> str:
     """Return the installed spectral_connectivity version (or ``"unknown"``)."""
     try:
-        from importlib.metadata import version
+        from importlib.metadata import PackageNotFoundError, version
 
         return version("spectral_connectivity")
-    except Exception:
+    except (PackageNotFoundError, ImportError):
+        # Package not installed / metadata unavailable; a genuinely unexpected
+        # error is left to surface rather than being masked as "unknown".
         return "unknown"
 
 
@@ -69,16 +73,44 @@ DEFAULT_METHODS: tuple[str, ...] = (
 )
 
 
-def _to_host_array(x: Any) -> NDArray:
-    """Return ``x`` as a host NumPy array, moving it off the GPU if needed.
+@dataclass(frozen=True)
+class _MeasureSpec:
+    """Shape/capability metadata used by the xarray wrapper."""
 
-    Under GPU mode ``Multitaper`` coordinates are CuPy arrays, which NumPy will
-    not implicitly convert. CuPy arrays expose ``.get()`` to copy to host (so the
-    GPU case returns a copy, not a view); NumPy arrays have no such method and
-    pass through unchanged.
-    """
-    to_host = getattr(x, "get", None)
-    return np.asarray(to_host() if callable(to_host) else x)
+    output_kind: str
+    xarray_supported: bool = True
+
+
+_PAIRWISE_SPEC = _MeasureSpec("pairwise")
+_POWER_SPEC = _MeasureSpec("power")
+_UNSUPPORTED_SPEC = _MeasureSpec("unsupported", xarray_supported=False)
+
+# Keep wrapper capabilities declarative. In particular, do not infer them from a
+# method-name substring: a newly added method containing "directed" need not have
+# the directed-transfer-function family's nonstandard output contract.
+_MEASURE_SPECS: dict[str, _MeasureSpec] = {
+    **{name: _PAIRWISE_SPEC for name in DEFAULT_METHODS if name != "power"},
+    "coherency": _PAIRWISE_SPEC,
+    "power": _POWER_SPEC,
+    "subset_pairwise_spectral_granger_prediction": _PAIRWISE_SPEC,
+    **dict.fromkeys(
+        (
+            "blockwise_spectral_granger_prediction",
+            "canonical_coherence",
+            "conditional_spectral_granger_prediction",
+            "delay",
+            "direct_directed_transfer_function",
+            "directed_coherence",
+            "directed_transfer_function",
+            "generalized_partial_directed_coherence",
+            "global_coherence",
+            "group_delay",
+            "partial_directed_coherence",
+            "phase_slope_index",
+        ),
+        _UNSUPPORTED_SPEC,
+    ),
+}
 
 
 def _validate_connectivity_matches_multitaper(
@@ -152,13 +184,9 @@ def _validate_connectivity_matches_multitaper(
             "`Connectivity.from_multitaper(m)`, or leave `connectivity=None` to "
             "build one automatically."
         )
-    # Identity does not detect a change to the (mutable) Multitaper's parameters
-    # after conn was built: conn holds a snapshot of the coefficients, but the
-    # result is labeled with mt_* metadata. Reject if the source's current
-    # parameters differ from the snapshot taken at build time, so a mutated
-    # source (e.g. a changed detrend_type or time_halfbandwidth_product) cannot
-    # mislabel the result. Reaching here implies identity held, so a snapshot
-    # exists (from_multitaper set it and reassignment would have cleared both).
+    # Multitaper parameters are immutable now, but retain this snapshot comparison
+    # as a defensive check for legacy/unpickled objects and subclasses that bypass
+    # the base class's assignment guard.
     snapshot = connectivity._source_parameters or {}
     current = m._provenance_metadata()
     if current.keys() != snapshot.keys() or any(
@@ -222,8 +250,7 @@ def connectivity_to_xarray(
         to share one ``Connectivity`` across several measures (avoiding a
         recomputed FFT per measure). Not part of the public API — it must be a
         ``Connectivity.from_multitaper(m)`` instance for *this* ``m`` (validated
-        by provenance identity), and a mutable ``Multitaper`` mutated after it
-        was built is rejected. To reuse a transform yourself, call the
+        by provenance identity). To reuse a transform yourself, call the
         ``Connectivity`` methods directly (the instance caches shared
         intermediates) or request multiple measures via
         ``multitaper_connectivity``.
@@ -243,7 +270,7 @@ def connectivity_to_xarray(
     ValueError
         In either of two cases: (1) the requested method does not fit the
         ``(time, frequency, source, target)`` xarray layout
-        (``global_coherence``, ``phase_slope_index``, ``group_delay``,
+        (``global_coherence``, ``phase_slope_index``, ``group_delay``, ``delay``,
         ``canonical_coherence``, or a directed measure); the message points to
         using ``Connectivity`` directly. (2) an internal ``_connectivity``
         instance is passed whose channel count, frequency grid, or time bins
@@ -262,15 +289,11 @@ def connectivity_to_xarray(
     ('time', 'frequency', 'source', 'target')
     """
     connectivity = _connectivity  # internal, keyword-only shared-instance hook
-    if (
-        method
-        in [
-            "group_delay",
-            "canonical_coherence",
-            "global_coherence",
-            "phase_slope_index",
-        ]
-    ) or ("directed" in method):
+    # Unknown methods are allowed for extensibility (including test/subclass
+    # methods) and default to the ordinary pairwise layout. Known exceptional
+    # methods are rejected through explicit capability metadata.
+    measure_spec = _MEASURE_SPECS.get(method, _PAIRWISE_SPEC)
+    if not measure_spec.xarray_supported:
         raise UnsupportedMeasureError(
             f"The method '{method}' is not supported by the xarray interface "
             f"(it does not return a plain (time, frequency, source, target) "
@@ -282,7 +305,7 @@ def connectivity_to_xarray(
     # Name the source and target axes
     signal_names_list: Sequence[str]
     if signal_names is None:
-        signal_names_list = list(np.arange(m.time_series.shape[-1]).astype(str))
+        signal_names_list = list(np.arange(m.n_signals).astype(str))
     else:
         signal_names_list = signal_names
 
@@ -292,23 +315,23 @@ def connectivity_to_xarray(
         _validate_connectivity_matches_multitaper(connectivity, m)
     connectivity_mat = getattr(connectivity, method)(**kwargs)
     # Only one couple (only makes sense for symmetrical metrics)
-    if (m.time_series.shape[-1] > 2) and squeeze:
+    if (m.n_signals > 2) and squeeze:
         warnings.warn(
-            f"squeeze=True but there are {m.time_series.shape[-1]} signals "
+            f"squeeze=True but there are {m.n_signals} signals "
             f"(more than 2 pairs); ignoring squeeze and returning the full "
             f"(source, target) matrix.",
             UserWarning,
             stacklevel=2,
         )
 
-    if method == "power":
+    if measure_spec.output_kind == "power":
         xar = xr.DataArray(
             connectivity_mat,
             coords=[connectivity.time, connectivity.frequencies, signal_names_list],
             dims=["time", "frequency", "source"],
         )
 
-    elif (m.time_series.shape[-1] == 2) and squeeze:
+    elif (m.n_signals == 2) and squeeze:
         connectivity_mat = connectivity_mat[..., 0, -1]
         xar = xr.DataArray(
             connectivity_mat,
@@ -332,8 +355,8 @@ def connectivity_to_xarray(
 
     # Label with the source transform's parameters taken from the snapshot
     # recorded when the Connectivity was built (Connectivity._source_parameters),
-    # NOT the live Multitaper: `m` is mutable, and the snapshot is guaranteed
-    # (by the validation above) to match `connectivity`'s coefficients. The
+    # NOT the live Multitaper: the snapshot is guaranteed (by the validation
+    # above) to match `connectivity`'s coefficients. The
     # snapshot already applied the NetCDF-serializable filtering (see
     # Multitaper._provenance_metadata). The 'mt_' prefix avoids xarray's '.dt'
     # accessor treating a bare attribute name as a datetime coordinate.
@@ -409,7 +432,7 @@ def multitaper_connectivity(
         default only because it is complex (NetCDF cannot store it), but it can be
         requested by name. Other measures that do not fit the ``(time, frequency,
         source, target)`` layout — ``global_coherence``, ``phase_slope_index``,
-        ``group_delay``, ``canonical_coherence``, and the directed-transfer-
+        ``group_delay``, ``delay``, ``canonical_coherence``, and the directed-transfer-
         function family — are *not* available through this wrapper at all
         (requesting one raises with a pointer to use ``Connectivity`` directly).
         Examples: "coherence_magnitude", "imaginary_coherence",

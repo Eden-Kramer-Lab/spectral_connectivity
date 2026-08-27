@@ -4,7 +4,6 @@ import warnings
 import weakref
 from collections.abc import Callable
 from functools import cached_property, partial, wraps
-from inspect import signature
 from itertools import combinations
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
@@ -20,7 +19,7 @@ from spectral_connectivity.statistics import (
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
 )
-from spectral_connectivity.utils import is_gpu_enabled
+from spectral_connectivity.utils import is_gpu_enabled, to_numpy
 
 if TYPE_CHECKING:
     from spectral_connectivity.transforms import Multitaper
@@ -63,14 +62,17 @@ else:
     from scipy.fft import ifft
     from scipy.sparse.linalg import svds
 
+EXPECTATION_AXES = {
+    "time": (0,),
+    "trials": (1,),
+    "tapers": (2,),
+    "time_trials": (0, 1),
+    "time_tapers": (0, 2),
+    "trials_tapers": (1, 2),
+    "time_trials_tapers": (0, 1, 2),
+}
 EXPECTATION = {
-    "time": partial(xp.mean, axis=0),
-    "trials": partial(xp.mean, axis=1),
-    "tapers": partial(xp.mean, axis=2),
-    "time_trials": partial(xp.mean, axis=(0, 1)),
-    "time_tapers": partial(xp.mean, axis=(0, 2)),
-    "trials_tapers": partial(xp.mean, axis=(1, 2)),
-    "time_trials_tapers": partial(xp.mean, axis=(0, 1, 2)),
+    name: partial(xp.mean, axis=axes) for name, axes in EXPECTATION_AXES.items()
 }
 
 # Tikhonov regularization factor for stabilizing matrix inversions
@@ -91,6 +93,10 @@ GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS = 64
 # chunk * (n_signals * n_estimates + min(n_signals, n_estimates)**2), so cap the
 # element count to keep it bounded regardless of the number of bins.
 GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
+# Peak workspace cap for the phase-lag-index family's observation-level signal
+# tiles. The final reduced signal-by-signal result is unavoidable, but the large
+# trial/taper/time-resolved outer product is never materialized in full.
+PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
 
 # Largest relative gap between the diagonal-noise-power denominator that
 # ``directed_coherence`` uses and the true power spectral density, tolerated
@@ -128,10 +134,7 @@ def _asnumpy(connectivity_measure: Callable) -> Callable:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         measure = connectivity_measure(*args, **kwargs)
         if measure is not None:
-            try:
-                return xp.asnumpy(measure)
-            except AttributeError:
-                return measure
+            return to_numpy(measure)
         else:
             return None
 
@@ -730,11 +733,8 @@ class Connectivity:
         # time_series); a dropped reference simply fails the identity check.
         instance._source_multitaper = weakref.ref(multitaper_instance)
         # Snapshot the source transform's parameters as they were at build time.
-        # The coefficients are a fixed snapshot, but a Multitaper is mutable; the
-        # wrapper labels results with these parameters, so capturing them here
-        # (rather than reading the live, possibly-mutated Multitaper later) keeps
-        # the metadata consistent with the coefficients and lets the wrapper
-        # detect a source mutated after construction.
+        # Multitaper configurations are immutable, and retaining the snapshot here
+        # also keeps metadata self-contained after the source object is released.
         instance._source_parameters = multitaper_instance._provenance_metadata()
         return instance
 
@@ -908,10 +908,7 @@ class Connectivity:
         """
         if fourier_coefficients is None:
             fourier_coefficients = self._fourier_coefficients
-        # Reuse the same axis metadata that ``n_observations`` reads, so this
-        # stays correct for every expectation_type without a parallel mapping.
-        axes = signature(self._expectation).parameters["axis"].default
-        average_axes = (axes,) if isinstance(axes, int) else tuple(axes)
+        average_axes = self._expectation_axes
 
         signal_axis = fourier_coefficients.ndim - 1
         frequency_axis = signal_axis - 1
@@ -940,7 +937,7 @@ class Connectivity:
 
     @cached_property
     def _cached_reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
-        """Cache the identity (``fcn=None``) expected cross-spectral matrix.
+        """Cache the reduced expected cross-spectral matrix.
 
         This is the reduced result of ``_expectation_cross_spectral_matrix()``.
         It is reused within a measure (``coherency`` divides it by power) and
@@ -956,7 +953,7 @@ class Connectivity:
     def _subset_cross_spectral_matrix(
         self, pairs: list | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
-        """Compute cross-spectral matrix for subset of channel pairs.
+        """Compute compact observation-level spectra for channel pairs.
 
         Parameters
         ----------
@@ -965,38 +962,32 @@ class Connectivity:
 
         Returns
         -------
-        array
-            Cross-spectral matrix for specified pairs.
+        array, shape (..., n_pairs, n_frequencies, 2, 2)
+            One compact 2-by-2 cross-spectral matrix per requested pair. The
+            trial/taper/time observation axes remain present until the caller
+            applies its configured expectation.
 
         """
-        pairs = np.array(pairs)
-        fourier_coefficients = self._fourier_coefficients[..., xp.newaxis]
-        fourier_coefficients = fourier_coefficients.astype(self._dtype)
-
-        csm_shape = list(self._fourier_coefficients.shape)
-        csm_shape += [csm_shape[-1]]
-        dtype = self._dtype
-        csm = xp.empty(csm_shape, dtype=dtype)
-
-        for i, j in pairs:
-            a = fourier_coefficients[..., [i], :]
-            b = fourier_coefficients[..., [j], :]
-
-            # compute the cross terms (off-diagonal)
-            csm[..., i, j] = _complex_inner_product(a, b)[..., 0, 0]
-            csm[..., j, i] = _complex_inner_product(b, a)[..., 0, 0]
-
-            # compute the diagonal terms (auto-correlation)
-            csm[..., i, i] = _complex_inner_product(a, a)[..., 0, 0]
-            csm[..., j, j] = _complex_inner_product(b, b)[..., 0, 0]
-
-        return csm
+        pair_indices = xp.asarray(pairs, dtype=int)
+        if pair_indices.ndim != 2 or pair_indices.shape[1] != 2:
+            raise ValueError("pairs must have shape (n_pairs, 2).")
+        if pair_indices.size == 0:
+            raise ValueError("pairs must contain at least one signal pair.")
+        n_signals = self._fourier_coefficients.shape[-1]
+        if bool(xp.any(pair_indices < 0)) or bool(xp.any(pair_indices >= n_signals)):
+            raise IndexError(f"pair indices must be between 0 and {n_signals - 1}.")
+        # Advanced-index the signal axis into (..., frequency, pair, 2), then put
+        # pair before frequency so frequency remains axis -3 as required by the
+        # Wilson factorization after the observation expectation is applied.
+        coefficients = self._fourier_coefficients[..., pair_indices]
+        coefficients = xp.moveaxis(coefficients, -2, -3).astype(self._dtype, copy=False)
+        coefficients = coefficients[..., xp.newaxis]
+        return _complex_inner_product(coefficients, coefficients, dtype=self._dtype)
 
     # These quantities feed every directed-connectivity measure and are
     # expensive to compute (the minimum-phase decomposition in particular), so
-    # they are cached per instance. Connectivity is treated as immutable after
-    # construction; do not mutate fourier_coefficients / expectation_type after
-    # accessing these.
+    # they are cached per instance. The validated input setters clear these
+    # cached properties before accepting a replacement.
     @cached_property
     def _minimum_phase_factor(self) -> NDArray[np.complexfloating]:
         return minimum_phase_decomposition(
@@ -1023,6 +1014,11 @@ class Connectivity:
         return EXPECTATION[self.expectation_type]
 
     @property
+    def _expectation_axes(self) -> tuple[int, ...]:
+        """Observation axes reduced by the configured expectation."""
+        return EXPECTATION_AXES[self.expectation_type]
+
+    @property
     def n_observations(self) -> int:
         """Return number of observations.
 
@@ -1032,13 +1028,14 @@ class Connectivity:
             Effective number of independent observations after averaging.
 
         """
-        axes = signature(self._expectation).parameters["axis"].default
-        if isinstance(axes, int):
-            return self._fourier_coefficients.shape[axes]
-        else:
-            return int(
-                np.prod([self._fourier_coefficients.shape[axis] for axis in axes])
+        return int(
+            np.prod(
+                [
+                    self._fourier_coefficients.shape[axis]
+                    for axis in self._expectation_axes
+                ]
             )
+        )
 
     @_asnumpy
     def power(self) -> NDArray[np.floating]:
@@ -1532,21 +1529,21 @@ class Connectivity:
         """Reduced moments of the per-observation imaginary cross-spectrum.
 
         The phase-lag-index family (``phase_lag_index``,
-        ``weighted_phase_lag_index``, ``debiased_squared_weighted_phase_lag_index``)
-        each average a function -- ``sign``, identity, ``abs`` or square -- of the
-        imaginary part of the per-observation cross-spectral matrix, with the
-        diagonal zeroed. This returns the requested reduced moments, computing
-        (and caching) any not already computed from a *single* formation of the
-        large observation-level cross-spectrum.
+        ``weighted_phase_lag_index``, ``debiased_squared_phase_lag_index``, and
+        ``debiased_squared_weighted_phase_lag_index``) each average a function --
+        ``sign``, identity, ``abs`` or square -- of the imaginary part of the
+        per-observation cross-spectral matrix, with the diagonal zeroed. This
+        returns the requested reduced moments, computing (and caching) any not
+        already available from signal-row tiles of the observation-level
+        cross-spectrum.
 
         Computing only the requested keys keeps a single-measure call
         (e.g. ``phase_lag_index`` needs only ``"sign"``) from doing the other
-        measures' reductions or retaining their moments; a shared instance
-        computing the whole family still forms the cross-spectrum only when a
-        needed moment is missing, so the family avoids re-forming it per
-        transform function. The cached moments are invalidated with the other
-        cached intermediates and are treated as read-only (callers copy before
-        any in-place edit).
+        measures' reductions or retaining their moments. Each tile is reduced
+        immediately, avoiding an observation-resolved ``n_signals**2``
+        intermediate. The reduced ``n_signals**2`` outputs are unavoidable. The
+        cached moments are invalidated with the other cached intermediates and
+        are treated as read-only (callers copy before any in-place edit).
 
         Parameters
         ----------
@@ -1563,27 +1560,62 @@ class Connectivity:
         cache = self.__dict__.setdefault("_imaginary_moment_cache", {})
         missing = [key for key in keys if key not in cache]
         if missing:
-            # The phase-lag-index family averages an anti-symmetric transform
-            # (sign/abs/square of the imaginary part) of the cross-spectral
-            # matrix, so -- unlike the coherence family and phase_locking_value --
-            # it cannot use the reduced matmul and must materialize the full
-            # observation-level cross-spectral matrix here (transient,
-            # O(observations * signals**2)).
-            imaginary = self._cross_spectral_matrix.imag
-            n_signals = imaginary.shape[-1]
-            diagonal_index = xp.diag_indices(n_signals)
-            # Self-connections have no meaningful imaginary part; zero the
-            # diagonal to avoid numerical-precision noise (matches the per-method
-            # fcns). None of the reducers below mutate ``imaginary`` in place.
-            imaginary[..., diagonal_index[0], diagonal_index[1]] = 0
-            reducers = {
-                "sign": lambda: xp.sign(imaginary),
-                "imaginary": lambda: imaginary,
-                "absolute": lambda: xp.abs(imaginary),
-                "squared": lambda: imaginary**2,
-            }
+            valid_keys = {"sign", "imaginary", "absolute", "squared"}
+            unknown = set(missing) - valid_keys
+            if unknown:
+                raise ValueError(f"unknown imaginary moment key(s): {sorted(unknown)}")
+
+            coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
+            n_signals = coefficients.shape[-1]
+            kept_observation_axes = [
+                axis for axis in range(3) if axis not in self._expectation_axes
+            ]
+            result_shape = (
+                *[coefficients.shape[axis] for axis in kept_observation_axes],
+                coefficients.shape[-2],
+                n_signals,
+                n_signals,
+            )
+            real_dtype = coefficients.real.dtype
             for key in missing:
-                cache[key] = self._expectation(reducers[key]())
+                cache[key] = xp.empty(result_shape, dtype=real_dtype)
+
+            observation_frequency_elements = int(np.prod(coefficients.shape[:-1]))
+            elements_per_source = max(1, observation_frequency_elements * n_signals)
+            signals_per_block = max(
+                1,
+                min(
+                    n_signals,
+                    PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS // elements_per_source,
+                ),
+            )
+
+            # Nonlinear sign/abs/square transforms prevent contracting the
+            # observation axes before the outer product. Form only a source-row
+            # tile at a time, reduce it immediately, and write the small result.
+            all_coefficients = coefficients[..., xp.newaxis]
+            for start in range(0, n_signals, signals_per_block):
+                stop = min(n_signals, start + signals_per_block)
+                source_coefficients = coefficients[..., start:stop, xp.newaxis]
+                imaginary = _complex_inner_product(
+                    source_coefficients,
+                    all_coefficients,
+                    dtype=self._dtype,
+                ).imag
+                local_diagonal = xp.arange(stop - start)
+                global_diagonal = xp.arange(start, stop)
+                imaginary[..., local_diagonal, global_diagonal] = 0
+
+                for key in missing:
+                    if key == "sign":
+                        moment = xp.sign(imaginary)
+                    elif key == "imaginary":
+                        moment = imaginary
+                    elif key == "absolute":
+                        moment = xp.abs(imaginary)
+                    else:  # key == "squared"; unknown keys were rejected above
+                        moment = imaginary**2
+                    cache[key][..., start:stop, :] = self._expectation(moment)
         return tuple(cache[key] for key in keys)
 
     @_asnumpy
@@ -1685,7 +1717,9 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: [0, 1]. Bias-corrected version of squared phase lag index.
+        **Range**: [-1 / (n_observations - 1), 1]. The unbiased finite-sample
+        estimate can be negative when the observed phase consistency is below
+        its null bias; negative values do not represent negative coupling.
 
         References
         ----------
@@ -1719,7 +1753,9 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: [0, 1]. Bias-corrected weighted phase lag index squared.
+        **Range**: [-1, 1]. The debiased finite-sample estimate can be negative
+        when the signed cross-products are dominated by inconsistent phase lags;
+        negative values do not represent negative coupling.
 
         References
         ----------
@@ -1761,7 +1797,9 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: [0, 1]. Unbiased phase consistency measure.
+        **Range**: [-1 / (n_observations - 1), 1]. The unbiased finite-sample
+        estimate can be negative when phase consistency is below its null bias;
+        negative values do not represent negative coupling.
 
         References
         ----------
@@ -1835,12 +1873,12 @@ class Connectivity:
 
         """
         pairs = np.array(pairs)
-        csm = self._expectation(self._subset_cross_spectral_matrix(pairs))
-        total_power = self._power
-        return _estimate_spectral_granger_prediction(
-            total_power,
-            csm,
+        pair_csm = self._expectation(self._subset_cross_spectral_matrix(pairs))
+        return _estimate_subset_spectral_granger_prediction(
+            self._power,
+            pair_csm,
             pairs,
+            n_signals=self._fourier_coefficients.shape[-1],
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
@@ -1967,10 +2005,16 @@ class Connectivity:
             / _total_inflow(self._transfer_function, noise_variance) ** 2
         )
 
+    def _partial_directed_coherence(self) -> NDArray[np.floating]:
+        """Return device-native PDC for reuse by other device-native measures."""
+        return _squared_magnitude(
+            self._MVAR_Fourier_coefficients
+            / _total_outflow(self._MVAR_Fourier_coefficients)
+        )
+
     @_ignore_nan_propagation_warnings
-    def partial_directed_coherence(
-        self, keep_cupy: bool = False
-    ) -> NDArray[np.floating]:
+    @_asnumpy
+    def partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by outflow.
 
         The transfer function coupling strength normalized by its
@@ -1979,11 +2023,6 @@ class Connectivity:
         The partial directed coherence tries to regress out the influence
         of other observed signals, leaving only the direct coupling between
         two signals.
-
-        Parameters
-        ----------
-        keep_cupy : bool, default=False
-            Whether to keep arrays as CuPy arrays.
 
         Returns
         -------
@@ -2002,24 +2041,7 @@ class Connectivity:
                Biological Cybernetics 84, 463-474.
 
         """
-        if keep_cupy:
-            return _squared_magnitude(
-                self._MVAR_Fourier_coefficients
-                / _total_outflow(self._MVAR_Fourier_coefficients)
-            )
-        else:
-            try:
-                return xp.asnumpy(
-                    _squared_magnitude(
-                        self._MVAR_Fourier_coefficients
-                        / _total_outflow(self._MVAR_Fourier_coefficients)
-                    )
-                )
-            except AttributeError:
-                return _squared_magnitude(
-                    self._MVAR_Fourier_coefficients
-                    / _total_outflow(self._MVAR_Fourier_coefficients)
-                )
+        return self._partial_directed_coherence()
 
     @_ignore_nan_propagation_warnings
     @_asnumpy
@@ -2092,9 +2114,7 @@ class Connectivity:
         full_frequency_DTF = self._transfer_function / _total_inflow(
             self._transfer_function, axis=(-1, -3)
         )
-        return xp.abs(full_frequency_DTF) * xp.sqrt(
-            self.partial_directed_coherence(keep_cupy=True)
-        )
+        return xp.abs(full_frequency_DTF) * xp.sqrt(self._partial_directed_coherence())
 
     def group_delay(
         self,
@@ -2143,6 +2163,11 @@ class Connectivity:
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
             self.coherency(), frequencies, frequencies_of_interest
         )
+        # Statistical inference and masked regression below are NumPy operations.
+        # Make the GPU-to-host boundary explicit before passing data into them;
+        # NumPy deliberately refuses implicit conversion of CuPy arrays.
+        bandpassed_coherency = to_numpy(bandpassed_coherency)
+        bandpassed_frequencies = to_numpy(bandpassed_frequencies)
 
         n_signals = bandpassed_coherency.shape[-1]
         signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
@@ -2156,15 +2181,10 @@ class Connectivity:
             independent_frequency_step,
             significance_threshold=significance_threshold,
         )
-        try:
-            coherence_phase = np.ma.masked_array(
-                xp.asnumpy(xp.unwrap(xp.angle(bandpassed_coherency), axis=-2)),
-                mask=~is_significant,
-            )
-        except AttributeError:
-            coherence_phase = np.ma.masked_array(
-                xp.unwrap(xp.angle(bandpassed_coherency), axis=-2), mask=~is_significant
-            )
+        coherence_phase = np.ma.masked_array(
+            np.unwrap(np.angle(bandpassed_coherency), axis=-2),
+            mask=~is_significant,
+        )
 
         # Vectorized masked linear regression of the unwrapped phase on
         # frequency, per (batch, signal pair), replacing a per-slice scipy
@@ -2266,8 +2286,12 @@ class Connectivity:
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
             self.coherency(), frequencies, frequencies_of_interest
         )
+        # Delay masking is NumPy-only. Transfer once at this boundary instead of
+        # mixing NumPy masks with device arrays throughout the calculation.
+        bandpassed_coherency = to_numpy(bandpassed_coherency)
+        bandpassed_frequencies = to_numpy(bandpassed_frequencies)
         n_signals = bandpassed_coherency.shape[-1]
-        signal_combination_ind = xp.array(list(combinations(xp.arange(n_signals), 2)))
+        signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
         bandpassed_coherency = bandpassed_coherency[
             ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
         ]
@@ -2278,35 +2302,35 @@ class Connectivity:
             independent_frequency_step,
             significance_threshold=significance_threshold,
         )
-        coherence_phase = xp.ma.masked_array(
-            xp.unwrap(xp.angle(bandpassed_coherency), axis=-2), mask=~is_significant
+        coherence_phase = np.ma.masked_array(
+            np.unwrap(np.angle(bandpassed_coherency), axis=-2), mask=~is_significant
         )
-        possible_range = 2 * xp.pi * xp.arange(-n_range, n_range + 1)
+        possible_range = 2 * np.pi * np.arange(-n_range, n_range + 1)
         # Convert phase to a time delay: tau = (phase + 2*pi*k) / (2*pi*f). The
         # 2*pi*k terms resolve the phase-wrapping ambiguity. Dividing only by
         # 2*pi (omitting f) would return cycles, not seconds, making a constant
         # physical delay appear frequency-dependent.
-        cycles = xp.rollaxis(
-            (possible_range + coherence_phase[..., xp.newaxis]) / (2 * xp.pi), -1, -2
+        cycles = np.rollaxis(
+            (possible_range + coherence_phase[..., np.newaxis]) / (2 * np.pi), -1, -2
         )
         # cycles has shape (..., n_frequencies, n_candidates, n_pairs); divide by
         # the frequency along the n_frequencies axis (-3). DC (f == 0) has no
         # defined delay and becomes NaN.
-        frequency = bandpassed_frequencies[:, xp.newaxis, xp.newaxis]
+        frequency = bandpassed_frequencies[:, np.newaxis, np.newaxis]
         with np.errstate(divide="ignore", invalid="ignore"):
             delays = cycles / frequency
-        delays[..., bandpassed_frequencies == 0, :, :] = xp.nan
+        delays[..., bandpassed_frequencies == 0, :, :] = np.nan
         # Fill non-significant frequencies (masked) with NaN rather than the
         # masked array's underlying 0.0, so a non-significant bin is not read as
         # a genuine zero-lag delay. This matches the DC handling above.
-        delays = xp.ma.filled(delays, xp.nan)
+        delays = np.ma.filled(delays, np.nan)
         new_shape = (
             *bandpassed_coherency.shape[:-1],
             len(possible_range),
             n_signals,
             n_signals,
         )
-        possible_delays = xp.full(new_shape, xp.nan)
+        possible_delays = np.full(new_shape, np.nan)
         possible_delays[
             ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
         ] = delays
@@ -3475,4 +3499,57 @@ def _estimate_spectral_granger_prediction(
     diagonal_ind = xp.diag_indices(n_signals)
     predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
+    return predictive_power
+
+
+def _estimate_subset_spectral_granger_prediction(
+    total_power: NDArray[np.floating],
+    pair_csm: NDArray[np.complexfloating],
+    pairs: NDArray[np.integer],
+    n_signals: int,
+    minimum_phase_tolerance: float = 1e-8,
+    minimum_phase_max_iterations: int = 500,
+) -> NDArray[np.floating]:
+    """Estimate selected pairwise Granger values from compact 2-by-2 spectra.
+
+    ``pair_csm`` has shape ``(..., n_pairs, n_frequencies, 2, 2)``. Keeping the
+    pair axis as a batch dimension avoids allocating a full signal-by-signal CSM
+    with uninitialized entries merely to consume its requested 2-by-2 slices.
+    """
+    pair_indices = xp.asarray(pairs, dtype=int)
+    n_frequencies = total_power.shape[-2]
+    non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
+    one_sided_power = xp.take(total_power, indices=non_neg_index, axis=-2)
+
+    # Gather the two powers for every pair, then move pair before frequency to
+    # match pair_csm's (..., pair, frequency, 2) batch layout.
+    pair_power = one_sided_power[..., pair_indices]
+    pair_power = xp.moveaxis(pair_power, -2, -3)
+
+    minimum_phase_factor = minimum_phase_decomposition(
+        pair_csm,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
+    )
+    transfer_function = _estimate_transfer_function(minimum_phase_factor)[
+        ..., non_neg_index, :, :
+    ]
+    rotated_covariance = _remove_instantaneous_causality(
+        _estimate_noise_covariance(minimum_phase_factor)
+    )
+    pair_predictive_power = _estimate_predictive_power(
+        pair_power,
+        rotated_covariance,
+        transfer_function,
+    )
+
+    output_shape = (*one_sided_power.shape, n_signals)
+    predictive_power = xp.full(output_shape, xp.nan)
+    for pair_number, pair in enumerate(pair_indices):
+        matrix_indices = pair[:, xp.newaxis]
+        predictive_power[..., matrix_indices, matrix_indices.T] = xp.take(
+            pair_predictive_power, pair_number, axis=-4
+        )
+    diagonal_indices = xp.diag_indices(n_signals)
+    predictive_power[..., diagonal_indices[0], diagonal_indices[1]] = xp.nan
     return predictive_power

@@ -5,9 +5,22 @@ import sys
 import warnings
 from typing import Any
 
+import numpy as np
+from numpy.typing import NDArray
+
 GPU_ENV_VAR = "SPECTRAL_CONNECTIVITY_ENABLE_GPU"
 _TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
 _FALSE_VALUES = frozenset({"false", "0", "no", "off", ""})
+
+
+def to_numpy(array: Any) -> NDArray:
+    """Return an array on the host without implicit device conversion.
+
+    CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. NumPy
+    arrays and ordinary array-likes pass directly through ``np.asarray``.
+    """
+    get = getattr(array, "get", None)
+    return np.asarray(get() if callable(get) else array)
 
 
 def is_gpu_enabled() -> bool:
