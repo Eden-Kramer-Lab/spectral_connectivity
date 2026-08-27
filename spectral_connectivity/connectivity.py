@@ -460,22 +460,45 @@ class Connectivity:
         dict_state["_source_multitaper"] = None
         slot_state: dict[str, Any] = {}
         for klass in type(self).__mro__:
-            for slot in getattr(klass, "__slots__", ()):
+            slots = getattr(klass, "__slots__", ())
+            # ``__slots__`` may be a single string (Python treats it as one slot);
+            # iterating it directly would walk characters, so normalize it.
+            if isinstance(slots, str):
+                slots = (slots,)
+            for slot in slots:
                 if slot in ("__dict__", "__weakref__"):
                     continue
+                # Private slot names are name-mangled (``__x`` -> ``_Class__x``);
+                # the descriptor lives under the mangled name.
+                if slot.startswith("__") and not slot.endswith("__"):
+                    slot = f"_{klass.__name__.lstrip('_')}{slot}"
                 try:
                     slot_state[slot] = getattr(self, slot)
                 except AttributeError:
                     pass  # an unset slot has no value to serialize
         return dict_state, slot_state
 
-    def __setstate__(self, state: tuple[dict[str, Any], dict[str, Any]]) -> None:
-        """Restore state produced by :meth:`__getstate__` (``__dict__`` + slots)."""
-        dict_state, slot_state = state
+    def __setstate__(
+        self, state: tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]
+    ) -> None:
+        """Restore state from :meth:`__getstate__` or a legacy plain dict.
+
+        Pickles written before this class defined ``__getstate__`` (e.g. from an
+        earlier release) contain a plain ``__dict__`` rather than the
+        ``(dict, slots)`` pair, so accept both forms; the provenance fields that
+        did not exist then are initialized to ``None``.
+        """
+        if isinstance(state, tuple):
+            dict_state, slot_state = state
+        else:
+            dict_state, slot_state = state, {}  # legacy plain-dict pickle
         if dict_state:
             self.__dict__.update(dict_state)
         for name, value in (slot_state or {}).items():
             setattr(self, name, value)
+        # Legacy pickles predate the provenance fields; ensure they exist.
+        self.__dict__.setdefault("_source_multitaper", None)
+        self.__dict__.setdefault("_source_parameters", None)
 
     # Cached quantities that depend on fourier_coefficients / expectation_type
     # and must be invalidated when either changes (see the setters below).

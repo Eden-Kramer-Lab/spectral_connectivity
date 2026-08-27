@@ -194,7 +194,8 @@ def connectivity_to_xarray(
     method: str = "coherence_magnitude",
     signal_names: Sequence[str] | None = None,
     squeeze: bool = False,
-    connectivity: Connectivity | None = None,
+    *,
+    _connectivity: Connectivity | None = None,
     **kwargs: Any,
 ) -> xr.DataArray:
     """
@@ -216,20 +217,16 @@ def connectivity_to_xarray(
     squeeze : bool, default=False
         If True and only 2 signals, return connectivity between first and last
         signal only. Only meaningful for symmetric measures.
-    connectivity : Connectivity, optional
-        A ``Connectivity`` built from ``m`` via ``Connectivity.from_multitaper(m)``.
-        When computing several measures from the same transform, pass a shared
-        instance to avoid recomputing the (uncached) FFT for each measure and to
-        reuse the cached power / cross-spectrum across the coherence-family
-        measures. When ``None`` (the default) one is constructed from ``m``
-        automatically. It **must** be built from ``m`` — ``m`` supplies the
-        output coordinates/metadata, so a mismatched ``connectivity`` would
-        mislabel the result. This is enforced by identity: ``from_multitaper``
-        records its source transform, and only an instance whose recorded source
-        is ``m`` (with the default ``expectation_type``) is accepted. A directly
-        constructed ``Connectivity``, or one whose coefficients were reassigned,
-        cannot be verified and is rejected (matching geometry alone does not
-        prove the data is the same).
+    _connectivity : Connectivity, optional
+        Internal, keyword-only optimization used by ``multitaper_connectivity``
+        to share one ``Connectivity`` across several measures (avoiding a
+        recomputed FFT per measure). Not part of the public API — it must be a
+        ``Connectivity.from_multitaper(m)`` instance for *this* ``m`` (validated
+        by provenance identity), and a mutable ``Multitaper`` mutated after it
+        was built is rejected. To reuse a transform yourself, call the
+        ``Connectivity`` methods directly (the instance caches shared
+        intermediates) or request multiple measures via
+        ``multitaper_connectivity``.
     **kwargs : dict
         Additional keyword arguments passed to connectivity method.
 
@@ -248,10 +245,10 @@ def connectivity_to_xarray(
         ``(time, frequency, source, target)`` xarray layout
         (``global_coherence``, ``phase_slope_index``, ``group_delay``,
         ``canonical_coherence``, or a directed measure); the message points to
-        using ``Connectivity`` directly. (2) a ``connectivity`` instance is
-        passed whose channel count, frequency grid, or time bins disagree with
-        ``m`` (it must have been built from ``m``); the message names the
-        disagreeing fields.
+        using ``Connectivity`` directly. (2) an internal ``_connectivity``
+        instance is passed whose channel count, frequency grid, or time bins
+        disagree with ``m`` (it must have been built from ``m``); the message
+        names the disagreeing fields.
 
     Examples
     --------
@@ -264,6 +261,7 @@ def connectivity_to_xarray(
     >>> coherence.dims
     ('time', 'frequency', 'source', 'target')
     """
+    connectivity = _connectivity  # internal, keyword-only shared-instance hook
     if (
         method
         in [
@@ -514,7 +512,7 @@ def multitaper_connectivity(
                 this_method,
                 signal_names,
                 squeeze,
-                connectivity=shared_connectivity,
+                _connectivity=shared_connectivity,
                 **connectivity_kwargs,
             )
             cons[this_method] = con  # Add data variable

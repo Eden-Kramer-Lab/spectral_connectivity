@@ -254,29 +254,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   measure raising `ValueError` because the data has too few observations — is
   **not** swallowed and still surfaces rather than silently dropping a requested
   measure.
-- The optional `connectivity=` argument to `connectivity_to_xarray` is now
-  validated by **provenance identity**, not geometry alone. `from_multitaper`
-  records (a weakref to) its source transform, and only a `Connectivity` whose
-  recorded source is the passed `Multitaper` is accepted; matching channel
-  count, frequency grid, and time bins no longer suffice, because two different
-  recordings can share them and the result takes its coordinates/metadata from
-  the `Multitaper` (a silent mislabeling risk). A directly constructed
-  `Connectivity`, or one whose coefficients were reassigned after
-  `from_multitaper`, is now rejected — build it with
-  `Connectivity.from_multitaper(m)` or leave `connectivity=None`. The injected
-  instance must also use the default `expectation_type` (`"trials_tapers"`);
-  other types do not fit the fixed `(time, frequency, source, target)` layout
-  and now raise an actionable error instead of a cryptic xarray dimension
-  mismatch. Because a `Multitaper` is mutable, `from_multitaper` also snapshots
-  the source transform's parameters: the result is labeled from that snapshot
-  (consistent with the snapshotted coefficients) rather than the live transform,
-  and if the source's parameters were changed after the `Connectivity` was built
-  (e.g. `detrend_type` or `time_halfbandwidth_product`) the injected use is
-  rejected, so a mutated source cannot silently mislabel the result.
+- The `Connectivity`-sharing hook used by `multitaper_connectivity` is now an
+  **internal, keyword-only `_connectivity` argument** to `connectivity_to_xarray`
+  rather than a public `connectivity=` parameter. Tying results to a live,
+  mutable `Multitaper` is a provenance footgun (the source's data or parameters
+  can change after the `Connectivity` is built), so the injection is no longer
+  part of the public API; reuse a transform by calling the `Connectivity`
+  methods directly (the instance caches shared intermediates) or by requesting
+  several measures from `multitaper_connectivity`. The internal hook is still
+  validated defensively: only a `Connectivity.from_multitaper(m)` instance whose
+  recorded source is that `Multitaper` (verified by identity, with the default
+  `expectation_type`) is accepted, results are labeled from a parameter snapshot
+  taken at build time (so a mutated source cannot mislabel them), and a mismatch
+  raises an actionable error rather than a cryptic xarray dimension mismatch.
 - `Connectivity` is now picklable and copyable when built via `from_multitaper`:
   the provenance weakref is dropped during serialization, and state is
   serialized as a `(__dict__, __slots__)` pair so attributes declared through a
-  subclass' `__slots__` survive `pickle` / `copy.copy` / `copy.deepcopy`.
+  subclass' `__slots__` survive `pickle` / `copy.copy` / `copy.deepcopy` —
+  including a string-form `__slots__` and name-mangled slot names. Legacy
+  plain-dict pickles (written before this class defined `__getstate__`) are also
+  accepted, with the new provenance fields initialized to `None`.
 
 ### Removed
 
@@ -308,9 +305,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `multitaper_connectivity` now builds a single `Connectivity` from the
   multitaper transform and reuses it across every requested measure, instead of
   reconstructing one (and recomputing the uncached FFT) per measure. Results are
-  bit-for-bit identical. `connectivity_to_xarray` gained an optional
-  `connectivity=` argument to accept the shared instance (validated against the
-  `Multitaper` to prevent mislabeled output). The FFT saving is modest on its
+  bit-for-bit identical. The shared instance is passed via an internal,
+  keyword-only `_connectivity` argument to `connectivity_to_xarray` (validated
+  against the `Multitaper` to prevent mislabeled output); it is not part of the
+  public API — reuse a transform yourself by calling `Connectivity` methods
+  directly (the instance caches shared intermediates) or by requesting several
+  measures from `multitaper_connectivity`. The FFT saving is modest on its
   own, because the tapers are already memoized on the `Multitaper` (so the
   dominant taper cost was not repeated); sharing one instance also lets the
   cached cross-spectrum and power (below) be reused across measures.

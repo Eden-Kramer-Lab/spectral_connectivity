@@ -669,7 +669,7 @@ def test_provenance_records_measure_kwargs(tmp_path):
     da = connectivity_to_xarray(
         m,
         method="stub_measure",
-        connectivity=conn,
+        _connectivity=conn,
         threshold=0.5,
         window=[1, 2, 3],
     )

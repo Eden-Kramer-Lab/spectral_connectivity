@@ -94,19 +94,19 @@ def test_injected_connectivity_mismatch_raises():
     connectivity_500 = Connectivity.from_multitaper(m_500)
 
     # Consistent instance is accepted.
-    connectivity_to_xarray(m_500, "coherence_magnitude", connectivity=connectivity_500)
+    connectivity_to_xarray(m_500, "coherence_magnitude", _connectivity=connectivity_500)
 
     # Different sampling frequency -> different frequency grid -> rejected.
     with pytest.raises(ValueError, match="not built from this `Multitaper`"):
         connectivity_to_xarray(
-            m_1000, "coherence_magnitude", connectivity=connectivity_500
+            m_1000, "coherence_magnitude", _connectivity=connectivity_500
         )
 
     # Different channel count -> rejected.
     m_two_signals = Multitaper(time_series[..., :2], sampling_frequency=500)
     with pytest.raises(ValueError, match="n_signals"):
         connectivity_to_xarray(
-            m_two_signals, "coherence_magnitude", connectivity=connectivity_500
+            m_two_signals, "coherence_magnitude", _connectivity=connectivity_500
         )
 
     # Different number of time windows (same frequency grid and channel count)
@@ -117,7 +117,7 @@ def test_injected_connectivity_mismatch_raises():
     connectivity_short = Connectivity.from_multitaper(m_short)
     with pytest.raises(ValueError, match="time"):
         connectivity_to_xarray(
-            m_long, "coherence_magnitude", connectivity=connectivity_short
+            m_long, "coherence_magnitude", _connectivity=connectivity_short
         )
 
 
@@ -147,7 +147,7 @@ def test_injected_connectivity_same_geometry_different_data_rejected():
     assert np.array_equal(m_a.time, m_b.time)
 
     with pytest.raises(ValueError, match="cannot be verified to come from"):
-        connectivity_to_xarray(m_b, "coherence_magnitude", connectivity=conn_a)
+        connectivity_to_xarray(m_b, "coherence_magnitude", _connectivity=conn_a)
 
 
 def test_injected_connectivity_reassigned_coefficients_rejected():
@@ -163,11 +163,11 @@ def test_injected_connectivity_reassigned_coefficients_rejected():
     m = Multitaper(rng.standard_normal((512, 3, 4)), sampling_frequency=500)
     conn = Connectivity.from_multitaper(m)
     # Accepted before reassignment (provenance intact).
-    connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+    connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
     # Reassign (even to a fresh transform of the same data): link is cleared.
     conn.fourier_coefficients = m.fft()
     with pytest.raises(ValueError, match="cannot be verified to come from"):
-        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+        connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
 
 
 def test_injected_connectivity_mutated_coordinate_rejected():
@@ -186,7 +186,7 @@ def test_injected_connectivity_mutated_coordinate_rejected():
     # Provenance link is intact (same source object), but shift the coordinate.
     conn.time = conn.time + 1.0
     with pytest.raises(ValueError, match="time"):
-        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+        connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
 
 
 @pytest.mark.parametrize(
@@ -215,7 +215,7 @@ def test_injected_connectivity_source_parameter_change_rejected(attr, value):
     conn = Connectivity.from_multitaper(m)
     setattr(m, attr, value)  # mutate the source after building conn
     with pytest.raises(ValueError, match="was modified after"):
-        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+        connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
 
 
 def test_injected_connectivity_nondefault_expectation_type_rejected():
@@ -232,4 +232,21 @@ def test_injected_connectivity_nondefault_expectation_type_rejected():
     m = Multitaper(rng.standard_normal((512, 3, 4)), sampling_frequency=500)
     conn = Connectivity.from_multitaper(m, expectation_type="time_trials_tapers")
     with pytest.raises(ValueError, match="expectation_type='trials_tapers'"):
+        connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
+
+
+def test_connectivity_injection_is_not_public():
+    """The Connectivity-sharing hook is internal (keyword-only ``_connectivity``).
+
+    It was a public `connectivity=` argument tying results to a live, mutable
+    Multitaper — a provenance footgun. It is now internal, so the public call
+    cannot inject a (potentially stale) instance; reuse a transform by calling
+    the Connectivity methods directly or via multitaper_connectivity([...]).
+    """
+    from spectral_connectivity.connectivity import Connectivity
+
+    rng = np.random.default_rng(5)
+    m = Multitaper(rng.standard_normal((256, 3, 3)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m)
+    with pytest.raises(TypeError):
         connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)

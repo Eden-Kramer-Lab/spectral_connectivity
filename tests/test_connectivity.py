@@ -2666,21 +2666,28 @@ class _SlottedConnectivity(Connectivity):
     __slots__ = ("extra_metadata",)
 
 
-def test_pickle_and_copy_preserve_subclass_slots():
+class _StringSlottedConnectivity(Connectivity):
+    """A subclass whose ``__slots__`` is a bare string (a single slot name)."""
+
+    __slots__ = "extra_metadata"
+
+
+@mark.parametrize("subclass", [_SlottedConnectivity, _StringSlottedConnectivity])
+def test_pickle_and_copy_preserve_subclass_slots(subclass):
     """__getstate__/__setstate__ must not drop subclass __slots__ state.
 
     The base Connectivity keeps its state in __dict__, but a subclass may declare
-    __slots__. Returning only __dict__ would silently lose those attributes on
-    pickle / copy.copy / copy.deepcopy; the (dict, slots) state pair preserves
-    them while still clearing the unpicklable provenance weakref.
+    __slots__ (as a tuple *or* a bare string). Returning only __dict__ would
+    silently lose those attributes on pickle / copy.copy / copy.deepcopy; the
+    (dict, slots) state pair preserves them while still clearing the unpicklable
+    provenance weakref.
     """
     import copy
     import pickle
 
-    SlottedConnectivity = _SlottedConnectivity
     rng = np.random.default_rng(1)
     m = Multitaper(rng.standard_normal((128, 2, 3)), sampling_frequency=500)
-    conn = SlottedConnectivity.from_multitaper(m)
+    conn = subclass.from_multitaper(m)
     conn.extra_metadata = {"subject": "s1"}
 
     for clone in (
@@ -2693,3 +2700,31 @@ def test_pickle_and_copy_preserve_subclass_slots():
             clone.coherence_magnitude(), conn.coherence_magnitude()
         )
         assert clone._source_multitaper is None
+
+
+def test_setstate_accepts_legacy_dict_state():
+    """A plain-dict pickle (from before __getstate__ existed) must still load.
+
+    Earlier releases had no custom __getstate__, so their pickles store a plain
+    __dict__ rather than the new (dict, slots) pair. __setstate__ must accept
+    that legacy form and initialize the new provenance fields to None instead of
+    raising ``ValueError: too many values to unpack``.
+    """
+    rng = np.random.default_rng(2)
+    fc = (
+        rng.standard_normal((2, 3, 4, 8, 3)) + 1j * rng.standard_normal((2, 3, 4, 8, 3))
+    ).astype(np.complex128)
+    conn = Connectivity(fourier_coefficients=fc)
+
+    # Emulate a legacy pickle payload: a plain __dict__ without provenance fields.
+    legacy_state = dict(conn.__dict__)
+    legacy_state.pop("_source_multitaper", None)
+    legacy_state.pop("_source_parameters", None)
+
+    restored = Connectivity.__new__(Connectivity)
+    restored.__setstate__(legacy_state)  # plain dict, as older versions pickled
+    assert restored._source_multitaper is None
+    assert restored._source_parameters is None
+    np.testing.assert_allclose(
+        restored.coherence_magnitude(), conn.coherence_magnitude()
+    )
