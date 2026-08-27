@@ -933,7 +933,7 @@ class Connectivity:
         # across signals.
         return one_sided * scale[:, xp.newaxis]
 
-    @_non_negative_frequencies(axis=-3)
+    @_asnumpy
     def coherency(self) -> NDArray[np.complexfloating]:
         """Return the complex-valued linear association between time series.
 
@@ -949,6 +949,17 @@ class Connectivity:
         **Range**: Magnitude |C_{xy}(f)| ∈ [0, 1]; phase ∈ [−π, π].
         Values lie in the unit disk of the complex plane.
 
+        """
+        return self._coherency()
+
+    @_non_negative_frequencies(axis=-3)
+    def _coherency(self) -> NDArray[np.complexfloating]:
+        """Device-native complex coherency (see the public ``coherency``).
+
+        Kept on the active array namespace (``xp``) so internal consumers --
+        ``coherence_magnitude``/``coherence_phase``, ``group_delay``, ``delay``,
+        ``phase_slope_index`` -- operate on device arrays without a premature
+        host transfer; the public ``coherency`` converts the result to NumPy.
         """
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
@@ -979,7 +990,7 @@ class Connectivity:
         **Range**: [−π, π]. Phase angles in radians for complex coherency.
 
         """
-        return xp.angle(self.coherency())
+        return xp.angle(self._coherency())
 
     @_asnumpy
     def coherence_magnitude(self) -> NDArray[np.floating]:
@@ -1007,7 +1018,7 @@ class Connectivity:
                Processing (ICASSP), pp 4240–4243.
 
         """
-        magnitude = _squared_magnitude(self.coherency())
+        magnitude = _squared_magnitude(self._coherency())
         return xp.clip(magnitude, 0, 1)
 
     @_asnumpy
@@ -2016,7 +2027,7 @@ class Connectivity:
             frequency_difference, frequency_resolution
         )
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self.coherency(), frequencies, frequencies_of_interest
+            self._coherency(), frequencies, frequencies_of_interest
         )
         # Statistical inference and masked regression below are NumPy operations.
         # Make the GPU-to-host boundary explicit before passing data into them;
@@ -2139,7 +2150,7 @@ class Connectivity:
             frequency_difference, frequency_resolution
         )
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self.coherency(), frequencies, frequencies_of_interest
+            self._coherency(), frequencies, frequencies_of_interest
         )
         # Delay masking is NumPy-only. Transfer once at this boundary instead of
         # mixing NumPy masks with device arrays throughout the calculation.
@@ -2235,7 +2246,7 @@ class Connectivity:
         """
         frequencies = self.frequencies
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self.coherency(), frequencies, frequencies_of_interest
+            self._coherency(), frequencies, frequencies_of_interest
         )
 
         self._require_multiple_frequencies("phase_slope_index")

@@ -36,6 +36,7 @@ assert isinstance(connectivity._fourier_coefficients, cp.ndarray)
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
     outputs = (
+        connectivity.coherency(),
         connectivity.coherence_magnitude(),
         connectivity.phase_lag_index(),
         connectivity.global_coherence()[0],
@@ -54,10 +55,15 @@ assert get_compute_backend()["backend"] == "gpu"
 """
     environment = os.environ.copy()
     environment["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-c", code],
-        check=True,
         env=environment,
         text=True,
         capture_output=True,
     )
+    if result.returncode != 0:
+        # Surface the child's traceback; a bare CalledProcessError hides it.
+        pytest.fail(
+            f"GPU smoke subprocess failed (exit {result.returncode}):\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
