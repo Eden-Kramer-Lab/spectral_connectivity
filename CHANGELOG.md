@@ -1,525 +1,108 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-> **Note on versioning:** this release corrects several measures whose numeric
-> output changes (see **Changed — corrected numerics (BREAKING)** below). These
-> are breaking changes and warrant a major version bump. Results computed for
-> `global_coherence`, `power`, `phase_slope_index`, `delay`, and the time
-> coordinate of multitaper/connectivity outputs will differ from earlier 2.x
-> releases.
+This release includes corrected numerical definitions and therefore requires a
+major version bump. Recompute affected results rather than comparing them
+directly with results from 2.x.
 
-> **Upgrading — raised dependency floors:** this release requires `scipy>=1.11.1`
-> (was 1.10). If you use the GPU backend, upgrade `cupy-cuda12x` to `>=13.0`
-> (was 12.0) **before** upgrading `spectral_connectivity` — `pip install -U
-> spectral_connectivity` will not force-upgrade an already-installed
-> `cupy-cuda12x==12.x`, and the too-old CuPy is only detected at first GPU use
-> (now with an explicit version error, no longer a misleading "CuPy is not
-> installed" message). Upgrade with `pip install -U cupy-cuda12x`.
+### Migration guide
 
-### Changed — corrected numerics (BREAKING)
-
-- **`Connectivity.global_coherence`**: now returns each component's fraction of
-  total coherent power (eigenvalue of the cross-spectral matrix over the sum of
-  all eigenvalues, per Cimenser et al. 2011), bounded in `[0, 1]` and
-  scale-invariant. It previously returned the raw squared singular values, which
-  scaled with the square of the input amplitude (×10 input → ×100 output). The
-  sparse (`svds`) branch is now sorted strongest-first explicitly (SciPy does
-  not guarantee the order `svds` returns), matching the dense branch.
-- **`Connectivity.power`**: now returns a true one-sided power spectral density —
-  the interior positive-frequency bins are doubled (DC and, for even FFT length,
-  Nyquist are not) so integrating over frequency recovers the full signal power.
-  Previously the one-sided spectrum was half the correct magnitude. Connectivity
-  measures are unaffected (they use the internal two-sided spectrum).
-- **`Connectivity.phase_slope_index`**: now sums `conj(C(f)) * C(f + df)` over
-  adjacent frequency bins (Nolte et al. 2008). It previously summed over all
-  `i < j` frequency-pair combinations, a different statistic (both magnitude
-  and, in general, sign differ).
-- **`Connectivity.delay`**: now returns a time delay in seconds
-  (`(phase + 2*pi*k) / (2*pi*f)`). It previously divided the phase by `2*pi`
-  only, returning cycles, so a constant physical delay appeared to grow with
-  frequency. The DC bin is returned as NaN. `group_delay` was already correct.
-- **`Multitaper.time`**: windows are now labeled by their center time, as
-  documented, instead of their first sample; the time coordinate of multitaper
-  and connectivity results shifts later by ~half a window.
-
-### Fixed
-
-- **Directed measures with `complex64` inputs**: Wilson minimum-phase
-  factorization now uses `complex128` working precision (or better). Its default
-  relative convergence tolerance, `1e-8`, is below float32 epsilon, so retaining
-  complex64 working buffers caused valid correlated spectra to exhaust the
-  iteration limit and return all-NaN directed measures.
-- **Subset spectral-Granger diagonal**: the compact pairwise implementation now
-  restores the public invariant that self-Granger entries are NaN after
-  scattering the requested 2×2 pair blocks into the full output matrix.
-- **GPU `group_delay` / `delay` backend boundary**: both methods now transfer
-  coherency to NumPy explicitly before entering their NumPy-only significance,
-  masked-array, and regression code. They previously passed a CuPy array into
-  `np.abs` / `np.asarray`, which rejects implicit device-to-host conversion.
-- **Unbiased phase-estimator ranges**: the docs now retain the legitimate
-  negative finite-sample range of PPC and the debiased PLI variants instead of
-  incorrectly describing all three as `[0, 1]`.
-- **Multiple-comparison validation**: BH and Bonferroni now validate `alpha`;
-  Bonferroni handles empty/non-finite families without division by zero and
-  excludes undefined tests consistently with BH, including emitting the same
-  `UserWarning` when the *entire* family is undefined (all p-values non-finite),
-  so an all-not-significant result cannot be silently mistaken for "no true
-  effects"; an unknown correction method raises an actionable `ValueError`
-  instead of leaking a dictionary `KeyError`.
-- **Wilson minimum-phase fallback is now deterministic (no global RNG state)**:
-  when a sub-spectrum's zero-lag matrix is not positive-definite (rank-deficient
-  / duplicated channels), `_get_initial_conditions` used to seed that unit's
-  starting point from `np.random.standard_normal` — averaging 1000 random
-  Wishart draws — so a pathological spectrum's factorization depended on
-  unrelated random calls and required reseeding for reproducibility. It now uses
-  the fixed positive-definite start `n_signals * I` (exactly the expectation of
-  that average). Ordinary inputs whose zero-lag matrix is positive-definite never
-  reach this fallback and are unchanged; the pathological fallback results are
-  now deterministic instead of depending on the global NumPy random state
-  (following the spirit of Scientific Python SPEC 7). This is a NumPy-backend
-  concern only — CuPy's Cholesky returns NaN rather than raising, so the GPU path
-  never enters this branch.
-- **`statistics.Benjamini_Hochberg_procedure` — undefined tests no longer
-  penalize the valid ones**: non-finite p-values (a coherence pair involving a
-  dead/zero-power channel yields `NaN`) were counted toward the number of tests,
-  which tightened the Benjamini-Hochberg threshold and made the *valid* pairs
-  more conservative (fewer significant frequencies in `group_delay` / `delay`).
-  They are now excluded from the family and returned as not-significant, so a
-  dead channel no longer reduces the power of the healthy pairs. Results for
-  finite p-values (the usual case, all channels live) are unchanged
-  (bit-for-bit over 3000 randomized trials). The procedure now delegates to
-  `scipy.stats.false_discovery_control`, which additionally rejects finite
-  p-values outside `[0, 1]`. **Dependency floor raised:** `scipy>=1.11.1` (was
-  `>=1.10`), the release that added `false_discovery_control`.
-- **Wilson minimum-phase decomposition — one singular sub-spectrum no longer
-  poisons the whole batch**: a single rank-deficient window (e.g. duplicated /
-  linearly dependent channels) made the batched `linalg.solve` raise, which
-  aborted the iteration and returned NaN for *every* sub-spectrum in the batch
-  (and diverged from the GPU path, where CuPy returns NaN instead of raising).
-  A new `_solve_isolating_singular` gives the NumPy path CuPy's semantics:
-  singular/non-finite sub-matrices resolve to NaN while the rest are solved
-  normally, so only the offending window is NaN, healthy windows still converge,
-  the non-convergence warning reports the correct count, and CPU and GPU agree.
-  `_get_initial_conditions` had the same all-or-nothing pattern — a single
-  non-positive-definite window made the batched Cholesky raise and replaced
-  *every* unit's deterministic Cholesky start with a random one (which could
-  stop otherwise-convergent windows from converging). It now falls back to a
-  random start only for the non-PD units, so the healthy units keep their exact
-  Cholesky initialization.
-- **`Connectivity.power` — preserves a float32 spectrum's dtype**: the one-sided
-  doubling multiplied by a float64 scale array, silently upcasting a float32
-  (complex64) spectrum back to float64 (doubling memory and defeating the
-  precision choice). The scale now matches the spectrum's dtype.
-- **Directed measures — scale-invariant regularization**: the Tikhonov diagonal
-  loading used to stabilize the transfer-function inversions (`_MVAR_Fourier_coefficients`
-  and `_estimate_transfer_function`) now scales with the RMS magnitude of the
-  matrix (`λ = 1e-12 · √mean(|H|²)`) instead of its mean square. The old
-  mean-square form gave `λ` amplitude-squared units while it is added to a
-  matrix with amplitude units, so the effective regularization was not
-  scale-invariant: rescaling the input by a large factor shifted spectral
-  Granger and DTF by orders of magnitude (e.g. ×10¹² input changed DTF by
-  thousands of percent). Results at ordinary scales are unchanged to ~1e-13.
-- **`Connectivity.directed_coherence` — diagonal-covariance assumption**: this
-  measure follows Baccalá et al. (1998), which assumes uncorrelated MVAR
-  innovations (a diagonal noise covariance) so that the normalizing denominator
-  equals the power spectral density `S_ii = Σ_k σ_kk|H_ik|²`. When the estimated
-  innovation covariance has materially correlated off-diagonal terms (common for
-  non-parametrically estimated MVARs), the true PSD `(H·Cov·Hᴴ)_ii` also contains
-  cross-power that the diagonal formula omits. The assumption is now documented,
-  and a `UserWarning` is emitted when the omitted cross-power is a material
-  fraction of the true PSD — a dimension-aware criterion (max relative gap
-  `|S_ii − Σ_k σ_kk|H_ik|²| / S_ii ≥ 10%`) rather than a pairwise-correlation
-  threshold, so it also catches many weakly-but-jointly correlated sources whose
-  cross terms still omit most of the power. The returned values are unchanged.
-- **`Connectivity.power` / directed measures / statistics**: importing the
-  package no longer executes a global `np.seterr(invalid="ignore")` that
-  silenced NumPy invalid-operation warnings for all downstream caller code.
-  Internal operations that legitimately produce NaN (the Granger log; the
-  DTF/PDC inflow/outflow normalization when the Wilson decomposition does not
-  converge) now scope the suppression locally instead.
-- **`statistics.get_normal_distribution_p_values`**: uses `scipy.stats.norm.sf`
-  instead of `1 - cdf`, so far-tail p-values keep full precision (e.g. `z=8.3`
-  gives `~5.2e-17` rather than underflowing to `0`).
-- **`wrapper.multitaper_connectivity`**: results are NetCDF-serializable again —
-  only attributes of NetCDF-supported types are copied into the xarray `attrs`.
-  Callable `Multitaper` members (e.g. the bound `summarize_parameters` method)
-  are skipped and `None`-valued options (e.g. `detrend_type=None`) are encoded
-  as the string `"None"`, both of which had made `to_netcdf` raise. The complex
-  `coherency` measure is also excluded from the default `method=None` discovery
-  (NetCDF cannot store complex arrays), so the documented default result is
-  serializable; request `"coherency"` explicitly if you need it.
-- **`Connectivity.phase_locking_value` / `pairwise_phase_consistency`**: a
-  zero-magnitude cross-spectrum entry (dead/flat channel) is normalized to NaN
-  via a guarded division with a `UserWarning`, instead of leaking a NumPy
-  `RuntimeWarning` (now that the global warning suppression is removed).
-- **`Connectivity.phase_slope_index`**: raises a clear error when fewer than two
-  frequency bins remain in the band after subsampling, instead of returning an
-  empty adjacent-product sum that NumPy reports as `0` (a false "no
-  directionality" result).
-- **`wrapper.multitaper_connectivity`**: accepts the documented
-  `(n_times, n_channels)` 2-D input (promoted to a single-trial 3-D array)
-  instead of forwarding it to `Multitaper` and raising.
-- **`Connectivity`**: the constructor now creates the documented default
-  coordinates (normalized frequencies, integer time indices) when they are
-  omitted, so a directly-constructed instance no longer crashes in
-  coordinate-dependent methods (`delay`, `group_delay`, `canonical_coherence`).
-- **`minimum_phase_decomposition`**: Wilson-algorithm convergence uses a
-  relative tolerance (normalized by the factor magnitude) so it is
-  scale-invariant; an absolute tolerance was scale-dependent (accepting large
-  relative reconstruction error for small-magnitude spectra). Because the
-  relative criterion is stricter for typical data, the default `max_iterations`
-  is raised to 500 (the loop still returns early on convergence, so this is
-  cheap for well-conditioned inputs), and `minimum_phase_tolerance` /
-  `minimum_phase_max_iterations` are now exposed on `Connectivity` /
-  `Connectivity.from_multitaper` so callers can recover near-singular cases.
-  A factor that becomes exactly singular during iteration (rank-deficient /
-  duplicated channels) is now returned as NaN with the convergence warning
-  instead of raising `LinAlgError`.
-- **`transforms.dpss_windows`**: a singular pivot during inverse iteration no
-  longer produces NaN tapers for valid parameters (e.g. `dpss_windows(8, 2, 3)`);
-  the pivot magnitude is floored so non-degenerate results are unchanged.
-  Invalid parameter combinations now raise: the window length must be `>= 2`
-  (a single-sample window crashed inside `_fix_taper_sign`),
-  `time_halfbandwidth_product` must satisfy `0 < NW < window_length / 2`
-  (otherwise concentration ratios could exceed 1), and
-  `1 <= n_tapers <= window_length`. A fractional `n_tapers` is rejected rather
-  than silently truncated (`Multitaper` also validates it at construction, so
-  the reported `n_tapers` cannot disagree with the taper count actually used).
-- **`Connectivity`**: the constructor validates supplied `frequencies` / `time`
-  coordinates — they must be exactly 1-D, finite, and match the data geometry.
-  A mismatched length, a wrong shape (e.g. `(n, 1)`, which passed a length-only
-  check), or a non-finite value previously misaligned/dropped bins silently, or
-  crashed `delay` / `group_delay` / `canonical_coherence` with a broadcasting
-  error.
-- **`Connectivity.delay` / `group_delay` / `phase_slope_index`**: raise a clear
-  error when the data has only one frequency bin, instead of a raw `IndexError`
-  from reading `frequencies[1]` for the frequency step.
-- **`Connectivity.delay` / `group_delay` / `phase_slope_index`**: a supplied
-  `frequency_resolution` must be a finite positive number; zero, negative, NaN,
-  and infinity are rejected (they caused step/slice errors or silent all-NaN
-  results).
-- **`statistics.coherence_significance_pvalue`**: `n_observations` must be a
-  finite integer `>= 2` (non-finite or non-integer counts previously gave NaN or
-  degenerate p-values).
-- **`transforms.Multitaper`**: a `time_window_duration` / `time_window_step`
-  that rounds/truncates to zero samples, or a window longer than the signal,
-  now raises a clear error instead of a divide-by-zero or an empty transform.
-  The validation runs on the resolved sample counts, so it also covers explicit
-  `n_time_samples_per_window` / `n_time_samples_per_step` (including `0`), not
-  just the duration-derived path.
-- **`Connectivity.global_coherence`**: rescales the coefficients by their
-  maximum magnitude before summing squares, so extreme magnitudes (e.g.
-  `~1e-200` or `~1e200`) no longer underflow/overflow to NaN; the measure is a
-  scale-invariant ratio, so the result is unchanged.
-- **`statistics.coherence_significance_pvalue`**: requires `n_observations >= 2`
-  (the Beta(1, n-1) null); smaller counts previously returned values outside
-  `[0, 1]` (e.g. `1.33` for `n_observations=0`).
-- **`Connectivity.directed_coherence`**: corrected the noise-variance normalization. The per-source noise variance was broadcast on the target axis instead of the source axis and combined with a malformed `sqrt`/denominator, producing values greater than 1 for channels with unequal noise variances. It now returns the squared directed coherence `nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2`, bounded in [0, 1] and summing to 1 over sources. **Values computed with earlier versions were incorrect whenever channel noise variances differed.**
-- **`Connectivity.group_delay` / `Connectivity.delay`**: the frequency-significance test now uses the exact zero-coherence null distribution (`statistics.coherence_significance_pvalue`, magnitude-squared coherence ~ Beta(1, n-1)). The previous Fisher one-sample z-transform both returned all-NaN (so `group_delay` raised a `zero-size array` error) and, once that was patched, was badly miscalibrated at the zero-coherence boundary — it over-rejected the null by 3-4x (~16-22% actual rejection at a nominal 5%), yielding spurious "significant" frequencies. `coherence_fisher_z_transform` is retained for two-sample comparisons; it now validates that `n_obs1` is a finite integer `>= 2` and `n_obs2` is a finite integer equal to `0` (one-sample) or `>= 2` (`n_obs=1` previously raised `ZeroDivisionError`, and non-finite/fractional counts gave NaN with a runtime warning).
-- **`statistics.power_confidence_intervals`**: split the tail mass evenly between the two tails. A requested 95% interval previously covered only ~90% (coverage was `2*ci - 1`). Added validation that `ci` is in `[0.5, 1.0)`, that `n_tapers` is a finite positive integer (zero/negative/NaN previously returned `(nan, nan)` and fractional values used meaningless non-integer degrees of freedom), and that `power` is finite and non-negative (a negative power previously returned negative, reversed bounds, e.g. `power=-1` -> ~`(-0.488, -3.080)`).
-- **`statistics.power_bias` / `statistics.power_variance`**: evaluate the digamma/trigamma functions at the chi-squared shape parameter `n_observations` (`nu/2`) rather than `2*n_observations`, correcting an ~2x error in the log-power bias/variance used by `power_fisher_z_transform`.
-- **`statistics.power_fisher_z_transform`**: the one-sample case (`n_obs2=0`) no longer hits the digamma/trigamma poles; the baseline default changed from 0 (`log(0)`) to 1.0. Observation counts must be finite integers and the spectra must be finite and strictly positive — non-finite/fractional counts and non-finite spectra previously produced silent NaN/Inf z-scores.
-- **`transforms.Multitaper`**: raise a clear error when `n_fft_samples` is smaller than the window length instead of silently truncating the signal (the FFT crops rather than zero-pads).
-- **`minimum_phase_decomposition`**: on Wilson-algorithm non-convergence, the unconverged sub-spectra are returned as NaN with a `UserWarning` instead of a silently partially-converged factor. Convergence is now tracked per independent sub-spectrum across all leading batch dimensions, so with expectation modes that retain a trial/taper axis a single failing sub-spectrum no longer NaNs the others at that time point.
-- **`simulate.simulate_MVAR`**: fixed a crash for single-signal, multi-trial simulations (an unqualified `squeeze` collapsed the signal axis).
-- **`utils.get_compute_backend`**: correctly reports the GPU backend (the previous `type(module)` check always reported CPU).
-- Connectivity measures now raise an informative error for single-signal input instead of returning all-NaN, and `debiased_squared_phase_lag_index`, `debiased_squared_weighted_phase_lag_index`, and `pairwise_phase_consistency` raise when `n_observations < 2` instead of returning all-NaN / dividing by zero. `coherency` / `imaginary_coherence` return NaN (with a warning) for dead (zero-power) channels instead of dividing by a floored epsilon.
-- **`statistics.get_normal_distribution_p_values`**: a genuine `TypeError` is now re-raised with its original traceback instead of being masked; the CuPy-to-host fallback only triggers for arrays that actually provide `.get()`.
-- **`statistics.coherence_rate_adjustment`**: validates that **both** firing rates are finite and `> 0` (`firing_rate_condition2 <= 0` previously raised an unhandled `ZeroDivisionError`, and non-finite rates passed the old `<= 0` check) and returns NaN (with a single `UserWarning`) wherever the adjustment is undefined — non-positive spike power (invalid input, which could previously yield a finite adjustment `> 1`), a non-positive argument (`1 + adjusted_rate / spike_power_spectrum <= 0`), or zero spike power. The division and square root run under a scoped `errstate`, so a zero-power bin no longer leaks a `RuntimeWarning` and returns `0`, and an argument of exactly `0` no longer returns `inf`; both are now NaN as documented.
-- **`Connectivity.global_coherence`**: clamps `max_rank` to the number of realizable components, `min(n_signals, n_trials * n_tapers)` (with a `UserWarning`). A one-trial/one-taper input previously crashed `svds` at the default `max_rank=1`, and an over-large `max_rank` could broadcast a single component into duplicate columns.
-- **`minimum_phase_decomposition`**: rejects invalid convergence controls — a non-finite or non-positive `tolerance`, or a non-positive / non-integer `max_iterations` — with a clear `ValueError` instead of silently returning all-NaN with a misleading non-convergence warning.
-- Corrected several docstring examples so their documented output matches (statistics `coherence_bias`, `coherence_rate_adjustment`, `get_normal_distribution_p_values`, `power_confidence_intervals`).
-- Refreshed the notebook snapshot baselines (`tests/__snapshots__/test_notebooks.ambr`) for the corrected `power`, `group_delay` / `delay`, `phase_slope_index`, `global_coherence`, and directed-measure outputs; made the `simulate_MVAR`-based snapshot tests deterministic (they now pass `random_state`), fixed the `canonical_coherence` tests to the current group-label API, and skipped the conditional-Granger example (unimplemented). The `global_coherence` snapshot now records only the coherence fractions (the singular vectors have arbitrary sign/phase that is not stable across SciPy/BLAS versions). The custom snapshot extension now applies a true, array-wide numerical tolerance: it stores every full array (gzip-compressed float32) and compares every element with `np.allclose` (rtol=1e-6, atol=1e-9) in `matches`, so tiny floating-point differences (e.g. across BLAS/library versions) are tolerated while any real change is caught. Storing float32 (its ~1e-7 relative precision matches the tolerance) keeps the baseline small without weakening the check. Earlier iterations were unsound: the original `matches()` override was dead code (syrupy compares serialized strings, so comparisons were bit-exact); a significant-figure-rounding approach failed for values straddling a rounding boundary; a full-array (uncompressed) serialization bloated the baseline to ~40 MB; and a compact statistics-plus-samples fingerprint missed changes at unsampled positions or permutations of equal-magnitude values. CI now runs these snapshot tests (previously the whole file was excluded, hiding the stale baselines).
-- Tooling: the mypy target is now Python 3.12 (matching the CI job) and the mypy floor is `>=1.11`, so mypy can parse NumPy 2.x's PEP 695 `type` statements in its stubs — the required type-checking gate previously failed to parse the stubs under a 3.10 target. Runtime compatibility with Python 3.10+ is still verified by the test matrix.
+| Previous behavior | New behavior / required action |
+| --- | --- |
+| `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
+| `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
+| `delay` returned cycles | Returns seconds; DC is `NaN` |
+| Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
+| `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
+| `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
+| `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
+| SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
 ### Changed
 
-- **`Multitaper` configurations are immutable after construction.** Input time
-  series, start times, and custom tapers are detached snapshots, exposed through
-  detached read-only copies; computational parameters cannot be reassigned. This prevents
-  lazy derived state from disagreeing internally (for example, changing the
-  time-halfbandwidth product could report seven tapers while the cached taper
-  matrix still contained five). Create a new `Multitaper` to change a transform
-  configuration. Provenance now comes from an explicit field registry rather
-  than reflecting over every public property, and CuPy array metadata is copied
-  to the host explicitly.
-- **`Connectivity.weighted_phase_lag_index`** is now documented as the *signed* index (range [-1, 1], like `phase_lag_index`); take the absolute value for the unsigned [0, 1] version. This is a documentation correction — the numeric output is unchanged.
-- The `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable is parsed case-insensitively (`"true"`, `"1"`, `"yes"`, `"on"`) and warns on unrecognized values instead of silently falling back to CPU.
-- Expensive directed-connectivity intermediates (minimum-phase factor, transfer function, noise covariance, MVAR coefficients) are cached per `Connectivity` instance and are automatically invalidated when `fourier_coefficients` or `expectation_type` is reassigned (they are now validated properties), so a reused instance cannot serve stale results. Reassigning `fourier_coefficients` with a different FFT-bin or time-window count now also resets the frequency/time coordinates to geometry-matching defaults (with a `UserWarning`), instead of leaving stale coordinates that silently dropped or misaligned bins in coordinate-dependent methods. Tikhonov regularization is scaled per (time-window, frequency) matrix rather than by a single global scalar.
-- `multitaper_connectivity` gives an actionable error for `global_coherence` / `phase_slope_index` (which do not fit the xarray interface) instead of a cryptic xarray error.
-- `multitaper_connectivity(method=None)` now selects an explicit default set of measures (the new `wrapper.DEFAULT_METHODS` allowlist) instead of discovering all public `Connectivity` methods and subtracting a denylist. The default set is unchanged (11 real-valued, NetCDF/xarray-compatible measures), but it is now stable and documented — a newly added `Connectivity` method can no longer silently join the default and break NetCDF serialization. The docstring no longer claims "all available methods": it names what the default excludes — `coherency` (complex; can still be requested by name), and `global_coherence` / `phase_slope_index` / `group_delay` / `canonical_coherence` / the directed-transfer-function family (which the wrapper does not support at all — request them via `Connectivity` directly). The default measure set and its variable order are unchanged (the allowlist is kept in the alphabetical order the previous discovery produced).
-- **Docs**: `docs/CONNECTIVITY_METRIC_RANGES.md` now lists `global_coherence` as bounded in `[0, 1]` (fraction of total coherent power, Cimenser et al. 2011), matching the corrected measure — it previously described the old unbounded squared-singular-value output.
-- `Connectivity` now stores its `fourier_coefficients` as a private immutable snapshot, so the per-instance caching cannot be silently corrupted by in-place edits (which would otherwise bypass cache invalidation and return stale power/coherence). The setter keeps a private copy that preserves the input's memory layout (`copy(order="K")`, so results are unchanged to the bit) and leaves the caller's original array untouched. The `fourier_coefficients` property never hands out a writable alias of that snapshot: it returns an independent, read-only copy. An in-place edit (`c.fourier_coefficients[...] = x`) therefore raises loudly instead of silently vanishing, and because the returned array is a copy (it owns its data) it is fully disconnected from the instance — re-enabling its `writeable` flag only affects the caller's throwaway copy. (A read-only *view* would not be safe: a caller could reach the owning base through `.base`, re-enable its `writeable` flag, and mutate the snapshot behind the caches.) On backends without a settable `writeable` flag (e.g. CuPy) the copy is returned writable but is still independent, so a write to it is harmless. Internal computations read the private snapshot directly, so the copy is paid only on explicit external access, not on the hot paths. To change the data, assign a new array to `fourier_coefficients`, which clears the caches, rather than editing in place.
-- `Multitaper` now validates `fft_workers` at construction (must be `None` or a
-  nonzero integer) and raises a message that names the parameter, instead of
-  forwarding a bad value into an opaque SciPy `ValueError`/`TypeError`.
-- `statistics.Benjamini_Hochberg_procedure` now emits a `UserWarning` when every
-  p-value in the family is non-finite (the whole family is undefined, e.g. every
-  tested pair involves a dead channel), so an all-not-significant result is not
-  mistaken for "no true effects". It also raises a clear `RuntimeError` if the
-  installed SciPy predates `false_discovery_control` (< 1.11), and its
-  out-of-range error now reports how many values were out of range and their
-  min/max.
-- `transforms.detrend` now rejects a breakpoint at exactly the data length
-  (validated against the documented `[0, N)` range) instead of silently
-  collapsing it into an empty trailing segment.
-- `multitaper_connectivity` now skips a measure that does not fit the xarray
-  layout (`global_coherence`, `phase_slope_index`, the directed family, …) in a
-  multi-measure call, logging the skip, instead of aborting the whole batch.
-  These are flagged with a dedicated `wrapper.UnsupportedMeasureError` (a
-  `ValueError` subclass), so a *genuine* computation error — e.g. a debiased
-  measure raising `ValueError` because the data has too few observations — is
-  **not** swallowed and still surfaces rather than silently dropping a requested
-  measure.
-- The `Connectivity`-sharing hook used by `multitaper_connectivity` is now an
-  **internal, keyword-only `_connectivity` argument** to `connectivity_to_xarray`
-  rather than a public `connectivity=` parameter. Tying results to a separate
-  live object is a provenance footgun, so the injection is no longer
-  part of the public API; reuse a transform by calling the `Connectivity`
-  methods directly (the instance caches shared intermediates) or by requesting
-  several measures from `multitaper_connectivity`. The internal hook is still
-  validated defensively: only a `Connectivity.from_multitaper(m)` instance whose
-  recorded source is that `Multitaper` (verified by identity, with the default
-  `expectation_type`) is accepted, results are labeled from a parameter snapshot
-  taken at build time, and a mismatch
-  raises an actionable error rather than a cryptic xarray dimension mismatch.
-- `Connectivity` is now picklable and copyable when built via `from_multitaper`:
-  the provenance weakref is dropped during serialization, and state is
-  serialized as a `(__dict__, __slots__)` pair so attributes declared through a
-  subclass' `__slots__` survive `pickle` / `copy.copy` / `copy.deepcopy` —
-  including a string-form `__slots__` and name-mangled slot names. Legacy
-  plain-dict pickles (written before this class defined `__getstate__`) are also
-  accepted, with the new provenance fields initialized to `None`.
+- `global_coherence`, `power`, `phase_slope_index`, `delay`, and
+  `Multitaper.time` now follow the definitions in the migration table.
+- Public connectivity methods reject single-signal inputs with an actionable
+  error; `power` remains available for one signal.
+- Bias-corrected phase measures require at least two observations.
+- `Multitaper` parameters and owned input snapshots are immutable after
+  construction. Array accessors return detached copies so cached calculations
+  cannot become stale through external mutation.
+- `multitaper_connectivity(method=None)` uses the stable, exported
+  `DEFAULT_METHODS` allowlist. Measures with incompatible result shapes point
+  users to `Connectivity` directly.
 
-### Removed
+### Fixed
 
-- **`transforms.dpss_windows` no longer accepts `interp_from` / `interp_kind`.**
-  The Slepian tapers are now solved directly with SciPy's LAPACK routine (see
-  **Performance** below for the full rationale and equivalence evidence), so the
-  public interpolation fast-path and its helper functions were removed. Code
-  passing these keywords must drop them; the default exact computation is faster
-  than the old interpolation path anyway. Relatedly, `dpss_windows(2, NW, 2)` (a
-  two-sample window with two tapers) now raises a clear `ValueError` rather than
-  returning degenerate tapers.
-- **The `blocks` parameter of `Connectivity` and `Connectivity.from_multitaper`
-  is removed.** It chunked the reduced cross-spectral path, whose consumers now
-  use a direct batched matmul (`phase_locking_value` /
-  `pairwise_phase_consistency` do so via unit-normalized coefficients — see
-  **Performance**). The phase-lag-index family still forms an observation-level
-  outer product, but it never supported block mode, so `blocks` had no remaining
-  consumer or effect (and its assembly path was broken under CuPy). Drop the
-  `blocks=` argument; results are unchanged. The associated internal helpers (`_reject_block_mode`,
-  `_nonsorted_unique`, and the transformed-block branch of
-  `_expectation_cross_spectral_matrix`) were removed with it.
-- **`Connectivity.partial_directed_coherence(keep_cupy=...)` is removed.** Public
-  connectivity measures consistently return NumPy arrays; device-native reuse by
-  `direct_directed_transfer_function` now goes through a private primitive.
+- Directed measures use at least complex128 working precision, so complex64
+  inputs can satisfy the Wilson factorization's default tolerance.
+- Subset spectral Granger restores `NaN` on the global self-Granger diagonal.
+- Wilson initialization and solves isolate rank-deficient sub-spectra instead of
+  poisoning a whole batch. Failed Cholesky units use the deterministic
+  `n_signals * I` fallback; healthy units retain their Cholesky starts.
+- Wilson convergence is relative and scale-invariant, and non-converged units
+  return `NaN` with a targeted warning.
+- Directed-measure regularization is scale-invariant, directed coherence uses
+  the correct source-axis noise variance, and it warns when correlated
+  innovations materially violate its diagonal-covariance assumption.
+- GPU boundaries for `group_delay`, `delay`, statistics, metadata, and public
+  returns now use explicit device-to-host conversion.
+- `power` preserves float32 precision, and global coherence avoids overflow or
+  underflow for extreme input scales.
+- Phase-locking and phase-lag measures handle dead channels without leaking
+  runtime warnings; their documented finite-sample ranges are corrected.
+- Group delay and delay use the exact zero-coherence significance distribution.
+  Undefined p-values are excluded consistently from BH and Bonferroni families.
+- Statistical helpers validate observation counts, confidence levels, spectra,
+  firing rates, p-values, and correction methods. Power confidence intervals
+  and log-power bias/variance use the corrected formulas.
+- Multitaper, DPSS, detrending, coordinate, FFT-size, window-size, frequency-step,
+  and `fft_workers` inputs now fail early with parameter-specific errors.
+- The wrapper accepts documented 2-D `(time, channels)` input and produces
+  NetCDF-serializable metadata. Unsupported batch measures are skipped without
+  swallowing genuine computation errors.
+- Importing the package no longer changes NumPy's global floating-point warning
+  state, and backend reporting now reflects the backend actually imported.
+- `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
+  simulations.
 
 ### Performance
 
-- **Subset pairwise spectral Granger** now carries and factors one compact 2×2
-  spectrum per requested pair as a batch. It no longer allocates a full
-  signal-by-signal observation-level matrix while leaving unrequested entries
-  uninitialized.
-- **The phase-lag-index family** now forms signal-row tiles of its nonlinear
-  observation-level cross-spectrum, reduces each tile immediately, and caches
-  only the final moments. The tile size is derived from an internal element
-  budget, so transient workspace no longer necessarily scales as
-  `observations × frequencies × n_signals²`; no public `blocks` mode is needed.
-- The expected cross-spectral matrix (used by coherence, spectral Granger, and
-  most other measures) is now computed with a single batched matrix
-  multiplication that contracts the averaged trial/taper/time axes directly,
-  instead of materializing the full per-observation
-  `(..., n_signals, n_signals)` outer product and then averaging. Results are
-  unchanged to floating-point tolerance. On a representative case this was
-  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). The coherence family,
-  the directed measures, and (below) `phase_locking_value` /
-  `pairwise_phase_consistency` all use this reduction now. The only measures
-  that still materialize the per-observation outer product are the phase-lag-index
-  family (`phase_lag_index`, `weighted_phase_lag_index`, and the two debiased
-  variants) cannot contract before applying their nonlinear transform, so they
-  now use the signal-tiled reduction described above. Because `blocks` never
-  supported the phase-lag family anyway, the parameter is removed (see
-  **Removed**).
-- **`Connectivity.phase_locking_value` / `pairwise_phase_consistency`** now
-  unit-normalize each Fourier coefficient and reuse the batched reduced
-  cross-spectral matmul, using
-  `(z_i conj(z_j)) / |z_i conj(z_j)| = (z_i/|z_i|) conj(z_j/|z_j|)`. This avoids
-  the per-observation outer product these were the last measures to form, so
-  peak memory drops from `O(observations · signals²)` to
-  `O(observations · signals)`; measured ~12–23× faster on CPU (`complex128`,
-  16–64 signals). Results match the previous implementation to floating-point
-  tolerance (~4e-16 for `complex128`), including the dead-channel NaN placement.
-  A latent GPU-boundary bug is also fixed: intermediates now stay on the active
-  array namespace, and only the public return value is converted to NumPy (the
-  old `phase_locking_value` called `xp.abs` on an already-host array).
-- `multitaper_connectivity` now builds a single `Connectivity` from the
-  multitaper transform and reuses it across every requested measure, instead of
-  reconstructing one (and recomputing the uncached FFT) per measure. Results are
-  bit-for-bit identical. The shared instance is passed via an internal,
-  keyword-only `_connectivity` argument to `connectivity_to_xarray` (validated
-  against the `Multitaper` to prevent mislabeled output); it is not part of the
-  public API — reuse a transform yourself by calling `Connectivity` methods
-  directly (the instance caches shared intermediates) or by requesting several
-  measures from `multitaper_connectivity`. The FFT saving is modest on its
-  own, because the tapers are already memoized on the `Multitaper` (so the
-  dominant taper cost was not repeated); sharing one instance also lets the
-  cached cross-spectrum and power (below) be reused across measures.
-- `Connectivity._power` and the reduced expected cross-spectral matrix are now
-  cached per instance (invalidated when `fourier_coefficients` or
-  `expectation_type` is reassigned, alongside the existing directed-measure
-  caches). `coherency` reads the power twice, and the coherence family plus
-  pairwise spectral Granger each read the cross-spectrum, so caching avoids
-  recomputing them — within a single measure and, for a shared instance, across
-  measures. A repeated `coherency` on a warmed instance was ~60× faster in a
-  representative case; the default multi-measure `multitaper_connectivity` call
-  is correspondingly faster. Only the reduced `(..., n_signals, n_signals)`
-  cross-spectrum is cached, never the large observation-resolved form.
-- The phase-lag-index family (`phase_lag_index`, `weighted_phase_lag_index`,
-  `debiased_squared_weighted_phase_lag_index`) now derives from shared reduced
-  moments of the observation-level imaginary cross-spectrum (`E[sign(Im)]`,
-  `E[Im]`, `E[|Im|]`, `E[Im**2]`), computed lazily per moment and cached, instead
-  of re-forming that large intermediate once per transform function. Each moment
-  is computed only when a measure needs it, from a single formation of the
-  cross-spectrum, so a single-measure call does only its own reductions while a
-  shared instance computing the whole family still avoids re-forming the
-  cross-spectrum per transform function. Computing the family together was ~3.4×
-  faster in a representative case; results are bit-for-bit identical. Only the
-  reduced moments actually requested are cached (never the observation-level
-  cross-spectrum), and they are invalidated with the other cached intermediates.
-- `Connectivity.global_coherence` now computes its per-time-frequency-bin
-  components with a single batched decomposition over all bins instead of a
-  Python loop with one SVD per bin — a batched Hermitian eigendecomposition of
-  the cross-spectral matrices (the measure's definition, Cimenser et al. 2011)
-  when `n_estimates >= n_signals`, or the economy SVD of the thin coefficient
-  matrix otherwise (which computes only the `n_estimates` non-trivial
-  components). This was ~15× faster on a 1024-bin case and, on GPU, removes the
-  two per-bin host syncs the old loop forced. Results match the previous per-bin
-  path to floating-point tolerance (~5e-16 on the coherence fractions; the
-  vectors, like singular vectors, are defined only up to a per-component phase
-  for distinct components, and up to an arbitrary unitary rotation/permutation
-  within any set of repeated/degenerate components, so they need not match the
-  previous path). The batched path is used when the decomposition dimension
-  `min(n_signals, n_estimates) <= 64` and is chunked over bins — from the
-  original tensor, sized to the real per-bin working set — to bound peak memory;
-  a per-bin `svds` fallback is retained for large square matrices, where
-  computing every component would be wasteful.
-- `Connectivity.group_delay` fits the unwrapped coherence phase against
-  frequency with a vectorized masked regression (closed-form OLS slope and
-  Pearson r from centered sums over the frequency axis) instead of
-  `np.ma.apply_along_axis`, which called `scipy.stats.mstats.linregress` once per
-  (time, signal pair). The regression kernel was ~500× faster in a
-  representative case and matches the previous result to floating-point tolerance
-  (~1e-15), with the same NaN for slices that have fewer than two significant
-  frequencies. Masked (e.g. zero-power) frequencies are excluded rather than
-  allowed to poison the sums, and the moments are computed from mean-centered
-  residuals so the fit stays accurate when the absolute frequencies are large
-  relative to their spacing. `scipy.stats.mstats.linregress` is no longer
-  imported.
-- Significant-frequency cluster selection (`_find_significant_frequencies`, used
-  by `group_delay` and `delay`) now selects the largest independent significant
-  cluster for all (time, signal-pair) slices with a vectorized pass instead of
-  `np.apply_along_axis` (one Python call per slice). Results are bit-for-bit
-  identical (it is boolean logic); the selection kernel was ~30× faster in a
-  representative case, further speeding up a warmed `group_delay`. The slices are
-  processed in bounded chunks (with `int32` run-length temporaries) so peak
-  memory stays independent of their number.
-- The Wilson minimum-phase iteration (used by the directed measures — spectral
-  Granger, DTF, PDC and relatives) now synchronizes the device at most once per
-  iteration instead of three times: the per-iteration convergence-count debug
-  log is guarded behind the debug log level (so its reduction is not computed
-  when debug logging is off), and the "all converged" and "all finished" early
-  -exit tests are combined into a single reduction. Results are bit-for-bit
-  identical; this is a GPU benefit (fewer host synchronizations) and a no-op on
-  CPU.
-- `transforms.dpss_windows` now computes the Slepian tapers via
-  `scipy.signal.windows.dpss` (a LAPACK `eigh_tridiagonal` solve) instead of the
-  package's own tridiagonal inverse-iteration solver. The eigenvalue problem and
-  concentration-ratio formula are identical; SciPy solves it with compiled LAPACK
-  rather than a Python-level iteration, so it is ~4.6–4.9× faster and removes a
-  class of numerical edge cases (e.g. the singular-pivot NaN that previously
-  required a guard). Tapers match the previous solver to ~1e-14 and eigenvalues
-  to ~1e-15 (both up to the usual per-taper sign, which agrees here), and the
-  independent `nitime` reference to floating-point tolerance. The validation,
-  low-bias taper selection, and integer-`n_tapers` checks are unchanged. The now
-  -unused custom solver helpers (`tridisolve`, `tridi_inverse_iteration`,
-  `_find_tapers_from_optimization`, `_get_taper_eigenvalues`, `_fix_taper_sign`,
-  `_auto_correlation`) and the interpolation fast-path (`interp_from` /
-  `interp_kind`, `_find_tapers_from_interpolation`, `_interpolate_taper`) were
-  removed; `dpss_windows` no longer accepts `interp_from` / `interp_kind`. A
-  two-sample window with two tapers (`dpss_windows(2, NW, 2)`) now raises a clear
-  `ValueError` — SciPy's antisymmetric-taper sign heuristic degenerates for a
-  length-two window and raises a bare `IndexError` there (on both scipy 1.10.x
-  and current releases), and such a window cannot support a second taper anyway.
-- `transforms._sliding_window` now builds its windowed view with NumPy's
-  `sliding_window_view` (subsampled to apply the step) instead of a hand-rolled
-  `as_strided` call. NumPy recommends the higher-level helper: it validates
-  bounds and shape rather than trusting manually computed strides. Output is
-  bit-for-bit identical (verified on the multitaper transform and the window
-  center-time coordinate); timings were neutral. With `is_copy=False` the view
-  is now read-only (NumPy's default), which prevents the accidental in-place
-  aliasing the previous writable view allowed; both production call sites copy.
-  An out-of-range `axis` and a non-positive `step_size` now raise `ValueError`
-  instead of silently windowing the wrong dimension or reversing the windows.
-- `transforms.detrend` now delegates the actual mean/least-squares removal to
-  `scipy.signal.detrend` (CPU) or `cupyx.scipy.signal.detrend` (GPU) instead of
-  carrying a vendored copy of SciPy's algorithm, removing ~50 lines. The
-  package's own `type`/`bp` validation and its actionable error messages are
-  kept, so behavior — including the errors — is unchanged; CPU output is
-  bit-for-bit identical (verified across constant/linear detrending, the
-  `'l'`/`'c'` aliases, several axes, breakpoints, and int/float32 dtypes).
-  **Dependency floor raised:** the GPU extra now requires `cupy-cuda12x>=13.0`
-  (was `>=12.0`), because `cupyx.scipy.signal.detrend` was added in CuPy 13.
-  GPU users on CuPy 12 must upgrade; CuPy 13 still targets CUDA 12.x.
-- **`Connectivity.from_multitaper` adopts the transform without copying.** The
-  immutable-snapshot setter copies the input Fourier coefficients (the largest
-  array in the pipeline) to protect the caches from external in-place edits.
-  `from_multitaper` passes the freshly built, unshared `Multitaper.fft()` output,
-  which nothing else references, so it is now frozen in place instead of copied —
-  removing a transient ~2x peak of that array during construction (which could
-  push a memory-constrained GPU into OOM). Because `fft()` returns a `swapaxes`
-  view whose base buffer is writable, the whole `.base` chain is frozen, so the
-  read-only guarantee is unchanged; results are bit-for-bit identical. Direct
-  construction (`Connectivity(fourier_coefficients=...)`) still copies
-  defensively, since a caller-supplied array may be retained and mutated.
-- **`Connectivity.global_coherence` gained a `max_workspace_elements` argument**
-  bounding the batched decomposition's transient working set (default ~16M
-  complex elements ≈ 256 MB, unchanged). Memory-constrained CPU/GPU callers can
-  lower it to trade a little speed (more, smaller frequency chunks) for a smaller
-  peak; the result is identical.
+- Reduced cross-spectral matrices use a batched matrix multiplication rather
+  than materializing the observation-level signal-by-signal outer product.
+- Phase locking uses unit-normalized coefficients with the same batched
+  reduction. Phase-lag measures use bounded signal-row tiles and cache only
+  reduced moments.
+- Compact subset spectral-Granger factors only the requested 2-by-2 spectra.
+- Global coherence uses chunked batched eigendecomposition/SVD for modest
+  decomposition dimensions and retains a per-bin sparse fallback for large
+  square problems. `max_workspace_elements` controls its working-set target.
+- Group delay regression and significant-frequency cluster selection are
+  vectorized and processed in bounded chunks.
+- Wilson iteration reduces GPU synchronization, DPSS delegates to SciPy's
+  compiled solver, detrending delegates to SciPy/CuPy, and sliding windows use
+  `sliding_window_view`.
+- Multi-measure wrapper calls build one `Connectivity` and reuse its cached
+  power, cross-spectrum, directed factors, and phase-lag moments.
+- `Connectivity.from_multitaper` adopts the transform's fresh FFT output
+  without a redundant full-size copy. CPU FFT parallelism is available through
+  the opt-in `fft_workers` argument.
 
 ### Added
 
-- **`multitaper_connectivity` / `connectivity_to_xarray` results are now
-  self-describing.** The `time` and `frequency` coordinates carry CF-style
-  `units` (`"s"` / `"Hz"`) and `long_name` attributes, so plotting libraries and
-  NetCDF readers label axes correctly. Each result also records provenance
-  attributes: `measure`, `package`, `package_version`, `backend` (`"CPU"` /
-  `"GPU"`), and `expectation_type`, alongside the existing `mt_*` multitaper
-  parameters and any measure keyword arguments (`arg_*`). All values are
-  NetCDF-serializable and survive a `to_netcdf` round-trip.
-- **`DEFAULT_METHODS`** — the default measure allowlist used by
-  `multitaper_connectivity(method=None)` — is now exported from the top-level
-  package (`from spectral_connectivity import DEFAULT_METHODS`), so callers can
-  inspect or extend the default set without importing from the internal
-  `wrapper` module.
-- `Multitaper` gained an `fft_workers` argument (also accepted by
-  `multitaper_connectivity` via `**kwargs`) that sets the number of parallel
-  worker threads for SciPy's CPU FFT (`-1` uses all cores). It defaults to
-  `None` (SciPy's single-threaded default), so existing behavior is unchanged;
-  enabling it speeds up the FFT stage on multi-core CPUs (measured ~1.4× for the
-  transform on an 18-core machine; larger on some SciPy builds). Results are
-  numerically equivalent to the single-threaded result — a threaded FFT may
-  differ at the floating-point-rounding level (~1e-16) from summation order, not
-  bit-for-bit. It is opt-in to avoid oversubscribing CPUs when the analysis is
-  already parallelized at a higher level, and is ignored on the GPU backend
-  (whose FFT has no such parameter and is already parallel).
+- Wrapper results carry CF-style time/frequency metadata plus NetCDF-safe
+  measure, package-version, backend, expectation, transform, and method-argument
+  provenance.
+- `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
+- Independent analytic-oracle, failure-mode, backend-boundary, serialization,
+  minimum-dependency, artifact, doctest, and notebook checks cover the corrected
+  behavior.
 
 ## [2.0.1] - 2026-05-12
 
@@ -919,7 +502,8 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 
 ---
 
-[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.2...v2.0.0
 [1.1.2]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Eden-Kramer-Lab/spectral_connectivity/compare/v1.1.0...v1.1.1

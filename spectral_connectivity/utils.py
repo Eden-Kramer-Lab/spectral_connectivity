@@ -3,7 +3,7 @@
 import os
 import sys
 import warnings
-from typing import Any
+from typing import Any, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,6 +11,12 @@ from numpy.typing import NDArray
 GPU_ENV_VAR = "SPECTRAL_CONNECTIVITY_ENABLE_GPU"
 _TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
 _FALSE_VALUES = frozenset({"false", "0", "no", "off", ""})
+
+# NumPy and CuPy intentionally share the same runtime API throughout the
+# package. ``numpy.typing.NDArray`` would incorrectly promise that a value is
+# always host-backed, so backend-facing interfaces use this explicit alias.
+BackendArray: TypeAlias = Any
+_ArrayT = TypeVar("_ArrayT")
 
 
 def to_numpy(array: Any) -> NDArray:
@@ -23,18 +29,34 @@ def to_numpy(array: Any) -> NDArray:
     return np.asarray(get() if callable(get) else array)
 
 
-def freeze_readonly(array: NDArray) -> NDArray:
-    """Mark ``array`` read-only in place and return it.
+def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
+    """Try to mark ``array`` read-only in place and return it.
 
     Setting ``writeable = False`` makes an accidental in-place edit raise loudly
     rather than silently corrupt shared/cached state. Array backends without a
     settable writeable flag (e.g. CuPy) are left as-is; callers rely on an
     already-detached copy for ownership there, not on the flag.
     """
+    backend_array: Any = array
     try:
-        array.flags.writeable = False
+        backend_array.flags.writeable = False
     except (AttributeError, ValueError):
         pass
+    return array
+
+
+def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
+    """Try to mark an array and every NumPy ``.base`` view read-only.
+
+    Freezing only the outer view does not protect its owning base buffer. Array
+    backends without a writable flag or a ``.base`` chain are left unchanged.
+    """
+    current: Any = array
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        mark_readonly_if_supported(current)
+        current = getattr(current, "base", None)
     return array
 
 

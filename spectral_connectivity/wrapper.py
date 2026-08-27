@@ -1,10 +1,10 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import xarray as xr
@@ -13,7 +13,6 @@ from numpy.typing import NDArray
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import get_compute_backend
-from spectral_connectivity.utils import to_numpy as _to_host_array
 
 logger = getLogger(__name__)
 
@@ -44,54 +43,34 @@ def _package_version() -> str:
         return "unknown"
 
 
-# Default measures for ``multitaper_connectivity(method=None)``: the real-valued
-# connectivity measures that fit the xarray/NetCDF interface. Defined explicitly
-# (rather than discovered by excluding a denylist) so the default set is stable
-# and documentable, and so a newly added Connectivity method cannot silently join
-# the default and break NetCDF serialization. Excluded on purpose: ``coherency``
-# (complex; NetCDF cannot store it — its content is covered by
-# coherence_magnitude/phase + imaginary_coherence), ``global_coherence`` and
-# ``phase_slope_index`` (do not fit the per-signal-pair xarray layout), the
-# directed transfer-function family and canonical/group-delay/conditional
-# measures (different output shapes), and utility properties.
-# Order is significant: xarray preserves insertion order, so this fixes the
-# variable/iteration/serialization order of the default Dataset. It is kept
-# alphabetical to match the order the previous ``inspect.getmembers`` discovery
-# produced, so the default result is unchanged for existing users.
-DEFAULT_METHODS: tuple[str, ...] = (
-    "coherence_magnitude",
-    "coherence_phase",
-    "debiased_squared_phase_lag_index",
-    "debiased_squared_weighted_phase_lag_index",
-    "imaginary_coherence",
-    "pairwise_phase_consistency",
-    "pairwise_spectral_granger_prediction",
-    "phase_lag_index",
-    "phase_locking_value",
-    "power",
-    "weighted_phase_lag_index",
-)
-
-
 @dataclass(frozen=True)
 class _MeasureSpec:
     """Shape/capability metadata used by the xarray wrapper."""
 
-    output_kind: str
-    xarray_supported: bool = True
+    output_kind: Literal["pairwise", "power", "unsupported"]
+    is_default: bool = False
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
-_POWER_SPEC = _MeasureSpec("power")
-_UNSUPPORTED_SPEC = _MeasureSpec("unsupported", xarray_supported=False)
+_UNSUPPORTED_SPEC = _MeasureSpec("unsupported")
 
-# Keep wrapper capabilities declarative. In particular, do not infer them from a
-# method-name substring: a newly added method containing "directed" need not have
-# the directed-transfer-function family's nonstandard output contract.
+# This is the single source of truth for wrapper capabilities and defaults.
+# Insertion order preserves the historical Dataset variable order.
 _MEASURE_SPECS: dict[str, _MeasureSpec] = {
-    **{name: _PAIRWISE_SPEC for name in DEFAULT_METHODS if name != "power"},
+    "coherence_magnitude": _MeasureSpec("pairwise", is_default=True),
+    "coherence_phase": _MeasureSpec("pairwise", is_default=True),
+    "debiased_squared_phase_lag_index": _MeasureSpec("pairwise", is_default=True),
+    "debiased_squared_weighted_phase_lag_index": _MeasureSpec(
+        "pairwise", is_default=True
+    ),
+    "imaginary_coherence": _MeasureSpec("pairwise", is_default=True),
+    "pairwise_phase_consistency": _MeasureSpec("pairwise", is_default=True),
+    "pairwise_spectral_granger_prediction": _MeasureSpec("pairwise", is_default=True),
+    "phase_lag_index": _MeasureSpec("pairwise", is_default=True),
+    "phase_locking_value": _MeasureSpec("pairwise", is_default=True),
+    "power": _MeasureSpec("power", is_default=True),
+    "weighted_phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "coherency": _PAIRWISE_SPEC,
-    "power": _POWER_SPEC,
     "subset_pairwise_spectral_granger_prediction": _PAIRWISE_SPEC,
     **dict.fromkeys(
         (
@@ -112,214 +91,74 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     ),
 }
 
-
-def _validate_connectivity_matches_multitaper(
-    connectivity: Connectivity, m: Multitaper
-) -> None:
-    """Raise if an injected ``Connectivity`` was not built from ``m``.
-
-    ``connectivity_to_xarray`` takes the data and coordinates from
-    ``connectivity`` but the metadata attributes from ``m``. If the two describe
-    different transforms the result would be silently mislabeled — real values
-    from one recording tagged with another's parameters.
-
-    Matching geometry (channel count, frequency grid, time bins) is *necessary
-    but not sufficient*: two different recordings with the same sampling
-    frequency, window, and channel count share it, so geometry alone cannot
-    establish provenance. Both are therefore required — geometry is validated
-    first (it also catches a from_multitaper instance whose public ``time`` /
-    ``frequencies`` were mutated after construction), and then provenance is
-    verified by identity: ``Connectivity.from_multitaper`` records a weakref to
-    its source transform, and only an instance whose recorded source is ``m`` is
-    accepted.
-
-    Also require the default ``expectation_type`` ("trials_tapers"): the xarray
-    layout below assumes the result keeps the time and frequency axes, which
-    other expectation types do not (they average time or keep the trial/taper
-    axes), so they would not fit the fixed (time, frequency, source, target)
-    dimensions.
-    """
-    # Always validate geometry first (a necessary condition): this catches a
-    # mismatched instance and also post-construction mutation of the public
-    # ``time`` / ``frequencies`` coordinates on an otherwise-from_multitaper
-    # instance, which the identity check below would not.
-    # Read the private snapshot for the shape: the public getter returns a
-    # defensive copy on backends without a writeable flag (CuPy), wasteful here
-    # and unnecessary for shape.
-    n_signals = connectivity._fourier_coefficients.shape[-1]
-    mismatches = []
-    if n_signals != m.n_signals:
-        mismatches.append(f"n_signals ({n_signals} != {m.n_signals})")
-    if not np.array_equal(
-        _to_host_array(connectivity.all_frequencies), _to_host_array(m.frequencies)
-    ):
-        mismatches.append("frequencies")
-    if not np.array_equal(_to_host_array(connectivity.time), _to_host_array(m.time)):
-        mismatches.append("time")
-    if mismatches:
-        raise ValueError(
-            "The provided `connectivity` was not built from this "
-            f"`Multitaper`; they disagree on: {', '.join(mismatches)}. "
-            "`connectivity_to_xarray` labels results with `m`'s coordinates "
-            "and metadata, so a mismatched instance would produce silently "
-            "mislabeled output. Pass a `Connectivity` built from `m` (e.g. "
-            "`Connectivity.from_multitaper(m)`) or leave `connectivity=None` "
-            "to build one automatically."
-        )
-    # Geometry alone cannot prove provenance (two recordings can share it), so
-    # additionally require an identity link to m. Checked before the parameter
-    # drift below: a reassigned-coefficients instance clears both the identity
-    # link and the parameter snapshot, and the identity failure is the accurate
-    # diagnosis there.
-    source = connectivity._source_multitaper
-    if source is None or source() is not m:
-        raise ValueError(
-            "The provided `connectivity` cannot be verified to come from this "
-            "`Multitaper`: it was not built by `Connectivity.from_multitaper(m)` "
-            "(or its coefficients were reassigned afterwards). A matching channel "
-            "count, frequency grid, and time bins do NOT prove it holds the same "
-            "data — two different recordings can share them — and "
-            "`connectivity_to_xarray` labels the result with `m`'s coordinates "
-            "and metadata, which would silently mislabel it. Build it with "
-            "`Connectivity.from_multitaper(m)`, or leave `connectivity=None` to "
-            "build one automatically."
-        )
-    # Multitaper parameters are immutable now, but retain this snapshot comparison
-    # as a defensive check for legacy/unpickled objects and subclasses that bypass
-    # the base class's assignment guard.
-    snapshot = connectivity._source_parameters or {}
-    current = m._provenance_metadata()
-    if current.keys() != snapshot.keys() or any(
-        not np.array_equal(current[key], snapshot[key]) for key in current
-    ):
-        unchanged = {
-            key
-            for key in current.keys() & snapshot.keys()
-            if np.array_equal(current[key], snapshot[key])
-        }
-        changed = sorted((current.keys() | snapshot.keys()) - unchanged)
-        raise ValueError(
-            "The source `Multitaper` was modified after this `connectivity` was "
-            f"built from it; its parameters now differ on: {', '.join(changed)}. "
-            "`connectivity` holds a snapshot of the old coefficients, but the "
-            "result would be labeled with the Multitaper's current parameters, "
-            "mislabeling it. Rebuild it with `Connectivity.from_multitaper(m)` "
-            "after changing `m`, or leave `connectivity=None`."
-        )
-    if connectivity.expectation_type != "trials_tapers":
-        raise ValueError(
-            "connectivity_to_xarray supports only expectation_type="
-            "'trials_tapers' (the default), which yields a result over "
-            "(time, frequency, source, target); got expectation_type="
-            f"'{connectivity.expectation_type}', which averages or keeps "
-            "different axes and does not fit that xarray layout. Use the "
-            "`Connectivity` class directly for other expectation types."
-        )
+DEFAULT_METHODS: tuple[str, ...] = tuple(
+    name for name, spec in _MEASURE_SPECS.items() if spec.is_default
+)
 
 
-def connectivity_to_xarray(
-    m: Multitaper,
-    method: str = "coherence_magnitude",
-    signal_names: Sequence[str] | None = None,
-    squeeze: bool = False,
-    *,
-    _connectivity: Connectivity | None = None,
+def _get_measure_spec(method: str) -> _MeasureSpec | None:
+    """Return wrapper metadata, rejecting known incompatible measures."""
+    measure_spec = _MEASURE_SPECS.get(method)
+    if measure_spec is None or measure_spec.output_kind != "unsupported":
+        return measure_spec
+    raise UnsupportedMeasureError(
+        f"The method '{method}' is not supported by the xarray interface "
+        f"(it does not return a plain (time, frequency, source, target) "
+        f"array). Please use the Connectivity class directly instead:\n\n"
+        f"from spectral_connectivity import Connectivity\n"
+        f"conn = Connectivity.from_multitaper(m)\n"
+        f"result = conn.{method}()\n"
+    )
+
+
+def _connectivity_result_to_xarray(
+    connectivity: Connectivity,
+    multitaper_metadata: Mapping[str, Any],
+    method: str,
+    signal_names: Sequence[str] | None,
+    squeeze: bool,
     **kwargs: Any,
 ) -> xr.DataArray:
-    """
-    Calculate connectivity measures and return as labeled xarray.
-
-    Computes the specified connectivity measure from multitaper spectral analysis
-    and returns results in an xarray.DataArray with properly labeled dimensions.
-
-    Parameters
-    ----------
-    m : Multitaper
-        Multitaper object containing spectral transform results.
-    method : str, default="coherence_magnitude"
-        Name of connectivity method to compute (e.g., "coherence_magnitude",
-        "imaginary_coherence", "phase_locking_value").
-    signal_names : sequence of str, optional
-        Names for signal channels used to label 'source' and 'target' dimensions.
-        If None, uses integer indices.
-    squeeze : bool, default=False
-        If True and only 2 signals, return connectivity between first and last
-        signal only. Only meaningful for symmetric measures.
-    _connectivity : Connectivity, optional
-        Internal, keyword-only optimization used by ``multitaper_connectivity``
-        to share one ``Connectivity`` across several measures (avoiding a
-        recomputed FFT per measure). Not part of the public API — it must be a
-        ``Connectivity.from_multitaper(m)`` instance for *this* ``m`` (validated
-        by provenance identity). To reuse a transform yourself, call the
-        ``Connectivity`` methods directly (the instance caches shared
-        intermediates) or request multiple measures via
-        ``multitaper_connectivity``.
-    **kwargs : dict
-        Additional keyword arguments passed to connectivity method.
-
-    Returns
-    -------
-    connectivity : xarray.DataArray
-        Connectivity results with dimensions:
-        - ['time', 'frequency', 'source', 'target'] for pairwise measures
-        - ['time', 'frequency', 'source'] for power spectral density
-        - ['time', 'frequency'] if squeeze=True and n_signals=2
-
-    Raises
-    ------
-    ValueError
-        In either of two cases: (1) the requested method does not fit the
-        ``(time, frequency, source, target)`` xarray layout
-        (``global_coherence``, ``phase_slope_index``, ``group_delay``, ``delay``,
-        ``canonical_coherence``, or a directed measure); the message points to
-        using ``Connectivity`` directly. (2) an internal ``_connectivity``
-        instance is passed whose channel count, frequency grid, or time bins
-        disagree with ``m`` (it must have been built from ``m``); the message
-        names the disagreeing fields.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from spectral_connectivity.transforms import Multitaper
-    >>> # Simulate data: (100 time points, 5 trials, 3 channels)
-    >>> data = np.random.randn(100, 5, 3)
-    >>> mt = Multitaper(data, sampling_frequency=1000)
-    >>> coherence = connectivity_to_xarray(mt, method="coherence_magnitude")
-    >>> coherence.dims
-    ('time', 'frequency', 'source', 'target')
-    """
-    connectivity = _connectivity  # internal, keyword-only shared-instance hook
-    # Unknown methods are allowed for extensibility (including test/subclass
-    # methods) and default to the ordinary pairwise layout. Known exceptional
-    # methods are rejected through explicit capability metadata.
-    measure_spec = _MEASURE_SPECS.get(method, _PAIRWISE_SPEC)
-    if not measure_spec.xarray_supported:
-        raise UnsupportedMeasureError(
-            f"The method '{method}' is not supported by the xarray interface "
-            f"(it does not return a plain (time, frequency, source, target) "
-            f"array). Please use the Connectivity class directly instead:\n\n"
-            f"from spectral_connectivity import Connectivity\n"
-            f"conn = Connectivity.from_multitaper(m)\n"
-            f"result = conn.{method}()\n"
-        )
-    # Name the source and target axes
-    signal_names_list: Sequence[str]
+    """Format one result from an already-built ``Connectivity`` instance."""
+    measure_spec = _get_measure_spec(method)
     if signal_names is None:
-        signal_names_list = list(np.arange(m.n_signals).astype(str))
-    else:
-        signal_names_list = signal_names
-
-    if connectivity is None:
-        connectivity = Connectivity.from_multitaper(m)
-    else:
-        _validate_connectivity_matches_multitaper(connectivity, m)
+        signal_names = [str(index) for index in range(connectivity.n_signals)]
+    elif len(signal_names) != connectivity.n_signals:
+        raise ValueError(
+            f"signal_names must contain {connectivity.n_signals} names, "
+            f"got {len(signal_names)}."
+        )
     connectivity_mat = getattr(connectivity, method)(**kwargs)
-    # Only one couple (only makes sense for symmetrical metrics)
-    if (m.n_signals > 2) and squeeze:
+
+    pairwise_shape = (
+        len(connectivity.time),
+        len(connectivity.frequencies),
+        connectivity.n_signals,
+        connectivity.n_signals,
+    )
+    power_shape = pairwise_shape[:-1]
+    actual_shape = tuple(connectivity_mat.shape)
+    if measure_spec is None:
+        if actual_shape != pairwise_shape:
+            raise UnsupportedMeasureError(
+                f"The method '{method}' returned shape {actual_shape}, but an "
+                f"unregistered wrapper extension must return {pairwise_shape}. "
+                "Register its output contract or use Connectivity directly."
+            )
+        measure_spec = _PAIRWISE_SPEC
+    expected_shape = (
+        power_shape if measure_spec.output_kind == "power" else pairwise_shape
+    )
+    if actual_shape != expected_shape:
+        raise ValueError(
+            f"The method '{method}' returned shape {actual_shape}; its wrapper "
+            f"contract requires {expected_shape}."
+        )
+
+    if connectivity.n_signals > 2 and squeeze:
         warnings.warn(
-            f"squeeze=True but there are {m.n_signals} signals "
-            f"(more than 2 pairs); ignoring squeeze and returning the full "
-            f"(source, target) matrix.",
+            f"squeeze=True but there are {connectivity.n_signals} signals; "
+            "returning the full (source, target) matrix.",
             UserWarning,
             stacklevel=2,
         )
@@ -327,11 +166,10 @@ def connectivity_to_xarray(
     if measure_spec.output_kind == "power":
         xar = xr.DataArray(
             connectivity_mat,
-            coords=[connectivity.time, connectivity.frequencies, signal_names_list],
+            coords=[connectivity.time, connectivity.frequencies, signal_names],
             dims=["time", "frequency", "source"],
         )
-
-    elif (m.n_signals == 2) and squeeze:
+    elif connectivity.n_signals == 2 and squeeze:
         connectivity_mat = connectivity_mat[..., 0, -1]
         xar = xr.DataArray(
             connectivity_mat,
@@ -345,22 +183,18 @@ def connectivity_to_xarray(
             coords=[
                 connectivity.time,
                 connectivity.frequencies,
-                signal_names_list,
-                signal_names_list,
+                signal_names,
+                signal_names,
             ],
             dims=["time", "frequency", "source", "target"],
         )
 
     xar.name = method
 
-    # Label with the source transform's parameters taken from the snapshot
-    # recorded when the Connectivity was built (Connectivity._source_parameters),
-    # NOT the live Multitaper: the snapshot is guaranteed (by the validation
-    # above) to match `connectivity`'s coefficients. The
-    # snapshot already applied the NetCDF-serializable filtering (see
-    # Multitaper._provenance_metadata). The 'mt_' prefix avoids xarray's '.dt'
-    # accessor treating a bare attribute name as a datetime coordinate.
-    for attr, value in (connectivity._source_parameters or {}).items():
+    # The caller captures metadata from the same transform used to build the
+    # Connectivity. The prefix avoids xarray's ``.dt`` accessor treating a bare
+    # attribute name as a datetime coordinate.
+    for attr, value in multitaper_metadata.items():
         xar.attrs["mt_" + attr] = value
 
     # CF-style coordinate metadata so the result is self-describing (plotting
@@ -396,6 +230,36 @@ def connectivity_to_xarray(
         )
 
     return xar
+
+
+def connectivity_to_xarray(
+    m: Multitaper,
+    method: str = "coherence_magnitude",
+    signal_names: Sequence[str] | None = None,
+    squeeze: bool = False,
+    **kwargs: Any,
+) -> xr.DataArray:
+    """Calculate one connectivity measure and return a labeled array.
+
+    Pairwise measures use ``(time, frequency, source, target)`` dimensions;
+    power uses ``(time, frequency, source)``. Measures with different output
+    contracts should be called on :class:`Connectivity` directly.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from spectral_connectivity.transforms import Multitaper
+    >>> data = np.random.default_rng(0).standard_normal((100, 5, 3))
+    >>> mt = Multitaper(data, sampling_frequency=1000)
+    >>> connectivity_to_xarray(mt).dims
+    ('time', 'frequency', 'source', 'target')
+    """
+    _get_measure_spec(method)
+    metadata = m._provenance_metadata()
+    connectivity = Connectivity.from_multitaper(m)
+    return _connectivity_result_to_xarray(
+        connectivity, metadata, method, signal_names, squeeze, **kwargs
+    )
 
 
 def multitaper_connectivity(
@@ -521,37 +385,29 @@ def multitaper_connectivity(
         time_window_duration=time_window_duration,
         **kwargs,
     )
-    # Build the Connectivity once and share it across every requested measure:
-    # from_multitaper recomputes the (uncached) FFT on each call, and a fresh
-    # instance would also discard cached intermediates. connectivity_kwargs are
-    # passed to the measure methods, not the constructor, so a single
-    # default-constructed instance matches the previous per-method construction.
+    # Capture metadata and build the shared calculation object from the same
+    # immutable transform. The private formatter below never accepts a separate
+    # Multitaper, so data and labels cannot be paired accidentally.
+    metadata = m._provenance_metadata()
     shared_connectivity = Connectivity.from_multitaper(m)
-    cons = xr.Dataset()  # Initialize
+    cons = xr.Dataset()
     for this_method in method:
         try:
-            con = connectivity_to_xarray(
-                m,
+            con = _connectivity_result_to_xarray(
+                shared_connectivity,
+                metadata,
                 this_method,
                 signal_names,
                 squeeze,
-                _connectivity=shared_connectivity,
                 **connectivity_kwargs,
             )
-            cons[this_method] = con  # Add data variable
+            cons[this_method] = con
         except (NotImplementedError, UnsupportedMeasureError) as e:
-            # Skip ONLY measures that structurally do not fit the xarray layout
-            # (UnsupportedMeasureError) or are not implemented. A genuine
-            # computation error — e.g. a debiased measure raising ValueError
-            # because the data has too few observations — is deliberately NOT
-            # caught here, so it surfaces instead of silently dropping a measure
-            # the user asked for. When only one measure was requested, re-raise
-            # even the structural case so nothing is swallowed.
+            # Structural incompatibility can be skipped in a batch. Other
+            # computation errors are intentionally not caught.
             if len(method) == 1:
-                raise e  # If that was the only method requested
-            else:
-                logger.warning(f"Skipping {this_method}: {e}")
+                raise
+            logger.warning("Skipping %s: %s", this_method, e)
     if return_dataarray and method[0] in cons:
         return cons[method[0]]
-    else:
-        return cons
+    return cons

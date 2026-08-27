@@ -7,7 +7,12 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 
-from spectral_connectivity.utils import freeze_readonly, is_gpu_enabled, to_numpy
+from spectral_connectivity.utils import (
+    BackendArray,
+    is_gpu_enabled,
+    mark_readonly_if_supported,
+    to_numpy,
+)
 
 logger = getLogger(__name__)
 
@@ -451,14 +456,14 @@ else:
     from scipy.signal import detrend as _backend_detrend
 
 
-def _immutable_array_snapshot(value: Any) -> NDArray:
+def _immutable_array_snapshot(value: Any) -> BackendArray:
     """Copy an input array and make the owned snapshot read-only when supported."""
-    return freeze_readonly(xp.array(value, copy=True))
+    return mark_readonly_if_supported(xp.array(value, copy=True))
 
 
-def _readonly_array_copy(array: NDArray) -> NDArray:
+def _readonly_array_copy(array: BackendArray) -> BackendArray:
     """Return a detached read-only copy of an internal array snapshot."""
-    return freeze_readonly(array.copy())
+    return mark_readonly_if_supported(array.copy())
 
 
 class Multitaper:
@@ -897,12 +902,12 @@ class Multitaper:
         object.__setattr__(self, "_initialized", True)
 
     @property
-    def time_series(self) -> NDArray[np.floating]:
+    def time_series(self) -> BackendArray:
         """Independent read-only copy of the input time-series snapshot."""
         return _readonly_array_copy(self._time_series)
 
     @property
-    def start_time(self) -> NDArray[np.floating]:
+    def start_time(self) -> BackendArray:
         """Independent read-only copy of the transform's start-time coordinate."""
         return _readonly_array_copy(self._start_time)
 
@@ -934,10 +939,8 @@ class Multitaper:
         store (strings, numbers, bools, and real numeric/string arrays),
         encoding ``None`` as ``"None"`` and skipping the large coordinate/data
         arrays (``time_series``, ``fft``, ``tapers``, ``frequencies``,
-        ``time``). Used to label results (the ``mt_*`` attributes in
-        :func:`spectral_connectivity.wrapper.connectivity_to_xarray`) and, via a
-        snapshot taken by :meth:`Connectivity.from_multitaper`, providing a
-        stable, backend-neutral record of the transform configuration.
+        ``time``). Used to label results with ``mt_*`` attributes in
+        :func:`spectral_connectivity.wrapper.connectivity_to_xarray`.
         """
         metadata: dict[str, Any] = {}
         for attr in self._PROVENANCE_FIELDS:
@@ -945,9 +948,7 @@ class Multitaper:
             if value is None:
                 value = "None"
             else:
-                get = getattr(value, "get", None)
-                if callable(get):
-                    value = get()
+                value = to_numpy(value) if hasattr(value, "shape") else value
             if isinstance(value, np.ndarray):
                 if value.dtype.kind not in "biufSU":  # exclude complex/object
                     continue

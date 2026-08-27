@@ -1,7 +1,6 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import warnings
-import weakref
 from collections.abc import Callable
 from functools import cached_property, partial, wraps
 from itertools import combinations
@@ -19,7 +18,13 @@ from spectral_connectivity.statistics import (
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
 )
-from spectral_connectivity.utils import freeze_readonly, is_gpu_enabled, to_numpy
+from spectral_connectivity.utils import (
+    BackendArray,
+    is_gpu_enabled,
+    mark_readonly_chain_if_supported,
+    mark_readonly_if_supported,
+    to_numpy,
+)
 
 if TYPE_CHECKING:
     from spectral_connectivity.transforms import Multitaper
@@ -202,27 +207,6 @@ def _non_negative_frequencies(axis: int) -> Callable:
     return decorator
 
 
-def _freeze_writeable_chain(array: NDArray) -> None:
-    """Mark ``array`` and every array in its ``.base`` chain read-only (NumPy).
-
-    A NumPy view shares its buffer with its ``.base``, so freezing only the
-    outer array leaves that buffer writable through the base. ``Multitaper.fft``
-    returns a ``swapaxes`` view whose base *is* the writable owning array, so the
-    whole chain must be frozen for the adoption path to be safe. Backends without
-    a settable ``writeable`` flag (e.g. CuPy) raise, which is ignored: adoption
-    there still relies on the array being unshared, and the getter returns a
-    fresh copy on such backends anyway. ``.base`` chains are acyclic, so the walk
-    terminates at the owning array.
-    """
-    obj: NDArray | None = array
-    while obj is not None:
-        try:
-            obj.flags.writeable = False
-        except (AttributeError, ValueError):
-            pass
-        obj = getattr(obj, "base", None)
-
-
 class Connectivity:
     """
     Compute functional and directed connectivity measures from spectral data.
@@ -388,132 +372,30 @@ class Connectivity:
             time = xp.arange(n_time_windows)
         self._frequencies = frequencies
         self._dtype = dtype
-        # Set by from_multitaper to a weakref to the source Multitaper, so
-        # consumers can verify provenance by identity (see from_multitaper).
-        # None for a directly-constructed instance, whose source is unknown.
-        self._source_multitaper: weakref.ref | None = None
-        # Snapshot of the source Multitaper's parameters at build time (see
-        # from_multitaper); None for a directly-constructed instance.
-        self._source_parameters: dict[str, Any] | None = None
-        try:
-            self.time = xp.asnumpy(time)
-        except AttributeError:
-            self.time = time
-
-    def __getstate__(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return picklable state, dropping the transient provenance weakref.
-
-        ``from_multitaper`` stores a ``weakref`` to its source ``Multitaper`` in
-        ``_source_multitaper``; weakrefs cannot be pickled, so an instance built
-        that way would otherwise fail to serialize (a directly constructed one
-        has ``None`` there and pickles fine). Provenance is a live-object link
-        that cannot survive serialization anyway, so clear it: an unpickled
-        instance behaves like a directly constructed one (usable everywhere
-        except as an identity-verified injected ``connectivity=`` argument).
-
-        The state is returned as a ``(dict_state, slot_state)`` pair (paired with
-        :meth:`__setstate__`) so attributes declared through a subclass'
-        ``__slots__`` are preserved — returning only ``__dict__`` would silently
-        drop them on pickle / ``copy.copy`` / ``copy.deepcopy``. The base class
-        keeps its data in ``__dict__``; the slot walk covers slotted subclasses.
-        """
-        dict_state = dict(getattr(self, "__dict__", {}))
-        dict_state["_source_multitaper"] = None
-        slot_state: dict[str, Any] = {}
-        for klass in type(self).__mro__:
-            slots = getattr(klass, "__slots__", ())
-            # ``__slots__`` may be a single string (Python treats it as one slot);
-            # iterating it directly would walk characters, so normalize it.
-            if isinstance(slots, str):
-                slots = (slots,)
-            for slot in slots:
-                if slot in ("__dict__", "__weakref__"):
-                    continue
-                # Private slot names are name-mangled (``__x`` -> ``_Class__x``);
-                # the descriptor lives under the mangled name.
-                if slot.startswith("__") and not slot.endswith("__"):
-                    slot = f"_{klass.__name__.lstrip('_')}{slot}"
-                try:
-                    slot_state[slot] = getattr(self, slot)
-                except AttributeError:
-                    pass  # an unset slot has no value to serialize
-        return dict_state, slot_state
-
-    def __setstate__(
-        self, state: tuple[dict[str, Any], dict[str, Any]] | dict[str, Any]
-    ) -> None:
-        """Restore state from :meth:`__getstate__` or a legacy plain dict.
-
-        Pickles written before this class defined ``__getstate__`` (e.g. from an
-        earlier release) contain a plain ``__dict__`` rather than the
-        ``(dict, slots)`` pair, so accept both forms; the provenance fields that
-        did not exist then are initialized to ``None``.
-        """
-        if isinstance(state, tuple):
-            dict_state, slot_state = state
-        else:
-            dict_state, slot_state = state, {}  # legacy plain-dict pickle
-        if dict_state:
-            self.__dict__.update(dict_state)
-        for name, value in (slot_state or {}).items():
-            setattr(self, name, value)
-        # Legacy pickles predate the provenance fields; ensure they exist.
-        self.__dict__.setdefault("_source_multitaper", None)
-        self.__dict__.setdefault("_source_parameters", None)
-
-    # Cached quantities that depend on fourier_coefficients / expectation_type
-    # and must be invalidated when either changes (see the setters below).
-    _CACHED_INTERMEDIATES = (
-        "_power",
-        "_cached_reduced_cross_spectral_matrix",
-        "_imaginary_moment_cache",
-        "_minimum_phase_factor",
-        "_transfer_function",
-        "_noise_covariance",
-        "_MVAR_Fourier_coefficients",
-    )
+        self.time = to_numpy(time)
 
     def _clear_cached_intermediates(self) -> None:
-        """Drop cached_property results that depend on the inputs."""
-        for name in self._CACHED_INTERMEDIATES:
-            self.__dict__.pop(name, None)
+        """Drop cached properties that depend on the spectral inputs.
+
+        Discovering descriptors avoids a second, hand-maintained registry that
+        could omit a newly added cache. Subclass caches are cleared as well.
+        """
+        for klass in type(self).__mro__:
+            for name, descriptor in vars(klass).items():
+                if isinstance(descriptor, cached_property):
+                    self.__dict__.pop(name, None)
 
     @property
-    def fourier_coefficients(self) -> NDArray[np.complexfloating]:
+    def fourier_coefficients(self) -> BackendArray:
         """Multitaper Fourier coefficients.
 
         Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-        Stored as an immutable snapshot so the cached intermediates (power,
-        cross-spectrum, directed factors) cannot be silently made stale by
-        in-place edits. This accessor returns an independent, **read-only copy**:
-        an in-place edit (``c.fourier_coefficients[...] = x``) raises rather than
-        silently vanishing, and because the returned array is a copy (it owns its
-        data, so ``.base`` is ``None``) it is fully disconnected from the snapshot
-        — even re-enabling its ``writeable`` flag only affects the caller's throw-
-        away copy, never the instance. (A read-only *view* would not be safe: its
-        owning base is reachable through ``.base``, whose ``writeable`` flag a
-        caller can re-enable and then mutate the snapshot behind the caches.) On
-        backends without a settable ``writeable`` flag (e.g. CuPy) the copy is
-        returned writable, which is harmless because it is still independent. To
-        change the data, assign a new array (which clears the caches) rather than
-        mutating the returned copy. Internal computations read
-        ``self._fourier_coefficients`` directly, so the copy is paid only on
-        explicit external access, not on the hot paths.
-
-        ``from_multitaper`` skips the *construction-time* copy: the
-        ``Multitaper.fft()`` output is freshly built and unshared, so it is frozen
-        in place (the whole ``.base`` chain, since ``fft()`` returns a view)
-        rather than duplicated, avoiding a transient doubling of the largest
-        array. That is independent of this getter, which still copies on access.
+        The instance owns an immutable snapshot so cached calculations cannot
+        become stale through in-place mutation. This accessor returns a detached
+        copy, marked read-only when the backend supports it. Assign a new array
+        through the setter to replace the coefficients and clear the caches.
         """
-        # Hand out an independent, read-only copy. copy() severs any link to the
-        # snapshot (the result owns its data, base is None), so a read-only *copy*
-        # is safe even if the caller re-enables its writeable flag -- unlike a
-        # read-only view, whose owning base is reachable and re-enable-able. The
-        # read-only flag makes an in-place edit raise loudly instead of silently
-        # vanishing against a discarded copy. On CuPy the freeze is a no-op; the
-        # copy is still independent, so a write to it is harmless.
-        return freeze_readonly(self._fourier_coefficients.copy())
+        return mark_readonly_if_supported(self._fourier_coefficients.copy())
 
     @fourier_coefficients.setter
     def fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
@@ -521,11 +403,6 @@ class Connectivity:
         # array and later mutate it in place, which would silently invalidate the
         # cached intermediates.
         self._set_fourier_coefficients(value, adopt=False)
-        # Replacing the data breaks any provenance link recorded by
-        # from_multitaper: the instance no longer holds the source transform's
-        # coefficients, so it must not still claim that source or its parameters.
-        self._source_multitaper = None
-        self._source_parameters = None
 
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
@@ -581,7 +458,7 @@ class Connectivity:
             # whose base buffer is writable; freeze the whole base chain, not just
             # the outer view, or the data stays reachable and mutable through
             # `.base`. No copy -- this is the memory-saving path.
-            _freeze_writeable_chain(value)
+            mark_readonly_chain_if_supported(value)
             owned = value
         else:
             # copy(order="K") keeps the caller's array's memory layout, so
@@ -590,7 +467,7 @@ class Connectivity:
             # by ~1e-16). CuPy may not support the writeable flag; the copy alone
             # still decouples the instance from later mutation of the caller's
             # array there.
-            owned = freeze_readonly(value.copy(order="K"))
+            owned = mark_readonly_if_supported(value.copy(order="K"))
         value = owned
         self._fourier_coefficients = value
         self._clear_cached_intermediates()
@@ -714,20 +591,7 @@ class Connectivity:
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
-        instance = cls(**init_kwargs)
-        # Record a verifiable link to the source transform so consumers that take
-        # data from this instance but metadata/coordinates from a Multitaper
-        # (e.g. wrapper.connectivity_to_xarray) can confirm the two describe the
-        # same data -- geometry alone (channel count, frequency grid, time bins)
-        # cannot, since two different recordings can share it. A weakref avoids
-        # extending the lifetime of the source Multitaper (and its raw
-        # time_series); a dropped reference simply fails the identity check.
-        instance._source_multitaper = weakref.ref(multitaper_instance)
-        # Snapshot the source transform's parameters as they were at build time.
-        # Multitaper configurations are immutable, and retaining the snapshot here
-        # also keeps metadata self-contained after the source object is released.
-        instance._source_parameters = multitaper_instance._provenance_metadata()
-        return instance
+        return cls(**init_kwargs)
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -827,10 +691,8 @@ class Connectivity:
 
     @cached_property
     def _power(self) -> NDArray[np.floating]:
-        # Cached per instance (invalidated when fourier_coefficients /
-        # expectation_type change; see _CACHED_INTERMEDIATES). coherency reads it
-        # twice and several measures each read it, so caching avoids recomputing
-        # the expectation. Consumers treat it as read-only.
+        # Reused by coherency and directed measures; the input setters discover
+        # and invalidate cached_property values automatically.
         return self._expectation(
             self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
@@ -1027,6 +889,11 @@ class Connectivity:
                 ]
             )
         )
+
+    @property
+    def n_signals(self) -> int:
+        """Number of signals represented by the Fourier coefficients."""
+        return int(self._fourier_coefficients.shape[-1])
 
     @_asnumpy
     def power(self) -> NDArray[np.floating]:
@@ -1263,10 +1130,7 @@ class Connectivity:
             ..., group_combination_ind[:, 1], group_combination_ind[:, 0]
         ] = magnitude
 
-        try:
-            return xp.asnumpy(canonical_coherence_magnitude), xp.asnumpy(labels)
-        except AttributeError:
-            return canonical_coherence_magnitude, labels
+        return to_numpy(canonical_coherence_magnitude), to_numpy(labels)
 
     def global_coherence(
         self,
@@ -1435,12 +1299,7 @@ class Connectivity:
                 stacklevel=2,
             )
 
-        try:
-            return xp.asnumpy(global_coherence), xp.asnumpy(
-                unnormalized_global_coherence
-            )
-        except AttributeError:
-            return global_coherence, unnormalized_global_coherence
+        return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self) -> NDArray[np.complexfloating]:
@@ -1514,6 +1373,11 @@ class Connectivity:
         # ulp above 1 (matching the bounds clipping coherence_magnitude applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
+    @cached_property
+    def _imaginary_moment_cache(self) -> dict[str, BackendArray]:
+        """Lazily populated phase-lag moments tied to the current inputs."""
+        return {}
+
     def _imaginary_cross_spectrum_moments(
         self, *keys: str
     ) -> tuple[NDArray[np.floating], ...]:
@@ -1548,7 +1412,7 @@ class Connectivity:
             The requested moments, in the order of ``keys``.
         """
         self._validate_multiple_signals()
-        cache = self.__dict__.setdefault("_imaginary_moment_cache", {})
+        cache = self._imaginary_moment_cache
         missing = [key for key in keys if key not in cache]
         if missing:
             valid_keys = {"sign", "imaginary", "absolute", "squared"}

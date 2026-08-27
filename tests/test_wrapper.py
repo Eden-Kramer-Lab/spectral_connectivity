@@ -7,6 +7,7 @@ from pytest import mark
 from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
+    DEFAULT_METHODS,
     connectivity_to_xarray,
     multitaper_connectivity,
 )
@@ -112,36 +113,16 @@ def test_multitaper_n_signals(n_signals):
         round(time_window_duration * sampling_frequency) - 1
     ) / (2 * sampling_frequency)
 
-    bad_methods = [
-        "delay",
-        "n_observations",
-        "frequencies",
-        "all_frequencies",
-        "fourier_coefficients",
-        "expectation_type",
-        "global_coherence",
-        "from_multitaper",
-        "phase_slope_index",
-        "subset_pairwise_spectral_granger_prediction",
-    ]
-    methods = [
-        x for x in dir(Connectivity) if not x.startswith("_") and x not in bad_methods
-    ]
-
-    for method in methods:
-        try:
-            m = multitaper_connectivity(
-                time_series,
-                method=method,
-                sampling_frequency=sampling_frequency,
-                time_window_duration=time_window_duration,
-            )
-            assert np.allclose(m.time.values, expected_time)
-            assert not (m.values == 0).all()
-            assert not (np.isnan(m.values)).all()
-
-        except (NotImplementedError, ValueError):
-            pass
+    for method in (*DEFAULT_METHODS, "coherency"):
+        m = multitaper_connectivity(
+            time_series,
+            method=method,
+            sampling_frequency=sampling_frequency,
+            time_window_duration=time_window_duration,
+        )
+        assert np.allclose(m.time.values, expected_time)
+        assert not (m.values == 0).all()
+        assert not (np.isnan(m.values)).all()
 
 
 @mark.parametrize("n_signals", range(2, 5))
@@ -419,18 +400,12 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     assert recorded == ["MISSING"]
 
 
-def test_to_host_array_handles_device_arrays():
-    """Coordinate validation must not implicitly convert GPU arrays.
-
-    Under GPU mode ``Multitaper`` coordinates are CuPy arrays, which raise on
-    implicit ``np.asarray`` conversion. ``_to_host_array`` must route through
-    ``.get()`` for such arrays while leaving NumPy arrays untouched, so the
-    injected-``Connectivity`` validation works on both backends.
-    """
-    from spectral_connectivity.wrapper import _to_host_array
+def test_to_numpy_handles_device_arrays():
+    """The shared backend boundary handles explicit device-to-host transfer."""
+    from spectral_connectivity.utils import to_numpy
 
     host = np.arange(5.0)
-    np.testing.assert_array_equal(_to_host_array(host), host)
+    np.testing.assert_array_equal(to_numpy(host), host)
 
     class _DeviceLike:
         """Mimics cupy.ndarray: no implicit conversion, but ``.get()`` works."""
@@ -447,7 +422,7 @@ def test_to_host_array_handles_device_arrays():
     device = _DeviceLike(np.arange(5.0))
     with pytest.raises(TypeError):
         np.asarray(device)  # guards the premise: implicit conversion fails
-    np.testing.assert_array_equal(_to_host_array(device), np.arange(5.0))
+    np.testing.assert_array_equal(to_numpy(device), np.arange(5.0))
 
 
 def test_multi_method_shares_single_fft():
@@ -644,7 +619,7 @@ def test_result_carries_provenance_metadata():
     assert any(key.startswith("mt_") for key in da.attrs)
 
 
-def test_provenance_records_measure_kwargs(tmp_path):
+def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
     """Measure keyword arguments are recorded as ``arg_<key>``.
 
     A scalar kwarg is stored as-is; a non-scalar kwarg is stringified so it
@@ -656,18 +631,22 @@ def test_provenance_records_measure_kwargs(tmp_path):
 
     rng = np.random.default_rng(3)
     m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
-    conn = Connectivity.from_multitaper(m)
-    n_time = len(conn.time)
-    n_freq = len(conn.frequencies)
-    n_signals = 3
-    stub = np.zeros((n_time, n_freq, n_signals, n_signals))
-    # Attach a stub measure fitting the (time, frequency, source, target) layout.
-    conn.stub_measure = lambda **kwargs: stub
+
+    def stub_measure(connectivity, **kwargs):
+        return np.zeros(
+            (
+                len(connectivity.time),
+                len(connectivity.frequencies),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            )
+        )
+
+    monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
 
     da = connectivity_to_xarray(
         m,
         method="stub_measure",
-        _connectivity=conn,
         threshold=0.5,
         window=[1, 2, 3],
     )
@@ -678,17 +657,26 @@ def test_provenance_records_measure_kwargs(tmp_path):
     da.to_netcdf(tmp_path / "args.nc")
 
 
-def test_wrapper_capabilities_do_not_use_method_name_substrings():
+def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
     """A pairwise extension containing 'directed' is not rejected by its name."""
     rng = np.random.default_rng(8)
     m = Multitaper(rng.standard_normal((128, 3, 2)), sampling_frequency=128)
-    conn = Connectivity.from_multitaper(m)
-    result = np.zeros((len(conn.time), len(conn.frequencies), 2, 2))
-    conn.undirected_similarity = lambda: result
 
-    data_array = connectivity_to_xarray(
-        m, method="undirected_similarity", _connectivity=conn
+    def undirected_similarity(connectivity):
+        return np.zeros(
+            (
+                len(connectivity.time),
+                len(connectivity.frequencies),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            )
+        )
+
+    monkeypatch.setattr(
+        Connectivity, "undirected_similarity", undirected_similarity, raising=False
     )
+
+    data_array = connectivity_to_xarray(m, method="undirected_similarity")
     assert data_array.dims == ("time", "frequency", "source", "target")
 
 

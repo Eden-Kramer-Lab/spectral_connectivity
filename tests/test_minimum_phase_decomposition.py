@@ -142,11 +142,10 @@ def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
 def test_get_initial_conditions_isolates_non_positive_definite_units():
     """A non-PD sub-spectrum must not change the healthy units' initialization.
 
-    Regression: _get_initial_conditions ran one batched Cholesky with an
-    all-or-nothing random fallback, so a single rank-deficient window replaced
-    EVERY unit's deterministic Cholesky start with a random one -- which can stop
-    otherwise-convergent windows from converging. Only the bad unit should fall
-    back to random; the healthy unit keeps its exact Cholesky initialization.
+    Regression: _get_initial_conditions previously used an all-or-nothing
+    fallback, so one rank-deficient window replaced every unit's Cholesky start.
+    Only the bad unit should use the deterministic identity fallback; the healthy
+    unit keeps its exact Cholesky initialization.
     """
     rng = np.random.default_rng(5)
     n_freq, n_signals = 16, 2

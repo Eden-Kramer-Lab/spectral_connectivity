@@ -16,6 +16,8 @@ import scipy.special
 import scipy.stats
 from numpy.typing import NDArray
 
+from spectral_connectivity.utils import to_numpy
+
 
 def _require_scipy_false_discovery_control() -> None:
     """Raise an actionable error if SciPy is too old for ``false_discovery_control``.
@@ -371,22 +373,13 @@ def get_normal_distribution_p_values(
 
     Notes
     -----
-    This function handles both NumPy and CuPy arrays automatically: SciPy
-    cannot operate on a CuPy array directly, so such an array is moved to the
-    host with ``.get()`` before computing the CDF.
+    This function handles both NumPy and CuPy arrays automatically. Inputs cross
+    the package's explicit host boundary before SciPy computes the CDF.
     """
     # Use the survival function (sf = 1 - cdf) rather than ``1 - cdf`` so that
     # far-tail p-values keep full precision: ``1 - norm.cdf(8.3)`` underflows to
     # exactly 0, while ``norm.sf(8.3)`` returns ~5.2e-17.
-    try:
-        return scipy.stats.norm.sf(data, loc=mean, scale=std_deviation)
-    except TypeError:
-        # SciPy raises TypeError on a CuPy array; move it to the host and retry.
-        # Any other TypeError is a genuine error and is re-raised with its
-        # original traceback rather than masked by an AttributeError on `.get`.
-        if hasattr(data, "get"):
-            return scipy.stats.norm.sf(data.get(), loc=mean, scale=std_deviation)
-        raise
+    return scipy.stats.norm.sf(to_numpy(data), loc=mean, scale=std_deviation)
 
 
 def coherence_significance_pvalue(
