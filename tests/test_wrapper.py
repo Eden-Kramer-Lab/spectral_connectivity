@@ -678,6 +678,20 @@ def test_provenance_records_measure_kwargs(tmp_path):
     da.to_netcdf(tmp_path / "args.nc")
 
 
+def test_wrapper_capabilities_do_not_use_method_name_substrings():
+    """A pairwise extension containing 'directed' is not rejected by its name."""
+    rng = np.random.default_rng(8)
+    m = Multitaper(rng.standard_normal((128, 3, 2)), sampling_frequency=128)
+    conn = Connectivity.from_multitaper(m)
+    result = np.zeros((len(conn.time), len(conn.frequencies), 2, 2))
+    conn.undirected_similarity = lambda: result
+
+    data_array = connectivity_to_xarray(
+        m, method="undirected_similarity", _connectivity=conn
+    )
+    assert data_array.dims == ("time", "frequency", "source", "target")
+
+
 def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
     """A batch mixing a supported and an xarray-incompatible measure drops the
     latter with a warning rather than aborting.

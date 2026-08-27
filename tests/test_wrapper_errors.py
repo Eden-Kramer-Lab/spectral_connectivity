@@ -196,14 +196,8 @@ def test_injected_connectivity_mutated_coordinate_rejected():
         ("time_halfbandwidth_product", 5),
     ],
 )
-def test_injected_connectivity_source_parameter_change_rejected(attr, value):
-    """Mutating the source Multitaper's parameters after build is rejected.
-
-    Identity still holds (same object), and geometry may be unchanged, but the
-    coefficients in `conn` are a snapshot while the result would be labeled with
-    the Multitaper's *current* parameters. A fresh computation would differ, so
-    the mislabeling must be caught rather than silently produced.
-    """
+def test_multitaper_source_parameter_change_is_prevented(attr, value):
+    """A source transform cannot diverge from its coefficients after construction."""
     from spectral_connectivity.connectivity import Connectivity
 
     rng = np.random.default_rng(4)
@@ -213,7 +207,13 @@ def test_injected_connectivity_source_parameter_change_rejected(attr, value):
         time_halfbandwidth_product=3,
     )
     conn = Connectivity.from_multitaper(m)
-    setattr(m, attr, value)  # mutate the source after building conn
+    with pytest.raises(AttributeError, match="immutable after construction"):
+        setattr(m, attr, value)
+    # The failed mutation leaves the source and its coefficient snapshot aligned.
+    connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
+    # Retain the provenance defense for legacy objects/subclasses that bypass the
+    # public immutability guard.
+    object.__setattr__(m, attr, value)
     with pytest.raises(ValueError, match="was modified after"):
         connectivity_to_xarray(m, "coherence_magnitude", _connectivity=conn)
 
