@@ -1,6 +1,6 @@
 # spectral_connectivity
 
-[![PR Test](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/PR-test.yml/badge.svg)](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/PR-test.yml)
+[![Test, Build, and Publish](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/release.yml/badge.svg)](https://github.com/Eden-Kramer-Lab/spectral_connectivity/actions/workflows/release.yml)
 [![DOI](https://zenodo.org/badge/104382538.svg)](https://zenodo.org/badge/latestdoi/104382538)
 [![Binder](https://mybinder.org/badge.svg)](https://mybinder.org/v2/gh/Eden-Kramer-Lab/spectral_connectivity/master)
 [![status](https://joss.theoj.org/papers/27eb33e699c9ea723783c44576d081bb/status.svg)](https://joss.theoj.org/papers/27eb33e699c9ea723783c44576d081bb)
