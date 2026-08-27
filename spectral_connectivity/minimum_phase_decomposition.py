@@ -88,6 +88,22 @@ def _get_initial_conditions(
         # rather than the whole batch falling back (which can stop
         # otherwise-convergent units from converging). This matches the GPU path,
         # where cholesky returns NaN for the bad unit instead of raising.
+        # Use warnings.warn (not just logger.warning) so this surfaces under
+        # pytest.warns / -W error and reaches the same audience as the GPU path:
+        # there, a rank-deficient unit's Cholesky returns NaN and the unit ends
+        # up NaN with a loud UserWarning. On CPU the deterministic fallback may
+        # instead let the iteration "converge" from a substitute start to a
+        # finite value that is not guaranteed correct, so it must be equally
+        # visible rather than only logged.
+        warnings.warn(
+            "Computing the initial conditions using the Cholesky failed for "
+            "some sub-spectra (rank-deficient / duplicated channels); using a "
+            "deterministic positive-definite fallback start for those units. "
+            "Their directed-connectivity values are not guaranteed correct — "
+            "check for duplicated or near-collinear channels.",
+            UserWarning,
+            stacklevel=2,
+        )
         logger.warning(
             "Computing the initial conditions using the Cholesky failed for "
             "some sub-spectra; using a deterministic fallback for those."
