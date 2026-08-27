@@ -19,6 +19,7 @@ directly with results from 2.x.
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
 | `delay` returned cycles | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
+| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
@@ -70,6 +71,13 @@ directly with results from 2.x.
 - The wrapper accepts documented 2-D `(time, channels)` input and produces
   NetCDF-serializable metadata. Unsupported batch measures are skipped without
   swallowing genuine computation errors.
+- The xarray wrapper now labels directed measures (e.g.
+  `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
+  the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
+  transposed, silently returning the reverse direction. Recompute any directed
+  results obtained through `multitaper_connectivity`. The underlying
+  `Connectivity` methods are unchanged (they keep the `output[i, j] = j -> i`
+  convention).
 - Importing the package no longer changes NumPy's global floating-point warning
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial

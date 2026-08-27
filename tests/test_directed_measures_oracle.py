@@ -32,6 +32,7 @@ import pytest
 from pytest import mark
 
 from spectral_connectivity import Connectivity
+from spectral_connectivity.wrapper import _connectivity_result_to_xarray
 
 
 def _analytic_var(coefficients, noise_covariance, n_fft):
@@ -163,3 +164,30 @@ def test_dtf_matches_analytic_closed_form(var_oracle):
 
     analytic_peak = np.argmax(np.abs(H[:n_non_negative, 1, 0]) ** 2)
     assert np.argmax(dtf[:, 1, 0]) == analytic_peak
+
+
+def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
+    """The xarray wrapper must label directed measures source -> target.
+
+    The ``Connectivity`` layer returns ``[i, j] = j -> i``; the wrapper
+    transposes directed measures so that ``sel(source=driver, target=receiver)``
+    reads out the causal entry. For this unidirectional VAR (signal 0 drives
+    signal 1), the causal entry is ``sel(source="0", target="1")`` and the
+    anti-causal ``sel(source="1", target="0")`` is analytically zero. A wrapper
+    that forgot the transpose would swap these two.
+    """
+    connectivity = var_oracle["connectivity"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = _connectivity_result_to_xarray(
+            connectivity,
+            {},
+            "pairwise_spectral_granger_prediction",
+            ["0", "1"],
+            False,
+        )
+
+    causal = result.sel(source="0", target="1").values  # 0 -> 1
+    anti_causal = result.sel(source="1", target="0").values  # 1 -> 0
+    assert np.nanmax(causal) > 0.05, np.nanmax(causal)
+    assert np.nanmax(np.abs(anti_causal)) < 1e-8, np.nanmax(np.abs(anti_causal))

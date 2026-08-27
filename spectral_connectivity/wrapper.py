@@ -49,9 +49,15 @@ class _MeasureSpec:
 
     output_kind: Literal["pairwise", "power", "unsupported"]
     is_default: bool = False
+    # Directed measures use the convention output[i, j] = influence j -> i (row
+    # = receiver, col = driver). The wrapper transposes them so the labeled
+    # (source, target) axes read source -> target; symmetric measures are
+    # unaffected by the transpose.
+    is_directed: bool = False
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
+_DIRECTED_PAIRWISE_SPEC = _MeasureSpec("pairwise", is_directed=True)
 _UNSUPPORTED_SPEC = _MeasureSpec("unsupported")
 
 # This is the single source of truth for wrapper capabilities and defaults.
@@ -65,13 +71,15 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     ),
     "imaginary_coherence": _MeasureSpec("pairwise", is_default=True),
     "pairwise_phase_consistency": _MeasureSpec("pairwise", is_default=True),
-    "pairwise_spectral_granger_prediction": _MeasureSpec("pairwise", is_default=True),
+    "pairwise_spectral_granger_prediction": _MeasureSpec(
+        "pairwise", is_default=True, is_directed=True
+    ),
     "phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "phase_locking_value": _MeasureSpec("pairwise", is_default=True),
     "power": _MeasureSpec("power", is_default=True),
     "weighted_phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "coherency": _PAIRWISE_SPEC,
-    "subset_pairwise_spectral_granger_prediction": _PAIRWISE_SPEC,
+    "subset_pairwise_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
     **dict.fromkeys(
         (
             "blockwise_spectral_granger_prediction",
@@ -154,6 +162,13 @@ def _connectivity_result_to_xarray(
             f"The method '{method}' returned shape {actual_shape}; its wrapper "
             f"contract requires {expected_shape}."
         )
+
+    if measure_spec.is_directed:
+        # Directed measures return output[i, j] = influence j -> i (row =
+        # receiver, col = driver). Transpose the trailing signal axes so the
+        # stored value at [i, j] is i -> j, matching the (source, target) labels
+        # applied below: sel(source=i, target=j) then reads "i drives j".
+        connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
     if connectivity.n_signals > 2 and squeeze:
         warnings.warn(
@@ -354,6 +369,13 @@ def multitaper_connectivity(
     Uses multitaper spectral estimation for robust power spectral density
     estimation before computing connectivity measures. This provides better
     spectral estimates than single-taper methods, especially for short time series.
+
+    For directed measures (e.g. ``pairwise_spectral_granger_prediction``) the
+    ``source`` and ``target`` axes are oriented so that
+    ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``.
+    (The underlying ``Connectivity`` methods use the transposed convention
+    ``output[i, j] = influence j -> i``; the wrapper transposes to the intuitive
+    source -> target layout.)
 
     References
     ----------

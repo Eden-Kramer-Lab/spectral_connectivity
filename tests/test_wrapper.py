@@ -759,3 +759,38 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
     assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
+
+
+def test_multitaper_connectivity_directed_source_target_orientation():
+    """Directed measures must label sel(source=driver, target=receiver) correctly.
+
+    Build a unidirectional VAR (signal 0 drives signal 1) as multi-trial time
+    series and confirm the Granger DataArray reads the strong influence at
+    source=0 -> target=1 and near-zero at source=1 -> target=0. Without the
+    directed transpose in the wrapper these two are swapped.
+    """
+    rng = np.random.default_rng(0)
+    n_time, n_trials = 2000, 8
+    time_series = np.zeros((n_time, n_trials, 2))
+    for trial in range(n_trials):
+        x = np.zeros(n_time)
+        y = np.zeros(n_time)
+        e_x = rng.standard_normal(n_time)
+        e_y = rng.standard_normal(n_time)
+        for t in range(1, n_time):
+            x[t] = 0.5 * x[t - 1] + e_x[t]
+            y[t] = 0.5 * y[t - 1] + 0.6 * x[t - 1] + e_y[t]  # 0 -> 1
+        time_series[:, trial, 0] = x
+        time_series[:, trial, 1] = y
+
+    da = multitaper_connectivity(
+        time_series,
+        sampling_frequency=200,
+        time_halfbandwidth_product=3,
+        method="pairwise_spectral_granger_prediction",
+        signal_names=["x", "y"],
+    )
+    causal = da.sel(source="x", target="y").values  # x drives y
+    anti_causal = da.sel(source="y", target="x").values
+    assert np.nanmax(causal) > np.nanmax(anti_causal)
+    assert np.nanmax(causal) > 0.05
