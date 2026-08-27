@@ -36,6 +36,10 @@ directly with results from 2.x.
   `direct_directed_transfer_function`) by name. They are opt-in (not in the
   default set) and, like the spectral Granger measures, are oriented so
   `sel(source=a, target=b)` is the influence from `a` to `b`.
+- A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
+  provenance (package, version, backend, expectation type, and the `mt_*`
+  multitaper parameters) as top-level `Dataset.attrs`, not only on each
+  variable.
 
 ### Changed
 

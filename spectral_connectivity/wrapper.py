@@ -216,12 +216,6 @@ def _connectivity_result_to_xarray(
 
     xar.name = method
 
-    # The caller captures metadata from the same transform used to build the
-    # Connectivity. The prefix avoids xarray's ``.dt`` accessor treating a bare
-    # attribute name as a datetime coordinate.
-    for attr, value in multitaper_metadata.items():
-        xar.attrs["mt_" + attr] = value
-
     # CF-style coordinate metadata so the result is self-describing (plotting
     # libraries and NetCDF readers use units / long_name for axis labels).
     if "time" in xar.coords:
@@ -235,16 +229,11 @@ def _connectivity_result_to_xarray(
             xar.coords[signal_axis].attrs.setdefault("long_name", "Signal")
 
     # Provenance: enough to trace how the result was produced. All values are
-    # NetCDF-serializable strings/numbers (the mt_* attributes above already
-    # record the multitaper parameters).
+    # NetCDF-serializable strings/numbers. The shared attrs (package, backend,
+    # multitaper parameters) are also attached to the Dataset when several
+    # measures are returned together.
+    xar.attrs.update(_shared_provenance_attrs(connectivity, multitaper_metadata))
     xar.attrs["measure"] = method
-    xar.attrs["package"] = "spectral_connectivity"
-    xar.attrs["package_version"] = _package_version()
-    # get_compute_backend() reports the backend actually imported (numpy vs
-    # cupy), not the current env var; is_gpu_enabled() would mislabel a result if
-    # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
-    xar.attrs["backend"] = get_compute_backend()["backend"].upper()
-    xar.attrs["expectation_type"] = connectivity.expectation_type
     # Record the measure's keyword arguments; stringify anything that is not a
     # plain NetCDF-serializable scalar so the record cannot break to_netcdf.
     for key, value in kwargs.items():
@@ -255,6 +244,31 @@ def _connectivity_result_to_xarray(
         )
 
     return xar
+
+
+def _shared_provenance_attrs(
+    connectivity: Connectivity, multitaper_metadata: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Provenance shared by every measure computed from one transform.
+
+    Covers the package/version, the imported backend, the expectation type, and
+    the multitaper parameters (``mt_*``) -- everything that does not depend on
+    the specific measure. The per-measure attributes (``measure`` and the
+    ``arg_*`` keyword arguments) are added by the caller.
+    """
+    # The ``mt_`` prefix avoids xarray's ``.dt`` accessor treating a bare
+    # attribute name as a datetime coordinate.
+    attrs: dict[str, Any] = {
+        "mt_" + attr: value for attr, value in multitaper_metadata.items()
+    }
+    attrs["package"] = "spectral_connectivity"
+    attrs["package_version"] = _package_version()
+    # get_compute_backend() reports the backend actually imported (numpy vs
+    # cupy), not the current env var; is_gpu_enabled() would mislabel a result if
+    # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
+    attrs["backend"] = get_compute_backend()["backend"].upper()
+    attrs["expectation_type"] = connectivity.expectation_type
+    return attrs
 
 
 def connectivity_to_xarray(
@@ -461,4 +475,7 @@ def multitaper_connectivity(
         )
     if return_dataarray and method[0] in cons:
         return cons[method[0]]
+    # Attach the shared provenance at the Dataset level too, so a multi-measure
+    # result is self-describing without having to inspect an individual variable.
+    cons.attrs.update(_shared_provenance_attrs(shared_connectivity, metadata))
     return cons

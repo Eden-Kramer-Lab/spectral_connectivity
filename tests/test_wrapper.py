@@ -897,3 +897,23 @@ def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
     causal = da.sel(source="x", target="y").values  # x drives y
     anti_causal = da.sel(source="y", target="x").values
     assert np.nanmax(causal) > np.nanmax(anti_causal)
+
+
+def test_multitaper_connectivity_dataset_carries_shared_provenance():
+    """A multi-measure Dataset exposes shared provenance at the top level.
+
+    Previously provenance lived only on each DataArray; a returned Dataset had
+    no top-level attrs, so tracing how a batch was produced meant inspecting an
+    arbitrary variable. The shared attrs (package, backend, expectation type,
+    multitaper parameters) are now on the Dataset too, and survive NetCDF.
+    """
+    rng = np.random.default_rng(0)
+    ds = multitaper_connectivity(
+        rng.standard_normal((512, 5, 3)), sampling_frequency=500
+    )
+    assert ds.attrs["package"] == "spectral_connectivity"
+    assert ds.attrs["backend"] in ("CPU", "GPU")
+    assert ds.attrs["expectation_type"] == "trials_tapers"
+    assert ds.attrs["mt_sampling_frequency"] == 500
+    # The shared attrs must not include per-measure fields.
+    assert "measure" not in ds.attrs
