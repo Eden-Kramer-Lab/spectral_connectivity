@@ -363,18 +363,22 @@ This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based 
 
 ### Making a Release
 
-To create a new release:
+Releases are published **automatically by CI**: pushing a `v*` tag runs the
+*Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
+to PyPI via trusted publishing (after approval in the protected `pypi`
+environment). Do **not** run `twine upload` by hand — that bypasses the tests,
+attestations, and approval gate. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+full process and the required one-time setup.
 
 ```bash
-# 1. Update version tag
-git tag v1.2.0
+# Update CHANGELOG.md, then tag and push -- CI does the rest.
+git tag -a v1.2.0 -m "v1.2.0"
 git push origin v1.2.0
+```
 
-# 2. Build and publish to PyPI
-hatch build
-twine upload dist/*
+Conda packages are published separately and manually:
 
-# 3. Build and publish to conda
+```bash
 conda build conda-recipe/ --output-folder ./conda-builds
 anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
 ```

@@ -58,9 +58,11 @@ To cut a release:
 
 **One-time setup (required for the automated release to work):**
 
-- On PyPI, configure a *trusted publisher* for this repository and the
-  `release.yml` workflow (PyPI project → Settings → Publishing), authorizing the
-  OIDC publish without a stored token.
+- On PyPI, configure a *trusted publisher* for this repository (PyPI project →
+  Settings → Publishing), authorizing the OIDC publish without a stored token.
+  Set the workflow to `release.yml` and the **environment name to `pypi`** to
+  match the workflow's `environment: pypi`; the publish is rejected if they
+  differ.
 - In the GitHub repository (Settings → Environments → `pypi`), add protection
   rules — required reviewers, and optionally a tag/branch restriction. Naming
   the environment in the workflow is **not** sufficient on its own; the

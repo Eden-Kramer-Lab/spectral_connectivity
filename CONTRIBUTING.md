@@ -49,23 +49,24 @@ This project uses an automated release workflow. To create a new release:
    ```
 
 3. **Automated workflow** (`.github/workflows/release.yml`)
-   The release workflow will automatically:
-   - Run code quality checks (ruff format, ruff check, mypy)
-   - Run tests on Python 3.10, 3.11, 3.12, and 3.13
-   - Build source distribution and wheel
-   - Test the built packages
-   - Publish to PyPI (requires trusted publishing setup)
-   - Create a GitHub release with notes extracted from CHANGELOG.md
+   Pushing the tag runs the release workflow, which automatically:
+   - Runs code quality checks (ruff format, ruff check, mypy)
+   - Runs tests on Python 3.10, 3.11, 3.12, and 3.13, plus the minimum
+     dependency floors
+   - Builds the source distribution and wheel and tests the built packages
+   - Generates build-provenance attestations for the artifacts
+   - Publishes to PyPI via trusted publishing (OIDC — no stored token), after
+     approval in the protected `pypi` environment
+   - Creates a GitHub release with notes extracted from CHANGELOG.md
 
-4. **Manual PyPI upload** (if needed)
-   If you need to publish manually:
-   ```bash
-   python -m build
-   twine check dist/*
-   twine upload dist/*
-   ```
+   This is the only supported way to publish. Do **not** run `twine upload` by
+   hand — a manual upload races the workflow and bypasses its tests,
+   attestations, and approval gate. If the automated publish fails, fix the
+   workflow (or PyPI trusted-publisher / environment settings) and re-run it.
+   The one-time trusted-publishing and environment-protection setup is
+   documented in [docs/contributing.md](docs/contributing.md).
 
-5. **Conda release** (requires anaconda and conda-build)
+4. **Conda release** (requires anaconda and conda-build)
    ```bash
    conda build conda-recipe/ --output-folder ./conda-builds
    anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
