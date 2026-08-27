@@ -39,6 +39,11 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
+# Dependency-floor policy: each lower bound is the oldest version the code is
+# actually tested against. The `test-min-deps` CI job installs exactly these
+# minimums (and the minimum Python) and runs the suite, so a floor cannot drift
+# out of sync with the code. Raise a floor only when a feature requires it (with
+# a comment saying why) or to follow the Scientific Python SPEC 0 support window.
 dependencies = [
     "numpy>=1.24,<3.0",
     "scipy>=1.11",  # scipy.stats.false_discovery_control (statistics.py)
