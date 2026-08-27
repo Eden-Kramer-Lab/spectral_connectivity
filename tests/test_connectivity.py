@@ -1686,6 +1686,13 @@ def test_expectation_cross_spectral_matrix_blocks():
     connectivity matrices by processing signal pairs in chunks. This test
     verifies that using blocks produces identical results to computing all
     connections at once.
+
+    An explicit ``fcn`` is passed so the call actually exercises the
+    block-chunking branch: the ``fcn=None`` identity path is reduced directly
+    with a batched matmul that ignores ``blocks`` (so it would compare the
+    reduced path against itself and prove nothing about chunking). ``np.abs`` is
+    Hermitian-preserving, so the chunked upper-triangle-plus-conjugate-fill
+    assembly must reproduce the unchunked result.
     """
     # Create test data with known structure
     # Use realistic dimensions: 10 time windows, 3 trials, 5 tapers, 50 frequencies, 10 signals
@@ -1714,7 +1721,7 @@ def test_expectation_cross_spectral_matrix_blocks():
             expectation_type=expectation_type,
             blocks=None,
         )
-        csm_unblocked = conn_unblocked._expectation_cross_spectral_matrix()
+        csm_unblocked = conn_unblocked._expectation_cross_spectral_matrix(fcn=np.abs)
 
         # Test with different numbers of blocks
         for n_blocks in [2, 3, 5]:
@@ -1723,7 +1730,7 @@ def test_expectation_cross_spectral_matrix_blocks():
                 expectation_type=expectation_type,
                 blocks=n_blocks,
             )
-            csm_blocked = conn_blocked._expectation_cross_spectral_matrix()
+            csm_blocked = conn_blocked._expectation_cross_spectral_matrix(fcn=np.abs)
 
             # Verify shapes match
             assert csm_blocked.shape == csm_unblocked.shape, (
@@ -1799,6 +1806,9 @@ def test_expectation_cross_spectral_matrix_blocks_edge_cases():
     - blocks=1 (equivalent to unblocked)
     - blocks > number of signal pairs (more blocks than needed)
     - Very small datasets
+
+    An explicit ``fcn`` (``np.abs``) is used so the block-chunking branch is
+    actually taken; the ``fcn=None`` identity path ignores ``blocks``.
     """
     # Small dataset
     n_time_windows = 2
@@ -1817,17 +1827,17 @@ def test_expectation_cross_spectral_matrix_blocks_edge_cases():
 
     # Compute reference (unblocked)
     conn_ref = Connectivity(fourier_coefficients=fourier_coefficients, blocks=None)
-    csm_ref = conn_ref._expectation_cross_spectral_matrix()
+    csm_ref = conn_ref._expectation_cross_spectral_matrix(fcn=np.abs)
 
     # Test blocks=1 (should work like unblocked)
     conn_block1 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=1)
-    csm_block1 = conn_block1._expectation_cross_spectral_matrix()
+    csm_block1 = conn_block1._expectation_cross_spectral_matrix(fcn=np.abs)
     assert np.allclose(csm_block1, csm_ref, rtol=1e-10, atol=1e-12)
 
     # Test blocks > number of pairs (should handle gracefully)
     # With 3 signals, there are 3 pairs: (0,1), (0,2), (1,2)
     conn_block10 = Connectivity(fourier_coefficients=fourier_coefficients, blocks=10)
-    csm_block10 = conn_block10._expectation_cross_spectral_matrix()
+    csm_block10 = conn_block10._expectation_cross_spectral_matrix(fcn=np.abs)
     assert np.allclose(csm_block10, csm_ref, rtol=1e-10, atol=1e-12)
 
 
@@ -2016,6 +2026,38 @@ def test_coherence_magnitude_block_mode_matches_unblocked(blocks):
     unblocked = Connectivity(fourier_coefficients=fc).coherence_magnitude()
     blocked = Connectivity(fourier_coefficients=fc, blocks=blocks).coherence_magnitude()
     np.testing.assert_allclose(blocked, unblocked, atol=1e-12)
+
+
+@mark.parametrize("blocks", [1, 2, 3, 10])
+def test_phase_locking_value_block_mode_matches_unblocked(blocks):
+    """phase_locking_value is the one measure that still honors ``blocks``.
+
+    It applies a per-observation magnitude normalization before averaging, so
+    (unlike the coherence family) it routes through the block-chunking assembly:
+    upper-triangle signal-pair blocks plus a Hermitian conjugate fill of the
+    lower triangle. Blocked and unblocked results must be identical, including
+    the NaN placement produced by a zero-magnitude (dead-channel) entry whose
+    normalization divides by zero -- a wrong pair index or a non-conjugate fill
+    would show up here.
+    """
+    rng = np.random.default_rng(7)
+    fc = rng.standard_normal((2, 3, 4, 6, 5)) + 1j * rng.standard_normal(
+        (2, 3, 4, 6, 5)
+    )
+    # A dead channel (all-zero) makes every cross-spectrum involving it zero, so
+    # its normalized phase-locking value is NaN -- exercises the NaN path through
+    # the block assembly and its Hermitian fill.
+    fc[..., 0] = 0.0
+
+    unblocked = Connectivity(fourier_coefficients=fc).phase_locking_value()
+    blocked = Connectivity(fourier_coefficients=fc, blocks=blocks).phase_locking_value()
+
+    assert blocked.shape == unblocked.shape
+    assert np.array_equal(np.isnan(blocked), np.isnan(unblocked)), (
+        f"NaN placement differs between blocks={blocks} and unblocked"
+    )
+    mask = ~np.isnan(unblocked)
+    np.testing.assert_allclose(blocked[mask], unblocked[mask], rtol=1e-10, atol=1e-12)
 
 
 @mark.parametrize(
@@ -2365,6 +2407,53 @@ def test_global_coherence_batched_matches_per_bin_fallback():
             assert np.all(gc_batched[~np.isnan(gc_batched)] <= 1)
 
 
+def test_global_coherence_batched_matches_per_bin_ill_conditioned():
+    """Batched eigh and per-bin SVD agree even for near-duplicate channels.
+
+    The batched path diagonalizes ``A @ Aᴴ`` with ``eigh``, which squares the
+    condition number relative to the per-bin ``svd(A)``. For a nearly
+    rank-deficient cross-spectral matrix (near-duplicate channels) the weakest
+    components can lose relative precision, but the coherence fractions must
+    still agree to a tight absolute tolerance, and the dominant component -- the
+    usual use of this measure -- must agree closely. This guards the documented
+    eigh/SVD tradeoff against a regression that widens the gap; the existing
+    equivalence test uses only well-conditioned Gaussian data.
+    """
+    from unittest.mock import patch
+
+    from spectral_connectivity import connectivity as conn_mod
+
+    rng = np.random.default_rng(20240827)
+    n_time, n_trials, n_tapers, n_fft, n_signals = 2, 30, 2, 10, 4
+    # Near-duplicate channels: a shared complex component broadcast across all
+    # signals plus a tiny (1e-6) per-channel perturbation. The resulting per-bin
+    # cross-spectral matrix is nearly rank-one (condition number ~1e6+), the
+    # regime where eigh(A @ Aᴴ) and svd(A) diverge most.
+    shared = rng.standard_normal(
+        (n_time, n_trials, n_tapers, n_fft, 1)
+    ) + 1j * rng.standard_normal((n_time, n_trials, n_tapers, n_fft, 1))
+    perturbation = 1e-6 * (
+        rng.standard_normal((n_time, n_trials, n_tapers, n_fft, n_signals))
+        + 1j * rng.standard_normal((n_time, n_trials, n_tapers, n_fft, n_signals))
+    )
+    fc = (shared + perturbation).astype(np.complex128)
+
+    for max_rank in (1, n_signals):
+        gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
+        # Force the per-bin svd/svds fallback (the well-conditioned reference).
+        with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+            gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
+
+        np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))
+        # Weak components may differ in relative terms but are ~machine-epsilon
+        # in absolute terms, so compare all components on an absolute tolerance.
+        np.testing.assert_allclose(gc_batched, gc_loop, atol=1e-8, equal_nan=True)
+        # The dominant component holds essentially all the coherent power for
+        # near-duplicate channels and must agree closely in relative terms.
+        np.testing.assert_allclose(gc_batched[..., 0], gc_loop[..., 0], rtol=1e-6)
+        assert np.all(gc_batched[..., 0] > 0.99)
+
+
 def test_global_coherence_batched_chunking_matches_single_chunk():
     """The multi-chunk path matches processing all bins in one chunk.
 
@@ -2548,3 +2637,24 @@ def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
         with pytest.warns(UserWarning, match="zero magnitude"):
             result = getattr(conn, measure)()
     assert np.isnan(result).any()
+
+
+def test_from_multitaper_connectivity_is_picklable():
+    """A Connectivity from from_multitaper must pickle despite the provenance weakref.
+
+    from_multitaper stores a weakref to its source Multitaper for provenance
+    verification; weakrefs are not picklable, so __getstate__ drops it. The
+    restored instance must round-trip and compute identical results (its
+    provenance link is gone, as a live-object link cannot survive serialization).
+    """
+    import pickle
+
+    rng = np.random.default_rng(0)
+    m = Multitaper(rng.standard_normal((128, 2, 3)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m)
+
+    restored = pickle.loads(pickle.dumps(conn))
+    np.testing.assert_allclose(
+        restored.coherence_magnitude(), conn.coherence_magnitude()
+    )
+    assert restored._source_multitaper is None

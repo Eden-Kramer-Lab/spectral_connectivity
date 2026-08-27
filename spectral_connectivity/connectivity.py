@@ -1,6 +1,7 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import warnings
+import weakref
 from collections.abc import Callable
 from functools import cached_property, partial, wraps
 from inspect import signature
@@ -426,10 +427,29 @@ class Connectivity:
         self._frequencies = frequencies
         self._blocks = blocks
         self._dtype = dtype
+        # Set by from_multitaper to a weakref to the source Multitaper, so
+        # consumers can verify provenance by identity (see from_multitaper).
+        # None for a directly-constructed instance, whose source is unknown.
+        self._source_multitaper: weakref.ref | None = None
         try:
             self.time = xp.asnumpy(time)
         except AttributeError:
             self.time = time
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Return picklable state, dropping the transient provenance weakref.
+
+        ``from_multitaper`` stores a ``weakref`` to its source ``Multitaper`` in
+        ``_source_multitaper``; weakrefs cannot be pickled, so an instance built
+        that way would otherwise fail to serialize (a directly constructed one
+        has ``None`` there and pickles fine). Provenance is a live-object link
+        that cannot survive serialization anyway, so clear it: an unpickled
+        instance behaves like a directly constructed one (usable everywhere
+        except as an identity-verified injected ``connectivity=`` argument).
+        """
+        state = self.__dict__.copy()
+        state["_source_multitaper"] = None
+        return state
 
     # Cached quantities that depend on fourier_coefficients / expectation_type
     # and must be invalidated when either changes (see the setters below).
@@ -496,6 +516,10 @@ class Connectivity:
         # array and later mutate it in place, which would silently invalidate the
         # cached intermediates.
         self._set_fourier_coefficients(value, adopt=False)
+        # Replacing the data breaks any provenance link recorded by
+        # from_multitaper: the instance no longer holds the source transform's
+        # coefficients, so it must not still claim that source.
+        self._source_multitaper = None
 
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
@@ -659,7 +683,13 @@ class Connectivity:
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         blocks : int, optional
-            Number of blocks for computation.
+            Number of signal-pair blocks for memory-efficient computation. In
+            practice this only affects ``phase_locking_value`` (a rough
+            guideline: use ``blocks=5``-``10`` for ``n_signals >= 50`` to reduce
+            peak memory); the coherence family and directed measures ignore it,
+            and the phase-lag-index family rejects it. Results are numerically
+            identical whether or not it is used. See :class:`Connectivity` for
+            the full explanation.
         dtype : np.dtype, default=complex128
             Data type for computations.
         minimum_phase_tolerance : float, default=1e-8
@@ -692,7 +722,16 @@ class Connectivity:
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
+        instance = cls(**init_kwargs)
+        # Record a verifiable link to the source transform so consumers that take
+        # data from this instance but metadata/coordinates from a Multitaper
+        # (e.g. wrapper.connectivity_to_xarray) can confirm the two describe the
+        # same data -- geometry alone (channel count, frequency grid, time bins)
+        # cannot, since two different recordings can share it. A weakref avoids
+        # extending the lifetime of the source Multitaper (and its raw
+        # time_series); a dropped reference simply fails the identity check.
+        instance._source_multitaper = weakref.ref(multitaper_instance)
+        return instance
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -1351,6 +1390,17 @@ class Connectivity:
         in that component, so the measure is scale-invariant and the components
         sum to at most 1.
 
+        **Algorithm**: when the number of estimates (``n_trials * n_tapers``)
+        is at least ``n_signals`` and ``n_signals`` is small
+        (``<= 64``), the components are obtained from an eigendecomposition of
+        the ``(n_signals, n_signals)`` cross-spectral matrix ``A @ Aᴴ`` rather
+        than a singular value decomposition of ``A``. This is substantially
+        faster but squares the condition number, so for a nearly rank-deficient
+        cross-spectral matrix (near-duplicate channels) the *weakest* returned
+        components (large ``max_rank``) may lose relative precision. The dominant
+        component(s) — the usual use of this measure — are unaffected. A thin
+        matrix (fewer estimates than signals) uses the economy SVD directly.
+
         References
         ----------
         .. [1] Cimenser, A., Purdon, P.L., Pierce, E.T., Walsh, J.L.,
@@ -1411,6 +1461,19 @@ class Connectivity:
                 self._fourier_coefficients, max_rank, max_workspace_elements
             )
         else:
+            # A user who tuned max_workspace_elements for memory gets no effect
+            # here (the per-bin path decomposes one bin at a time); note it so the
+            # setting having no effect is discoverable, without warning on the
+            # common default-valued call.
+            if max_workspace_elements != GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS:
+                logger.debug(
+                    "global_coherence: max_workspace_elements=%d is ignored on "
+                    "the per-bin fallback path used when "
+                    "min(n_signals, n_estimates)=%d > %d.",
+                    max_workspace_elements,
+                    min(n_signals, n_estimates),
+                    GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS,
+                )
             # Per-bin fallback for a large decomposition dimension, where forming
             # every component is wasteful and svds (used when max_rank is small)
             # finds only the top ones requested.
@@ -3237,6 +3300,10 @@ def _global_coherence_components(
         vectors = left_vectors[..., :max_rank]
 
     safe_total = xp.where(total_power == 0, 1, total_power)
+    # The cross-spectral matrix is PSD by construction (``scaled @ scaledᴴ``), so
+    # any negative eigenvalue is round-off in eigh and is clipped to 0. (The SVD
+    # path returns squared singular values, which are non-negative already, so
+    # the clip is a no-op there.)
     fractions = xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
 
     undefined = is_zero_power[..., 0, 0]
