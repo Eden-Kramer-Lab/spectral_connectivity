@@ -16,9 +16,7 @@ help:
 # Catch-all target: route all unknown targets to Sphinx using the new
 # "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
 
-# Note: Jupytext converts .py to .ipynb (Sphinx seems to execute Notebook..?)
 %: Makefile
 	rm -rf _build
 	rm -rf _autosummary
-	jupytext --to notebook examples/*.py
 	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)

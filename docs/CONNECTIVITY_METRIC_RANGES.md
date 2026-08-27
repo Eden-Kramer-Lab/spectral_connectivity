@@ -1,5 +1,12 @@
 # Connectivity Metric Ranges
 
+## Direction convention
+
+For xarray results returned by `multitaper_connectivity`,
+`result.sel(source="a", target="b")` is the influence from `a` to `b`. The
+lower-level `Connectivity` methods retain their historical array convention:
+`result[..., i, j]` represents `j -> i`.
+
 The following summarizes the theoretical value ranges for common connectivity metrics.
 
 | Metric | Range | Notes |

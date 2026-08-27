@@ -29,11 +29,13 @@ If you are fixing a known issue, please add the issue number to the PR message.
 
 If you are fixing a new issue, file an issue and then reference it in the PR.
 
-### How to build the documenation
+### How to build the documentation
 
-1. Change directory to `spectral_connectivity/docs`
-2. Run `make html` to preview the docs.
-3. A commit to the master branch will automatically build the docs on readthedocs.
+1. From the repository root, install the documentation dependencies with
+   `pip install -r docs/requirements-docs.txt`.
+2. Run `make -C docs html` to build the site.
+3. Preview `docs/_build/html/index.html`. A commit to the master branch will
+   automatically build the docs on Read the Docs.
 
 ### How to make a release
 
@@ -89,4 +91,4 @@ This project follows [Semantic Versioning](https://semver.org/):
 
 ## Authorship on manuscripts
 
-Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not soley determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).
+Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not solely determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).

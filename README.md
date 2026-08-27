@@ -29,7 +29,9 @@
 + it implements the canonical coherence, which can
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
-+ all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
++ core transforms and connectivity calculations support GPU acceleration when
+  `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
+  importing the package. Public results are returned as NumPy arrays.
 
 ### Tutorials
 
@@ -64,6 +66,11 @@ measures = multitaper_connectivity(
     method=["coherence_magnitude", "imaginary_coherence", "phase_locking_value"],
 )
 ```
+
+For directed measures, `result.sel(source="a", target="b")` means influence
+from `a` to `b`. The directed-transfer-function family is available by name as
+an opt-in method. The lower-level `Connectivity` methods retain their historical
+array convention: `result[..., i, j]` represents `j -> i`.
 
 #### Choosing parameters
 
@@ -160,7 +167,9 @@ See [environment.yml](environment.yml) for the most current list of dependencies
 
 ### GPU Acceleration
 
-`spectral_connectivity` supports GPU acceleration using [CuPy](https://cupy.dev/), which can provide significant speedups for large datasets (10-100x faster depending on data size and GPU hardware).
+`spectral_connectivity` supports GPU acceleration using
+[CuPy](https://cupy.dev/), which can accelerate large workloads when a suitable
+CUDA device is available.
 
 #### GPU Setup Options
 
@@ -221,18 +230,19 @@ print(f"Device: {backend['device_name']}")
 conda install -c conda-forge cupy
 ```
 
-**Alternative (pip - auto-detect, may be slower on first run):**
+**Recommended pip installation (CUDA 12):**
 
 ```bash
-pip install cupy
+pip install "spectral-connectivity[gpu]"
 ```
 
-**Advanced (pip - specify CUDA version for faster install):**
+The package's GPU extra installs `cupy-cuda12x>=13.0`. For another CUDA version,
+install the corresponding CuPy 13+ distribution directly instead of the extra.
 
 ```bash
 # Check your CUDA version first: nvidia-smi
-pip install cupy-cuda11x  # For CUDA 11.x
-pip install cupy-cuda12x  # For CUDA 12.x
+pip install "cupy-cuda11x>=13.0"  # CUDA 11.x
+pip install "cupy-cuda12x>=13.0"  # CUDA 12.x
 ```
 
 See [CuPy Installation Guide](https://docs.cupy.dev/en/stable/install.html) for detailed instructions and GPU-specific requirements.
@@ -251,7 +261,8 @@ print(backend["message"])
 
 # Or if GPU not available:
 # "Using CPU backend with NumPy. To enable GPU acceleration:
-#   1. Install CuPy: 'conda install -c conda-forge cupy' or 'pip install cupy'
+#   1. Install CuPy: 'conda install -c conda-forge cupy' or
+#      'pip install "spectral-connectivity[gpu]"'
 #   2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing
 # See documentation for detailed setup instructions."
 

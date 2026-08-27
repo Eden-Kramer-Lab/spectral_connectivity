@@ -946,7 +946,8 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: Magnitude |C_{xy}(f)| ∈ [0, 1]; phase ∈ [−π, π].
+        **Range**: Magnitude :math:`|C_{xy}(f)|` is in [0, 1]; phase is in
+        [−π, π].
         Values lie in the unit disk of the complex plane.
 
         """

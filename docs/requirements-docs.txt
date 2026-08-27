@@ -1,4 +1,3 @@
-spectral_connectivity
 numpydoc>=1.6
 sphinx
 docutils

@@ -14,7 +14,7 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
 2. Format, lint, and type-check your code with [ruff](https://docs.astral.sh/ruff/) and [mypy](https://mypy-lang.org/) (the same checks CI runs): `ruff format spectral_connectivity/ tests/`, `ruff check spectral_connectivity/ tests/`, and `mypy spectral_connectivity/`.
-3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through github actions.
+3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
    Changes to backend-specific code must also pass the real-device smoke test on
    a CUDA machine: `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu
    pytest -m gpu`. Device-like mocks do not replace this release gate.
@@ -26,11 +26,13 @@ If you are fixing a known issue, please add the issue number to the PR message.
 
 If you are fixing a new issue, file an issue and then reference it in the PR.
 
-### How to build the documenation
+### How to build the documentation
 
-1. Change directory to `spectral_connectivity/docs`
-2. Run `make html` to preview the docs.
-3. A commit to the master branch will automatically build the docs on readthedocs.
+1. From the repository root, install the documentation dependencies with
+   `pip install -r docs/requirements-docs.txt`.
+2. Run `make -C docs html` to build the site.
+3. Preview `docs/_build/html/index.html`. A commit to the master branch will
+   automatically build the docs on Read the Docs.
 
 ### How to make a release
 
@@ -117,4 +119,4 @@ This package is not currently on conda-forge. To add it:
 
 ## Authorship on manuscripts
 
-Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not soley determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).
+Authorship on any manuscripts for the `spectral_connectivity` package will be granted based on substantive contributions to the design and implementation of the spectral_connectivity package. This is not solely determined by lines of code or number of commits contributed to the project, but these will be considered when making this decision. For example, a one letter correction in documentation will not be considered substantive for authorship (although typo correction is very much appreciated).

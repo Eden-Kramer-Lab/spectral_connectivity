@@ -186,7 +186,7 @@ multitaper.frequencies
 # %% [markdown]
 # ## The Connectivity class
 #
-# The `Connectivity` class computes the frequency-domain connectivity measures from the Fourier coeffcients. Let's import the class and look at the docstring:
+# The `Connectivity` class computes frequency-domain connectivity measures from Fourier coefficients. Let's import the class and look at the docstring:
 
 # %%
 from spectral_connectivity import Connectivity
@@ -199,7 +199,6 @@ from spectral_connectivity import Connectivity
 # + `expectation_type`
 # + `frequencies`,
 # + `time`
-# + `blocks`
 # + `dtype`
 #
 # Of these, we have already computed the `fourier_coefficients`, `time`, and `frequencies` from the `Multitaper` class (see last section). We will consider the most important remaining parameters in turn:
@@ -215,14 +214,9 @@ from spectral_connectivity import Connectivity
 #
 # Note that the order of the dimensions must be in the order time, trials, and tapers. So if you wish to average over all three, the correct expectation type is `time_trials_tapers` and not `trials_time_tapers`.
 #
-# ### blocks
-#
-# The `blocks` parameter can help when the computation of the connectivity measures is taking up a large amount of RAM. The computation of the cross-spectral matrix can be large depending on the number of time samples, frequencies, trials and tapers. Therefore it is sometimes useful to simplify this by breaking this computation up into smaller arrays (`blocks`). The `blocks` parameter controls the number of blocks the matrix is split into. Setting this parameter appropriately is a matter of experimentation, but users should start with the default of 1 and increase it as needed as memory usage becomes a problem.
-#
-#
 # ### Using Connectivity
 #
-# Okay, now that we understand the parameters, we can now instantiate the class in order to compute the connectivity measures. You can instantiate the class as follows:
+# Cross-spectral reductions are performed in bounded internal batches, so no memory-tuning argument is required. We can now instantiate the class to compute connectivity measures:
 #
 #
 #
@@ -234,7 +228,6 @@ connectivity = Connectivity(
     expectation_type="trials_tapers",
     frequencies=multitaper.frequencies,
     time=multitaper.time,
-    blocks=1,
 )
 
 # %% [markdown]
@@ -261,7 +254,7 @@ connectivity.frequencies.shape
 
 # %%
 connectivity = Connectivity.from_multitaper(
-    multitaper, expectation_type="time_trials_tapers", blocks=1
+    multitaper, expectation_type="time_trials_tapers"
 )
 connectivity.power().shape
 

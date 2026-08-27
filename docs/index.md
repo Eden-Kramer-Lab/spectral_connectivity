@@ -7,9 +7,9 @@
 [![PyPI version](https://badge.fury.io/py/spectral_connectivity.svg)](https://badge.fury.io/py/spectral_connectivity)
 [![Anaconda-Server Badge](https://anaconda.org/edeno/spectral_connectivity/badges/version.svg)](https://anaconda.org/edeno/spectral_connectivity)
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
-[![Coverage Status](https://coveralls.io/repos/github/Eden-Kramer-Lab/spectral_connectivity/badge.svg?branch=master)](https://coveralls.io/github/Eden-Kramer-Lab/spectral_connectivity?branch=master)
+[![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
-### What is spectral_connectivity?
+## What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
@@ -20,9 +20,11 @@
 + it implements the canonical coherence, which can
 efficiently summarize brain-area level coherences from multielectrode recordings.
 + easier user interface for the multitaper fourier transform
-+ all function are GPU-enabled if `cupy` is installed and the environmental variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU` is set to 'true'.
++ core transforms and connectivity calculations support GPU acceleration when
+  `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
+  importing the package. Public results are returned as NumPy arrays.
 
-### Tutorials
+## Tutorials
 
 See the following notebooks for more information on how to use the package:
 
@@ -30,7 +32,28 @@ See the following notebooks for more information on how to use the package:
 + [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
 + [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
-### Usage Example
+## Usage Example
+
+The high-level `multitaper_connectivity` function runs the multitaper transform
+and returns a labeled xarray object:
+
+```python
+from spectral_connectivity import multitaper_connectivity
+
+coherence = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method="coherence_magnitude",
+    time_halfbandwidth_product=3,
+)
+```
+
+For directed measures, `result.sel(source="a", target="b")` means influence
+from `a` to `b`. The directed-transfer-function family is available by name as
+an opt-in method. The lower-level `Connectivity` methods retain their historical
+array convention: `result[..., i, j]` represents `j -> i`.
+
+For finer control, use the `Multitaper` and `Connectivity` classes directly:
 
 ```python
 from spectral_connectivity import Multitaper, Connectivity
@@ -53,13 +76,13 @@ weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 ```
 
-### Citation
+## Citation
 
 For citation, please use the following:
 
 > Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
 
-### Implemented Measures
+## Implemented Measures
 
 Functional
 
@@ -85,7 +108,7 @@ Directed
 7. phase_lag_index
 8. pairwise_spectral_granger_prediction
 
-### Package Dependencies
+## Package Dependencies
 
 `spectral_connectivity` requires:
 
@@ -95,9 +118,9 @@ Directed
 + scipy
 + xarray
 
-See [environment.yml](environment.yml) for the most current list of dependencies.
+See the repository's `pyproject.toml` for the authoritative dependency list.
 
-### Installation
+## Installation
 
 ```bash
 pip install spectral_connectivity
@@ -109,7 +132,7 @@ or
 conda install -c edeno spectral_connectivity
 ```
 
-### Developer Installation
+## Developer Installation
 
 If you want to make contributions to this library, please use this installation.
 
@@ -130,7 +153,7 @@ conda activate spectral_connectivity
 pip install -e .
 ```
 
-### Recent publications and pre-prints that used this software
+## Recent publications and pre-prints that used this software
 
 + Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
 + Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
@@ -143,9 +166,13 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 + The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
 
 ```{toctree}
+:caption: Guides
 :hidden:
 :maxdepth: 2
 
+CONNECTIVITY_METRIC_RANGES
+STYLE
+NOTEBOOK_SNAPSHOT_TESTS
 ```
 
 ```{toctree}

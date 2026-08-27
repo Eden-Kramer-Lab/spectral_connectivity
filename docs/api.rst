@@ -4,7 +4,7 @@ API
 .. automodule:: spectral_connectivity
 
 .. autosummary::
-   :toctree:
+   :toctree: _autosummary
    :template: custom-module-template.rst
    :recursive:
 

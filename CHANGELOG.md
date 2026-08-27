@@ -40,6 +40,13 @@ directly with results from 2.x.
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
   variable.
+- Wrapper results carry CF-style time/frequency metadata plus NetCDF-safe
+  measure, package-version, backend, expectation, transform, and method-argument
+  provenance.
+- `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
+- Independent analytic-oracle, failure-mode, backend-boundary, serialization,
+  minimum-dependency, artifact, doctest, and notebook checks cover the corrected
+  behavior.
 
 ### Changed
 
@@ -84,6 +91,9 @@ directly with results from 2.x.
 - The wrapper accepts documented 2-D `(time, channels)` input and produces
   NetCDF-serializable metadata. Unsupported batch measures are skipped without
   swallowing genuine computation errors.
+- The documentation build installs the current checkout on Read the Docs,
+  confines generated sources to ignored directories, and the introductory
+  tutorial no longer uses the removed `blocks` argument.
 - The xarray wrapper now labels directed measures (e.g.
   `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
   the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
@@ -97,10 +107,10 @@ directly with results from 2.x.
 - `multitaper_connectivity(..., squeeze=True)` keeps the selected `source` and
   `target` as scalar coordinates instead of dropping them, so the squeezed
   `(time, frequency)` result still records which pair (and, for directed
-  measures, which direction) it represents. squeeze is now honored only for
-  single-method (DataArray) requests -- because those scalar coordinates are
-  Dataset-wide, applying them in a multi-measure Dataset would collide with a
-  sibling `power` variable's `source` dimension -- and is ignored, with a
+  measures, which direction) it represents. `squeeze=True` is now honored only
+  for single-method (DataArray) requests -- because those scalar coordinates
+  are Dataset-wide, applying them in a multi-measure Dataset would collide with
+  a sibling `power` variable's `source` dimension -- and is ignored, with a
   warning, for multi-measure requests. It is a no-op for `power`.
 - Importing the package no longer changes NumPy's global floating-point warning
   state, and backend reporting now reflects the backend actually imported.
@@ -128,16 +138,6 @@ directly with results from 2.x.
 - `Connectivity.from_multitaper` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
-
-### Added
-
-- Wrapper results carry CF-style time/frequency metadata plus NetCDF-safe
-  measure, package-version, backend, expectation, transform, and method-argument
-  provenance.
-- `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
-- Independent analytic-oracle, failure-mode, backend-boundary, serialization,
-  minimum-dependency, artifact, doctest, and notebook checks cover the corrected
-  behavior.
 
 ## [2.0.1] - 2026-05-12
 
