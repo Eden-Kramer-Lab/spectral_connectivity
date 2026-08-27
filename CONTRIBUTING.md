@@ -42,9 +42,9 @@ This project uses an automated release workflow. To create a new release:
    - Use format: `## [X.Y.Z] - YYYY-MM-DD`
    - Commit the changelog update
 
-2. **Create and push a version tag**
+2. **Create and push a version tag** (annotated)
    ```bash
-   git tag vX.Y.Z
+   git tag -a vX.Y.Z -m "vX.Y.Z"
    git push origin vX.Y.Z
    ```
 
