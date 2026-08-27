@@ -598,3 +598,49 @@ def test_multitaper_warns_on_step_larger_than_duration():
             time_window_duration=0.5,
             time_window_step=1.0,
         )
+
+
+def test_multitaper_configuration_and_array_snapshots_are_immutable():
+    """Derived state cannot become stale through public mutation."""
+    source = np.arange(200.0).reshape(100, 1, 2)
+    custom_tapers = np.ones((100, 3))
+    m = Multitaper(
+        source,
+        sampling_frequency=100,
+        time_halfbandwidth_product=2,
+        n_tapers=3,
+        tapers=custom_tapers,
+    )
+
+    source[0, 0, 0] = -1
+    custom_tapers[0, 0] = -1
+    assert m.time_series[0, 0, 0] == 0
+    assert m.tapers[0, 0] == 1
+
+    with pytest.raises(ValueError, match="read-only"):
+        m.time_series[0, 0, 0] = 5
+    with pytest.raises(ValueError, match="read-only"):
+        m.tapers[0, 0] = 5
+    exposed_time_series = m.time_series
+    exposed_time_series.flags.writeable = True
+    exposed_time_series[0, 0, 0] = 99
+    exposed_tapers = m.tapers
+    exposed_tapers.flags.writeable = True
+    exposed_tapers[0, 0] = 99
+    assert m.time_series[0, 0, 0] == 0
+    assert m.tapers[0, 0] == 1
+    with pytest.raises(AttributeError, match="immutable after construction"):
+        m.time_halfbandwidth_product = 4
+    with pytest.raises(AttributeError, match="immutable after construction"):
+        m.sampling_frequency = 200
+
+
+def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
+    """Unrelated public attributes do not silently alter serialized metadata."""
+    m = Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100)
+    m.unrelated_extension_attribute = 42
+    metadata = m._provenance_metadata()
+
+    assert tuple(metadata) == m._PROVENANCE_FIELDS
+    assert "unrelated_extension_attribute" not in metadata
+    assert isinstance(metadata["start_time"], np.ndarray)

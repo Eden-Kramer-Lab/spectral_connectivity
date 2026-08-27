@@ -451,6 +451,30 @@ else:
     from scipy.signal import detrend as _backend_detrend
 
 
+def _immutable_array_snapshot(value: Any) -> NDArray:
+    """Copy an input array and make the owned snapshot read-only when supported."""
+    snapshot = xp.array(value, copy=True)
+    try:
+        snapshot.flags.writeable = False
+    except (AttributeError, ValueError):
+        # Some array backends do not expose NumPy's writeable flag. Ownership is
+        # still detached from the caller by the copy above.
+        pass
+    return snapshot
+
+
+def _readonly_array_copy(array: NDArray) -> NDArray:
+    """Return a detached read-only copy of an internal array snapshot."""
+    copy = array.copy()
+    try:
+        copy.flags.writeable = False
+    except (AttributeError, ValueError):
+        # A backend without a writeable flag still returns detached storage, so
+        # caller mutation cannot affect the transform.
+        pass
+    return copy
+
+
 class Multitaper:
     """
     Multitaper spectral analysis for robust power spectral density estimation.
@@ -554,6 +578,10 @@ class Multitaper:
 
     Notes
     -----
+    A ``Multitaper`` represents one immutable transform configuration. Constructor
+    arrays are copied, and array properties return detached read-only copies. To
+    change the data or a parameter, create a new instance.
+
     The multitaper method uses discrete prolate spheroidal sequences (DPSS)
     as tapers, which are optimal for spectral analysis in the sense of minimizing
     spectral leakage while maximizing energy concentration in the frequency band
@@ -600,6 +628,46 @@ class Multitaper:
     Trials: 100, Signals: 5
     """
 
+    _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
+        {
+            "sampling_frequency",
+            "time_halfbandwidth_product",
+            "detrend_type",
+            "is_low_bias",
+            "fft_workers",
+        }
+    )
+    _PROVENANCE_FIELDS = (
+        "detrend_type",
+        "fft_workers",
+        "frequency_resolution",
+        "is_low_bias",
+        "n_fft_samples",
+        "n_signals",
+        "n_tapers",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "nyquist_frequency",
+        "sampling_frequency",
+        "start_time",
+        "time_halfbandwidth_product",
+        "time_window_duration",
+        "time_window_step",
+    )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Keep transform parameters immutable once construction has completed."""
+        if (
+            getattr(self, "_initialized", False)
+            and name in self._IMMUTABLE_PUBLIC_PARAMETERS
+        ):
+            raise AttributeError(
+                f"Multitaper.{name} is immutable after construction; create a new "
+                "Multitaper instance with the desired parameters."
+            )
+        object.__setattr__(self, name, value)
+
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -617,7 +685,8 @@ class Multitaper:
         is_low_bias: bool = True,
         fft_workers: int | None = None,
     ) -> None:
-        self.time_series = xp.asarray(time_series)
+        object.__setattr__(self, "_initialized", False)
+        self._time_series = _immutable_array_snapshot(time_series)
         # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
         # be a nonzero integer (a negative value counts back from os.cpu_count(),
         # so -1 uses all cores) or None (SciPy's single-threaded default).
@@ -638,14 +707,14 @@ class Multitaper:
         self.fft_workers = fft_workers
 
         # Validate that time_series is 3D
-        if self.time_series.ndim != 3:
+        if self._time_series.ndim != 3:
             error_msg = (
                 f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
-                f"but got {self.time_series.ndim}D array with shape {self.time_series.shape}.\n"
+                f"but got {self._time_series.ndim}D array with shape {self._time_series.shape}.\n"
                 "\n"
             )
 
-            if self.time_series.ndim == 1:
+            if self._time_series.ndim == 1:
                 error_msg += (
                     "For a single time series, use:\n"
                     "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
@@ -653,7 +722,7 @@ class Multitaper:
                     "Or manually:\n"
                     "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
                 )
-            elif self.time_series.ndim == 2:
+            elif self._time_series.ndim == 2:
                 error_msg += (
                     "For 2D data, you must clarify the meaning of the second dimension.\n"
                     "\n"
@@ -672,7 +741,7 @@ class Multitaper:
                 )
             else:
                 error_msg += (
-                    f"Arrays with {self.time_series.ndim} dimensions are not supported.\n"
+                    f"Arrays with {self._time_series.ndim} dimensions are not supported.\n"
                     "Expected shape: (n_time_samples, n_trials, n_signals)"
                 )
 
@@ -779,7 +848,7 @@ class Multitaper:
             )
 
         # Warn if data appears to be transposed (very few time points, many signals)
-        n_time, _, n_signals = self.time_series.shape
+        n_time, _, n_signals = self._time_series.shape
         if n_time < n_signals:
             import warnings
 
@@ -788,7 +857,7 @@ class Multitaper:
                 "This seems unusual and your data may be transposed.\n"
                 "\n"
                 "Expected shape: (n_time_samples, n_trials, n_signals)\n"
-                f"Your shape: {self.time_series.shape}\n"
+                f"Your shape: {self._time_series.shape}\n"
                 "\n"
                 "If your data is transposed, use:\n"
                 "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
@@ -799,7 +868,7 @@ class Multitaper:
             )
 
         # Warn if data contains NaN or Inf
-        if not xp.all(xp.isfinite(self.time_series)):
+        if not xp.all(xp.isfinite(self._time_series)):
             import warnings
 
             warnings.warn(
@@ -827,9 +896,9 @@ class Multitaper:
         self._time_window_duration = time_window_duration
         self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
-        self.start_time = xp.asarray(start_time)
+        self._start_time = _immutable_array_snapshot(start_time)
         self._n_fft_samples = n_fft_samples
-        self._tapers = tapers
+        self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         # Reject a fractional n_tapers at construction so the reported
         # n_tapers metadata cannot disagree with the (integer) taper count used.
         if n_tapers is not None and (
@@ -839,6 +908,17 @@ class Multitaper:
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        object.__setattr__(self, "_initialized", True)
+
+    @property
+    def time_series(self) -> NDArray[np.floating]:
+        """Independent read-only copy of the input time-series snapshot."""
+        return _readonly_array_copy(self._time_series)
+
+    @property
+    def start_time(self) -> NDArray[np.floating]:
+        """Independent read-only copy of the transform's start-time coordinate."""
+        return _readonly_array_copy(self._start_time)
 
     def __repr__(self) -> str:
         """Return string representation of Multitaper object.
@@ -870,25 +950,19 @@ class Multitaper:
         arrays (``time_series``, ``fft``, ``tapers``, ``frequencies``,
         ``time``). Used to label results (the ``mt_*`` attributes in
         :func:`spectral_connectivity.wrapper.connectivity_to_xarray`) and, via a
-        snapshot taken by :meth:`Connectivity.from_multitaper`, to detect a
-        source transform mutated after a ``Connectivity`` was built from it.
+        snapshot taken by :meth:`Connectivity.from_multitaper`, providing a
+        stable, backend-neutral record of the transform configuration.
         """
         metadata: dict[str, Any] = {}
-        for attr in dir(self):
-            if attr[0] == "_" or attr in (
-                "time_series",
-                "fft",
-                "tapers",
-                "frequencies",
-                "time",
-            ):
-                continue
+        for attr in self._PROVENANCE_FIELDS:
             value = getattr(self, attr)
-            if callable(value):
-                continue
             if value is None:
                 value = "None"
-            elif isinstance(value, np.ndarray):
+            else:
+                get = getattr(value, "get", None)
+                if callable(get):
+                    value = get()
+            if isinstance(value, np.ndarray):
                 if value.dtype.kind not in "biufSU":  # exclude complex/object
                     continue
             elif not isinstance(
@@ -963,7 +1037,7 @@ class Multitaper:
         estimate_n_tapers : Estimate number of tapers
         """
         # Calculate time windows info
-        n_time_samples = self.time_series.shape[0]
+        n_time_samples = self._time_series.shape[0]
         signal_duration = n_time_samples / self.sampling_frequency
         n_windows = int(
             xp.floor(
@@ -1035,7 +1109,8 @@ FFT samples:          {self.n_fft_samples}
                 self.n_tapers,
                 is_low_bias=self.is_low_bias,
             )
-        return self._tapers
+            self._tapers = _immutable_array_snapshot(self._tapers)
+        return _readonly_array_copy(self._tapers)
 
     @property
     def time_window_duration(self) -> float:
@@ -1105,7 +1180,7 @@ FFT samples:          {self.n_fft_samples}
             self._n_time_samples_per_window is None
             and self._time_window_duration is None
         ):
-            self._n_time_samples_per_window = self.time_series.shape[0]
+            self._n_time_samples_per_window = self._time_series.shape[0]
         elif self._time_window_duration is not None:
             self._n_time_samples_per_window = int(
                 xp.around(self.time_window_duration * self.sampling_frequency)
@@ -1116,7 +1191,7 @@ FFT samples:          {self.n_fft_samples}
         # it: an explicit n_time_samples_per_window=0 (or a duration rounding to
         # 0) would divide by zero downstream, and an oversized window yields an
         # empty transform.
-        n_time_samples = self.time_series.shape[0]
+        n_time_samples = self._time_series.shape[0]
         if self._n_time_samples_per_window < 1:
             raise ValueError(
                 f"n_time_samples_per_window resolved to "
@@ -1225,14 +1300,14 @@ FFT samples:          {self.n_fft_samples}
 
         """
         original_time = (
-            xp.arange(0, self.time_series.shape[0]) / self.sampling_frequency
+            xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
         )
         # Label each window by its center time, as documented (the mean of the
         # window's sample times equals the center for uniformly spaced samples).
         window_center_time = _sliding_window(
             original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
         ).mean(axis=-1)
-        return self.start_time + window_center_time
+        return self._start_time + window_center_time
 
     @property
     def n_signals(self) -> int:
@@ -1244,7 +1319,7 @@ FFT samples:          {self.n_fft_samples}
             Number of signals in the time series.
 
         """
-        return 1 if len(self.time_series.shape) < 2 else self.time_series.shape[-1]
+        return 1 if len(self._time_series.shape) < 2 else self._time_series.shape[-1]
 
     @property
     def n_trials(self) -> int:
@@ -1256,7 +1331,7 @@ FFT samples:          {self.n_fft_samples}
             Number of trials in the time series.
 
         """
-        return 1 if len(self.time_series.shape) < 3 else self.time_series.shape[1]
+        return 1 if len(self._time_series.shape) < 3 else self._time_series.shape[1]
 
     @property
     def frequency_resolution(self) -> float:
@@ -1298,7 +1373,7 @@ FFT samples:          {self.n_fft_samples}
             Complex-valued Fourier coefficients.
 
         """
-        time_series = _add_axes(self.time_series)
+        time_series = _add_axes(self._time_series)
         time_series = _sliding_window(
             time_series,
             window_size=self.n_time_samples_per_window,
@@ -1311,12 +1386,21 @@ FFT samples:          {self.n_fft_samples}
         logger.info(self)
 
         return _multitaper_fft(
-            self.tapers,
+            self._tapers_for_fft(),
             time_series,
             self.n_fft_samples,
             self.sampling_frequency,
             workers=self.fft_workers,
         ).swapaxes(2, -1)
+
+    def _tapers_for_fft(self) -> NDArray[np.floating]:
+        """Return the internal taper snapshot without an unnecessary public view."""
+        if self._tapers is None:
+            # Populate through the public property so generation and freezing have
+            # one implementation, then use the owned internal snapshot.
+            _ = self.tapers
+        assert self._tapers is not None
+        return self._tapers
 
 
 def prepare_time_series(
