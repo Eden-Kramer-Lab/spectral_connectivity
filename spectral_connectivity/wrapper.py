@@ -143,8 +143,11 @@ def connectivity_to_xarray(
 
     Raises
     ------
-    NotImplementedError
-        If the requested method is not supported by xarray interface.
+    ValueError
+        If the requested method does not fit the ``(time, frequency, source,
+        target)`` xarray layout (``global_coherence``, ``phase_slope_index``,
+        ``group_delay``, ``canonical_coherence``, or a directed measure); the
+        message points to using ``Connectivity`` directly.
 
     Examples
     --------
