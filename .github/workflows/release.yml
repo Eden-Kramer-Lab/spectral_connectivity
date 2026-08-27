@@ -93,18 +93,20 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install minimum-supported dependency versions
-        # Pin each declared floor to its lowest release, then install the package
-        # (its ranges are satisfied by the pins, so pip does not upgrade them).
+        # Pin each declared floor to its EXACT lowest installable release (a
+        # `1.24.*` glob would grab the newest 1.24 patch, not the 1.24.0 floor),
+        # then install the package (its ranges are satisfied by the pins, so pip
+        # does not upgrade them). scipy 1.11.0 is yanked, so 1.11.1 is the lowest
+        # a `>=1.11` user actually resolves. nitime (needed by test_transforms)
+        # requires numpy>=1.24, so it does not push numpy off the 1.24.0 floor.
         run: |
-          pip install "numpy==1.24.*" "scipy==1.11.*" "xarray==2023.1.*" "matplotlib==3.7.*"
-          pip install -e . pytest pytest-cov
+          pip install numpy==1.24.0 scipy==1.11.1 xarray==2023.1.0 matplotlib==3.7.0
+          pip install -e . pytest pytest-cov nitime
           pip check
       - name: Show resolved versions
         run: python -c "import numpy, scipy, xarray, matplotlib; print('numpy', numpy.__version__, 'scipy', scipy.__version__, 'xarray', xarray.__version__, 'matplotlib', matplotlib.__version__)"
       - name: Run tests against minimum dependencies
-        # test_transforms.py needs nitime (which would pull a newer numpy); its
-        # DPSS logic is covered by test_dpss.py, which runs here.
-        run: pytest tests/ --ignore=tests/test_notebooks.py --ignore=tests/test_transforms.py -p no:warnings
+        run: pytest tests/ --ignore=tests/test_notebooks.py -p no:warnings
 
   build:
     name: Build distribution

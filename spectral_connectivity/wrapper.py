@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import is_gpu_enabled
+from spectral_connectivity.utils import get_compute_backend
 
 logger = getLogger(__name__)
 
@@ -286,7 +286,10 @@ def connectivity_to_xarray(
     xar.attrs["measure"] = method
     xar.attrs["package"] = "spectral_connectivity"
     xar.attrs["package_version"] = _package_version()
-    xar.attrs["backend"] = "GPU" if is_gpu_enabled() else "CPU"
+    # get_compute_backend() reports the backend actually imported (numpy vs
+    # cupy), not the current env var; is_gpu_enabled() would mislabel a result if
+    # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
+    xar.attrs["backend"] = get_compute_backend()["backend"].upper()
     xar.attrs["expectation_type"] = connectivity.expectation_type
     # Record the measure's keyword arguments; stringify anything that is not a
     # plain NetCDF-serializable scalar so the record cannot break to_netcdf.

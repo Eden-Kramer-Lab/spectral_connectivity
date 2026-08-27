@@ -636,3 +636,22 @@ def test_metadata_survives_netcdf_round_trip(tmp_path):
         assert var.attrs["expectation_type"] == "trials_tapers"
     finally:
         reloaded.close()
+
+
+def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
+    """The backend attr must reflect the imported backend, not the live env var.
+
+    The backend is fixed when the package is imported; toggling
+    SPECTRAL_CONNECTIVITY_ENABLE_GPU afterwards must not mislabel a result.
+    """
+    from spectral_connectivity.utils import get_compute_backend
+
+    monkeypatch.setenv("SPECTRAL_CONNECTIVITY_ENABLE_GPU", "true")
+    rng = np.random.default_rng(0)
+    da = connectivity_to_xarray(
+        Multitaper(rng.standard_normal((256, 5, 3)), sampling_frequency=500),
+        method="coherence_magnitude",
+    )
+    # Matches the actually-imported backend (CPU in CI / this env), not the env var.
+    assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
+    assert da.attrs["backend"] == "CPU"
