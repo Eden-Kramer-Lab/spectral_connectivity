@@ -318,6 +318,36 @@ def test_fft_workers_does_not_change_results():
     np.testing.assert_allclose(baseline.values, parallel.values, rtol=1e-10, atol=1e-12)
 
 
+@pytest.mark.parametrize("bad", [0, 1.5, "4", True, np.float64(2.0)])
+def test_fft_workers_invalid_values_raise_named_error(bad):
+    """Invalid `fft_workers` must fail with a message naming the parameter.
+
+    Forwarding a bad value straight to ``scipy.fft.fft(workers=...)`` surfaces an
+    opaque error (``0`` -> "workers must not be zero"; ``"4"`` -> a bare
+    ``TypeError``) that never mentions ``fft_workers``. Validate at construction
+    so the user gets an actionable message, mirroring ``max_workspace_elements``.
+    ``True`` is rejected because ``bool`` is an ``int`` subclass but not a
+    meaningful thread count.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((64, 2, 2))
+    with pytest.raises(ValueError, match="fft_workers"):
+        Multitaper(time_series, sampling_frequency=500, fft_workers=bad)
+
+
+@pytest.mark.parametrize("good", [None, 1, 2, -1, np.int64(3)])
+def test_fft_workers_valid_values_accepted(good):
+    """None and any nonzero integer thread count are accepted."""
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((64, 2, 2))
+    mt = Multitaper(time_series, sampling_frequency=500, fft_workers=good)
+    assert mt.fft_workers == good
+
+
 def test_fft_workers_is_actually_forwarded_to_scipy():
     """`fft_workers` must reach SciPy's FFT (and only on the CPU backend).
 
@@ -614,6 +644,89 @@ def test_result_carries_provenance_metadata():
     assert da.attrs["expectation_type"] == "trials_tapers"
     # The multitaper parameters are still recorded under the mt_ prefix.
     assert any(key.startswith("mt_") for key in da.attrs)
+
+
+def test_provenance_records_measure_kwargs(tmp_path):
+    """Measure keyword arguments are recorded as ``arg_<key>``.
+
+    A scalar kwarg is stored as-is; a non-scalar kwarg is stringified so it
+    cannot break ``to_netcdf``. Exercised through a stub measure that fits the
+    (time, frequency, source, target) layout and accepts kwargs, since none of
+    the default xarray-compatible measures take keyword arguments.
+    """
+    import xarray as xr  # noqa: F401
+
+    rng = np.random.default_rng(3)
+    m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m)
+    n_time = len(conn.time)
+    n_freq = len(conn.frequencies)
+    n_signals = 3
+    stub = np.zeros((n_time, n_freq, n_signals, n_signals))
+    # Attach a stub measure fitting the (time, frequency, source, target) layout.
+    conn.stub_measure = lambda **kwargs: stub
+
+    da = connectivity_to_xarray(
+        m,
+        method="stub_measure",
+        connectivity=conn,
+        threshold=0.5,
+        window=[1, 2, 3],
+    )
+    # Scalar kwarg stored as-is; non-scalar kwarg stringified.
+    assert da.attrs["arg_threshold"] == 0.5
+    assert da.attrs["arg_window"] == str([1, 2, 3])
+    # The stringified non-scalar must not break NetCDF serialization.
+    da.to_netcdf(tmp_path / "args.nc")
+
+
+def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
+    """A batch mixing a supported and an xarray-incompatible measure drops the
+    latter with a warning rather than aborting.
+
+    ``connectivity_to_xarray`` raises ``ValueError`` (not ``NotImplementedError``)
+    for ``global_coherence``; the batch loop must catch it so the supported
+    measure is still returned.
+    """
+    rng = np.random.default_rng(0)
+    result = multitaper_connectivity(
+        rng.standard_normal((256, 4, 3)),
+        sampling_frequency=500,
+        method=["coherence_magnitude", "global_coherence"],
+    )
+    assert "coherence_magnitude" in result
+    assert "global_coherence" not in result
+
+
+def test_multitaper_connectivity_genuine_error_not_swallowed():
+    """A real computation error in a batch surfaces; it is not silently dropped.
+
+    A debiased measure requires >= 2 observations. With one trial and one taper
+    it raises ValueError — a genuine data problem, distinct from a measure that
+    structurally does not fit the xarray layout (UnsupportedMeasureError). It
+    must propagate, not leave the user with a Dataset that silently omits the
+    requested measure alongside the ones that happened to succeed.
+    """
+    rng = np.random.default_rng(0)
+    ts = rng.standard_normal((256, 1, 3))  # one trial
+    with pytest.raises(ValueError, match="at least 2 observations"):
+        multitaper_connectivity(
+            ts,
+            sampling_frequency=500,
+            time_halfbandwidth_product=1,  # -> one taper -> n_observations = 1
+            method=["power", "debiased_squared_phase_lag_index"],
+        )
+
+
+def test_multitaper_connectivity_single_unsupported_measure_raises():
+    """Requesting only an xarray-incompatible measure re-raises, not swallowed."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError):
+        multitaper_connectivity(
+            rng.standard_normal((256, 4, 3)),
+            sampling_frequency=500,
+            method=["global_coherence"],
+        )
 
 
 def test_metadata_survives_netcdf_round_trip(tmp_path):

@@ -16,6 +16,20 @@ from spectral_connectivity.utils import get_compute_backend
 logger = getLogger(__name__)
 
 
+class UnsupportedMeasureError(ValueError):
+    """A measure does not fit the ``(time, frequency, source, target)`` layout.
+
+    Raised by :func:`connectivity_to_xarray` for measures that cannot be
+    represented as a plain per-signal-pair xarray (``global_coherence``,
+    ``phase_slope_index``, ``group_delay``, ``canonical_coherence``, the directed
+    family). It subclasses ``ValueError`` for backward compatibility, but is a
+    distinct type so :func:`multitaper_connectivity` can skip an unsupported
+    measure in a multi-measure batch *without* also swallowing a genuine
+    computation error (e.g. a measure that raises ``ValueError`` because the data
+    has too few observations).
+    """
+
+
 def _package_version() -> str:
     """Return the installed spectral_connectivity version (or ``"unknown"``)."""
     try:
@@ -74,15 +88,32 @@ def _validate_connectivity_matches_multitaper(
 
     ``connectivity_to_xarray`` takes the data and coordinates from
     ``connectivity`` but the metadata attributes from ``m``. If the two describe
-    different transforms (e.g. a different sampling frequency or channel count),
-    the result would be silently mislabeled — real values on one frequency grid
-    tagged with another transform's parameters. Enforce that they agree on the
-    geometry the output depends on: channel count, the (two-sided) frequency
-    grid, and the time bins.
+    different transforms the result would be silently mislabeled — real values
+    from one recording tagged with another's parameters.
+
+    Matching geometry (channel count, frequency grid, time bins) is *necessary
+    but not sufficient*: two different recordings with the same sampling
+    frequency, window, and channel count share it, so geometry alone cannot
+    establish provenance. Both are therefore required — geometry is validated
+    first (it also catches a from_multitaper instance whose public ``time`` /
+    ``frequencies`` were mutated after construction), and then provenance is
+    verified by identity: ``Connectivity.from_multitaper`` records a weakref to
+    its source transform, and only an instance whose recorded source is ``m`` is
+    accepted.
+
+    Also require the default ``expectation_type`` ("trials_tapers"): the xarray
+    layout below assumes the result keeps the time and frequency axes, which
+    other expectation types do not (they average time or keep the trial/taper
+    axes), so they would not fit the fixed (time, frequency, source, target)
+    dimensions.
     """
+    # Always validate geometry first (a necessary condition): this catches a
+    # mismatched instance and also post-construction mutation of the public
+    # ``time`` / ``frequencies`` coordinates on an otherwise-from_multitaper
+    # instance, which the identity check below would not.
     # Read the private snapshot for the shape: the public getter returns a
-    # defensive copy on backends without a writeable flag (CuPy), which would be
-    # wasteful here (this runs once per measure) and is unnecessary for shape.
+    # defensive copy on backends without a writeable flag (CuPy), wasteful here
+    # and unnecessary for shape.
     n_signals = connectivity._fourier_coefficients.shape[-1]
     mismatches = []
     if n_signals != m.n_signals:
@@ -95,12 +126,37 @@ def _validate_connectivity_matches_multitaper(
         mismatches.append("time")
     if mismatches:
         raise ValueError(
-            "The provided `connectivity` was not built from this `Multitaper`; "
-            f"they disagree on: {', '.join(mismatches)}. `connectivity_to_xarray` "
-            "labels results with `m`'s coordinates and metadata, so a mismatched "
-            "instance would produce silently mislabeled output. Pass a "
-            "`Connectivity` built from `m` (e.g. `Connectivity.from_multitaper(m)`)"
-            " or leave `connectivity=None` to build one automatically."
+            "The provided `connectivity` was not built from this "
+            f"`Multitaper`; they disagree on: {', '.join(mismatches)}. "
+            "`connectivity_to_xarray` labels results with `m`'s coordinates "
+            "and metadata, so a mismatched instance would produce silently "
+            "mislabeled output. Pass a `Connectivity` built from `m` (e.g. "
+            "`Connectivity.from_multitaper(m)`) or leave `connectivity=None` "
+            "to build one automatically."
+        )
+    # Geometry alone cannot prove provenance (two recordings can share it), so
+    # additionally require an identity link to m.
+    source = connectivity._source_multitaper
+    if source is None or source() is not m:
+        raise ValueError(
+            "The provided `connectivity` cannot be verified to come from this "
+            "`Multitaper`: it was not built by `Connectivity.from_multitaper(m)` "
+            "(or its coefficients were reassigned afterwards). A matching channel "
+            "count, frequency grid, and time bins do NOT prove it holds the same "
+            "data — two different recordings can share them — and "
+            "`connectivity_to_xarray` labels the result with `m`'s coordinates "
+            "and metadata, which would silently mislabel it. Build it with "
+            "`Connectivity.from_multitaper(m)`, or leave `connectivity=None` to "
+            "build one automatically."
+        )
+    if connectivity.expectation_type != "trials_tapers":
+        raise ValueError(
+            "connectivity_to_xarray supports only expectation_type="
+            "'trials_tapers' (the default), which yields a result over "
+            "(time, frequency, source, target); got expectation_type="
+            f"'{connectivity.expectation_type}', which averages or keeps "
+            "different axes and does not fit that xarray layout. Use the "
+            "`Connectivity` class directly for other expectation types."
         )
 
 
@@ -132,16 +188,19 @@ def connectivity_to_xarray(
         If True and only 2 signals, return connectivity between first and last
         signal only. Only meaningful for symmetric measures.
     connectivity : Connectivity, optional
-        A ``Connectivity`` already built from ``m``. When computing several
-        measures from the same transform, pass a shared instance to avoid
-        recomputing the (uncached) FFT for each measure and to reuse the cached
-        power / cross-spectrum across the coherence-family measures. When
-        ``None`` (the default) one is constructed from ``m`` via
-        ``Connectivity.from_multitaper``. It must be built from ``m`` — ``m`` is
-        still used for the output coordinates/metadata, so a mismatched
-        ``connectivity`` would mislabel the result. This is enforced: an instance
-        whose channel count, frequency grid, or time bins disagree with ``m``
-        raises ``ValueError``.
+        A ``Connectivity`` built from ``m`` via ``Connectivity.from_multitaper(m)``.
+        When computing several measures from the same transform, pass a shared
+        instance to avoid recomputing the (uncached) FFT for each measure and to
+        reuse the cached power / cross-spectrum across the coherence-family
+        measures. When ``None`` (the default) one is constructed from ``m``
+        automatically. It **must** be built from ``m`` — ``m`` supplies the
+        output coordinates/metadata, so a mismatched ``connectivity`` would
+        mislabel the result. This is enforced by identity: ``from_multitaper``
+        records its source transform, and only an instance whose recorded source
+        is ``m`` (with the default ``expectation_type``) is accepted. A directly
+        constructed ``Connectivity``, or one whose coefficients were reassigned,
+        cannot be verified and is rejected (matching geometry alone does not
+        prove the data is the same).
     **kwargs : dict
         Additional keyword arguments passed to connectivity method.
 
@@ -156,10 +215,14 @@ def connectivity_to_xarray(
     Raises
     ------
     ValueError
-        If the requested method does not fit the ``(time, frequency, source,
-        target)`` xarray layout (``global_coherence``, ``phase_slope_index``,
-        ``group_delay``, ``canonical_coherence``, or a directed measure); the
-        message points to using ``Connectivity`` directly.
+        In either of two cases: (1) the requested method does not fit the
+        ``(time, frequency, source, target)`` xarray layout
+        (``global_coherence``, ``phase_slope_index``, ``group_delay``,
+        ``canonical_coherence``, or a directed measure); the message points to
+        using ``Connectivity`` directly. (2) a ``connectivity`` instance is
+        passed whose channel count, frequency grid, or time bins disagree with
+        ``m`` (it must have been built from ``m``); the message names the
+        disagreeing fields.
 
     Examples
     --------
@@ -181,7 +244,7 @@ def connectivity_to_xarray(
             "phase_slope_index",
         ]
     ) or ("directed" in method):
-        raise ValueError(
+        raise UnsupportedMeasureError(
             f"The method '{method}' is not supported by the xarray interface "
             f"(it does not return a plain (time, frequency, source, target) "
             f"array). Please use the Connectivity class directly instead:\n\n"
@@ -444,12 +507,18 @@ def multitaper_connectivity(
                 **connectivity_kwargs,
             )
             cons[this_method] = con  # Add data variable
-        except NotImplementedError as e:
+        except (NotImplementedError, UnsupportedMeasureError) as e:
+            # Skip ONLY measures that structurally do not fit the xarray layout
+            # (UnsupportedMeasureError) or are not implemented. A genuine
+            # computation error — e.g. a debiased measure raising ValueError
+            # because the data has too few observations — is deliberately NOT
+            # caught here, so it surfaces instead of silently dropping a measure
+            # the user asked for. When only one measure was requested, re-raise
+            # even the structural case so nothing is swallowed.
             if len(method) == 1:
                 raise e  # If that was the only method requested
             else:
-                # If one measure among many, just warn
-                logger.warning(f"{this_method} is not implemented in xarray")
+                logger.warning(f"Skipping {this_method}: {e}")
     if return_dataarray and method[0] in cons:
         return cons[method[0]]
     else:

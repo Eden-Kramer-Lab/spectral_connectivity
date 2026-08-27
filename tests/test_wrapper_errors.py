@@ -119,3 +119,88 @@ def test_injected_connectivity_mismatch_raises():
         connectivity_to_xarray(
             m_long, "coherence_magnitude", connectivity=connectivity_short
         )
+
+
+def test_injected_connectivity_same_geometry_different_data_rejected():
+    """Identical geometry but a different recording must be rejected.
+
+    Geometry (channel count, frequency grid, time bins) cannot establish
+    provenance: two different datasets with the same sampling frequency, window,
+    and channel count share it. Without an identity check the result would carry
+    the injected instance's connectivity with `m`'s metadata — a silent
+    mislabeling. Provenance is verified by the source recorded in
+    `from_multitaper`, so a Connectivity built from a *different* Multitaper of
+    the same shape is rejected even though every geometry check passes.
+    """
+    from spectral_connectivity.connectivity import Connectivity
+
+    rng = np.random.default_rng(0)
+    data_a = rng.standard_normal((512, 3, 4))
+    data_b = rng.standard_normal((512, 3, 4))  # same shape, different data
+    m_a = Multitaper(data_a, sampling_frequency=500)
+    m_b = Multitaper(data_b, sampling_frequency=500)
+    conn_a = Connectivity.from_multitaper(m_a)
+
+    # Sanity: the two transforms are geometrically identical (the old geometry-
+    # only validator would have accepted this mismatch).
+    assert np.array_equal(m_a.frequencies, m_b.frequencies)
+    assert np.array_equal(m_a.time, m_b.time)
+
+    with pytest.raises(ValueError, match="cannot be verified to come from"):
+        connectivity_to_xarray(m_b, "coherence_magnitude", connectivity=conn_a)
+
+
+def test_injected_connectivity_reassigned_coefficients_rejected():
+    """Reassigning coefficients clears the provenance link, so injection fails.
+
+    After `conn = from_multitaper(m)`, assigning `conn.fourier_coefficients`
+    replaces the data; the instance no longer provably holds `m`'s coefficients,
+    so it must not be accepted with `m` even though the geometry still matches.
+    """
+    from spectral_connectivity.connectivity import Connectivity
+
+    rng = np.random.default_rng(1)
+    m = Multitaper(rng.standard_normal((512, 3, 4)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m)
+    # Accepted before reassignment (provenance intact).
+    connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+    # Reassign (even to a fresh transform of the same data): link is cleared.
+    conn.fourier_coefficients = m.fft()
+    with pytest.raises(ValueError, match="cannot be verified to come from"):
+        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+
+
+def test_injected_connectivity_mutated_coordinate_rejected():
+    """Mutating a public coordinate after from_multitaper is caught by geometry.
+
+    Identity alone would still accept the instance (its recorded source is still
+    `m`), but the output would take the mutated `time` coordinate while the
+    metadata comes from `m` — a silent disagreement. Geometry is validated
+    regardless of the provenance link, so this is rejected.
+    """
+    from spectral_connectivity.connectivity import Connectivity
+
+    rng = np.random.default_rng(3)
+    m = Multitaper(rng.standard_normal((512, 3, 4)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m)
+    # Provenance link is intact (same source object), but shift the coordinate.
+    conn.time = conn.time + 1.0
+    with pytest.raises(ValueError, match="time"):
+        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)
+
+
+def test_injected_connectivity_nondefault_expectation_type_rejected():
+    """Only the default expectation_type fits the fixed xarray layout.
+
+    `from_multitaper(m, expectation_type="time_trials_tapers")` is provably from
+    `m`, but it averages the time axis, so its result does not fit the
+    (time, frequency, source, target) layout. Require an actionable error rather
+    than a cryptic xarray dimension-mismatch.
+    """
+    from spectral_connectivity.connectivity import Connectivity
+
+    rng = np.random.default_rng(2)
+    m = Multitaper(rng.standard_normal((512, 3, 4)), sampling_frequency=500)
+    conn = Connectivity.from_multitaper(m, expectation_type="time_trials_tapers")
+    with pytest.raises(ValueError, match="expectation_type='trials_tapers'"):
+        connectivity_to_xarray(m, "coherence_magnitude", connectivity=conn)

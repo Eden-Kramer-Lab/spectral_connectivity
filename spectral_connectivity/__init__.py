@@ -15,7 +15,7 @@ from spectral_connectivity.transforms import (
     suggest_parameters,
 )
 from spectral_connectivity.utils import get_compute_backend
-from spectral_connectivity.wrapper import multitaper_connectivity
+from spectral_connectivity.wrapper import DEFAULT_METHODS, multitaper_connectivity
 
 # Import version information
 try:
@@ -29,6 +29,7 @@ except ImportError:
 # Define the public API of the package
 __all__ = [
     "Connectivity",
+    "DEFAULT_METHODS",
     "Multitaper",
     "MultitaperParameters",
     "multitaper_connectivity",
