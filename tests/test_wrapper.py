@@ -6,7 +6,10 @@ from pytest import mark
 
 from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
-from spectral_connectivity.wrapper import multitaper_connectivity
+from spectral_connectivity.wrapper import (
+    connectivity_to_xarray,
+    multitaper_connectivity,
+)
 
 
 @mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
@@ -580,3 +583,56 @@ def test_from_multitaper_supports_subclass_overriding_init():
     np.testing.assert_array_equal(sub.power(), base.power())
     # The base class still uses the no-copy adoption path (stores a view).
     assert base._fourier_coefficients.base is not None
+
+
+def test_result_carries_cf_coordinate_metadata():
+    """time/frequency coordinates get CF-style units and long_name."""
+    rng = np.random.default_rng(0)
+    ds = multitaper_connectivity(
+        rng.standard_normal((512, 5, 3)), sampling_frequency=500
+    )
+    assert ds.coords["time"].attrs["units"] == "s"
+    assert ds.coords["time"].attrs["long_name"] == "Time"
+    assert ds.coords["frequency"].attrs["units"] == "Hz"
+    assert ds.coords["frequency"].attrs["long_name"] == "Frequency"
+    assert ds.coords["source"].attrs["long_name"] == "Signal"
+
+
+def test_result_carries_provenance_metadata():
+    """Each measure records package/version/backend/expectation_type/measure."""
+    from spectral_connectivity.wrapper import _package_version
+
+    rng = np.random.default_rng(1)
+    da = connectivity_to_xarray(
+        Multitaper(rng.standard_normal((512, 5, 3)), sampling_frequency=500),
+        method="coherence_magnitude",
+    )
+    assert da.attrs["measure"] == "coherence_magnitude"
+    assert da.attrs["package"] == "spectral_connectivity"
+    assert da.attrs["package_version"] == _package_version()
+    assert da.attrs["backend"] in ("CPU", "GPU")
+    assert da.attrs["expectation_type"] == "trials_tapers"
+    # The multitaper parameters are still recorded under the mt_ prefix.
+    assert any(key.startswith("mt_") for key in da.attrs)
+
+
+def test_metadata_survives_netcdf_round_trip(tmp_path):
+    """Provenance attrs and coordinate units survive a NetCDF round-trip."""
+    import xarray as xr
+
+    rng = np.random.default_rng(2)
+    ds = multitaper_connectivity(
+        rng.standard_normal((512, 5, 3)), sampling_frequency=500
+    )
+    path = tmp_path / "provenance.nc"
+    ds.to_netcdf(path)
+    reloaded = xr.open_dataset(path)
+    try:
+        assert reloaded.coords["time"].attrs["units"] == "s"
+        assert reloaded.coords["frequency"].attrs["units"] == "Hz"
+        var = reloaded["coherence_magnitude"]
+        assert var.attrs["package"] == "spectral_connectivity"
+        assert var.attrs["backend"] in ("CPU", "GPU")
+        assert var.attrs["expectation_type"] == "trials_tapers"
+    finally:
+        reloaded.close()

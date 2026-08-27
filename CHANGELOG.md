@@ -382,6 +382,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`multitaper_connectivity` / `connectivity_to_xarray` results are now
+  self-describing.** The `time` and `frequency` coordinates carry CF-style
+  `units` (`"s"` / `"Hz"`) and `long_name` attributes, so plotting libraries and
+  NetCDF readers label axes correctly. Each result also records provenance
+  attributes: `measure`, `package`, `package_version`, `backend` (`"CPU"` /
+  `"GPU"`), and `expectation_type`, alongside the existing `mt_*` multitaper
+  parameters and any measure keyword arguments (`arg_*`). All values are
+  NetCDF-serializable and survive a `to_netcdf` round-trip.
 - `Multitaper` gained an `fft_workers` argument (also accepted by
   `multitaper_connectivity` via `**kwargs`) that sets the number of parallel
   worker threads for SciPy's CPU FFT (`-1` uses all cores). It defaults to

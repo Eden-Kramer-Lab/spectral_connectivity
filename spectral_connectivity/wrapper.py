@@ -11,8 +11,20 @@ from numpy.typing import NDArray
 
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.utils import is_gpu_enabled
 
 logger = getLogger(__name__)
+
+
+def _package_version() -> str:
+    """Return the installed spectral_connectivity version (or ``"unknown"``)."""
+    try:
+        from importlib.metadata import version
+
+        return version("spectral_connectivity")
+    except Exception:
+        return "unknown"
+
 
 # Default measures for ``multitaper_connectivity(method=None)``: the real-valued
 # connectivity measures that fit the xarray/NetCDF interface. Defined explicitly
@@ -255,6 +267,35 @@ def connectivity_to_xarray(
         # datetime64 timedelta64 dtype
         # or for arrays containing cftime datetime objects.
         xar.attrs["mt_" + attr] = value
+
+    # CF-style coordinate metadata so the result is self-describing (plotting
+    # libraries and NetCDF readers use units / long_name for axis labels).
+    if "time" in xar.coords:
+        xar.coords["time"].attrs.setdefault("long_name", "Time")
+        xar.coords["time"].attrs.setdefault("units", "s")
+    if "frequency" in xar.coords:
+        xar.coords["frequency"].attrs.setdefault("long_name", "Frequency")
+        xar.coords["frequency"].attrs.setdefault("units", "Hz")
+    for signal_axis in ("source", "target"):
+        if signal_axis in xar.coords:
+            xar.coords[signal_axis].attrs.setdefault("long_name", "Signal")
+
+    # Provenance: enough to trace how the result was produced. All values are
+    # NetCDF-serializable strings/numbers (the mt_* attributes above already
+    # record the multitaper parameters).
+    xar.attrs["measure"] = method
+    xar.attrs["package"] = "spectral_connectivity"
+    xar.attrs["package_version"] = _package_version()
+    xar.attrs["backend"] = "GPU" if is_gpu_enabled() else "CPU"
+    xar.attrs["expectation_type"] = connectivity.expectation_type
+    # Record the measure's keyword arguments; stringify anything that is not a
+    # plain NetCDF-serializable scalar so the record cannot break to_netcdf.
+    for key, value in kwargs.items():
+        xar.attrs["arg_" + key] = (
+            value
+            if isinstance(value, (str, int, float, np.integer, np.floating, np.bool_))
+            else str(value)
+        )
 
     return xar
 
