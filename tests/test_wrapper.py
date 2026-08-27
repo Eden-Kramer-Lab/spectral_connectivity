@@ -49,16 +49,13 @@ def test_multitaper_coherence_magnitude(time_window_duration, dtype):
 # (time, frequency, source) xarray layouts. Requesting one raises
 # UnsupportedMeasureError with a pointer to use Connectivity directly.
 _WRAPPER_UNSUPPORTED_METHODS = [
-    "directed_transfer_function",
-    "directed_coherence",
-    "partial_directed_coherence",
-    "generalized_partial_directed_coherence",
-    "direct_directed_transfer_function",
     "canonical_coherence",
     "group_delay",
     "delay",
     "global_coherence",
     "phase_slope_index",
+    "conditional_spectral_granger_prediction",
+    "blockwise_spectral_granger_prediction",
 ]
 
 
@@ -855,3 +852,48 @@ def test_multitaper_connectivity_squeeze_warns_and_keeps_matrix_for_many_signals
             squeeze=True,
         )
     assert da.dims == ("time", "frequency", "source", "target")
+
+
+_DTF_FAMILY = [
+    "directed_transfer_function",
+    "directed_coherence",
+    "partial_directed_coherence",
+    "generalized_partial_directed_coherence",
+    "direct_directed_transfer_function",
+]
+
+
+@mark.parametrize("method", _DTF_FAMILY)
+def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
+    """The DTF family is opt-in through the wrapper and oriented source -> target.
+
+    For a unidirectional VAR (signal 0 drives 1), the causal entry is
+    sel(source=0, target=1); it must dominate the anti-causal sel(source=1,
+    target=0). This also confirms the wrapper's directed transpose is applied to
+    these newly exposed measures.
+    """
+    rng = np.random.default_rng(0)
+    n_time, n_trials = 2000, 8
+    time_series = np.zeros((n_time, n_trials, 2))
+    for trial in range(n_trials):
+        x = np.zeros(n_time)
+        y = np.zeros(n_time)
+        e_x = rng.standard_normal(n_time)
+        e_y = rng.standard_normal(n_time)
+        for t in range(1, n_time):
+            x[t] = 0.5 * x[t - 1] + e_x[t]
+            y[t] = 0.5 * y[t - 1] + 0.6 * x[t - 1] + e_y[t]  # 0 -> 1
+        time_series[:, trial, 0] = x
+        time_series[:, trial, 1] = y
+
+    da = multitaper_connectivity(
+        time_series,
+        sampling_frequency=200,
+        time_halfbandwidth_product=3,
+        method=method,
+        signal_names=["x", "y"],
+    )
+    assert da.dims == ("time", "frequency", "source", "target")
+    causal = da.sel(source="x", target="y").values  # x drives y
+    anti_causal = da.sel(source="y", target="x").values
+    assert np.nanmax(causal) > np.nanmax(anti_causal)

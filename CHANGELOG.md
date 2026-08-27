@@ -28,6 +28,15 @@ directly with results from 2.x.
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
+### Added
+
+- `multitaper_connectivity` now accepts the directed-transfer-function family
+  (`directed_transfer_function`, `directed_coherence`,
+  `partial_directed_coherence`, `generalized_partial_directed_coherence`,
+  `direct_directed_transfer_function`) by name. They are opt-in (not in the
+  default set) and, like the spectral Granger measures, are oriented so
+  `sel(source=a, target=b)` is the influence from `a` to `b`.
+
 ### Changed
 
 - `global_coherence`, `power`, `phase_slope_index`, `delay`, and

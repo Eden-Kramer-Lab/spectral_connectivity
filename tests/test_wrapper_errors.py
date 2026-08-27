@@ -20,7 +20,7 @@ def test_unsupported_method_error_message():
         time_window_duration=0.1,
     )
 
-    for method in ("directed_coherence", "canonical_coherence", "group_delay"):
+    for method in ("phase_slope_index", "canonical_coherence", "group_delay"):
         with pytest.raises(UnsupportedMeasureError) as exc_info:
             connectivity_to_xarray(m, method=method)
         message = str(exc_info.value)

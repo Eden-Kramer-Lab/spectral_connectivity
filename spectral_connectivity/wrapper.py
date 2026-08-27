@@ -22,8 +22,9 @@ class UnsupportedMeasureError(ValueError):
 
     Raised by :func:`connectivity_to_xarray` for measures that cannot be
     represented as a plain per-signal-pair xarray (``global_coherence``,
-    ``phase_slope_index``, ``group_delay``, ``canonical_coherence``, the directed
-    family). It subclasses ``ValueError`` for backward compatibility, but is a
+    ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
+    and the conditional/blockwise spectral Granger measures). It subclasses
+    ``ValueError`` for backward compatibility, but is a
     distinct type so :func:`multitaper_connectivity` can skip an unsupported
     measure in a multi-measure batch *without* also swallowing a genuine
     computation error (e.g. a measure that raises ``ValueError`` because the data
@@ -80,19 +81,22 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "weighted_phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "coherency": _PAIRWISE_SPEC,
     "subset_pairwise_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
+    # Directed-transfer-function family: opt-in (not in the default set),
+    # directed (output[i, j] = influence j -> i, transposed to source -> target),
+    # and returning the full (time, frequency, source, target) layout.
+    "directed_transfer_function": _DIRECTED_PAIRWISE_SPEC,
+    "directed_coherence": _DIRECTED_PAIRWISE_SPEC,
+    "partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
+    "generalized_partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
+    "direct_directed_transfer_function": _DIRECTED_PAIRWISE_SPEC,
     **dict.fromkeys(
         (
             "blockwise_spectral_granger_prediction",
             "canonical_coherence",
             "conditional_spectral_granger_prediction",
             "delay",
-            "direct_directed_transfer_function",
-            "directed_coherence",
-            "directed_transfer_function",
-            "generalized_partial_directed_coherence",
             "global_coherence",
             "group_delay",
-            "partial_directed_coherence",
             "phase_slope_index",
         ),
         _UNSUPPORTED_SPEC,
@@ -315,13 +319,17 @@ def multitaper_connectivity(
         real-valued measures that fit the xarray/NetCDF interface (see
         ``DEFAULT_METHODS``) — not every measure. ``coherency`` is left out of the
         default only because it is complex (NetCDF cannot store it), but it can be
-        requested by name. Other measures that do not fit the ``(time, frequency,
-        source, target)`` layout — ``global_coherence``, ``phase_slope_index``,
-        ``group_delay``, ``delay``, ``canonical_coherence``, and the directed-transfer-
-        function family — are *not* available through this wrapper at all
-        (requesting one raises with a pointer to use ``Connectivity`` directly).
-        Examples: "coherence_magnitude", "imaginary_coherence",
-        "phase_locking_value".
+        requested by name. The directed-transfer-function family
+        (``directed_transfer_function``, ``directed_coherence``,
+        ``partial_directed_coherence``, ``generalized_partial_directed_coherence``,
+        ``direct_directed_transfer_function``) is also opt-in by name (see the
+        Notes on directed orientation). Other measures that do not fit the
+        ``(time, frequency, source, target)`` layout — ``global_coherence``,
+        ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
+        and the conditional/blockwise spectral Granger measures — are *not*
+        available through this wrapper at all (requesting one raises with a
+        pointer to use ``Connectivity`` directly). Examples:
+        "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
     signal_names : sequence of str, optional
         Names for signal channels used to label dimensions. If None, uses indices.
     squeeze : bool, default=False
@@ -401,7 +409,7 @@ def multitaper_connectivity(
         # The explicit NetCDF-safe / xarray-compatible default set (see
         # DEFAULT_METHODS). Not every Connectivity method — coherency (complex),
         # global_coherence / phase_slope_index, and the directed-transfer-function
-        # family are excluded.
+        # family are excluded from the default (the last is still opt-in by name).
         method = list(DEFAULT_METHODS)
     elif isinstance(method, str):
         method = [method]  # Convert to list
