@@ -182,15 +182,8 @@ def _connectivity_result_to_xarray(
         # applied below: sel(source=i, target=j) then reads "i drives j".
         connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
-    if connectivity.n_signals > 2 and squeeze:
-        warnings.warn(
-            f"squeeze=True but there are {connectivity.n_signals} signals; "
-            "returning the full (source, target) matrix.",
-            UserWarning,
-            stacklevel=2,
-        )
-
     if measure_spec.output_kind == "power":
+        # squeeze has no meaning for power (no target axis); it is a no-op here.
         xar = xr.DataArray(
             connectivity_mat,
             coords=[connectivity.time, connectivity.frequencies, signal_names],
@@ -207,12 +200,22 @@ def _connectivity_result_to_xarray(
             ],
             dims=["time", "frequency", "source", "target"],
         )
-        if connectivity.n_signals == 2 and squeeze:
+        if squeeze and connectivity.n_signals == 2:
             # Reduce to the single ordered pair (first source, last target).
             # drop=False keeps ``source`` and ``target`` as scalar coordinates so
             # the returned (time, frequency) array still records which pair -- and
-            # for directed measures, which direction -- it represents.
+            # for directed measures, which direction -- it represents. The caller
+            # only passes squeeze=True when returning a standalone DataArray;
+            # these scalar coordinates would otherwise collide, Dataset-wide, with
+            # a sibling ``power`` variable's ``source`` dimension.
             xar = xar.isel(source=0, target=-1, drop=False)
+        elif squeeze and connectivity.n_signals > 2:
+            warnings.warn(
+                f"squeeze=True but there are {connectivity.n_signals} signals; "
+                "returning the full (source, target) matrix.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     xar.name = method
 
@@ -347,12 +350,16 @@ def multitaper_connectivity(
     signal_names : sequence of str, optional
         Names for signal channels used to label dimensions. If None, uses indices.
     squeeze : bool, default=False
-        If True and there are exactly 2 channels, reduce to the single ordered
-        pair (first source, last target), returning a ``(time, frequency)``
-        array. The selected ``source`` and ``target`` are retained as scalar
-        coordinates, so the pair -- and, for directed measures, the direction --
-        is still recorded. With more than 2 channels a warning is issued and the
-        full matrix is returned.
+        Only honored when a single ``method`` (a string) is requested, so the
+        result is a DataArray. If there are exactly 2 channels, reduce a pairwise
+        measure to the single ordered pair (first source, last target), returning
+        a ``(time, frequency)`` array whose selected ``source`` and ``target`` are
+        retained as scalar coordinates -- so the pair (and, for directed measures,
+        the direction) is still recorded. With more than 2 channels a warning is
+        issued and the full matrix is returned; for ``power`` (no target axis)
+        squeeze is a no-op. For multi-measure requests (which return a Dataset,
+        whose variables can have incompatible axes such as ``power``'s), squeeze
+        is ignored with a warning.
     connectivity_kwargs : dict, optional
         Additional keyword arguments passed to connectivity methods.
     **kwargs : dict
@@ -434,6 +441,19 @@ def multitaper_connectivity(
         raise ValueError(
             "method must name at least one connectivity measure; got an empty list."
         )
+    if squeeze and not return_dataarray:
+        # squeeze reduces a pairwise measure to a (time, frequency) array whose
+        # source/target become scalar coordinates. In a Dataset those scalars are
+        # shared across all variables and would collide with a sibling variable's
+        # axes (e.g. power's ``source`` dimension), so squeeze is honored only
+        # when a single method is requested and the result is a DataArray.
+        warnings.warn(
+            "squeeze=True is ignored for multi-measure results (a Dataset); "
+            "request a single method (a string) to get a squeezed DataArray.",
+            UserWarning,
+            stacklevel=2,
+        )
+        squeeze = False
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).

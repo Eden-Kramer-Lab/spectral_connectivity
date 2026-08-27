@@ -735,6 +735,11 @@ def test_metadata_survives_netcdf_round_trip(tmp_path):
         assert var.attrs["package"] == "spectral_connectivity"
         assert var.attrs["backend"] in ("CPU", "GPU")
         assert var.attrs["expectation_type"] == "trials_tapers"
+        # The shared provenance attached at the Dataset level also round-trips.
+        assert reloaded.attrs["package"] == "spectral_connectivity"
+        assert reloaded.attrs["backend"] in ("CPU", "GPU")
+        assert reloaded.attrs["expectation_type"] == "trials_tapers"
+        assert reloaded.attrs["mt_sampling_frequency"] == 500
     finally:
         reloaded.close()
 
@@ -854,6 +859,32 @@ def test_multitaper_connectivity_squeeze_warns_and_keeps_matrix_for_many_signals
     assert da.dims == ("time", "frequency", "source", "target")
 
 
+def test_multitaper_connectivity_squeeze_ignored_for_multi_measure_dataset():
+    """squeeze=True must not corrupt a mixed Dataset (pairwise + power).
+
+    Scalar source/target coordinates are Dataset-wide, so a squeezed pairwise
+    variable would collide with ``power``'s ``source`` dimension: coherence would
+    lose its source label and power would inherit a bogus scalar target. squeeze
+    is therefore ignored (with a warning) whenever the result is a Dataset, and
+    every variable keeps its full, correct axes.
+    """
+    rng = np.random.default_rng(0)
+    with pytest.warns(UserWarning, match="ignored for multi-measure"):
+        ds = multitaper_connectivity(
+            rng.standard_normal((256, 5, 2)),
+            sampling_frequency=256,
+            method=None,  # default set: pairwise measures plus power
+            signal_names=["x", "y"],
+            squeeze=True,
+        )
+    assert "power" in ds.data_vars
+    assert ds["coherence_magnitude"].dims == ("time", "frequency", "source", "target")
+    assert ds["power"].dims == ("time", "frequency", "source")
+    # No Dataset-wide scalar coordinate leaked onto the wrong variable.
+    assert "target" not in ds["power"].coords
+    assert ds["coherence_magnitude"].sizes["source"] == 2
+
+
 _DTF_FAMILY = [
     "directed_transfer_function",
     "directed_coherence",
@@ -905,7 +936,8 @@ def test_multitaper_connectivity_dataset_carries_shared_provenance():
     Previously provenance lived only on each DataArray; a returned Dataset had
     no top-level attrs, so tracing how a batch was produced meant inspecting an
     arbitrary variable. The shared attrs (package, backend, expectation type,
-    multitaper parameters) are now on the Dataset too, and survive NetCDF.
+    multitaper parameters) are now on the Dataset too. (Their NetCDF round-trip
+    is covered by ``test_metadata_survives_netcdf_round_trip``.)
     """
     rng = np.random.default_rng(0)
     ds = multitaper_connectivity(

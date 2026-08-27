@@ -97,7 +97,11 @@ directly with results from 2.x.
 - `multitaper_connectivity(..., squeeze=True)` keeps the selected `source` and
   `target` as scalar coordinates instead of dropping them, so the squeezed
   `(time, frequency)` result still records which pair (and, for directed
-  measures, which direction) it represents.
+  measures, which direction) it represents. squeeze is now honored only for
+  single-method (DataArray) requests -- because those scalar coordinates are
+  Dataset-wide, applying them in a multi-measure Dataset would collide with a
+  sibling `power` variable's `source` dimension -- and is ignored, with a
+  warning, for multi-measure requests. It is a no-op for `power`.
 - Importing the package no longer changes NumPy's global floating-point warning
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
