@@ -1466,7 +1466,13 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
-        coefficients = self._fourier_coefficients
+        # Normalize at the computation dtype (``self._dtype``, complex128 by
+        # default): the previous materialized path formed the outer product at
+        # that dtype, so normalizing complex64 inputs at their own precision here
+        # would let float32 rounding push the unit magnitudes -- and thus the
+        # averaged PLV/PPC -- slightly past 1. copy=False avoids a copy when the
+        # dtype already matches (the division below allocates a fresh array).
+        coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -1515,7 +1521,10 @@ class Connectivity:
                signals. Human Brain Mapping 8, 194-208.
 
         """
-        return xp.abs(self._phase_locking_value())
+        # Clip to the documented [0, 1] range: |mean of unit-magnitude entries|
+        # is <= 1 mathematically, but floating-point rounding can leave it a few
+        # ulp above 1 (matching the bounds clipping coherence_magnitude applies).
+        return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
     def _imaginary_cross_spectrum_moments(
         self, *keys: str
@@ -1554,9 +1563,12 @@ class Connectivity:
         cache = self.__dict__.setdefault("_imaginary_moment_cache", {})
         missing = [key for key in keys if key not in cache]
         if missing:
-            # Full observation-level cross-spectral matrix (transient); the
-            # phase-lag-index family rejects block mode, so the non-block form is
-            # always the correct input.
+            # The phase-lag-index family averages an anti-symmetric transform
+            # (sign/abs/square of the imaginary part) of the cross-spectral
+            # matrix, so -- unlike the coherence family and phase_locking_value --
+            # it cannot use the reduced matmul and must materialize the full
+            # observation-level cross-spectral matrix here (transient,
+            # O(observations * signals**2)).
             imaginary = self._cross_spectral_matrix.imag
             n_signals = imaginary.shape[-1]
             diagonal_index = xp.diag_indices(n_signals)

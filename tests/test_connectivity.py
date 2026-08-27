@@ -1728,11 +1728,9 @@ def test_phase_locking_value_matches_per_observation_reference(
         fc[:, 1, :, :, 0] = 0.0  # dead channel 0 on trial 1
 
     conn = Connectivity(fourier_coefficients=fc, expectation_type=expectation_type)
-    tol = (
-        {"rtol": 2e-6, "atol": 2e-6}
-        if dtype == np.complex64
-        else {"rtol": 1e-9, "atol": 1e-11}
-    )
+    # Both the factorized measure and the reference normalize at the computation
+    # dtype (complex128 default), so even a complex64 input agrees to ~1e-15.
+    tol = {"rtol": 1e-9, "atol": 1e-11}
 
     ref_complex = _reference_normalized_cross_spectrum(conn)
     ref_plv = np.abs(ref_complex)
@@ -1748,6 +1746,10 @@ def test_phase_locking_value_matches_per_observation_reference(
     # Diagonal (self-consistency) is 1 where defined.
     diag = np.diagonal(plv, axis1=-2, axis2=-1)
     np.testing.assert_allclose(diag[~np.isnan(diag)], 1.0, **tol)
+    # Documented bounds hold exactly for PLV (public method clips to [0, 1]),
+    # including at the input precision where the raw normalization can overshoot.
+    assert np.nanmin(plv) >= 0.0
+    assert np.nanmax(plv) <= 1.0
 
     # Pairwise phase consistency built from the same complex reference.
     n = conn.n_observations
@@ -1758,6 +1760,9 @@ def test_phase_locking_value_matches_per_observation_reference(
         np.testing.assert_array_equal(np.isnan(ppc), np.isnan(ref_ppc))
         fppc = ~np.isnan(ref_ppc)
         np.testing.assert_allclose(ppc[fppc], ref_ppc[fppc], **tol)
+        # PPC is not clipped (it can be slightly negative for random phases),
+        # but must not exceed 1 beyond floating-point rounding.
+        assert np.nanmax(ppc) <= 1.0 + 1e-9
     else:
         with pytest.raises(ValueError, match="at least 2 observations"):
             conn.pairwise_phase_consistency()

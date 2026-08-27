@@ -297,9 +297,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of materializing the full per-observation
   `(..., n_signals, n_signals)` outer product and then averaging. Results are
   unchanged to floating-point tolerance. On a representative case this was
-  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). Every measure now uses
-  this reduction, so the per-observation outer product (and the `blocks`
-  parameter that chunked it) is gone entirely (see **Removed**).
+  ~6× faster and cut peak memory ~9× (472 MB → 53 MB). The coherence family,
+  the directed measures, and (below) `phase_locking_value` /
+  `pairwise_phase_consistency` all use this reduction now. The only measures
+  that still materialize the per-observation outer product are the phase-lag-index
+  family (`phase_lag_index`, `weighted_phase_lag_index`, and the two debiased
+  variants), which average an anti-symmetric transform of it and so cannot;
+  they remain `O(observations · signals²)`. Because that path was the only
+  remaining consumer of the outer product that `blocks` chunked — and `blocks`
+  never supported the phase-lag family anyway — the `blocks` parameter is
+  removed (see **Removed**).
 - **`Connectivity.phase_locking_value` / `pairwise_phase_consistency`** now
   unit-normalize each Fourier coefficient and reuse the batched reduced
   cross-spectral matmul, using
