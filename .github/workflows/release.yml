@@ -125,10 +125,42 @@ jobs:
         run: pip install dist/*.tar.gz
       - name: Check import
         run: python -c "import spectral_connectivity; print('Version:', spectral_connectivity.__version__)"
-      - name: Install test dependencies
-        run: pip install pytest pytest-cov nitime
-      - name: Run package tests
-        run: pytest --pyargs spectral_connectivity -v || echo "No tests found in package"
+      - name: Check dependency consistency
+        run: pip check
+      - name: Smoke-test the installed package
+        # No repo checkout in this job, so these imports resolve to the built
+        # wheel/sdist, not the source tree. A real end-to-end computation that
+        # fails loudly -- the previous `pytest --pyargs ... || echo` collected no
+        # tests (they are not shipped in the package) and the `|| echo` masked
+        # both that and any genuine failure, so the step always "passed".
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from spectral_connectivity import (
+              Connectivity,
+              Multitaper,
+              multitaper_connectivity,
+          )
+
+          rng = np.random.default_rng(0)
+          signals = rng.standard_normal((512, 5, 3))
+          m = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=3)
+          c = Connectivity.from_multitaper(m)
+
+          coherence = np.asarray(c.coherence_magnitude())
+          assert coherence.shape[-2:] == (3, 3), coherence.shape
+          # Off-diagonal coherence must be finite and in [0, 1].
+          offdiag = coherence[..., 0, 1]
+          assert np.isfinite(offdiag).all()
+          assert (offdiag >= 0).all() and (offdiag <= 1 + 1e-8).all()
+
+          granger = np.asarray(c.pairwise_spectral_granger_prediction())
+          assert np.isfinite(np.nan_to_num(granger)).all()
+
+          ds = multitaper_connectivity(signals, sampling_frequency=500)
+          assert "coherence_magnitude" in ds.data_vars
+          print("Installed-package smoke test OK")
+          PY
 
   publish:
     name: Publish to PyPI
