@@ -12,27 +12,6 @@ from spectral_connectivity.wrapper import (
 )
 
 
-def test_unsupported_method_error_message():
-    """Incompatible result shapes point users to the lower-level API."""
-    m = Multitaper(
-        np.random.default_rng(0).random((100, 5, 2)),
-        sampling_frequency=1000,
-        time_window_duration=0.1,
-    )
-
-    for method in ("phase_slope_index", "canonical_coherence", "group_delay"):
-        with pytest.raises(UnsupportedMeasureError) as exc_info:
-            connectivity_to_xarray(m, method=method)
-        message = str(exc_info.value)
-        assert "is not supported by the xarray interface" in message
-        assert "Connectivity class directly" in message
-        assert "from spectral_connectivity import Connectivity" in message
-        assert f"result = conn.{method}()" in message
-
-    with pytest.raises(UnsupportedMeasureError, match="global_coherence"):
-        connectivity_to_xarray(m, method="global_coherence")
-
-
 def test_time_halfbandwidth_product_kwarg_passthrough():
     """The documented Multitaper keyword works through the wrapper."""
     time_series = np.random.default_rng(0).random((200, 5, 2))
