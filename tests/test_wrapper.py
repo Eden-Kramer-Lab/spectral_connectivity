@@ -7,7 +7,7 @@ import pytest
 import xarray as xr
 from pytest import mark
 
-from spectral_connectivity import Multitaper
+from spectral_connectivity import MorletWavelet, Multitaper, Welch
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
@@ -18,6 +18,8 @@ from spectral_connectivity.wrapper import (
     _netcdf_provenance_value,
     _reject_unmaterialized_backing,
     connectivity_to_xarray,
+    fourier_connectivity,
+    frequency_band_reduce,
     multitaper_connectivity,
 )
 
@@ -60,7 +62,6 @@ _WRAPPER_UNSUPPORTED_METHODS = [
     "delay",
     "global_coherence",
     "phase_slope_index",
-    "conditional_spectral_granger_prediction",
     "blockwise_spectral_granger_prediction",
 ]
 
@@ -1855,3 +1856,139 @@ def test_multitaper_connectivity_dataset_carries_shared_provenance():
     assert ds.attrs["mt_sampling_frequency"] == 500
     # The shared attrs must not include per-measure fields.
     assert "measure" not in ds.attrs
+
+
+def test_fourier_connectivity_matches_multitaper_adapter():
+    """Externally supplied FFT coefficients reuse the same numerical contract."""
+    rng = np.random.default_rng(301)
+    transform = Multitaper(
+        rng.standard_normal((256, 5, 3)),
+        sampling_frequency=128,
+        time_halfbandwidth_product=2,
+    )
+    expected = connectivity_to_xarray(
+        transform,
+        method="coherence_magnitude",
+        signal_names=["a", "b", "c"],
+    )
+    actual = fourier_connectivity(
+        transform.fft(),
+        frequencies=transform.frequencies,
+        time=transform.time,
+        method="coherence_magnitude",
+        signal_names=["a", "b", "c"],
+    )
+
+    xr.testing.assert_allclose(actual, expected)
+    assert actual.attrs["fourier_source"] == "external_fourier_coefficients"
+
+
+def test_fourier_connectivity_infers_and_transposes_labeled_dimensions():
+    """A coefficient DataArray carries frequency, time, and signal coordinates."""
+    rng = np.random.default_rng(302)
+    transform = Multitaper(
+        rng.standard_normal((256, 4, 2)),
+        sampling_frequency=128,
+        time_window_duration=1,
+        time_halfbandwidth_product=2,
+    )
+    coefficients = transform.fft()
+    labeled = xr.DataArray(
+        coefficients.transpose(4, 3, 1, 0, 2),
+        dims=("channel", "frequency", "epoch", "window", "taper"),
+        coords={
+            "channel": ["left", "right"],
+            "frequency": transform.frequencies,
+            "window": transform.time,
+        },
+        attrs={"subject": "rat-1"},
+    )
+    actual = fourier_connectivity(labeled, method="power")
+    expected = fourier_connectivity(
+        coefficients,
+        frequencies=transform.frequencies,
+        time=transform.time,
+        signal_names=["left", "right"],
+        method="power",
+    )
+
+    xr.testing.assert_allclose(actual, expected)
+    assert json.loads(actual.attrs["input_attrs_json"]) == {"subject": "rat-1"}
+
+
+def test_multitaper_frequency_crop_decimation_and_band_mean():
+    """Frequency operations are coordinate-based and preserve axis order."""
+    result = multitaper_connectivity(
+        np.random.default_rng(303).standard_normal((256, 3)),
+        sampling_frequency=128,
+        method="coherence_magnitude",
+        frequency_range=(8, 32),
+        frequency_decimation=2,
+        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+    )
+
+    assert result.dims == ("time", "band", "source", "target")
+    assert result.band.values.tolist() == ["alpha", "beta"]
+    assert result.attrs["frequency_reduction"] == "mean"
+
+
+def test_frequency_band_reduce_uses_circular_phase_mean():
+    """Phases straddling the branch cut average near pi, not zero."""
+    phase = xr.DataArray(
+        np.array([np.pi - 0.1, -np.pi + 0.1]),
+        dims=("frequency",),
+        coords={"frequency": [10.0, 11.0]},
+        name="coherence_phase",
+        attrs={"measure": "coherence_phase"},
+    )
+    reduced = frequency_band_reduce(phase, {"alpha": (8, 12)})
+
+    assert abs(float(reduced.sel(band="alpha"))) == pytest.approx(np.pi)
+
+
+def test_frequency_band_integral_is_restricted_to_spectral_densities():
+    score = xr.DataArray(
+        [0.25, 0.5],
+        dims=("frequency",),
+        coords={"frequency": [1.0, 2.0]},
+        name="coherence_magnitude",
+        attrs={"measure": "coherence_magnitude"},
+    )
+    with pytest.raises(ValueError, match="defined only for power"):
+        frequency_band_reduce(score, {"low": (1, 2)}, reduction="integral")
+
+
+def test_fourier_connectivity_rejects_one_sided_frequency_coordinate():
+    coefficients = np.ones((3, 9, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="one-sided transform"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.linspace(0, 40, 9),
+            method="coherence_magnitude",
+        )
+
+
+def test_fourier_connectivity_rejects_fftshifted_coordinate():
+    coefficients = np.ones((3, 8, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="standard FFT order"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.fft.fftshift(np.fft.fftfreq(8, d=0.01)),
+            method="coherence_magnitude",
+        )
+
+
+def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
+    data = np.random.default_rng(304).standard_normal((128, 3, 2))
+    welch = connectivity_to_xarray(
+        Welch(data, sampling_frequency=64, n_time_samples_per_segment=32),
+        method="coherence_magnitude",
+    )
+    morlet = connectivity_to_xarray(
+        MorletWavelet(data, 64, np.array([4.0, 8.0, 16.0])),
+        method="coherence_magnitude",
+    )
+
+    assert welch.attrs["welch_window"] == "hann_periodic"
+    assert morlet.attrs["morlet_decimation"] == 1
+    assert morlet.frequency.values.tolist() == [4.0, 8.0, 16.0]

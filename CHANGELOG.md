@@ -31,6 +31,26 @@ directly with results from 2.x.
 
 ### Added
 
+- Spectral primitives and pairwise measures: one-sided
+  `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
+  corrected imaginary PLV, and directed PLI.
+- Multivariate/group measures: maximized imaginary coherency (MIC),
+  multivariate interaction measure (MIM), conditional spectral Granger,
+  blockwise spectral Granger, and time-reversed spectral Granger.
+- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
+  output is explicitly one-sided and rejects Wilson-factorized directed
+  measures, which require a full two-sided spectrum.
+- Multitaper `taper_weighting` supports historical uniform weighting,
+  eigenvalue weighting, and Thomson adaptive frequency/signal-specific
+  weighting.
+- `fourier_connectivity` accepts externally computed two-sided Fourier
+  coefficients as NumPy arrays or labeled DataArrays. High-level results can be
+  cropped, decimated, or reduced into named frequency bands; phase uses a
+  circular mean and integration is restricted to spectral densities.
+- `Connectivity.jackknife` and `jackknife_confidence_interval` provide
+  leave-one-trial/taper bias correction, standard errors, and confidence
+  intervals with automatic log-power, Fisher-coherence, and circular-phase
+  transformations.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,

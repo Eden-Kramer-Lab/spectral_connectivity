@@ -67,6 +67,23 @@ measures = multitaper_connectivity(
 )
 ```
 
+Crop, decimate, or aggregate the frequency coordinate without losing labels:
+
+```python
+band_connectivity = multitaper_connectivity(
+    time_series,
+    sampling_frequency=sampling_frequency,
+    method="coherence_magnitude",
+    frequency_range=(4, 100),
+    frequency_bands={"theta": (4, 8), "alpha": (8, 13), "beta": (13, 30)},
+)
+```
+
+Named-band means are arithmetic means of the computed score; complex measures
+use a complex-vector mean and `coherence_phase` uses a circular mean. Band
+integration is restricted to power and cross-spectral density, where it has the
+physical interpretation of band power/covariance.
+
 `time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
 names define axis roles; positions do not.** Common dimension names are
 inferred and transposed automatically; for domain-specific names, pass
@@ -154,6 +171,39 @@ weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 ```
 
+The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
+wavelet transforms. Morlet coefficients are one-sided, so they support
+functional measures but deliberately reject Wilson-factorized directed
+measures:
+
+```python
+from spectral_connectivity import (
+    Connectivity,
+    MorletWavelet,
+    ShortTimeFourierTransform,
+    Welch,
+)
+
+stft = ShortTimeFourierTransform(time_series, sampling_frequency, time_window_duration=1)
+welch = Welch(time_series, sampling_frequency, segment_duration=1)
+wavelet = MorletWavelet(time_series, sampling_frequency, frequencies=[4, 8, 16, 32])
+
+stft_coherence = Connectivity.from_transform(stft).coherence_magnitude()
+```
+
+For DPSS transforms, `taper_weighting="uniform"` preserves the historical
+behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
+Thomson's frequency- and signal-specific iterative weights.
+
+Already have full two-sided FFT coefficients? `fourier_connectivity` accepts
+NumPy arrays or labeled DataArrays in the core
+`(time, trial, taper, frequency, signal)` layout (with documented shorter
+forms), preserving frequency, time, and signal coordinates.
+
+Uncertainty for real-valued measures is available through
+`Connectivity.jackknife(...)`, with automatic log-power, Fisher-coherence, and
+circular-phase transformations.
+
 ### Documentation
 
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
@@ -165,15 +215,18 @@ For a canonical reference of connectivity metric value ranges, see [Connectivity
 Functional
 
 1. coherency
-2. canonical_coherence
-3. imaginary_coherence
-4. phase_locking_value
-5. phase_lag_index
-6. weighted_phase_lag_index
-7. debiased_squared_phase_lag_index
-8. debiased_squared_weighted_phase_lag_index
-9. pairwise_phase_consistency
-10. global coherence
+2. cross_spectral_density
+3. coherence_magnitude and coherence_phase
+4. imaginary_coherence and signed imaginary_coherency
+5. partial_coherence
+6. canonical_coherence
+7. maximized_imaginary_coherency and multivariate_interaction_measure
+8. phase_locking_value and corrected_imaginary_phase_locking_value
+9. phase_lag_index, directed_phase_lag_index, and weighted_phase_lag_index
+10. debiased_squared_phase_lag_index
+11. debiased_squared_weighted_phase_lag_index
+12. pairwise_phase_consistency
+13. global_coherence
 
 Directed
 
@@ -183,8 +236,10 @@ Directed
 4. generalized_partial_directed_coherence
 5. direct_directed_transfer_function
 6. group_delay
-7. phase_lag_index
-8. pairwise_spectral_granger_prediction
+7. pairwise_spectral_granger_prediction
+8. conditional_spectral_granger_prediction
+9. blockwise_spectral_granger_prediction
+10. time_reversed_spectral_granger_prediction
 
 ### Package Dependencies
 
