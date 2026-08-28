@@ -62,9 +62,7 @@ def test_multitaper_coherence_magnitude(time_window_duration):
 )
 def test_connectivity_to_xarray_exposes_group_pairwise_results(method):
     rng = np.random.default_rng(42)
-    transform = Multitaper(
-        rng.standard_normal((256, 6, 4)), sampling_frequency=128
-    )
+    transform = Multitaper(rng.standard_normal((256, 6, 4)), sampling_frequency=128)
     result = connectivity_to_xarray(
         transform,
         method=method,
@@ -103,9 +101,7 @@ def test_group_pairwise_directed_orientation_is_source_to_target(monkeypatch):
 
 def test_connectivity_to_xarray_exposes_rich_multivariate_components():
     rng = np.random.default_rng(43)
-    transform = Multitaper(
-        rng.standard_normal((256, 8, 4)), sampling_frequency=128
-    )
+    transform = Multitaper(rng.standard_normal((256, 8, 4)), sampling_frequency=128)
     result = connectivity_to_xarray(
         transform,
         method="canonical_coherency",
@@ -134,8 +130,8 @@ def test_connectivity_to_xarray_exposes_rich_multivariate_components():
         "side",
         "signal",
     )
-    assert result.seed_group.values.tolist() == [10]
-    assert result.target_group.values.tolist() == [20]
+    assert result.connection_seed_group.values.tolist() == [10]
+    assert result.connection_target_group.values.tolist() == [20]
     assert result.group_membership.sel(group=10, signal="a").item()
 
 
@@ -1699,6 +1695,23 @@ def test_multitaper_connectivity_merges_rich_multivariate_datasets():
     assert list(result.data_vars).count("group_membership") == 1
 
 
+def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_not_collide():
+    # A group-pairwise measure uses source_group/target_group as *dimensions*;
+    # components use connection_seed_group/connection_target_group as per-
+    # connection coordinates. Merging them must keep the per-connection labels
+    # intact rather than overwrite them with the group dimension index.
+    result = multitaper_connectivity(
+        np.random.default_rng(451).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=["blockwise_spectral_granger_prediction", "canonical_coherency"],
+        connectivity_kwargs={"group_labels": [0, 0, 1, 1]},
+    )
+    assert result["target_group"].dims == ("target_group",)
+    assert result["connection_target_group"].dims == ("connection",)
+    assert result.connection_seed_group.values.tolist() == [0]
+    assert result.connection_target_group.values.tolist() == [1]
+
+
 def test_multitaper_connectivity_genuine_error_not_swallowed():
     """A real computation error in a batch surfaces; it is not silently dropped.
 
@@ -2178,9 +2191,7 @@ def test_fourier_connectivity_allows_unlabeled_undirected_measure():
 
 def test_fourier_connectivity_accepts_one_sided_functional_input():
     rng = np.random.default_rng(316)
-    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal(
-        (4, 9, 2)
-    )
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal((4, 9, 2))
     result = fourier_connectivity(
         coefficients,
         frequencies=np.linspace(0, 40, 9),
@@ -2205,9 +2216,7 @@ def test_fourier_connectivity_rejects_directed_one_sided_input():
 
 def test_fourier_connectivity_explicit_one_sided_without_frequencies():
     rng = np.random.default_rng(317)
-    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal(
-        (4, 9, 2)
-    )
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal((4, 9, 2))
     result = fourier_connectivity(
         coefficients,
         method="coherence_magnitude",

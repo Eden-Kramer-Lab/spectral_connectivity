@@ -738,6 +738,34 @@ def test_morlet_default_zero_padding_matches_same_convolution():
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
 
 
+@mark.parametrize("padding_mode", ["reflect", "edge"])
+def test_morlet_padding_modes_match_padded_convolution(padding_mode):
+    from scipy.signal import fftconvolve
+
+    rng = np.random.default_rng(920)
+    data = rng.standard_normal((96, 2, 2))
+    transform = MorletWavelet(
+        data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode
+    )
+
+    sigma = 4 / (2 * np.pi * 8)
+    half_width = int(np.ceil(5 * sigma * 64))
+    wavelet_time = np.arange(-half_width, half_width + 1) / 64
+    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
+    expected = fftconvolve(
+        padded,
+        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
+        mode="valid",
+        axes=0,
+    ) / np.sqrt(64)
+
+    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected, atol=1e-12)
+
+
 def test_morlet_edge_mask_nan_and_trim_contracts():
     rng = np.random.default_rng(919)
     data = rng.standard_normal((256, 2, 2))
@@ -768,7 +796,9 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
         edge_mode="trim",
     )
 
-    np.testing.assert_array_equal(kept.valid_time_frequency, masked.valid_time_frequency)
+    np.testing.assert_array_equal(
+        kept.valid_time_frequency, masked.valid_time_frequency
+    )
     assert not np.all(masked.valid_time_frequency)
     masked_power = Connectivity.from_transform(masked).power()
     np.testing.assert_array_equal(
@@ -797,14 +827,10 @@ def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
     # Reflection maps the first frequency neighborhood to [12, 8, 12] Hz.
     expected = np.mean(
         raw_coefficients[:, :, [1, 0, 1], :][..., :, :, np.newaxis]
-        * np.conjugate(
-            raw_coefficients[:, :, [1, 0, 1], :][..., :, np.newaxis, :]
-        ),
+        * np.conjugate(raw_coefficients[:, :, [1, 0, 1], :][..., :, np.newaxis, :]),
         axis=(1, 2),
     )
-    actual = Connectivity.from_transform(
-        smoothed
-    ).cross_spectral_density()[:, 0]
+    actual = Connectivity.from_transform(smoothed).cross_spectral_density()[:, 0]
     np.testing.assert_allclose(actual, expected)
 
 
