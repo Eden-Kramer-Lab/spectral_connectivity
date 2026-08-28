@@ -3,8 +3,12 @@ import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from pytest import mark
 
+from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
+    MorletWavelet,
     Multitaper,
+    ShortTimeFourierTransform,
+    Welch,
     _add_axes,
     _get_low_bias_tapers,
     _multitaper_fft,
@@ -644,3 +648,107 @@ def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
     assert tuple(metadata) == m._PROVENANCE_FIELDS
     assert "unrelated_extension_attribute" not in metadata
     assert isinstance(metadata["start_time"], np.ndarray)
+
+
+def test_short_time_fourier_transform_hann_shape_and_peak():
+    sampling_frequency = 128
+    time = np.arange(256) / sampling_frequency
+    signal = np.sin(2 * np.pi * 16 * time)
+    data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
+    transform = ShortTimeFourierTransform(
+        data,
+        sampling_frequency=sampling_frequency,
+        time_window_duration=1,
+        time_window_step=0.5,
+    )
+
+    coefficients = transform.fft()
+    assert coefficients.shape == (3, 1, 1, 128, 2)
+    positive_power = np.abs(coefficients[0, 0, 0, :65, 0]) ** 2
+    assert transform.frequencies[np.argmax(positive_power)] == pytest.approx(16)
+    assert transform.frequency_resolution == pytest.approx(1.5)
+
+
+def test_welch_packs_segments_on_observation_axis():
+    data = np.random.default_rng(401).standard_normal((256, 3, 2))
+    transform = Welch(
+        data,
+        sampling_frequency=128,
+        n_time_samples_per_segment=64,
+        segment_overlap=0.5,
+    )
+
+    assert transform.n_segments == 7
+    assert transform.fft().shape == (1, 3, 7, 64, 2)
+    assert transform.time.shape == (1,)
+
+
+def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
+    sampling_frequency = 128
+    time = np.arange(256) / sampling_frequency
+    signal = np.sin(2 * np.pi * 16 * time)
+    data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
+    transform = MorletWavelet(
+        data,
+        sampling_frequency,
+        np.array([8.0, 16.0, 32.0]),
+        n_cycles=5,
+        smoothing_time=0.25,
+    )
+
+    coefficients = transform.fft()
+    assert coefficients.shape == (8, 1, 32, 3, 2)
+    mean_power = np.mean(np.abs(coefficients[..., 0]) ** 2, axis=(0, 1, 2))
+    assert transform.frequencies[np.argmax(mean_power)] == pytest.approx(16)
+
+    connectivity = Connectivity.from_transform(transform)
+    assert connectivity.power().shape[-2] == 3
+    np.testing.assert_array_equal(connectivity.frequencies, transform.frequencies)
+    canonical, _ = connectivity.canonical_coherence([0, 1])
+    mic, _ = connectivity.maximized_imaginary_coherency([0, 1])
+    assert canonical.shape[-3] == 3
+    assert mic.shape[-3] == 3
+    with pytest.raises(ValueError, match="full two-sided spectrum"):
+        connectivity.pairwise_spectral_granger_prediction()
+
+
+def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
+    data = np.random.default_rng(402).standard_normal((256, 4, 2))
+    default = Multitaper(data, sampling_frequency=128, time_halfbandwidth_product=3)
+    uniform = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="uniform",
+    )
+    eigen = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="eigen",
+    )
+    adaptive = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="adaptive",
+    )
+
+    np.testing.assert_array_equal(default.fft(), uniform.fft())
+    assert eigen.taper_eigenvalues is not None
+    assert len(eigen.taper_eigenvalues) == eigen.fft().shape[2]
+    assert np.all(np.isfinite(eigen.fft()))
+    assert np.all(np.isfinite(adaptive.fft()))
+    assert not np.allclose(adaptive.fft(), uniform.fft())
+
+
+def test_nonuniform_weighting_rejects_custom_tapers():
+    with pytest.raises(ValueError, match="custom tapers"):
+        Multitaper(
+            np.ones((64, 2, 2)),
+            sampling_frequency=64,
+            time_halfbandwidth_product=2,
+            n_tapers=3,
+            tapers=np.ones((64, 3)),
+            taper_weighting="adaptive",
+        )
