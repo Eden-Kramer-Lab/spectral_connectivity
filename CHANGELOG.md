@@ -55,7 +55,9 @@ directly with results from 2.x.
   core's order. **This changes the DataArray contract from position-driven to
   name-driven:** domain-specific names must be assigned with `time_dim`,
   `trial_dim`, and `signal_dim`, and ambiguous dimensions raise instead of
-  falling back to axis position. Numeric time coordinates are treated as
+  falling back to axis position; when a single unrecognized dimension is
+  assigned to the one remaining role by elimination, a warning names the assumed
+  mapping. Numeric time coordinates are treated as
   elapsed seconds, numeric sample coordinates as sample numbers, and are used
   for output window times. `sampling_frequency` is now optional for a DataArray:
   when omitted it is inferred from a numeric elapsed-seconds `time` coordinate

@@ -5,7 +5,7 @@ import warnings
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, NamedTuple, TypeAlias
 
 import numpy as np
 import xarray as xr
@@ -19,6 +19,9 @@ logger = getLogger(__name__)
 
 _UNSET = object()
 
+# Per-element type of a signal label. The array-level invariants -- homogeneous
+# dtype, uniqueness, no missing values, int32 range -- cannot be expressed in an
+# element union and are enforced in ``_validated_signal_labels``.
 _SignalLabel: TypeAlias = (
     str
     | bytes
@@ -33,6 +36,22 @@ _SignalLabel: TypeAlias = (
     | np.datetime64
     | np.timedelta64
 )
+
+
+class _TimeAxis(NamedTuple):
+    """Resolved time axis: an inferred rate (None if given) and start time."""
+
+    inferred_sampling_frequency: float | None
+    start_time: float | None
+
+
+class _UnwrappedInput(NamedTuple):
+    """Array data plus what a DataArray contributed, named to avoid swaps."""
+
+    data: BackendArray
+    signal_names: Sequence[_SignalLabel] | None
+    inferred_sampling_frequency: float | None
+    inferred_start_time: float | None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -114,12 +133,23 @@ def _store_provenance_item(
     A scalar is stored as-is; a structured or non-finite value is stored as a
     canonical JSON string under ``<prefix><key>_json`` so a consumer knows to
     ``json.loads`` it (mirrors the ``arg_<key>`` / ``arg_<key>_json`` split).
+    Raises ``ValueError`` on a name collision (e.g. a structured ``x`` and a
+    scalar ``x_json`` both mapping to ``<prefix>x_json``) rather than silently
+    overwriting the earlier value; ``measure_kwargs_json`` remains the canonical
+    full record.
     """
     netcdf_value = _netcdf_provenance_value(value)
     if isinstance(netcdf_value, str) and not isinstance(value, str):
-        attrs[f"{prefix}{key}_json"] = netcdf_value
+        attr_name = f"{prefix}{key}_json"
     else:
-        attrs[f"{prefix}{key}"] = netcdf_value
+        attr_name = f"{prefix}{key}"
+    if attr_name in attrs:
+        raise ValueError(
+            f"Provenance attribute {attr_name!r} is assigned twice; two keys "
+            f"(one of them {key!r}) collide under the {prefix!r} namespace. "
+            "Rename the offending argument."
+        )
+    attrs[attr_name] = netcdf_value
 
 
 class UnsupportedMeasureError(ValueError):
@@ -160,6 +190,14 @@ class _MeasureSpec:
     # (source, target) axes read source -> target; symmetric measures are
     # unaffected by the transpose.
     is_directed: bool = False
+
+    def __post_init__(self) -> None:
+        # Make the field couplings unrepresentable rather than merely unused, so
+        # a future registry entry cannot silently violate them.
+        if self.is_directed and self.output_kind != "pairwise":
+            raise ValueError("is_directed requires output_kind='pairwise'.")
+        if self.is_default and self.output_kind == "unsupported":
+            raise ValueError("an unsupported measure cannot be a default.")
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
@@ -590,7 +628,21 @@ def _resolve_dataarray_dimensions(
         dimension for dimension in time_series.dims if dimension not in used_dimensions
     ]
     if len(unresolved_roles) == 1 and len(unused_dimensions) == 1:
-        resolved[unresolved_roles[0]] = unused_dimensions[0]
+        # One role and one unrecognized dimension remain, so the mapping is
+        # determined by elimination. Warn: whether an axis is the trial axis
+        # decides whether it is averaged away, so a wrong guess here silently
+        # changes the science. The caller can silence this by naming the role.
+        assumed_role = unresolved_roles[0]
+        assumed_dimension = unused_dimensions[0]
+        warnings.warn(
+            f"Assuming DataArray dimension {assumed_dimension!r} is the "
+            f"{assumed_role} axis because it is the only unassigned dimension. "
+            f"Pass {assumed_role}_dim explicitly to silence this warning, or if "
+            "the mapping is wrong.",
+            UserWarning,
+            stacklevel=4,
+        )
+        resolved[assumed_role] = assumed_dimension
         unresolved_roles.clear()
     if unresolved_roles:
         arguments = ", ".join(f"{role}_dim" for role in unresolved_roles)
@@ -608,7 +660,7 @@ def _time_axis_from_dataarray(
     time_dimension: Hashable,
     sampling_frequency: float | None,
     explicit_start_time: Any = _UNSET,
-) -> tuple[float | None, float | None]:
+) -> _TimeAxis:
     """Resolve the sampling rate and start time from a numeric time index.
 
     Returns ``(inferred_sampling_frequency, start_time)``. When
@@ -616,7 +668,8 @@ def _time_axis_from_dataarray(
     it and ``inferred_sampling_frequency`` is ``None``. When it is ``None``, the
     rate is inferred from a numeric ``time`` (elapsed-seconds) coordinate; an
     integer ``sample`` coordinate carries no time scale and cannot supply one.
-    Returns ``(None, None)`` when the dimension has no numeric time coordinate.
+    Returns ``(None, None)`` when the dimension carries no recognized time
+    coordinate at all (a non-numeric time coordinate raises instead).
     """
     candidates = [
         (name, coordinate)
@@ -625,7 +678,7 @@ def _time_axis_from_dataarray(
         and (name == time_dimension or _dimension_role(name) == "time")
     ]
     if not candidates:
-        return None, None
+        return _TimeAxis(None, None)
     exact_time = [item for item in candidates if str(item[0]).lower() == "time"]
     semantic_auxiliary = [
         item
@@ -658,8 +711,10 @@ def _time_axis_from_dataarray(
         raise TypeError(
             f"The DataArray time coordinate {coordinate_name!r} must contain "
             "numeric elapsed seconds, or integer-like sample numbers for a "
-            "'sample' coordinate. Datetime, timedelta, and object time "
-            "coordinates are not yet supported."
+            "'sample' coordinate. Datetime, timedelta, complex, boolean, and "
+            f"object time coordinates are not yet supported (got dtype "
+            f"{values.dtype!r}). Convert a datetime axis to elapsed seconds, "
+            "e.g. (da.time - da.time[0]) / np.timedelta64(1, 's')."
         )
 
     times = values.astype(np.float64, copy=False)
@@ -815,7 +870,7 @@ def _time_axis_from_dataarray(
                 f"DataArray time coordinate {inferred_start_time!r}. Remove "
                 "start_time or make the values agree."
             )
-    return inferred_sampling_frequency, inferred_start_time
+    return _TimeAxis(inferred_sampling_frequency, inferred_start_time)
 
 
 def _signal_labels_from_dataarray(
@@ -823,10 +878,11 @@ def _signal_labels_from_dataarray(
 ) -> Sequence[_SignalLabel] | None:
     """Signal labels from a 1-D index coordinate on the signal dimension.
 
-    Returns ``None`` (default integer labels used downstream) when the signal
-    dimension has no usable 1-D index coordinate. If the DataArray *does* carry
-    coordinates along that dimension but none is a usable 1-D index coordinate,
-    warn rather than silently dropping the user's labels.
+    Returns ``None`` (default string, i.e. stringified-index, labels used
+    downstream) when the signal dimension has no usable 1-D index coordinate. If
+    the DataArray *does* carry coordinates along that dimension but none is a
+    usable 1-D index coordinate, warn rather than silently dropping the user's
+    labels.
     """
     # Membership, not ``coords.get``: ``.get`` fabricates a default integer
     # index for a bare dimension, which would mask the no-coordinate case.
@@ -845,7 +901,7 @@ def _signal_labels_from_dataarray(
         warnings.warn(
             f"The input DataArray has coordinates along its signal dimension "
             f"{signal_dimension!r} that are not a 1-D index coordinate, so "
-            f"signal labels could not be inferred; default integer labels will "
+            f"signal labels could not be inferred; default string labels will "
             f"be used. Pass ``signal_names`` explicitly, or attach a 1-D "
             f"coordinate named {signal_dimension!r} to label the output "
             f"source/target axes.",
@@ -878,7 +934,7 @@ def _unwrap_xarray_input(
     trial_dim: Hashable | None,
     signal_dim: Hashable | None,
     explicit_start_time: Any = _UNSET,
-) -> tuple[BackendArray, Sequence[_SignalLabel] | None, float | None, float | None]:
+) -> _UnwrappedInput:
     """Extract array data and, when available, labels from a DataArray input.
 
     Semantic dimensions are inferred from common names or supplied explicitly,
@@ -896,7 +952,7 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an "
                 "xarray.DataArray input."
             )
-        return time_series, signal_names, None, None
+        return _UnwrappedInput(time_series, signal_names, None, None)
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -917,7 +973,9 @@ def _unwrap_xarray_input(
 
     data = time_series.transpose(*dimension_order).data
     _reject_unmaterialized_backing(data)
-    return data, signal_names, inferred_sampling_frequency, inferred_start_time
+    return _UnwrappedInput(
+        data, signal_names, inferred_sampling_frequency, inferred_start_time
+    )
 
 
 def multitaper_connectivity(
@@ -1056,6 +1114,18 @@ def multitaper_connectivity(
     >>> list(measures.data_vars)
     ['coherence_magnitude', 'imaginary_coherence']
 
+    >>> # An xarray.DataArray labels axes by dimension name and can supply the
+    >>> # sampling rate and channel labels itself (no sampling_frequency needed).
+    >>> import xarray as xr
+    >>> da = xr.DataArray(
+    ...     data,
+    ...     dims=("time", "channel"),
+    ...     coords={"time": t, "channel": ["Signal_1", "Signal_2"]},
+    ... )
+    >>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+    >>> coherence.coords["source"].values.tolist()
+    ['Signal_1', 'Signal_2']
+
     Notes
     -----
     Uses multitaper spectral estimation for robust power spectral density
@@ -1086,6 +1156,11 @@ def multitaper_connectivity(
       carried over from an input ``xarray.DataArray`` (e.g. subject or session
       metadata). Keeping the complete mapping in one record preserves arbitrary
       keys without collisions or invalid NetCDF attribute names.
+
+    JSON records are canonical for scalar, numpy, mapping, and sequence values.
+    A value outside those kinds is recorded best-effort via its ``repr``, which
+    may embed a memory address and is therefore not guaranteed reproducible
+    across runs.
 
     References
     ----------
@@ -1193,9 +1268,13 @@ def multitaper_connectivity(
                 input_attrs=input_attrs,
                 **connectivity_kwargs,
             )
-        except (NotImplementedError, UnsupportedMeasureError) as e:
-            # Structural incompatibility can be skipped in a batch. Other
-            # computation errors are intentionally not caught.
+        except UnsupportedMeasureError as e:
+            # A measure whose result shape does not fit the xarray layout can be
+            # skipped in a batch. Every in-package structural incompatibility is
+            # already surfaced as UnsupportedMeasureError by ``_get_measure_spec``
+            # before the measure runs; a genuine NotImplementedError from the
+            # numeric/backend path is *not* caught, so a broken measure fails
+            # loudly instead of silently vanishing from the Dataset.
             if len(method) == 1:
                 raise
             logger.warning("Skipping %s: %s", this_method, e)

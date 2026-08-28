@@ -14,6 +14,7 @@ from spectral_connectivity.wrapper import (
     UnsupportedMeasureError,
     _canonical_json,
     _json_compatible,
+    _MeasureSpec,
     _netcdf_provenance_value,
     _reject_unmaterialized_backing,
     connectivity_to_xarray,
@@ -22,15 +23,13 @@ from spectral_connectivity.wrapper import (
 
 
 @mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
-@mark.parametrize("dtype", [np.complex64, np.complex128])
-def test_multitaper_coherence_magnitude(time_window_duration, dtype):
-    np.random.default_rng(42)
+def test_multitaper_coherence_magnitude(time_window_duration):
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     start_time, end_time = 0, 4.8
     n_trials, n_signals = 10, 2
     n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    # time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
     expected_time = np.arange(start_time, end_time, time_window_duration)
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
@@ -439,6 +438,124 @@ def test_dataarray_unrecognized_dimensions_require_explicit_roles():
     xr.testing.assert_identical(actual, expected)
 
 
+def test_dataarray_single_unrecognized_dimension_warns_before_assuming_role():
+    """The by-elimination role assignment is not silent (it could average data)."""
+    raw = np.random.default_rng(40).standard_normal((256, 4, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "drug_dose", "channel"),
+        coords={"channel": ["left", "right"]},
+    )
+    with pytest.warns(UserWarning, match=r"Assuming.*'drug_dose'.*trial axis"):
+        result = multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+    # Naming the role silences the warning and gives the same result.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        explicit = multitaper_connectivity(
+            data,
+            sampling_frequency=256,
+            method="coherence_magnitude",
+            trial_dim="drug_dose",
+        )
+    xr.testing.assert_identical(result, explicit)
+
+
+def test_dataarray_explicit_role_conflicting_with_recognized_name_is_rejected():
+    data = xr.DataArray(
+        np.random.default_rng(41).standard_normal((256, 2)),
+        dims=("time", "channel"),
+    )
+    with pytest.raises(ValueError, match="conflicts with its recognized"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="power", signal_dim="time"
+        )
+
+
+def test_dataarray_two_dimensions_inferring_same_role_are_rejected():
+    data = xr.DataArray(
+        np.random.default_rng(42).standard_normal((256, 3, 2)),
+        dims=("channel", "electrode", "time"),
+    )
+    with pytest.raises(ValueError, match="both denote the signal axis"):
+        multitaper_connectivity(data, sampling_frequency=256, method="power")
+
+
+def test_dataarray_trial_dim_rejected_for_2d_input():
+    data = xr.DataArray(
+        np.random.default_rng(43).standard_normal((256, 2)),
+        dims=("time", "channel"),
+    )
+    with pytest.raises(ValueError, match="trial_dim cannot be used with a 2-D"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="power", trial_dim="channel"
+        )
+
+
+def test_dataarray_explicit_dim_naming_nonexistent_dimension_is_rejected():
+    data = xr.DataArray(
+        np.random.default_rng(44).standard_normal((256, 2)),
+        dims=("time", "channel"),
+    )
+    with pytest.raises(ValueError, match="is not an input dimension"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="power", signal_dim="nope"
+        )
+
+
+def test_dataarray_same_dimension_assigned_to_two_roles_is_rejected():
+    data = xr.DataArray(
+        np.random.default_rng(45).standard_normal((256, 2)),
+        dims=("a", "b"),
+    )
+    with pytest.raises(ValueError, match="was assigned to both"):
+        multitaper_connectivity(
+            data,
+            sampling_frequency=256,
+            method="power",
+            time_dim="a",
+            signal_dim="a",
+        )
+
+
+def test_dataarray_ambiguous_time_coordinates_are_rejected():
+    raw = np.random.default_rng(46).standard_normal((128, 2))
+    seconds = np.arange(raw.shape[0]) / 64.0
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={
+            "timestamp": ("time", seconds),
+            "times": ("time", seconds),
+            "channel": ["left", "right"],
+        },
+    )
+    with pytest.raises(ValueError, match="Multiple coordinates"):
+        multitaper_connectivity(data, sampling_frequency=64, method="power")
+
+
+def test_dataarray_non_scalar_start_time_is_rejected():
+    raw = np.random.default_rng(47).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": np.arange(raw.shape[0]) / 64.0},
+    )
+    with pytest.raises(ValueError, match="requires scalar start_time"):
+        multitaper_connectivity(
+            data, sampling_frequency=64, method="power", start_time=[0, 1]
+        )
+
+
+def test_measure_spec_rejects_inconsistent_field_combinations():
+    """Illegal capability combinations are unrepresentable, not merely unused."""
+    with pytest.raises(ValueError, match="is_directed requires"):
+        _MeasureSpec("power", is_directed=True)
+    with pytest.raises(ValueError, match="unsupported measure cannot be a default"):
+        _MeasureSpec("unsupported", is_default=True)
+
+
 def test_dataarray_numeric_time_coordinate_sets_output_time():
     """A numeric time index supplies the transform's start time in seconds."""
     sampling_frequency = 64
@@ -540,8 +657,11 @@ def test_dataarray_datetime_time_coordinate_has_conversion_hint():
         coords={"time": time, "channel": ["left", "right"]},
     )
 
-    with pytest.raises(TypeError, match="not yet supported"):
+    with pytest.raises(TypeError, match="not yet supported") as excinfo:
         multitaper_connectivity(data, sampling_frequency=1, method="power")
+    # The message names the offending dtype and gives a copy-paste conversion.
+    assert "M8" in str(excinfo.value) or "datetime64" in str(excinfo.value)
+    assert "np.timedelta64(1, 's')" in str(excinfo.value)
 
 
 def test_dataarray_time_spacing_must_match_sampling_frequency():
@@ -1303,6 +1423,44 @@ def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
     }
     # Structured provenance must not break NetCDF serialization.
     da.to_netcdf(tmp_path / "args.nc")
+
+
+def test_provenance_arg_key_collision_raises_instead_of_overwriting(monkeypatch):
+    """A structured ``x`` and a scalar ``x_json`` cannot silently share a key."""
+    rng = np.random.default_rng(3)
+    m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
+
+    def stub_measure(connectivity, **kwargs):
+        return np.zeros(
+            (
+                len(connectivity.time),
+                len(connectivity.frequencies),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            )
+        )
+
+    monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
+
+    with pytest.raises(ValueError, match="assigned twice"):
+        connectivity_to_xarray(m, method="stub_measure", x=[1, 2, 3], x_json=5)
+
+
+def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
+    """A genuine NotImplementedError is not swallowed into a missing variable."""
+    rng = np.random.default_rng(9)
+
+    def broken_measure(connectivity):
+        raise NotImplementedError("backend cannot compute this")
+
+    monkeypatch.setattr(Connectivity, "broken_measure", broken_measure, raising=False)
+
+    with pytest.raises(NotImplementedError, match="backend cannot compute"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 4, 2)),
+            sampling_frequency=256,
+            method=["coherence_magnitude", "broken_measure"],
+        )
 
 
 def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):

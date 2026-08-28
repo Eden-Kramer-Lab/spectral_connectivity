@@ -87,7 +87,13 @@ portable NetCDF3 serialization.
 
 Datetime, timedelta, and object-valued **time coordinates** are not yet
 supported. Convert them to numeric elapsed seconds before calling
-`multitaper_connectivity`; datetime and timedelta **signal labels** remain valid.
+`multitaper_connectivity`, for example:
+
+```python
+da = da.assign_coords(time=(da.time - da.time[0]) / np.timedelta64(1, "s"))
+```
+
+datetime and timedelta **signal labels** remain valid.
 
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as
