@@ -678,6 +678,16 @@ def _time_axis_from_dataarray(
     ]
     if not candidates:
         return _TimeAxis(None, None)
+    if sampling_frequency is not None and (
+        not np.isfinite(sampling_frequency) or sampling_frequency <= 0
+    ):
+        # This path takes the reciprocal of the rate below; validate up front so
+        # a bad value gives a clear message instead of a raw ZeroDivisionError or
+        # a misleading coordinate-spacing error.
+        raise ValueError(
+            "sampling_frequency must be a positive, finite number for a "
+            f"DataArray with a numeric time coordinate; got {sampling_frequency!r}."
+        )
     exact_time = [item for item in candidates if str(item[0]).lower() == "time"]
     semantic_auxiliary = [
         item
@@ -686,11 +696,14 @@ def _time_axis_from_dataarray(
     ]
     if len(exact_time) == 1:
         coordinate_name, coordinate = exact_time[0]
-    elif len(semantic_auxiliary) == 1:
+    elif not exact_time and len(semantic_auxiliary) == 1:
         coordinate_name, coordinate = semantic_auxiliary[0]
-    elif len(candidates) == 1:
+    elif not exact_time and len(candidates) == 1:
         coordinate_name, coordinate = candidates[0]
     else:
+        # Falls through here when several coordinates are case-insensitively
+        # "time" (len(exact_time) > 1): that is genuinely ambiguous, not a cue to
+        # silently prefer an auxiliary coordinate.
         coordinate_names = [name for name, _ in candidates]
         raise ValueError(
             f"Multiple coordinates {coordinate_names!r} could label time "

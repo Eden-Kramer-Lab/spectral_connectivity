@@ -537,6 +537,36 @@ def test_dataarray_ambiguous_time_coordinates_are_rejected():
         multitaper_connectivity(data, sampling_frequency=64, method="power")
 
 
+def test_dataarray_case_insensitive_duplicate_time_coordinates_are_rejected():
+    """Two coordinates that are both case-insensitively 'time' are ambiguous."""
+    raw = np.random.default_rng(48).standard_normal((128, 2))
+    seconds = np.arange(raw.shape[0]) / 64.0
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={
+            "time": seconds,
+            "TIME": ("time", 100.0 + seconds),
+            "channel": ["left", "right"],
+        },
+    )
+    with pytest.raises(ValueError, match="Multiple coordinates"):
+        multitaper_connectivity(data, sampling_frequency=64, method="power")
+
+
+@pytest.mark.parametrize("bad_rate", [0, -64, float("nan"), float("inf")])
+def test_dataarray_nonpositive_sampling_frequency_is_rejected(bad_rate):
+    """A non-positive/non-finite rate raises a clear error, not ZeroDivisionError."""
+    raw = np.random.default_rng(49).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": np.arange(raw.shape[0]) / 64.0},
+    )
+    with pytest.raises(ValueError, match="sampling_frequency must be a positive"):
+        multitaper_connectivity(data, sampling_frequency=bad_rate, method="power")
+
+
 def test_dataarray_non_scalar_start_time_is_rejected():
     raw = np.random.default_rng(47).standard_normal((128, 2))
     data = xr.DataArray(
