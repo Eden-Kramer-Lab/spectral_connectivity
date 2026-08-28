@@ -98,6 +98,24 @@ def test_power(dtype):
     assert np.allclose(expected_power, this_Conn.power())
 
 
+@mark.parametrize("n_fft_samples", [5, 6])
+def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
+    n_fft_samples,
+):
+    """CSD uses the same one-sided scaling as public power."""
+    rng = np.random.default_rng(101)
+    coefficients = rng.standard_normal((2, 3, 2, n_fft_samples, 3)) + 1j * (
+        rng.standard_normal((2, 3, 2, n_fft_samples, 3))
+    )
+    conn = Connectivity(coefficients)
+    csd = conn.cross_spectral_density()
+
+    assert csd.shape == (2, n_fft_samples // 2 + 1, 3, 3)
+    np.testing.assert_allclose(csd, np.conj(np.swapaxes(csd, -1, -2)))
+    diagonal = np.diagonal(csd, axis1=-2, axis2=-1).real
+    np.testing.assert_allclose(diagonal, conn.power())
+
+
 @mark.parametrize(
     "expectation_type, expected_shape",
     [("trials_tapers", (1, 4, 5)), ("trials", (1, 3, 4, 5)), ("tapers", (1, 2, 4, 5))],
@@ -177,6 +195,45 @@ def test_imaginary_coherence():
     )
 
 
+def test_imaginary_coherency_preserves_pair_orientation():
+    coefficients = np.empty((1, 8, 1, 1, 2), dtype=complex)
+    coefficients[..., 0] = np.exp(1j * np.pi / 2)
+    coefficients[..., 1] = 1.0
+    signed = Connectivity(coefficients).imaginary_coherency().squeeze()
+
+    assert signed[0, 1] == pytest.approx(1.0)
+    assert signed[1, 0] == pytest.approx(-1.0)
+    assert np.isnan(signed[0, 0])
+
+
+def test_partial_coherence_matches_inverse_spectral_matrix_definition():
+    rng = np.random.default_rng(102)
+    coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
+        rng.standard_normal((1, 200, 3, 4, 3))
+    )
+    conn = Connectivity(coefficients)
+    actual = conn.partial_coherence(regularization=1e-10)
+
+    spectrum = conn._expectation_cross_spectral_matrix()
+    scale = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1), keepdims=True))
+    identity = np.eye(3)
+    precision = np.linalg.solve(spectrum + 1e-10 * scale * identity, identity)
+    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
+    denominator = np.sqrt(diagonal[..., :, None] * diagonal[..., None, :])
+    expected = np.abs(-precision / denominator) ** 2
+    index = np.arange(3)
+    expected[..., index, index] = np.nan
+
+    np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
+
+
+@mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])
+def test_partial_coherence_rejects_invalid_regularization(regularization):
+    coefficients = np.ones((1, 2, 2, 2, 2), dtype=complex)
+    with pytest.raises(ValueError, match="regularization"):
+        Connectivity(coefficients).partial_coherence(regularization=regularization)
+
+
 def test_phase_locking_value():
     """Make sure phase locking value ignores magnitudes."""
     rng = np.random.default_rng(42)
@@ -194,6 +251,23 @@ def test_phase_locking_value():
     assert np.allclose(
         np.angle(this_Conn.phase_locking_value()), expected_phase_locking_value_angle
     )
+
+
+def test_corrected_imaginary_phase_locking_value():
+    """ciPLV rejects zero lag and retains consistent quadrature locking."""
+    zero_lag = np.ones((1, 10, 1, 1, 2), dtype=complex)
+    zero_result = (
+        Connectivity(zero_lag).corrected_imaginary_phase_locking_value().squeeze()
+    )
+    assert zero_result[0, 1] == 0.0
+
+    quadrature = zero_lag.copy()
+    quadrature[..., 0] = 1j
+    quadrature_result = (
+        Connectivity(quadrature).corrected_imaginary_phase_locking_value().squeeze()
+    )
+    assert quadrature_result[0, 1] == pytest.approx(1.0)
+    assert quadrature_result[1, 0] == pytest.approx(1.0)
 
 
 def test_phase_lag_index_sets_zero_phase_signals_to_zero():
@@ -229,6 +303,58 @@ def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
     assert np.allclose(this_Conn.phase_lag_index().squeeze(), expected_phase_lag_index)
+
+
+def test_directed_phase_lag_index_orientation_and_complement():
+    coefficients = np.empty((1, 12, 1, 1, 2), dtype=complex)
+    coefficients[..., 0] = np.exp(1j * np.pi / 2)
+    coefficients[..., 1] = 1.0
+    dpli = Connectivity(coefficients).directed_phase_lag_index().squeeze()
+
+    assert dpli[0, 1] == 1.0
+    assert dpli[1, 0] == 0.0
+    assert dpli[0, 0] == 0.5
+    np.testing.assert_allclose(dpli + dpli.T, 1.0)
+
+
+def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
+    coefficients = np.empty((1, 20, 2, 1, 2), dtype=complex)
+    coefficients[..., 0] = 1j
+    coefficients[..., 1] = 1.0
+    conn = Connectivity(coefficients)
+
+    mic, mic_labels = conn.maximized_imaginary_coherency([0, 1])
+    mim, mim_labels = conn.multivariate_interaction_measure([0, 1])
+
+    np.testing.assert_array_equal(mic_labels, [0, 1])
+    np.testing.assert_array_equal(mim_labels, [0, 1])
+    assert mic.squeeze()[0, 1] == pytest.approx(1.0)
+    assert mim.squeeze()[0, 1] == pytest.approx(1.0)
+    assert np.isnan(mic.squeeze()[0, 0])
+
+
+def test_mic_and_mim_are_invariant_to_within_group_real_mixing():
+    rng = np.random.default_rng(103)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    labels = np.array([0, 0, 1, 1])
+    original = Connectivity(coefficients)
+
+    first_mix = np.array([[2.0, 0.4], [-0.3, 1.2]])
+    second_mix = np.array([[0.8, -0.2], [0.5, 1.7]])
+    mixed = coefficients.copy()
+    mixed[..., :2] = np.einsum("...i,ji->...j", coefficients[..., :2], first_mix)
+    mixed[..., 2:] = np.einsum("...i,ji->...j", coefficients[..., 2:], second_mix)
+    transformed = Connectivity(mixed)
+
+    original_mic, _ = original.maximized_imaginary_coherency(labels)
+    mixed_mic, _ = transformed.maximized_imaginary_coherency(labels)
+    original_mim, _ = original.multivariate_interaction_measure(labels)
+    mixed_mim, _ = transformed.multivariate_interaction_measure(labels)
+
+    np.testing.assert_allclose(mixed_mic, original_mic, rtol=1e-9, atol=1e-10)
+    np.testing.assert_allclose(mixed_mim, original_mim, rtol=1e-9, atol=1e-10)
 
 
 def test_weighted_phase_lag_index_sets_zero_phase_signals_to_zero():
@@ -2156,3 +2282,35 @@ def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
         with pytest.warns(UserWarning, match="zero magnitude"):
             result = getattr(conn, measure)()
     assert np.isnan(result).any()
+
+
+def test_connectivity_jackknife_recomputes_leave_one_out_measure():
+    rng = np.random.default_rng(510)
+    coefficients = rng.standard_normal((1, 4, 3, 16, 2)) + 1j * rng.standard_normal(
+        (1, 4, 3, 16, 2)
+    )
+    connectivity = Connectivity(coefficients)
+
+    result = connectivity.jackknife("coherence_magnitude")
+
+    assert result.n_observations == 12
+    assert result.transformation == "fisher"
+    assert result.estimate.shape == (1, 9, 2, 2)
+    assert result.standard_error.shape == result.estimate.shape
+    off_diagonal = result.estimate[..., 0, 1]
+    assert np.all(result.confidence_interval[0][..., 0, 1] <= off_diagonal)
+    assert np.all(result.confidence_interval[1][..., 0, 1] >= off_diagonal)
+
+
+def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result():
+    rng = np.random.default_rng(511)
+    coefficients = rng.standard_normal((1, 3, 2, 12, 2)) + 1j * rng.standard_normal(
+        (1, 3, 2, 12, 2)
+    )
+    connectivity = Connectivity(coefficients)
+
+    power = connectivity.jackknife("power")
+    assert power.transformation == "log"
+    assert np.all(power.confidence_interval[0] > 0)
+    with pytest.raises(TypeError, match="real-valued measure"):
+        connectivity.jackknife("coherency")

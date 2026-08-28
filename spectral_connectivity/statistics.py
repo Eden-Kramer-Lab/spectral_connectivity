@@ -9,6 +9,7 @@ connectivity analysis.
 
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -17,6 +18,128 @@ import scipy.stats
 from numpy.typing import NDArray
 
 from spectral_connectivity.utils import to_numpy
+
+
+@dataclass(frozen=True)
+class JackknifeResult:
+    """Leave-one-observation-out estimate and normal-approximation interval."""
+
+    estimate: NDArray[np.floating]
+    bias_corrected: NDArray[np.floating]
+    standard_error: NDArray[np.floating]
+    confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
+    n_observations: int
+    transformation: str
+
+
+def _identity(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return value
+
+
+def _wrap_phase(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.angle(np.exp(1j * value))
+
+
+def _exponential(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.exp(value)
+
+
+def _hyperbolic_tangent(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.tanh(value)
+
+
+def jackknife_confidence_interval(
+    estimate: NDArray[np.floating],
+    leave_one_out: NDArray[np.floating],
+    *,
+    confidence_level: float = 0.95,
+    transformation: Literal["identity", "log", "fisher", "circular"] = "identity",
+) -> JackknifeResult:
+    """Summarize leave-one-out replicates with a jackknife confidence interval.
+
+    ``leave_one_out`` must have replicate on its first axis. Log transformation
+    is appropriate for positive spectra, Fisher's ``atanh`` for coherence
+    magnitudes, and circular transformation for angles in radians. Reported
+    confidence bounds and bias-corrected estimates are returned on the original
+    scale; the standard error is converted back with the local delta method.
+    """
+    if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
+        raise ValueError(
+            "confidence_level must be finite and strictly between 0 and 1."
+        )
+    if transformation not in {"identity", "log", "fisher", "circular"}:
+        raise ValueError(
+            "transformation must be 'identity', 'log', 'fisher', or 'circular'."
+        )
+    estimate_array = np.asarray(estimate)
+    replicates = np.asarray(leave_one_out)
+    if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
+        raise TypeError("Jackknife intervals require a real-valued measure.")
+    if (
+        replicates.ndim != estimate_array.ndim + 1
+        or replicates.shape[1:] != estimate_array.shape
+    ):
+        raise ValueError(
+            "leave_one_out must have shape (n_observations, *estimate.shape)."
+        )
+    n_observations = replicates.shape[0]
+    if n_observations < 2:
+        raise ValueError("Jackknife inference requires at least 2 observations.")
+
+    if transformation == "identity":
+        transformed_estimate = estimate_array
+        transformed_replicates = replicates
+        inverse = _identity
+        derivative = np.ones_like(estimate_array)
+    elif transformation == "log":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            transformed_estimate = np.where(
+                estimate_array > 0, np.log(estimate_array), np.nan
+            )
+            transformed_replicates = np.where(
+                replicates > 0, np.log(replicates), np.nan
+            )
+        inverse = _exponential
+        derivative = estimate_array
+    elif transformation == "fisher":
+        epsilon = np.finfo(float).eps
+        transformed_estimate = np.arctanh(
+            np.clip(estimate_array, -1 + epsilon, 1 - epsilon)
+        )
+        transformed_replicates = np.arctanh(
+            np.clip(replicates, -1 + epsilon, 1 - epsilon)
+        )
+        inverse = _hyperbolic_tangent
+        derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
+    else:
+        # Unwrap every replicate onto the branch nearest the full estimate.
+        transformed_estimate = estimate_array
+        transformed_replicates = estimate_array + np.angle(
+            np.exp(1j * (replicates - estimate_array))
+        )
+        inverse = _wrap_phase
+        derivative = np.ones_like(estimate_array)
+
+    replicate_mean = np.mean(transformed_replicates, axis=0)
+    bias_corrected_transformed = (
+        n_observations * transformed_estimate - (n_observations - 1) * replicate_mean
+    )
+    transformed_standard_error = np.sqrt(
+        (n_observations - 1)
+        / n_observations
+        * np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
+    )
+    critical_value = scipy.stats.norm.ppf(0.5 + confidence_level / 2)
+    lower = inverse(transformed_estimate - critical_value * transformed_standard_error)
+    upper = inverse(transformed_estimate + critical_value * transformed_standard_error)
+    return JackknifeResult(
+        estimate=estimate_array,
+        bias_corrected=inverse(bias_corrected_transformed),
+        standard_error=np.abs(derivative) * transformed_standard_error,
+        confidence_interval=(lower, upper),
+        n_observations=n_observations,
+        transformation=transformation,
+    )
 
 
 def _require_scipy_false_discovery_control() -> None:

@@ -15,6 +15,7 @@ from spectral_connectivity.statistics import (
     coherence_rate_adjustment,
     coherence_significance_pvalue,
     get_normal_distribution_p_values,
+    jackknife_confidence_interval,
     power_bias,
     power_confidence_intervals,
     power_fisher_z_transform,
@@ -482,3 +483,31 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
     """Negative or non-finite power must raise, not return reversed/NaN bounds."""
     with pytest.raises(ValueError, match="power must be finite and non-negative"):
         power_confidence_intervals(n_tapers=5, power=bad_power, ci=0.95)
+
+
+def test_jackknife_confidence_interval_matches_mean_example():
+    result = jackknife_confidence_interval(
+        np.array(2.0), np.array([2.5, 2.0, 1.5]), confidence_level=0.95
+    )
+
+    assert result.estimate == pytest.approx(2.0)
+    assert result.bias_corrected == pytest.approx(2.0)
+    assert result.standard_error == pytest.approx(np.sqrt(1 / 3))
+    assert result.confidence_interval[0] < result.estimate
+    assert result.confidence_interval[1] > result.estimate
+
+
+def test_jackknife_log_and_circular_transforms_return_original_scale():
+    log_result = jackknife_confidence_interval(
+        np.array(2.0),
+        np.array([1.8, 2.0, 2.2]),
+        transformation="log",
+    )
+    assert log_result.transformation == "log"
+    assert log_result.confidence_interval[0] > 0
+
+    phases = np.array([np.pi - 0.1, -np.pi + 0.1, np.pi - 0.05])
+    circular = jackknife_confidence_interval(
+        np.array(np.pi), phases, transformation="circular"
+    )
+    assert abs(circular.bias_corrected) > 3.0

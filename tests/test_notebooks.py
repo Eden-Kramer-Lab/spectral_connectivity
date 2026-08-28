@@ -1014,10 +1014,6 @@ def test_ding_example1(snapshot):
     assert outputs == snapshot
 
 
-@pytest.mark.skip(
-    reason="conditional_spectral_granger_prediction is not implemented "
-    "(raises NotImplementedError); re-enable when it lands."
-)
 def test_nedungadi_example2(snapshot):
     """Nedungadi Example 2: Conditional Granger (representative example showing confounds)."""
     np.random.seed(42)

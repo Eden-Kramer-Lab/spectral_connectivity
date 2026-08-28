@@ -191,3 +191,31 @@ def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
     anti_causal = result.sel(source="1", target="0").values  # 1 -> 0
     assert np.nanmax(causal) > 0.05, np.nanmax(causal)
     assert np.nanmax(np.abs(anti_causal)) < 1e-8, np.nanmax(np.abs(anti_causal))
+
+
+def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
+    """One-channel blocks and a two-node conditional system reduce to pairwise GC."""
+    connectivity = var_oracle["connectivity"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pairwise = connectivity.pairwise_spectral_granger_prediction()
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction([0, 1])
+        conditional = connectivity.conditional_spectral_granger_prediction()
+
+    np.testing.assert_array_equal(labels, [0, 1])
+    np.testing.assert_allclose(blockwise, pairwise, atol=1e-6, equal_nan=True)
+    np.testing.assert_allclose(conditional, pairwise, atol=1e-6, equal_nan=True)
+
+
+def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
+    """Time reversal makes the originally causal direction predominantly reverse."""
+    connectivity = var_oracle["connectivity"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        reversed_gc = connectivity.time_reversed_spectral_granger_prediction()[0]
+
+    # Original system is 0 -> 1 ([1, 0]); after reversal the [0, 1] direction
+    # must dominate strongly, even though correlated reversed innovations can
+    # leave a small residual in the original direction.
+    assert np.nanmax(reversed_gc[..., 0, 1]) > 0.5
+    assert np.nanmax(reversed_gc[..., 0, 1]) > 10 * np.nanmax(reversed_gc[..., 1, 0])
