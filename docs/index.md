@@ -101,12 +101,14 @@ For finer control, use the `Multitaper` and `Connectivity` classes directly:
 from spectral_connectivity import Multitaper, Connectivity
 
 # Compute multitaper spectral estimate
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
+m = Multitaper(
+    time_series=signals,
+    sampling_frequency=sampling_frequency,
+    time_halfbandwidth_product=time_halfbandwidth_product,
+    time_window_duration=0.060,
+    time_window_step=0.060,
+    start_time=time[0],
+)
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
 # (`from_multitaper` is a backward-compatible alias for the transform-neutral
@@ -114,14 +116,12 @@ m = Multitaper(time_series=signals,
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
-power = c.power() # spectral power
+power = c.power()  # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
-mic = c.maximized_imaginary_coherency_components(
-    brain_area_labels, n_components=2
-)
+mic = c.maximized_imaginary_coherency_components(brain_area_labels, n_components=2)
 ```
 
 The xarray wrappers retain nonstandard scientific shapes instead of flattening

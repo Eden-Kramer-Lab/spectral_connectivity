@@ -189,9 +189,7 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 # Exact Vidaurre CaCoh is complex and component-resolved. Rich MIC uses the
 # same result schema; both include filters, patterns, and group membership.
 cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
-mic = c.maximized_imaginary_coherency_components(
-    brain_area_labels, n_components=2
-)
+mic = c.maximized_imaginary_coherency_components(brain_area_labels, n_components=2)
 ```
 
 The xarray interfaces preserve these non-pairwise contracts as labeled axes:
