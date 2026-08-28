@@ -1850,7 +1850,10 @@ class MorletWavelet:
     smoothing_kernel : {"boxcar", "hann"}, default="boxcar"
         Separable time/frequency weights for the local estimate. ``"boxcar"``
         preserves the historical equal-weight smoothing; ``"hann"`` reduces
-        discontinuities at the neighborhood boundary.
+        discontinuities at the neighborhood boundary. Note that a symmetric Hann
+        window puts zero weight on its endpoints, so a very small window degrades
+        to a near no-op (e.g. ``smoothing_frequency=3`` weights only the centre
+        bin); use a larger window or ``"boxcar"`` for genuine smoothing.
     padding_mode : {"constant", "reflect", "edge"}, default="constant"
         How the time series is extended before convolution. ``"constant"``
         (zero padding) preserves the historical transform.
@@ -2042,7 +2045,15 @@ class MorletWavelet:
         )
 
     def _windowed_validity(self) -> BackendArray:
-        """Strict validity of every time/frequency output neighborhood."""
+        """Strict validity of every time/frequency output neighborhood.
+
+        Cached because ``valid_time_frequency`` and ``observation_weights`` both
+        request it on the same immutable transform (e.g. once each per
+        ``connectivity_to_xarray`` call).
+        """
+        cached = getattr(self, "_windowed_validity_cache", None)
+        if cached is not None:
+            return cached
         validity = xp.asarray(self._base_validity)
         windows = _sliding_window(
             validity,
@@ -2058,12 +2069,12 @@ class MorletWavelet:
                 ((0, 0), (frequency_half_width, frequency_half_width), (0, 0)),
                 mode=frequency_mode,
             )
-            windows = _sliding_window(
-                windows, self.smoothing_frequency, axis=1
-            )
+            windows = _sliding_window(windows, self.smoothing_frequency, axis=1)
         else:
             windows = windows[..., xp.newaxis]
-        return xp.all(windows, axis=(-2, -1))
+        result = xp.all(windows, axis=(-2, -1))
+        self._windowed_validity_cache = result
+        return result
 
     @property
     def valid_time_frequency(self) -> NDArray[np.bool_]:
@@ -2099,7 +2110,9 @@ class MorletWavelet:
         )
         weights = xp.broadcast_to(kernel, shape).copy()
         if self.edge_mode == "nan":
-            weights *= self._windowed_validity()[:, xp.newaxis, xp.newaxis, :, xp.newaxis]
+            weights *= self._windowed_validity()[
+                :, xp.newaxis, xp.newaxis, :, xp.newaxis
+            ]
         return _readonly_array_copy(weights)
 
     def fft(self) -> NDArray[np.complexfloating]:
@@ -2129,9 +2142,9 @@ class MorletWavelet:
                 ((half_width, half_width), (0, 0), (0, 0)),
                 mode=self.padding_mode,
             )
-            coefficient = fftconvolve(
-                padded, kernel, mode="valid", axes=0
-            ) / xp.sqrt(self.sampling_frequency)
+            coefficient = fftconvolve(padded, kernel, mode="valid", axes=0) / xp.sqrt(
+                self.sampling_frequency
+            )
             coefficients.append(coefficient[self._sample_indices])
 
         transformed = xp.stack(coefficients, axis=2)
@@ -2146,13 +2159,16 @@ class MorletWavelet:
             frequency_mode = "reflect" if transformed.shape[2] > 1 else "edge"
             windows = xp.pad(
                 windows,
-                ((0, 0), (0, 0), (frequency_half_width, frequency_half_width),
-                 (0, 0), (0, 0)),
+                (
+                    (0, 0),
+                    (0, 0),
+                    (frequency_half_width, frequency_half_width),
+                    (0, 0),
+                    (0, 0),
+                ),
                 mode=frequency_mode,
             )
-            windows = _sliding_window(
-                windows, self.smoothing_frequency, axis=2
-            )
+            windows = _sliding_window(windows, self.smoothing_frequency, axis=2)
         else:
             windows = windows[..., xp.newaxis]
         windows = xp.transpose(windows, (0, 1, 4, 5, 2, 3))

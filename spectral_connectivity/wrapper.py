@@ -712,7 +712,7 @@ def _connectivity_result_to_xarray(
             **signal_coordinates,
         }
         variables = {
-            "group_delay": ("group_delay", np.asarray(delay), "s"),
+            "group_delay": ("Group delay", np.asarray(delay), "s"),
             "group_delay_slope": ("phase slope", np.asarray(slope), "rad/Hz"),
             "group_delay_r_value": (
                 "phase-frequency correlation",
@@ -790,8 +790,19 @@ def _connectivity_result_to_xarray(
             **base_coordinates,
             "connection": np.arange(n_connections),
             "component": np.arange(n_components),
-            "seed_group": ("connection", numerical_result.connections[:, 0]),
-            "target_group": ("connection", numerical_result.connections[:, 1]),
+            # Per-connection group labels on the ``connection`` dimension. Named
+            # distinctly from the ``source_group``/``target_group`` *dimension*
+            # coordinates used by group-pairwise results so the two contracts
+            # never alias (and are silently overwritten) when merged in one
+            # Dataset.
+            "connection_seed_group": (
+                "connection",
+                numerical_result.connections[:, 0],
+            ),
+            "connection_target_group": (
+                "connection",
+                numerical_result.connections[:, 1],
+            ),
             "side": ("side", ["seed", "target"]),
             "signal": ("signal", signal_labels),
             "group": ("group", numerical_result.group_labels),
@@ -806,8 +817,8 @@ def _connectivity_result_to_xarray(
                         "frequency",
                         "connection",
                         "component",
-                        "seed_group",
-                        "target_group",
+                        "connection_seed_group",
+                        "connection_target_group",
                     )
                 },
                 dims=("time", "frequency", "connection", "component"),
@@ -837,8 +848,8 @@ def _connectivity_result_to_xarray(
                 "frequency",
                 "connection",
                 "component",
-                "seed_group",
-                "target_group",
+                "connection_seed_group",
+                "connection_target_group",
                 "side",
                 "signal",
             )
@@ -2340,6 +2351,16 @@ def fourier_connectivity(
             for name in methods
             if _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).is_directed
         ]
+        if directed_methods and one_sided:
+            # The caller already declared one-sided input, so no frequency vector
+            # would enable directed measures -- give the accurate reason.
+            raise ValueError(
+                f"Directed measures {sorted(set(directed_methods))} require a full "
+                "two-sided spectrum in standard FFT order. One-sided transforms "
+                "(is_one_sided=True) support functional connectivity measures but "
+                "not Wilson-factorized directed measures. Request only undirected "
+                "measures, or supply full two-sided coefficients."
+            )
         if directed_methods:
             raise ValueError(
                 f"Directed measures {sorted(set(directed_methods))} require a full "

@@ -97,6 +97,28 @@ class MultivariateConnectivityResult:
     first group and side 1 is the second. Entries for signals outside a side's
     group are NaN. ``connections`` contains the corresponding group-label pair
     for each connection and ``group_membership`` has shape ``(group, signal)``.
+
+    Attributes
+    ----------
+    method : str
+        Name of the measure that produced the result.
+    scores : NDArray[number], shape (..., frequency, connection, component)
+        Per-component connectivity. Complex for ``canonical_coherency``
+        (magnitude times ``exp(-1j * phi)``), real for MIC. A component a
+        connection cannot supply (its smaller group has fewer channels than the
+        requested ``n_components``) is NaN.
+    connections : NDArray, shape (connection, 2)
+        The ``(first_group_label, second_group_label)`` pair for each connection.
+    group_labels : NDArray, shape (group,)
+        Sorted unique group labels.
+    group_membership : NDArray[bool], shape (group, signal)
+        ``True`` where a signal belongs to a group.
+    filters : NDArray[floating] or None, shape (..., frequency, connection, component, side, signal)
+        Spatial filters mapping channel data to each component; NaN outside a
+        side's group.
+    patterns : NDArray[floating] or None, same shape as ``filters``
+        Haufe-style patterns (``within-group real CSD @ filter``) mapping each
+        component back to channel space.
     """
 
     method: str
@@ -1702,6 +1724,43 @@ class Connectivity:
         component-resolved scores, spatial filters, and Haufe-style patterns.
         Additional components are fitted after projection onto the null spaces
         of the previously selected filters.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group; every unordered pair of
+            groups is one connection.
+        rank : int, optional
+            Retain at most this many within-group whitening directions per group.
+            ``None`` keeps every numerically non-zero direction. Applied
+            identically to both groups of every connection.
+        n_components : int, default=1
+            Number of coherency components to return. A connection whose smaller
+            group has fewer channels returns NaN for the unavailable components.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        MultivariateConnectivityResult
+            Complex ``scores`` of shape ``(..., frequency, connection,
+            component)`` plus real filters and patterns; see the class docstring.
+
+        Notes
+        -----
+        **Range**: score magnitudes lie in ``[0, 1]``. This method is currently
+        computed on the CPU with a per-frequency-bin Python loop and a phase
+        search, so it does not use the GPU (``xp``) backend and is markedly
+        slower than the scalar :meth:`canonical_coherence`; prefer the scalar
+        method for large sliding-window analyses that do not need the filters.
+
+        References
+        ----------
+        .. [1] Vidaurre C, et al. (2019) Canonical maximization of coherence: A
+               novel tool for investigation of neuronal interactions between two
+               datasets. NeuroImage 201:116009.
+        .. [2] Haufe S, et al. (2014) On the interpretation of weight vectors of
+               linear models in multivariate neuroimaging. NeuroImage 87:96-110.
         """
         return self._multivariate_component_result(
             "canonical_coherency",
@@ -1724,6 +1783,42 @@ class Connectivity:
         The singular vectors of the whitened imaginary between-group CSD are
         returned in descending singular-value order. Filters map channel data
         to the components; patterns map the components back to channel space.
+        This is the component-resolved counterpart of the scalar
+        :meth:`maximized_imaginary_coherency`.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group; every unordered pair of
+            groups is one connection.
+        rank : int, optional
+            Retain at most this many within-group whitening directions per group.
+            ``None`` keeps every numerically non-zero direction.
+        n_components : int, default=1
+            Number of singular components to return. A connection whose smaller
+            group has fewer channels returns NaN for the unavailable components.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        MultivariateConnectivityResult
+            Real ``scores`` of shape ``(..., frequency, connection, component)``
+            plus filters and patterns; see the class docstring.
+
+        Notes
+        -----
+        **Range**: scores lie in ``[0, 1]``. Like :meth:`canonical_coherency`,
+        this is computed on the CPU with a per-frequency-bin Python loop and does
+        not use the GPU (``xp``) backend; prefer the scalar
+        :meth:`maximized_imaginary_coherency` for large analyses that do not need
+        the filters.
+
+        References
+        ----------
+        .. [1] Ewald A, et al. (2012) Estimating true brain connectivity from EEG/
+               MEG data invariant to linear and static transformations in sensor
+               space. NeuroImage 60(1):476-488.
         """
         return self._multivariate_component_result(
             "maximized_imaginary_coherency_components",
@@ -1761,14 +1856,22 @@ class Connectivity:
                 f"n_components must be a positive integer, got {n_components!r}."
             )
         regularization = _validated_regularization(regularization)
-        max_components = min(
-            min(len(indices) for indices in group_indices),
-            rank if rank is not None else self.n_signals,
-        )
+        rank_cap = rank if rank is not None else self.n_signals
+        # The number of components a connection can support is bounded by the two
+        # groups *in that connection* (and the requested rank), not by the
+        # smallest group overall. Compute the per-connection capacity and reject
+        # only when no connection can supply n_components; connections whose
+        # groups are smaller return NaN for the unavailable components.
+        connection_capacities = [
+            min(len(group_indices[first]), len(group_indices[second]), rank_cap)
+            for first, second in combinations(range(len(labels)), 2)
+        ]
+        max_components = max(connection_capacities)
         if n_components > max_components:
             raise ValueError(
-                f"n_components ({n_components}) must not exceed the minimum "
-                f"group rank/size ({max_components})."
+                f"n_components ({n_components}) must not exceed the largest "
+                f"per-connection group rank/size ({max_components}); no group pair "
+                f"is large enough to supply that many components."
             )
 
         spectrum = to_numpy(self._expectation_cross_spectral_matrix())
@@ -1778,7 +1881,10 @@ class Connectivity:
         leading_shape = spectrum.shape[:-3]
         n_frequencies = spectrum.shape[-3]
         connections = np.asarray(
-            [(labels[first], labels[second]) for first, second in combinations(range(len(labels)), 2)]
+            [
+                (labels[first], labels[second])
+                for first, second in combinations(range(len(labels)), 2)
+            ]
         )
         n_connections = len(connections)
         score_dtype = np.complex128 if method == "canonical_coherency" else float
@@ -1811,6 +1917,9 @@ class Connectivity:
         ):
             first_indices = group_indices[first]
             second_indices = group_indices[second]
+            # This connection can only supply as many components as its smaller
+            # group (and the rank cap); the rest stay NaN in the pre-filled array.
+            component_count = min(n_components, connection_capacities[connection_index])
             for flat_index, full_csd in enumerate(flat_spectrum):
                 Caa = full_csd[np.ix_(first_indices, first_indices)]
                 Cab = full_csd[np.ix_(first_indices, second_indices)]
@@ -1831,7 +1940,7 @@ class Connectivity:
                             Cab,
                             Cbb,
                             rank=rank,
-                            n_components=n_components,
+                            n_components=component_count,
                             regularization=regularization,
                         )
                     )
@@ -1841,18 +1950,45 @@ class Connectivity:
                         Cab,
                         Cbb,
                         rank=rank,
-                        n_components=n_components,
+                        n_components=component_count,
                         regularization=regularization,
                     )
-                flat_scores[flat_index, connection_index] = local_scores
+                flat_scores[flat_index, connection_index, :component_count] = (
+                    local_scores
+                )
                 for side, indices in enumerate((first_indices, second_indices)):
-                    for component in range(n_components):
+                    for component in range(component_count):
                         flat_filters[
                             flat_index, connection_index, component, side, indices
                         ] = local_filters[side][:, component]
                         flat_patterns[
                             flat_index, connection_index, component, side, indices
                         ] = local_patterns[side][:, component]
+
+        # A within-group block that is numerically rank-deficient (collinear or
+        # duplicated channels) makes the whitening zero out its null directions,
+        # so a requested component that lands there comes back with a ~0 score and
+        # an all-zero spatial filter. The math is self-consistent (that direction
+        # carries no coherence), but a caller can misread "component k = 0" as a
+        # finding rather than "the group has no k-th direction". Detect the
+        # all-zero filter columns among computed components and warn once. A
+        # genuinely zero-coherence component keeps a non-zero unit filter, so it
+        # is not flagged.
+        computed_component = np.isfinite(scores)
+        # Filters are NaN outside their group's channels, so sum only the filled
+        # in-group entries; a phantom component's in-group filter is all zero.
+        side_filter_norm = np.sqrt(np.nansum(filters**2, axis=-1))
+        degenerate_side = np.any(side_filter_norm <= 1e-10, axis=-1)
+        if bool(np.any(computed_component & degenerate_side)):
+            warnings.warn(
+                f"{method}: some requested components fall in the null space of a "
+                "rank-deficient within-group cross-spectrum (collinear or "
+                "duplicated channels), so they are returned with a zero score and "
+                "an all-zero spatial filter. Reduce n_components or pass an "
+                "explicit rank to avoid these phantom components.",
+                UserWarning,
+                stacklevel=3,
+            )
 
         return MultivariateConnectivityResult(
             method=method,
@@ -3493,7 +3629,9 @@ def _numpy_inverse_square_root(
     matrix: NDArray[np.floating], *, rank: int | None, regularization: float
 ) -> NDArray[np.floating]:
     """NumPy inverse square root used by component-resolved decompositions."""
-    symmetric = (np.asarray(matrix, dtype=float) + np.asarray(matrix, dtype=float).T) / 2
+    symmetric = (
+        np.asarray(matrix, dtype=float) + np.asarray(matrix, dtype=float).T
+    ) / 2
     eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
     largest = max(float(eigenvalues[-1]), 0.0)
     tolerance = np.finfo(eigenvalues.dtype).eps * max(1, len(eigenvalues)) * largest
@@ -3536,10 +3674,7 @@ def _optimize_canonical_coherency_phase(
     # gives substantially tighter phase accuracy than a grid-only search.
     coarse_phases = np.linspace(0.0, np.pi, 33, endpoint=False)
     coarse_values = np.asarray(
-        [
-            _canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0]
-            for phi in coarse_phases
-        ]
+        [_canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0] for phi in coarse_phases]
     )
     best_index = int(np.nanargmax(coarse_values))
     step = np.pi / len(coarse_phases)
@@ -3630,17 +3765,15 @@ def _mic_components(
     """MIC singular components and channel-space projections for one CSD."""
     real_aa = np.real(Caa)
     real_bb = np.real(Cbb)
-    Taa = _numpy_inverse_square_root(
-        real_aa, rank=rank, regularization=regularization
-    )
-    Tbb = _numpy_inverse_square_root(
-        real_bb, rank=rank, regularization=regularization
-    )
+    Taa = _numpy_inverse_square_root(real_aa, rank=rank, regularization=regularization)
+    Tbb = _numpy_inverse_square_root(real_bb, rank=rank, regularization=regularization)
     transformed = Taa @ np.imag(Cab) @ Tbb
     left, singular_values, right_h = np.linalg.svd(transformed, full_matrices=False)
     left = left[:, :n_components]
     right = right_h[:n_components].T
-    scores = singular_values[:n_components]
+    # MIC is a coherence in [0, 1]; clip roundoff excursions like the scalar
+    # ``maximized_imaginary_coherency`` does.
+    scores = np.clip(singular_values[:n_components], 0.0, 1.0)
     filters_a = Taa @ left
     filters_b = Tbb @ right
     patterns_a = real_aa @ filters_a
