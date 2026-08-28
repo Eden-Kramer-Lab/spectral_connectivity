@@ -1,5 +1,6 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import difflib
 import json
 import warnings
 from collections.abc import Hashable, Mapping, Sequence
@@ -204,9 +205,7 @@ class _MeasureSpec:
             "pairwise",
             "group_pairwise",
         }:
-            raise ValueError(
-                "is_directed requires pairwise or group_pairwise output."
-            )
+            raise ValueError("is_directed requires pairwise or group_pairwise output.")
         if self.is_default and self.output_kind == "unsupported":
             raise ValueError("an unsupported measure cannot be a default.")
 
@@ -259,9 +258,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "maximized_imaginary_coherency": _MeasureSpec("group_pairwise"),
     "multivariate_interaction_measure": _MeasureSpec("group_pairwise"),
     "canonical_coherency": _MeasureSpec("multivariate_components"),
-    "maximized_imaginary_coherency_components": _MeasureSpec(
-        "multivariate_components"
-    ),
+    "maximized_imaginary_coherency_components": _MeasureSpec("multivariate_components"),
     "delay": _MeasureSpec("delay"),
     "global_coherence": _MeasureSpec("global"),
     "group_delay": _MeasureSpec("group_delay"),
@@ -271,6 +268,162 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
 DEFAULT_METHODS: tuple[str, ...] = tuple(
     name for name, spec in _MEASURE_SPECS.items() if spec.is_default
 )
+
+
+@dataclass(frozen=True)
+class MeasureInfo:
+    """A single connectivity measure the high-level wrapper can compute.
+
+    Attributes
+    ----------
+    name : str
+        Value to pass as ``method`` to :func:`multitaper_connectivity` or
+        :func:`fourier_connectivity`, and the name of the corresponding
+        :class:`~spectral_connectivity.Connectivity` method.
+    category : str
+        The output-shape contract, one of ``"pairwise"``, ``"power"``,
+        ``"group_pairwise"``, ``"multivariate_components"``, ``"delay"``,
+        ``"global"``, ``"group_delay"``, or ``"phase_slope"``.
+    description : str
+        One-line summary taken from the ``Connectivity`` method's docstring.
+    is_default : bool
+        Whether the measure is in the default set computed when ``method`` is
+        omitted (see ``DEFAULT_METHODS``).
+    is_directed : bool
+        Whether the measure is directional (``source -> target`` asymmetric).
+    """
+
+    name: str
+    category: str
+    description: str
+    is_default: bool
+    is_directed: bool
+
+
+def _measure_description(name: str) -> str:
+    """Return the one-line summary from a ``Connectivity`` method docstring."""
+    docstring = getattr(Connectivity, name).__doc__ or ""
+    for line in docstring.strip().splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def list_measures(
+    *,
+    category: str | None = None,
+    default_only: bool = False,
+    directed: bool | None = None,
+) -> list[MeasureInfo]:
+    """List the connectivity measures the high-level wrapper can compute.
+
+    This is the discovery entry point: it enumerates every valid ``method``
+    name for :func:`multitaper_connectivity` and :func:`fourier_connectivity`,
+    together with each measure's output category, a one-line description, and
+    whether it is in the default set and/or directional.
+
+    Parameters
+    ----------
+    category : str, optional
+        Return only measures with this output category (e.g. ``"pairwise"``,
+        ``"power"``, ``"group_pairwise"``). Raises ``ValueError`` for an
+        unknown category.
+    default_only : bool, default False
+        Return only the measures computed when ``method`` is omitted.
+    directed : bool, optional
+        If ``True``, return only directional measures; if ``False``, only
+        symmetric ones; if ``None`` (default), return both.
+
+    Returns
+    -------
+    measures : list of MeasureInfo
+        One record per measure, in the wrapper's canonical order.
+
+    Examples
+    --------
+    >>> from spectral_connectivity import list_measures
+    >>> [m.name for m in list_measures(default_only=True)][:3]
+    ['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+    >>> next(m for m in list_measures() if m.name == "power").description
+    'Return the one-sided power spectral density of the signal.'
+    """
+    valid_categories = {spec.output_kind for spec in _MEASURE_SPECS.values()}
+    if category is not None and category not in valid_categories:
+        raise ValueError(
+            f"Unknown category {category!r}. Valid categories are: "
+            f"{', '.join(sorted(valid_categories))}."
+        )
+
+    measures = []
+    for name, spec in _MEASURE_SPECS.items():
+        if default_only and not spec.is_default:
+            continue
+        if category is not None and spec.output_kind != category:
+            continue
+        if directed is not None and spec.is_directed != directed:
+            continue
+        measures.append(
+            MeasureInfo(
+                name=name,
+                category=spec.output_kind,
+                description=_measure_description(name),
+                is_default=spec.is_default,
+                is_directed=spec.is_directed,
+            )
+        )
+    return measures
+
+
+def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
+    """Rank plausible measure names for a misspelled or abbreviated request.
+
+    Substring matches (which handle abbreviations such as ``"granger"``) are
+    preferred over ``difflib`` fuzzy matches (which handle single-character
+    typos), since the former is what mistaken measure names usually look like.
+    """
+    lowered = name.lower()
+    ranked: list[str] = [
+        measure
+        for measure in _MEASURE_SPECS
+        if lowered in measure.lower() or measure.lower() in lowered
+    ]
+    lower_to_name = {measure.lower(): measure for measure in _MEASURE_SPECS}
+    for hit in difflib.get_close_matches(lowered, lower_to_name, n=limit, cutoff=0.5):
+        measure = lower_to_name[hit]
+        if measure not in ranked:
+            ranked.append(measure)
+    return ranked[:limit]
+
+
+def _validate_method_names(methods: Sequence[str]) -> None:
+    """Reject unknown measure names with a helpful, actionable message.
+
+    A name is accepted if it is either a registered measure or any real
+    ``Connectivity`` attribute, so subclass/monkeypatched extension measures
+    (which the wrapper supports) still pass; only names that resolve to nothing
+    are rejected, turning an obscure ``AttributeError`` into an actionable hint.
+    """
+    unknown = [
+        method
+        for method in methods
+        if method not in _MEASURE_SPECS and not hasattr(Connectivity, method)
+    ]
+    if not unknown:
+        return
+    parts = []
+    for name in unknown:
+        suggestions = _suggest_measure_names(name)
+        if suggestions:
+            hint = " Did you mean: " + ", ".join(repr(s) for s in suggestions) + "?"
+        else:
+            hint = ""
+        parts.append(f"{name!r} is not a known connectivity measure.{hint}")
+    parts.append(
+        f"Call spectral_connectivity.list_measures() to see the "
+        f"{len(_MEASURE_SPECS)} available measures."
+    )
+    raise ValueError(" ".join(parts))
 
 
 def _get_measure_spec(method: str) -> _MeasureSpec | None:
@@ -561,7 +714,11 @@ def _connectivity_result_to_xarray(
         variables = {
             "group_delay": ("group_delay", np.asarray(delay), "s"),
             "group_delay_slope": ("phase slope", np.asarray(slope), "rad/Hz"),
-            "group_delay_r_value": ("phase-frequency correlation", np.asarray(r_value), "1"),
+            "group_delay_r_value": (
+                "phase-frequency correlation",
+                np.asarray(r_value),
+                "1",
+            ),
         }
         data_vars: dict[str, xr.DataArray] = {}
         for name, (long_name, values, units) in variables.items():
@@ -978,9 +1135,7 @@ def connectivity_to_xarray(
             valid_time_frequency=(
                 ("time", "frequency"),
                 validity,
-                {
-                    "long_name": "Full wavelet and smoothing support is in-record"
-                },
+                {"long_name": "Full wavelet and smoothing support is in-record"},
             )
         )
     return result
@@ -992,7 +1147,9 @@ def _combine_formatted_results(
 ) -> xr.Dataset:
     """Merge heterogeneous formatted measures without losing sub-variables."""
     datasets = [
-        result.to_dataset(name=result.name) if isinstance(result, xr.DataArray) else result
+        result.to_dataset(name=result.name)
+        if isinstance(result, xr.DataArray)
+        else result
         for result in results
     ]
     try:
@@ -1751,6 +1908,7 @@ def multitaper_connectivity(
         raise ValueError(
             "method must name at least one connectivity measure; got an empty list."
         )
+    _validate_method_names(method)
     if squeeze and not return_dataarray:
         # squeeze reduces a pairwise measure to a (time, frequency) array whose
         # source/target become scalar coordinates. In a Dataset those scalars are
@@ -2117,8 +2275,7 @@ def fourier_connectivity(
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
         if one_sided:
             if np.any(frequency_values < 0) or (
-                frequency_values.size > 1
-                and not np.all(np.diff(frequency_values) > 0)
+                frequency_values.size > 1 and not np.all(np.diff(frequency_values) > 0)
             ):
                 raise ValueError(
                     "One-sided frequencies must be non-negative and strictly "
@@ -2172,6 +2329,7 @@ def fourier_connectivity(
         raise ValueError(
             "method must name at least one connectivity measure; got an empty list."
         )
+    _validate_method_names(methods)
     if frequencies is None:
         # Without a frequency coordinate, orientation and two-sidedness cannot be
         # verified, so the default ``is_one_sided=False`` lets a one-sided input

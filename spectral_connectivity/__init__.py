@@ -5,7 +5,10 @@ directed connectivity measures from time series data using multitaper methods.
 """
 
 # flake8: noqa
-from spectral_connectivity.connectivity import Connectivity, MultivariateConnectivityResult
+from spectral_connectivity.connectivity import (
+    Connectivity,
+    MultivariateConnectivityResult,
+)
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_reconstruction_error,
 )
@@ -27,8 +30,10 @@ from spectral_connectivity.transforms import (
 from spectral_connectivity.utils import get_compute_backend
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
+    MeasureInfo,
     fourier_connectivity,
     frequency_band_reduce,
+    list_measures,
     multitaper_connectivity,
 )
 
@@ -46,6 +51,7 @@ __all__ = [
     "Connectivity",
     "DEFAULT_METHODS",
     "JackknifeResult",
+    "MeasureInfo",
     "MorletWavelet",
     "MultivariateConnectivityResult",
     "Multitaper",
@@ -55,6 +61,7 @@ __all__ = [
     "fourier_connectivity",
     "frequency_band_reduce",
     "jackknife_confidence_interval",
+    "list_measures",
     "minimum_phase_reconstruction_error",
     "multitaper_connectivity",
     "prepare_time_series",

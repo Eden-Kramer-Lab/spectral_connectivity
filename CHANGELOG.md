@@ -85,6 +85,16 @@ directly with results from 2.x.
   `direct_directed_transfer_function`) by name. They are opt-in (not in the
   default set) and, like the spectral Granger measures, are oriented so
   `sel(source=a, target=b)` is the influence from `a` to `b`.
+- `list_measures()` enumerates every wrapper-supported `method` name with its
+  output category, a one-line description sourced from the `Connectivity`
+  method docstring, and whether it is a default and/or directed measure;
+  filter with `category`, `default_only`, and `directed`. An unknown `method`
+  passed to `multitaper_connectivity` or `fourier_connectivity` now raises a
+  `ValueError` that suggests the closest measure names and points to
+  `list_measures()`, instead of a bare `AttributeError`.
+- A doctested `docs/cookbook.md` collects short, copy-pasteable recipes for the
+  most common tasks (functional and directed connectivity, reading the labeled
+  output, frequency bands, and bringing your own Fourier coefficients).
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each

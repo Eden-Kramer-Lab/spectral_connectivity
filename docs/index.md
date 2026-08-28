@@ -250,6 +250,7 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 :hidden:
 :maxdepth: 2
 
+cookbook
 CONNECTIVITY_METRIC_RANGES
 STYLE
 NOTEBOOK_SNAPSHOT_TESTS

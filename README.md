@@ -67,6 +67,21 @@ measures = multitaper_connectivity(
 )
 ```
 
+Not sure which `method` names are valid? `list_measures()` enumerates every
+supported measure with its output category and a one-line description, and an
+unknown `method` name raises an error that suggests the closest matches:
+
+```python
+from spectral_connectivity import list_measures
+
+# Every valid method name, e.g. filter to the directed measures
+directed = [m.name for m in list_measures(directed=True)]
+```
+
+See the [**Cookbook**](docs/cookbook.md) for short, copy-pasteable recipes
+covering functional and directed connectivity, reading the labeled output,
+frequency bands, and using your own Fourier coefficients.
+
 Crop, decimate, or aggregate the frequency coordinate without losing labels:
 
 ```python
