@@ -50,10 +50,13 @@ directly with results from 2.x.
   weighting. Adaptive weighting compares the periodogram against the process
   noise on a matched power-spectral-density scale and warns if the iteration
   does not converge.
-- `fourier_connectivity` accepts externally computed two-sided Fourier
-  coefficients as NumPy arrays or labeled DataArrays. High-level results can be
-  cropped, decimated, or reduced into named frequency bands; phase uses a
-  circular mean and integration is restricted to spectral densities.
+- `fourier_connectivity` accepts externally computed Fourier coefficients as
+  NumPy arrays or labeled DataArrays. Functional measures support one-sided
+  coefficients (inferred from a labeled non-negative frequency coordinate or
+  declared with `is_one_sided=True`), while directed factorization still
+  requires a full two-sided spectrum. High-level results can be cropped,
+  decimated, or reduced into named frequency bands; phase uses a circular mean
+  and integration is restricted to spectral densities.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` provide
   leave-one-trial/taper bias correction, standard errors, and confidence
   intervals with automatic variance-stabilizing transformations: log for power,

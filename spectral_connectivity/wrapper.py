@@ -1733,6 +1733,7 @@ def fourier_connectivity(
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
     expectation_type: Literal["trials_tapers"] = "trials_tapers",
+    is_one_sided: bool | None = None,
     *,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
@@ -1753,10 +1754,11 @@ def fourier_connectivity(
     taper, frequency, signal)``, or the core's full ``(time, trial, taper,
     frequency, signal)`` layout. A DataArray is transposed by semantic dimension
     names (or explicit ``*_dim`` arguments), and its frequency, time, signal
-    coordinates and attributes are preserved. Coefficients must contain a full
-    two-sided FFT in standard FFT order; one-sided transforms cannot support the
-    package's directed spectral factorization and are rejected when identifiable
-    from their frequency coordinate.
+    coordinates and attributes are preserved. When ``is_one_sided`` is omitted,
+    a supplied non-negative, increasing frequency coordinate is recognized as a
+    one-sided transform. One-sided coefficients support functional connectivity,
+    but the core rejects directed measures that require a full two-sided spectrum.
+    Set ``is_one_sided`` explicitly when no frequency coordinate is available.
 
     The xarray layout currently requires ``expectation_type="trials_tapers"``;
     use :class:`Connectivity` directly for expectations that retain trial/taper
@@ -1787,16 +1789,27 @@ def fourier_connectivity(
     )
     if getattr(getattr(coefficient_data, "dtype", None), "kind", None) != "c":
         raise TypeError("fourier_coefficients must be complex-valued.")
+    inferred_one_sided = False
+    if is_one_sided is not None and not isinstance(is_one_sided, (bool, np.bool_)):
+        raise TypeError("is_one_sided must be a boolean or None.")
     if frequencies is not None:
         frequency_values = np.asarray(frequencies, dtype=float)
         if frequency_values.ndim != 1:
             raise ValueError("frequencies must be a one-dimensional coordinate.")
-        if frequency_values.size > 1 and not np.any(frequency_values < 0):
-            raise ValueError(
-                "frequencies appears to describe a one-sided transform. Pass "
-                "full two-sided FFT coefficients in standard FFT order."
-            )
-        if frequency_values.size > 1:
+        inferred_one_sided = bool(
+            frequency_values.size > 1 and not np.any(frequency_values < 0)
+        )
+        one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
+        if one_sided:
+            if np.any(frequency_values < 0) or (
+                frequency_values.size > 1
+                and not np.all(np.diff(frequency_values) > 0)
+            ):
+                raise ValueError(
+                    "One-sided frequencies must be non-negative and strictly "
+                    "increasing."
+                )
+        elif frequency_values.size > 1:
             frequency_step = (
                 frequency_values[1] - frequency_values[0]
                 if frequency_values.size > 2
@@ -1817,6 +1830,8 @@ def fourier_connectivity(
                     "frequencies must be uniformly spaced in standard FFT "
                     "order (zero and positive bins followed by negative bins)."
                 )
+    else:
+        one_sided = bool(is_one_sided) if is_one_sided is not None else False
 
     connectivity = Connectivity(
         coefficient_data,
@@ -1826,6 +1841,7 @@ def fourier_connectivity(
         dtype=dtype,
         minimum_phase_tolerance=minimum_phase_tolerance,
         minimum_phase_max_iterations=minimum_phase_max_iterations,
+        is_one_sided=one_sided,
     )
     if connectivity_kwargs is None:
         connectivity_kwargs = {}
@@ -1874,6 +1890,8 @@ def fourier_connectivity(
         "coefficient_shape_json": _canonical_json(tuple(coefficient_data.shape)),
         "frequency_coordinate": "provided" if frequencies is not None else "normalized",
         "time_coordinate": "provided" if time is not None else "index",
+        "is_one_sided": one_sided,
+        "one_sided_inferred": is_one_sided is None and inferred_one_sided,
     }
     shared_attrs = _shared_provenance_attrs(
         connectivity,

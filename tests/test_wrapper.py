@@ -2011,14 +2011,46 @@ def test_fourier_connectivity_allows_unlabeled_undirected_measure():
     assert "frequency" in result.dims
 
 
-def test_fourier_connectivity_rejects_one_sided_frequency_coordinate():
+def test_fourier_connectivity_accepts_one_sided_functional_input():
+    rng = np.random.default_rng(316)
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal(
+        (4, 9, 2)
+    )
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.linspace(0, 40, 9),
+        method="coherence_magnitude",
+    )
+
+    assert result.dims == ("time", "frequency", "source", "target")
+    np.testing.assert_array_equal(result.frequency, np.linspace(0, 40, 9))
+    assert result.attrs["fourier_is_one_sided"]
+    assert result.attrs["fourier_one_sided_inferred"]
+
+
+def test_fourier_connectivity_rejects_directed_one_sided_input():
     coefficients = np.ones((3, 9, 2), dtype=np.complex128)
-    with pytest.raises(ValueError, match="one-sided transform"):
+    with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
         fourier_connectivity(
             coefficients,
             frequencies=np.linspace(0, 40, 9),
-            method="coherence_magnitude",
+            method="pairwise_spectral_granger_prediction",
         )
+
+
+def test_fourier_connectivity_explicit_one_sided_without_frequencies():
+    rng = np.random.default_rng(317)
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal(
+        (4, 9, 2)
+    )
+    result = fourier_connectivity(
+        coefficients,
+        method="coherence_magnitude",
+        is_one_sided=True,
+    )
+
+    assert np.all(result.frequency >= 0)
+    assert result.attrs["fourier_is_one_sided"]
 
 
 def test_fourier_connectivity_rejects_fftshifted_coordinate():
