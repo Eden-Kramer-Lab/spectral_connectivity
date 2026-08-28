@@ -307,10 +307,12 @@ def test_dataarray_without_final_coordinate_uses_default_labels():
 
 def test_dataarray_non_1d_final_coordinate_warns_and_uses_default_labels():
     """A non-1-D coordinate on the signal dim cannot label it; warn and fall back."""
+    # A non-index name (not equal to a dimension) so older xarray accepts the
+    # 2-D coordinate; it still spans the signal dim, so it is unusable as labels.
     data = xr.DataArray(
         np.random.default_rng(7).standard_normal((256, 2)),
         dims=("sample", "channel"),
-        coords={"channel": (("sample", "channel"), np.zeros((256, 2)))},
+        coords={"channel_grid": (("sample", "channel"), np.zeros((256, 2)))},
     )
     with pytest.warns(UserWarning, match="not a 1-D index coordinate"):
         result = multitaper_connectivity(
