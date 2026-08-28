@@ -1,5 +1,6 @@
 import inspect
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -11,6 +12,10 @@ from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     UnsupportedMeasureError,
+    _canonical_json,
+    _json_compatible,
+    _netcdf_provenance_value,
+    _reject_unmaterialized_backing,
     connectivity_to_xarray,
     multitaper_connectivity,
 )
@@ -285,6 +290,222 @@ def test_explicit_signal_names_override_dataarray_coordinate():
 
     assert result.coords["source"].values.tolist() == ["first", "second"]
     assert result.coords["target"].values.tolist() == ["first", "second"]
+
+
+def test_dataarray_without_final_coordinate_uses_default_labels():
+    """A DataArray whose signal dim has no coordinate falls back to indices."""
+    data = xr.DataArray(
+        np.random.default_rng(6).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # bare unlabeled input must not warn
+        result = multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+    assert result.coords["source"].values.tolist() == ["0", "1"]
+
+
+def test_dataarray_non_1d_final_coordinate_warns_and_uses_default_labels():
+    """A non-1-D coordinate on the signal dim cannot label it; warn and fall back."""
+    data = xr.DataArray(
+        np.random.default_rng(7).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"channel": (("sample", "channel"), np.zeros((256, 2)))},
+    )
+    with pytest.warns(UserWarning, match="not a 1-D index coordinate"):
+        result = multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+    assert result.coords["source"].values.tolist() == ["0", "1"]
+
+
+def test_dataarray_labels_on_non_index_coordinate_warn():
+    """Labels on a differently-named coordinate are not silently dropped."""
+    data = xr.DataArray(
+        np.random.default_rng(8).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"channel_name": ("channel", ["left", "right"])},
+    )
+    with pytest.warns(UserWarning, match="not a 1-D index coordinate"):
+        result = multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+    assert result.coords["source"].values.tolist() == ["0", "1"]
+
+
+def test_dataarray_integer_final_coordinate_is_preserved():
+    """Coordinate label types survive xarray input/output round-tripping."""
+    data = xr.DataArray(
+        np.random.default_rng(9).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"channel": [10, 20]},
+    )
+    result = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+    assert result.coords["source"].values.tolist() == [10, 20]
+    assert result.sel(source=10).coords["source"].item() == 10
+
+
+def test_dataarray_time_like_trailing_dim_rejects_transposition():
+    """A trailing dimension named like time cannot be treated as signals."""
+    data = xr.DataArray(
+        np.random.default_rng(10).standard_normal((256, 2)),
+        dims=("channel", "time"),
+    )
+    with pytest.raises(ValueError, match="positional order"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+
+
+def test_dataarray_swapped_time_and_trial_dims_are_rejected():
+    """Recognized non-trailing transpositions must not compute silently."""
+    data = xr.DataArray(
+        np.random.default_rng(11).standard_normal((4, 256, 2)),
+        dims=("trial", "time", "channel"),
+    )
+    with pytest.raises(ValueError, match=r"dimension 'trial'.*position 0"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+
+
+def test_dataarray_role_absent_at_dimensionality_is_rejected_with_reshape_hint():
+    """A role with no slot at this ndim (trial in 2-D) points at the shape, not transpose."""
+    data = xr.DataArray(
+        np.random.default_rng(13).standard_normal((256, 4)),
+        dims=("time", "trial"),
+    )
+    with pytest.raises(ValueError, match="has no trial axis"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+
+
+def test_dataarray_dask_backing_is_rejected():
+    """A dask-backed DataArray raises with a materialization hint."""
+    dask_array = pytest.importorskip("dask.array")
+    data = xr.DataArray(
+        dask_array.from_array(
+            np.random.default_rng(12).standard_normal((256, 2)), chunks=(128, 2)
+        ),
+        dims=("sample", "channel"),
+    )
+    with pytest.raises(TypeError, match="dask-backed"):
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="coherence_magnitude"
+        )
+
+
+def test_dask_protocol_backing_is_rejected_without_optional_dependency():
+    """Dask detection uses its collection protocol, not a module-name heuristic."""
+
+    class LazyArray:
+        def __dask_graph__(self):
+            return {}
+
+    with pytest.raises(TypeError, match="dask-backed"):
+        _reject_unmaterialized_backing(LazyArray())
+
+
+class TestProvenanceSerialization:
+    """Direct coverage of the provenance-serialization helpers.
+
+    Every branch exists to keep ``to_netcdf`` from breaking on unusual measure
+    kwargs; each is exercised here across the value taxonomy rather than only
+    incidentally through a measure that happens to pass such a value.
+    """
+
+    def test_scalar_and_none_passthrough(self):
+        assert _json_compatible(None) is None
+        assert _json_compatible(True) is True
+        assert _json_compatible(3) == 3
+        assert _json_compatible(2.5) == 2.5
+        assert _json_compatible("x") == "x"
+        assert _canonical_json(None) == "null"
+
+    def test_nonfinite_float_becomes_marker(self):
+        assert _json_compatible(float("nan")) == {"nonfinite_float": "nan"}
+        assert _json_compatible(float("inf")) == {"nonfinite_float": "inf"}
+        # measure_kwargs_json must not emit a bare NaN token.
+        assert "NaN" not in _canonical_json({"x": float("nan")})
+
+    def test_numpy_scalars_and_arrays_are_plain_python(self):
+        assert _json_compatible(np.float64(0.5)) == 0.5
+        assert _json_compatible(np.int64(7)) == 7
+        assert _json_compatible(np.array([1, 2, 3])) == [1, 2, 3]
+        # No numpy reprs leak into the JSON string.
+        encoded = _canonical_json({"w": np.array([1.0, 2.0])})
+        assert "float64" not in encoded and "array" not in encoded
+
+    def test_nested_mapping_is_sorted_and_deterministic(self):
+        value = {"b": 1, "a": {"d": 2, "c": 3}}
+        assert _canonical_json(value) == '{"a":{"c":3,"d":2},"b":1}'
+
+    def test_non_string_mapping_keys_cannot_collide(self):
+        encoded = _canonical_json({1: "integer", "1": "string"})
+        assert json.loads(encoded) == {
+            "python_type": "mapping",
+            "items": [["1", "string"], [1, "integer"]],
+        }
+
+    def test_arbitrary_object_falls_back_to_type_and_repr(self):
+        compatible = _json_compatible({1, 2})  # sets are not JSON-native
+        assert set(compatible) == {"python_type", "repr"}
+        assert compatible["python_type"] == "builtins.set"
+        # The fallback must still produce valid JSON.
+        json.loads(_canonical_json({1, 2}))
+
+    def test_netcdf_provenance_value_routes_structured_and_nonfinite_to_json(self):
+        assert _netcdf_provenance_value(0.5) == 0.5
+        assert _netcdf_provenance_value("s") == "s"
+        assert json.loads(_netcdf_provenance_value([1, 2])) == [1, 2]
+        assert json.loads(_netcdf_provenance_value(float("nan"))) == {
+            "nonfinite_float": "nan"
+        }
+
+
+def test_structured_and_nonfinite_kwargs_survive_netcdf(tmp_path, monkeypatch):
+    """Unusual measure kwargs serialize and round-trip through NetCDF."""
+    rng = np.random.default_rng(13)
+    m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
+
+    def stub_measure(connectivity, **kwargs):
+        return np.zeros(
+            (
+                len(connectivity.time),
+                len(connectivity.frequencies),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            )
+        )
+
+    monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
+
+    da = connectivity_to_xarray(
+        m,
+        method="stub_measure",
+        nested={"b": 1, "a": 2},
+        weights=np.array([1.0, 2.0]),
+        cutoff=float("inf"),
+    )
+    assert json.loads(da.attrs["arg_nested_json"]) == {"a": 2, "b": 1}
+    assert json.loads(da.attrs["arg_weights_json"]) == [1.0, 2.0]
+    assert json.loads(da.attrs["arg_cutoff_json"]) == {"nonfinite_float": "inf"}
+
+    path = tmp_path / "structured.nc"
+    da.to_netcdf(path)
+    reloaded = xr.open_dataarray(path)
+    try:
+        assert json.loads(reloaded.attrs["measure_kwargs_json"]) == {
+            "nested": {"a": 2, "b": 1},
+            "weights": [1.0, 2.0],
+            "cutoff": {"nonfinite_float": "inf"},
+        }
+    finally:
+        reloaded.close()
 
 
 def test_result_netcdf_serializable_with_detrend_none(tmp_path):
@@ -689,9 +910,11 @@ def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
         threshold=0.5,
         window=[1, 2, 3],
     )
-    # Scalar kwarg stored as-is; non-scalar kwarg stored as parseable JSON.
+    # Scalar kwarg stored as-is under ``arg_<key>``; structured kwarg stored as
+    # parseable JSON under the ``arg_<key>_json`` name so it self-identifies.
     assert da.attrs["arg_threshold"] == 0.5
-    assert json.loads(da.attrs["arg_window"]) == [1, 2, 3]
+    assert "arg_window" not in da.attrs
+    assert json.loads(da.attrs["arg_window_json"]) == [1, 2, 3]
     assert json.loads(da.attrs["measure_kwargs_json"]) == {
         "threshold": 0.5,
         "window": [1, 2, 3],

@@ -42,11 +42,19 @@ directly with results from 2.x.
   variable.
 - Wrapper results carry descriptive time/frequency metadata plus NetCDF-safe
   measure, package-version, backend, expectation, transform, and method-argument
-  provenance. Structured method arguments are recorded as canonical JSON.
+  provenance. Scalar method arguments are stored under `arg_<key>`; structured
+  or non-finite values are stored as canonical, JSON-normalized data under
+  `arg_<key>_json` (and `None` serializes as `"null"`), with the full mapping in
+  `measure_kwargs_json`. Non-string mapping keys use a collision-safe tagged
+  item representation.
 - `multitaper_connectivity` accepts an `xarray.DataArray` using the documented
   positional axis order and, unless `signal_names` is supplied explicitly,
   preserves its final-dimension labels as the result's `source` / `target`
-  coordinates.
+  coordinates without coercing their types. Because axes are interpreted
+  positionally rather than by name, recognized dimension names that conflict
+  with the required order are rejected; labels that cannot be inferred still
+  produce a warning. Dask-backed DataArrays are rejected with a materialization
+  hint.
 - `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
 - Independent analytic-oracle, failure-mode, backend-boundary, serialization,
   minimum-dependency, artifact, doctest, and notebook checks cover the corrected

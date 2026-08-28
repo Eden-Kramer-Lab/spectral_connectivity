@@ -48,9 +48,12 @@ coherence = multitaper_connectivity(
 )
 ```
 
-`time_series` may also be an `xarray.DataArray` with the same positional axis
-order. Labels on its final dimension become the result's `source` and `target`
-coordinates unless `signal_names` is supplied explicitly.
+`time_series` may also be an `xarray.DataArray`. Axes are interpreted by
+*position* (`(n_times[, n_trials], n_signals)`). Recognized time, trial, and
+signal dimension names that conflict with this order are rejected with a
+transposition hint; unrecognized names retain the positional contract. A 1-D
+coordinate on the final dimension is preserved—including its label type—as the
+result's `source` and `target` coordinates unless `signal_names` is supplied.
 
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as
