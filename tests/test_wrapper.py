@@ -573,6 +573,114 @@ def test_dataarray_time_coordinate_must_agree_with_explicit_start_time():
         )
 
 
+def test_dataarray_infers_sampling_frequency_from_time_coordinate():
+    """An elapsed-seconds time coordinate supplies the rate when it is omitted."""
+    sampling_frequency = 64  # power of two: 1/fs is exact, so inference round-trips
+    raw = np.random.default_rng(30).standard_normal((256, 3))
+    time = 5.0 + np.arange(raw.shape[0]) / sampling_frequency
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": time, "channel": ["a", "b", "c"]},
+    )
+
+    inferred = multitaper_connectivity(data, method="coherence_magnitude")
+    explicit = multitaper_connectivity(
+        data, sampling_frequency=sampling_frequency, method="coherence_magnitude"
+    )
+
+    xr.testing.assert_identical(inferred, explicit)
+    # The frequency grid reflects the inferred rate (Nyquist = fs / 2).
+    assert float(inferred.frequency.max()) == pytest.approx(sampling_frequency / 2)
+
+
+def test_dataarray_infers_rate_from_precise_float32_time_coordinate():
+    """Float32 can infer a rate when a zero-based axis retains enough precision."""
+    sampling_frequency = 1000
+    raw = np.random.default_rng(35).standard_normal((256, 2))
+    time = (np.arange(raw.shape[0]) / sampling_frequency).astype(np.float32)
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": time})
+
+    result = multitaper_connectivity(data, method="power")
+
+    assert result.attrs["mt_sampling_frequency"] == pytest.approx(
+        sampling_frequency, rel=1e-6
+    )
+
+
+def test_dataarray_refuses_precision_limited_rate_inference():
+    """A quantized large-offset axis must not silently turn 1 kHz into 1024 Hz."""
+    sampling_frequency = 1000
+    raw = np.random.default_rng(36).standard_normal((16, 2))
+    time = (10_000.0 + np.arange(raw.shape[0]) / sampling_frequency).astype(np.float32)
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": time})
+
+    with pytest.raises(ValueError, match="Cannot reliably infer sampling_frequency"):
+        multitaper_connectivity(data, method="power", time_halfbandwidth_product=2)
+
+    # The same quantized coordinate remains usable when the caller supplies the
+    # rate; its dtype-aware validation already permits the representational error.
+    explicit = multitaper_connectivity(
+        data,
+        sampling_frequency=sampling_frequency,
+        method="power",
+        time_halfbandwidth_product=2,
+    )
+    assert explicit.attrs["mt_sampling_frequency"] == sampling_frequency
+    assert float(explicit.frequency.max()) == pytest.approx(sampling_frequency / 2)
+
+
+def test_dataarray_rejects_nonfinite_inferred_sampling_frequency():
+    """Subnormal time steps fail clearly instead of reaching transform division."""
+    raw = np.random.default_rng(37).standard_normal((16, 2))
+    time = np.arange(raw.shape[0]) * 1e-310
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": time})
+
+    with pytest.raises(ValueError, match="non-finite sampling rate"):
+        multitaper_connectivity(data, method="power")
+
+
+def test_array_without_sampling_frequency_is_rejected():
+    """A NumPy input cannot infer a rate and must be given one."""
+    with pytest.raises(ValueError, match="sampling_frequency is required"):
+        multitaper_connectivity(
+            np.random.default_rng(31).standard_normal((256, 2)),
+            method="coherence_magnitude",
+        )
+
+
+def test_dataarray_without_time_coordinate_requires_sampling_frequency():
+    """A DataArray with no numeric time coordinate cannot infer a rate."""
+    data = xr.DataArray(
+        np.random.default_rng(32).standard_normal((256, 2)),
+        dims=("time", "channel"),
+        coords={"channel": ["left", "right"]},
+    )
+    with pytest.raises(ValueError, match="sampling_frequency is required"):
+        multitaper_connectivity(data, method="coherence_magnitude")
+
+
+def test_dataarray_sample_coordinate_cannot_infer_sampling_frequency():
+    """Integer sample numbers carry no time scale, so inference is refused."""
+    data = xr.DataArray(
+        np.random.default_rng(33).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"sample": np.arange(256)},
+    )
+    with pytest.raises(ValueError, match="Cannot infer sampling_frequency"):
+        multitaper_connectivity(data, method="coherence_magnitude")
+
+
+def test_dataarray_nonuniform_time_coordinate_cannot_infer_sampling_frequency():
+    """A non-uniform time axis has no single rate to infer."""
+    raw = np.random.default_rng(34).standard_normal((128, 2))
+    times = np.arange(raw.shape[0]) / 64.0
+    times[50:] += 0.5  # break regular spacing
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": times})
+    with pytest.raises(ValueError, match="not uniformly spaced"):
+        multitaper_connectivity(data, method="coherence_magnitude")
+
+
 def test_dataarray_role_absent_at_dimensionality_is_rejected_with_reshape_hint():
     """A role with no slot at this ndim (trial in 2-D) points at the shape, not transpose."""
     data = xr.DataArray(
@@ -612,23 +720,20 @@ def test_dask_protocol_backing_is_rejected_without_optional_dependency():
 
 
 def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
-    """A DataArray's own attrs survive under the ``input_`` namespace."""
+    """A DataArray's own attrs survive in one canonical provenance record."""
+    input_attrs = {"subject": "m1", "session": 7, "montage": [1, 2, 3]}
     data = xr.DataArray(
         np.random.default_rng(20).standard_normal((256, 2)),
         dims=("time", "channel"),
         coords={"channel": ["left", "right"]},
-        attrs={"subject": "m1", "session": 7, "montage": [1, 2, 3]},
+        attrs=input_attrs,
     )
 
     # Single-method DataArray result.
     result = multitaper_connectivity(
         data, sampling_frequency=256, method="coherence_magnitude"
     )
-    assert result.attrs["input_subject"] == "m1"
-    assert result.attrs["input_session"] == 7
-    # A structured attr is JSON-encoded under the ``_json`` suffix.
-    assert "input_montage" not in result.attrs
-    assert json.loads(result.attrs["input_montage_json"]) == [1, 2, 3]
+    assert json.loads(result.attrs["input_attrs_json"]) == input_attrs
     # Namespacing keeps caller metadata from clobbering our own provenance.
     assert result.attrs["package"] == "spectral_connectivity"
 
@@ -638,11 +743,43 @@ def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
         sampling_frequency=256,
         method=["coherence_magnitude", "imaginary_coherence"],
     )
-    assert ds.attrs["input_subject"] == "m1"
-    assert ds["coherence_magnitude"].attrs["input_subject"] == "m1"
+    assert json.loads(ds.attrs["input_attrs_json"]) == input_attrs
+    assert (
+        json.loads(ds["coherence_magnitude"].attrs["input_attrs_json"]) == input_attrs
+    )
 
     # Provenance must remain NetCDF-serializable.
     ds.to_netcdf(tmp_path / "input_attrs.nc")
+
+
+def test_dataarray_input_attrs_cannot_collide_or_break_netcdf(tmp_path):
+    """Arbitrary attr keys remain distinct inside the fixed JSON record."""
+    input_attrs = {
+        1: "integer key",
+        "1": "string key",
+        "x": [1, 2],
+        "x_json": "literal suffix",
+        "subject/id": "m1",
+    }
+    data = xr.DataArray(
+        np.random.default_rng(22).standard_normal((256, 2)),
+        dims=("time", "channel"),
+        attrs=input_attrs,
+    )
+
+    result = multitaper_connectivity(data, sampling_frequency=256, method="power")
+    assert result.attrs["input_attrs_json"] == _canonical_json(input_attrs)
+    assert {key for key in result.attrs if key.startswith("input_")} == {
+        "input_attrs_json"
+    }
+
+    path = tmp_path / "arbitrary_input_attrs.nc"
+    result.to_netcdf(path)
+    reloaded = xr.open_dataarray(path)
+    try:
+        assert reloaded.attrs["input_attrs_json"] == _canonical_json(input_attrs)
+    finally:
+        reloaded.close()
 
 
 def test_plain_ndarray_input_has_no_input_namespace():
@@ -1372,6 +1509,38 @@ def test_multitaper_connectivity_rejects_structured_signal_names():
             method="coherence_magnitude",
             signal_names=[("region", 1), ("region", 2)],
         )
+
+
+def test_multitaper_connectivity_rejects_nonportable_integer_signal_names():
+    """Accepted integer coordinates must remain writable by the SciPy backend."""
+    rng = np.random.default_rng(0)
+    labels = np.array([2**63, 2**63 + 1], dtype=np.uint64)
+    with pytest.raises(ValueError, match="signed 32-bit range"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)),
+            sampling_frequency=256,
+            method="power",
+            signal_names=labels,
+        )
+
+
+def test_portable_integer_signal_name_boundaries_survive_netcdf(tmp_path):
+    """The documented signed 32-bit boundary values serialize successfully."""
+    labels = np.array([np.iinfo(np.int32).min, np.iinfo(np.int32).max], dtype=np.int64)
+    result = multitaper_connectivity(
+        np.random.default_rng(0).standard_normal((256, 3, 2)),
+        sampling_frequency=256,
+        method="power",
+        signal_names=labels,
+    )
+
+    path = tmp_path / "integer_signal_boundaries.nc"
+    result.to_netcdf(path)
+    reloaded = xr.open_dataarray(path)
+    try:
+        np.testing.assert_array_equal(reloaded.source.values, labels)
+    finally:
+        reloaded.close()
 
 
 def test_multitaper_connectivity_squeeze_retains_pair_labels():

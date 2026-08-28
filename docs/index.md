@@ -54,12 +54,17 @@ inferred and transposed automatically; for domain-specific names, pass
 `time_dim`, `trial_dim`, and `signal_dim` explicitly. Ambiguous dimensions raise
 instead of falling back to axis position. Numeric `time`
 coordinates are interpreted as elapsed seconds and numeric `sample` coordinates
-as sample numbers; both are checked against `sampling_frequency` and used to
-label output window centers. A 1-D index on the signal dimension is
-preserved—including its label type—as the result's `source` and `target`
-coordinates unless `signal_names` is supplied. Signal labels must be unique,
-non-missing, NetCDF-compatible scalar strings, real numbers, datetimes, or
-timedeltas.
+as sample numbers, and are used to label output window centers. When
+`sampling_frequency` is given it is checked against the time index; when it is
+omitted, a numeric elapsed-seconds `time` coordinate infers it (a `sample`
+index cannot, having no time scale). Inference also requires enough coordinate
+precision to resolve the rate reliably; pass `sampling_frequency` explicitly for
+low-precision or large-offset time coordinates. A 1-D index on the signal
+dimension is preserved—including its label type—as the result's `source` and
+`target` coordinates unless `signal_names` is supplied. Signal labels must be
+unique, non-missing, NetCDF-compatible scalar strings, real numbers, datetimes,
+or timedeltas; integer labels must fit the signed 32-bit range for portable
+NetCDF3 serialization.
 
 Datetime, timedelta, and object-valued **time coordinates** are not yet
 supported. Convert them to numeric elapsed seconds before calling

@@ -255,6 +255,20 @@ def _validated_signal_labels(
             "datetime, or timedelta scalar labels; object and complex labels "
             "are not supported."
         )
+    if signal_coordinate.dtype.kind in "iu" and signal_coordinate.size:
+        # SciPy is a required dependency and therefore xarray's only guaranteed
+        # NetCDF writer in a minimum installation. Its NetCDF3 backend cannot
+        # represent integer coordinate values outside the signed 32-bit range.
+        integer_values = np.asarray(signal_coordinate.data)
+        minimum = int(integer_values.min())
+        maximum = int(integer_values.max())
+        int32 = np.iinfo(np.int32)
+        if minimum < int32.min or maximum > int32.max:
+            raise ValueError(
+                "Integer signal_names must fit the signed 32-bit range for "
+                "portable NetCDF3 serialization; got range "
+                f"[{minimum}, {maximum}]. Use string labels for larger identifiers."
+            )
     if bool(getattr(signal_index, "hasnans", False)):
         raise ValueError(
             "signal_names must not contain missing labels (NaN, NaT, or None)."
@@ -396,8 +410,9 @@ def _shared_provenance_attrs(
     the multitaper parameters (``mt_*``) -- everything that does not depend on
     the specific measure. The per-measure attributes (``measure``,
     ``measure_kwargs_json``, and the convenient ``arg_*`` views) are added by
-    the caller. Any attributes on an input ``xarray.DataArray`` are carried
-    through under an ``input_*`` namespace so the caller's own metadata survives.
+    the caller. Attributes on an input ``xarray.DataArray`` are carried through
+    as one canonical JSON record so arbitrary keys cannot collide or produce
+    invalid NetCDF attribute names.
     """
     # Namespace transform settings so they cannot collide with measure-level or
     # package-level provenance attributes.
@@ -411,11 +426,12 @@ def _shared_provenance_attrs(
     # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
     attrs["backend"] = get_compute_backend()["backend"].upper()
     attrs["expectation_type"] = connectivity.expectation_type
-    # Preserve the caller's DataArray attributes. The ``input_`` prefix keeps
-    # them in a distinct namespace from our own provenance keys; each value is
-    # made NetCDF-safe (structured values land under ``input_<key>_json``).
-    for key, value in (input_attrs or {}).items():
-        _store_provenance_item(attrs, "input_", key, value)
+    # A single fixed key is both collision-proof and a valid NetCDF attribute
+    # name. Flattening arbitrary user keys would make unlike keys such as 1 and
+    # "1" collide, make a structured ``x`` collide with a literal ``x_json``,
+    # and let characters such as "/" create an invalid NetCDF attribute name.
+    if input_attrs:
+        attrs["input_attrs_json"] = _canonical_json(input_attrs)
     return attrs
 
 
@@ -471,6 +487,12 @@ _SIGNAL_DIM_NAMES = frozenset(
         "nodes",
     }
 )
+
+# Inference is a convenience, so prefer requiring an explicit rate over silently
+# deriving a scientifically meaningful frequency scale from a precision-starved
+# coordinate. This bounds the endpoint-quantization contribution to the inferred
+# rate at 100 parts per million of the observed time span.
+_MAX_INFERRED_RATE_RELATIVE_RESOLUTION = 1e-4
 
 
 def _dimension_role(dimension: Hashable) -> str | None:
@@ -581,13 +603,21 @@ def _resolve_dataarray_dimensions(
     return tuple(resolved[role] for role in expected_roles)
 
 
-def _start_time_from_dataarray(
+def _time_axis_from_dataarray(
     time_series: xr.DataArray,
     time_dimension: Hashable,
-    sampling_frequency: float,
+    sampling_frequency: float | None,
     explicit_start_time: Any = _UNSET,
-) -> float | None:
-    """Validate a numeric time index and return its first sample in seconds."""
+) -> tuple[float | None, float | None]:
+    """Resolve the sampling rate and start time from a numeric time index.
+
+    Returns ``(inferred_sampling_frequency, start_time)``. When
+    ``sampling_frequency`` is given, the coordinate spacing is validated against
+    it and ``inferred_sampling_frequency`` is ``None``. When it is ``None``, the
+    rate is inferred from a numeric ``time`` (elapsed-seconds) coordinate; an
+    integer ``sample`` coordinate carries no time scale and cannot supply one.
+    Returns ``(None, None)`` when the dimension has no numeric time coordinate.
+    """
     candidates = [
         (name, coordinate)
         for name, coordinate in time_series.coords.items()
@@ -595,7 +625,7 @@ def _start_time_from_dataarray(
         and (name == time_dimension or _dimension_role(name) == "time")
     ]
     if not candidates:
-        return None
+        return None, None
     exact_time = [item for item in candidates if str(item[0]).lower() == "time"]
     semantic_auxiliary = [
         item
@@ -656,9 +686,68 @@ def _start_time_from_dataarray(
             "integer-like sample numbers. Use a 'time' coordinate for elapsed "
             "fractional seconds."
         )
-    expected_interval = (
-        1.0 if coordinate_is_sample_index else 1.0 / float(sampling_frequency)
-    )
+    inferred_sampling_frequency: float | None = None
+    if sampling_frequency is None:
+        # Infer the rate from an elapsed-seconds coordinate. Integer sample
+        # numbers have no time scale, so they cannot supply one.
+        if coordinate_is_sample_index:
+            raise ValueError(
+                f"Cannot infer sampling_frequency from the integer sample "
+                f"coordinate {coordinate_name!r}, which has no time scale. Pass "
+                "sampling_frequency, or use a numeric 'time' coordinate in "
+                "elapsed seconds."
+            )
+        if times.size < 2:
+            raise ValueError(
+                "Cannot infer sampling_frequency from a single-sample time "
+                f"coordinate {coordinate_name!r}; pass sampling_frequency."
+            )
+        # Span-based estimate averages float noise over the whole (uniform) grid.
+        coordinate_span = float(times[-1]) - float(times[0])
+        if not np.isfinite(coordinate_span) or coordinate_span <= 0:
+            raise ValueError(
+                "Cannot infer sampling_frequency: the DataArray time coordinate "
+                f"{coordinate_name!r} does not have a finite positive span. Pass "
+                "sampling_frequency explicitly."
+            )
+        if np.issubdtype(values.dtype, np.floating):
+            # Estimate the resolution of the stored endpoints in their original
+            # dtype. If one representable step is material relative to the whole
+            # span, the reciprocal interval would report false precision (e.g. a
+            # float32 1-kHz axis at a large offset can appear to be 1024 Hz).
+            storage_scale = float(np.max(np.abs(times), initial=0.0))
+            storage_resolution = abs(
+                float(np.spacing(np.asarray(storage_scale, dtype=values.dtype)))
+            )
+            relative_resolution = storage_resolution / coordinate_span
+            if (
+                not np.isfinite(relative_resolution)
+                or relative_resolution > _MAX_INFERRED_RATE_RELATIVE_RESOLUTION
+            ):
+                raise ValueError(
+                    "Cannot reliably infer sampling_frequency from DataArray time "
+                    f"coordinate {coordinate_name!r}: its {values.dtype} resolution "
+                    f"({storage_resolution!r} s) is too large relative to the "
+                    f"observed span ({coordinate_span!r} s). Pass "
+                    "sampling_frequency explicitly, or use a higher-precision or "
+                    "zero-based elapsed-seconds coordinate."
+                )
+        expected_interval = coordinate_span / (times.size - 1)
+        if (
+            not np.isfinite(expected_interval)
+            or expected_interval <= 0
+            or expected_interval < 1.0 / np.finfo(np.float64).max
+        ):
+            raise ValueError(
+                "Cannot infer sampling_frequency: the DataArray time coordinate "
+                f"{coordinate_name!r} implies a non-finite sampling rate. Pass "
+                "sampling_frequency explicitly."
+            )
+        inferred_sampling_frequency = 1.0 / expected_interval
+    else:
+        expected_interval = (
+            1.0 if coordinate_is_sample_index else 1.0 / float(sampling_frequency)
+        )
     coordinate_scale = max(float(np.max(np.abs(times), initial=0.0)), 1.0)
     coordinate_resolution = (
         abs(float(np.spacing(np.asarray(coordinate_scale, dtype=values.dtype))))
@@ -677,6 +766,16 @@ def _start_time_from_dataarray(
         rtol=0,
         atol=coordinate_tolerance,
     ):
+        observed_median = float(np.median(differences))
+        if sampling_frequency is None:
+            # Inference requires a regular grid; an irregular one has no single
+            # rate to derive.
+            raise ValueError(
+                f"Cannot infer sampling_frequency: the DataArray time coordinate "
+                f"{coordinate_name!r} is not uniformly spaced (observed median "
+                f"step {observed_median!r} s). Pass sampling_frequency "
+                "explicitly, or provide a regularly sampled time coordinate."
+            )
         expected_description = (
             "1 sample per coordinate step"
             if coordinate_is_sample_index
@@ -685,16 +784,18 @@ def _start_time_from_dataarray(
         raise ValueError(
             f"The DataArray time coordinate spacing does not match "
             f"sampling_frequency={sampling_frequency!r} Hz (expected "
-            f"{expected_description}, observed median "
-            f"{float(np.median(differences))!r})."
+            f"{expected_description}, observed median {observed_median!r})."
         )
 
-    inferred_start_time = float(times[0]) / (
-        float(sampling_frequency) if coordinate_is_sample_index else 1.0
-    )
-    start_time_tolerance = coordinate_tolerance / (
-        float(sampling_frequency) if coordinate_is_sample_index else 1.0
-    )
+    if coordinate_is_sample_index:
+        # A sample coordinate only reaches here with an explicit rate; inference
+        # already rejected it above.
+        assert sampling_frequency is not None
+        time_scale = float(sampling_frequency)
+    else:
+        time_scale = 1.0
+    inferred_start_time = float(times[0]) / time_scale
+    start_time_tolerance = coordinate_tolerance / time_scale
     if explicit_start_time is not _UNSET:
         explicit = to_numpy(explicit_start_time)
         if explicit.size != 1:
@@ -714,7 +815,7 @@ def _start_time_from_dataarray(
                 f"DataArray time coordinate {inferred_start_time!r}. Remove "
                 "start_time or make the values agree."
             )
-    return inferred_start_time
+    return inferred_sampling_frequency, inferred_start_time
 
 
 def _signal_labels_from_dataarray(
@@ -771,18 +872,21 @@ def _reject_unmaterialized_backing(data: Any) -> None:
 def _unwrap_xarray_input(
     time_series: NDArray[np.floating] | xr.DataArray,
     signal_names: Sequence[_SignalLabel] | None,
-    sampling_frequency: float,
+    sampling_frequency: float | None,
     *,
     time_dim: Hashable | None,
     trial_dim: Hashable | None,
     signal_dim: Hashable | None,
     explicit_start_time: Any = _UNSET,
-) -> tuple[BackendArray, Sequence[_SignalLabel] | None, float | None]:
+) -> tuple[BackendArray, Sequence[_SignalLabel] | None, float | None, float | None]:
     """Extract array data and, when available, labels from a DataArray input.
 
     Semantic dimensions are inferred from common names or supplied explicitly,
     then transposed into the numerical core's positional order. A numeric time
-    index is validated against the sampling rate and supplies ``start_time``.
+    index supplies ``start_time`` and, when ``sampling_frequency`` is omitted,
+    the sampling rate; when the rate is given it is validated against the index.
+    Returns ``(data, signal_names, inferred_sampling_frequency,
+    inferred_start_time)``.
     """
     if not isinstance(time_series, xr.DataArray):
         if any(
@@ -792,7 +896,7 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an "
                 "xarray.DataArray input."
             )
-        return time_series, signal_names, None
+        return time_series, signal_names, None, None
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -804,7 +908,7 @@ def _unwrap_xarray_input(
     signal_dimension = dimension_order[-1]
     if signal_names is None:
         signal_names = _signal_labels_from_dataarray(time_series, signal_dimension)
-    inferred_start_time = _start_time_from_dataarray(
+    inferred_sampling_frequency, inferred_start_time = _time_axis_from_dataarray(
         time_series,
         time_dimension,
         sampling_frequency,
@@ -813,12 +917,12 @@ def _unwrap_xarray_input(
 
     data = time_series.transpose(*dimension_order).data
     _reject_unmaterialized_backing(data)
-    return data, signal_names, inferred_start_time
+    return data, signal_names, inferred_sampling_frequency, inferred_start_time
 
 
 def multitaper_connectivity(
     time_series: NDArray[np.floating] | xr.DataArray,
-    sampling_frequency: float,
+    sampling_frequency: float | None = None,
     time_window_duration: float | None = None,
     method: str | list[str] | None = None,
     signal_names: Sequence[_SignalLabel] | None = None,
@@ -846,17 +950,23 @@ def multitaper_connectivity(
         inferred and transposed automatically; use ``time_dim``, ``trial_dim``,
         and ``signal_dim`` for domain-specific names. Ambiguous names raise rather
         than falling back to dimension position. A numeric time index is
-        interpreted as elapsed seconds (a ``sample`` index as sample numbers),
-        validated against ``sampling_frequency``, and used to label output window
-        centers. Datetime, timedelta, and object-valued time coordinates are not
-        yet supported and must first be converted to numeric elapsed seconds.
+        interpreted as elapsed seconds (a ``sample`` index as sample numbers)
+        and used to label output window centers. When ``sampling_frequency`` is
+        given it is validated against the index; when it is omitted, an
+        elapsed-seconds ``time`` coordinate infers it (a ``sample`` index cannot,
+        having no time scale). Datetime, timedelta, and object-valued time
+        coordinates are not yet supported and must first be converted to numeric
+        elapsed seconds.
         When ``signal_names`` is omitted,
         labels from a 1-D index coordinate on the signal dimension are carried to
         the output's ``source`` and ``target`` coordinates without changing their
         type; if such labels are present but unusable a warning is issued and
         default string labels are used.
-    sampling_frequency : float
-        Sampling rate in Hz of the time series data.
+    sampling_frequency : float, optional
+        Sampling rate in Hz of the time series data. Required for array input;
+        for a DataArray it may be omitted and inferred from a sufficiently precise
+        numeric elapsed-seconds ``time`` coordinate. Pass it explicitly when a
+        low-precision or large-offset coordinate cannot resolve the rate reliably.
     time_window_duration : float, optional
         Duration of sliding window in seconds for time-resolved analysis.
         If None, analyzes entire time series (no time resolution).
@@ -879,8 +989,10 @@ def multitaper_connectivity(
         "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
-        channels. Nested or structured labels are not supported. If None, uses the
-        DataArray signal index when available, otherwise stringified indices.
+        channels. Integer labels must fit the signed 32-bit range for portable
+        NetCDF3 serialization. Nested or structured labels are not supported. If
+        None, uses the DataArray signal index when available, otherwise stringified
+        indices.
     squeeze : bool, default=False
         Only honored when a single ``method`` (a string) is requested, so the
         result is a DataArray. If there are exactly 2 channels, reduce a pairwise
@@ -970,9 +1082,10 @@ def multitaper_connectivity(
       ``measure_kwargs_json`` is the canonical record).
     - ``package``, ``package_version``, ``backend``, ``expectation_type`` --
       software provenance.
-    - ``input_<key>`` / ``input_<key>_json`` -- attributes carried over from an
-      input ``xarray.DataArray`` (e.g. subject or session metadata), preserved
-      under the ``input_`` namespace so the caller's own metadata survives.
+    - ``input_attrs_json`` -- a canonical, JSON-normalized record of attributes
+      carried over from an input ``xarray.DataArray`` (e.g. subject or session
+      metadata). Keeping the complete mapping in one record preserves arbitrary
+      keys without collisions or invalid NetCDF attribute names.
 
     References
     ----------
@@ -985,7 +1098,12 @@ def multitaper_connectivity(
         dict(time_series.attrs) if isinstance(time_series, xr.DataArray) else None
     )
     explicit_start_time = kwargs.get("start_time", _UNSET)
-    time_series_data, signal_names, inferred_start_time = _unwrap_xarray_input(
+    (
+        time_series_data,
+        signal_names,
+        inferred_sampling_frequency,
+        inferred_start_time,
+    ) = _unwrap_xarray_input(
         time_series,
         signal_names,
         sampling_frequency,
@@ -994,6 +1112,14 @@ def multitaper_connectivity(
         signal_dim=signal_dim,
         explicit_start_time=explicit_start_time,
     )
+    if inferred_sampling_frequency is not None:
+        sampling_frequency = inferred_sampling_frequency
+    if sampling_frequency is None:
+        raise ValueError(
+            "sampling_frequency is required unless the input is an "
+            "xarray.DataArray with a numeric 'time' coordinate (in elapsed "
+            "seconds) to infer it from."
+        )
     if inferred_start_time is not None and explicit_start_time is _UNSET:
         kwargs["start_time"] = inferred_start_time
     if connectivity_kwargs is None:

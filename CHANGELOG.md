@@ -48,23 +48,28 @@ directly with results from 2.x.
   `arg_<key>_json` (and `None` serializes as `"null"`), with the full mapping in
   `measure_kwargs_json`. Non-string mapping keys use a collision-safe tagged
   item representation. Attributes on an input `xarray.DataArray` are carried
-  through under an `input_<key>` (or `input_<key>_json`) namespace so caller
-  metadata survives.
+  through in one canonical `input_attrs_json` record, preserving arbitrary keys
+  without collisions or invalid NetCDF attribute names.
 - `multitaper_connectivity` accepts an `xarray.DataArray`, infers common
   time/trial/signal dimension names, and transposes them into the numerical
   core's order. **This changes the DataArray contract from position-driven to
   name-driven:** domain-specific names must be assigned with `time_dim`,
   `trial_dim`, and `signal_dim`, and ambiguous dimensions raise instead of
   falling back to axis position. Numeric time coordinates are treated as
-  elapsed seconds, numeric sample coordinates as sample numbers, and both are
-  checked against `sampling_frequency` and used for output window times.
+  elapsed seconds, numeric sample coordinates as sample numbers, and are used
+  for output window times. `sampling_frequency` is now optional for a DataArray:
+  when omitted it is inferred from a numeric elapsed-seconds `time` coordinate
+  with sufficient numerical precision (a `sample` index cannot supply one);
+  low-precision or large-offset coordinates require an explicit rate. When given,
+  the rate is validated against the index. It remains required for array input.
   Datetime, timedelta, and object-valued time coordinates are not yet supported
   and must first be converted to numeric elapsed seconds.
   Unless `signal_names` is supplied explicitly, the signal index is preserved
   as the result's `source` / `target` coordinates without coercing its type.
   Missing, duplicate, nested, and structured signal labels are rejected;
-  labels that cannot be inferred still produce a warning. Dask-backed
-  DataArrays are rejected with a materialization hint.
+  integer labels must fit the signed 32-bit range required for portable NetCDF3
+  serialization. Labels that cannot be inferred still produce a warning.
+  Dask-backed DataArrays are rejected with a materialization hint.
 - `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
 - Independent analytic-oracle, failure-mode, backend-boundary, serialization,
   minimum-dependency, artifact, doctest, and notebook checks cover the corrected
