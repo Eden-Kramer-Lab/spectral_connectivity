@@ -1958,6 +1958,59 @@ def test_frequency_band_integral_is_restricted_to_spectral_densities():
         frequency_band_reduce(score, {"low": (1, 2)}, reduction="integral")
 
 
+def test_multitaper_frequency_crop_and_decimation_select_correct_bins():
+    """Cropping and decimation select the expected frequency-coordinate values."""
+    result = multitaper_connectivity(
+        np.random.default_rng(313).standard_normal((256, 2)),
+        sampling_frequency=128,
+        method="coherence_magnitude",
+        frequency_range=(8, 32),
+        frequency_decimation=2,
+    )
+
+    # Full grid bins are multiples of 128/256 = 0.5 Hz; cropping keeps [8, 32]
+    # and decimation by 2 keeps every other surviving bin.
+    full_frequencies = np.fft.rfftfreq(256, d=1 / 128)
+    in_band = full_frequencies[(full_frequencies >= 8) & (full_frequencies <= 32)]
+    expected = in_band[::2]
+    np.testing.assert_allclose(result.frequency.values, expected)
+
+
+def test_frequency_band_integral_equals_analytic_area():
+    """Band integral of a flat spectral density equals value times bandwidth."""
+    frequencies = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    flat_power = xr.DataArray(
+        np.full_like(frequencies, 2.0),
+        dims=("frequency",),
+        coords={"frequency": frequencies},
+        name="power",
+        attrs={"measure": "power"},
+    )
+    reduced = frequency_band_reduce(
+        flat_power, {"band": (1.0, 5.0)}, reduction="integral"
+    )
+    # Trapezoidal integral of the constant 2.0 over [1, 5] Hz is 2 * (5 - 1) = 8.
+    assert float(reduced.sel(band="band")) == pytest.approx(8.0)
+
+
+def test_fourier_connectivity_rejects_unlabeled_directed_measure():
+    """Directed measures need a frequency coordinate to verify two-sidedness."""
+    coefficients = np.ones((3, 8, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="two-sided spectrum"):
+        fourier_connectivity(
+            coefficients,
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+def test_fourier_connectivity_allows_unlabeled_undirected_measure():
+    coefficients = np.random.default_rng(314).standard_normal(
+        (4, 8, 2)
+    ) + 1j * np.random.default_rng(315).standard_normal((4, 8, 2))
+    result = fourier_connectivity(coefficients, method="coherence_magnitude")
+    assert "frequency" in result.dims
+
+
 def test_fourier_connectivity_rejects_one_sided_frequency_coordinate():
     coefficients = np.ones((3, 9, 2), dtype=np.complex128)
     with pytest.raises(ValueError, match="one-sided transform"):

@@ -511,3 +511,70 @@ def test_jackknife_log_and_circular_transforms_return_original_scale():
         np.array(np.pi), phases, transformation="circular"
     )
     assert abs(circular.bias_corrected) > 3.0
+
+
+def test_jackknife_fisher_squared_matches_atanh_of_magnitude():
+    # fisher_squared applies the atanh(sqrt(.)) variance-stabilizing transform
+    # for magnitude-squared coherence. Its confidence interval must equal the
+    # squared plain-fisher interval computed on the unsquared magnitude.
+    magnitude_estimate = 0.6
+    magnitude_replicates = np.array([0.55, 0.6, 0.65])
+    squared = jackknife_confidence_interval(
+        np.array(magnitude_estimate**2),
+        np.array(magnitude_replicates**2),
+        transformation="fisher_squared",
+    )
+    magnitude = jackknife_confidence_interval(
+        np.array(magnitude_estimate),
+        magnitude_replicates,
+        transformation="fisher",
+    )
+    assert squared.transformation == "fisher_squared"
+    # Bounds and interval map through the square of the magnitude interval.
+    np.testing.assert_allclose(
+        squared.confidence_interval[0], magnitude.confidence_interval[0] ** 2
+    )
+    np.testing.assert_allclose(
+        squared.confidence_interval[1], magnitude.confidence_interval[1] ** 2
+    )
+    # The interval stays ordered and brackets the estimate.
+    assert squared.confidence_interval[0] <= magnitude_estimate**2
+    assert squared.confidence_interval[1] >= magnitude_estimate**2
+
+
+def test_jackknife_fisher_squared_interval_is_monotonic_near_zero():
+    # Small estimate with wide spread: the lower atanh bound maps below zero, and
+    # squaring must not fold it back above the estimate.
+    result = jackknife_confidence_interval(
+        np.array(0.01),
+        np.array([0.0, 0.02, 0.05]),
+        transformation="fisher_squared",
+    )
+    assert result.confidence_interval[0] <= 0.01
+    assert result.confidence_interval[1] >= 0.01
+    assert result.confidence_interval[0] >= 0.0
+
+
+def test_jackknife_log_warns_on_non_positive_values():
+    with pytest.warns(UserWarning, match="non-positive"):
+        jackknife_confidence_interval(
+            np.array(1.0),
+            np.array([1.0, -0.5, 2.0]),
+            transformation="log",
+        )
+
+
+def test_jackknife_fisher_warns_at_saturated_coherence():
+    with pytest.warns(UserWarning, match="saturated coherence"):
+        jackknife_confidence_interval(
+            np.array(1.0),
+            np.array([0.99, 1.0, 0.995]),
+            transformation="fisher",
+        )
+
+
+def test_jackknife_rejects_unknown_transformation():
+    with pytest.raises(ValueError, match="transformation must be"):
+        jackknife_confidence_interval(
+            np.array(1.0), np.array([1.0, 2.0]), transformation="bogus"
+        )

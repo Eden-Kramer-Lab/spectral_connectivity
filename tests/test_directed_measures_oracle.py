@@ -207,6 +207,56 @@ def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
     np.testing.assert_allclose(conditional, pairwise, atol=1e-6, equal_nan=True)
 
 
+def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
+    """A truly absent causal direction returns 0 (like the block path), not NaN.
+
+    For the unidirectional oracle (0 -> 1) the [0, 1] direction (1 -> 0) has no
+    causal influence. Roundoff can drive the log-ratio slightly negative there;
+    it must be clipped to 0 rather than discarded as NaN, matching the
+    conditional/block Granger convention.
+    """
+    connectivity = var_oracle["connectivity"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        granger = connectivity.pairwise_spectral_granger_prediction()[0]
+
+    non_causal = granger[..., 0, 1]
+    # No NaN masquerading as "no result"; the absent direction is a finite ~0.
+    assert not np.isnan(non_causal).all()
+    assert np.nanmax(np.abs(non_causal)) < 1e-6
+
+
+def test_conditional_granger_removes_mediated_influence():
+    """A 3-node chain 0 -> 1 -> 2 has zero conditional influence 0 -> 2 given 1.
+
+    Signal 0 reaches signal 2 only through the mediator 1, so unconditional
+    pairwise Granger 0 -> 2 is positive, but the conditional Granger 0 -> 2 | 1
+    is analytically zero once 1 is accounted for (Chen, Bressler & Ding 2006).
+    This exercises the non-empty conditioning path that the scalar/2-node oracle
+    cannot reach.
+    """
+    # Lower-triangular VAR with no *direct* 0 -> 2 link (A[2, 0] == 0 at all lags).
+    a1 = np.array([[0.5, 0.0, 0.0], [0.4, 0.5, 0.0], [0.0, 0.4, 0.5]])
+    a2 = np.array([[-0.6, 0.0, 0.0], [0.0, -0.6, 0.0], [0.0, 0.0, -0.6]])
+    coefficients = np.stack([a1, a2])
+    _, _, spectrum = _analytic_var(coefficients, np.eye(3), _N_FFT)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(spectrum)
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pairwise = connectivity.pairwise_spectral_granger_prediction()[0]
+        conditional = connectivity.conditional_spectral_granger_prediction()[0]
+
+    # Unconditional 0 -> 2 (row 2, col 0) is clearly non-zero via the mediator.
+    assert np.nanmax(pairwise[..., 2, 0]) > 0.05
+    # Conditioning on signal 1 removes it: 0 -> 2 | 1 collapses toward zero.
+    assert np.nanmax(conditional[..., 2, 0]) < 1e-3
+    # The genuine direct link 1 -> 2 | 0 survives conditioning.
+    assert np.nanmax(conditional[..., 2, 1]) > 0.05
+
+
 def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
     """Time reversal makes the originally causal direction predominantly reverse."""
     connectivity = var_oracle["connectivity"]

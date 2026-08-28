@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
@@ -740,6 +742,101 @@ def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
     assert np.all(np.isfinite(eigen.fft()))
     assert np.all(np.isfinite(adaptive.fft()))
     assert not np.allclose(adaptive.fft(), uniform.fft())
+
+
+def test_adaptive_weighting_matches_eigen_for_white_noise():
+    # For a flat (white) spectrum the process noise level equals the mean taper
+    # power, so Thomson's denominator collapses to the spectrum and the adaptive
+    # weights approach sqrt(eigenvalue) -- i.e. the eigenvalue weighting. This
+    # only holds when the noise term is on the same power-spectral-density scale
+    # as the periodogram; the previous code left it a factor of the sampling
+    # frequency too large, which this oracle would catch.
+    data = np.random.default_rng(913).standard_normal((3000, 1, 1))
+    eigen = Multitaper(
+        data,
+        sampling_frequency=500,
+        time_halfbandwidth_product=4,
+        taper_weighting="eigen",
+    ).fft()
+    adaptive = Multitaper(
+        data,
+        sampling_frequency=500,
+        time_halfbandwidth_product=4,
+        taper_weighting="adaptive",
+        adaptive_max_iterations=200,
+    ).fft()
+    relative_difference = np.abs(adaptive - eigen) / (np.abs(eigen) + 1e-12)
+    assert float(np.median(relative_difference)) < 0.05
+
+
+def test_adaptive_weighting_is_invariant_to_input_scale():
+    # The weights are ratios, so scaling the input must not change them once the
+    # noise term is on the periodogram's scale.
+    data = np.random.default_rng(914).standard_normal((1024, 1, 2))
+
+    def transform(values, weighting):
+        return Multitaper(
+            values,
+            sampling_frequency=256,
+            time_halfbandwidth_product=3,
+            taper_weighting=weighting,
+        ).fft()
+
+    uniform = transform(data, "uniform")
+    uniform_scaled = transform(data * 1000, "uniform")
+    adaptive = transform(data, "adaptive")
+    adaptive_scaled = transform(data * 1000, "adaptive")
+    weights = adaptive / uniform
+    weights_scaled = adaptive_scaled / uniform_scaled
+    np.testing.assert_allclose(weights, weights_scaled, rtol=1e-9, atol=1e-9)
+
+
+def test_adaptive_weighting_warns_on_non_convergence():
+    data = np.random.default_rng(915).standard_normal((512, 1, 2))
+    multitaper = Multitaper(
+        data,
+        sampling_frequency=256,
+        time_halfbandwidth_product=4,
+        taper_weighting="adaptive",
+        adaptive_max_iterations=1,
+        adaptive_tolerance=1e-15,
+    )
+    with pytest.warns(UserWarning, match="did not converge"):
+        multitaper.fft()
+
+
+def test_welch_default_segment_warns_on_coarse_resolution():
+    data = np.random.default_rng(916).standard_normal((30000, 1, 1))
+    with pytest.warns(UserWarning, match="default segment length"):
+        Welch(data, sampling_frequency=30000)
+
+
+def test_welch_explicit_segment_does_not_warn():
+    data = np.random.default_rng(917).standard_normal((30000, 1, 1))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        Welch(data, sampling_frequency=30000, segment_duration=1.0)
+
+
+@pytest.mark.parametrize("transform_cls", [ShortTimeFourierTransform, Welch])
+def test_transform_rejects_non_positive_sampling_frequency(transform_cls):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        transform_cls(np.ones((64, 1, 2)), sampling_frequency=0)
+
+
+def test_morlet_rejects_non_positive_sampling_frequency():
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=-1, frequencies=[4, 8])
+
+
+def test_morlet_rejects_frequencies_at_or_above_nyquist():
+    with pytest.raises(ValueError, match="below Nyquist"):
+        MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=100, frequencies=[10, 60])
+
+
+def test_welch_rejects_out_of_range_overlap():
+    with pytest.raises(ValueError, match="segment_overlap"):
+        Welch(np.ones((256, 1, 2)), sampling_frequency=128, segment_overlap=1.0)
 
 
 def test_nonuniform_weighting_rejects_custom_tapers():

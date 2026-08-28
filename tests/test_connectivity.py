@@ -333,6 +333,30 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert np.isnan(mic.squeeze()[0, 0])
 
 
+def test_mic_rejects_single_group_and_non_positive_rank():
+    coefficients = np.empty((1, 20, 2, 1, 3), dtype=complex)
+    coefficients[..., 0] = 1j
+    coefficients[..., 1] = 1.0
+    coefficients[..., 2] = 0.5j
+    conn = Connectivity(coefficients)
+    with pytest.raises(ValueError, match="at least two groups"):
+        conn.maximized_imaginary_coherency([0, 0, 0])
+    with pytest.raises(ValueError, match="rank must be a positive integer"):
+        conn.multivariate_interaction_measure([0, 1, 1], rank=0)
+
+
+def test_partial_coherence_warns_and_nans_on_zero_power():
+    rng = np.random.default_rng(919)
+    coefficients = rng.standard_normal((1, 6, 2, 4, 3)) + 1j * rng.standard_normal(
+        (1, 6, 2, 4, 3)
+    )
+    coefficients[:, :, :, 0, :] = 0.0  # a fully dead frequency bin
+    conn = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="zero power"):
+        result = conn.partial_coherence(regularization=1e-10)
+    assert np.isnan(result[:, 0]).all()
+
+
 def test_mic_and_mim_are_invariant_to_within_group_real_mixing():
     rng = np.random.default_rng(103)
     coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
@@ -2294,7 +2318,9 @@ def test_connectivity_jackknife_recomputes_leave_one_out_measure():
     result = connectivity.jackknife("coherence_magnitude")
 
     assert result.n_observations == 12
-    assert result.transformation == "fisher"
+    # coherence_magnitude is magnitude-*squared* coherence, so auto resolves to
+    # the atanh(sqrt(.)) variance-stabilizing transform, not plain atanh.
+    assert result.transformation == "fisher_squared"
     assert result.estimate.shape == (1, 9, 2, 2)
     assert result.standard_error.shape == result.estimate.shape
     off_diagonal = result.estimate[..., 0, 1]
@@ -2314,3 +2340,31 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
     assert np.all(power.confidence_interval[0] > 0)
     with pytest.raises(TypeError, match="real-valued measure"):
         connectivity.jackknife("coherency")
+
+
+@pytest.mark.parametrize("measure", ["coherence_magnitude", "phase_locking_value"])
+def test_single_observation_normalized_measure_warns(measure):
+    # A single observation (1 trial x 1 taper) forces every magnitude-normalized
+    # value to 1 (apparent perfect connectivity); this must warn rather than
+    # silently return a misleading result.
+    rng = np.random.default_rng(707)
+    coefficients = rng.standard_normal((1, 1, 1, 16, 3)) + 1j * rng.standard_normal(
+        (1, 1, 1, 16, 3)
+    )
+    connectivity = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="single observation"):
+        result = getattr(connectivity, measure)()
+    # And the degenerate result is indeed saturated at 1.
+    off_diagonal = result[..., 0, 1]
+    np.testing.assert_allclose(np.abs(off_diagonal), 1.0, atol=1e-6)
+
+
+def test_multiple_observations_normalized_measure_does_not_warn():
+    rng = np.random.default_rng(708)
+    coefficients = rng.standard_normal((1, 4, 3, 16, 3)) + 1j * rng.standard_normal(
+        (1, 4, 3, 16, 3)
+    )
+    connectivity = Connectivity(coefficients)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        connectivity.coherence_magnitude()
