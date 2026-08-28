@@ -714,6 +714,136 @@ def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
         connectivity.pairwise_spectral_granger_prediction()
 
 
+def test_morlet_default_zero_padding_matches_same_convolution():
+    from scipy.signal import fftconvolve
+
+    rng = np.random.default_rng(918)
+    data = rng.standard_normal((96, 2, 2))
+    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4)
+
+    sigma = 4 / (2 * np.pi * 8)
+    half_width = int(np.ceil(5 * sigma * 64))
+    wavelet_time = np.arange(-half_width, half_width + 1) / 64
+    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    expected = fftconvolve(
+        data,
+        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
+        mode="same",
+        axes=0,
+    ) / np.sqrt(64)
+
+    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
+
+
+def test_morlet_edge_mask_nan_and_trim_contracts():
+    rng = np.random.default_rng(919)
+    data = rng.standard_normal((256, 2, 2))
+    frequencies = np.array([8.0, 16.0, 32.0])
+    kept = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        smoothing_time=0.25,
+        smoothing_frequency=3,
+        edge_mode="keep",
+    )
+    masked = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        smoothing_time=0.25,
+        smoothing_frequency=3,
+        edge_mode="nan",
+    )
+    trimmed = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        edge_mode="trim",
+    )
+
+    np.testing.assert_array_equal(kept.valid_time_frequency, masked.valid_time_frequency)
+    assert not np.all(masked.valid_time_frequency)
+    masked_power = Connectivity.from_transform(masked).power()
+    np.testing.assert_array_equal(
+        np.isnan(masked_power[..., 0]), ~masked.valid_time_frequency
+    )
+    assert np.all(np.isfinite(Connectivity.from_transform(kept).power()))
+    assert np.all(trimmed.valid_time_frequency)
+    assert trimmed.time[0] >= trimmed.edge_half_width.max()
+    assert trimmed.time[-1] <= (len(data) - 1) / 128 - trimmed.edge_half_width.max()
+
+
+def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
+    rng = np.random.default_rng(920)
+    data = rng.standard_normal((128, 3, 2))
+    frequencies = np.array([8.0, 12.0, 20.0])
+    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    smoothed = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        n_cycles=3,
+        smoothing_frequency=3,
+        smoothing_kernel="boxcar",
+    )
+    raw_coefficients = raw.fft()[:, :, 0]
+    # Reflection maps the first frequency neighborhood to [12, 8, 12] Hz.
+    expected = np.mean(
+        raw_coefficients[:, :, [1, 0, 1], :][..., :, :, np.newaxis]
+        * np.conjugate(
+            raw_coefficients[:, :, [1, 0, 1], :][..., :, np.newaxis, :]
+        ),
+        axis=(1, 2),
+    )
+    actual = Connectivity.from_transform(
+        smoothed
+    ).cross_spectral_density()[:, 0]
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
+    data = np.random.default_rng(921).standard_normal((128, 1, 2))
+    transform = MorletWavelet(
+        data,
+        64,
+        np.array([8.0, 12.0, 20.0]),
+        n_cycles=3,
+        smoothing_time=0.25,
+        smoothing_kernel="hann",
+    )
+    connectivity = Connectivity.from_transform(transform)
+
+    assert np.unique(transform.observation_weights).size > 1
+    with pytest.raises(ValueError, match="non-uniform observation_weights"):
+        connectivity.pairwise_phase_consistency()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"smoothing_frequency": 2}, "positive odd integer"),
+        ({"smoothing_kernel": "triangle"}, "boxcar.*hann"),
+        ({"padding_mode": "wrap"}, "constant.*reflect.*edge"),
+        ({"edge_mode": "drop"}, "keep.*nan.*trim"),
+    ],
+)
+def test_morlet_rejects_invalid_edge_and_smoothing_controls(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        MorletWavelet(
+            np.ones((64, 1, 2)),
+            sampling_frequency=64,
+            frequencies=[8, 16],
+            **kwargs,
+        )
+
+
 def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
     data = np.random.default_rng(402).standard_normal((256, 4, 2))
     default = Multitaper(data, sampling_frequency=128, time_halfbandwidth_product=3)

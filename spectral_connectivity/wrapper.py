@@ -687,9 +687,28 @@ def connectivity_to_xarray(
         metadata,
         transform_prefix=getattr(m, "_provenance_prefix", "mt_"),
     )
-    return _connectivity_result_to_xarray(
+    result = _connectivity_result_to_xarray(
         connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
     )
+    valid_time_frequency = getattr(m, "valid_time_frequency", None)
+    if valid_time_frequency is not None:
+        validity = np.asarray(valid_time_frequency, dtype=bool)
+        expected_shape = (len(connectivity.time), len(connectivity.frequencies))
+        if validity.shape != expected_shape:
+            raise ValueError(
+                "transform.valid_time_frequency must have shape "
+                f"{expected_shape}, got {validity.shape}."
+            )
+        result = result.assign_coords(
+            valid_time_frequency=(
+                ("time", "frequency"),
+                validity,
+                {
+                    "long_name": "Full wavelet and smoothing support is in-record"
+                },
+            )
+        )
+    return result
 
 
 # Common dimension names let the wrapper infer semantic roles. DataArrays are

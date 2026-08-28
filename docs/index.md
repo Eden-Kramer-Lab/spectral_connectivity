@@ -124,8 +124,11 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 spectral transforms with the same coefficient interface. Morlet output is
 positive-frequency-only and is therefore limited to functional measures;
 directed Wilson factorization requires a full two-sided FFT. For single-trial
-Morlet data, set `smoothing_time` so normalized measures (coherence, PLV) are
-estimated over multiple observations rather than being degenerate at 1. `Welch`
+Morlet data, `smoothing_time` and `smoothing_frequency` collect a local
+time/frequency neighborhood; `smoothing_kernel` selects boxcar or Hann weights.
+`padding_mode` controls convolution boundaries, while `edge_mode` retains,
+masks, or trims estimates without full wavelet support. The strict
+`valid_time_frequency` mask is also exposed by the xarray wrapper. `Welch`
 resolves `1 / segment_duration` Hz, so set `segment_duration` explicitly for
 electrophysiology data. Multitaper DPSS coefficients support uniform
 (historical), eigenvalue, or Thomson adaptive taper weighting through

@@ -45,6 +45,11 @@ directly with results from 2.x.
 - `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
   output is explicitly one-sided and rejects Wilson-factorized directed
   measures, which require a full two-sided spectrum.
+- Morlet transforms now expose strict time-frequency edge validity and support
+  constant/reflect/edge convolution padding, keep/NaN/trim edge policies,
+  adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
+  Connectivity expectations consume the local weights directly, and xarray
+  results carry the `valid_time_frequency` mask.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
   weighting. Adaptive weighting compares the periodogram against the process

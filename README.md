@@ -190,11 +190,18 @@ stft = ShortTimeFourierTransform(
     time_series, sampling_frequency, time_window_duration=1
 )
 welch = Welch(time_series, sampling_frequency, segment_duration=1)
-# For a single continuous trial, set `smoothing_time` so normalized measures
-# (coherence, PLV) are estimated over multiple observations instead of being
-# degenerate at 1.
+# For a single continuous trial, collect a local time/frequency neighborhood so
+# normalized measures are estimated over multiple observations. Invalid wavelet
+# edges can be retained, marked NaN, or trimmed.
 wavelet = MorletWavelet(
-    time_series, sampling_frequency, frequencies=[4, 8, 16, 32], smoothing_time=0.5
+    time_series,
+    sampling_frequency,
+    frequencies=[4, 8, 16, 32],
+    smoothing_time=0.5,
+    smoothing_frequency=3,
+    smoothing_kernel="hann",
+    padding_mode="reflect",
+    edge_mode="nan",
 )
 
 stft_coherence = Connectivity.from_transform(stft).coherence_magnitude()
@@ -205,6 +212,8 @@ variance, `ShortTimeFourierTransform`/`Welch` for a simple single-window or
 segment-averaged estimate, and `MorletWavelet` for time-resolved analysis at
 specific frequencies. `Welch`'s frequency resolution is `1 / segment_duration`
 Hz, so set `segment_duration` explicitly for electrophysiology data.
+`MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
+the xarray wrapper carries it as a two-dimensional coordinate.
 
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies

@@ -1675,6 +1675,39 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
     np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
 
 
+def test_weighted_expectation_matches_manual_cross_spectrum():
+    rng = np.random.default_rng(922)
+    coefficients = rng.standard_normal((2, 3, 4, 5, 2)) + 1j * rng.standard_normal(
+        (2, 3, 4, 5, 2)
+    )
+    weights = rng.uniform(0.1, 1.0, size=(2, 3, 4, 5, 1))
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+
+    outer = coefficients[..., :, np.newaxis] * np.conjugate(
+        coefficients[..., np.newaxis, :]
+    )
+    expected = np.sum(outer * weights[..., np.newaxis], axis=(1, 2)) / np.sum(
+        weights, axis=(1, 2)
+    )[..., np.newaxis]
+    np.testing.assert_allclose(
+        connectivity._expectation_cross_spectral_matrix(), expected
+    )
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        np.ones((2, 3, 4, 5)),
+        np.full((2, 3, 4, 5, 1), -1.0),
+        np.full((2, 3, 4, 5, 1), np.nan),
+    ],
+)
+def test_observation_weights_validation(weights):
+    coefficients = np.ones((2, 3, 4, 5, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="observation_weights"):
+        Connectivity(coefficients, observation_weights=weights)
+
+
 def _reference_normalized_cross_spectrum(conn):
     """Honest per-observation phase-locking cross-spectrum (materialized).
 

@@ -2077,3 +2077,22 @@ def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
     assert welch.attrs["welch_window"] == "hann_periodic"
     assert morlet.attrs["morlet_decimation"] == 1
     assert morlet.frequency.values.tolist() == [4.0, 8.0, 16.0]
+    assert morlet.valid_time_frequency.dims == ("time", "frequency")
+    assert morlet.attrs["morlet_edge_mode"] == "keep"
+    assert morlet.attrs["morlet_smoothing_kernel"] == "boxcar"
+
+
+def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
+    data = np.random.default_rng(318).standard_normal((128, 2, 2))
+    transform = MorletWavelet(
+        data,
+        64,
+        np.array([4.0, 8.0, 16.0]),
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
+    result = connectivity_to_xarray(transform, method="power")
+
+    np.testing.assert_array_equal(
+        result.isnull().all("source"), ~result.valid_time_frequency
+    )

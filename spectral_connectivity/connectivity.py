@@ -274,12 +274,17 @@ class Connectivity:
         Whether coefficients contain only non-negative frequencies. One-sided
         transforms are returned without FFT half-spectrum slicing or power
         doubling and cannot be used by Wilson-factorized directed measures.
+    observation_weights : ndarray, optional
+        Finite non-negative weights with shape ``(time, trial, taper,
+        frequency, 1)``. They are applied to every expectation and shared
+        across signals. Transform constructors supply these automatically when
+        smoothing uses a non-uniform kernel or masks invalid edge estimates.
 
     Attributes
     ----------
     n_observations : int
-        Effective number of independent observations after averaging,
-        used for statistical inference.
+        Number of trial/taper observations reduced by the expectation. This is
+        the raw count, not a weighted effective sample size.
 
     See Also
     --------
@@ -342,6 +347,7 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
         is_one_sided: bool = False,
+        observation_weights: NDArray[np.floating] | None = None,
         *,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
@@ -357,6 +363,7 @@ class Connectivity:
         else:
             self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
+        self.observation_weights = observation_weights
         # Wilson minimum-phase factorization controls, used by the directed
         # measures. Near-singular cross-spectral matrices can need more than the
         # default iterations to converge; exposing these lets callers recover
@@ -416,6 +423,42 @@ class Connectivity:
         self._frequencies = frequencies
         self._dtype = dtype
         self.time = to_numpy(time)
+
+    @property
+    def observation_weights(self) -> BackendArray | None:
+        """Non-negative weights used when averaging spectral observations.
+
+        Weights have shape ``(time, trial, taper, frequency, 1)`` and are
+        shared by every signal. A detached, read-only copy is returned so cached
+        expectations cannot be invalidated by mutation.
+        """
+        if self._observation_weights is None:
+            return None
+        return mark_readonly_if_supported(self._observation_weights.copy())
+
+    @observation_weights.setter
+    def observation_weights(self, value: NDArray[np.floating] | None) -> None:
+        if value is None:
+            self._observation_weights = None
+            self._clear_cached_intermediates()
+            return
+        weights = xp.asarray(value)
+        expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
+        if tuple(weights.shape) != expected_shape:
+            raise ValueError(
+                "observation_weights must have shape "
+                f"{expected_shape}, got {tuple(weights.shape)}. Weights must be "
+                "shared across signals."
+            )
+        if not bool(xp.all(xp.isfinite(weights))) or bool(xp.any(weights < 0)):
+            raise ValueError(
+                "observation_weights must contain only finite, non-negative values."
+            )
+        real_dtype = self._fourier_coefficients.real.dtype
+        self._observation_weights = mark_readonly_if_supported(
+            weights.astype(real_dtype, copy=True)
+        )
+        self._clear_cached_intermediates()
 
     def _clear_cached_intermediates(self) -> None:
         """Drop cached properties that depend on the spectral inputs.
@@ -637,6 +680,9 @@ class Connectivity:
             init_kwargs["is_one_sided"] = bool(
                 getattr(multitaper_instance, "is_one_sided", False)
             )
+            init_kwargs["observation_weights"] = getattr(
+                multitaper_instance, "observation_weights", None
+            )
         return cls(**init_kwargs)
 
     @classmethod
@@ -701,6 +747,13 @@ class Connectivity:
                 f"that is zero when n_observations < 2, so it is undefined for a "
                 f"single observation. Use more trials/tapers, or the "
                 f"non-debiased measure (phase_lag_index / phase_locking_value)."
+            )
+        if not self._observation_weights_are_uniform:
+            raise ValueError(
+                f"{measure} does not support non-uniform observation_weights. "
+                "Its finite-sample correction assumes equally weighted "
+                "independent observations; use a non-debiased measure or "
+                "smoothing_kernel='boxcar'."
             )
 
     def _warn_single_observation_degenerate(self, measure: str) -> None:
@@ -890,6 +943,13 @@ class Connectivity:
         observations = observations.reshape(
             (*observations.shape[: len(kept_axes) + 1], n_observations, n_signals)
         )
+        weights = None
+        if self._observation_weights is not None:
+            weights = xp.transpose(
+                self._observation_weights[..., 0],
+                [*kept_axes, frequency_axis, *average_axes],
+            ).reshape((*observations.shape[:-2], n_observations))
+            observations = observations * xp.sqrt(weights)[..., xp.newaxis]
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
         cross_spectral_matrix = xp.matmul(
@@ -897,7 +957,16 @@ class Connectivity:
             xp.conj(observations),
             dtype=self._dtype,
         )
-        return cross_spectral_matrix / n_observations
+        if weights is None:
+            return cross_spectral_matrix / n_observations
+        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
+        result = xp.full_like(cross_spectral_matrix, xp.nan)
+        return xp.divide(
+            cross_spectral_matrix,
+            denominator,
+            out=result,
+            where=denominator > 0,
+        )
 
     @cached_property
     def _cached_reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -974,9 +1043,39 @@ class Connectivity:
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
         return _regularized_inverse(self._transfer_function)
 
-    @property
-    def _expectation(self) -> Callable:
-        return EXPECTATION[self.expectation_type]
+    def _expectation(
+        self, values: BackendArray, *, frequency_axis: int = 3
+    ) -> BackendArray:
+        """Average observation axes, applying optional spectral weights."""
+        if self._observation_weights is None:
+            return EXPECTATION[self.expectation_type](values)
+
+        if frequency_axis < 0:
+            frequency_axis += values.ndim
+        if frequency_axis < 3 or frequency_axis >= values.ndim:
+            raise ValueError("frequency_axis must follow the three observation axes.")
+        weight_shape = [1] * values.ndim
+        weight_shape[0:3] = self._observation_weights.shape[0:3]
+        weight_shape[frequency_axis] = self._observation_weights.shape[3]
+        weights = self._observation_weights[..., 0].reshape(weight_shape)
+        numerator = xp.sum(values * weights, axis=self._expectation_axes)
+        denominator = xp.sum(weights, axis=self._expectation_axes)
+        result = xp.full_like(numerator, xp.nan)
+        return xp.divide(numerator, denominator, out=result, where=denominator > 0)
+
+    @cached_property
+    def _observation_weights_are_uniform(self) -> bool:
+        """Whether every reduced bin gives its observations equal weight."""
+        if self._observation_weights is None:
+            return True
+        weights = self._observation_weights[..., 0]
+        kept_axes = [axis for axis in range(3) if axis not in self._expectation_axes]
+        order = [*kept_axes, 3, *self._expectation_axes]
+        reordered = xp.transpose(weights, order)
+        flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
+        if flattened.shape[-1] < 2:
+            return True
+        return bool(xp.all(flattened == flattened[..., :1]))
 
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
@@ -1066,6 +1165,7 @@ class Connectivity:
             )
 
         coefficients = self._fourier_coefficients
+        observation_weights = self._observation_weights
         if self.expectation_type == "trials_tapers":
             n_observations = coefficients.shape[1] * coefficients.shape[2]
             observation_coefficients = coefficients.reshape(
@@ -1075,6 +1175,14 @@ class Connectivity:
                 coefficients.shape[3],
                 coefficients.shape[4],
             )
+            if observation_weights is not None:
+                observation_weights = observation_weights.reshape(
+                    observation_weights.shape[0],
+                    n_observations,
+                    1,
+                    observation_weights.shape[3],
+                    1,
+                )
             observation_axis = 1
             replicate_expectation = "trials_tapers"
         elif self.expectation_type == "trials":
@@ -1096,6 +1204,11 @@ class Connectivity:
         for omitted in range(n_observations):
             keep = xp.arange(n_observations) != omitted
             subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
+            subset_weights = (
+                None
+                if observation_weights is None
+                else xp.compress(keep, observation_weights, axis=observation_axis)
+            )
             replicate_connectivity = Connectivity(
                 subset,
                 expectation_type=replicate_expectation,
@@ -1105,6 +1218,7 @@ class Connectivity:
                 minimum_phase_tolerance=self._minimum_phase_tolerance,
                 minimum_phase_max_iterations=self._minimum_phase_max_iterations,
                 is_one_sided=self._is_one_sided,
+                observation_weights=subset_weights,
             )
             replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
@@ -2345,7 +2459,9 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
-        pair_csm = self._expectation(self._subset_cross_spectral_matrix(pairs))
+        pair_csm = self._expectation(
+            self._subset_cross_spectral_matrix(pairs), frequency_axis=4
+        )
         return _estimate_subset_spectral_granger_prediction(
             self._power,
             pair_csm,

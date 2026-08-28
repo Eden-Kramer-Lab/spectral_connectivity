@@ -1813,7 +1813,7 @@ class Welch:
 
 
 class MorletWavelet:
-    """Complex Morlet wavelet transform with optional local time smoothing.
+    """Complex Morlet transform with explicit edge and 2-D smoothing controls.
 
     Coefficients contain only the requested positive frequencies and therefore
     support functional, but not Wilson-factorized directed, connectivity. With
@@ -1843,6 +1843,22 @@ class MorletWavelet:
     smoothing_step : float, optional
         Step (seconds) between smoothing windows; defaults to ``smoothing_time``
         and requires it.
+    smoothing_frequency : int, default=1
+        Odd number of adjacent requested frequency bins collected into each
+        local estimate. Frequency boundaries are reflected, matching the
+        boundary convention used by MNE's time-resolved spectral smoothing.
+    smoothing_kernel : {"boxcar", "hann"}, default="boxcar"
+        Separable time/frequency weights for the local estimate. ``"boxcar"``
+        preserves the historical equal-weight smoothing; ``"hann"`` reduces
+        discontinuities at the neighborhood boundary.
+    padding_mode : {"constant", "reflect", "edge"}, default="constant"
+        How the time series is extended before convolution. ``"constant"``
+        (zero padding) preserves the historical transform.
+    edge_mode : {"keep", "nan", "trim"}, default="keep"
+        Treatment of coefficients whose five-standard-deviation wavelet support
+        extends beyond the original record. ``"keep"`` retains padded values,
+        ``"nan"`` makes derived estimates NaN, and ``"trim"`` removes times
+        that are not valid for every requested frequency.
     zero_mean : bool, default=True
         Subtract the wavelet's mean so it has no DC response.
     start_time : float, default=0.0
@@ -1862,6 +1878,10 @@ class MorletWavelet:
         decimation: int = 1,
         smoothing_time: float | None = None,
         smoothing_step: float | None = None,
+        smoothing_frequency: int = 1,
+        smoothing_kernel: Literal["boxcar", "hann"] = "boxcar",
+        padding_mode: Literal["constant", "reflect", "edge"] = "constant",
+        edge_mode: Literal["keep", "nan", "trim"] = "keep",
         zero_mean: bool = True,
         start_time: float = 0.0,
     ) -> None:
@@ -1911,6 +1931,21 @@ class MorletWavelet:
             raise ValueError(
                 "smoothing_step requires smoothing_time and must be finite and positive."
             )
+        if (
+            isinstance(smoothing_frequency, bool)
+            or not isinstance(smoothing_frequency, (int, np.integer))
+            or smoothing_frequency < 1
+            or smoothing_frequency % 2 == 0
+        ):
+            raise ValueError("smoothing_frequency must be a positive odd integer.")
+        if smoothing_kernel not in {"boxcar", "hann"}:
+            raise ValueError("smoothing_kernel must be 'boxcar' or 'hann'.")
+        if padding_mode not in {"constant", "reflect", "edge"}:
+            raise ValueError("padding_mode must be 'constant', 'reflect', or 'edge'.")
+        if padding_mode == "reflect" and data.shape[0] < 2:
+            raise ValueError("padding_mode='reflect' requires at least 2 time samples.")
+        if edge_mode not in {"keep", "nan", "trim"}:
+            raise ValueError("edge_mode must be 'keep', 'nan', or 'trim'.")
 
         self._time_series = _immutable_array_snapshot(data)
         self.sampling_frequency = float(sampling_frequency)
@@ -1919,10 +1954,40 @@ class MorletWavelet:
         self.decimation = int(decimation)
         self.smoothing_time = smoothing_time
         self.smoothing_step = smoothing_step
+        self.smoothing_frequency = int(smoothing_frequency)
+        self.smoothing_kernel = smoothing_kernel
+        self.padding_mode = padding_mode
+        self.edge_mode = edge_mode
         self.zero_mean = bool(zero_mean)
         self.start_time = float(start_time)
 
-        n_decimated = (data.shape[0] - 1) // self.decimation + 1
+        half_widths = np.maximum(
+            1,
+            np.ceil(
+                5
+                * cycle_values
+                / (2 * np.pi * frequency_values)
+                * self.sampling_frequency
+            ).astype(int),
+        )
+        self._edge_half_width_samples = _immutable_array_snapshot(half_widths)
+        sample_indices = np.arange(0, data.shape[0], self.decimation)
+        validity = (sample_indices[:, np.newaxis] >= half_widths) & (
+            sample_indices[:, np.newaxis] < data.shape[0] - half_widths
+        )
+        if edge_mode == "trim":
+            keep = np.all(validity, axis=1)
+            if not np.any(keep):
+                raise ValueError(
+                    "edge_mode='trim' leaves no samples valid for every requested "
+                    "frequency; use fewer cycles, a longer record, or edge_mode='nan'."
+                )
+            sample_indices = sample_indices[keep]
+            validity = validity[keep]
+        self._sample_indices = _immutable_array_snapshot(sample_indices)
+        self._base_validity = _immutable_array_snapshot(validity)
+
+        n_decimated = len(sample_indices)
         if smoothing_time is None:
             self._smoothing_samples = 1
             self._smoothing_step_samples = 1
@@ -1959,10 +2024,7 @@ class MorletWavelet:
 
     @property
     def time(self) -> NDArray[np.floating]:
-        sample_times = self.start_time + (
-            xp.arange(0, self._time_series.shape[0], self.decimation)
-            / self.sampling_frequency
-        )
+        sample_times = self.start_time + self._sample_indices / self.sampling_frequency
         if self._smoothing_samples == 1:
             return sample_times
         return _sliding_window(
@@ -1972,11 +2034,84 @@ class MorletWavelet:
             axis=0,
         ).mean(axis=-1)
 
+    @property
+    def edge_half_width(self) -> NDArray[np.floating]:
+        """Wavelet half-support at each frequency, in seconds."""
+        return _readonly_array_copy(
+            self._edge_half_width_samples / self.sampling_frequency
+        )
+
+    def _windowed_validity(self) -> BackendArray:
+        """Strict validity of every time/frequency output neighborhood."""
+        validity = xp.asarray(self._base_validity)
+        windows = _sliding_window(
+            validity,
+            self._smoothing_samples,
+            self._smoothing_step_samples,
+            axis=0,
+        )
+        frequency_half_width = self.smoothing_frequency // 2
+        if frequency_half_width:
+            frequency_mode = "reflect" if validity.shape[1] > 1 else "edge"
+            windows = xp.pad(
+                windows,
+                ((0, 0), (frequency_half_width, frequency_half_width), (0, 0)),
+                mode=frequency_mode,
+            )
+            windows = _sliding_window(
+                windows, self.smoothing_frequency, axis=1
+            )
+        else:
+            windows = windows[..., xp.newaxis]
+        return xp.all(windows, axis=(-2, -1))
+
+    @property
+    def valid_time_frequency(self) -> NDArray[np.bool_]:
+        """Mask where the full wavelet and smoothing support is in-record."""
+        return _readonly_array_copy(self._windowed_validity())
+
+    @staticmethod
+    def _kernel_values(size: int, kernel: str) -> BackendArray:
+        if kernel == "boxcar" or size == 1:
+            return xp.ones(size, dtype=float)
+        values = xp.asarray(scipy_hann(size, sym=True))
+        if not bool(xp.any(values > 0)):
+            return xp.ones(size, dtype=float)
+        return values
+
+    @property
+    def observation_weights(self) -> NDArray[np.floating]:
+        """Weights consumed by :class:`Connectivity` for local expectations."""
+        time_weights = self._kernel_values(
+            self._smoothing_samples, self.smoothing_kernel
+        )
+        frequency_weights = self._kernel_values(
+            self.smoothing_frequency, self.smoothing_kernel
+        )
+        kernel = time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
+        kernel = kernel.reshape(1, 1, -1, 1, 1)
+        shape = (
+            len(self.time),
+            self.n_trials,
+            self._smoothing_samples * self.smoothing_frequency,
+            len(self._frequencies),
+            1,
+        )
+        weights = xp.broadcast_to(kernel, shape).copy()
+        if self.edge_mode == "nan":
+            weights *= self._windowed_validity()[:, xp.newaxis, xp.newaxis, :, xp.newaxis]
+        return _readonly_array_copy(weights)
+
     def fft(self) -> NDArray[np.complexfloating]:
         coefficients: list[BackendArray] = []
-        for frequency, cycles in zip(self._frequencies, self._n_cycles, strict=True):
+        for frequency, cycles, half_width in zip(
+            self._frequencies,
+            self._n_cycles,
+            self._edge_half_width_samples,
+            strict=True,
+        ):
             sigma = cycles / (2 * xp.pi * frequency)
-            half_width = max(1, int(xp.ceil(5 * sigma * self.sampling_frequency)))
+            half_width = int(half_width)
             wavelet_time = (
                 xp.arange(-half_width, half_width + 1) / self.sampling_frequency
             )
@@ -1989,21 +2124,45 @@ class MorletWavelet:
             wavelet = oscillation * gaussian
             wavelet = wavelet / xp.sqrt(xp.sum(xp.abs(wavelet) ** 2))
             kernel = xp.conjugate(wavelet[::-1])[:, xp.newaxis, xp.newaxis]
+            padded = xp.pad(
+                self._time_series,
+                ((half_width, half_width), (0, 0), (0, 0)),
+                mode=self.padding_mode,
+            )
             coefficient = fftconvolve(
-                self._time_series, kernel, mode="same", axes=0
+                padded, kernel, mode="valid", axes=0
             ) / xp.sqrt(self.sampling_frequency)
-            coefficients.append(coefficient[:: self.decimation])
+            coefficients.append(coefficient[self._sample_indices])
 
         transformed = xp.stack(coefficients, axis=2)
-        if self._smoothing_samples == 1:
-            return transformed[:, :, xp.newaxis, :, :]
         windows = _sliding_window(
             transformed,
             self._smoothing_samples,
             self._smoothing_step_samples,
             axis=0,
         )
-        return xp.moveaxis(windows, -1, 2)
+        frequency_half_width = self.smoothing_frequency // 2
+        if frequency_half_width:
+            frequency_mode = "reflect" if transformed.shape[2] > 1 else "edge"
+            windows = xp.pad(
+                windows,
+                ((0, 0), (0, 0), (frequency_half_width, frequency_half_width),
+                 (0, 0), (0, 0)),
+                mode=frequency_mode,
+            )
+            windows = _sliding_window(
+                windows, self.smoothing_frequency, axis=2
+            )
+        else:
+            windows = windows[..., xp.newaxis]
+        windows = xp.transpose(windows, (0, 1, 4, 5, 2, 3))
+        return windows.reshape(
+            windows.shape[0],
+            windows.shape[1],
+            self._smoothing_samples * self.smoothing_frequency,
+            windows.shape[4],
+            windows.shape[5],
+        )
 
     def _provenance_metadata(self) -> dict[str, Any]:
         return {
@@ -2013,6 +2172,10 @@ class MorletWavelet:
             "n_signals": self.n_signals,
             "n_trials": self.n_trials,
             "sampling_frequency": self.sampling_frequency,
+            "edge_mode": self.edge_mode,
+            "padding_mode": self.padding_mode,
+            "smoothing_frequency": self.smoothing_frequency,
+            "smoothing_kernel": self.smoothing_kernel,
             "smoothing_step": self.smoothing_step
             if self.smoothing_step is not None
             else "None",
