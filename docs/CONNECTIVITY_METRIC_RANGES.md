@@ -19,8 +19,9 @@ The following summarizes the theoretical value ranges for common connectivity me
 | **Imaginary coherence** | [0, 1] (magnitude) | Raw imaginary part ranges [−1, 1]; magnitude version. |
 | **Imaginary coherency** | [−1, 1] | Signed imaginary component; antisymmetric across pairs. |
 | **Partial coherence** | [0, 1] | Magnitude-squared association conditional on all other signals. |
-| **Canonical coherence** | [0, 1] | Maximal coherence between groups. |
-| **MIC (maximized imaginary coherency)** | [0, 1] | Strongest whitened phase-lagged interaction between groups. |
+| **Canonical coherence (legacy)** | [0, 1] | Historical magnitude-squared canonical-correlation estimator. |
+| **CaCoh / canonical coherency** | Complex unit disk | Exact phase-optimised Vidaurre CaCoh; magnitude is in [0, 1], phase uses MNE's `exp(-1j * phi)` convention. |
+| **MIC (maximized imaginary coherency)** | [0, 1] | Whitened phase-lagged singular components; the rich result includes scores, filters, and patterns. |
 | **MIM (multivariate interaction measure)** | [0, min(group ranks)] | Sum of squared phase-lagged interaction components. |
 | **Global coherence** | [0, 1] | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
 | **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
@@ -60,7 +61,8 @@ The following summarizes the theoretical value ranges for common connectivity me
 - **corrected_imaginary_phase_locking_value**: Zero-lag-corrected PLV
 - **directed_phase_lag_index**: Probability-like signed phase-leading score
 - **maximized_imaginary_coherency**: Strongest whitened imaginary interaction
-- **canonical_coherence**: Maximal coherence between groups
+- **canonical_coherence**: Historical magnitude-squared canonical correlation
+- **canonical_coherency**: Magnitude of exact complex phase-optimised CaCoh
 - **phase_locking_value**: Phase consistency measure
 - **directed_transfer_function**: Normalized directional influence
 - **directed_coherence**: DTF scaled by noise variance

@@ -333,6 +333,117 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert np.isnan(mic.squeeze()[0, 0])
 
 
+def test_exact_cacoh_reduces_to_scalar_complex_coherency_up_to_sign():
+    rng = np.random.default_rng(923)
+    first = rng.standard_normal(200) + 1j * rng.standard_normal(200)
+    second = 0.6 * np.exp(-0.8j) * first + 0.8 * (
+        rng.standard_normal(200) + 1j * rng.standard_normal(200)
+    )
+    coefficients = np.stack((first, second), axis=-1)[np.newaxis, :, np.newaxis, np.newaxis]
+    connectivity = Connectivity(coefficients)
+
+    result = connectivity.canonical_coherency([0, 1])
+    score = result.scores.squeeze()
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    coherency = csd[0, 1] / np.sqrt(csd[0, 0].real * csd[1, 1].real)
+
+    assert abs(score) == pytest.approx(abs(coherency), rel=1e-9)
+    ratio = score / np.conjugate(coherency)
+    assert ratio.imag == pytest.approx(0.0, abs=1e-7)
+    assert abs(ratio.real) == pytest.approx(1.0, rel=1e-9)
+
+
+def test_exact_cacoh_matches_dense_phase_grid_oracle():
+    rng = np.random.default_rng(924)
+    coefficients = rng.standard_normal((1, 300, 1, 1, 4)) + 1j * rng.standard_normal(
+        (1, 300, 1, 1, 4)
+    )
+    connectivity = Connectivity(coefficients)
+    result = connectivity.canonical_coherency(
+        [0, 0, 1, 1], regularization=0.0
+    )
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+
+    def inverse_sqrt(matrix):
+        values, vectors = np.linalg.eigh((matrix + matrix.T) / 2)
+        return (vectors / np.sqrt(values)[np.newaxis, :]) @ vectors.T
+
+    Taa = inverse_sqrt(csd[:2, :2].real)
+    Tbb = inverse_sqrt(csd[2:, 2:].real)
+    phases = np.linspace(0, np.pi, 20001)
+    grid_maximum = max(
+        np.linalg.svd(
+            Taa @ np.real(np.exp(-1j * phase) * csd[:2, 2:]) @ Tbb,
+            compute_uv=False,
+        )[0]
+        for phase in phases
+    )
+    assert abs(result.scores.squeeze()) == pytest.approx(grid_maximum, abs=2e-8)
+
+
+def test_rich_mic_scores_filters_and_patterns_match_svd_oracle():
+    rng = np.random.default_rng(925)
+    coefficients = rng.standard_normal((1, 250, 1, 1, 4)) + 1j * rng.standard_normal(
+        (1, 250, 1, 1, 4)
+    )
+    connectivity = Connectivity(coefficients)
+    result = connectivity.maximized_imaginary_coherency_components(
+        [0, 0, 1, 1], n_components=2, regularization=0.0
+    )
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    filters = result.filters.squeeze()
+    patterns = result.patterns.squeeze()
+    first_filters = filters[:, 0, :2].T
+    second_filters = filters[:, 1, 2:].T
+
+    reconstructed = np.asarray(
+        [
+            first_filters[:, component].T
+            @ csd[:2, 2:].imag
+            @ second_filters[:, component]
+            for component in range(2)
+        ]
+    )
+    np.testing.assert_allclose(result.scores.squeeze(), reconstructed, atol=1e-12)
+    assert np.all(np.diff(result.scores.squeeze()) <= 0)
+    np.testing.assert_allclose(
+        patterns[:, 0, :2].T, csd[:2, :2].real @ first_filters
+    )
+    np.testing.assert_allclose(
+        patterns[:, 1, 2:].T, csd[2:, 2:].real @ second_filters
+    )
+    assert np.isnan(filters[:, 0, 2:]).all()
+    assert np.isnan(filters[:, 1, :2]).all()
+
+
+def test_multicomponent_cacoh_deflates_previous_filters():
+    rng = np.random.default_rng(926)
+    coefficients = rng.standard_normal((1, 300, 1, 1, 6)) + 1j * rng.standard_normal(
+        (1, 300, 1, 1, 6)
+    )
+    result = Connectivity(coefficients).canonical_coherency(
+        [0, 0, 0, 1, 1, 1], n_components=3
+    )
+    filters = result.filters.squeeze()
+
+    for side, indices in enumerate((slice(0, 3), slice(3, 6))):
+        local = filters[:, side, indices]
+        np.testing.assert_allclose(local @ local.T, np.diag(np.diag(local @ local.T)), atol=1e-8)
+    assert result.group_membership.tolist() == [
+        [True, True, True, False, False, False],
+        [False, False, False, True, True, True],
+    ]
+
+
+@pytest.mark.parametrize("method", ["canonical_coherency", "maximized_imaginary_coherency_components"])
+def test_multivariate_components_validate_group_geometry(method):
+    connectivity = Connectivity(np.ones((1, 4, 2, 1, 4), dtype=complex))
+    with pytest.raises(ValueError, match="length n_signals"):
+        getattr(connectivity, method)([0, 1])
+    with pytest.raises(ValueError, match="n_components"):
+        getattr(connectivity, method)([0, 0, 1, 1], n_components=3)
+
+
 def test_mic_rejects_single_group_and_non_positive_rank():
     coefficients = np.empty((1, 20, 2, 1, 3), dtype=complex)
     coefficients[..., 0] = 1j

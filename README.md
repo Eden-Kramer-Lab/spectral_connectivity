@@ -171,6 +171,12 @@ power = c.power()  # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
+# Exact Vidaurre CaCoh is complex and component-resolved. Rich MIC uses the
+# same result schema; both include filters, patterns, and group membership.
+cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
+mic = c.maximized_imaginary_coherency_components(
+    brain_area_labels, n_components=2
+)
 ```
 
 The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
@@ -245,8 +251,8 @@ Functional
 3. coherence_magnitude and coherence_phase
 4. imaginary_coherence and signed imaginary_coherency
 5. partial_coherence
-6. canonical_coherence
-7. maximized_imaginary_coherency and multivariate_interaction_measure
+6. canonical_coherence and exact complex canonical_coherency (CaCoh)
+7. maximized_imaginary_coherency (score-only or component-resolved) and multivariate_interaction_measure
 8. phase_locking_value and corrected_imaginary_phase_locking_value
 9. phase_lag_index, directed_phase_lag_index, and weighted_phase_lag_index
 10. debiased_squared_phase_lag_index

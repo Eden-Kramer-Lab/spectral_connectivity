@@ -2,6 +2,7 @@
 
 import warnings
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from functools import cached_property, partial, wraps
 from itertools import combinations, permutations
 from logging import getLogger
@@ -85,6 +86,26 @@ EXPECTATION = {
 # Tikhonov regularization factor for stabilizing matrix inversions
 # Used to prevent numerical instability with near-singular matrices
 TIKHONOV_REGULARIZATION_FACTOR = 1e-12
+
+
+@dataclass(frozen=True)
+class MultivariateConnectivityResult:
+    """Component-resolved multivariate connectivity and spatial projections.
+
+    ``scores`` has shape ``(..., frequency, connection, component)``. Filters
+    and patterns, when present, append ``(side, signal)`` where side 0 is the
+    first group and side 1 is the second. Entries for signals outside a side's
+    group are NaN. ``connections`` contains the corresponding group-label pair
+    for each connection and ``group_membership`` has shape ``(group, signal)``.
+    """
+
+    method: str
+    scores: NDArray[np.number]
+    connections: NDArray[Any]
+    group_labels: NDArray[Any]
+    group_membership: NDArray[np.bool_]
+    filters: NDArray[np.floating] | None = None
+    patterns: NDArray[np.floating] | None = None
 
 
 def _validated_regularization(value: Any) -> float:
@@ -1558,10 +1579,30 @@ class Connectivity:
         result[..., diagonal, diagonal] = xp.nan
         return result
 
+    def _validated_group_indices(
+        self, group_labels: NDArray[Any]
+    ) -> tuple[NDArray[Any], list[NDArray[np.intp]], NDArray[np.bool_]]:
+        """Validate a one-label-per-signal grouping and return its geometry."""
+        self._validate_multiple_signals()
+        labels_array = np.asarray(group_labels)
+        if labels_array.ndim != 1 or len(labels_array) != self.n_signals:
+            raise ValueError(
+                f"group_labels must be one-dimensional with length "
+                f"n_signals ({self.n_signals}), got shape {labels_array.shape}."
+            )
+        labels = np.unique(labels_array)
+        if len(labels) < 2:
+            raise ValueError("group_labels must define at least two groups.")
+        indices = [np.flatnonzero(labels_array == label) for label in labels]
+        membership = np.asarray(
+            np.stack([labels_array == label for label in labels]), dtype=bool
+        )
+        return labels, indices, membership
+
     def canonical_coherence(
         self, group_labels: NDArray[np.integer]
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
-        """Find the maximal coherence between each combination of groups.
+        """Return the historical magnitude-squared canonical correlation.
 
         The canonical coherence finds two sets of weights such that the
         coherence between the linear combination of group1 and the linear
@@ -1591,9 +1632,14 @@ class Connectivity:
                functional networks in humans with application to speech.
                Boston University.
 
+        See Also
+        --------
+        canonical_coherency
+            Exact complex, phase-optimised Vidaurre CaCoh with component
+            filters and patterns.
+
         """
-        self._validate_multiple_signals()
-        labels = np.unique(group_labels)
+        labels, _, _ = self._validated_group_indices(group_labels)
         n_frequencies = self._fourier_coefficients.shape[-2]
         non_negative_frequencies = xp.arange(
             0, self._nonnegative_frequency_count(n_frequencies)
@@ -1634,6 +1680,189 @@ class Connectivity:
         ] = magnitude
 
         return to_numpy(canonical_coherence_magnitude), to_numpy(labels)
+
+    def canonical_coherency(
+        self,
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None = None,
+        n_components: int = 1,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> MultivariateConnectivityResult:
+        """Return exact complex canonical coherency (CaCoh) components.
+
+        This implements Vidaurre et al.'s phase-optimised CaCoh definition: for
+        each candidate phase, the real projection of the between-group CSD is
+        whitened by the real within-group CSDs, and the phase giving the largest
+        singular value is selected. Scores are complex, with magnitude equal to
+        the maximised coherence and phase encoded using MNE's
+        ``magnitude * exp(-1j * phi)`` convention.
+
+        Unlike the historical :meth:`canonical_coherence`, this method returns
+        component-resolved scores, spatial filters, and Haufe-style patterns.
+        Additional components are fitted after projection onto the null spaces
+        of the previously selected filters.
+        """
+        return self._multivariate_component_result(
+            "canonical_coherency",
+            group_labels,
+            rank=rank,
+            n_components=n_components,
+            regularization=regularization,
+        )
+
+    def maximized_imaginary_coherency_components(
+        self,
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None = None,
+        n_components: int = 1,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> MultivariateConnectivityResult:
+        """Return component-resolved MIC scores, filters, and patterns.
+
+        The singular vectors of the whitened imaginary between-group CSD are
+        returned in descending singular-value order. Filters map channel data
+        to the components; patterns map the components back to channel space.
+        """
+        return self._multivariate_component_result(
+            "maximized_imaginary_coherency_components",
+            group_labels,
+            rank=rank,
+            n_components=n_components,
+            regularization=regularization,
+        )
+
+    def _multivariate_component_result(
+        self,
+        method: Literal[
+            "canonical_coherency", "maximized_imaginary_coherency_components"
+        ],
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None,
+        n_components: int,
+        regularization: float,
+    ) -> MultivariateConnectivityResult:
+        """Compute rich CaCoh/MIC results from the expected CSD."""
+        labels, group_indices, membership = self._validated_group_indices(group_labels)
+        if rank is not None and (
+            isinstance(rank, bool)
+            or not isinstance(rank, (int, np.integer))
+            or rank < 1
+        ):
+            raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+        if (
+            isinstance(n_components, bool)
+            or not isinstance(n_components, (int, np.integer))
+            or n_components < 1
+        ):
+            raise ValueError(
+                f"n_components must be a positive integer, got {n_components!r}."
+            )
+        regularization = _validated_regularization(regularization)
+        max_components = min(
+            min(len(indices) for indices in group_indices),
+            rank if rank is not None else self.n_signals,
+        )
+        if n_components > max_components:
+            raise ValueError(
+                f"n_components ({n_components}) must not exceed the minimum "
+                f"group rank/size ({max_components})."
+            )
+
+        spectrum = to_numpy(self._expectation_cross_spectral_matrix())
+        spectrum = spectrum[
+            ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
+        ]
+        leading_shape = spectrum.shape[:-3]
+        n_frequencies = spectrum.shape[-3]
+        connections = np.asarray(
+            [(labels[first], labels[second]) for first, second in combinations(range(len(labels)), 2)]
+        )
+        n_connections = len(connections)
+        score_dtype = np.complex128 if method == "canonical_coherency" else float
+        scores = np.full(
+            (*leading_shape, n_frequencies, n_connections, n_components),
+            np.nan,
+            dtype=score_dtype,
+        )
+        projection_shape = (
+            *leading_shape,
+            n_frequencies,
+            n_connections,
+            n_components,
+            2,
+            self.n_signals,
+        )
+        filters = np.full(projection_shape, np.nan, dtype=float)
+        patterns = np.full(projection_shape, np.nan, dtype=float)
+        flat_scores = scores.reshape((-1, n_connections, n_components))
+        flat_filters = filters.reshape(
+            (-1, n_connections, n_components, 2, self.n_signals)
+        )
+        flat_patterns = patterns.reshape(
+            (-1, n_connections, n_components, 2, self.n_signals)
+        )
+
+        flat_spectrum = spectrum.reshape((-1, self.n_signals, self.n_signals))
+        for connection_index, (first, second) in enumerate(
+            combinations(range(len(labels)), 2)
+        ):
+            first_indices = group_indices[first]
+            second_indices = group_indices[second]
+            for flat_index, full_csd in enumerate(flat_spectrum):
+                Caa = full_csd[np.ix_(first_indices, first_indices)]
+                Cab = full_csd[np.ix_(first_indices, second_indices)]
+                Cbb = full_csd[np.ix_(second_indices, second_indices)]
+                if not (
+                    np.all(np.isfinite(Caa))
+                    and np.all(np.isfinite(Cab))
+                    and np.all(np.isfinite(Cbb))
+                ):
+                    continue
+                local_scores: NDArray[Any]
+                local_filters: tuple[NDArray[np.floating], NDArray[np.floating]]
+                local_patterns: tuple[NDArray[np.floating], NDArray[np.floating]]
+                if method == "canonical_coherency":
+                    local_scores, local_filters, local_patterns = (
+                        _canonical_coherency_components(
+                            Caa,
+                            Cab,
+                            Cbb,
+                            rank=rank,
+                            n_components=n_components,
+                            regularization=regularization,
+                        )
+                    )
+                else:
+                    local_scores, local_filters, local_patterns = _mic_components(
+                        Caa,
+                        Cab,
+                        Cbb,
+                        rank=rank,
+                        n_components=n_components,
+                        regularization=regularization,
+                    )
+                flat_scores[flat_index, connection_index] = local_scores
+                for side, indices in enumerate((first_indices, second_indices)):
+                    for component in range(n_components):
+                        flat_filters[
+                            flat_index, connection_index, component, side, indices
+                        ] = local_filters[side][:, component]
+                        flat_patterns[
+                            flat_index, connection_index, component, side, indices
+                        ] = local_patterns[side][:, component]
+
+        return MultivariateConnectivityResult(
+            method=method,
+            scores=scores,
+            connections=connections,
+            group_labels=np.asarray(labels),
+            group_membership=np.asarray(membership, dtype=bool),
+            filters=filters,
+            patterns=patterns,
+        )
 
     def maximized_imaginary_coherency(
         self,
@@ -1743,16 +1972,7 @@ class Connectivity:
         regularization: float,
     ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer]]:
         """Whiten imaginary CSD blocks for MIC/MIM."""
-        self._validate_multiple_signals()
-        group_labels = np.asarray(group_labels)
-        if group_labels.ndim != 1 or len(group_labels) != self.n_signals:
-            raise ValueError(
-                f"group_labels must be one-dimensional with length "
-                f"n_signals ({self.n_signals}), got shape {group_labels.shape}."
-            )
-        labels = np.unique(group_labels)
-        if len(labels) < 2:
-            raise ValueError("group_labels must define at least two groups.")
+        labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
         if rank is not None and (
             isinstance(rank, bool)
             or not isinstance(rank, (int, np.integer))
@@ -1765,9 +1985,7 @@ class Connectivity:
         spectrum = spectrum[
             ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
         ]
-        group_indices = [
-            xp.asarray(np.flatnonzero(group_labels == label)) for label in labels
-        ]
+        group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
         inverse_square_roots = []
         for indices in group_indices:
             within = spectrum[..., indices[:, xp.newaxis], indices[xp.newaxis, :]].real
@@ -3269,6 +3487,165 @@ def _matrix_inverse_square_root(
         eigenvectors * inverse_sqrt_values[..., xp.newaxis, :],
         xp.swapaxes(eigenvectors, -1, -2),
     )
+
+
+def _numpy_inverse_square_root(
+    matrix: NDArray[np.floating], *, rank: int | None, regularization: float
+) -> NDArray[np.floating]:
+    """NumPy inverse square root used by component-resolved decompositions."""
+    symmetric = (np.asarray(matrix, dtype=float) + np.asarray(matrix, dtype=float).T) / 2
+    eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
+    largest = max(float(eigenvalues[-1]), 0.0)
+    tolerance = np.finfo(eigenvalues.dtype).eps * max(1, len(eigenvalues)) * largest
+    keep = eigenvalues > tolerance
+    if rank is not None and rank < len(eigenvalues):
+        rank_mask = np.arange(len(eigenvalues)) >= len(eigenvalues) - rank
+        keep &= rank_mask
+    matrix_rms = float(np.sqrt(np.mean(symmetric**2)))
+    safe_values = np.where(keep, eigenvalues + regularization * matrix_rms, 1.0)
+    inverse_values = np.where(keep, 1.0 / np.sqrt(safe_values), 0.0)
+    return (eigenvectors * inverse_values[np.newaxis, :]) @ eigenvectors.T
+
+
+def _canonical_coherency_at_phase(
+    phi: float,
+    Cab: NDArray[np.complexfloating],
+    Taa: NDArray[np.floating],
+    Tbb: NDArray[np.floating],
+) -> tuple[float, NDArray[np.floating], NDArray[np.floating]]:
+    """CaCoh magnitude and singular vectors for one phase projection."""
+    projected = np.real(np.exp(-1j * phi) * Cab)
+    left, singular_values, right_h = np.linalg.svd(
+        Taa @ projected @ Tbb, full_matrices=False
+    )
+    if singular_values.size == 0:
+        return np.nan, np.empty(0), np.empty(0)
+    return float(singular_values[0]), left[:, 0], right_h[0]
+
+
+def _optimize_canonical_coherency_phase(
+    Cab: NDArray[np.complexfloating],
+    Taa: NDArray[np.floating],
+    Tbb: NDArray[np.floating],
+) -> tuple[float, float, NDArray[np.floating], NDArray[np.floating]]:
+    """Globally bracket then finely optimize Vidaurre's phase objective."""
+    from scipy.optimize import minimize_scalar
+
+    # The objective is pi-periodic. A coarse global scan prevents a bounded
+    # local optimizer from selecting the wrong lobe; bounded refinement then
+    # gives substantially tighter phase accuracy than a grid-only search.
+    coarse_phases = np.linspace(0.0, np.pi, 33, endpoint=False)
+    coarse_values = np.asarray(
+        [
+            _canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0]
+            for phi in coarse_phases
+        ]
+    )
+    best_index = int(np.nanargmax(coarse_values))
+    step = np.pi / len(coarse_phases)
+    centre = float(coarse_phases[best_index])
+    optimum = minimize_scalar(
+        lambda phi: -_canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0],
+        bounds=(centre - step, centre + step),
+        method="bounded",
+        options={"xatol": 1e-12},
+    )
+    phi = float(optimum.x)
+    magnitude, left, right = _canonical_coherency_at_phase(phi, Cab, Taa, Tbb)
+    return magnitude, phi, left, right
+
+
+def _orthogonal_complement(filters: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Orthonormal basis for the Euclidean complement of filter columns."""
+    left = np.linalg.svd(filters, full_matrices=True)[0]
+    return left[:, filters.shape[1] :]
+
+
+def _canonical_coherency_components(
+    Caa: NDArray[np.complexfloating],
+    Cab: NDArray[np.complexfloating],
+    Cbb: NDArray[np.complexfloating],
+    *,
+    rank: int | None,
+    n_components: int,
+    regularization: float,
+) -> tuple[
+    NDArray[np.complexfloating],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+]:
+    """Exact phase-optimised CaCoh components for one CSD matrix."""
+    real_aa = np.real(Caa)
+    real_bb = np.real(Cbb)
+    basis_a: NDArray[np.floating] = np.eye(Caa.shape[0])
+    basis_b: NDArray[np.floating] = np.eye(Cbb.shape[0])
+    scores = np.full(n_components, np.nan + 0j)
+    filters_a = np.full((Caa.shape[0], n_components), np.nan)
+    filters_b = np.full((Cbb.shape[0], n_components), np.nan)
+    patterns_a = np.full_like(filters_a, np.nan)
+    patterns_b = np.full_like(filters_b, np.nan)
+
+    for component in range(n_components):
+        reduced_aa = basis_a.T @ real_aa @ basis_a
+        reduced_ab: NDArray[np.complexfloating] = np.asarray(
+            basis_a.T @ Cab @ basis_b, dtype=np.complex128
+        )
+        reduced_bb = basis_b.T @ real_bb @ basis_b
+        Taa = _numpy_inverse_square_root(
+            reduced_aa, rank=rank, regularization=regularization
+        )
+        Tbb = _numpy_inverse_square_root(
+            reduced_bb, rank=rank, regularization=regularization
+        )
+        magnitude, phi, left, right = _optimize_canonical_coherency_phase(
+            reduced_ab, Taa, Tbb
+        )
+        filter_a = basis_a @ (Taa @ left)
+        filter_b = basis_b @ (Tbb @ right)
+        scores[component] = magnitude * np.exp(-1j * phi)
+        filters_a[:, component] = filter_a
+        filters_b[:, component] = filter_b
+        patterns_a[:, component] = real_aa @ filter_a
+        patterns_b[:, component] = real_bb @ filter_b
+        if component + 1 < n_components:
+            basis_a = _orthogonal_complement(filters_a[:, : component + 1])
+            basis_b = _orthogonal_complement(filters_b[:, : component + 1])
+
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b)
+
+
+def _mic_components(
+    Caa: NDArray[np.complexfloating],
+    Cab: NDArray[np.complexfloating],
+    Cbb: NDArray[np.complexfloating],
+    *,
+    rank: int | None,
+    n_components: int,
+    regularization: float,
+) -> tuple[
+    NDArray[np.floating],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+]:
+    """MIC singular components and channel-space projections for one CSD."""
+    real_aa = np.real(Caa)
+    real_bb = np.real(Cbb)
+    Taa = _numpy_inverse_square_root(
+        real_aa, rank=rank, regularization=regularization
+    )
+    Tbb = _numpy_inverse_square_root(
+        real_bb, rank=rank, regularization=regularization
+    )
+    transformed = Taa @ np.imag(Cab) @ Tbb
+    left, singular_values, right_h = np.linalg.svd(transformed, full_matrices=False)
+    left = left[:, :n_components]
+    right = right_h[:n_components].T
+    scores = singular_values[:n_components]
+    filters_a = Taa @ left
+    filters_b = Tbb @ right
+    patterns_a = real_aa @ filters_a
+    patterns_b = real_bb @ filters_b
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b)
 
 
 def _estimate_transfer_function(

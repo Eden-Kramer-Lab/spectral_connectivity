@@ -37,6 +37,12 @@ directly with results from 2.x.
 - Multivariate/group measures: maximized imaginary coherency (MIC),
   multivariate interaction measure (MIM), conditional spectral Granger,
   blockwise spectral Granger, and time-reversed spectral Granger.
+- Exact complex `canonical_coherency` (Vidaurre CaCoh) performs phase
+  optimisation and component deflation and returns component scores, spatial
+  filters, patterns, connections, and group membership. The new
+  `maximized_imaginary_coherency_components` exposes the same rich result schema
+  for multiple MIC singular components; the historical score-only APIs remain
+  available unchanged.
 - `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
   relative reconstruction error of the Wilson factorization per sub-spectrum, so
   callers can check whether a cross-spectrum is resolved finely enough in
