@@ -67,6 +67,39 @@ measures = multitaper_connectivity(
 )
 ```
 
+`time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
+names define axis roles; positions do not.** Common dimension names are
+inferred and transposed automatically; for domain-specific names, pass
+`time_dim`, `trial_dim`, and `signal_dim` explicitly. Ambiguous dimensions raise
+instead of falling back to axis position; when a single unrecognized dimension
+is left for the one remaining role, it is assigned by elimination and a warning
+names the assumed mapping. Numeric `time`
+coordinates are interpreted as elapsed seconds and numeric `sample` coordinates
+as sample numbers, and are used to label output window centers. When
+`sampling_frequency` is given it is checked against the time index; when it is
+omitted, a numeric elapsed-seconds `time` coordinate infers it (a `sample`
+index cannot, having no time scale). Inference also requires enough coordinate
+precision to resolve the rate reliably; pass `sampling_frequency` explicitly for
+low-precision or large-offset time coordinates. A 1-D index on the signal
+dimension is preserved—including its label type—as the output's `source` and
+`target` coordinates unless `signal_names` is passed explicitly. Signal labels
+must be unique, non-missing, NetCDF-compatible scalar strings, real numbers,
+datetimes, or timedeltas; integer labels must fit the signed 32-bit range for
+portable NetCDF3 serialization.
+
+Datetime, timedelta, and object-valued **time coordinates** are not yet
+supported. Convert them to numeric elapsed seconds before calling
+`multitaper_connectivity`, for example:
+
+```python
+da = da.assign_coords(time=(da.time - da.time[0]) / np.timedelta64(1, "s"))
+```
+
+datetime and timedelta **signal labels** remain valid.
+
+A dask-backed DataArray is rejected; materialize it first with
+`DataArray.compute()` (or `.load()`) and pass the result.
+
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as
 an opt-in method. The lower-level `Connectivity` methods retain their historical
