@@ -1023,7 +1023,10 @@ def multitaper_connectivity(
         domain. For a DataArray, common time/trial/signal dimension names are
         inferred and transposed automatically; use ``time_dim``, ``trial_dim``,
         and ``signal_dim`` for domain-specific names. Ambiguous names raise rather
-        than falling back to dimension position. A numeric time index is
+        than falling back to dimension position, though a single unrecognized
+        dimension left for the one remaining role is assigned by elimination with
+        a warning. A dask-backed DataArray is rejected (materialize it first with
+        ``DataArray.compute()``). A numeric time index is
         interpreted as elapsed seconds (a ``sample`` index as sample numbers)
         and used to label output window centers. When ``sampling_frequency`` is
         given it is validated against the index; when it is omitted, an
