@@ -52,6 +52,7 @@ class _UnwrappedInput(NamedTuple):
     signal_names: Sequence[_SignalLabel] | None
     inferred_sampling_frequency: float | None
     inferred_start_time: float | None
+    input_attrs: Mapping[Any, Any] | None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -74,7 +75,9 @@ def _json_compatible(value: Any) -> Any:
     if isinstance(value, np.generic):
         return _json_compatible(value.item())
     if isinstance(value, np.ndarray):
-        return _json_compatible(value.tolist())
+        # Host-convert via the util so a device-backed array is never moved by
+        # an implicit ``np.asarray``/``tolist`` transfer.
+        return _json_compatible(to_numpy(value).tolist())
     if isinstance(value, Mapping):
         if all(isinstance(key, str) for key in value):
             return {key: _json_compatible(item) for key, item in sorted(value.items())}
@@ -82,15 +85,9 @@ def _json_compatible(value: Any) -> Any:
             [_json_compatible(key), _json_compatible(item)]
             for key, item in value.items()
         ]
-        converted_items.sort(
-            key=lambda pair: json.dumps(
-                pair[0],
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-                allow_nan=False,
-            )
-        )
+        # Keys are already JSON-compatible; sort by their canonical form so the
+        # serialization contract lives in one place (``_canonical_json``).
+        converted_items.sort(key=lambda pair: _canonical_json(pair[0]))
         return {"python_type": "mapping", "items": converted_items}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_json_compatible(item) for item in value]
@@ -325,17 +322,18 @@ def _validated_signal_labels(
 
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
-    multitaper_metadata: Mapping[str, Any],
     method: str,
-    signal_names: Sequence[_SignalLabel] | None,
+    signal_labels: BackendArray,
     squeeze: bool,
-    *,
-    input_attrs: Mapping[Any, Any] | None = None,
+    shared_attrs: Mapping[str, Any],
     **kwargs: Any,
 ) -> xr.DataArray:
-    """Format one result from an already-built ``Connectivity`` instance."""
+    """Format one result from an already-built ``Connectivity`` instance.
+
+    ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
+    one transform, so the caller validates/builds them once and passes them in.
+    """
     measure_spec = _get_measure_spec(method)
-    signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     connectivity_mat = getattr(connectivity, method)(**kwargs)
 
     pairwise_shape = (
@@ -370,9 +368,8 @@ def _connectivity_result_to_xarray(
         # applied below: sel(source=i, target=j) then reads "i drives j".
         connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
-    attrs = _shared_provenance_attrs(
-        connectivity, multitaper_metadata, input_attrs=input_attrs
-    )
+    # Copy the shared provenance so per-measure keys never leak across measures.
+    attrs = dict(shared_attrs)
     attrs["measure"] = method
     attrs["measure_kwargs_json"] = _canonical_json(kwargs)
     for key, value in kwargs.items():
@@ -498,33 +495,42 @@ def connectivity_to_xarray(
     _get_measure_spec(method)
     metadata = m._provenance_metadata()
     connectivity = Connectivity.from_multitaper(m)
+    signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
+    shared_attrs = _shared_provenance_attrs(connectivity, metadata)
     return _connectivity_result_to_xarray(
-        connectivity, metadata, method, signal_names, squeeze, **kwargs
+        connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
     )
 
 
 # Common dimension names let the wrapper infer semantic roles. DataArrays are
 # transposed into the numerical core's (time[, trial], signal) order; callers
 # provide explicit ``*_dim`` arguments when their names are domain-specific.
+# Integer sample-number names are a time sub-kind, tracked separately for the
+# unit distinction in ``_time_axis_from_dataarray`` (they carry no time scale).
 _SAMPLE_DIM_NAMES = frozenset({"sample", "samples"})
-_TIME_DIM_NAMES = frozenset(
-    {"time", "times", "timestamp", "timestamps", *_SAMPLE_DIM_NAMES}
-)
-_TRIAL_DIM_NAMES = frozenset({"trial", "trials", "epoch", "epochs"})
-_SIGNAL_DIM_NAMES = frozenset(
-    {
-        "signal",
-        "signals",
-        "channel",
-        "channels",
-        "electrode",
-        "electrodes",
-        "sensor",
-        "sensors",
-        "node",
-        "nodes",
-    }
-)
+# Single source of truth mapping each semantic role to its recognized dimension
+# names; ``_dimension_role`` is the derived inverse lookup.
+_ROLE_SYNONYMS: dict[str, frozenset[str]] = {
+    "time": frozenset({"time", "times", "timestamp", "timestamps", *_SAMPLE_DIM_NAMES}),
+    "trial": frozenset({"trial", "trials", "epoch", "epochs"}),
+    "signal": frozenset(
+        {
+            "signal",
+            "signals",
+            "channel",
+            "channels",
+            "electrode",
+            "electrodes",
+            "sensor",
+            "sensors",
+            "node",
+            "nodes",
+        }
+    ),
+}
+_SYNONYM_TO_ROLE: dict[str, str] = {
+    name: role for role, names in _ROLE_SYNONYMS.items() for name in names
+}
 
 # Inference is a convenience, so prefer requiring an explicit rate over silently
 # deriving a scientifically meaningful frequency scale from a precision-starved
@@ -535,14 +541,7 @@ _MAX_INFERRED_RATE_RELATIVE_RESOLUTION = 1e-4
 
 def _dimension_role(dimension: Hashable) -> str | None:
     """Return the recognized semantic role of an xarray dimension name."""
-    name = str(dimension).lower()
-    if name in _TIME_DIM_NAMES:
-        return "time"
-    if name in _TRIAL_DIM_NAMES:
-        return "trial"
-    if name in _SIGNAL_DIM_NAMES:
-        return "signal"
-    return None
+    return _SYNONYM_TO_ROLE.get(str(dimension).lower())
 
 
 def _resolve_dataarray_dimensions(
@@ -952,7 +951,7 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an "
                 "xarray.DataArray input."
             )
-        return _UnwrappedInput(time_series, signal_names, None, None)
+        return _UnwrappedInput(time_series, signal_names, None, None, None)
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -974,7 +973,11 @@ def _unwrap_xarray_input(
     data = time_series.transpose(*dimension_order).data
     _reject_unmaterialized_backing(data)
     return _UnwrappedInput(
-        data, signal_names, inferred_sampling_frequency, inferred_start_time
+        data,
+        signal_names,
+        inferred_sampling_frequency,
+        inferred_start_time,
+        dict(time_series.attrs),
     )
 
 
@@ -1169,15 +1172,13 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
-    input_attrs = (
-        dict(time_series.attrs) if isinstance(time_series, xr.DataArray) else None
-    )
     explicit_start_time = kwargs.get("start_time", _UNSET)
     (
         time_series_data,
         signal_names,
         inferred_sampling_frequency,
         inferred_start_time,
+        input_attrs,
     ) = _unwrap_xarray_input(
         time_series,
         signal_names,
@@ -1245,14 +1246,21 @@ def multitaper_connectivity(
     # Multitaper, so data and labels cannot be paired accidentally.
     metadata = m._provenance_metadata()
     shared_connectivity = Connectivity.from_multitaper(m)
+    # Validate labels and build shared provenance once; both are invariant across
+    # the requested measures.
+    signal_labels = _validated_signal_labels(
+        signal_names, shared_connectivity.n_signals
+    )
+    shared_attrs = _shared_provenance_attrs(
+        shared_connectivity, metadata, input_attrs=input_attrs
+    )
     if return_dataarray:
         return _connectivity_result_to_xarray(
             shared_connectivity,
-            metadata,
             method[0],
-            signal_names,
+            signal_labels,
             squeeze,
-            input_attrs=input_attrs,
+            shared_attrs,
             **connectivity_kwargs,
         )
 
@@ -1261,11 +1269,10 @@ def multitaper_connectivity(
         try:
             data_vars[this_method] = _connectivity_result_to_xarray(
                 shared_connectivity,
-                metadata,
                 this_method,
-                signal_names,
+                signal_labels,
                 squeeze,
-                input_attrs=input_attrs,
+                shared_attrs,
                 **connectivity_kwargs,
             )
         except UnsupportedMeasureError as e:
@@ -1286,9 +1293,4 @@ def multitaper_connectivity(
     # Shared coordinates are aligned once during construction. Dataset-level
     # provenance makes a multi-measure result self-describing without requiring
     # callers to inspect an individual variable.
-    return xr.Dataset(
-        data_vars=data_vars,
-        attrs=_shared_provenance_attrs(
-            shared_connectivity, metadata, input_attrs=input_attrs
-        ),
-    )
+    return xr.Dataset(data_vars=data_vars, attrs=dict(shared_attrs))

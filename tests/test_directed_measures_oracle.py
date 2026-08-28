@@ -181,10 +181,10 @@ def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
         warnings.simplefilter("ignore")
         result = _connectivity_result_to_xarray(
             connectivity,
-            {},
             "pairwise_spectral_granger_prediction",
             ["0", "1"],
             False,
+            {},
         )
 
     causal = result.sel(source="0", target="1").values  # 0 -> 1
