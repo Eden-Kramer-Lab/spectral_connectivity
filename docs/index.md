@@ -109,7 +109,9 @@ m = Multitaper(time_series=signals,
                start_time=time[0])
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-c = Connectivity.from_multitaper(m)
+# (`from_multitaper` is a backward-compatible alias for the transform-neutral
+# `from_transform`.)
+c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
 power = c.power() # spectral power
@@ -121,13 +123,19 @@ canonical_coherence = c.canonical_coherence(brain_area_labels)
 `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` provide alternative
 spectral transforms with the same coefficient interface. Morlet output is
 positive-frequency-only and is therefore limited to functional measures;
-directed Wilson factorization requires a full two-sided FFT. Multitaper DPSS
-coefficients support uniform (historical), eigenvalue, or Thomson adaptive taper
-weighting through `taper_weighting`.
+directed Wilson factorization requires a full two-sided FFT. For single-trial
+Morlet data, set `smoothing_time` so normalized measures (coherence, PLV) are
+estimated over multiple observations rather than being degenerate at 1. `Welch`
+resolves `1 / segment_duration` Hz, so set `segment_duration` explicitly for
+electrophysiology data. Multitaper DPSS coefficients support uniform
+(historical), eigenvalue, or Thomson adaptive taper weighting through
+`taper_weighting`.
 
 For uncertainty estimates, `Connectivity.jackknife(method)` recomputes a
 real-valued measure while leaving out each trial/taper observation and returns a
-bias-corrected estimate, standard error, and confidence interval.
+bias-corrected estimate, standard error, and confidence interval, applying an
+automatic variance-stabilizing transformation (log for power, `atanh(sqrt(.))`
+for magnitude-squared coherence, and circular for phase).
 
 ## Citation
 

@@ -37,20 +37,34 @@ directly with results from 2.x.
 - Multivariate/group measures: maximized imaginary coherency (MIC),
   multivariate interaction measure (MIM), conditional spectral Granger,
   blockwise spectral Granger, and time-reversed spectral Granger.
+- `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
+  relative reconstruction error of the Wilson factorization per sub-spectrum, so
+  callers can check whether a cross-spectrum is resolved finely enough in
+  frequency to trust the directed measures built on it (an under-resolved
+  spectrum can converge yet reconstruct poorly).
 - `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
   output is explicitly one-sided and rejects Wilson-factorized directed
   measures, which require a full two-sided spectrum.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
-  weighting.
+  weighting. Adaptive weighting compares the periodogram against the process
+  noise on a matched power-spectral-density scale and warns if the iteration
+  does not converge.
 - `fourier_connectivity` accepts externally computed two-sided Fourier
   coefficients as NumPy arrays or labeled DataArrays. High-level results can be
   cropped, decimated, or reduced into named frequency bands; phase uses a
   circular mean and integration is restricted to spectral densities.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` provide
   leave-one-trial/taper bias correction, standard errors, and confidence
-  intervals with automatic log-power, Fisher-coherence, and circular-phase
-  transformations.
+  intervals with automatic variance-stabilizing transformations: log for power,
+  `atanh(sqrt(.))` for magnitude-squared coherence (`transformation=
+  "fisher_squared"`), and circular for phase.
+- Magnitude-normalized measures (coherency, phase-locking value, and everything
+  derived from them) warn when computed from a single observation, where they
+  are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
+  provide multiple trials/tapers. `Welch` warns when its default segment length
+  yields coarse frequency resolution. `fourier_connectivity` rejects directed
+  measures on unlabeled coefficients whose two-sidedness cannot be verified.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,

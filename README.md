@@ -162,7 +162,9 @@ m = Multitaper(
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-c = Connectivity.from_multitaper(m)
+# (`from_transform` is the transform-neutral spelling; `from_multitaper` is a
+# backward-compatible alias for it.)
+c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
 power = c.power()  # spectral power
@@ -184,16 +186,30 @@ from spectral_connectivity import (
     Welch,
 )
 
-stft = ShortTimeFourierTransform(time_series, sampling_frequency, time_window_duration=1)
+stft = ShortTimeFourierTransform(
+    time_series, sampling_frequency, time_window_duration=1
+)
 welch = Welch(time_series, sampling_frequency, segment_duration=1)
-wavelet = MorletWavelet(time_series, sampling_frequency, frequencies=[4, 8, 16, 32])
+# For a single continuous trial, set `smoothing_time` so normalized measures
+# (coherence, PLV) are estimated over multiple observations instead of being
+# degenerate at 1.
+wavelet = MorletWavelet(
+    time_series, sampling_frequency, frequencies=[4, 8, 16, 32], smoothing_time=0.5
+)
 
 stft_coherence = Connectivity.from_transform(stft).coherence_magnitude()
 ```
 
+Which transform? Use `Multitaper` for stationary spectra with controlled
+variance, `ShortTimeFourierTransform`/`Welch` for a simple single-window or
+segment-averaged estimate, and `MorletWavelet` for time-resolved analysis at
+specific frequencies. `Welch`'s frequency resolution is `1 / segment_duration`
+Hz, so set `segment_duration` explicitly for electrophysiology data.
+
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
-Thomson's frequency- and signal-specific iterative weights.
+Thomson's frequency- and signal-specific iterative weights (useful when high
+spectral dynamic range or line noise makes some tapers systematically leakier).
 
 Already have full two-sided FFT coefficients? `fourier_connectivity` accepts
 NumPy arrays or labeled DataArrays in the core
@@ -201,8 +217,9 @@ NumPy arrays or labeled DataArrays in the core
 forms), preserving frequency, time, and signal coordinates.
 
 Uncertainty for real-valued measures is available through
-`Connectivity.jackknife(...)`, with automatic log-power, Fisher-coherence, and
-circular-phase transformations.
+`Connectivity.jackknife(...)`, with automatic variance-stabilizing
+transformations (log for power, `atanh(sqrt(.))` for magnitude-squared
+coherence, and circular for phase).
 
 ### Documentation
 
