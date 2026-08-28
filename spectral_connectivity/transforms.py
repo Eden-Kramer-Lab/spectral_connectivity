@@ -36,6 +36,27 @@ MIN_EIGENVALUE_THRESHOLD = 0.9
 TAPER_MULTIPLIER = 2.0
 
 
+def _validate_sampling_frequency(sampling_frequency: float) -> None:
+    """Raise an actionable error for a non-finite or non-positive sampling rate.
+
+    Shared by every transform so the newer STFT/Welch/Morlet classes give the
+    same guidance as :class:`Multitaper` rather than a bare one-line message.
+    """
+    if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
+        raise ValueError(
+            f"sampling_frequency must be finite and positive, got "
+            f"{sampling_frequency!r}.\n"
+            "\n"
+            "The sampling frequency is the rate at which your data was collected.\n"
+            "Common values:\n"
+            "  - EEG: 250-1000 Hz\n"
+            "  - LFP/ephys: 1000-30000 Hz\n"
+            "  - fMRI: 0.5-2 Hz (1/TR)\n"
+            "\n"
+            "Check your data acquisition settings or metadata."
+        )
+
+
 class MultitaperParameters(TypedDict):
     """Parameter suggestions for multitaper analysis.
 
@@ -554,9 +575,12 @@ class Multitaper:
         backend, whose FFT is already parallel.
     taper_weighting : {"uniform", "eigen", "adaptive"}, default="uniform"
         How DPSS eigencoefficients contribute to spectra. ``"uniform"`` keeps
-        historical equal weighting, ``"eigen"`` uses concentration ratios,
-        and ``"adaptive"`` iteratively estimates frequency- and
-        signal-specific Thomson weights. Non-uniform modes require internally
+        historical equal weighting (a good default). ``"eigen"`` down-weights
+        the less concentrated tapers by their eigenvalues. ``"adaptive"``
+        iteratively estimates frequency- and signal-specific Thomson weights;
+        reach for it when high spectral dynamic range or line noise makes some
+        tapers systematically leakier, at the cost of extra iterations for a
+        typically modest bias reduction. Non-uniform modes require internally
         generated DPSS tapers.
     adaptive_max_iterations : int, default=50
         Iteration ceiling for Thomson adaptive weighting.
@@ -720,20 +744,31 @@ class Multitaper:
         self.fft_workers = fft_workers
         if taper_weighting not in {"uniform", "eigen", "adaptive"}:
             raise ValueError(
-                "taper_weighting must be 'uniform', 'eigen', or 'adaptive'."
+                "taper_weighting must be 'uniform', 'eigen', or 'adaptive', got "
+                f"{taper_weighting!r}. Use 'uniform' for the historical equal "
+                "weighting, 'eigen' to weight tapers by their spectral "
+                "concentration, or 'adaptive' for Thomson's iterative weighting."
             )
         if (
             isinstance(adaptive_max_iterations, bool)
             or not isinstance(adaptive_max_iterations, (int, np.integer))
             or adaptive_max_iterations < 1
         ):
-            raise ValueError("adaptive_max_iterations must be a positive integer.")
+            raise ValueError(
+                "adaptive_max_iterations must be a positive integer, got "
+                f"{adaptive_max_iterations!r}."
+            )
         if not np.isfinite(adaptive_tolerance) or adaptive_tolerance <= 0:
-            raise ValueError("adaptive_tolerance must be finite and positive.")
+            raise ValueError(
+                "adaptive_tolerance must be finite and positive, got "
+                f"{adaptive_tolerance!r}."
+            )
         if tapers is not None and taper_weighting != "uniform":
             raise ValueError(
                 "Eigenvalue/adaptive weighting requires internally generated "
-                "DPSS tapers; custom tapers do not provide concentration ratios."
+                "DPSS tapers; custom tapers do not provide concentration ratios. "
+                "Use taper_weighting='uniform' with custom tapers, or omit the "
+                "tapers argument to let Multitaper generate DPSS tapers."
             )
         self.taper_weighting = taper_weighting
         self.adaptive_max_iterations = int(adaptive_max_iterations)
@@ -1450,11 +1485,21 @@ FFT samples:          {self.n_fft_samples}
                 * weights[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
             )
 
-        segment_variance = xp.var(time_series, axis=-1)
+        # Thomson's adaptive weights balance the taper periodogram against the
+        # process-noise level, which must be on the *same* power-spectral-density
+        # scale. ``fft()`` returns ``fft(taper * x) / sampling_frequency`` with
+        # tapers scaled by ``sqrt(sampling_frequency)``, so ``|coefficients| ** 2``
+        # is a PSD (signal ** 2 / Hz) while ``var(time_series)`` is a raw
+        # time-domain variance (signal ** 2). Dividing by ``sampling_frequency``
+        # puts the noise term on the PSD scale; without it the noise is inflated
+        # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
+        noise_power_spectral_density = xp.var(time_series, axis=-1) / (
+            self.sampling_frequency
+        )
         return _apply_adaptive_taper_weights(
             coefficients,
             eigenvalues,
-            segment_variance,
+            noise_power_spectral_density,
             max_iterations=self.adaptive_max_iterations,
             tolerance=self.adaptive_tolerance,
         )
@@ -1474,8 +1519,32 @@ class ShortTimeFourierTransform(Multitaper):
 
     The returned coefficients follow the same five-dimensional contract as
     :class:`Multitaper`, with a singleton taper axis. This makes the transform
-    directly usable with :meth:`Connectivity.from_multitaper` and
+    directly usable with :meth:`Connectivity.from_transform` and
     :func:`spectral_connectivity.wrapper.connectivity_to_xarray`.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float, default=1000
+        Samples per second (Hz).
+    detrend_type : {"constant", "linear"} or None, default="constant"
+        Detrending applied to each window before the FFT.
+    time_window_duration : float, optional
+        Window length in seconds. Give this or ``n_time_samples_per_window``.
+    time_window_step : float, optional
+        Step between successive windows in seconds (defaults to the window
+        duration, i.e. no overlap).
+    start_time : float or ndarray, default=0
+        Time of the first sample, in seconds.
+    n_fft_samples : int, optional
+        FFT length; defaults to the window length.
+    n_time_samples_per_window : int, optional
+        Window length in samples (alternative to ``time_window_duration``).
+    n_time_samples_per_step : int, optional
+        Step between windows in samples (alternative to ``time_window_step``).
+    fft_workers : int, optional
+        Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
 
     _provenance_prefix = "stft_"
@@ -1494,8 +1563,7 @@ class ShortTimeFourierTransform(Multitaper):
         n_time_samples_per_step: int | None = None,
         fft_workers: int | None = None,
     ) -> None:
-        if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
-            raise ValueError("sampling_frequency must be finite and positive.")
+        _validate_sampling_frequency(sampling_frequency)
         for name, value in (
             ("time_window_duration", time_window_duration),
             ("time_window_step", time_window_step),
@@ -1595,6 +1663,30 @@ class Welch:
     Segment coefficients are represented on the taper/observation axis, so the
     default ``trials_tapers`` expectation averages both trials and Welch
     segments and returns a single spectrum centered on the analyzed record.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float, default=1000
+        Samples per second (Hz).
+    segment_duration : float, optional
+        Segment length in seconds; sets the frequency resolution
+        (``1 / segment_duration`` Hz). Strongly recommended -- the fallback of
+        256 samples does not scale with the sampling rate. Give this or
+        ``n_time_samples_per_segment``.
+    segment_overlap : float, default=0.5
+        Fractional overlap between successive segments, in ``[0, 1)``.
+    n_time_samples_per_segment : int, optional
+        Segment length in samples (alternative to ``segment_duration``).
+    detrend_type : {"constant", "linear"} or None, default="constant"
+        Detrending applied to each segment before the FFT.
+    start_time : float or ndarray, default=0
+        Time of the first sample, in seconds.
+    n_fft_samples : int, optional
+        FFT length; defaults to the segment length.
+    fft_workers : int, optional
+        Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
 
     _provenance_prefix = "welch_"
@@ -1612,8 +1704,7 @@ class Welch:
         n_fft_samples: int | None = None,
         fft_workers: int | None = None,
     ) -> None:
-        if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
-            raise ValueError("sampling_frequency must be finite and positive.")
+        _validate_sampling_frequency(sampling_frequency)
         if segment_duration is not None and (
             not np.isfinite(segment_duration) or segment_duration <= 0
         ):
@@ -1639,7 +1730,28 @@ class Welch:
         elif segment_duration is not None:
             segment_samples = int(np.around(segment_duration * sampling_frequency))
         else:
+            import warnings
+
             segment_samples = min(256, n_time_samples)
+            # SciPy's historical 256-sample default does not scale with the
+            # sampling rate, so at typical electrophysiology rates it yields a
+            # very short window and coarse frequency resolution (e.g. ~117 Hz at
+            # 30 kHz), collapsing neuroscience bands. Warn so the choice is
+            # explicit rather than silent.
+            frequency_resolution = sampling_frequency / segment_samples
+            if frequency_resolution > 4:
+                warnings.warn(
+                    f"Welch is using the default segment length of "
+                    f"{segment_samples} samples, giving a "
+                    f"{segment_samples / sampling_frequency * 1e3:.1f} ms window "
+                    f"and {frequency_resolution:.1f} Hz frequency resolution at "
+                    f"sampling_frequency={sampling_frequency:g} Hz. This is too "
+                    "coarse for typical neuroscience bands. Pass segment_duration "
+                    "(seconds) or n_time_samples_per_segment to set the resolution "
+                    "explicitly.",
+                    UserWarning,
+                    stacklevel=2,
+                )
         if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
             raise ValueError("segment_overlap must satisfy 0 <= overlap < 1.")
         step_samples = max(1, int(np.around(segment_samples * (1 - segment_overlap))))
@@ -1709,6 +1821,32 @@ class MorletWavelet:
     For a single continuous trial, set ``smoothing_time`` to collect neighboring
     wavelet coefficients on the observation axis; otherwise normalized pairwise
     measures are degenerate at unit magnitude.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float
+        Samples per second (Hz).
+    frequencies : ndarray, shape (n_frequencies,)
+        Strictly increasing positive frequencies (Hz) below Nyquist.
+    n_cycles : float or ndarray, default=7.0
+        Number of oscillation cycles per wavelet, scalar or one per frequency.
+        Controls the time/frequency-resolution trade-off: more cycles give
+        sharper frequency but coarser time resolution.
+    decimation : int, default=1
+        Keep every ``decimation``-th output sample to reduce memory/compute.
+    smoothing_time : float, optional
+        Duration (seconds) of a sliding window whose coefficients are collected
+        onto the observation axis. Set this for single-trial data so normalized
+        measures (coherence, PLV) are not degenerate.
+    smoothing_step : float, optional
+        Step (seconds) between smoothing windows; defaults to ``smoothing_time``
+        and requires it.
+    zero_mean : bool, default=True
+        Subtract the wavelet's mean so it has no DC response.
+    start_time : float, default=0.0
+        Time of the first sample, in seconds.
     """
 
     _provenance_prefix = "morlet_"
@@ -1732,8 +1870,7 @@ class MorletWavelet:
             raise ValueError(
                 "time_series must have shape (n_time_samples, n_trials, n_signals)."
             )
-        if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
-            raise ValueError("sampling_frequency must be finite and positive.")
+        _validate_sampling_frequency(sampling_frequency)
         frequency_values = np.asarray(frequencies, dtype=float)
         if (
             frequency_values.ndim != 1
@@ -2145,7 +2282,7 @@ def _multitaper_fft(
 def _apply_adaptive_taper_weights(
     coefficients: NDArray[np.complexfloating],
     eigenvalues: NDArray[np.floating],
-    segment_variance: NDArray[np.floating],
+    noise_power_spectral_density: NDArray[np.floating],
     *,
     max_iterations: int,
     tolerance: float,
@@ -2157,17 +2294,25 @@ def _apply_adaptive_taper_weights(
     taper axis, allowing :class:`Connectivity`'s ordinary taper mean to compute
     the corresponding weighted auto- and cross-spectra without changing their
     scale.
+
+    ``noise_power_spectral_density`` must already be on the same
+    power-spectral-density scale as ``|coefficients| ** 2`` (see the caller in
+    :meth:`Multitaper.fft`); a raw time-domain variance would over-weight the
+    noise term by a factor of the sampling frequency.
     """
+    import warnings
+
     taper_power = xp.abs(coefficients) ** 2
     n_initial = min(2, coefficients.shape[2])
     spectrum = xp.mean(taper_power[:, :, :n_initial, :, :], axis=2)
 
     concentration = eigenvalues[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
     root_concentration = xp.sqrt(concentration)
-    noise = segment_variance[:, :, xp.newaxis, xp.newaxis, :]
+    noise = noise_power_spectral_density[:, :, xp.newaxis, xp.newaxis, :]
     eps = xp.finfo(taper_power.dtype).eps
 
     weights = xp.ones_like(taper_power, dtype=taper_power.dtype)
+    converged = False
     for _ in range(max_iterations):
         expanded_spectrum = spectrum[:, :, xp.newaxis, :, :]
         denominator = concentration * expanded_spectrum + (1.0 - concentration) * noise
@@ -2187,8 +2332,19 @@ def _apply_adaptive_taper_weights(
         scale = xp.maximum(xp.abs(spectrum), eps)
         if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
             spectrum = updated
+            converged = True
             break
         spectrum = updated
+
+    if not converged:
+        warnings.warn(
+            f"Adaptive taper weighting did not converge within {max_iterations} "
+            f"iterations (tolerance={tolerance:g}). The returned spectrum uses the "
+            "last iterate, which may bias power and connectivity estimates. "
+            "Increase adaptive_max_iterations or relax adaptive_tolerance.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     rms = xp.sqrt(xp.mean(weights**2, axis=2, keepdims=True))
     normalized_weights = xp.divide(
@@ -2198,41 +2354,6 @@ def _apply_adaptive_taper_weights(
         where=rms > eps,
     )
     return coefficients * normalized_weights
-
-
-def _make_tapers(
-    n_time_samples_per_window: int,
-    sampling_frequency: float,
-    time_halfbandwidth_product: float,
-    n_tapers: int,
-    is_low_bias: bool = True,
-) -> NDArray[np.floating]:
-    """Return discrete prolate spheroidal sequences (tapers) for multitaper analysis.
-
-    Returns the Discrete prolate spheroidal sequences (tapers) for
-    multi-taper spectral analysis.
-
-    Parameters
-    ----------
-    n_time_samples_per_window : int
-    sampling_frequency : int
-    time_halfbandwidth_product : float
-    n_tapers : int
-    is_low_bias : bool
-        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
-
-    Returns
-    -------
-    tapers : array_like, shape (n_time_samples_per_window, n_tapers)
-
-    """
-    tapers, _ = dpss_windows(
-        n_time_samples_per_window,
-        time_halfbandwidth_product,
-        n_tapers,
-        is_low_bias=is_low_bias,
-    )
-    return tapers.T * xp.sqrt(sampling_frequency)
 
 
 def dpss_windows(

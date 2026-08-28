@@ -6,6 +6,9 @@ directed connectivity measures from time series data using multitaper methods.
 
 # flake8: noqa
 from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.minimum_phase_decomposition import (
+    minimum_phase_reconstruction_error,
+)
 from spectral_connectivity.statistics import (
     JackknifeResult,
     jackknife_confidence_interval,
@@ -51,6 +54,7 @@ __all__ = [
     "fourier_connectivity",
     "frequency_band_reduce",
     "jackknife_confidence_interval",
+    "minimum_phase_reconstruction_error",
     "multitaper_connectivity",
     "prepare_time_series",
     "estimate_frequency_resolution",

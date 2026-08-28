@@ -48,28 +48,62 @@ def _hyperbolic_tangent(value: NDArray[np.floating]) -> NDArray[np.floating]:
     return np.tanh(value)
 
 
+def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    # Back-transform for magnitude-squared coherence: recover |coherence| =
+    # tanh(.), clamp it to the physical [0, 1] range (a lower confidence bound in
+    # atanh space can map to a negative magnitude), then square. Clamping before
+    # squaring keeps the mapping monotonic, so squaring cannot fold a negative
+    # magnitude back above the estimate.
+    return np.clip(np.tanh(value), 0, 1) ** 2
+
+
+def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
+    """Warn that a saturated coherence yields a delta-method standard error of 0.
+
+    At ``|coherence| == 1`` the Fisher delta-method derivative is exactly zero,
+    so the back-transformed standard error is reported as ``0`` -- implying
+    perfect certainty rather than a degenerate boundary. Surface it so the zero
+    is not mistaken for a genuinely tight estimate.
+    """
+    if bool(np.any(at_boundary)):
+        warnings.warn(
+            f"Fisher jackknife: {int(np.count_nonzero(at_boundary))} value(s) sit "
+            "at saturated coherence (|coherence| == 1), where the delta-method "
+            "standard error is exactly 0. This reflects a boundary, not perfect "
+            "certainty; interpret those standard errors with care.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def jackknife_confidence_interval(
     estimate: NDArray[np.floating],
     leave_one_out: NDArray[np.floating],
     *,
     confidence_level: float = 0.95,
-    transformation: Literal["identity", "log", "fisher", "circular"] = "identity",
+    transformation: Literal[
+        "identity", "log", "fisher", "fisher_squared", "circular"
+    ] = "identity",
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
     ``leave_one_out`` must have replicate on its first axis. Log transformation
-    is appropriate for positive spectra, Fisher's ``atanh`` for coherence
-    magnitudes, and circular transformation for angles in radians. Reported
-    confidence bounds and bias-corrected estimates are returned on the original
-    scale; the standard error is converted back with the local delta method.
+    is appropriate for positive spectra, Fisher's ``atanh`` for magnitude
+    coherence in ``[-1, 1]``, ``fisher_squared`` (``atanh(sqrt(.))``) for
+    magnitude-squared coherence in ``[0, 1]``, and circular transformation for
+    angles in radians. Reported confidence bounds and bias-corrected estimates
+    are returned on the original scale; the standard error is converted back
+    with the local delta method.
     """
     if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
         raise ValueError(
             "confidence_level must be finite and strictly between 0 and 1."
         )
-    if transformation not in {"identity", "log", "fisher", "circular"}:
+    valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
+    if transformation not in valid_transformations:
         raise ValueError(
-            "transformation must be 'identity', 'log', 'fisher', or 'circular'."
+            "transformation must be 'identity', 'log', 'fisher', "
+            f"'fisher_squared', or 'circular'; got {transformation!r}."
         )
     estimate_array = np.asarray(estimate)
     replicates = np.asarray(leave_one_out)
@@ -92,6 +126,18 @@ def jackknife_confidence_interval(
         inverse = _identity
         derivative = np.ones_like(estimate_array)
     elif transformation == "log":
+        n_nonpositive = int(
+            np.count_nonzero(estimate_array <= 0) + np.count_nonzero(replicates <= 0)
+        )
+        if n_nonpositive:
+            warnings.warn(
+                f"Jackknife log transform: {n_nonpositive} non-positive value(s) "
+                "map to NaN and propagate to the affected bins' confidence bounds "
+                "(a single non-positive replicate makes its whole bin NaN). This "
+                "usually indicates a spectral null or a non-power measure.",
+                UserWarning,
+                stacklevel=2,
+            )
         with np.errstate(divide="ignore", invalid="ignore"):
             transformed_estimate = np.where(
                 estimate_array > 0, np.log(estimate_array), np.nan
@@ -102,6 +148,7 @@ def jackknife_confidence_interval(
         inverse = _exponential
         derivative = estimate_array
     elif transformation == "fisher":
+        _warn_fisher_boundary(np.abs(estimate_array) >= 1)
         epsilon = np.finfo(float).eps
         transformed_estimate = np.arctanh(
             np.clip(estimate_array, -1 + epsilon, 1 - epsilon)
@@ -111,6 +158,23 @@ def jackknife_confidence_interval(
         )
         inverse = _hyperbolic_tangent
         derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
+    elif transformation == "fisher_squared":
+        # Variance-stabilizing transform for magnitude-squared coherence in
+        # [0, 1] (Enochson & Goodman 1965): atanh(sqrt(MSC)) = atanh(|coherence|).
+        # Applying Fisher's atanh to the *unsquared* magnitude is the established
+        # transform; atanh(MSC) is not. The delta-method derivative back to the
+        # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC).
+        _warn_fisher_boundary(estimate_array >= 1)
+        epsilon = np.finfo(float).eps
+        clipped_estimate = np.clip(estimate_array, 0, 1)
+        transformed_estimate = np.arctanh(
+            np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon)
+        )
+        transformed_replicates = np.arctanh(
+            np.clip(np.sqrt(np.clip(replicates, 0, 1)), 0, 1 - epsilon)
+        )
+        inverse = _hyperbolic_tangent_squared
+        derivative = 2 * np.sqrt(clipped_estimate) * (1 - clipped_estimate)
     else:
         # Unwrap every replicate onto the branch nearest the full estimate.
         transformed_estimate = estimate_array

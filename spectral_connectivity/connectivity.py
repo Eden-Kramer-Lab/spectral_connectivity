@@ -703,6 +703,31 @@ class Connectivity:
                 f"non-debiased measure (phase_lag_index / phase_locking_value)."
             )
 
+    def _warn_single_observation_degenerate(self, measure: str) -> None:
+        """Warn that a magnitude-normalized measure is degenerate for one observation.
+
+        Coherency, the phase-locking value, and every measure derived from them
+        normalize each cross-spectral entry by its magnitude. With a single
+        observation (one trial times one taper/window -- e.g. a single-trial
+        :class:`~spectral_connectivity.transforms.MorletWavelet` transform
+        without ``smoothing_time``) that normalization forces every magnitude to
+        exactly one, so the measure reports perfect connectivity between
+        unrelated signals and carries no information. This is a silent-failure
+        trap rather than an error, so it warns instead of raising.
+        """
+        if self.n_observations < 2:
+            warnings.warn(
+                f"{measure} is computed from a single observation "
+                "(n_observations == n_trials * n_tapers == 1), so every "
+                "magnitude-normalized value is mathematically forced to 1 "
+                "(apparent perfect connectivity) regardless of the data and "
+                "carries no information. Provide multiple trials/tapers, or set "
+                "smoothing_time on MorletWavelet to collect neighboring "
+                "coefficients on the observation axis.",
+                UserWarning,
+                stacklevel=3,
+            )
+
     def _require_multiple_frequencies(self, measure: str) -> None:
         """Raise if fewer than two frequency bins are available.
 
@@ -1006,9 +1031,16 @@ class Connectivity:
         analytic variance formula (at a computational cost proportional to
         ``n_observations``).
 
-        ``transformation="auto"`` uses log power, Fisher-transformed coherence
-        magnitude, circular phase, and the identity scale for other real-valued
-        measures. Complex-valued and tuple-valued measures are not supported.
+        ``transformation="auto"`` uses log power, the ``fisher_squared``
+        (``atanh(sqrt(.))``) transform for magnitude-squared coherence, circular
+        phase, and the identity scale for other real-valued measures.
+        Complex-valued and tuple-valued measures are not supported.
+
+        If the input Fourier coefficients were produced with
+        ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates
+        reuse the full-sample Thomson weights (the adaptive weights are not
+        recomputed for each reduced taper set), so the interval is an
+        approximation in that case.
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             raise ValueError(
@@ -1081,12 +1113,16 @@ class Connectivity:
                 )
             replicates.append(np.asarray(replicate))
 
-        resolved_transformation: Literal["identity", "log", "fisher", "circular"]
+        resolved_transformation: Literal[
+            "identity", "log", "fisher", "fisher_squared", "circular"
+        ]
         if transformation == "auto":
             if method == "power":
                 resolved_transformation = "log"
             elif method == "coherence_magnitude":
-                resolved_transformation = "fisher"
+                # coherence_magnitude returns magnitude-*squared* coherence, whose
+                # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
+                resolved_transformation = "fisher_squared"
             elif method == "coherence_phase":
                 resolved_transformation = "circular"
             else:
@@ -1203,6 +1239,7 @@ class Connectivity:
         ``phase_slope_index`` -- operate on device arrays without a premature
         host transfer; the public ``coherency`` converts the result to NumPy.
         """
+        self._warn_single_observation_degenerate("coherency")
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
         )
@@ -1825,6 +1862,7 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
+        self._warn_single_observation_degenerate("phase_locking_value")
         # Normalize at the computation dtype (``self._dtype``, complex128 by
         # default): the previous materialized path formed the outer product at
         # that dtype, so normalizing complex64 inputs at their own precision here
@@ -2367,7 +2405,13 @@ class Connectivity:
         Notes
         -----
         **Range**: theoretically ``[0, ∞)``. Tiny negative values caused by
-        subtracting two spectral decompositions are clipped to zero.
+        subtracting two spectral decompositions are clipped to zero. Bins where
+        the intrinsic spectrum is not positive-definite are returned as NaN.
+
+        **Cost**: this performs on the order of ``n_signals ** 2`` minimum-phase
+        factorizations of ``(n_signals - 1)``-channel subsystems, so it can be
+        slow for large channel counts (tens of signals); prefer a coarser
+        grouping via :meth:`blockwise_spectral_granger_prediction` when possible.
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
         spectrum = self._expectation_cross_spectral_matrix()
@@ -2382,20 +2426,27 @@ class Connectivity:
 
         all_indices = np.arange(self.n_signals)
         for target in range(self.n_signals):
+            # The "joint" model always includes every signal except the target
+            # (its source block is {source} + conditioning = all - target), and
+            # the block-Granger value is invariant to the ordering of that source
+            # block. So it is identical for every source and only needs to be
+            # factorized once per target rather than n_signals - 1 times.
+            other_indices = all_indices[all_indices != target]
+            if other_indices.size == 0:
+                continue
+            joint = _estimate_block_spectral_granger_prediction(
+                spectrum,
+                np.array([target]),
+                other_indices,
+                minimum_phase_tolerance=self._minimum_phase_tolerance,
+                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            )
             for source in range(self.n_signals):
                 if source == target:
                     continue
                 conditioning = all_indices[
                     (all_indices != target) & (all_indices != source)
                 ]
-                joint_sources = np.concatenate(([source], conditioning))
-                joint = _estimate_block_spectral_granger_prediction(
-                    spectrum,
-                    np.array([target]),
-                    joint_sources,
-                    minimum_phase_tolerance=self._minimum_phase_tolerance,
-                    minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-                )
                 if conditioning.size:
                     conditioned = _estimate_block_spectral_granger_prediction(
                         spectrum,
@@ -3169,7 +3220,18 @@ def _estimate_predictive_power(
         predictive_power = xp.log(total_power[..., xp.newaxis]) - xp.log(
             intrinsic_power
         )
-    predictive_power[predictive_power <= 0] = xp.nan
+    # Spectral Granger is >= 0; a tiny negative is roundoff around a true zero
+    # (no causality). Clip those to 0 -- matching the block/conditional path --
+    # rather than discarding a legitimately zero influence as NaN. Genuinely
+    # negative values (a near-singular rotation drove intrinsic_power above
+    # total_power) remain NaN as an invalid result.
+    tolerance = 100 * xp.finfo(predictive_power.dtype).eps
+    predictive_power = xp.where(
+        (predictive_power < 0) & (predictive_power > -tolerance),
+        0.0,
+        predictive_power,
+    )
+    predictive_power[predictive_power < 0] = xp.nan
     return predictive_power
 
 
@@ -4148,10 +4210,34 @@ def _estimate_block_spectral_granger_prediction(
     ) / 2.0
     _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
     _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
-    value = total_logdet - intrinsic_logdet
-    value = xp.real(value)
+    value = xp.real(total_logdet - intrinsic_logdet)
     tolerance = 100 * xp.finfo(value.dtype).eps
-    return xp.where((value < 0) & (value > -tolerance), 0.0, value)
+    value = xp.where((value < 0) & (value > -tolerance), 0.0, value)
+    # ``intrinsic`` is a difference of spectral blocks and is only guaranteed
+    # positive-definite in exact arithmetic; near-degenerate conditioning can
+    # make it (or the total spectrum) indefinite/singular, in which case the
+    # log-determinant ratio is physically meaningless. Test positive-definiteness
+    # directly via the smallest eigenvalue of these Hermitian matrices -- a
+    # determinant-sign test would miss an even number of negative eigenvalues.
+    # Return NaN (and warn) rather than a plausible but wrong finite influence.
+    smallest_total_eigenvalue = xp.linalg.eigvalsh(hermitian_total_target_spectrum)[
+        ..., 0
+    ]
+    smallest_intrinsic_eigenvalue = xp.linalg.eigvalsh(intrinsic)[..., 0]
+    positive_definite = (smallest_total_eigenvalue > 0) & (
+        smallest_intrinsic_eigenvalue > 0
+    )
+    if not bool(xp.all(positive_definite)):
+        warnings.warn(
+            "Block spectral Granger: the intrinsic or total target spectrum was "
+            "not positive-definite at some time-frequency bins (typically from "
+            "near-singular conditioning after removing the source block). Those "
+            "bins are returned as NaN. Consider increasing regularization or "
+            "minimum_phase_max_iterations, or checking for collinear channels.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return xp.where(positive_definite, value, xp.nan)
 
 
 def _estimate_subset_spectral_granger_prediction(

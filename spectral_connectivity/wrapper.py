@@ -1671,12 +1671,28 @@ def _unwrap_fourier_input(
         data = data[:, :, np.newaxis, ...]
 
     frequency_dimension = role_to_dimension["frequency"]
+    has_frequency_coordinate = frequency_dimension in coefficient_array.coords
+    frequency_coordinate_is_1d = has_frequency_coordinate and coefficient_array.coords[
+        frequency_dimension
+    ].dims == (frequency_dimension,)
     coordinate_frequencies = (
         coefficient_array.coords[frequency_dimension].to_numpy()
-        if frequency_dimension in coefficient_array.coords
-        and coefficient_array.coords[frequency_dimension].dims == (frequency_dimension,)
+        if frequency_coordinate_is_1d
         else None
     )
+    if (
+        has_frequency_coordinate
+        and not frequency_coordinate_is_1d
+        and frequencies is None
+    ):
+        warnings.warn(
+            f"The DataArray frequency coordinate {frequency_dimension!r} is not "
+            "one-dimensional and was ignored; the result falls back to normalized "
+            "FFT-bin labels. Pass a 1-D `frequencies` array to keep meaningful "
+            "frequency labels.",
+            UserWarning,
+            stacklevel=3,
+        )
     if frequencies is None:
         frequencies = coordinate_frequencies
     elif coordinate_frequencies is not None and not _coordinates_agree(
@@ -1825,6 +1841,24 @@ def fourier_connectivity(
         raise ValueError(
             "method must name at least one connectivity measure; got an empty list."
         )
+    if frequencies is None:
+        # Without a frequency coordinate, orientation and two-sidedness cannot be
+        # verified, so the default ``is_one_sided=False`` lets a one-sided input
+        # (e.g. rfft/wavelet coefficients) reach Wilson factorization and produce
+        # a silently wrong directed result. Reject known directed measures instead.
+        directed_methods = [
+            name
+            for name in methods
+            if _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).is_directed
+        ]
+        if directed_methods:
+            raise ValueError(
+                f"Directed measures {sorted(set(directed_methods))} require a full "
+                "two-sided spectrum in standard FFT order, which cannot be verified "
+                "without a frequency coordinate. Pass `frequencies` (the FFT "
+                "frequency vector, including negative bins) so two-sidedness can be "
+                "checked, or request only undirected measures."
+            )
     if squeeze and not return_dataarray:
         warnings.warn(
             "squeeze=True is ignored for multi-measure results (a Dataset); "
