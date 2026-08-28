@@ -48,12 +48,22 @@ coherence = multitaper_connectivity(
 )
 ```
 
-`time_series` may also be an `xarray.DataArray`. Axes are interpreted by
-*position* (`(n_times[, n_trials], n_signals)`). Recognized time, trial, and
-signal dimension names that conflict with this order are rejected with a
-transposition hint; unrecognized names retain the positional contract. A 1-D
-coordinate on the final dimension is preserved—including its label type—as the
-result's `source` and `target` coordinates unless `signal_names` is supplied.
+`time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
+names define axis roles; positions do not.** Common dimension names are
+inferred and transposed automatically; for domain-specific names, pass
+`time_dim`, `trial_dim`, and `signal_dim` explicitly. Ambiguous dimensions raise
+instead of falling back to axis position. Numeric `time`
+coordinates are interpreted as elapsed seconds and numeric `sample` coordinates
+as sample numbers; both are checked against `sampling_frequency` and used to
+label output window centers. A 1-D index on the signal dimension is
+preserved—including its label type—as the result's `source` and `target`
+coordinates unless `signal_names` is supplied. Signal labels must be unique,
+non-missing, NetCDF-compatible scalar strings, real numbers, datetimes, or
+timedeltas.
+
+Datetime, timedelta, and object-valued **time coordinates** are not yet
+supported. Convert them to numeric elapsed seconds before calling
+`multitaper_connectivity`; datetime and timedelta **signal labels** remain valid.
 
 For directed measures, `result.sel(source="a", target="b")` means influence
 from `a` to `b`. The directed-transfer-function family is available by name as

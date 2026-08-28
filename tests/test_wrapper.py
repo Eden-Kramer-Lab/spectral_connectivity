@@ -348,27 +348,228 @@ def test_dataarray_integer_final_coordinate_is_preserved():
     assert result.sel(source=10).coords["source"].item() == 10
 
 
-def test_dataarray_time_like_trailing_dim_rejects_transposition():
-    """A trailing dimension named like time cannot be treated as signals."""
+def test_dataarray_datetime_signal_coordinate_is_preserved():
+    """Nanosecond datetime labels must not be coerced to integer timestamps."""
+    labels = np.array(["2025-01-01", "2025-01-02"], dtype="datetime64[ns]")
     data = xr.DataArray(
-        np.random.default_rng(10).standard_normal((256, 2)),
+        np.random.default_rng(18).standard_normal((256, 2)),
+        dims=("sample", "channel"),
+        coords={"channel": labels},
+    )
+
+    result = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+
+    assert result.source.dtype == np.dtype("datetime64[ns]")
+    np.testing.assert_array_equal(result.source.values, labels)
+
+
+def test_dataarray_named_dimensions_are_transposed_automatically():
+    """Dimension names, rather than input position, determine semantic axes."""
+    raw = np.random.default_rng(10).standard_normal((256, 2))
+    data = xr.DataArray(
+        raw.T,
         dims=("channel", "time"),
+        coords={"channel": ["left", "right"]},
     )
-    with pytest.raises(ValueError, match="positional order"):
-        multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
-        )
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+    expected = multitaper_connectivity(
+        raw,
+        sampling_frequency=256,
+        method="coherence_magnitude",
+        signal_names=["left", "right"],
+    )
+
+    xr.testing.assert_identical(actual, expected)
 
 
-def test_dataarray_swapped_time_and_trial_dims_are_rejected():
-    """Recognized non-trailing transpositions must not compute silently."""
+def test_dataarray_swapped_time_and_trial_dims_are_transposed_automatically():
+    """Named trial/time axes are normalized before entering numerical code."""
+    raw = np.random.default_rng(11).standard_normal((256, 4, 2))
     data = xr.DataArray(
-        np.random.default_rng(11).standard_normal((4, 256, 2)),
+        raw.transpose(1, 0, 2),
         dims=("trial", "time", "channel"),
+        coords={"channel": ["left", "right"]},
     )
-    with pytest.raises(ValueError, match=r"dimension 'trial'.*position 0"):
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+    expected = multitaper_connectivity(
+        raw,
+        sampling_frequency=256,
+        method="coherence_magnitude",
+        signal_names=["left", "right"],
+    )
+
+    xr.testing.assert_identical(actual, expected)
+
+
+def test_dataarray_unrecognized_dimensions_require_explicit_roles():
+    """Domain-specific dimension names never fall back to unsafe positions."""
+    raw = np.random.default_rng(14).standard_normal((8, 256, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("replicate_id", "clock_tick", "unit_id"),
+        coords={"unit_id": ["left", "right"]},
+    )
+
+    with pytest.raises(ValueError, match="time_dim, trial_dim, signal_dim"):
+        multitaper_connectivity(data, sampling_frequency=256, method="power")
+
+    actual = multitaper_connectivity(
+        data,
+        sampling_frequency=256,
+        method="power",
+        time_dim="clock_tick",
+        trial_dim="replicate_id",
+        signal_dim="unit_id",
+    )
+    expected = multitaper_connectivity(
+        raw.transpose(1, 0, 2),
+        sampling_frequency=256,
+        method="power",
+        signal_names=["left", "right"],
+    )
+
+    xr.testing.assert_identical(actual, expected)
+
+
+def test_dataarray_numeric_time_coordinate_sets_output_time():
+    """A numeric time index supplies the transform's start time in seconds."""
+    sampling_frequency = 64
+    raw = np.random.default_rng(15).standard_normal((128, 2))
+    time = 10.0 + np.arange(raw.shape[0]) / sampling_frequency
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": time, "channel": ["left", "right"]},
+    )
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=sampling_frequency, method="power"
+    )
+    expected = multitaper_connectivity(
+        raw,
+        sampling_frequency=sampling_frequency,
+        method="power",
+        signal_names=["left", "right"],
+        start_time=time[0],
+    )
+
+    xr.testing.assert_identical(actual, expected)
+    assert actual.time.item() == pytest.approx(10.9921875)
+
+
+def test_dataarray_auxiliary_time_coordinate_sets_output_time():
+    """A named time coordinate may label a separate sample dimension."""
+    sampling_frequency = 64
+    raw = np.random.default_rng(19).standard_normal((128, 2))
+    time = 10.0 + np.arange(raw.shape[0]) / sampling_frequency
+    data = xr.DataArray(
+        raw,
+        dims=("sample", "channel"),
+        coords={
+            "sample": np.arange(raw.shape[0]),
+            "time": ("sample", time),
+            "channel": ["left", "right"],
+        },
+    )
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=sampling_frequency, method="power"
+    )
+
+    assert actual.time.item() == pytest.approx(10.9921875)
+
+
+def test_dataarray_sample_coordinate_sets_output_time():
+    """A sample-number index is converted to elapsed seconds."""
+    sampling_frequency = 64
+    raw = np.random.default_rng(20).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("sample", "channel"),
+        coords={
+            "sample": 640 + np.arange(raw.shape[0]),
+            "channel": ["left", "right"],
+        },
+    )
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=sampling_frequency, method="power"
+    )
+
+    assert actual.time.item() == pytest.approx(10.9921875)
+
+
+def test_dataarray_large_float32_time_coordinate_uses_actual_resolution():
+    """Representable float32 axes are valid even at a large absolute offset."""
+    sampling_frequency = 4
+    start_time = 1_000_000.0
+    raw = np.random.default_rng(21).standard_normal((128, 2))
+    time = (start_time + np.arange(raw.shape[0]) / sampling_frequency).astype(
+        np.float32
+    )
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": time, "channel": ["left", "right"]},
+    )
+
+    actual = multitaper_connectivity(
+        data, sampling_frequency=sampling_frequency, method="power"
+    )
+
+    assert actual.time.item() == pytest.approx(start_time + 15.875)
+
+
+def test_dataarray_datetime_time_coordinate_has_conversion_hint():
+    """Datetime time axes fail explicitly until absolute-time output is supported."""
+    raw = np.random.default_rng(22).standard_normal((128, 2))
+    time = np.datetime64("2025-01-01") + np.arange(raw.shape[0]) * np.timedelta64(
+        1, "s"
+    )
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": time, "channel": ["left", "right"]},
+    )
+
+    with pytest.raises(TypeError, match="not yet supported"):
+        multitaper_connectivity(data, sampling_frequency=1, method="power")
+
+
+def test_dataarray_time_spacing_must_match_sampling_frequency():
+    raw = np.random.default_rng(16).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": np.arange(raw.shape[0]) / 32},
+    )
+
+    with pytest.raises(ValueError, match="spacing does not match"):
+        multitaper_connectivity(data, sampling_frequency=64, method="power")
+
+
+def test_dataarray_time_coordinate_must_agree_with_explicit_start_time():
+    raw = np.random.default_rng(17).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": 10 + np.arange(raw.shape[0]) / 64},
+    )
+
+    with pytest.raises(ValueError, match=r"start_time=.*conflicts"):
         multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
+            data,
+            sampling_frequency=64,
+            method="power",
+            start_time=0,
         )
 
 
@@ -408,6 +609,50 @@ def test_dask_protocol_backing_is_rejected_without_optional_dependency():
 
     with pytest.raises(TypeError, match="dask-backed"):
         _reject_unmaterialized_backing(LazyArray())
+
+
+def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
+    """A DataArray's own attrs survive under the ``input_`` namespace."""
+    data = xr.DataArray(
+        np.random.default_rng(20).standard_normal((256, 2)),
+        dims=("time", "channel"),
+        coords={"channel": ["left", "right"]},
+        attrs={"subject": "m1", "session": 7, "montage": [1, 2, 3]},
+    )
+
+    # Single-method DataArray result.
+    result = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+    assert result.attrs["input_subject"] == "m1"
+    assert result.attrs["input_session"] == 7
+    # A structured attr is JSON-encoded under the ``_json`` suffix.
+    assert "input_montage" not in result.attrs
+    assert json.loads(result.attrs["input_montage_json"]) == [1, 2, 3]
+    # Namespacing keeps caller metadata from clobbering our own provenance.
+    assert result.attrs["package"] == "spectral_connectivity"
+
+    # Multi-method Dataset result: carried on the Dataset and each variable.
+    ds = multitaper_connectivity(
+        data,
+        sampling_frequency=256,
+        method=["coherence_magnitude", "imaginary_coherence"],
+    )
+    assert ds.attrs["input_subject"] == "m1"
+    assert ds["coherence_magnitude"].attrs["input_subject"] == "m1"
+
+    # Provenance must remain NetCDF-serializable.
+    ds.to_netcdf(tmp_path / "input_attrs.nc")
+
+
+def test_plain_ndarray_input_has_no_input_namespace():
+    """A NumPy input contributes no ``input_*`` attributes."""
+    result = multitaper_connectivity(
+        np.random.default_rng(21).standard_normal((256, 2)),
+        sampling_frequency=256,
+        method="coherence_magnitude",
+    )
+    assert not any(key.startswith("input_") for key in result.attrs)
 
 
 class TestProvenanceSerialization:
@@ -1102,6 +1347,30 @@ def test_multitaper_connectivity_rejects_duplicate_signal_names():
             sampling_frequency=256,
             method="coherence_magnitude",
             signal_names=["a", "a"],
+        )
+
+
+def test_multitaper_connectivity_rejects_duplicate_nan_signal_names():
+    """Index semantics treat distinct NaN objects as duplicate labels."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="must not contain missing labels"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)),
+            sampling_frequency=256,
+            method="coherence_magnitude",
+            signal_names=[float("nan"), float("nan")],
+        )
+
+
+def test_multitaper_connectivity_rejects_structured_signal_names():
+    """Hashable tuples are not silently accepted as non-portable coordinates."""
+    rng = np.random.default_rng(0)
+    with pytest.raises(ValueError, match="one-dimensional xarray coordinate"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 3, 2)),
+            sampling_frequency=256,
+            method="coherence_magnitude",
+            signal_names=[("region", 1), ("region", 2)],
         )
 
 

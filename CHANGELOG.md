@@ -19,6 +19,7 @@ directly with results from 2.x.
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
 | `delay` returned cycles | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
+| `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
 | `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
@@ -46,15 +47,24 @@ directly with results from 2.x.
   or non-finite values are stored as canonical, JSON-normalized data under
   `arg_<key>_json` (and `None` serializes as `"null"`), with the full mapping in
   `measure_kwargs_json`. Non-string mapping keys use a collision-safe tagged
-  item representation.
-- `multitaper_connectivity` accepts an `xarray.DataArray` using the documented
-  positional axis order and, unless `signal_names` is supplied explicitly,
-  preserves its final-dimension labels as the result's `source` / `target`
-  coordinates without coercing their types. Because axes are interpreted
-  positionally rather than by name, recognized dimension names that conflict
-  with the required order are rejected; labels that cannot be inferred still
-  produce a warning. Dask-backed DataArrays are rejected with a materialization
-  hint.
+  item representation. Attributes on an input `xarray.DataArray` are carried
+  through under an `input_<key>` (or `input_<key>_json`) namespace so caller
+  metadata survives.
+- `multitaper_connectivity` accepts an `xarray.DataArray`, infers common
+  time/trial/signal dimension names, and transposes them into the numerical
+  core's order. **This changes the DataArray contract from position-driven to
+  name-driven:** domain-specific names must be assigned with `time_dim`,
+  `trial_dim`, and `signal_dim`, and ambiguous dimensions raise instead of
+  falling back to axis position. Numeric time coordinates are treated as
+  elapsed seconds, numeric sample coordinates as sample numbers, and both are
+  checked against `sampling_frequency` and used for output window times.
+  Datetime, timedelta, and object-valued time coordinates are not yet supported
+  and must first be converted to numeric elapsed seconds.
+  Unless `signal_names` is supplied explicitly, the signal index is preserved
+  as the result's `source` / `target` coordinates without coercing its type.
+  Missing, duplicate, nested, and structured signal labels are rejected;
+  labels that cannot be inferred still produce a warning. Dask-backed
+  DataArrays are rejected with a materialization hint.
 - `DEFAULT_METHODS` and `get_compute_backend` are exported at package level.
 - Independent analytic-oracle, failure-mode, backend-boundary, serialization,
   minimum-dependency, artifact, doctest, and notebook checks cover the corrected
