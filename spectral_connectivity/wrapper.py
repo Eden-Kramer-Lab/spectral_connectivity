@@ -11,7 +11,10 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.connectivity import (
+    Connectivity,
+    MultivariateConnectivityResult,
+)
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import BackendArray, get_compute_backend, to_numpy
 
@@ -150,17 +153,13 @@ def _store_provenance_item(
 
 
 class UnsupportedMeasureError(ValueError):
-    """A measure does not fit the ``(time, frequency, source, target)`` layout.
+    """A method has no registered semantic xarray output contract.
 
-    Raised by :func:`connectivity_to_xarray` for measures that cannot be
-    represented as a plain per-signal-pair xarray (``global_coherence``,
-    ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
-    and blockwise spectral Granger). It subclasses ``ValueError`` for backward
-    compatibility, but is a distinct type so :func:`multitaper_connectivity`
-    can skip an unsupported
-    measure in a multi-measure batch *without* also swallowing a genuine
-    computation error (e.g. a measure that raises ``ValueError`` because the data
-    has too few observations).
+    Built-in nonstandard results (components, groups, delays, and multi-variable
+    outputs) have explicit schemas. This exception remains for unregistered
+    extensions whose returned shape cannot be inferred safely. It subclasses
+    ``ValueError`` for backward compatibility and lets multi-measure wrappers
+    distinguish structural incompatibility from genuine numerical errors.
     """
 
 
@@ -180,7 +179,17 @@ def _package_version() -> str:
 class _MeasureSpec:
     """Shape/capability metadata used by the xarray wrapper."""
 
-    output_kind: Literal["pairwise", "power", "unsupported"]
+    output_kind: Literal[
+        "pairwise",
+        "power",
+        "group_pairwise",
+        "delay",
+        "global",
+        "group_delay",
+        "phase_slope",
+        "multivariate_components",
+        "unsupported",
+    ]
     is_default: bool = False
     # Directed measures use the convention output[i, j] = influence j -> i (row
     # = receiver, col = driver). The wrapper transposes them so the labeled
@@ -191,8 +200,13 @@ class _MeasureSpec:
     def __post_init__(self) -> None:
         # Make the field couplings unrepresentable rather than merely unused, so
         # a future registry entry cannot silently violate them.
-        if self.is_directed and self.output_kind != "pairwise":
-            raise ValueError("is_directed requires output_kind='pairwise'.")
+        if self.is_directed and self.output_kind not in {
+            "pairwise",
+            "group_pairwise",
+        }:
+            raise ValueError(
+                "is_directed requires pairwise or group_pairwise output."
+            )
         if self.is_default and self.output_kind == "unsupported":
             raise ValueError("an unsupported measure cannot be a default.")
 
@@ -238,19 +252,20 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
     "generalized_partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
     "direct_directed_transfer_function": _DIRECTED_PAIRWISE_SPEC,
-    **dict.fromkeys(
-        (
-            "blockwise_spectral_granger_prediction",
-            "canonical_coherence",
-            "delay",
-            "global_coherence",
-            "group_delay",
-            "maximized_imaginary_coherency",
-            "multivariate_interaction_measure",
-            "phase_slope_index",
-        ),
-        _UNSUPPORTED_SPEC,
+    "blockwise_spectral_granger_prediction": _MeasureSpec(
+        "group_pairwise", is_directed=True
     ),
+    "canonical_coherence": _MeasureSpec("group_pairwise"),
+    "maximized_imaginary_coherency": _MeasureSpec("group_pairwise"),
+    "multivariate_interaction_measure": _MeasureSpec("group_pairwise"),
+    "canonical_coherency": _MeasureSpec("multivariate_components"),
+    "maximized_imaginary_coherency_components": _MeasureSpec(
+        "multivariate_components"
+    ),
+    "delay": _MeasureSpec("delay"),
+    "global_coherence": _MeasureSpec("global"),
+    "group_delay": _MeasureSpec("group_delay"),
+    "phase_slope_index": _MeasureSpec("phase_slope"),
 }
 
 DEFAULT_METHODS: tuple[str, ...] = tuple(
@@ -337,14 +352,14 @@ def _connectivity_result_to_xarray(
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
     **kwargs: Any,
-) -> xr.DataArray:
+) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
     """
     measure_spec = _get_measure_spec(method)
-    connectivity_mat = getattr(connectivity, method)(**kwargs)
+    numerical_result = getattr(connectivity, method)(**kwargs)
 
     pairwise_shape = (
         len(connectivity.time),
@@ -353,8 +368,8 @@ def _connectivity_result_to_xarray(
         connectivity.n_signals,
     )
     power_shape = pairwise_shape[:-1]
-    actual_shape = tuple(connectivity_mat.shape)
     if measure_spec is None:
+        actual_shape = tuple(numerical_result.shape)
         if actual_shape != pairwise_shape:
             raise UnsupportedMeasureError(
                 f"The method '{method}' returned shape {actual_shape}, but an "
@@ -362,21 +377,6 @@ def _connectivity_result_to_xarray(
                 "Register its output contract or use Connectivity directly."
             )
         measure_spec = _PAIRWISE_SPEC
-    expected_shape = (
-        power_shape if measure_spec.output_kind == "power" else pairwise_shape
-    )
-    if actual_shape != expected_shape:
-        raise ValueError(
-            f"The method '{method}' returned shape {actual_shape}; its wrapper "
-            f"contract requires {expected_shape}."
-        )
-
-    if measure_spec.is_directed:
-        # Directed measures return output[i, j] = influence j -> i (row =
-        # receiver, col = driver). Transpose the trailing signal axes so the
-        # stored value at [i, j] is i -> j, matching the (source, target) labels
-        # applied below: sel(source=i, target=j) then reads "i drives j".
-        connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
@@ -385,7 +385,7 @@ def _connectivity_result_to_xarray(
     for key, value in kwargs.items():
         _store_provenance_item(attrs, "arg_", key, value)
 
-    coordinates: dict[str, Any] = {
+    base_coordinates: dict[str, Any] = {
         "time": (
             "time",
             connectivity.time,
@@ -396,12 +396,28 @@ def _connectivity_result_to_xarray(
             connectivity.frequencies,
             {"long_name": "Frequency", "units": "Hz"},
         ),
-        "source": (
-            "source",
-            signal_labels,
-            {"long_name": "Source signal"},
-        ),
     }
+    signal_coordinates = {
+        "source": ("source", signal_labels, {"long_name": "Source signal"}),
+        "target": ("target", signal_labels, {"long_name": "Target signal"}),
+    }
+
+    if measure_spec.output_kind in {"pairwise", "power"}:
+        connectivity_mat = np.asarray(numerical_result)
+        expected_shape = (
+            power_shape if measure_spec.output_kind == "power" else pairwise_shape
+        )
+        if tuple(connectivity_mat.shape) != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its wrapper contract requires {expected_shape}."
+            )
+        if measure_spec.is_directed:
+            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
+        coordinates = {**base_coordinates, "source": signal_coordinates["source"]}
+    else:
+        coordinates = dict(base_coordinates)
+
     if measure_spec.output_kind == "power":
         # squeeze has no meaning for power (no target axis); it is a no-op here.
         xar = xr.DataArray(
@@ -411,12 +427,10 @@ def _connectivity_result_to_xarray(
             name=method,
             attrs=attrs,
         )
-    else:
-        coordinates["target"] = (
-            "target",
-            signal_labels,
-            {"long_name": "Target signal"},
-        )
+        return xar
+
+    if measure_spec.output_kind == "pairwise":
+        coordinates["target"] = signal_coordinates["target"]
         xar = xr.DataArray(
             connectivity_mat,
             coords=coordinates,
@@ -440,8 +454,257 @@ def _connectivity_result_to_xarray(
                 UserWarning,
                 stacklevel=2,
             )
+        return xar
 
-    return xar
+    if measure_spec.output_kind == "group_pairwise":
+        connectivity_mat, group_labels = numerical_result
+        connectivity_mat = np.asarray(connectivity_mat)
+        group_labels = np.asarray(group_labels)
+        expected_shape = (
+            len(connectivity.time),
+            len(connectivity.frequencies),
+            len(group_labels),
+            len(group_labels),
+        )
+        if connectivity_mat.shape != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its group-pairwise contract requires {expected_shape}."
+            )
+        if measure_spec.is_directed:
+            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
+        coordinates.update(
+            {
+                "source_group": ("source_group", group_labels),
+                "target_group": ("target_group", group_labels),
+            }
+        )
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "frequency", "source_group", "target_group"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "delay":
+        connectivity_mat = np.asarray(numerical_result)
+        frequencies = np.asarray(connectivity.frequencies)
+        frequency_band = kwargs.get("frequencies_of_interest")
+        if frequency_band is not None:
+            frequencies = frequencies[
+                (frequency_band[0] < frequencies) & (frequencies < frequency_band[1])
+            ]
+        delay_expected_shape = (
+            len(connectivity.time),
+            len(frequencies),
+            connectivity_mat.shape[-3],
+            connectivity.n_signals,
+            connectivity.n_signals,
+        )
+        if connectivity_mat.shape != delay_expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its delay contract requires {delay_expected_shape}."
+            )
+        coordinates = {
+            "time": base_coordinates["time"],
+            "frequency": ("frequency", frequencies, {"units": "Hz"}),
+            "candidate": np.arange(
+                -int(kwargs.get("n_range", 3)), int(kwargs.get("n_range", 3)) + 1
+            ),
+            **signal_coordinates,
+        }
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "frequency", "candidate", "source", "target"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "phase_slope":
+        connectivity_mat = np.asarray(numerical_result)
+        expected_shape = (
+            len(connectivity.time),
+            connectivity.n_signals,
+            connectivity.n_signals,
+        )
+        if connectivity_mat.shape != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its phase-slope contract requires {expected_shape}."
+            )
+        band = kwargs.get("frequencies_of_interest")
+        if band is None:
+            band = (connectivity.frequencies[0], connectivity.frequencies[-1])
+        coordinates = {
+            "time": base_coordinates["time"],
+            **signal_coordinates,
+            "frequency_band_lower": float(band[0]),
+            "frequency_band_upper": float(band[1]),
+        }
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "source", "target"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "group_delay":
+        delay, slope, r_value = numerical_result
+        dataset_coordinates = {
+            "time": base_coordinates["time"],
+            **signal_coordinates,
+        }
+        variables = {
+            "group_delay": ("group_delay", np.asarray(delay), "s"),
+            "group_delay_slope": ("phase slope", np.asarray(slope), "rad/Hz"),
+            "group_delay_r_value": ("phase-frequency correlation", np.asarray(r_value), "1"),
+        }
+        data_vars: dict[str, xr.DataArray] = {}
+        for name, (long_name, values, units) in variables.items():
+            if values.shape != (
+                len(connectivity.time),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            ):
+                raise ValueError(f"The method '{method}' returned an invalid shape.")
+            variable_attrs = {**attrs, "long_name": long_name, "units": units}
+            data_vars[name] = xr.DataArray(
+                values,
+                coords=dataset_coordinates,
+                dims=("time", "source", "target"),
+                attrs=variable_attrs,
+            )
+        return xr.Dataset(data_vars, attrs=attrs)
+
+    if measure_spec.output_kind == "global":
+        scores, vectors = numerical_result
+        scores = np.asarray(scores)[..., : len(connectivity.frequencies), :]
+        vectors = np.asarray(vectors)[..., : len(connectivity.frequencies), :, :]
+        n_components = scores.shape[-1]
+        dataset_coordinates = {
+            **base_coordinates,
+            "component": np.arange(n_components),
+            "source": signal_coordinates["source"],
+        }
+        return xr.Dataset(
+            {
+                "global_coherence": xr.DataArray(
+                    scores,
+                    coords={
+                        key: dataset_coordinates[key]
+                        for key in ("time", "frequency", "component")
+                    },
+                    dims=("time", "frequency", "component"),
+                    attrs=attrs,
+                ),
+                "global_coherence_vectors": xr.DataArray(
+                    vectors,
+                    coords=dataset_coordinates,
+                    dims=("time", "frequency", "source", "component"),
+                    attrs={**attrs, "long_name": "Global coherence spatial vectors"},
+                ),
+            },
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "multivariate_components":
+        if not isinstance(numerical_result, MultivariateConnectivityResult):
+            raise TypeError(
+                f"The method '{method}' did not return MultivariateConnectivityResult."
+            )
+        n_connections = numerical_result.scores.shape[-2]
+        n_components = numerical_result.scores.shape[-1]
+        expected_scores = (
+            len(connectivity.time),
+            len(connectivity.frequencies),
+            n_connections,
+            n_components,
+        )
+        if numerical_result.scores.shape != expected_scores:
+            raise ValueError(
+                f"The method '{method}' returned score shape "
+                f"{numerical_result.scores.shape}; expected {expected_scores}."
+            )
+        component_coordinates = {
+            **base_coordinates,
+            "connection": np.arange(n_connections),
+            "component": np.arange(n_components),
+            "seed_group": ("connection", numerical_result.connections[:, 0]),
+            "target_group": ("connection", numerical_result.connections[:, 1]),
+            "side": ("side", ["seed", "target"]),
+            "signal": ("signal", signal_labels),
+            "group": ("group", numerical_result.group_labels),
+        }
+        data_vars = {
+            method: xr.DataArray(
+                numerical_result.scores,
+                coords={
+                    key: component_coordinates[key]
+                    for key in (
+                        "time",
+                        "frequency",
+                        "connection",
+                        "component",
+                        "seed_group",
+                        "target_group",
+                    )
+                },
+                dims=("time", "frequency", "connection", "component"),
+                attrs=attrs,
+            ),
+            "group_membership": xr.DataArray(
+                numerical_result.group_membership,
+                coords={
+                    "group": component_coordinates["group"],
+                    "signal": component_coordinates["signal"],
+                },
+                dims=("group", "signal"),
+            ),
+        }
+        projection_dims = (
+            "time",
+            "frequency",
+            "connection",
+            "component",
+            "side",
+            "signal",
+        )
+        projection_coordinates = {
+            key: component_coordinates[key]
+            for key in (
+                "time",
+                "frequency",
+                "connection",
+                "component",
+                "seed_group",
+                "target_group",
+                "side",
+                "signal",
+            )
+        }
+        if numerical_result.filters is not None:
+            data_vars[f"{method}_filters"] = xr.DataArray(
+                numerical_result.filters,
+                coords=projection_coordinates,
+                dims=projection_dims,
+                attrs={**attrs, "long_name": "Spatial filters"},
+            )
+        if numerical_result.patterns is not None:
+            data_vars[f"{method}_patterns"] = xr.DataArray(
+                numerical_result.patterns,
+                coords=projection_coordinates,
+                dims=projection_dims,
+                attrs={**attrs, "long_name": "Spatial patterns"},
+            )
+        return xr.Dataset(data_vars, attrs=attrs)
+
+    raise UnsupportedMeasureError(
+        f"No xarray formatter is registered for method {method!r}."
+    )
 
 
 def _shared_provenance_attrs(
@@ -621,6 +884,19 @@ def _select_and_reduce_frequencies(
         raise ValueError("frequency_decimation must be a positive integer.")
 
     selected = result
+    requests_frequency_operation = (
+        frequency_range is not None
+        or frequency_decimation != 1
+        or frequency_bands is not None
+    )
+    if requests_frequency_operation and "frequency" not in selected.dims:
+        raise ValueError(
+            "This result has no frequency dimension: the requested method "
+            "already reduces frequency (for example phase_slope_index or "
+            "group_delay), so frequency_range, frequency_decimation, and "
+            "frequency_bands cannot be applied afterward. Pass the method's "
+            "frequencies_of_interest argument through connectivity_kwargs instead."
+        )
     if frequency_range is not None:
         try:
             lower, upper = frequency_range
@@ -662,12 +938,11 @@ def connectivity_to_xarray(
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     **kwargs: Any,
-) -> xr.DataArray:
+) -> xr.DataArray | xr.Dataset:
     """Calculate one connectivity measure and return a labeled array.
 
-    Pairwise measures use ``(time, frequency, source, target)`` dimensions;
-    power uses ``(time, frequency, source)``. Measures with different output
-    contracts should be called on :class:`Connectivity` directly.
+    Ordinary pairwise measures return a DataArray; component-resolved or
+    multi-quantity measures return a Dataset with explicit semantic axes.
 
     Examples
     --------
@@ -709,6 +984,26 @@ def connectivity_to_xarray(
             )
         )
     return result
+
+
+def _combine_formatted_results(
+    results: Sequence[xr.DataArray | xr.Dataset],
+    shared_attrs: Mapping[str, Any],
+) -> xr.Dataset:
+    """Merge heterogeneous formatted measures without losing sub-variables."""
+    datasets = [
+        result.to_dataset(name=result.name) if isinstance(result, xr.DataArray) else result
+        for result in results
+    ]
+    try:
+        combined = xr.merge(datasets, compat="no_conflicts", join="exact")
+    except ValueError as error:
+        raise ValueError(
+            "Requested measures produced conflicting xarray variables or "
+            "coordinates; request them separately or use compatible group labels."
+        ) from error
+    combined.attrs = dict(shared_attrs)
+    return combined
 
 
 # Common dimension names let the wrapper infer semantic roles. DataArrays are
@@ -1324,9 +1619,10 @@ def multitaper_connectivity(
     Returns
     -------
     result : xarray.DataArray or xarray.Dataset
-        - DataArray if single method requested: connectivity values with dimensions
-          ['time', 'frequency', 'source', 'target'] or ['time', 'frequency'] if squeezed
-        - Dataset if multiple methods: collection of DataArrays, one per method
+        A plain single-quantity method returns a DataArray. Component-resolved
+        and multi-quantity methods return a Dataset even when requested alone;
+        multiple methods are merged into one Dataset without flattening their
+        semantic dimensions.
 
     Examples
     --------
@@ -1443,10 +1739,8 @@ def multitaper_connectivity(
     return_dataarray = False  # Default: return dataset
     if method is None:
         # The explicit, portably serializable / xarray-compatible default set
-        # (see DEFAULT_METHODS). Not every Connectivity method — coherency
-        # (complex), global_coherence / phase_slope_index, and the directed-
-        # transfer-function family are excluded from the default (the last is
-        # still opt-in by name).
+        # (see DEFAULT_METHODS). Complex, component/group, frequency-reduced,
+        # and directed-transfer-function results remain opt-in by name.
         method = list(DEFAULT_METHODS)
     elif isinstance(method, str):
         method = [method]  # Convert to list
@@ -1504,16 +1798,18 @@ def multitaper_connectivity(
             **connectivity_kwargs,
         )
     else:
-        data_vars: dict[str, xr.DataArray] = {}
+        formatted_results: list[xr.DataArray | xr.Dataset] = []
         for this_method in method:
             try:
-                data_vars[this_method] = _connectivity_result_to_xarray(
-                    shared_connectivity,
-                    this_method,
-                    signal_labels,
-                    squeeze,
-                    shared_attrs,
-                    **connectivity_kwargs,
+                formatted_results.append(
+                    _connectivity_result_to_xarray(
+                        shared_connectivity,
+                        this_method,
+                        signal_labels,
+                        squeeze,
+                        shared_attrs,
+                        **connectivity_kwargs,
+                    )
                 )
             except UnsupportedMeasureError as e:
                 # A measure whose result shape does not fit the xarray layout can be
@@ -1525,7 +1821,7 @@ def multitaper_connectivity(
                 if len(method) == 1:
                     raise
                 logger.warning("Skipping %s: %s", this_method, e)
-        if not data_vars:
+        if not formatted_results:
             raise UnsupportedMeasureError(
                 "None of the requested methods produced a compatible result "
                 f"for the xarray interface: {method!r}."
@@ -1533,7 +1829,7 @@ def multitaper_connectivity(
         # Shared coordinates are aligned once during construction. Dataset-level
         # provenance makes a multi-measure result self-describing without requiring
         # callers to inspect an individual variable.
-        result = xr.Dataset(data_vars=data_vars, attrs=dict(shared_attrs))
+        result = _combine_formatted_results(formatted_results, shared_attrs)
 
     return _select_and_reduce_frequencies(
         result,
@@ -1928,27 +2224,29 @@ def fourier_connectivity(
             **connectivity_kwargs,
         )
     else:
-        data_vars: dict[str, xr.DataArray] = {}
+        formatted_results: list[xr.DataArray | xr.Dataset] = []
         for this_method in methods:
             try:
-                data_vars[this_method] = _connectivity_result_to_xarray(
-                    connectivity,
-                    this_method,
-                    signal_labels,
-                    False,
-                    shared_attrs,
-                    **connectivity_kwargs,
+                formatted_results.append(
+                    _connectivity_result_to_xarray(
+                        connectivity,
+                        this_method,
+                        signal_labels,
+                        False,
+                        shared_attrs,
+                        **connectivity_kwargs,
+                    )
                 )
             except UnsupportedMeasureError as error:
                 if len(methods) == 1:
                     raise
                 logger.warning("Skipping %s: %s", this_method, error)
-        if not data_vars:
+        if not formatted_results:
             raise UnsupportedMeasureError(
                 "None of the requested methods produced a compatible result "
                 f"for the xarray interface: {methods!r}."
             )
-        result = xr.Dataset(data_vars=data_vars, attrs=dict(shared_attrs))
+        result = _combine_formatted_results(formatted_results, shared_attrs)
 
     return _select_and_reduce_frequencies(
         result,

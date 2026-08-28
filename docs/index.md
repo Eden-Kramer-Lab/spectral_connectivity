@@ -124,6 +124,13 @@ mic = c.maximized_imaginary_coherency_components(
 )
 ```
 
+The xarray wrappers retain nonstandard scientific shapes instead of flattening
+them: group-pair matrices have `source_group`/`target_group`; rich CaCoh/MIC
+results include `connection`, `component`, `side`, `signal`, filters, patterns,
+and group membership; delay has a `candidate` axis; and global coherence and
+group delay return multi-variable Datasets. Phase slope and group delay have no
+frequency dimension because their band has already been reduced.
+
 `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` provide alternative
 spectral transforms with the same coefficient interface. Morlet output is
 positive-frequency-only and is therefore limited to functional measures;

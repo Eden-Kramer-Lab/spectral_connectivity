@@ -11,7 +11,6 @@ from spectral_connectivity import MorletWavelet, Multitaper, Welch
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
-    UnsupportedMeasureError,
     _canonical_json,
     _json_compatible,
     _MeasureSpec,
@@ -53,37 +52,187 @@ def test_multitaper_coherence_magnitude(time_window_duration):
     assert not (np.isnan(m.values)).all()
 
 
-# Measures that do not fit the wrapper's (time, frequency, source, target) /
-# (time, frequency, source) xarray layouts. Requesting one raises
-# UnsupportedMeasureError with a pointer to use Connectivity directly.
-_WRAPPER_UNSUPPORTED_METHODS = [
-    "canonical_coherence",
-    "group_delay",
-    "delay",
-    "global_coherence",
-    "phase_slope_index",
-    "blockwise_spectral_granger_prediction",
-]
-
-
-@mark.parametrize("method", _WRAPPER_UNSUPPORTED_METHODS)
-def test_multitaper_connectivity_rejects_unsupported_methods(method):
-    """A measure without a plain xarray layout is rejected, not silently skipped.
-
-    Replaces an earlier loop that caught the errors and then asserted against the
-    *previous* iteration's result, so a raising regression in a supported measure
-    could pass unnoticed. Supported measures are exercised non-degenerately by
-    ``test_multitaper_n_signals`` / ``test_multitaper_connectivities_n_signals``.
-    """
+@mark.parametrize(
+    "method",
+    [
+        "canonical_coherence",
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+    ],
+)
+def test_connectivity_to_xarray_exposes_group_pairwise_results(method):
     rng = np.random.default_rng(42)
-    time_series = rng.random((7201, 10, 2))
-    with pytest.raises(UnsupportedMeasureError):
+    transform = Multitaper(
+        rng.standard_normal((256, 6, 4)), sampling_frequency=128
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method=method,
+        signal_names=["a", "b", "c", "d"],
+        group_labels=[10, 10, 20, 20],
+    )
+
+    assert result.dims == ("time", "frequency", "source_group", "target_group")
+    assert result.source_group.values.tolist() == [10, 20]
+    assert result.target_group.values.tolist() == [10, 20]
+
+
+def test_group_pairwise_directed_orientation_is_source_to_target(monkeypatch):
+    transform = Multitaper(
+        np.random.default_rng(427).standard_normal((128, 3, 4)),
+        sampling_frequency=64,
+    )
+
+    def blockwise(self, group_labels):
+        values = np.zeros((len(self.time), len(self.frequencies), 2, 2))
+        values[..., 1, 0] = 7.0  # native convention: group 0 -> group 1
+        return values, np.array([10, 20])
+
+    monkeypatch.setattr(
+        Connectivity, "blockwise_spectral_granger_prediction", blockwise
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method="blockwise_spectral_granger_prediction",
+        group_labels=[10, 10, 20, 20],
+    )
+
+    assert np.all(result.sel(source_group=10, target_group=20) == 7)
+    assert np.all(result.sel(source_group=20, target_group=10) == 0)
+
+
+def test_connectivity_to_xarray_exposes_rich_multivariate_components():
+    rng = np.random.default_rng(43)
+    transform = Multitaper(
+        rng.standard_normal((256, 8, 4)), sampling_frequency=128
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method="canonical_coherency",
+        signal_names=["a", "b", "c", "d"],
+        group_labels=[10, 10, 20, 20],
+        n_components=2,
+    )
+
+    assert set(result.data_vars) == {
+        "canonical_coherency",
+        "canonical_coherency_filters",
+        "canonical_coherency_patterns",
+        "group_membership",
+    }
+    assert result.canonical_coherency.dims == (
+        "time",
+        "frequency",
+        "connection",
+        "component",
+    )
+    assert result.canonical_coherency_filters.dims == (
+        "time",
+        "frequency",
+        "connection",
+        "component",
+        "side",
+        "signal",
+    )
+    assert result.seed_group.values.tolist() == [10]
+    assert result.target_group.values.tolist() == [20]
+    assert result.group_membership.sel(group=10, signal="a").item()
+
+
+def test_connectivity_to_xarray_exposes_global_components():
+    transform = Multitaper(
+        np.random.default_rng(44).standard_normal((256, 6, 3)),
+        sampling_frequency=128,
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method="global_coherence",
+        signal_names=["a", "b", "c"],
+        max_rank=2,
+    )
+
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
+    assert result.global_coherence.dims == ("time", "frequency", "component")
+    assert result.global_coherence_vectors.dims == (
+        "time",
+        "frequency",
+        "source",
+        "component",
+    )
+    assert result.sizes["component"] == 2
+
+
+def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
+    transform = Multitaper(
+        np.random.default_rng(45).standard_normal((256, 12, 2)),
+        sampling_frequency=128,
+    )
+    delay = connectivity_to_xarray(
+        transform,
+        method="delay",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+        n_range=1,
+    )
+    psi = connectivity_to_xarray(
+        transform,
+        method="phase_slope_index",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+    )
+    group_delay = connectivity_to_xarray(
+        transform,
+        method="group_delay",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+    )
+
+    assert delay.dims == ("time", "frequency", "candidate", "source", "target")
+    assert delay.candidate.values.tolist() == [-1, 0, 1]
+    assert np.all((delay.frequency > 8) & (delay.frequency < 40))
+    assert psi.dims == ("time", "source", "target")
+    assert psi.frequency_band_lower.item() == 8
+    assert psi.frequency_band_upper.item() == 40
+    assert set(group_delay.data_vars) == {
+        "group_delay",
+        "group_delay_slope",
+        "group_delay_r_value",
+    }
+    assert group_delay.group_delay.attrs["units"] == "s"
+
+
+def test_frequency_operations_reject_already_reduced_output():
+    data = np.random.default_rng(428).standard_normal((256, 4, 2))
+    with pytest.raises(ValueError, match="no frequency dimension"):
         multitaper_connectivity(
-            time_series,
-            sampling_frequency=1500,
-            method=method,
-            time_window_duration=0.1,
+            data,
+            sampling_frequency=128,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequencies_of_interest": (8, 40)},
+            frequency_range=(10, 30),
         )
+
+
+def test_fourier_connectivity_exposes_global_dataset():
+    rng = np.random.default_rng(429)
+    coefficients = rng.standard_normal((2, 4, 2, 16, 3)) + 1j * rng.standard_normal(
+        (2, 4, 2, 16, 3)
+    )
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.fft.fftfreq(16, d=1 / 128),
+        method="global_coherence",
+        connectivity_kwargs={"max_rank": 2},
+    )
+
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
+    assert result.sizes["frequency"] == 9
 
 
 @mark.parametrize("n_signals", range(2, 5))
@@ -1519,14 +1668,7 @@ def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
     assert data_array.dims == ("time", "frequency", "source", "target")
 
 
-def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
-    """A batch mixing a supported and an xarray-incompatible measure drops the
-    latter with a warning rather than aborting.
-
-    ``connectivity_to_xarray`` raises ``ValueError`` (not ``NotImplementedError``)
-    for ``global_coherence``; the batch loop must catch it so the supported
-    measure is still returned.
-    """
+def test_multitaper_connectivity_merges_nonstandard_dataset_in_batch():
     rng = np.random.default_rng(0)
     result = multitaper_connectivity(
         rng.standard_normal((256, 4, 3)),
@@ -1534,17 +1676,36 @@ def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
         method=["coherence_magnitude", "global_coherence"],
     )
     assert "coherence_magnitude" in result
-    assert "global_coherence" not in result
+    assert "global_coherence" in result
+    assert "global_coherence_vectors" in result
+
+
+def test_multitaper_connectivity_merges_rich_multivariate_datasets():
+    result = multitaper_connectivity(
+        np.random.default_rng(430).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=[
+            "canonical_coherency",
+            "maximized_imaginary_coherency_components",
+        ],
+        connectivity_kwargs={
+            "group_labels": [0, 0, 1, 1],
+            "n_components": 1,
+        },
+    )
+
+    assert "canonical_coherency_filters" in result
+    assert "maximized_imaginary_coherency_components_patterns" in result
+    assert list(result.data_vars).count("group_membership") == 1
 
 
 def test_multitaper_connectivity_genuine_error_not_swallowed():
     """A real computation error in a batch surfaces; it is not silently dropped.
 
     A debiased measure requires >= 2 observations. With one trial and one taper
-    it raises ValueError — a genuine data problem, distinct from a measure that
-    structurally does not fit the xarray layout (UnsupportedMeasureError). It
-    must propagate, not leave the user with a Dataset that silently omits the
-    requested measure alongside the ones that happened to succeed.
+    it raises ValueError and must propagate, rather than leave the user with a
+    Dataset that silently omits the requested measure alongside the ones that
+    happened to succeed.
     """
     rng = np.random.default_rng(0)
     ts = rng.standard_normal((256, 1, 3))  # one trial
@@ -1557,15 +1718,17 @@ def test_multitaper_connectivity_genuine_error_not_swallowed():
         )
 
 
-def test_multitaper_connectivity_single_unsupported_measure_raises():
-    """Requesting only an xarray-incompatible measure re-raises, not swallowed."""
+def test_multitaper_connectivity_single_dataset_measure_is_dataset():
     rng = np.random.default_rng(0)
-    with pytest.raises(ValueError):
-        multitaper_connectivity(
-            rng.standard_normal((256, 4, 3)),
-            sampling_frequency=500,
-            method=["global_coherence"],
-        )
+    result = multitaper_connectivity(
+        rng.standard_normal((256, 4, 3)),
+        sampling_frequency=500,
+        method=["global_coherence"],
+    )
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
 
 
 def test_metadata_survives_netcdf_round_trip(tmp_path):
@@ -1657,14 +1820,16 @@ def test_multitaper_connectivity_rejects_empty_method_list():
         )
 
 
-def test_multitaper_connectivity_raises_when_no_method_is_compatible():
+def test_multitaper_connectivity_merges_frequency_and_band_only_outputs():
     rng = np.random.default_rng(0)
-    with pytest.raises(UnsupportedMeasureError, match="None of the requested methods"):
-        multitaper_connectivity(
-            rng.standard_normal((256, 3, 2)),
-            sampling_frequency=256,
-            method=["global_coherence", "phase_slope_index"],
-        )
+    result = multitaper_connectivity(
+        rng.standard_normal((256, 3, 2)),
+        sampling_frequency=256,
+        method=["global_coherence", "phase_slope_index"],
+    )
+    assert "global_coherence" in result
+    assert "phase_slope_index" in result
+    assert "frequency" not in result.phase_slope_index.dims
 
 
 def test_multitaper_connectivity_rejects_duplicate_signal_names():

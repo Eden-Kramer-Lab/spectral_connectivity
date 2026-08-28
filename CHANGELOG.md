@@ -89,6 +89,10 @@ directly with results from 2.x.
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
   variable.
+- The xarray interfaces now expose every built-in nonstandard result contract:
+  group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
+  and membership, delay candidates, global-coherence scores/vectors,
+  group-delay quantities, and frequency-reduced phase-slope matrices.
 - Wrapper results carry descriptive time/frequency metadata plus NetCDF-safe
   measure, package-version, backend, expectation, transform, and method-argument
   provenance. Scalar method arguments are stored under `arg_<key>`; structured
