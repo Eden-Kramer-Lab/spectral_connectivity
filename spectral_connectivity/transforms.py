@@ -57,6 +57,31 @@ def _validate_sampling_frequency(sampling_frequency: float) -> None:
         )
 
 
+def _resolve_sample_count(
+    explicit: int | None,
+    duration: float | None,
+    sampling_frequency: float,
+    mismatch_message: str,
+) -> int | None:
+    """Resolve a window/segment length from an explicit count or a duration.
+
+    Returns the sample count when either ``explicit`` or ``duration`` is given
+    (cross-checking that they agree when both are), or ``None`` when neither is
+    provided so the caller can apply its own default. Shared by the STFT window,
+    STFT step, and Welch segment resolution.
+    """
+    if explicit is not None:
+        samples = int(explicit)
+        if duration is not None and int(np.around(duration * sampling_frequency)) != (
+            samples
+        ):
+            raise ValueError(mismatch_message)
+        return samples
+    if duration is not None:
+        return int(np.around(duration * sampling_frequency))
+    return None
+
+
 class MultitaperParameters(TypedDict):
     """Parameter suggestions for multitaper analysis.
 
@@ -1493,8 +1518,8 @@ FFT samples:          {self.n_fft_samples}
         # time-domain variance (signal ** 2). Dividing by ``sampling_frequency``
         # puts the noise term on the PSD scale; without it the noise is inflated
         # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
-        noise_power_spectral_density = xp.var(time_series, axis=-1) / (
-            self.sampling_frequency
+        noise_power_spectral_density = (
+            xp.var(time_series, axis=-1) / self.sampling_frequency
         )
         return _apply_adaptive_taper_weights(
             coefficients,
@@ -1584,37 +1609,30 @@ class ShortTimeFourierTransform(Multitaper):
         if len(data_shape) != 3:
             # Delegate the detailed dimensionality message to Multitaper.
             window_samples = 2
-        elif n_time_samples_per_window is not None:
-            window_samples = int(n_time_samples_per_window)
-            if time_window_duration is not None:
-                duration_samples = int(
-                    np.around(time_window_duration * sampling_frequency)
-                )
-                if duration_samples != window_samples:
-                    raise ValueError(
-                        "time_window_duration and n_time_samples_per_window "
-                        "resolve to different Hann window lengths."
-                    )
-        elif time_window_duration is not None:
-            window_samples = int(np.around(time_window_duration * sampling_frequency))
         else:
-            window_samples = int(data_shape[0] if data_shape else 0)
+            resolved_window = _resolve_sample_count(
+                n_time_samples_per_window,
+                time_window_duration,
+                sampling_frequency,
+                "time_window_duration and n_time_samples_per_window resolve to "
+                "different Hann window lengths.",
+            )
+            window_samples = (
+                int(data_shape[0] if data_shape else 0)
+                if resolved_window is None
+                else resolved_window
+            )
         if window_samples < 2:
             raise ValueError("A Hann transform window requires at least 2 samples.")
 
-        if n_time_samples_per_step is not None:
-            step_samples = int(n_time_samples_per_step)
-            if time_window_step is not None:
-                duration_step = int(np.around(time_window_step * sampling_frequency))
-                if duration_step != step_samples:
-                    raise ValueError(
-                        "time_window_step and n_time_samples_per_step resolve "
-                        "to different step lengths."
-                    )
-        elif time_window_step is not None:
-            step_samples = int(np.around(time_window_step * sampling_frequency))
-        else:
-            step_samples = window_samples
+        resolved_step = _resolve_sample_count(
+            n_time_samples_per_step,
+            time_window_step,
+            sampling_frequency,
+            "time_window_step and n_time_samples_per_step resolve to different "
+            "step lengths.",
+        )
+        step_samples = window_samples if resolved_step is None else resolved_step
 
         window = scipy_hann(window_samples, sym=False)
         norm = np.linalg.norm(window)
@@ -1718,18 +1736,14 @@ class Welch:
                 "n_time_samples_per_segment must be an integer of at least 2."
             )
         n_time_samples = int(getattr(time_series, "shape", (0,))[0])
-        if n_time_samples_per_segment is not None:
-            segment_samples = int(n_time_samples_per_segment)
-            if segment_duration is not None:
-                duration_samples = int(np.around(segment_duration * sampling_frequency))
-                if duration_samples != segment_samples:
-                    raise ValueError(
-                        "segment_duration and n_time_samples_per_segment "
-                        "resolve to different lengths."
-                    )
-        elif segment_duration is not None:
-            segment_samples = int(np.around(segment_duration * sampling_frequency))
-        else:
+        segment_samples = _resolve_sample_count(
+            n_time_samples_per_segment,
+            segment_duration,
+            sampling_frequency,
+            "segment_duration and n_time_samples_per_segment resolve to different "
+            "lengths.",
+        )
+        if segment_samples is None:
             import warnings
 
             segment_samples = min(256, n_time_samples)
@@ -2481,7 +2495,6 @@ def _apply_adaptive_taper_weights(
     eps = xp.finfo(taper_power.dtype).eps
 
     weights = xp.ones_like(taper_power, dtype=taper_power.dtype)
-    converged = False
     for _ in range(max_iterations):
         expanded_spectrum = spectrum[:, :, xp.newaxis, :, :]
         denominator = concentration * expanded_spectrum + (1.0 - concentration) * noise
@@ -2492,20 +2505,19 @@ def _apply_adaptive_taper_weights(
             where=xp.abs(denominator) > eps,
         )
         weight_power = weights**2
+        weight_sum = xp.sum(weight_power, axis=2)
         updated = xp.divide(
             xp.sum(weight_power * taper_power, axis=2),
-            xp.sum(weight_power, axis=2),
+            weight_sum,
             out=xp.zeros_like(spectrum),
-            where=xp.sum(weight_power, axis=2) > eps,
+            where=weight_sum > eps,
         )
         scale = xp.maximum(xp.abs(spectrum), eps)
         if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
             spectrum = updated
-            converged = True
             break
         spectrum = updated
-
-    if not converged:
+    else:
         warnings.warn(
             f"Adaptive taper weighting did not converge within {max_iterations} "
             f"iterations (tolerance={tolerance:g}). The returned spectrum uses the "

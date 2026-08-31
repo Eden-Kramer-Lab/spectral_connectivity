@@ -132,18 +132,24 @@ class MultivariateConnectivityResult:
 
 def _validated_regularization(value: Any) -> float:
     """Return a finite non-negative scalar regularization factor."""
+    message = f"regularization must be a finite non-negative scalar, got {value!r}."
     if isinstance(value, bool) or not isinstance(
         value, (int, float, np.integer, np.floating)
     ):
-        raise ValueError(
-            f"regularization must be a finite non-negative scalar, got {value!r}."
-        )
+        raise ValueError(message)
     regularization = float(value)
     if not np.isfinite(regularization) or regularization < 0:
-        raise ValueError(
-            f"regularization must be a finite non-negative scalar, got {value!r}."
-        )
+        raise ValueError(message)
     return regularization
+
+
+def _validated_rank(rank: int | None) -> int | None:
+    """Return a positive-integer rank or None, rejecting other values."""
+    if rank is not None and (
+        isinstance(rank, bool) or not isinstance(rank, (int, np.integer)) or rank < 1
+    ):
+        raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+    return rank
 
 
 # global_coherence computes, per time-frequency bin, the strongest components of
@@ -1868,12 +1874,7 @@ class Connectivity:
     ) -> MultivariateConnectivityResult:
         """Compute rich CaCoh/MIC results from the expected CSD."""
         labels, group_indices, membership = self._validated_group_indices(group_labels)
-        if rank is not None and (
-            isinstance(rank, bool)
-            or not isinstance(rank, (int, np.integer))
-            or rank < 1
-        ):
-            raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+        rank = _validated_rank(rank)
         if (
             isinstance(n_components, bool)
             or not isinstance(n_components, (int, np.integer))
@@ -1884,6 +1885,9 @@ class Connectivity:
             )
         regularization = _validated_regularization(regularization)
         rank_cap = rank if rank is not None else self.n_signals
+        # ``pairs`` is the single connection ordering shared by the capacities,
+        # the ``connections`` labels, and the main loop below.
+        pairs = list(combinations(range(len(labels)), 2))
         # The number of components a connection can support is bounded by the two
         # groups *in that connection* (and the requested rank), not by the
         # smallest group overall. Compute the per-connection capacity and reject
@@ -1891,7 +1895,7 @@ class Connectivity:
         # groups are smaller return NaN for the unavailable components.
         connection_capacities = [
             min(len(group_indices[first]), len(group_indices[second]), rank_cap)
-            for first, second in combinations(range(len(labels)), 2)
+            for first, second in pairs
         ]
         max_components = max(connection_capacities)
         if n_components > max_components:
@@ -1908,10 +1912,7 @@ class Connectivity:
         leading_shape = spectrum.shape[:-3]
         n_frequencies = spectrum.shape[-3]
         connections = np.asarray(
-            [
-                (labels[first], labels[second])
-                for first, second in combinations(range(len(labels)), 2)
-            ]
+            [(labels[first], labels[second]) for first, second in pairs]
         )
         n_connections = len(connections)
         score_dtype = xp.complex128 if method == "canonical_coherency" else float
@@ -1937,9 +1938,7 @@ class Connectivity:
             else _mic_components
         )
         any_phantom = False
-        for connection_index, (first, second) in enumerate(
-            combinations(range(len(labels)), 2)
-        ):
+        for connection_index, (first, second) in enumerate(pairs):
             first_indices = group_indices[first]
             second_indices = group_indices[second]
             n_first = len(first_indices)
@@ -2128,12 +2127,7 @@ class Connectivity:
     ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer]]:
         """Whiten imaginary CSD blocks for MIC/MIM."""
         labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
-        if rank is not None and (
-            isinstance(rank, bool)
-            or not isinstance(rank, (int, np.integer))
-            or rank < 1
-        ):
-            raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+        rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
 
         spectrum = self._expectation_cross_spectral_matrix()
@@ -2145,11 +2139,11 @@ class Connectivity:
         for indices in group_indices:
             within = spectrum[..., indices[:, xp.newaxis], indices[xp.newaxis, :]].real
             inverse_square_roots.append(
-                _matrix_inverse_square_root(
+                _batched_inverse_square_root(
                     within,
                     rank=rank,
                     regularization=regularization,
-                )
+                )[0]
             )
 
         transformed: list[tuple[int, int, BackendArray]] = []
@@ -2988,21 +2982,12 @@ class Connectivity:
             Sorted unique group labels.
         """
         self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
-        labels_array = np.asarray(group_labels)
-        if labels_array.ndim != 1 or len(labels_array) != self.n_signals:
-            raise ValueError(
-                f"group_labels must be one-dimensional with length "
-                f"n_signals ({self.n_signals}), got shape {labels_array.shape}."
-            )
-        labels = np.unique(labels_array)
-        if len(labels) < 2:
-            raise ValueError("group_labels must define at least two groups.")
+        labels, indices, _ = self._validated_group_indices(group_labels)
 
         spectrum = self._expectation_cross_spectral_matrix()
         n_nonnegative = spectrum.shape[-3] // 2 + 1
         output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
         result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
-        indices = [np.flatnonzero(labels_array == label) for label in labels]
         for target, source in permutations(range(len(labels)), 2):
             result[..., target, source] = _estimate_block_spectral_granger_prediction(
                 spectrum,
@@ -3630,36 +3615,6 @@ def _regularized_inverse(
     # the RHS shape (NumPy tolerates the mismatch; CuPy does not).
     identity_batched = xp.broadcast_to(identity, matrix.shape)
     return xp.linalg.solve(matrix + lam * identity_batched, identity_batched)
-
-
-def _matrix_inverse_square_root(
-    matrix: NDArray[np.floating],
-    *,
-    rank: int | None,
-    regularization: float,
-) -> NDArray[np.floating]:
-    """Return a rank-aware inverse square root of real symmetric matrices."""
-    n_components = matrix.shape[-1]
-    matrix_rms = xp.sqrt(xp.mean(matrix**2, axis=(-2, -1), keepdims=True))
-    eigenvalues, eigenvectors = xp.linalg.eigh(
-        (matrix + xp.swapaxes(matrix, -1, -2)) / 2
-    )
-    largest = xp.maximum(eigenvalues[..., -1:], 0.0)
-    tolerance = xp.finfo(eigenvalues.dtype).eps * max(1, n_components) * largest
-    keep = eigenvalues > tolerance
-    if rank is not None and rank < n_components:
-        rank_mask = xp.arange(n_components) >= n_components - rank
-        keep = keep & rank_mask
-    # Determine the numerical rank from the unregularized matrix. Diagonal
-    # loading conditions retained modes, but must not manufacture inverse power
-    # along an exactly zero/null direction.
-    loading = regularization * matrix_rms[..., 0]
-    safe_values = xp.where(keep, eigenvalues + loading, 1.0)
-    inverse_sqrt_values = xp.where(keep, 1.0 / xp.sqrt(safe_values), 0.0)
-    return xp.matmul(
-        eigenvectors * inverse_sqrt_values[..., xp.newaxis, :],
-        xp.swapaxes(eigenvectors, -1, -2),
-    )
 
 
 def _batched_inverse_square_root(

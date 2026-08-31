@@ -985,7 +985,7 @@ def frequency_band_reduce(
     ):
         raise ValueError("band names must be unique, non-empty strings.")
 
-    validated_bands: list[tuple[str, float, float, NDArray[np.bool_]]] = []
+    band_masks: list[NDArray[np.bool_]] = []
     for name, bounds in bands.items():
         try:
             lower, upper = bounds
@@ -1005,7 +1005,7 @@ def frequency_band_reduce(
             raise ValueError(
                 f"Band {name!r} ({lower:g}, {upper:g}) contains no frequency bins."
             )
-        validated_bands.append((name, lower, upper, mask))
+        band_masks.append(mask)
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", data.name or ""))
@@ -1020,7 +1020,7 @@ def frequency_band_reduce(
             )
 
         reduced_bands: list[xr.DataArray] = []
-        for _name, _lower, _upper, mask in validated_bands:
+        for mask in band_masks:
             selected = data.isel(frequency=np.flatnonzero(mask))
             if reduction == "integral":
                 reduced = selected.integrate("frequency")
@@ -1227,6 +1227,88 @@ def _combine_formatted_results(
         ) from error
     combined.attrs = dict(shared_attrs)
     return combined
+
+
+def _format_and_reduce_measures(
+    connectivity: Connectivity,
+    methods: list[str],
+    *,
+    return_dataarray: bool,
+    signal_labels: Sequence[_SignalLabel],
+    squeeze: bool,
+    shared_attrs: Mapping[str, Any],
+    connectivity_kwargs: Mapping[str, Any],
+    frequency_range: tuple[float, float] | None,
+    frequency_decimation: int,
+    frequency_bands: Mapping[str, tuple[float, float]] | None,
+    frequency_reduction: Literal["mean", "integral"],
+) -> xr.DataArray | xr.Dataset:
+    """Format the requested measures to xarray and apply frequency reduction.
+
+    Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
+    honors ``squeeze`` only for a single-measure DataArray, formats each measure
+    (skipping structurally-unsupported ones in a multi-measure batch), merges the
+    survivors, and applies any frequency crop/decimation/band reduction.
+    """
+    if squeeze and not return_dataarray:
+        # squeeze reduces a pairwise measure to a (time, frequency) array whose
+        # source/target become scalar coordinates; in a Dataset those scalars are
+        # shared across variables and collide with a sibling's axes, so squeeze is
+        # honored only for a single-method DataArray.
+        warnings.warn(
+            "squeeze=True is ignored for multi-measure results (a Dataset); "
+            "request a single method (a string) to get a squeezed DataArray.",
+            UserWarning,
+            stacklevel=3,
+        )
+        squeeze = False
+
+    if return_dataarray:
+        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
+            connectivity,
+            methods[0],
+            signal_labels,
+            squeeze,
+            shared_attrs,
+            **connectivity_kwargs,
+        )
+    else:
+        formatted_results: list[xr.DataArray | xr.Dataset] = []
+        for this_method in methods:
+            try:
+                formatted_results.append(
+                    _connectivity_result_to_xarray(
+                        connectivity,
+                        this_method,
+                        signal_labels,
+                        False,
+                        shared_attrs,
+                        **connectivity_kwargs,
+                    )
+                )
+            except UnsupportedMeasureError as error:
+                # A measure whose result shape does not fit the xarray layout can
+                # be skipped in a batch. In-package structural incompatibility is
+                # surfaced as UnsupportedMeasureError before the measure runs; a
+                # genuine NotImplementedError is not caught, so a broken measure
+                # fails loudly instead of silently vanishing from the Dataset.
+                if len(methods) == 1:
+                    raise
+                logger.warning("Skipping %s: %s", this_method, error)
+        if not formatted_results:
+            raise UnsupportedMeasureError(
+                "None of the requested methods produced a compatible result "
+                f"for the xarray interface: {methods!r}."
+            )
+        result = _combine_formatted_results(formatted_results, shared_attrs)
+
+    return _select_and_reduce_frequencies(
+        result,
+        frequency_range=frequency_range,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+        frequency_reduction=frequency_reduction,
+    )
 
 
 # Common dimension names let the wrapper infer semantic roles. DataArrays are
@@ -1975,19 +2057,6 @@ def multitaper_connectivity(
             "method must name at least one connectivity measure; got an empty list."
         )
     _validate_method_names(method)
-    if squeeze and not return_dataarray:
-        # squeeze reduces a pairwise measure to a (time, frequency) array whose
-        # source/target become scalar coordinates. In a Dataset those scalars are
-        # shared across all variables and would collide with a sibling variable's
-        # axes (e.g. power's ``source`` dimension), so squeeze is honored only
-        # when a single method is requested and the result is a DataArray.
-        warnings.warn(
-            "squeeze=True is ignored for multi-measure results (a Dataset); "
-            "request a single method (a string) to get a squeezed DataArray.",
-            UserWarning,
-            stacklevel=2,
-        )
-        squeeze = False
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -2012,51 +2081,14 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    if return_dataarray:
-        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
-            shared_connectivity,
-            method[0],
-            signal_labels,
-            squeeze,
-            shared_attrs,
-            **connectivity_kwargs,
-        )
-    else:
-        formatted_results: list[xr.DataArray | xr.Dataset] = []
-        for this_method in method:
-            try:
-                formatted_results.append(
-                    _connectivity_result_to_xarray(
-                        shared_connectivity,
-                        this_method,
-                        signal_labels,
-                        squeeze,
-                        shared_attrs,
-                        **connectivity_kwargs,
-                    )
-                )
-            except UnsupportedMeasureError as e:
-                # A measure whose result shape does not fit the xarray layout can be
-                # skipped in a batch. Every in-package structural incompatibility is
-                # already surfaced as UnsupportedMeasureError by ``_get_measure_spec``
-                # before the measure runs; a genuine NotImplementedError from the
-                # numeric/backend path is *not* caught, so a broken measure fails
-                # loudly instead of silently vanishing from the Dataset.
-                if len(method) == 1:
-                    raise
-                logger.warning("Skipping %s: %s", this_method, e)
-        if not formatted_results:
-            raise UnsupportedMeasureError(
-                "None of the requested methods produced a compatible result "
-                f"for the xarray interface: {method!r}."
-            )
-        # Shared coordinates are aligned once during construction. Dataset-level
-        # provenance makes a multi-measure result self-describing without requiring
-        # callers to inspect an individual variable.
-        result = _combine_formatted_results(formatted_results, shared_attrs)
-
-    return _select_and_reduce_frequencies(
-        result,
+    return _format_and_reduce_measures(
+        shared_connectivity,
+        method,
+        return_dataarray=return_dataarray,
+        signal_labels=signal_labels,
+        squeeze=squeeze,
+        shared_attrs=shared_attrs,
+        connectivity_kwargs=connectivity_kwargs,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -2433,15 +2465,6 @@ def fourier_connectivity(
                 "frequency vector, including negative bins) so two-sidedness can be "
                 "checked, or request only one-sided-compatible measures."
             )
-    if squeeze and not return_dataarray:
-        warnings.warn(
-            "squeeze=True is ignored for multi-measure results (a Dataset); "
-            "request a single method (a string) to get a squeezed DataArray.",
-            UserWarning,
-            stacklevel=2,
-        )
-        squeeze = False
-
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     metadata = {
         "source": "external_fourier_coefficients",
@@ -2457,42 +2480,14 @@ def fourier_connectivity(
         input_attrs=input_attrs,
         transform_prefix="fourier_",
     )
-    if return_dataarray:
-        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
-            connectivity,
-            methods[0],
-            signal_labels,
-            squeeze,
-            shared_attrs,
-            **connectivity_kwargs,
-        )
-    else:
-        formatted_results: list[xr.DataArray | xr.Dataset] = []
-        for this_method in methods:
-            try:
-                formatted_results.append(
-                    _connectivity_result_to_xarray(
-                        connectivity,
-                        this_method,
-                        signal_labels,
-                        False,
-                        shared_attrs,
-                        **connectivity_kwargs,
-                    )
-                )
-            except UnsupportedMeasureError as error:
-                if len(methods) == 1:
-                    raise
-                logger.warning("Skipping %s: %s", this_method, error)
-        if not formatted_results:
-            raise UnsupportedMeasureError(
-                "None of the requested methods produced a compatible result "
-                f"for the xarray interface: {methods!r}."
-            )
-        result = _combine_formatted_results(formatted_results, shared_attrs)
-
-    return _select_and_reduce_frequencies(
-        result,
+    return _format_and_reduce_measures(
+        connectivity,
+        methods,
+        return_dataarray=return_dataarray,
+        signal_labels=signal_labels,
+        squeeze=squeeze,
+        shared_attrs=shared_attrs,
+        connectivity_kwargs=connectivity_kwargs,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
