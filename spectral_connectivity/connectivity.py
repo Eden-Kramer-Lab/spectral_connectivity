@@ -3742,10 +3742,11 @@ def _optimize_canonical_coherency_phase(
         backward = objective(phase - step)
         first_derivative = (forward - backward) / (2 * step)
         second_derivative = (forward - 2 * centre + backward) / step**2
-        newton_step = xp.where(
-            xp.abs(second_derivative) > 1e-12,
-            first_derivative / second_derivative,
-            0.0,
+        newton_step = xp.divide(
+            first_derivative,
+            second_derivative,
+            out=xp.zeros_like(first_derivative),
+            where=xp.abs(second_derivative) > 1e-12,
         )
         phase = phase - xp.clip(newton_step, -0.1, 0.1)
     projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)

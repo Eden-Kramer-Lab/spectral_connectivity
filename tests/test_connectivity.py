@@ -584,6 +584,25 @@ def test_cacoh_magnitude_is_at_least_mic():
     assert np.all(np.abs(cacoh.scores) >= mic.scores - 1e-9)
 
 
+def test_cacoh_zero_cross_spectrum_does_not_warn():
+    # Independent one-hot observations give identity within-group spectra and an
+    # exactly zero between-group spectrum. The phase objective is therefore flat:
+    # both finite-difference derivatives are zero throughout Newton refinement.
+    coefficients = np.zeros((1, 4, 1, 1, 4), dtype=complex)
+    coefficients[0, :, 0, 0, :] = np.eye(4)
+    connectivity = Connectivity(
+        coefficients, is_one_sided=True, frequencies=np.array([1.0])
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = connectivity.canonical_coherency(
+            [0, 0, 1, 1], n_components=2
+        )
+
+    np.testing.assert_array_equal(result.scores, 0.0)
+
+
 def test_component_methods_invariant_to_within_group_real_mixing():
     # Within-group whitening makes the scores invariant to invertible real
     # within-group mixing. MIC components all come from one whitened SVD, so all
