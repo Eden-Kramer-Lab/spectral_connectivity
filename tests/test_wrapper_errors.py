@@ -57,6 +57,46 @@ def test_unregistered_nonpairwise_extension_is_rejected(monkeypatch):
         connectivity_to_xarray(m, "custom_summary")
 
 
+def test_batch_skips_unsupported_measure_with_warning(monkeypatch, caplog):
+    """In a multi-measure batch an unsupported measure is skipped, not fatal."""
+    import logging
+
+    monkeypatch.setattr(
+        Connectivity,
+        "custom_summary",
+        lambda self: np.zeros((len(self.time), len(self.frequencies))),
+        raising=False,
+    )
+    time_series = np.random.default_rng(1).standard_normal((256, 3, 2))
+    with caplog.at_level(logging.WARNING):
+        result = multitaper_connectivity(
+            time_series,
+            sampling_frequency=128,
+            method=["coherence_magnitude", "custom_summary"],
+        )
+    assert "coherence_magnitude" in result.data_vars
+    assert "custom_summary" not in result.data_vars
+    assert "Skipping custom_summary" in caplog.text
+
+
+def test_batch_of_only_unsupported_measures_raises(monkeypatch):
+    """A batch in which every measure is unsupported fails loudly, not empty."""
+    for name in ("custom_summary", "other_summary"):
+        monkeypatch.setattr(
+            Connectivity,
+            name,
+            lambda self: np.zeros((len(self.time), len(self.frequencies))),
+            raising=False,
+        )
+    time_series = np.random.default_rng(2).standard_normal((256, 3, 2))
+    with pytest.raises(UnsupportedMeasureError, match="None of the requested methods"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=128,
+            method=["custom_summary", "other_summary"],
+        )
+
+
 def test_signal_names_length_is_validated():
     """Coordinate mismatches fail before xarray emits a lower-level error."""
     m = Multitaper(np.zeros((128, 3, 2)), sampling_frequency=128)

@@ -2044,6 +2044,26 @@ class MorletWavelet:
             self._edge_half_width_samples / self.sampling_frequency
         )
 
+    def _smooth_frequency_axis(
+        self, array: BackendArray, frequency_axis: int
+    ) -> BackendArray:
+        """Reflect-pad and window ``frequency_axis`` for adjacent-bin smoothing.
+
+        Appends the smoothing-frequency window as a new trailing axis (or a
+        singleton axis when no frequency smoothing is requested). Shared by
+        :meth:`_windowed_validity` and :meth:`fft` so the padding convention
+        (reflect, or edge for a single frequency) cannot drift between the
+        validity mask and the coefficients it describes.
+        """
+        frequency_half_width = self.smoothing_frequency // 2
+        if not frequency_half_width:
+            return array[..., xp.newaxis]
+        frequency_mode = "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        pad_width = [(0, 0)] * array.ndim
+        pad_width[frequency_axis] = (frequency_half_width, frequency_half_width)
+        padded = xp.pad(array, tuple(pad_width), mode=frequency_mode)
+        return _sliding_window(padded, self.smoothing_frequency, axis=frequency_axis)
+
     def _windowed_validity(self) -> BackendArray:
         """Strict validity of every time/frequency output neighborhood.
 
@@ -2061,17 +2081,7 @@ class MorletWavelet:
             self._smoothing_step_samples,
             axis=0,
         )
-        frequency_half_width = self.smoothing_frequency // 2
-        if frequency_half_width:
-            frequency_mode = "reflect" if validity.shape[1] > 1 else "edge"
-            windows = xp.pad(
-                windows,
-                ((0, 0), (frequency_half_width, frequency_half_width), (0, 0)),
-                mode=frequency_mode,
-            )
-            windows = _sliding_window(windows, self.smoothing_frequency, axis=1)
-        else:
-            windows = windows[..., xp.newaxis]
+        windows = self._smooth_frequency_axis(windows, frequency_axis=1)
         result = xp.all(windows, axis=(-2, -1))
         self._windowed_validity_cache = result
         return result
@@ -2154,23 +2164,7 @@ class MorletWavelet:
             self._smoothing_step_samples,
             axis=0,
         )
-        frequency_half_width = self.smoothing_frequency // 2
-        if frequency_half_width:
-            frequency_mode = "reflect" if transformed.shape[2] > 1 else "edge"
-            windows = xp.pad(
-                windows,
-                (
-                    (0, 0),
-                    (0, 0),
-                    (frequency_half_width, frequency_half_width),
-                    (0, 0),
-                    (0, 0),
-                ),
-                mode=frequency_mode,
-            )
-            windows = _sliding_window(windows, self.smoothing_frequency, axis=2)
-        else:
-            windows = windows[..., xp.newaxis]
+        windows = self._smooth_frequency_axis(windows, frequency_axis=2)
         windows = xp.transpose(windows, (0, 1, 4, 5, 2, 3))
         return windows.reshape(
             windows.shape[0],

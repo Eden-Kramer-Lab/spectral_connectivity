@@ -1676,6 +1676,21 @@ def test_multitaper_connectivity_merges_nonstandard_dataset_in_batch():
     assert "global_coherence_vectors" in result
 
 
+def test_frequency_bands_on_mixed_dataset_leaves_frequency_free_variables():
+    # A batch mixing a frequency-carrying measure with one that has no frequency
+    # axis (group_delay): band reduction applies to the former and passes the
+    # latter through unchanged, rather than erroring on the frequency-free var.
+    result = multitaper_connectivity(
+        np.random.default_rng(452).standard_normal((512, 4, 3)),
+        sampling_frequency=200,
+        method=["coherence_magnitude", "group_delay"],
+        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+    )
+    assert result["coherence_magnitude"].dims == ("time", "band", "source", "target")
+    assert result["group_delay"].dims == ("time", "source", "target")
+    assert result.band.values.tolist() == ["alpha", "beta"]
+
+
 def test_multitaper_connectivity_merges_rich_multivariate_datasets():
     result = multitaper_connectivity(
         np.random.default_rng(430).standard_normal((128, 5, 4)),

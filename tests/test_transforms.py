@@ -834,6 +834,35 @@ def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
     np.testing.assert_allclose(actual, expected)
 
 
+def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
+    rng = np.random.default_rng(922)
+    data = rng.standard_normal((128, 3, 2))
+    frequencies = np.array([6.0, 8.0, 12.0, 16.0, 20.0])
+    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    smoothed = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        n_cycles=3,
+        smoothing_frequency=5,
+        smoothing_kernel="hann",
+    )
+    raw_coefficients = raw.fft()[:, :, 0]  # (time, trial, frequency, signal)
+    weights = np.array([0.0, 0.5, 1.0, 0.5, 0.0])  # scipy hann(5, sym=True)
+
+    # Centre frequency (index 2): neighborhood [0, 1, 2, 3, 4], no reflection.
+    outer = raw_coefficients[..., :, np.newaxis] * np.conjugate(
+        raw_coefficients[..., np.newaxis, :]
+    )
+    weighted = (
+        np.sum(weights[None, None, :, None, None] * outer, axis=2) / weights.sum()
+    )
+    expected = weighted.mean(axis=1)  # unweighted mean over trials
+
+    actual = Connectivity.from_transform(smoothed).cross_spectral_density()[:, 2]
+    np.testing.assert_allclose(actual, expected)
+
+
 def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
     data = np.random.default_rng(921).standard_normal((128, 1, 2))
     transform = MorletWavelet(
