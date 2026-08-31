@@ -880,6 +880,48 @@ def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
         connectivity.pairwise_phase_consistency()
 
 
+def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
+    rng = np.random.default_rng(923)
+    transform = MorletWavelet(
+        rng.standard_normal((192, 4, 4)),
+        64,
+        np.array([6.0, 10.0, 16.0, 24.0]),
+        n_cycles=3,
+        smoothing_time=0.25,
+        smoothing_kernel="hann",
+        edge_mode="nan",
+    )
+    connectivity = Connectivity.from_transform(transform)
+    scores, _ = connectivity.global_coherence()
+    canonical, _ = connectivity.canonical_coherence(np.array([0, 0, 1, 1]))
+
+    invalid = ~transform.valid_time_frequency
+    assert np.isnan(scores[..., 0][invalid]).all()
+    assert np.isnan(canonical[..., 0, 1][invalid]).all()
+
+    time_index, frequency_index = np.argwhere(transform.valid_time_frequency)[0]
+    coefficients = transform.fft()[time_index, :, :, frequency_index, :]
+    weights = transform.observation_weights[time_index, :, :, frequency_index, 0]
+    weighted = coefficients.reshape(-1, 4).T * np.sqrt(weights.reshape(-1))[None, :]
+
+    singular_values = np.linalg.svd(weighted, compute_uv=False)
+    expected_global = singular_values[0] ** 2 / np.sum(singular_values**2)
+    np.testing.assert_allclose(scores[time_index, frequency_index, 0], expected_global)
+
+    def _whiten_group(indices):
+        u, _, vh = np.linalg.svd(weighted[indices], full_matrices=False)
+        return u @ vh
+
+    first = _whiten_group([0, 1])
+    second = _whiten_group([2, 3])
+    expected_canonical = (
+        np.linalg.svd(first @ np.conjugate(second.T), compute_uv=False)[0] ** 2
+    )
+    np.testing.assert_allclose(
+        canonical[time_index, frequency_index, 0, 1], expected_canonical
+    )
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

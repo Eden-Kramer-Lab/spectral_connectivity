@@ -1669,6 +1669,17 @@ class Connectivity:
         fourier_coefficients = self._fourier_coefficients[
             ..., non_negative_frequencies, :
         ]
+        observation_weights = None
+        if self._observation_weights is not None:
+            observation_weights = self._observation_weights[
+                ..., non_negative_frequencies, :
+            ]
+            # Canonical correlation is computed from observation covariance
+            # matrices. Multiplying every observation by sqrt(weight) gives the
+            # weighted covariance while retaining the existing SVD whitening
+            # implementation. A shared normalization by sum(weight) cancels
+            # from the canonical correlation and is therefore unnecessary.
+            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
                 fourier_coefficients[..., xp.isin(group_labels, label)]
@@ -1691,6 +1702,13 @@ class Connectivity:
                 axis=-1,
             )
         )
+        if observation_weights is not None:
+            no_valid_observations = (
+                xp.sum(observation_weights[..., 0], axis=(1, 2)) <= 0
+            )
+            magnitude = xp.where(
+                no_valid_observations[..., xp.newaxis], xp.nan, magnitude
+            )
 
         canonical_coherence_magnitude = xp.full(new_shape, xp.nan)
         group_combination_ind = xp.array(list(combinations(xp.arange(n_groups), 2)))
@@ -2263,8 +2281,18 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
+            fourier_coefficients = self._fourier_coefficients
+            if self._observation_weights is not None:
+                # The global-coherence eigenspectrum is formed from A @ A^H.
+                # Scaling each observation column by sqrt(weight) therefore
+                # produces the weighted cross-spectrum. The scalar division by
+                # sum(weight) cancels when component power is normalized by
+                # total power.
+                fourier_coefficients = fourier_coefficients * xp.sqrt(
+                    self._observation_weights
+                )
             global_coherence, unnormalized_global_coherence = _batched_global_coherence(
-                self._fourier_coefficients, max_rank, max_workspace_elements
+                fourier_coefficients, max_rank, max_workspace_elements
             )
         else:
             # A user who tuned max_workspace_elements for memory gets no effect
@@ -2299,6 +2327,13 @@ class Connectivity:
                         .reshape((n_trials * n_tapers, n_signals))
                         .T
                     )
+                    if self._observation_weights is not None:
+                        weights = self._observation_weights[
+                            time_ind, :, :, freq_ind, 0
+                        ].reshape(n_trials * n_tapers)
+                        fourier_coefficients = (
+                            fourier_coefficients * xp.sqrt(weights)[xp.newaxis, :]
+                        )
 
                     (
                         global_coherence[time_ind, freq_ind],
@@ -3550,11 +3585,12 @@ def _divide_masking_zero_denominator(
         ``numerator / denominator`` with (near-)zero-denominator entries NaN.
     """
     zero = denominator <= xp.finfo(denominator.dtype).tiny
+    invalid = zero | ~xp.isfinite(denominator)
     if xp.any(zero):
         warnings.warn(message, UserWarning, stacklevel=3)
-    safe = xp.where(zero, xp.asarray(1.0, dtype=denominator.dtype), denominator)
+    safe = xp.where(invalid, xp.asarray(1.0, dtype=denominator.dtype), denominator)
     result = numerator / safe
-    result[zero] = xp.nan
+    result[invalid] = xp.nan
     return result
 
 
