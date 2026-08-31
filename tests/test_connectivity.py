@@ -570,6 +570,54 @@ def test_mic_and_mim_are_invariant_to_within_group_real_mixing():
     np.testing.assert_allclose(mixed_mim, original_mim, rtol=1e-9, atol=1e-10)
 
 
+def test_cacoh_magnitude_is_at_least_mic():
+    # CaCoh maximizes |Re(exp(-i*phi) * whitened CSD)| over all phases; MIC is
+    # the imaginary-axis (phi = pi/2) special case, so |CaCoh| >= MIC.
+    rng = np.random.default_rng(935)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    connectivity = Connectivity(coefficients)
+    labels = [0, 0, 1, 1]
+    cacoh = connectivity.canonical_coherency(labels, n_components=1)
+    mic = connectivity.maximized_imaginary_coherency_components(labels, n_components=1)
+    assert np.all(np.abs(cacoh.scores) >= mic.scores - 1e-9)
+
+
+def test_component_methods_invariant_to_within_group_real_mixing():
+    # Within-group whitening makes the scores invariant to invertible real
+    # within-group mixing. MIC components all come from one whitened SVD, so all
+    # are invariant; CaCoh's higher components deflate in (Euclidean) channel
+    # space, which mixing does not preserve, so only its first component is
+    # invariant (this matches mne-connectivity's deflation).
+    rng = np.random.default_rng(936)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    labels = np.array([0, 0, 1, 1])
+    original = Connectivity(coefficients)
+    first_mix = np.array([[2.0, 0.4], [-0.3, 1.2]])
+    second_mix = np.array([[0.8, -0.2], [0.5, 1.7]])
+    mixed = coefficients.copy()
+    mixed[..., :2] = np.einsum("...i,ji->...j", coefficients[..., :2], first_mix)
+    mixed[..., 2:] = np.einsum("...i,ji->...j", coefficients[..., 2:], second_mix)
+    transformed = Connectivity(mixed)
+
+    original_mic = original.maximized_imaginary_coherency_components(
+        labels, n_components=2
+    ).scores
+    mixed_mic = transformed.maximized_imaginary_coherency_components(
+        labels, n_components=2
+    ).scores
+    np.testing.assert_allclose(mixed_mic, original_mic, rtol=1e-7, atol=1e-9)
+
+    original_cacoh = original.canonical_coherency(labels, n_components=1).scores
+    mixed_cacoh = transformed.canonical_coherency(labels, n_components=1).scores
+    np.testing.assert_allclose(
+        np.abs(mixed_cacoh), np.abs(original_cacoh), rtol=1e-7, atol=1e-9
+    )
+
+
 def test_weighted_phase_lag_index_sets_zero_phase_signals_to_zero():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(

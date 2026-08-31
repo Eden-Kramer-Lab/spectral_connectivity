@@ -1777,11 +1777,11 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: score magnitudes lie in ``[0, 1]``. This method is currently
-        computed on the CPU with a per-frequency-bin Python loop and a phase
-        search, so it does not use the GPU (``xp``) backend and is markedly
-        slower than the scalar :meth:`canonical_coherence`; prefer the scalar
-        method for large sliding-window analyses that do not need the filters.
+        **Range**: score magnitudes lie in ``[0, 1]``. The whitening,
+        singular-value decomposition, and phase optimization (a coarse grid
+        bracket followed by a batched Newton refinement) are vectorized over the
+        time/frequency axes on the active ``xp`` backend, so this runs on the GPU
+        when GPU support is enabled.
 
         References
         ----------
@@ -1837,11 +1837,9 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: scores lie in ``[0, 1]``. Like :meth:`canonical_coherency`,
-        this is computed on the CPU with a per-frequency-bin Python loop and does
-        not use the GPU (``xp``) backend; prefer the scalar
-        :meth:`maximized_imaginary_coherency` for large analyses that do not need
-        the filters.
+        **Range**: scores lie in ``[0, 1]``. The whitening and singular-value
+        decomposition are vectorized over the time/frequency axes on the active
+        ``xp`` backend, so this runs on the GPU when GPU support is enabled.
 
         References
         ----------
@@ -1903,7 +1901,7 @@ class Connectivity:
                 f"is large enough to supply that many components."
             )
 
-        spectrum = to_numpy(self._expectation_cross_spectral_matrix())
+        spectrum = self._expectation_cross_spectral_matrix()
         spectrum = spectrum[
             ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
         ]
@@ -1916,10 +1914,10 @@ class Connectivity:
             ]
         )
         n_connections = len(connections)
-        score_dtype = np.complex128 if method == "canonical_coherency" else float
-        scores = np.full(
+        score_dtype = xp.complex128 if method == "canonical_coherency" else float
+        scores = xp.full(
             (*leading_shape, n_frequencies, n_connections, n_components),
-            np.nan,
+            xp.nan,
             dtype=score_dtype,
         )
         projection_shape = (
@@ -1930,85 +1928,77 @@ class Connectivity:
             2,
             self.n_signals,
         )
-        filters = np.full(projection_shape, np.nan, dtype=float)
-        patterns = np.full(projection_shape, np.nan, dtype=float)
-        flat_scores = scores.reshape((-1, n_connections, n_components))
-        flat_filters = filters.reshape(
-            (-1, n_connections, n_components, 2, self.n_signals)
-        )
-        flat_patterns = patterns.reshape(
-            (-1, n_connections, n_components, 2, self.n_signals)
-        )
+        filters = xp.full(projection_shape, xp.nan, dtype=float)
+        patterns = xp.full(projection_shape, xp.nan, dtype=float)
 
-        flat_spectrum = spectrum.reshape((-1, self.n_signals, self.n_signals))
+        component_fn = (
+            _canonical_coherency_components
+            if method == "canonical_coherency"
+            else _mic_components
+        )
+        any_phantom = False
         for connection_index, (first, second) in enumerate(
             combinations(range(len(labels)), 2)
         ):
             first_indices = group_indices[first]
             second_indices = group_indices[second]
+            n_first = len(first_indices)
             # This connection can only supply as many components as its smaller
             # group (and the rank cap); the rest stay NaN in the pre-filled array.
             component_count = min(n_components, connection_capacities[connection_index])
-            for flat_index, full_csd in enumerate(flat_spectrum):
-                Caa = full_csd[np.ix_(first_indices, first_indices)]
-                Cab = full_csd[np.ix_(first_indices, second_indices)]
-                Cbb = full_csd[np.ix_(second_indices, second_indices)]
-                if not (
-                    np.all(np.isfinite(Caa))
-                    and np.all(np.isfinite(Cab))
-                    and np.all(np.isfinite(Cbb))
-                ):
-                    continue
-                local_scores: NDArray[Any]
-                local_filters: tuple[NDArray[np.floating], NDArray[np.floating]]
-                local_patterns: tuple[NDArray[np.floating], NDArray[np.floating]]
-                if method == "canonical_coherency":
-                    local_scores, local_filters, local_patterns = (
-                        _canonical_coherency_components(
-                            Caa,
-                            Cab,
-                            Cbb,
-                            rank=rank,
-                            n_components=component_count,
-                            regularization=regularization,
-                        )
-                    )
-                else:
-                    local_scores, local_filters, local_patterns = _mic_components(
-                        Caa,
-                        Cab,
-                        Cbb,
-                        rank=rank,
-                        n_components=component_count,
-                        regularization=regularization,
-                    )
-                flat_scores[flat_index, connection_index, :component_count] = (
-                    local_scores
+            combined = xp.asarray(np.concatenate((first_indices, second_indices)))
+            # Sub-CSD over every leading/frequency bin at once: (..., freq, m, m).
+            subsystem = spectrum[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
+            # A non-finite bin (e.g. a dead channel) would make the batched
+            # eigendecomposition fail; compute a placeholder there and mask it
+            # back to NaN afterward, matching the old per-bin skip.
+            finite_bin = xp.all(xp.isfinite(subsystem), axis=(-2, -1))
+            identity = xp.eye(combined.shape[0], dtype=subsystem.dtype)
+            safe = xp.where(
+                finite_bin[..., xp.newaxis, xp.newaxis], subsystem, identity
+            )
+            local_scores, (filter_a, filter_b), (pattern_a, pattern_b), rank_here = (
+                component_fn(
+                    safe[..., :n_first, :n_first],
+                    safe[..., :n_first, n_first:],
+                    safe[..., n_first:, n_first:],
+                    rank=rank,
+                    n_components=component_count,
+                    regularization=regularization,
                 )
-                for side, indices in enumerate((first_indices, second_indices)):
-                    for component in range(component_count):
-                        flat_filters[
-                            flat_index, connection_index, component, side, indices
-                        ] = local_filters[side][:, component]
-                        flat_patterns[
-                            flat_index, connection_index, component, side, indices
-                        ] = local_patterns[side][:, component]
+            )
+            valid = finite_bin[..., xp.newaxis]
+            scores[..., connection_index, :component_count] = xp.where(
+                valid, local_scores, xp.nan
+            )
+            for side, (indices, side_filter, side_pattern) in enumerate(
+                (
+                    (first_indices, filter_a, pattern_a),
+                    (second_indices, filter_b, pattern_b),
+                )
+            ):
+                masked_filter = xp.where(valid[..., xp.newaxis], side_filter, xp.nan)
+                masked_pattern = xp.where(valid[..., xp.newaxis], side_pattern, xp.nan)
+                signal_index = xp.asarray(indices)
+                # Assign one component at a time: a single trailing fancy index
+                # (the group's channels) with only integer indices before it keeps
+                # the scattered axis at the end, avoiding NumPy's mixed
+                # slice/advanced-index dimension reordering.
+                for component in range(component_count):
+                    filters[..., connection_index, component, side, signal_index] = (
+                        masked_filter[..., component]
+                    )
+                    patterns[..., connection_index, component, side, signal_index] = (
+                        masked_pattern[..., component]
+                    )
+            # A rank-deficient within-group block (collinear/duplicated channels)
+            # supplies fewer directions than requested; the extra "phantom"
+            # components come back with a ~0 score and an all-zero filter. Flag it
+            # via the eigenvalue-based rank (scale-invariant), not the filter norm.
+            if bool(xp.any(finite_bin & (rank_here < component_count))):
+                any_phantom = True
 
-        # A within-group block that is numerically rank-deficient (collinear or
-        # duplicated channels) makes the whitening zero out its null directions,
-        # so a requested component that lands there comes back with a ~0 score and
-        # an all-zero spatial filter. The math is self-consistent (that direction
-        # carries no coherence), but a caller can misread "component k = 0" as a
-        # finding rather than "the group has no k-th direction". Detect the
-        # all-zero filter columns among computed components and warn once. A
-        # genuinely zero-coherence component keeps a non-zero unit filter, so it
-        # is not flagged.
-        computed_component = np.isfinite(scores)
-        # Filters are NaN outside their group's channels, so sum only the filled
-        # in-group entries; a phantom component's in-group filter is all zero.
-        side_filter_norm = np.sqrt(np.nansum(filters**2, axis=-1))
-        degenerate_side = np.any(side_filter_norm <= 1e-10, axis=-1)
-        if bool(np.any(computed_component & degenerate_side)):
+        if any_phantom:
             warnings.warn(
                 f"{method}: some requested components fall in the null space of a "
                 "rank-deficient within-group cross-spectrum (collinear or "
@@ -2021,12 +2011,12 @@ class Connectivity:
 
         return MultivariateConnectivityResult(
             method=method,
-            scores=scores,
+            scores=to_numpy(scores),
             connections=connections,
             group_labels=np.asarray(labels),
             group_membership=np.asarray(membership, dtype=bool),
-            filters=filters,
-            patterns=patterns,
+            filters=to_numpy(filters),
+            patterns=to_numpy(patterns),
         )
 
     def maximized_imaginary_coherency(
@@ -3672,75 +3662,102 @@ def _matrix_inverse_square_root(
     )
 
 
-def _numpy_inverse_square_root(
-    matrix: NDArray[np.floating], *, rank: int | None, regularization: float
-) -> NDArray[np.floating]:
-    """NumPy inverse square root used by component-resolved decompositions."""
-    symmetric = (
-        np.asarray(matrix, dtype=float) + np.asarray(matrix, dtype=float).T
-    ) / 2
-    eigenvalues, eigenvectors = np.linalg.eigh(symmetric)
-    largest = max(float(eigenvalues[-1]), 0.0)
-    tolerance = np.finfo(eigenvalues.dtype).eps * max(1, len(eigenvalues)) * largest
+def _batched_inverse_square_root(
+    matrices: NDArray[np.floating], *, rank: int | None, regularization: float
+) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+    """Inverse square root of batched real symmetric matrices, with kept rank.
+
+    ``matrices`` has shape ``(..., n, n)``; the eigendecomposition, rank mask and
+    regularization are applied independently per leading (time/frequency) bin on
+    the active ``xp`` backend. Returns ``(T, kept_rank)`` where ``kept_rank`` is
+    the number of retained (numerically non-zero, rank-capped) directions per
+    bin -- used to detect null-space "phantom" components scale-invariantly.
+    """
+    symmetric = (matrices + matrices.swapaxes(-1, -2)) / 2
+    eigenvalues, eigenvectors = xp.linalg.eigh(symmetric)
+    largest = xp.maximum(eigenvalues[..., -1:], 0.0)
+    tolerance = xp.finfo(eigenvalues.dtype).eps * matrices.shape[-1] * largest
     keep = eigenvalues > tolerance
-    if rank is not None and rank < len(eigenvalues):
-        rank_mask = np.arange(len(eigenvalues)) >= len(eigenvalues) - rank
-        keep &= rank_mask
-    matrix_rms = float(np.sqrt(np.mean(symmetric**2)))
-    safe_values = np.where(keep, eigenvalues + regularization * matrix_rms, 1.0)
-    inverse_values = np.where(keep, 1.0 / np.sqrt(safe_values), 0.0)
-    return (eigenvectors * inverse_values[np.newaxis, :]) @ eigenvectors.T
+    n_channels = matrices.shape[-1]
+    if rank is not None and rank < n_channels:
+        keep = keep & (xp.arange(n_channels) >= (n_channels - rank))
+    matrix_rms = xp.sqrt(xp.mean(symmetric**2, axis=(-2, -1)))[..., xp.newaxis]
+    safe_values = xp.where(keep, eigenvalues + regularization * matrix_rms, 1.0)
+    inverse_values = xp.where(keep, 1.0 / xp.sqrt(safe_values), 0.0)
+    transform = (
+        eigenvectors * inverse_values[..., xp.newaxis, :]
+    ) @ eigenvectors.swapaxes(-1, -2)
+    return transform, keep.sum(-1)
 
 
-def _canonical_coherency_at_phase(
-    phi: float,
-    Cab: NDArray[np.complexfloating],
-    Taa: NDArray[np.floating],
-    Tbb: NDArray[np.floating],
-) -> tuple[float, NDArray[np.floating], NDArray[np.floating]]:
-    """CaCoh magnitude and singular vectors for one phase projection."""
-    projected = np.real(np.exp(-1j * phi) * Cab)
-    left, singular_values, right_h = np.linalg.svd(
-        Taa @ projected @ Tbb, full_matrices=False
-    )
-    if singular_values.size == 0:
-        return np.nan, np.empty(0), np.empty(0)
-    return float(singular_values[0]), left[:, 0], right_h[0]
+def _batched_orthogonal_complement(
+    filters: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Per-bin orthonormal basis for the complement of the filter columns.
+
+    ``filters`` has shape ``(..., n, k)``; returns ``(..., n, n - k)``.
+    """
+    left = xp.linalg.svd(filters, full_matrices=True)[0]
+    return left[..., :, filters.shape[-1] :]
 
 
 def _optimize_canonical_coherency_phase(
     Cab: NDArray[np.complexfloating],
     Taa: NDArray[np.floating],
     Tbb: NDArray[np.floating],
-) -> tuple[float, float, NDArray[np.floating], NDArray[np.floating]]:
-    """Globally bracket then finely optimize Vidaurre's phase objective."""
-    from scipy.optimize import minimize_scalar
+    *,
+    n_grid: int = 37,
+    n_refine: int = 12,
+) -> tuple[
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+]:
+    """Vidaurre's phase objective, optimized per bin over batched leading axes.
 
-    # The objective is pi-periodic. A coarse global scan prevents a bounded
-    # local optimizer from selecting the wrong lobe; bounded refinement then
-    # gives substantially tighter phase accuracy than a grid-only search.
-    coarse_phases = np.linspace(0.0, np.pi, 33, endpoint=False)
-    coarse_values = np.asarray(
-        [_canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0] for phi in coarse_phases]
+    A coarse grid brackets the (pi-periodic) single-lobe maximum, then a batched
+    Newton refinement on the finite-difference derivatives converges each bin to
+    the optimum. Fully vectorized over the leading (time/frequency) axes and
+    backend-agnostic (no per-bin ``scipy.optimize`` loop). Returns the maximized
+    magnitude, the optimizing phase, and the top left/right singular vectors of
+    the whitened real projection at that phase.
+    """
+    leading_shape = Cab.shape[:-2]
+
+    def objective(phase: NDArray[np.floating]) -> NDArray[np.floating]:
+        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
+        return xp.linalg.svd(Taa @ projected @ Tbb, compute_uv=False)[..., 0]
+
+    grid_values = [k * float(np.pi) / n_grid for k in range(n_grid)]
+    grid_scores = xp.stack(
+        [objective(xp.full(leading_shape, phase)) for phase in grid_values]
     )
-    best_index = int(np.nanargmax(coarse_values))
-    step = np.pi / len(coarse_phases)
-    centre = float(coarse_phases[best_index])
-    optimum = minimize_scalar(
-        lambda phi: -_canonical_coherency_at_phase(phi, Cab, Taa, Tbb)[0],
-        bounds=(centre - step, centre + step),
-        method="bounded",
-        options={"xatol": 1e-12},
+    grid = xp.asarray(grid_values)
+    phase = grid[xp.argmax(grid_scores, axis=0)]
+    step = 1e-5
+    for _ in range(n_refine):
+        forward = objective(phase + step)
+        centre = objective(phase)
+        backward = objective(phase - step)
+        first_derivative = (forward - backward) / (2 * step)
+        second_derivative = (forward - 2 * centre + backward) / step**2
+        newton_step = xp.where(
+            xp.abs(second_derivative) > 1e-12,
+            first_derivative / second_derivative,
+            0.0,
+        )
+        phase = phase - xp.clip(newton_step, -0.1, 0.1)
+    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
+    left, singular_values, right_h = xp.linalg.svd(
+        Taa @ projected @ Tbb, full_matrices=False
     )
-    phi = float(optimum.x)
-    magnitude, left, right = _canonical_coherency_at_phase(phi, Cab, Taa, Tbb)
-    return magnitude, phi, left, right
-
-
-def _orthogonal_complement(filters: NDArray[np.floating]) -> NDArray[np.floating]:
-    """Orthonormal basis for the Euclidean complement of filter columns."""
-    left = np.linalg.svd(filters, full_matrices=True)[0]
-    return left[:, filters.shape[1] :]
+    return (
+        singular_values[..., 0],
+        phase,
+        left[..., :, 0],
+        right_h.swapaxes(-1, -2)[..., :, 0],
+    )
 
 
 def _canonical_coherency_components(
@@ -3755,45 +3772,59 @@ def _canonical_coherency_components(
     NDArray[np.complexfloating],
     tuple[NDArray[np.floating], NDArray[np.floating]],
     tuple[NDArray[np.floating], NDArray[np.floating]],
+    NDArray[np.integer],
 ]:
-    """Exact phase-optimised CaCoh components for one CSD matrix."""
-    real_aa = np.real(Caa)
-    real_bb = np.real(Cbb)
-    basis_a: NDArray[np.floating] = np.eye(Caa.shape[0])
-    basis_b: NDArray[np.floating] = np.eye(Cbb.shape[0])
-    scores = np.full(n_components, np.nan + 0j)
-    filters_a = np.full((Caa.shape[0], n_components), np.nan)
-    filters_b = np.full((Cbb.shape[0], n_components), np.nan)
-    patterns_a = np.full_like(filters_a, np.nan)
-    patterns_b = np.full_like(filters_b, np.nan)
+    """Exact phase-optimised CaCoh components, batched over leading axes.
+
+    Each of ``Caa``/``Cab``/``Cbb`` has shape ``(..., n_a/n_b, n_a/n_b)`` with
+    arbitrary leading (time/frequency) axes. Returns per-component scores,
+    filters, patterns (all with a trailing ``component`` axis) plus the per-bin
+    effective within-group rank.
+    """
+    real_aa = xp.real(Caa)
+    real_bb = xp.real(Cbb)
+    leading_shape = Caa.shape[:-2]
+    n_a = Caa.shape[-1]
+    n_b = Cbb.shape[-1]
+    identity_a = xp.broadcast_to(xp.eye(n_a), (*leading_shape, n_a, n_a))
+    identity_b = xp.broadcast_to(xp.eye(n_b), (*leading_shape, n_b, n_b))
+    basis_a = xp.array(identity_a)
+    basis_b = xp.array(identity_b)
+    scores = xp.full((*leading_shape, n_components), xp.nan, dtype=Cab.dtype)
+    filters_a = xp.full((*leading_shape, n_a, n_components), xp.nan)
+    filters_b = xp.full((*leading_shape, n_b, n_components), xp.nan)
+    patterns_a = xp.full_like(filters_a, xp.nan)
+    patterns_b = xp.full_like(filters_b, xp.nan)
+    effective_rank = None
 
     for component in range(n_components):
-        reduced_aa = basis_a.T @ real_aa @ basis_a
-        reduced_ab: NDArray[np.complexfloating] = np.asarray(
-            basis_a.T @ Cab @ basis_b, dtype=np.complex128
-        )
-        reduced_bb = basis_b.T @ real_bb @ basis_b
-        Taa = _numpy_inverse_square_root(
+        reduced_aa = basis_a.swapaxes(-1, -2) @ real_aa @ basis_a
+        reduced_ab = basis_a.swapaxes(-1, -2) @ Cab @ basis_b
+        reduced_bb = basis_b.swapaxes(-1, -2) @ real_bb @ basis_b
+        transform_aa, rank_a = _batched_inverse_square_root(
             reduced_aa, rank=rank, regularization=regularization
         )
-        Tbb = _numpy_inverse_square_root(
+        transform_bb, rank_b = _batched_inverse_square_root(
             reduced_bb, rank=rank, regularization=regularization
         )
-        magnitude, phi, left, right = _optimize_canonical_coherency_phase(
-            reduced_ab, Taa, Tbb
+        if effective_rank is None:
+            effective_rank = xp.minimum(rank_a, rank_b)
+        magnitude, phase, left, right = _optimize_canonical_coherency_phase(
+            reduced_ab, transform_aa, transform_bb
         )
-        filter_a = basis_a @ (Taa @ left)
-        filter_b = basis_b @ (Tbb @ right)
-        scores[component] = magnitude * np.exp(-1j * phi)
-        filters_a[:, component] = filter_a
-        filters_b[:, component] = filter_b
-        patterns_a[:, component] = real_aa @ filter_a
-        patterns_b[:, component] = real_bb @ filter_b
+        filter_a = (basis_a @ (transform_aa @ left[..., xp.newaxis]))[..., 0]
+        filter_b = (basis_b @ (transform_bb @ right[..., xp.newaxis]))[..., 0]
+        scores[..., component] = magnitude * xp.exp(-1j * phase)
+        filters_a[..., component] = filter_a
+        filters_b[..., component] = filter_b
+        patterns_a[..., component] = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
+        patterns_b[..., component] = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
         if component + 1 < n_components:
-            basis_a = _orthogonal_complement(filters_a[:, : component + 1])
-            basis_b = _orthogonal_complement(filters_b[:, : component + 1])
+            basis_a = _batched_orthogonal_complement(filters_a[..., : component + 1])
+            basis_b = _batched_orthogonal_complement(filters_b[..., : component + 1])
 
-    return scores, (filters_a, filters_b), (patterns_a, patterns_b)
+    assert effective_rank is not None  # n_components >= 1, so the loop always runs
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
 
 
 def _mic_components(
@@ -3808,24 +3839,33 @@ def _mic_components(
     NDArray[np.floating],
     tuple[NDArray[np.floating], NDArray[np.floating]],
     tuple[NDArray[np.floating], NDArray[np.floating]],
+    NDArray[np.integer],
 ]:
-    """MIC singular components and channel-space projections for one CSD."""
-    real_aa = np.real(Caa)
-    real_bb = np.real(Cbb)
-    Taa = _numpy_inverse_square_root(real_aa, rank=rank, regularization=regularization)
-    Tbb = _numpy_inverse_square_root(real_bb, rank=rank, regularization=regularization)
-    transformed = Taa @ np.imag(Cab) @ Tbb
-    left, singular_values, right_h = np.linalg.svd(transformed, full_matrices=False)
-    left = left[:, :n_components]
-    right = right_h[:n_components].T
+    """MIC singular components and channel-space projections, batched.
+
+    Same batched shape contract as :func:`_canonical_coherency_components`.
+    """
+    real_aa = xp.real(Caa)
+    real_bb = xp.real(Cbb)
+    transform_aa, rank_a = _batched_inverse_square_root(
+        real_aa, rank=rank, regularization=regularization
+    )
+    transform_bb, rank_b = _batched_inverse_square_root(
+        real_bb, rank=rank, regularization=regularization
+    )
+    transformed = transform_aa @ xp.imag(Cab) @ transform_bb
+    left, singular_values, right_h = xp.linalg.svd(transformed, full_matrices=False)
+    left = left[..., :, :n_components]
+    right = right_h.swapaxes(-1, -2)[..., :, :n_components]
     # MIC is a coherence in [0, 1]; clip roundoff excursions like the scalar
     # ``maximized_imaginary_coherency`` does.
-    scores = np.clip(singular_values[:n_components], 0.0, 1.0)
-    filters_a = Taa @ left
-    filters_b = Tbb @ right
+    scores = xp.clip(singular_values[..., :n_components], 0.0, 1.0)
+    filters_a = transform_aa @ left
+    filters_b = transform_bb @ right
     patterns_a = real_aa @ filters_a
     patterns_b = real_bb @ filters_b
-    return scores, (filters_a, filters_b), (patterns_a, patterns_b)
+    effective_rank = xp.minimum(rank_a, rank_b)
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
 
 
 def _estimate_transfer_function(

@@ -79,6 +79,22 @@ def test_batch_skips_unsupported_measure_with_warning(monkeypatch, caplog):
     assert "Skipping custom_summary" in caplog.text
 
 
+def test_combine_formatted_results_reraises_on_coordinate_conflict():
+    """Merging measures with conflicting coordinates raises an actionable error."""
+    import xarray as xr
+
+    from spectral_connectivity.wrapper import _combine_formatted_results
+
+    first = xr.DataArray(
+        [1.0, 2.0], dims=("frequency",), coords={"frequency": [1.0, 2.0]}, name="a"
+    )
+    second = xr.DataArray(
+        [3.0, 4.0], dims=("frequency",), coords={"frequency": [1.0, 3.0]}, name="b"
+    )
+    with pytest.raises(ValueError, match="conflicting xarray variables or coordinates"):
+        _combine_formatted_results([first, second], {})
+
+
 def test_batch_of_only_unsupported_measures_raises(monkeypatch):
     """A batch in which every measure is unsupported fails loudly, not empty."""
     for name in ("custom_summary", "other_summary"):
