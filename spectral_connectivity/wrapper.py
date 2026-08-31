@@ -355,7 +355,9 @@ def list_measures(
         Return only the measures computed when ``method`` is omitted.
     directed : bool, optional
         If ``True``, return only directional measures; if ``False``, only
-        symmetric ones; if ``None`` (default), return both.
+        non-directional ones; if ``None`` (default), return both. Non-directional
+        does not necessarily mean symmetric: for example, phase-valued measures
+        may be antisymmetric and complex coherency is Hermitian.
 
     Returns
     -------
