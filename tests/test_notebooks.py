@@ -1014,8 +1014,8 @@ def test_ding_example1(snapshot):
     assert outputs == snapshot
 
 
-def test_nedungadi_example2(snapshot):
-    """Nedungadi Example 2: Conditional Granger (representative example showing confounds)."""
+def test_conditional_granger_three_signal_regression(snapshot):
+    """Regression coverage for conditional Granger on a three-signal VAR."""
     np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3
