@@ -2067,13 +2067,11 @@ class MorletWavelet:
     def _windowed_validity(self) -> BackendArray:
         """Strict validity of every time/frequency output neighborhood.
 
-        Cached because ``valid_time_frequency`` and ``observation_weights`` both
-        request it on the same immutable transform (e.g. once each per
-        ``connectivity_to_xarray`` call).
+        Recomputed on each call rather than cached: ``MorletWavelet`` does not
+        enforce parameter immutability, so a cache keyed on object identity could
+        silently go stale if a smoothing parameter were mutated after first
+        access. The computation is a cheap boolean pad-and-window.
         """
-        cached = getattr(self, "_windowed_validity_cache", None)
-        if cached is not None:
-            return cached
         validity = xp.asarray(self._base_validity)
         windows = _sliding_window(
             validity,
@@ -2082,9 +2080,7 @@ class MorletWavelet:
             axis=0,
         )
         windows = self._smooth_frequency_axis(windows, frequency_axis=1)
-        result = xp.all(windows, axis=(-2, -1))
-        self._windowed_validity_cache = result
-        return result
+        return xp.all(windows, axis=(-2, -1))
 
     @property
     def valid_time_frequency(self) -> NDArray[np.bool_]:
