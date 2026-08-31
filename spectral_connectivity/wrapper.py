@@ -192,26 +192,37 @@ class _MeasureSpec:
         "unsupported",
     ]
     is_default: bool = False
-    # Directed measures use the convention output[i, j] = influence j -> i (row
-    # = receiver, col = driver). The wrapper transposes them so the labeled
-    # (source, target) axes read source -> target; symmetric measures are
-    # unaffected by the transpose.
+    # Scientific directionality, native matrix orientation, and spectrum
+    # requirements are independent capabilities. For example dPLI and PSI are
+    # directional but already use source -> target orientation and do not need
+    # Wilson factorization.
     is_directed: bool = False
+    transpose_output: bool = False
+    requires_two_sided: bool = False
 
     def __post_init__(self) -> None:
         # Make the field couplings unrepresentable rather than merely unused, so
         # a future registry entry cannot silently violate them.
-        if self.is_directed and self.output_kind not in {
+        if self.transpose_output and self.output_kind not in {
             "pairwise",
             "group_pairwise",
         }:
-            raise ValueError("is_directed requires pairwise or group_pairwise output.")
+            raise ValueError(
+                "transpose_output requires pairwise or group_pairwise output."
+            )
+        if self.transpose_output and not self.is_directed:
+            raise ValueError("transpose_output requires a directional measure.")
         if self.is_default and self.output_kind == "unsupported":
             raise ValueError("an unsupported measure cannot be a default.")
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
-_DIRECTED_PAIRWISE_SPEC = _MeasureSpec("pairwise", is_directed=True)
+_DIRECTED_PAIRWISE_SPEC = _MeasureSpec(
+    "pairwise",
+    is_directed=True,
+    transpose_output=True,
+    requires_two_sided=True,
+)
 _UNSUPPORTED_SPEC = _MeasureSpec("unsupported")
 
 # This is the single source of truth for wrapper capabilities and defaults.
@@ -226,7 +237,11 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "imaginary_coherence": _MeasureSpec("pairwise", is_default=True),
     "pairwise_phase_consistency": _MeasureSpec("pairwise", is_default=True),
     "pairwise_spectral_granger_prediction": _MeasureSpec(
-        "pairwise", is_default=True, is_directed=True
+        "pairwise",
+        is_default=True,
+        is_directed=True,
+        transpose_output=True,
+        requires_two_sided=True,
     ),
     "phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "phase_locking_value": _MeasureSpec("pairwise", is_default=True),
@@ -239,7 +254,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "corrected_imaginary_phase_locking_value": _PAIRWISE_SPEC,
     # dPLI's native row/column layout is already phase-leader -> phase-lagger,
     # so it must not receive the transpose used by Granger/DTF-family outputs.
-    "directed_phase_lag_index": _PAIRWISE_SPEC,
+    "directed_phase_lag_index": _MeasureSpec("pairwise", is_directed=True),
     "subset_pairwise_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
     "conditional_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
     "time_reversed_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
@@ -252,17 +267,20 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "generalized_partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
     "direct_directed_transfer_function": _DIRECTED_PAIRWISE_SPEC,
     "blockwise_spectral_granger_prediction": _MeasureSpec(
-        "group_pairwise", is_directed=True
+        "group_pairwise",
+        is_directed=True,
+        transpose_output=True,
+        requires_two_sided=True,
     ),
     "canonical_coherence": _MeasureSpec("group_pairwise"),
     "maximized_imaginary_coherency": _MeasureSpec("group_pairwise"),
     "multivariate_interaction_measure": _MeasureSpec("group_pairwise"),
     "canonical_coherency": _MeasureSpec("multivariate_components"),
     "maximized_imaginary_coherency_components": _MeasureSpec("multivariate_components"),
-    "delay": _MeasureSpec("delay"),
+    "delay": _MeasureSpec("delay", is_directed=True),
     "global_coherence": _MeasureSpec("global"),
-    "group_delay": _MeasureSpec("group_delay"),
-    "phase_slope_index": _MeasureSpec("phase_slope"),
+    "group_delay": _MeasureSpec("group_delay", is_directed=True),
+    "phase_slope_index": _MeasureSpec("phase_slope", is_directed=True),
 }
 
 DEFAULT_METHODS: tuple[str, ...] = tuple(
@@ -291,6 +309,9 @@ class MeasureInfo:
         omitted (see ``DEFAULT_METHODS``).
     is_directed : bool
         Whether the measure is directional (``source -> target`` asymmetric).
+    requires_two_sided : bool
+        Whether the measure requires a full two-sided spectrum, including
+        negative-frequency bins.
     """
 
     name: str
@@ -298,6 +319,7 @@ class MeasureInfo:
     description: str
     is_default: bool
     is_directed: bool
+    requires_two_sided: bool
 
 
 def _measure_description(name: str) -> str:
@@ -370,6 +392,7 @@ def list_measures(
                 description=_measure_description(name),
                 is_default=spec.is_default,
                 is_directed=spec.is_directed,
+                requires_two_sided=spec.requires_two_sided,
             )
         )
     return measures
@@ -399,15 +422,16 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
 def _validate_method_names(methods: Sequence[str]) -> None:
     """Reject unknown measure names with a helpful, actionable message.
 
-    A name is accepted if it is either a registered measure or any real
+    A name is accepted if it is either a registered measure or any callable
     ``Connectivity`` attribute, so subclass/monkeypatched extension measures
-    (which the wrapper supports) still pass; only names that resolve to nothing
-    are rejected, turning an obscure ``AttributeError`` into an actionable hint.
+    (which the wrapper supports) still pass. Properties and other non-callable
+    attributes are rejected before they can produce an obscure ``TypeError``.
     """
     unknown = [
         method
         for method in methods
-        if method not in _MEASURE_SPECS and not hasattr(Connectivity, method)
+        if method not in _MEASURE_SPECS
+        and not callable(getattr(Connectivity, method, None))
     ]
     if not unknown:
         return
@@ -565,7 +589,7 @@ def _connectivity_result_to_xarray(
                 f"The method '{method}' returned shape {connectivity_mat.shape}; "
                 f"its wrapper contract requires {expected_shape}."
             )
-        if measure_spec.is_directed:
+        if measure_spec.transpose_output:
             connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates = {**base_coordinates, "source": signal_coordinates["source"]}
     else:
@@ -624,7 +648,7 @@ def _connectivity_result_to_xarray(
                 f"The method '{method}' returned shape {connectivity_mat.shape}; "
                 f"its group-pairwise contract requires {expected_shape}."
             )
-        if measure_spec.is_directed:
+        if measure_spec.transpose_output:
             connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates.update(
             {
@@ -1762,12 +1786,12 @@ def multitaper_connectivity(
         (``directed_transfer_function``, ``directed_coherence``,
         ``partial_directed_coherence``, ``generalized_partial_directed_coherence``,
         ``direct_directed_transfer_function``) is also opt-in by name (see the
-        Notes on directed orientation). Other measures that do not fit the
-        ``(time, frequency, source, target)`` layout — ``global_coherence``,
-        ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
-        and blockwise spectral Granger — are *not*
-        available through this wrapper at all (requesting one raises with a
-        pointer to use ``Connectivity`` directly). Examples:
+        Notes on directed orientation). Measures with nonstandard layouts,
+        including ``global_coherence``, ``phase_slope_index``, ``group_delay``,
+        ``delay``, ``canonical_coherence``, and blockwise spectral Granger, are
+        available by name and return labeled DataArrays or Datasets with their
+        component, group, candidate-delay, or frequency-reduced dimensions.
+        Examples:
         "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
@@ -2360,7 +2384,14 @@ def fourier_connectivity(
 
     return_dataarray = isinstance(method, str)
     if method is None:
-        methods = list(DEFAULT_METHODS)
+        methods = [
+            name
+            for name in DEFAULT_METHODS
+            if not (
+                one_sided
+                and _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).requires_two_sided
+            )
+        ]
     elif isinstance(method, str):
         methods = [method]
     else:
@@ -2374,29 +2405,31 @@ def fourier_connectivity(
         # Without a frequency coordinate, orientation and two-sidedness cannot be
         # verified, so the default ``is_one_sided=False`` lets a one-sided input
         # (e.g. rfft/wavelet coefficients) reach Wilson factorization and produce
-        # a silently wrong directed result. Reject known directed measures instead.
-        directed_methods = [
+        # a silently wrong Wilson-factorized result. Reject methods that declare
+        # the full-spectrum requirement; other directional measures such as dPLI
+        # and PSI remain valid on one-sided coefficients.
+        two_sided_methods = [
             name
             for name in methods
-            if _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).is_directed
+            if _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).requires_two_sided
         ]
-        if directed_methods and one_sided:
+        if two_sided_methods and one_sided:
             # The caller already declared one-sided input, so no frequency vector
-            # would enable directed measures -- give the accurate reason.
+            # would enable Wilson factorization -- give the accurate reason.
             raise ValueError(
-                f"Directed measures {sorted(set(directed_methods))} require a full "
+                f"Measures {sorted(set(two_sided_methods))} require a full "
                 "two-sided spectrum in standard FFT order. One-sided transforms "
                 "(is_one_sided=True) support functional connectivity measures but "
-                "not Wilson-factorized directed measures. Request only undirected "
+                "not Wilson-factorized measures. Request only one-sided-compatible "
                 "measures, or supply full two-sided coefficients."
             )
-        if directed_methods:
+        if two_sided_methods:
             raise ValueError(
-                f"Directed measures {sorted(set(directed_methods))} require a full "
+                f"Measures {sorted(set(two_sided_methods))} require a full "
                 "two-sided spectrum in standard FFT order, which cannot be verified "
                 "without a frequency coordinate. Pass `frequencies` (the FFT "
                 "frequency vector, including negative bins) so two-sidedness can be "
-                "checked, or request only undirected measures."
+                "checked, or request only one-sided-compatible measures."
             )
     if squeeze and not return_dataarray:
         warnings.warn(

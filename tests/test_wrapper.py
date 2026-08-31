@@ -728,8 +728,10 @@ def test_dataarray_non_scalar_start_time_is_rejected():
 
 def test_measure_spec_rejects_inconsistent_field_combinations():
     """Illegal capability combinations are unrepresentable, not merely unused."""
-    with pytest.raises(ValueError, match="is_directed requires"):
-        _MeasureSpec("power", is_directed=True)
+    with pytest.raises(ValueError, match="transpose_output requires pairwise"):
+        _MeasureSpec("power", is_directed=True, transpose_output=True)
+    with pytest.raises(ValueError, match="requires a directional measure"):
+        _MeasureSpec("pairwise", transpose_output=True)
     with pytest.raises(ValueError, match="unsupported measure cannot be a default"):
         _MeasureSpec("unsupported", is_default=True)
 
@@ -2217,6 +2219,22 @@ def test_fourier_connectivity_accepts_one_sided_functional_input():
     np.testing.assert_array_equal(result.frequency, np.linspace(0, 40, 9))
     assert result.attrs["fourier_is_one_sided"]
     assert result.attrs["fourier_one_sided_inferred"]
+
+
+def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
+    rng = np.random.default_rng(320)
+    coefficients = rng.standard_normal((5, 9, 2)) + 1j * rng.standard_normal((5, 9, 2))
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.linspace(0, 40, 9),
+    )
+
+    expected = tuple(
+        name
+        for name in DEFAULT_METHODS
+        if name != "pairwise_spectral_granger_prediction"
+    )
+    assert tuple(result.data_vars) == expected
 
 
 def test_fourier_connectivity_rejects_directed_one_sided_input():

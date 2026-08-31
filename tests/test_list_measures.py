@@ -23,7 +23,7 @@ def test_each_measure_is_a_real_connectivity_method():
 
 
 def test_returns_measureinfo_records_with_populated_fields():
-    """Records expose name, category, description, and the two flags."""
+    """Records expose name, category, description, and capability flags."""
     coherence = next(
         measure for measure in list_measures() if measure.name == "coherence_magnitude"
     )
@@ -31,6 +31,7 @@ def test_returns_measureinfo_records_with_populated_fields():
     assert coherence.category == "pairwise"
     assert coherence.is_default is True
     assert coherence.is_directed is False
+    assert coherence.requires_two_sided is False
     assert coherence.description == (
         "Return the magnitude squared of the complex coherency."
     )
@@ -63,6 +64,22 @@ def test_directed_filter_selects_directed_measures():
     undirected = list_measures(directed=False)
     assert all(not measure.is_directed for measure in undirected)
     assert "coherence_magnitude" in {measure.name for measure in undirected}
+
+
+def test_directionality_is_independent_of_spectrum_requirement():
+    measures = {measure.name: measure for measure in list_measures()}
+    for name in (
+        "directed_phase_lag_index",
+        "phase_slope_index",
+        "delay",
+        "group_delay",
+    ):
+        assert measures[name].is_directed
+        assert not measures[name].requires_two_sided
+
+    granger = measures["pairwise_spectral_granger_prediction"]
+    assert granger.is_directed
+    assert granger.requires_two_sided
 
 
 def test_category_filter_selects_matching_output_kind():

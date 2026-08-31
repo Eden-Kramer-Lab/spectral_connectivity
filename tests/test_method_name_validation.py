@@ -85,3 +85,13 @@ def test_fourier_connectivity_validates_method_names():
             method="coherence",
         )
     assert "coherence_magnitude" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("property_name", ["frequencies", "n_signals"])
+def test_noncallable_connectivity_properties_are_rejected(time_series, property_name):
+    with pytest.raises(ValueError, match=property_name):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=200,
+            method=property_name,
+        )
