@@ -32,7 +32,9 @@ category and a one-line description. Use it instead of guessing method strings.
 >>> [m.name for m in list_measures(default_only=True)][:3]
 ['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
 >>> [m.name for m in list_measures(directed=True)][:2]
-['pairwise_spectral_granger_prediction', 'subset_pairwise_spectral_granger_prediction']
+['pairwise_spectral_granger_prediction', 'directed_phase_lag_index']
+>>> next(m for m in list_measures() if m.name == "phase_slope_index").requires_two_sided
+False
 >>> power = next(m for m in list_measures() if m.name == "power")
 >>> power.category, power.description
 ('power', 'Return the one-sided power spectral density of the signal.')
