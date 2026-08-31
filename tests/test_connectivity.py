@@ -596,9 +596,7 @@ def test_cacoh_zero_cross_spectrum_does_not_warn():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        result = connectivity.canonical_coherency(
-            [0, 0, 1, 1], n_components=2
-        )
+        result = connectivity.canonical_coherency([0, 0, 1, 1], n_components=2)
 
     np.testing.assert_array_equal(result.scores, 0.0)
 
