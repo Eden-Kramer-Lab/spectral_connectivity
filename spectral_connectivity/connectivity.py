@@ -616,19 +616,30 @@ class Connectivity:
         time_stale = (
             getattr(self, "time", None) is not None and len(self.time) != n_time_windows
         )
-        if frequencies_stale or time_stale:
+        observation_weights = getattr(self, "_observation_weights", None)
+        expected_weight_shape = (*value.shape[:-1], 1)
+        weights_stale = observation_weights is not None and (
+            tuple(observation_weights.shape) != expected_weight_shape
+        )
+        if frequencies_stale or time_stale or weights_stale:
             warnings.warn(
                 "Reassigning fourier_coefficients changed the FFT/time geometry; "
-                "the frequency/time coordinates were reset to defaults "
-                "(normalized frequencies / integer indices). Construct a new "
-                "Connectivity if you need specific coordinates for the new data.",
+                "incompatible frequency/time coordinates and observation weights "
+                "were reset to defaults or cleared. Construct a new Connectivity "
+                "if you need specific coordinates or weights for the new data.",
                 UserWarning,
                 stacklevel=2,
             )
             if frequencies_stale:
-                self._frequencies = xp.fft.fftfreq(n_fft_samples)
+                self._frequencies = (
+                    xp.linspace(0.0, 0.5, n_fft_samples)
+                    if getattr(self, "_is_one_sided", False)
+                    else xp.fft.fftfreq(n_fft_samples)
+                )
             if time_stale:
                 self.time = xp.arange(n_time_windows)
+            if weights_stale:
+                self._observation_weights = None
 
     @property
     def expectation_type(self) -> str:

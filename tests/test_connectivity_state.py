@@ -346,6 +346,45 @@ def test_reassigning_same_geometry_keeps_coordinates_without_warning():
     np.testing.assert_array_equal(conn.frequencies, freqs_before)
 
 
+def test_reassigning_one_sided_geometry_keeps_nonnegative_frequencies():
+    rng = np.random.default_rng(26)
+    coefficients = rng.standard_normal((2, 3, 1, 5, 2)) + 1j * rng.standard_normal(
+        (2, 3, 1, 5, 2)
+    )
+    conn = Connectivity(coefficients, is_one_sided=True)
+
+    replacement = rng.standard_normal((2, 3, 1, 7, 2)) + 1j * rng.standard_normal(
+        (2, 3, 1, 7, 2)
+    )
+    with pytest.warns(UserWarning, match="changed the FFT/time geometry"):
+        conn.fourier_coefficients = replacement
+
+    np.testing.assert_array_equal(conn.frequencies, np.linspace(0.0, 0.5, 7))
+    assert conn.is_one_sided
+
+
+def test_reassigning_incompatible_geometry_clears_observation_weights():
+    rng = np.random.default_rng(27)
+    coefficients = rng.standard_normal((2, 3, 1, 5, 2)) + 1j * rng.standard_normal(
+        (2, 3, 1, 5, 2)
+    )
+    weights = np.ones((*coefficients.shape[:-1], 1))
+    conn = Connectivity(
+        coefficients,
+        is_one_sided=True,
+        observation_weights=weights,
+    )
+
+    replacement = rng.standard_normal((2, 3, 1, 7, 2)) + 1j * rng.standard_normal(
+        (2, 3, 1, 7, 2)
+    )
+    with pytest.warns(UserWarning, match="observation weights"):
+        conn.fourier_coefficients = replacement
+
+    assert conn.observation_weights is None
+    assert conn.power().shape == (2, 7, 2)
+
+
 def test_connectivity_rejects_mismatched_coordinate_lengths():
     """Supplied frequencies/time must match the data geometry."""
     fc = np.zeros((3, 2, 1, 8, 2), dtype=complex)  # n_time=3, n_fft=8
