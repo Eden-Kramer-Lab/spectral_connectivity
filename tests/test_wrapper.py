@@ -2285,3 +2285,46 @@ def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
     np.testing.assert_array_equal(
         result.isnull().all("source"), ~result.valid_time_frequency
     )
+
+
+def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
+    data = np.random.default_rng(319).standard_normal((192, 5, 2))
+    frequencies = np.array([4.0, 8.0, 12.0, 20.0])
+    transform = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
+
+    phase_slope = connectivity_to_xarray(transform, method="phase_slope_index")
+    assert phase_slope.dims == ("time", "source", "target")
+    assert phase_slope.valid_time.dims == ("time",)
+    np.testing.assert_array_equal(
+        phase_slope.valid_time, transform.valid_time_frequency.all(axis=1)
+    )
+
+    band = (5.0, 15.0)
+    delay = connectivity_to_xarray(
+        transform,
+        method="delay",
+        frequencies_of_interest=band,
+    )
+    np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
+    np.testing.assert_array_equal(
+        delay.valid_time_frequency,
+        transform.valid_time_frequency[:, [1, 2]],
+    )
+
+    group_delay = connectivity_to_xarray(
+        transform,
+        method="group_delay",
+        frequencies_of_interest=band,
+    )
+    assert "frequency" not in group_delay.dims
+    assert group_delay.valid_time.dims == ("time",)
+    np.testing.assert_array_equal(
+        group_delay.valid_time,
+        transform.valid_time_frequency[:, [1, 2]].all(axis=1),
+    )

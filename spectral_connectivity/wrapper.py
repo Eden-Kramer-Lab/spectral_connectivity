@@ -1142,13 +1142,42 @@ def connectivity_to_xarray(
                 "transform.valid_time_frequency must have shape "
                 f"{expected_shape}, got {validity.shape}."
             )
-        result = result.assign_coords(
-            valid_time_frequency=(
-                ("time", "frequency"),
+        validity_attrs = {
+            "long_name": "Full wavelet and smoothing support is in-record"
+        }
+        if "frequency" in result.dims:
+            full_validity = xr.DataArray(
                 validity,
-                {"long_name": "Full wavelet and smoothing support is in-record"},
+                coords={
+                    "time": np.asarray(connectivity.time),
+                    "frequency": np.asarray(connectivity.frequencies),
+                },
+                dims=("time", "frequency"),
+                attrs=validity_attrs,
             )
-        )
+            # Delay and other nonstandard schemas may retain only a requested
+            # frequency band. Select the matching validity bins rather than
+            # attaching the transform's full frequency axis to the result.
+            result_frequencies = np.asarray(result.coords["frequency"])
+            aligned_validity = full_validity.sel(frequency=result_frequencies)
+            result = result.assign_coords(valid_time_frequency=aligned_validity)
+        elif "time" in result.dims:
+            # PSI and group delay aggregate a frequency band. They have no
+            # frequency dimension on which a 2-D coordinate can live, so expose
+            # whether every frequency contributing to each time point has full
+            # wavelet/smoothing support.
+            frequencies = np.asarray(connectivity.frequencies)
+            frequency_band = kwargs.get("frequencies_of_interest")
+            if frequency_band is None:
+                frequency_index = np.ones(frequencies.shape, dtype=bool)
+            else:
+                frequency_index = (frequency_band[0] < frequencies) & (
+                    frequencies < frequency_band[1]
+                )
+            valid_time = validity[:, frequency_index].all(axis=1)
+            result = result.assign_coords(
+                valid_time=(("time",), valid_time, validity_attrs)
+            )
     return result
 
 
