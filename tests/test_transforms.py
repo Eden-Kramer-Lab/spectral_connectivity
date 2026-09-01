@@ -22,8 +22,9 @@ from spectral_connectivity.transforms import (
 def test_transform_is_one_sided_flags():
     """Every transform exposes an explicit is_one_sided layout flag.
 
-    The transform-neutral wrapper reads this attribute directly rather than
-    relying on a getattr default, so the base Multitaper must declare it.
+    The transform-neutral constructor consults this attribute when it is
+    present, so the base Multitaper should declare its layout rather than rely
+    solely on the backward-compatible ``getattr(..., False)`` fallback.
     """
     assert Multitaper.is_one_sided is False
     assert ShortTimeFourierTransform.is_one_sided is False
