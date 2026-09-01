@@ -16,6 +16,25 @@ def test_lists_every_registered_measure():
     assert names == list(_MEASURE_SPECS)
 
 
+def test_every_public_connectivity_measure_is_registered():
+    """A new Connectivity measure must declare its wrapper contract.
+
+    An unregistered method would be invisible to ``list_measures()`` and, when
+    requested by name, would fall back to the undirected pairwise contract
+    (no source/target transpose, no two-sided-spectrum requirement).
+    """
+    import inspect
+
+    non_measure_methods = {"jackknife"}
+    public_methods = {
+        name
+        for name in dir(Connectivity)
+        if not name.startswith("_")
+        and inspect.isfunction(inspect.getattr_static(Connectivity, name))
+    }
+    assert public_methods - non_measure_methods == set(_MEASURE_SPECS)
+
+
 def test_each_measure_is_a_real_connectivity_method():
     """A listed name can always be called on the Connectivity class."""
     for measure in list_measures():

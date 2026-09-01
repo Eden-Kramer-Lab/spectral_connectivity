@@ -1199,10 +1199,28 @@ class Connectivity:
         analytic variance formula (at a computational cost proportional to
         ``n_observations``).
 
-        ``transformation="auto"`` uses log power, the ``fisher_squared``
-        (``atanh(sqrt(.))``) transform for magnitude-squared coherence, circular
-        phase, and the identity scale for other real-valued measures.
-        Complex-valued and tuple-valued measures are not supported.
+        Parameters
+        ----------
+        method : str
+            Name of a public, real-valued connectivity measure to recompute,
+            e.g. ``"coherence_magnitude"``. Complex-valued and tuple-valued
+            measures are not supported.
+        confidence_level : float, default=0.95
+            Two-sided coverage of the normal-approximation interval, in (0, 1).
+        transformation : {"auto", "identity", "log", "fisher", "circular"}
+            Scale on which the interval is formed. ``"auto"`` uses log power,
+            the ``fisher_squared`` (``atanh(sqrt(.))``) transform for
+            magnitude-squared coherence, circular phase, and the identity scale
+            for other real-valued measures.
+        **method_kwargs
+            Keyword arguments forwarded to ``method`` on every replicate.
+
+        Returns
+        -------
+        JackknifeResult
+            Estimate, bias-corrected estimate, standard error, and confidence
+            bounds, each with the measure's own shape (for a pairwise measure
+            ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
 
         If the input Fourier coefficients were produced with
         ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates

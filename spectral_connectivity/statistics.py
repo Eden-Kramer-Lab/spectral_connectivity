@@ -22,7 +22,28 @@ from spectral_connectivity.utils import to_numpy
 
 @dataclass(frozen=True)
 class JackknifeResult:
-    """Leave-one-observation-out estimate and normal-approximation interval."""
+    """Leave-one-observation-out estimate and normal-approximation interval.
+
+    Every array attribute has the shape of the underlying measure, e.g.
+    ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a pairwise
+    connectivity measure.
+
+    Attributes
+    ----------
+    estimate : array
+        The full-sample estimate on the original scale.
+    bias_corrected : array
+        Jackknife bias-corrected estimate on the original scale.
+    standard_error : array
+        Standard error on the original scale (delta method through the
+        transformation).
+    confidence_interval : tuple of (lower, upper) arrays
+        Confidence bounds on the original scale.
+    n_observations : int
+        Number of leave-one-out replicates.
+    transformation : str
+        Variance-stabilizing transformation used for the interval.
+    """
 
     estimate: NDArray[np.floating]
     bias_corrected: NDArray[np.floating]
@@ -87,13 +108,27 @@ def jackknife_confidence_interval(
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
-    ``leave_one_out`` must have replicate on its first axis. Log transformation
-    is appropriate for positive spectra, Fisher's ``atanh`` for magnitude
-    coherence in ``[-1, 1]``, ``fisher_squared`` (``atanh(sqrt(.))``) for
-    magnitude-squared coherence in ``[0, 1]``, and circular transformation for
-    angles in radians. Reported confidence bounds and bias-corrected estimates
-    are returned on the original scale; the standard error is converted back
-    with the local delta method.
+    Parameters
+    ----------
+    estimate : array, shape (...)
+        Full-sample estimate of a real-valued measure.
+    leave_one_out : array, shape (n_observations, ...)
+        Replicates with one observation omitted each, stacked on the first
+        axis; the remaining axes must match ``estimate``.
+    confidence_level : float, default=0.95
+        Two-sided coverage of the normal-approximation interval, in (0, 1).
+    transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
+        Scale on which the interval is formed. Log is appropriate for positive
+        spectra, Fisher's ``atanh`` for magnitude coherence in ``[-1, 1]``,
+        ``fisher_squared`` (``atanh(sqrt(.))``) for magnitude-squared coherence
+        in ``[0, 1]``, and circular for angles in radians.
+
+    Returns
+    -------
+    JackknifeResult
+        Estimate, bias-corrected estimate, standard error, and confidence
+        bounds, all on the original scale and with the shape of ``estimate``.
+        The standard error is converted back with the local delta method.
     """
     if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
         raise ValueError(
