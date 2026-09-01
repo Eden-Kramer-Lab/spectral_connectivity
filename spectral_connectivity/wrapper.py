@@ -1017,6 +1017,13 @@ def frequency_band_reduce(
         Inclusive lower and upper frequency bounds in the coordinate's units.
     reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
+
+    Returns
+    -------
+    xarray.DataArray or xarray.Dataset
+        Same type as ``result`` with the ``frequency`` dimension replaced by a
+        ``band`` dimension holding the band names, and the band definitions
+        recorded in ``attrs["frequency_bands_json"]``.
     """
     if "frequency" not in result.dims:
         raise ValueError("result must have a 'frequency' dimension.")
@@ -2402,7 +2409,7 @@ def fourier_connectivity(
     Returns
     -------
     xarray.DataArray or xarray.Dataset
-        Labeled result with ``time``, ``frequency`` (or ``frequency_band``),
+        Labeled result with ``time``, ``frequency`` (or ``band``),
         and measure-specific dimensions such as ``source``/``target``; a
         DataArray for a single ``method`` name, otherwise a Dataset. Directed
         measures are oriented so ``sel(source=a, target=b)`` is the influence
