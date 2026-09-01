@@ -1067,6 +1067,31 @@ def test_transform_rejects_non_positive_sampling_frequency(transform_cls):
         transform_cls(np.ones((64, 1, 2)), sampling_frequency=0)
 
 
+def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
+    """A one-sample smoothing window with a larger step must still decimate
+    ``time`` and ``observation_weights`` to match ``fft()``."""
+    rng = np.random.default_rng(5)
+    wavelet = MorletWavelet(
+        rng.standard_normal((2000, 1, 2)),
+        sampling_frequency=1000.0,
+        frequencies=[10.0, 20.0],
+        smoothing_time=0.001,
+        smoothing_step=0.005,
+    )
+    n_time = wavelet.fft().shape[0]
+    assert n_time == 400
+    assert wavelet.time.shape == (n_time,)
+    assert wavelet.observation_weights.shape[0] == n_time
+    assert wavelet.valid_time_frequency.shape[0] == n_time
+    Connectivity.from_transform(wavelet)
+
+
+@pytest.mark.parametrize("bad_rate", [float("nan"), float("inf")])
+def test_multitaper_rejects_non_finite_sampling_frequency(bad_rate):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        Multitaper(np.ones((64, 1, 2)), sampling_frequency=bad_rate)
+
+
 def test_morlet_rejects_non_positive_sampling_frequency():
     with pytest.raises(ValueError, match="sampling_frequency must be finite"):
         MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=-1, frequencies=[4, 8])

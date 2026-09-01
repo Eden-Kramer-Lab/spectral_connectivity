@@ -2046,7 +2046,7 @@ class MorletWavelet:
     @property
     def time(self) -> NDArray[np.floating]:
         sample_times = self.start_time + self._sample_indices / self.sampling_frequency
-        if self._smoothing_samples == 1:
+        if self._smoothing_samples == 1 and self._smoothing_step_samples == 1:
             return sample_times
         return _sliding_window(
             sample_times,
