@@ -1592,21 +1592,19 @@ class ShortTimeFourierTransform(Multitaper):
                 raise ValueError(f"{name} must be a positive integer.")
         data_shape = getattr(time_series, "shape", ())
         if len(data_shape) != 3:
-            # Delegate the detailed dimensionality message to Multitaper.
-            window_samples = 2
-        else:
-            resolved_window = _resolve_sample_count(
-                n_time_samples_per_window,
-                time_window_duration,
-                sampling_frequency,
-                "time_window_duration and n_time_samples_per_window resolve to "
-                "different Hann window lengths.",
+            raise ValueError(
+                "time_series must have shape (n_time_samples, n_trials, n_signals)."
             )
-            window_samples = (
-                int(data_shape[0] if data_shape else 0)
-                if resolved_window is None
-                else resolved_window
-            )
+        resolved_window = _resolve_sample_count(
+            n_time_samples_per_window,
+            time_window_duration,
+            sampling_frequency,
+            "time_window_duration and n_time_samples_per_window resolve to "
+            "different Hann window lengths.",
+        )
+        window_samples = (
+            int(data_shape[0]) if resolved_window is None else resolved_window
+        )
         if window_samples < 2:
             raise ValueError("A Hann transform window requires at least 2 samples.")
 
