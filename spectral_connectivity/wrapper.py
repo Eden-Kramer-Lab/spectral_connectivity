@@ -190,7 +190,6 @@ class _MeasureSpec:
         "group_delay",
         "phase_slope",
         "multivariate_components",
-        "unsupported",
     ]
     is_default: bool = False
     # Scientific directionality, native matrix orientation, and spectrum
@@ -213,8 +212,6 @@ class _MeasureSpec:
             )
         if self.transpose_output and not self.is_directed:
             raise ValueError("transpose_output requires a directional measure.")
-        if self.is_default and self.output_kind == "unsupported":
-            raise ValueError("an unsupported measure cannot be a default.")
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
@@ -224,8 +221,6 @@ _DIRECTED_PAIRWISE_SPEC = _MeasureSpec(
     transpose_output=True,
     requires_two_sided=True,
 )
-_UNSUPPORTED_SPEC = _MeasureSpec("unsupported")
-
 # This is the single source of truth for wrapper capabilities and defaults.
 # Insertion order preserves the historical Dataset variable order.
 _MEASURE_SPECS: dict[str, _MeasureSpec] = {
@@ -465,18 +460,8 @@ def _validate_method_names(methods: Sequence[str]) -> None:
 
 
 def _get_measure_spec(method: str) -> _MeasureSpec | None:
-    """Return wrapper metadata, rejecting known incompatible measures."""
-    measure_spec = _MEASURE_SPECS.get(method)
-    if measure_spec is None or measure_spec.output_kind != "unsupported":
-        return measure_spec
-    raise UnsupportedMeasureError(
-        f"The method '{method}' is not supported by the xarray interface "
-        f"(it does not return a plain (time, frequency, source, target) "
-        f"array). Please use the Connectivity class directly instead:\n\n"
-        f"from spectral_connectivity import Connectivity\n"
-        f"conn = Connectivity.from_multitaper(m)\n"
-        f"result = conn.{method}()\n"
-    )
+    """Return wrapper metadata for a registered measure, or None."""
+    return _MEASURE_SPECS.get(method)
 
 
 def _validated_signal_labels(
@@ -932,9 +917,7 @@ def _connectivity_result_to_xarray(
             )
         return xr.Dataset(data_vars, attrs=attrs)
 
-    raise UnsupportedMeasureError(
-        f"No xarray formatter is registered for method {method!r}."
-    )
+    raise AssertionError(f"unreachable: unknown output kind for {method!r}")
 
 
 def _shared_provenance_attrs(
@@ -2459,7 +2442,8 @@ def fourier_connectivity(
             for name in DEFAULT_METHODS
             if not (
                 one_sided
-                and _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).requires_two_sided
+                and name in _MEASURE_SPECS
+                and _MEASURE_SPECS[name].requires_two_sided
             )
         ]
     elif isinstance(method, str):
@@ -2481,7 +2465,7 @@ def fourier_connectivity(
         two_sided_methods = [
             name
             for name in methods
-            if _MEASURE_SPECS.get(name, _UNSUPPORTED_SPEC).requires_two_sided
+            if name in _MEASURE_SPECS and _MEASURE_SPECS[name].requires_two_sided
         ]
         if two_sided_methods and one_sided:
             # The caller already declared one-sided input, so no frequency vector
