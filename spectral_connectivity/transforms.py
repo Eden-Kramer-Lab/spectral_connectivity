@@ -11,6 +11,7 @@ from scipy.signal.windows import hann as scipy_hann
 from spectral_connectivity.utils import (
     BackendArray,
     is_gpu_enabled,
+    is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
 )
@@ -778,11 +779,7 @@ class Multitaper:
                 "weighting, 'eigen' to weight tapers by their spectral "
                 "concentration, or 'adaptive' for Thomson's iterative weighting."
             )
-        if (
-            isinstance(adaptive_max_iterations, bool)
-            or not isinstance(adaptive_max_iterations, (int, np.integer))
-            or adaptive_max_iterations < 1
-        ):
+        if not is_positive_integer(adaptive_max_iterations):
             raise ValueError(
                 "adaptive_max_iterations must be a positive integer, got "
                 f"{adaptive_max_iterations!r}."
@@ -1591,11 +1588,7 @@ class ShortTimeFourierTransform(Multitaper):
             ("n_time_samples_per_window", n_time_samples_per_window),
             ("n_time_samples_per_step", n_time_samples_per_step),
         ):
-            if value is not None and (
-                isinstance(value, bool)
-                or not isinstance(value, (int, np.integer))
-                or value < 1
-            ):
+            if value is not None and not is_positive_integer(value):
                 raise ValueError(f"{name} must be a positive integer.")
         data_shape = getattr(time_series, "shape", ())
         if len(data_shape) != 3:
@@ -1719,10 +1712,8 @@ class Welch:
             not np.isfinite(segment_duration) or segment_duration <= 0
         ):
             raise ValueError("segment_duration must be finite and positive.")
-        if n_time_samples_per_segment is not None and (
-            isinstance(n_time_samples_per_segment, bool)
-            or not isinstance(n_time_samples_per_segment, (int, np.integer))
-            or n_time_samples_per_segment < 2
+        if n_time_samples_per_segment is not None and not is_positive_integer(
+            n_time_samples_per_segment, minimum=2
         ):
             raise ValueError(
                 "n_time_samples_per_segment must be an integer of at least 2."
@@ -1922,11 +1913,7 @@ class MorletWavelet:
             raise ValueError(
                 "n_cycles must be a positive scalar or have one value per frequency."
             )
-        if (
-            isinstance(decimation, bool)
-            or not isinstance(decimation, (int, np.integer))
-            or decimation < 1
-        ):
+        if not is_positive_integer(decimation):
             raise ValueError("decimation must be a positive integer.")
         if smoothing_time is not None and (
             not np.isfinite(smoothing_time) or smoothing_time <= 0
@@ -1940,12 +1927,7 @@ class MorletWavelet:
             raise ValueError(
                 "smoothing_step requires smoothing_time and must be finite and positive."
             )
-        if (
-            isinstance(smoothing_frequency, bool)
-            or not isinstance(smoothing_frequency, (int, np.integer))
-            or smoothing_frequency < 1
-            or smoothing_frequency % 2 == 0
-        ):
+        if not is_positive_integer(smoothing_frequency) or smoothing_frequency % 2 == 0:
             raise ValueError("smoothing_frequency must be a positive odd integer.")
         if smoothing_kernel not in {"boxcar", "hann"}:
             raise ValueError("smoothing_kernel must be 'boxcar' or 'hann'.")

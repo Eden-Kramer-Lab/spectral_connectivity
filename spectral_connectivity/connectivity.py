@@ -24,6 +24,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.utils import (
     BackendArray,
     is_gpu_enabled,
+    is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
     to_numpy,
@@ -145,9 +146,7 @@ def _validated_regularization(value: Any) -> float:
 
 def _validated_rank(rank: int | None) -> int | None:
     """Return a positive-integer rank or None, rejecting other values."""
-    if rank is not None and (
-        isinstance(rank, bool) or not isinstance(rank, (int, np.integer)) or rank < 1
-    ):
+    if rank is not None and not is_positive_integer(rank):
         raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
     return rank
 
@@ -1905,11 +1904,7 @@ class Connectivity:
         """Compute rich CaCoh/MIC results from the expected CSD."""
         labels, group_indices, membership = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
-        if (
-            isinstance(n_components, bool)
-            or not isinstance(n_components, (int, np.integer))
-            or n_components < 1
-        ):
+        if not is_positive_integer(n_components):
             raise ValueError(
                 f"n_components must be a positive integer, got {n_components!r}."
             )
@@ -2294,11 +2289,7 @@ class Connectivity:
         # size, so a float (NaN/inf included) or bool would either pick a
         # nonsensical chunk or blow up later inside range(). bool is an int
         # subclass, so reject it explicitly.
-        if (
-            isinstance(max_workspace_elements, bool)
-            or not isinstance(max_workspace_elements, (int, np.integer))
-            or max_workspace_elements < 1
-        ):
+        if not is_positive_integer(max_workspace_elements):
             raise ValueError(
                 f"max_workspace_elements must be a positive integer (e.g. "
                 f"1_000_000), got {max_workspace_elements!r}. It bounds the memory "
