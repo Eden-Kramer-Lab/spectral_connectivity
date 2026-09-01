@@ -1278,6 +1278,8 @@ class Connectivity:
                 if observation_weights is None
                 else xp.compress(keep, observation_weights, axis=observation_axis)
             )
+            # ``subset`` is a fresh, unshared compress() output, so adopt it in
+            # place instead of copying and re-scanning it for every replicate.
             replicate_connectivity = Connectivity(
                 subset,
                 expectation_type=replicate_expectation,
@@ -1288,6 +1290,7 @@ class Connectivity:
                 minimum_phase_max_iterations=self._minimum_phase_max_iterations,
                 is_one_sided=self._is_one_sided,
                 observation_weights=subset_weights,
+                _adopt_fourier_coefficients=True,
             )
             replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
