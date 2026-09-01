@@ -2390,15 +2390,9 @@ def fourier_connectivity(
             frequency_values.size > 1 and not np.any(frequency_values < 0)
         )
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
-        if one_sided:
-            if np.any(frequency_values < 0) or (
-                frequency_values.size > 1 and not np.all(np.diff(frequency_values) > 0)
-            ):
-                raise ValueError(
-                    "One-sided frequencies must be non-negative and strictly "
-                    "increasing."
-                )
-        elif frequency_values.size > 1:
+        # A one-sided coordinate (non-negative, strictly increasing) is validated
+        # by Connectivity itself; only the two-sided FFT-order check lives here.
+        if not one_sided and frequency_values.size > 1:
             frequency_step = (
                 frequency_values[1] - frequency_values[0]
                 if frequency_values.size > 2
