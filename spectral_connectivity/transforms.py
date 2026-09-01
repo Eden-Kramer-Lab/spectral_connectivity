@@ -462,8 +462,7 @@ def suggest_parameters(
 if is_gpu_enabled():
     try:
         import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, next_fast_len
-        from cupyx.scipy.signal import fftconvolve
+        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
     except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
@@ -501,9 +500,8 @@ if is_gpu_enabled():
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
-    from scipy.fft import fft, fftfreq, next_fast_len
+    from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.signal import detrend as _backend_detrend
-    from scipy.signal import fftconvolve
 
 
 def _immutable_array_snapshot(value: Any) -> BackendArray:
@@ -2114,6 +2112,23 @@ class MorletWavelet:
         return _readonly_array_copy(weights)
 
     def fft(self) -> NDArray[np.complexfloating]:
+        # Pad once to the widest wavelet and transform the data once; each
+        # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
+        # Padding wider than a given wavelet needs does not change its 'valid'
+        # output: the extra samples never enter that wavelet's support.
+        n_time_samples = self._time_series.shape[0]
+        max_half_width = int(xp.max(self._edge_half_width_samples))
+        padded = xp.pad(
+            self._time_series,
+            ((max_half_width, max_half_width), (0, 0), (0, 0)),
+            mode=self.padding_mode,
+        )
+        n_fft = next_fast_len(padded.shape[0] + 2 * max_half_width)
+        # The wavelets are complex128; transform the data at that precision so
+        # a float32 record is not convolved in single precision.
+        data_spectrum = fft(padded.astype(xp.float64, copy=False), n=n_fft, axis=0)
+        scale = 1.0 / xp.sqrt(self.sampling_frequency)
+
         coefficients: list[BackendArray] = []
         for frequency, cycles, half_width in zip(
             self._frequencies,
@@ -2134,15 +2149,13 @@ class MorletWavelet:
                 )
             wavelet = oscillation * gaussian
             wavelet = wavelet / xp.sqrt(xp.sum(xp.abs(wavelet) ** 2))
-            kernel = xp.conjugate(wavelet[::-1])[:, xp.newaxis, xp.newaxis]
-            padded = xp.pad(
-                self._time_series,
-                ((half_width, half_width), (0, 0), (0, 0)),
-                mode=self.padding_mode,
-            )
-            coefficient = fftconvolve(padded, kernel, mode="valid", axes=0) / xp.sqrt(
-                self.sampling_frequency
-            )
+            kernel = xp.conjugate(wavelet[::-1])
+            kernel_spectrum = fft(kernel, n=n_fft)[:, xp.newaxis, xp.newaxis]
+            convolved = ifft(data_spectrum * kernel_spectrum, axis=0)
+            # The 'valid' output centred on original sample i sits at
+            # full-convolution index i + max_half_width + half_width.
+            start = max_half_width + half_width
+            coefficient = convolved[start : start + n_time_samples] * scale
             coefficients.append(coefficient[self._sample_indices])
 
         transformed = xp.stack(coefficients, axis=2)
