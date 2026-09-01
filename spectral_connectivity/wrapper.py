@@ -1,6 +1,7 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
 import difflib
+import inspect
 import json
 import warnings
 from collections.abc import Hashable, Mapping, Sequence
@@ -421,19 +422,30 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
     return ranked[:limit]
 
 
+_NON_MEASURE_METHODS = frozenset({"jackknife"})
+
+
+def _is_extension_measure(name: str) -> bool:
+    """Whether ``name`` is a public instance method usable as a measure."""
+    if name.startswith("_") or name in _NON_MEASURE_METHODS:
+        return False
+    attribute = inspect.getattr_static(Connectivity, name, None)
+    return inspect.isfunction(attribute)
+
+
 def _validate_method_names(methods: Sequence[str]) -> None:
     """Reject unknown measure names with a helpful, actionable message.
 
-    A name is accepted if it is either a registered measure or any callable
-    ``Connectivity`` attribute, so subclass/monkeypatched extension measures
-    (which the wrapper supports) still pass. Properties and other non-callable
-    attributes are rejected before they can produce an obscure ``TypeError``.
+    A name is accepted if it is either a registered measure or a public
+    instance method of ``Connectivity``, so subclass/monkeypatched extension
+    measures (which the wrapper supports) still pass. Properties, private
+    helpers, classmethods, and the non-measure ``jackknife`` driver are rejected
+    before they can produce an obscure ``TypeError``.
     """
     unknown = [
         method
         for method in methods
-        if method not in _MEASURE_SPECS
-        and not callable(getattr(Connectivity, method, None))
+        if method not in _MEASURE_SPECS and not _is_extension_measure(method)
     ]
     if not unknown:
         return

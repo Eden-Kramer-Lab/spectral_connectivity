@@ -1407,6 +1407,17 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
     np.testing.assert_array_equal(result["valid_time_frequency"].values, host_mask)
 
 
+@pytest.mark.parametrize(
+    "name", ["jackknife", "from_transform", "_clear_cached_intermediates"]
+)
+def test_non_measure_callables_are_rejected_as_unknown_measures(name):
+    rng = np.random.default_rng(12)
+    with pytest.raises(ValueError, match="not a known connectivity measure"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)), sampling_frequency=250, method=name
+        )
+
+
 def test_multi_method_shares_single_fft():
     """A multi-method call computes the FFT once, not once per measure.
 
