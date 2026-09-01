@@ -24,6 +24,7 @@ directly with results from 2.x.
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
+| Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
@@ -35,8 +36,10 @@ directly with results from 2.x.
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
   corrected imaginary PLV, and directed PLI.
 - Multivariate/group measures: maximized imaginary coherency (MIC),
-  multivariate interaction measure (MIM), conditional spectral Granger,
-  blockwise spectral Granger, and time-reversed spectral Granger.
+  multivariate interaction measure (MIM), conditional spectral Granger
+  (the Chen, Bressler & Ding 2006 frequency decomposition, computed from one
+  full-system and one reduced-system factorization per source), blockwise
+  spectral Granger, and time-reversed spectral Granger.
 - Exact complex `canonical_coherency` (Vidaurre CaCoh) performs phase
   optimisation and component deflation and returns component scores, spatial
   filters, patterns, connections, and group membership. The new
@@ -69,7 +72,9 @@ directly with results from 2.x.
   declared with `is_one_sided=True`), while directed factorization still
   requires a full two-sided spectrum. High-level results can be cropped,
   decimated, or reduced into named frequency bands; phase uses a circular mean
-  and integration is restricted to spectral densities.
+  and integration is restricted to spectral densities. The standalone
+  `frequency_band_reduce(result, bands, reduction=...)` applies the same
+  band reduction to an already-computed labeled result.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` provide
   leave-one-trial/taper bias correction, standard errors, and confidence
   intervals with automatic variance-stabilizing transformations: log for power,

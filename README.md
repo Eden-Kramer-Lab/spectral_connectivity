@@ -97,7 +97,9 @@ band_connectivity = multitaper_connectivity(
 Named-band means are arithmetic means of the computed score; complex measures
 use a complex-vector mean and `coherence_phase` uses a circular mean. Band
 integration is restricted to power and cross-spectral density, where it has the
-physical interpretation of band power/covariance.
+physical interpretation of band power/covariance. The same reduction is
+available for an already-computed result via
+`frequency_band_reduce(result, bands, reduction="mean")`.
 
 `time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
 names define axis roles; positions do not.** Common dimension names are
