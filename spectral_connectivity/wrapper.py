@@ -2322,7 +2322,6 @@ def fourier_connectivity(
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
-    expectation_type: Literal["trials_tapers"] = "trials_tapers",
     is_one_sided: bool | None = None,
     *,
     frequency_range: tuple[float, float] | None = None,
@@ -2350,16 +2349,10 @@ def fourier_connectivity(
     but the core rejects directed measures that require a full two-sided spectrum.
     Set ``is_one_sided`` explicitly when no frequency coordinate is available.
 
-    The xarray layout currently requires ``expectation_type="trials_tapers"``;
-    use :class:`Connectivity` directly for expectations that retain trial/taper
-    axes or average over time.
+    The labeled output has one time axis, so the expectation is always
+    ``"trials_tapers"``; use :class:`Connectivity` directly for expectations
+    that retain trial/taper axes or average over time.
     """
-    if expectation_type != "trials_tapers":
-        raise ValueError(
-            "fourier_connectivity supports expectation_type='trials_tapers' "
-            "because the labeled output has one time axis; use Connectivity "
-            "directly for other expectation layouts."
-        )
     (
         coefficient_data,
         frequencies,
@@ -2418,7 +2411,7 @@ def fourier_connectivity(
 
     connectivity = Connectivity(
         coefficient_data,
-        expectation_type=expectation_type,
+        expectation_type="trials_tapers",
         frequencies=frequencies,
         time=time,
         dtype=dtype,
