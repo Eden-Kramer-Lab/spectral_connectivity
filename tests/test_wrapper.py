@@ -1418,6 +1418,17 @@ def test_non_measure_callables_are_rejected_as_unknown_measures(name):
         )
 
 
+def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
+    rng = np.random.default_rng(13)
+    with pytest.raises(TypeError, match="passed to every requested method"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)),
+            sampling_frequency=250,
+            method=["coherence_magnitude", "canonical_coherence"],
+            connectivity_kwargs={"group_labels": [0, 0, 1]},
+        )
+
+
 def test_multi_method_shares_single_fft():
     """A multi-method call computes the FFT once, not once per measure.
 

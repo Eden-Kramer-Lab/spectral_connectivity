@@ -4,7 +4,7 @@ import difflib
 import inspect
 import json
 import warnings
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, Literal, NamedTuple, TypeAlias
@@ -536,6 +536,28 @@ def _validated_signal_labels(
     return signal_coordinate.data
 
 
+def _check_method_accepts_kwargs(
+    method: str, measure: Callable[..., Any], kwargs: Mapping[str, Any]
+) -> None:
+    """Raise an actionable error when ``kwargs`` names a parameter ``measure``
+    does not accept.
+
+    ``connectivity_kwargs`` is broadcast to every requested method, so a
+    keyword needed by one measure (e.g. ``group_labels``) reaches the others.
+    """
+    parameters = inspect.signature(measure).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return
+    rejected = sorted(set(kwargs) - set(parameters))
+    if rejected:
+        raise TypeError(
+            f"{method} does not accept keyword argument(s) "
+            f"{', '.join(map(repr, rejected))}. connectivity_kwargs is passed to "
+            "every requested method, so request measures that need different "
+            "arguments in separate calls."
+        )
+
+
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
     method: str,
@@ -550,7 +572,9 @@ def _connectivity_result_to_xarray(
     one transform, so the caller validates/builds them once and passes them in.
     """
     measure_spec = _get_measure_spec(method)
-    numerical_result = getattr(connectivity, method)(**kwargs)
+    measure = getattr(connectivity, method)
+    _check_method_accepts_kwargs(method, measure, kwargs)
+    numerical_result = measure(**kwargs)
 
     pairwise_shape = (
         len(connectivity.time),
