@@ -2340,19 +2340,74 @@ def fourier_connectivity(
 ) -> xr.DataArray | xr.Dataset:
     """Compute labeled connectivity from externally estimated FFT coefficients.
 
-    NumPy-like inputs may use ``(observation, frequency, signal)``, ``(trial,
-    taper, frequency, signal)``, or the core's full ``(time, trial, taper,
-    frequency, signal)`` layout. A DataArray is transposed by semantic dimension
-    names (or explicit ``*_dim`` arguments), and its frequency, time, signal
-    coordinates and attributes are preserved. When ``is_one_sided`` is omitted,
-    a supplied non-negative, increasing frequency coordinate is recognized as a
-    one-sided transform. One-sided coefficients support functional connectivity,
-    but the core rejects directed measures that require a full two-sided spectrum.
-    Set ``is_one_sided`` explicitly when no frequency coordinate is available.
-
     The labeled output has one time axis, so the expectation is always
     ``"trials_tapers"``; use :class:`Connectivity` directly for expectations
     that retain trial/taper axes or average over time.
+
+    Parameters
+    ----------
+    fourier_coefficients : array or xarray.DataArray
+        Complex coefficients in ``(n_observations, n_frequencies, n_signals)``,
+        ``(n_trials, n_tapers, n_frequencies, n_signals)``, or the core's full
+        ``(n_time, n_trials, n_tapers, n_frequencies, n_signals)`` layout. A
+        DataArray is transposed by semantic dimension names (or the explicit
+        ``*_dim`` arguments) and its frequency, time, and signal coordinates
+        and attributes are preserved.
+    frequencies : array, shape (n_frequencies,), optional
+        Frequency of each bin in Hz. A two-sided coordinate must be in standard
+        FFT order; a non-negative, strictly increasing coordinate is treated as
+        one-sided when ``is_one_sided`` is omitted. Taken from the DataArray
+        coordinate when not given.
+    time : array, shape (n_time,), optional
+        Center time of each window in seconds; defaults to window indices.
+    method : str or list of str, optional
+        Measure name(s) from :func:`list_measures`. A single name returns a
+        DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
+        Dataset with one variable per measure.
+    signal_names : sequence, optional
+        Labels for the ``source``/``target`` coordinates; defaults to the
+        DataArray signal coordinate or ``"0"``, ``"1"``, ....
+    squeeze : bool, default=False
+        Drop length-one dimensions from a single-measure result.
+    connectivity_kwargs : dict, optional
+        Keyword arguments passed to every requested measure (for example
+        ``group_labels`` for group measures). Measures that need different
+        arguments must be requested in separate calls.
+    is_one_sided : bool, optional
+        Declare whether the coefficients cover only non-negative frequencies.
+        Required when no frequency coordinate is available and the input is
+        one-sided (e.g. ``rfft`` output); otherwise inferred from
+        ``frequencies``.
+    frequency_range : (float, float), optional
+        Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
+        or band reduction.
+    frequency_decimation : int, default=1
+        Keep every ``frequency_decimation``-th frequency bin.
+    frequency_bands : mapping of str to (float, float), optional
+        Named inclusive bands to reduce the frequency axis into; see
+        :func:`frequency_band_reduce`.
+    frequency_reduction : {"mean", "integral"}, default="mean"
+        Within-band reduction used with ``frequency_bands``.
+    time_dim, trial_dim, taper_dim, frequency_dim, signal_dim : hashable, optional
+        DataArray dimension names for each axis role, when they cannot be
+        inferred from common names.
+    dtype : numpy.dtype, default=complex128
+        Working precision for the connectivity computations.
+    minimum_phase_tolerance : float, default=1e-8
+        Relative convergence tolerance of the Wilson factorization used by the
+        directed measures.
+    minimum_phase_max_iterations : int, default=500
+        Maximum Wilson iterations for the directed measures.
+
+    Returns
+    -------
+    xarray.DataArray or xarray.Dataset
+        Labeled result with ``time``, ``frequency`` (or ``frequency_band``),
+        and measure-specific dimensions such as ``source``/``target``; a
+        DataArray for a single ``method`` name, otherwise a Dataset. Directed
+        measures are oriented so ``sel(source=a, target=b)`` is the influence
+        from ``a`` to ``b``. One-sided coefficients support functional
+        measures, but measures that need a full two-sided spectrum raise.
     """
     (
         coefficient_data,
