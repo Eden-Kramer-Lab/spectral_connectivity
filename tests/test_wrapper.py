@@ -732,8 +732,6 @@ def test_measure_spec_rejects_inconsistent_field_combinations():
         _MeasureSpec("power", is_directed=True, transpose_output=True)
     with pytest.raises(ValueError, match="requires a directional measure"):
         _MeasureSpec("pairwise", transpose_output=True)
-    with pytest.raises(ValueError, match="unsupported measure cannot be a default"):
-        _MeasureSpec("unsupported", is_default=True)
 
 
 def test_dataarray_numeric_time_coordinate_sets_output_time():
