@@ -958,6 +958,36 @@ def _shared_provenance_attrs(
     return attrs
 
 
+def _inclusive_frequency_mask(
+    label: str,
+    bounds: Any,
+    frequencies: NDArray[np.floating],
+) -> tuple[NDArray[np.bool_], tuple[float, float]]:
+    """Validate ``(low, high)`` bounds and return the inclusive bin mask.
+
+    Shared by ``frequency_range`` and ``frequency_bands`` so both arguments keep
+    the same semantics and error messages; ``label`` names the offending
+    argument or band in those messages.
+    """
+    try:
+        lower, upper = bounds
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{label} must contain exactly two bounds (low, high)."
+        ) from error
+    lower = float(lower)
+    upper = float(upper)
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
+        raise ValueError(
+            f"{label} must have finite bounds with low <= high; "
+            f"got ({lower!r}, {upper!r})."
+        )
+    mask = (frequencies >= lower) & (frequencies <= upper)
+    if not np.any(mask):
+        raise ValueError(f"{label} ({lower:g}, {upper:g}) contains no frequency bins.")
+    return mask, (lower, upper)
+
+
 def frequency_band_reduce(
     result: xr.DataArray | xr.Dataset,
     bands: Mapping[str, tuple[float, float]],
@@ -1004,27 +1034,10 @@ def frequency_band_reduce(
     ):
         raise ValueError("band names must be unique, non-empty strings.")
 
-    band_masks: list[NDArray[np.bool_]] = []
-    for name, bounds in bands.items():
-        try:
-            lower, upper = bounds
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                f"Band {name!r} must contain exactly two bounds (low, high)."
-            ) from error
-        lower = float(lower)
-        upper = float(upper)
-        if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
-            raise ValueError(
-                f"Band {name!r} must have finite bounds with low <= high; "
-                f"got ({lower!r}, {upper!r})."
-            )
-        mask = (frequencies >= lower) & (frequencies <= upper)
-        if not np.any(mask):
-            raise ValueError(
-                f"Band {name!r} ({lower:g}, {upper:g}) contains no frequency bins."
-            )
-        band_masks.append(mask)
+    band_masks: list[NDArray[np.bool_]] = [
+        _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)[0]
+        for name, bounds in bands.items()
+    ]
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", data.name or ""))
@@ -1111,25 +1124,12 @@ def _select_and_reduce_frequencies(
             "frequencies_of_interest argument through connectivity_kwargs instead."
         )
     if frequency_range is not None:
-        try:
-            lower, upper = frequency_range
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "frequency_range must contain exactly two bounds (low, high)."
-            ) from error
-        lower = float(lower)
-        upper = float(upper)
-        if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
-            raise ValueError(
-                "frequency_range must have finite bounds with low <= high."
-            )
-        frequencies = np.asarray(selected.coords["frequency"].values)
-        indices = np.flatnonzero((frequencies >= lower) & (frequencies <= upper))
-        if indices.size == 0:
-            raise ValueError(
-                f"frequency_range ({lower:g}, {upper:g}) contains no bins."
-            )
-        selected = selected.isel(frequency=indices)
+        mask, (lower, upper) = _inclusive_frequency_mask(
+            "frequency_range",
+            frequency_range,
+            np.asarray(selected.coords["frequency"].values),
+        )
+        selected = selected.isel(frequency=np.flatnonzero(mask))
         selected.attrs = dict(selected.attrs)
         selected.attrs["frequency_range_json"] = _canonical_json((lower, upper))
 
