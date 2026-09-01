@@ -730,6 +730,17 @@ class Connectivity:
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
+        # The transform contract (sidedness, observation weights) is part of the
+        # public constructor and must always reach the instance: a subclass that
+        # cannot accept it fails loudly here rather than silently computing on a
+        # one-sided or weighted spectrum as if it were two-sided and unweighted.
+        # The keywords are passed only when non-default so a subclass mirroring
+        # the older signature keeps working with a plain two-sided transform.
+        if bool(getattr(multitaper_instance, "is_one_sided", False)):
+            init_kwargs["is_one_sided"] = True
+        weights = getattr(multitaper_instance, "observation_weights", None)
+        if weights is not None:
+            init_kwargs["observation_weights"] = weights
         # fft() returns a freshly built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
         # pass the private keyword when the subclass has not overridden __init__:
@@ -737,12 +748,6 @@ class Connectivity:
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
-            init_kwargs["is_one_sided"] = bool(
-                getattr(multitaper_instance, "is_one_sided", False)
-            )
-            init_kwargs["observation_weights"] = getattr(
-                multitaper_instance, "observation_weights", None
-            )
         return cls(**init_kwargs)
 
     @classmethod

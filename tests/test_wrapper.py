@@ -1530,6 +1530,34 @@ def test_from_multitaper_supports_subclass_overriding_init():
     assert base._fourier_coefficients.base is not None
 
 
+def test_from_transform_subclass_overriding_init_keeps_transform_contract():
+    """A subclass with a pass-through __init__ must receive the transform's
+    sidedness and observation weights, not silently fall back to two-sided,
+    unweighted defaults."""
+    rng = np.random.default_rng(4)
+    mw = MorletWavelet(
+        rng.standard_normal((1000, 2, 2)),
+        sampling_frequency=500,
+        frequencies=[10.0, 20.0, 30.0, 40.0, 50.0],
+        smoothing_time=0.1,
+        smoothing_kernel="hann",
+    )
+
+    class PassThrough(Connectivity):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    sub = PassThrough.from_transform(mw)
+    base = Connectivity.from_transform(mw)
+    assert sub._is_one_sided is True
+    assert sub._observation_weights is not None
+    np.testing.assert_array_equal(sub.frequencies, base.frequencies)
+    np.testing.assert_allclose(sub.power(), base.power())
+    np.testing.assert_allclose(
+        sub.coherence_magnitude(), base.coherence_magnitude(), equal_nan=True
+    )
+
+
 def test_result_carries_descriptive_coordinate_metadata():
     """Coordinates carry unambiguous axis labels and physical units."""
     rng = np.random.default_rng(0)
