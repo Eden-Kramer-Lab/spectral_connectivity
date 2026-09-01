@@ -1161,7 +1161,7 @@ def connectivity_to_xarray(
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
     if valid_time_frequency is not None:
-        validity = np.asarray(valid_time_frequency, dtype=bool)
+        validity = to_numpy(valid_time_frequency).astype(bool)
         expected_shape = (len(connectivity.time), len(connectivity.frequencies))
         if validity.shape != expected_shape:
             raise ValueError(

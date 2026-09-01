@@ -1367,6 +1367,46 @@ def test_to_numpy_handles_device_arrays():
     np.testing.assert_array_equal(to_numpy(device), np.arange(5.0))
 
 
+def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
+    """``valid_time_frequency`` may live on the device (CuPy); the wrapper must
+    transfer it explicitly rather than rely on implicit ``np.asarray``."""
+
+    class _DeviceLike:
+        def __init__(self, host_array):
+            self._host = host_array
+
+        def get(self):
+            return self._host
+
+        def __array__(self, dtype=None, copy=None):
+            raise TypeError("Implicit conversion to a NumPy array is not allowed.")
+
+    rng = np.random.default_rng(11)
+    transform = MorletWavelet(
+        rng.standard_normal((512, 2, 2)),
+        sampling_frequency=128,
+        frequencies=np.array([4.0, 8.0, 16.0]),
+        edge_mode="nan",
+    )
+    host_mask = np.asarray(transform.valid_time_frequency)
+
+    class DeviceMaskTransform:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        @property
+        def valid_time_frequency(self):
+            return _DeviceLike(host_mask)
+
+    result = connectivity_to_xarray(
+        DeviceMaskTransform(transform), method="coherence_magnitude"
+    )
+    np.testing.assert_array_equal(result["valid_time_frequency"].values, host_mask)
+
+
 def test_multi_method_shares_single_fft():
     """A multi-method call computes the FFT once, not once per measure.
 
