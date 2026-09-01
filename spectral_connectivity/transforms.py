@@ -1843,10 +1843,10 @@ class MorletWavelet:
     smoothing_kernel : {"boxcar", "hann"}, default="boxcar"
         Separable time/frequency weights for the local estimate. ``"boxcar"``
         preserves the historical equal-weight smoothing; ``"hann"`` reduces
-        discontinuities at the neighborhood boundary. Note that a symmetric Hann
-        window puts zero weight on its endpoints, so a very small window degrades
-        to a near no-op (e.g. ``smoothing_frequency=3`` weights only the centre
-        bin); use a larger window or ``"boxcar"`` for genuine smoothing.
+        discontinuities at the neighborhood boundary. The Hann weights are the
+        interior of a symmetric Hann window two samples wider than the
+        neighborhood, so every sample carries a non-zero weight (e.g.
+        ``smoothing_frequency=3`` weights the bins ``[0.5, 1, 0.5]``).
     padding_mode : {"constant", "reflect", "edge"}, default="constant"
         How the time series is extended before convolution. ``"constant"``
         (zero padding) preserves the historical transform.
