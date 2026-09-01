@@ -826,27 +826,17 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
     assert trimmed.time[-1] <= (len(data) - 1) / 128 - trimmed.edge_half_width.max()
 
 
-def test_morlet_edge_validity_ignores_zero_weight_kernel_samples():
-    """A Hann kernel gives its endpoints zero weight, so neighbours that carry
-    no weight must not invalidate a bin whose own support is in-record."""
-    rng = np.random.default_rng(924)
-    data = rng.standard_normal((300, 1, 2))
-    frequencies = np.array([5.0, 20.0, 40.0])
-    unsmoothed = MorletWavelet(data, 100, frequencies, edge_mode="nan")
-    hann = MorletWavelet(
-        data,
-        100,
-        frequencies,
-        smoothing_frequency=3,
-        smoothing_kernel="hann",
-        edge_mode="nan",
+def test_morlet_hann_kernel_has_nonzero_endpoints():
+    """A Hann smoothing kernel must weight every sample in the window; a
+    symmetric Hann of the window size would zero its endpoints, so a size-3
+    kernel would not smooth at all."""
+    np.testing.assert_allclose(
+        MorletWavelet._kernel_values(3, "hann"), [0.5, 1.0, 0.5]
     )
-    # Hann of size 3 is [0, 1, 0]: only the centre bin contributes.
-    np.testing.assert_array_equal(
-        hann.valid_time_frequency, unsmoothed.valid_time_frequency
+    np.testing.assert_allclose(
+        MorletWavelet._kernel_values(5, "hann"), [0.25, 0.75, 1.0, 0.75, 0.25]
     )
-    weights = hann.observation_weights[:, 0, :, :, 0]
-    assert np.array_equal(weights[:, 1, :] > 0, unsmoothed.valid_time_frequency)
+    assert np.all(MorletWavelet._kernel_values(2, "hann") > 0)
 
 
 def test_morlet_boxcar_edge_mask_error_names_edge_mode():
@@ -906,7 +896,7 @@ def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
         smoothing_kernel="hann",
     )
     raw_coefficients = raw.fft()[:, :, 0]  # (time, trial, frequency, signal)
-    weights = np.array([0.0, 0.5, 1.0, 0.5, 0.0])  # scipy hann(5, sym=True)
+    weights = np.array([0.25, 0.75, 1.0, 0.75, 0.25])  # interior of hann(7)
 
     # Centre frequency (index 2): neighborhood [0, 1, 2, 3, 4], no reflection.
     outer = raw_coefficients[..., :, np.newaxis] * np.conjugate(

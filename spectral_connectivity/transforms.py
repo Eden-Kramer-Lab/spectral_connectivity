@@ -2064,10 +2064,7 @@ class MorletWavelet:
             axis=0,
         )
         windows = self._smooth_frequency_axis(windows, frequency_axis=1)
-        # Only samples that actually contribute to the smoothed estimate can
-        # invalidate it: a Hann kernel gives its endpoints zero weight.
-        contributes = self._smoothing_kernel_values() > 0
-        return xp.all(windows | ~contributes, axis=(-2, -1))
+        return xp.all(windows, axis=(-2, -1))
 
     @property
     def valid_time_frequency(self) -> NDArray[np.bool_]:
@@ -2078,10 +2075,11 @@ class MorletWavelet:
     def _kernel_values(size: int, kernel: str) -> BackendArray:
         if kernel == "boxcar" or size == 1:
             return xp.ones(size, dtype=float)
-        values = xp.asarray(scipy_hann(size, sym=True))
-        if not bool(xp.any(values > 0)):
-            return xp.ones(size, dtype=float)
-        return values
+        # Interior of a symmetric Hann window two samples wider, so every
+        # sample in the window carries a non-zero weight (a symmetric Hann of
+        # ``size`` itself has zero endpoints, and a size-3 kernel would then
+        # weight only the centre sample).
+        return xp.asarray(scipy_hann(size + 2, sym=True)[1:-1])
 
     def _smoothing_kernel_values(self) -> BackendArray:
         """Time-by-frequency smoothing weights, shape (n_time_window, n_freq_window)."""
