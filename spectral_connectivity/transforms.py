@@ -844,19 +844,7 @@ class Multitaper:
 
             raise ValueError(error_msg)
 
-        # Validate sampling_frequency
-        if sampling_frequency <= 0:
-            raise ValueError(
-                f"sampling_frequency must be positive, got {sampling_frequency}.\n"
-                "\n"
-                "The sampling frequency is the rate at which your data was collected.\n"
-                "Common values:\n"
-                "  - EEG: 250-1000 Hz\n"
-                "  - LFP/ephys: 1000-30000 Hz\n"
-                "  - fMRI: 0.5-2 Hz (1/TR)\n"
-                "\n"
-                "Check your data acquisition settings or metadata."
-            )
+        _validate_sampling_frequency(sampling_frequency)
 
         # Validate time_halfbandwidth_product
         if time_halfbandwidth_product < 1:

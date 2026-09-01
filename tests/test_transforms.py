@@ -500,10 +500,10 @@ def test_multitaper_rejects_negative_sampling_freq():
     rng = np.random.default_rng(42)
     time_series = rng.standard_normal((100, 1, 1))
 
-    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+    with pytest.raises(ValueError, match=r"sampling_frequency must be finite"):
         Multitaper(time_series=time_series, sampling_frequency=-1000)
 
-    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+    with pytest.raises(ValueError, match=r"sampling_frequency must be finite"):
         Multitaper(time_series=time_series, sampling_frequency=0)
 
 
