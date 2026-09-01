@@ -681,6 +681,10 @@ class Multitaper:
     Trials: 100, Signals: 5
     """
 
+    #: Multitaper returns the full two-sided FFT spectrum (both positive and
+    #: negative frequencies), so consumers must not assume a one-sided layout.
+    is_one_sided = False
+
     _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
         {
             "sampling_frequency",

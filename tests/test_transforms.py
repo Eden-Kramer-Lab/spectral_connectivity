@@ -19,6 +19,21 @@ from spectral_connectivity.transforms import (
 )
 
 
+def test_transform_is_one_sided_flags():
+    """Every transform exposes an explicit is_one_sided layout flag.
+
+    The transform-neutral wrapper reads this attribute directly rather than
+    relying on a getattr default, so the base Multitaper must declare it.
+    """
+    assert Multitaper.is_one_sided is False
+    assert ShortTimeFourierTransform.is_one_sided is False
+    assert Welch.is_one_sided is False
+    assert MorletWavelet.is_one_sided is True
+
+    time_series = np.ones((16, 1, 1))
+    assert Multitaper(time_series=time_series).is_one_sided is False
+
+
 def test__add_axes():
     # Add dimension if no trials
     n_time_samples, n_signals = (2, 3)
