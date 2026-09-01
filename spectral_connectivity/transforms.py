@@ -2086,7 +2086,10 @@ class MorletWavelet:
             axis=0,
         )
         windows = self._smooth_frequency_axis(windows, frequency_axis=1)
-        return xp.all(windows, axis=(-2, -1))
+        # Only samples that actually contribute to the smoothed estimate can
+        # invalidate it: a Hann kernel gives its endpoints zero weight.
+        contributes = self._smoothing_kernel_values() > 0
+        return xp.all(windows | ~contributes, axis=(-2, -1))
 
     @property
     def valid_time_frequency(self) -> NDArray[np.bool_]:
@@ -2102,17 +2105,20 @@ class MorletWavelet:
             return xp.ones(size, dtype=float)
         return values
 
-    @property
-    def observation_weights(self) -> NDArray[np.floating]:
-        """Weights consumed by :class:`Connectivity` for local expectations."""
+    def _smoothing_kernel_values(self) -> BackendArray:
+        """Time-by-frequency smoothing weights, shape (n_time_window, n_freq_window)."""
         time_weights = self._kernel_values(
             self._smoothing_samples, self.smoothing_kernel
         )
         frequency_weights = self._kernel_values(
             self.smoothing_frequency, self.smoothing_kernel
         )
-        kernel = time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
-        kernel = kernel.reshape(1, 1, -1, 1, 1)
+        return time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
+
+    @property
+    def observation_weights(self) -> NDArray[np.floating]:
+        """Weights consumed by :class:`Connectivity` for local expectations."""
+        kernel = self._smoothing_kernel_values().reshape(1, 1, -1, 1, 1)
         shape = (
             len(self.time),
             self.n_trials,
