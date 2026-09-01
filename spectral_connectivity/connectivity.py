@@ -1349,6 +1349,12 @@ class Connectivity:
         frequencies of a real signal carry equal power). The DC bin, and the
         Nyquist bin for an even FFT length, are not doubled.
 
+        For one-sided input (``is_one_sided=True``) the coefficients are
+        returned as provided: a one-sided transform such as
+        :class:`~spectral_connectivity.transforms.MorletWavelet` already
+        scales its coefficients to the one-sided density, and externally
+        supplied one-sided coefficients keep whatever scale they were given.
+
         Returns
         -------
         NDArray[floating]

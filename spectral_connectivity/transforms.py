@@ -1862,6 +1862,8 @@ class MorletWavelet:
     """
 
     _provenance_prefix = "morlet_"
+    # Coefficients are already on the one-sided PSD scale (see fft), so
+    # Connectivity must not double them again.
     is_one_sided = True
 
     def __init__(
@@ -2125,7 +2127,11 @@ class MorletWavelet:
         # The wavelets are complex128; transform the data at that precision so
         # a float32 record is not convolved in single precision.
         data_spectrum = fft(padded.astype(xp.float64, copy=False), n=n_fft, axis=0)
-        scale = 1.0 / xp.sqrt(self.sampling_frequency)
+        # Unit-energy wavelet response scaled to a one-sided power spectral
+        # density: |coefficient|^2 is in signal^2 / Hz and, like Multitaper's
+        # power, counts the negative-frequency half of a real signal (the
+        # factor 2). This is FieldTrip's convention; MNE omits both factors.
+        scale = xp.sqrt(2.0 / self.sampling_frequency)
 
         coefficients: list[BackendArray] = []
         for frequency, cycles, half_width in zip(

@@ -730,6 +730,31 @@ def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
         connectivity.pairwise_spectral_granger_prediction()
 
 
+def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
+    """Both transforms report the one-sided PSD (2 * variance / fs) of white
+    noise, so wavelet and multitaper power are on the same scale."""
+    fs, variance = 500.0, 4.0
+    data = np.sqrt(variance) * np.random.default_rng(926).standard_normal(
+        (10000, 20, 1)
+    )
+    multitaper_power = Connectivity.from_multitaper(
+        Multitaper(data, fs, time_halfbandwidth_product=4, time_window_duration=2.0)
+    ).power()
+    morlet_power = Connectivity.from_transform(
+        MorletWavelet(
+            data,
+            fs,
+            [40.0, 80.0, 120.0],
+            n_cycles=7,
+            edge_mode="trim",
+            smoothing_time=0.5,
+        )
+    ).power()
+    expected = 2 * variance / fs
+    np.testing.assert_allclose(np.nanmean(multitaper_power), expected, rtol=0.05)
+    np.testing.assert_allclose(np.nanmean(morlet_power), expected, rtol=0.05)
+
+
 def test_morlet_default_zero_padding_matches_same_convolution():
     from scipy.signal import fftconvolve
 
@@ -749,7 +774,7 @@ def test_morlet_default_zero_padding_matches_same_convolution():
         np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
         mode="same",
         axes=0,
-    ) / np.sqrt(64)
+    ) * np.sqrt(2 / 64)
 
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
 
@@ -777,7 +802,7 @@ def test_morlet_padding_modes_match_padded_convolution(padding_mode):
         np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
         mode="valid",
         axes=0,
-    ) / np.sqrt(64)
+    ) * np.sqrt(2 / 64)
 
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected, atol=1e-12)
 
@@ -830,9 +855,7 @@ def test_morlet_hann_kernel_has_nonzero_endpoints():
     """A Hann smoothing kernel must weight every sample in the window; a
     symmetric Hann of the window size would zero its endpoints, so a size-3
     kernel would not smooth at all."""
-    np.testing.assert_allclose(
-        MorletWavelet._kernel_values(3, "hann"), [0.5, 1.0, 0.5]
-    )
+    np.testing.assert_allclose(MorletWavelet._kernel_values(3, "hann"), [0.5, 1.0, 0.5])
     np.testing.assert_allclose(
         MorletWavelet._kernel_values(5, "hann"), [0.25, 0.75, 1.0, 0.75, 0.25]
     )

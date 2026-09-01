@@ -55,7 +55,10 @@ directly with results from 2.x.
   spectrum can converge yet reconstruct poorly).
 - `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
   output is explicitly one-sided and rejects Wilson-factorized directed
-  measures, which require a full two-sided spectrum.
+  measures, which require a full two-sided spectrum. Morlet coefficients are
+  scaled so that `power()` is the one-sided PSD in signal²/Hz, on the same
+  scale as `Multitaper` (FieldTrip's convention; MNE's wavelet power is
+  `2 * sampling_frequency` times larger).
 - Morlet transforms now expose strict time-frequency edge validity and support
   constant/reflect/edge convolution padding, keep/NaN/trim edge policies,
   adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
