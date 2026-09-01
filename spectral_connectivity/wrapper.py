@@ -18,7 +18,12 @@ from spectral_connectivity.connectivity import (
     MultivariateConnectivityResult,
 )
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import BackendArray, get_compute_backend, to_numpy
+from spectral_connectivity.utils import (
+    BackendArray,
+    get_compute_backend,
+    is_positive_integer,
+    to_numpy,
+)
 
 logger = getLogger(__name__)
 
@@ -1102,11 +1107,7 @@ def _select_and_reduce_frequencies(
     frequency_reduction: Literal["mean", "integral"],
 ) -> xr.DataArray | xr.Dataset:
     """Apply the wrapper's shared, coordinate-aware frequency operations."""
-    if isinstance(frequency_decimation, bool) or not isinstance(
-        frequency_decimation, (int, np.integer)
-    ):
-        raise TypeError("frequency_decimation must be a positive integer.")
-    if frequency_decimation < 1:
+    if not is_positive_integer(frequency_decimation):
         raise ValueError("frequency_decimation must be a positive integer.")
 
     selected = result
