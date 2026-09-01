@@ -17,6 +17,7 @@ from spectral_connectivity.connectivity import (
     _max_psd_discrepancy,
     _remove_instantaneous_causality,
     _reshape,
+    _sanitized_nonnegative_granger,
     _set_diagonal_to_zero,
     _squared_magnitude,
     _total_inflow,
@@ -1428,6 +1429,57 @@ def test_subset_pairwise_granger_prediction_masks_global_diagonal():
     )
 
     assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
+
+
+@mark.parametrize("dtype", [np.float32, np.float64])
+def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
+    """The shared sanitizer clips roundoff, NaNs real negatives, keeps the rest."""
+    eps = np.finfo(dtype).eps
+    tiny_negative = -10 * eps  # inside the 100 * eps roundoff band
+    material_negative = -1e-3  # far outside the roundoff band
+    value = np.array([0.0, 0.5, tiny_negative, material_negative, np.nan], dtype=dtype)
+
+    sanitized = _sanitized_nonnegative_granger(value)
+
+    # Exact zero (no causality) is preserved, not discarded as NaN.
+    assert sanitized[0] == 0.0
+    # A genuine positive influence passes through untouched.
+    assert sanitized[1] == dtype(0.5)
+    # Roundoff around a true zero is clipped up to exactly zero.
+    assert sanitized[2] == 0.0
+    # A materially-negative (invalid) value becomes NaN.
+    assert np.isnan(sanitized[3])
+    # NaN propagates unchanged.
+    assert np.isnan(sanitized[4])
+
+
+@mark.parametrize(
+    "seed",
+    [0, 1, 2, 3, 4],
+)
+def test_spectral_granger_variants_never_return_negative(seed):
+    """Every spectral Granger variant honors the non-negativity invariant.
+
+    Rank-deficient (collinear) channels drive the Wilson factorization toward
+    degeneracy, where log-determinant differences can go numerically negative.
+    Regardless, no variant may report a materially-negative finite influence:
+    every finite output must be ``>= 0``; degenerate bins are NaN.
+    """
+    rng = np.random.default_rng(seed)
+    n_time, n_trials, n_tapers, n_fft, n_signals = 1, 6, 3, 32, 4
+    shape = (n_time, n_trials, n_tapers, n_fft, n_signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    # Make the last channel a near-duplicate of the first to force degeneracy.
+    coefficients[..., -1] = coefficients[..., 0] + 1e-6 * coefficients[..., -1]
+    conn = Connectivity(coefficients)
+
+    pairwise = conn.pairwise_spectral_granger_prediction()
+    conditional = conn.conditional_spectral_granger_prediction()
+    blockwise, _ = conn.blockwise_spectral_granger_prediction(np.array([0, 0, 1, 1]))
+
+    for result in (pairwise, conditional, blockwise):
+        finite = np.isfinite(result)
+        assert np.all(result[finite] >= 0.0)
 
 
 def test_complex64_directed_measure_uses_viable_wilson_precision():

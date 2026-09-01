@@ -2955,9 +2955,7 @@ class Connectivity:
                         minimum_phase_tolerance=self._minimum_phase_tolerance,
                         minimum_phase_max_iterations=self._minimum_phase_max_iterations,
                     )
-                    value = joint - conditioned
-                    tolerance = 100 * xp.finfo(value.dtype).eps
-                    value = xp.where((value < 0) & (value > -tolerance), 0.0, value)
+                    value = _sanitized_nonnegative_granger(joint - conditioned)
                 else:
                     value = joint
                 result[..., target, source] = value
@@ -3856,6 +3854,24 @@ def _estimate_transfer_function(
     return xp.matmul(minimum_phase, _regularized_inverse(H_0))
 
 
+def _sanitized_nonnegative_granger(
+    value: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Enforce the non-negativity invariant shared by every spectral Granger variant.
+
+    Spectral Granger prediction is ``>= 0`` by definition -- it is the log-ratio
+    of a total to an intrinsic spectral density, which is at least one. Two
+    numerically-computed log-determinants can still differ by a tiny negative
+    amount around a true zero (no causality) or, when the underlying
+    factorization is degenerate, by a materially negative amount. Clip the
+    roundoff band to exactly zero and mark materially-negative (invalid) values
+    as NaN. NaN inputs pass through unchanged.
+    """
+    tolerance = 100 * xp.finfo(value.dtype).eps
+    value = xp.where((value < 0) & (value > -tolerance), 0.0, value)
+    return xp.where(value < 0, xp.nan, value)
+
+
 def _estimate_predictive_power(
     total_power: NDArray[np.floating],
     rotated_covariance: NDArray[np.floating],
@@ -3889,18 +3905,9 @@ def _estimate_predictive_power(
         predictive_power = xp.log(total_power[..., xp.newaxis]) - xp.log(
             intrinsic_power
         )
-    # Spectral Granger is >= 0; a tiny negative is roundoff around a true zero
-    # (no causality). Clip those to 0 -- matching the block/conditional path --
-    # rather than discarding a legitimately zero influence as NaN. Genuinely
-    # negative values (a near-singular rotation drove intrinsic_power above
-    # total_power) remain NaN as an invalid result.
-    tolerance = 100 * xp.finfo(predictive_power.dtype).eps
-    predictive_power = xp.where(
-        (predictive_power < 0) & (predictive_power > -tolerance),
-        0.0,
-        predictive_power,
-    )
-    predictive_power[predictive_power < 0] = xp.nan
+    # A near-singular rotation can drive intrinsic_power above total_power,
+    # giving a negative log-ratio; clip roundoff to zero and NaN the rest.
+    predictive_power = _sanitized_nonnegative_granger(predictive_power)
     return predictive_power
 
 
@@ -4879,9 +4886,7 @@ def _estimate_block_spectral_granger_prediction(
     ) / 2.0
     _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
     _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
-    value = xp.real(total_logdet - intrinsic_logdet)
-    tolerance = 100 * xp.finfo(value.dtype).eps
-    value = xp.where((value < 0) & (value > -tolerance), 0.0, value)
+    value = _sanitized_nonnegative_granger(xp.real(total_logdet - intrinsic_logdet))
     # ``intrinsic`` is a difference of spectral blocks and is only guaranteed
     # positive-definite in exact arithmetic; near-degenerate conditioning can
     # make it (or the total spectrum) indefinite/singular, in which case the
