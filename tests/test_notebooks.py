@@ -52,8 +52,25 @@ def _encode(data):
             }
         }
     contiguous = np.ascontiguousarray(array, dtype=_STORE_DTYPE)
-    blob = base64.b64encode(gzip.compress(contiguous.tobytes(), 9)).decode("ascii")
+    # mtime=0 keeps the gzip header constant, so identical data serializes to
+    # identical bytes and a snapshot diff shows only arrays that changed.
+    blob = base64.b64encode(gzip.compress(contiguous.tobytes(), 9, mtime=0)).decode(
+        "ascii"
+    )
     return {"array": {"shape": list(array.shape), "gzip_b64": blob}}
+
+
+def test_encode_is_independent_of_wall_clock_time():
+    """Identical data must serialize to identical bytes on different days, so a
+    snapshot diff shows only arrays whose values changed."""
+    from unittest.mock import patch
+
+    array = np.arange(12.0).reshape(3, 4)
+    with patch("time.time", return_value=1_000_000.0):
+        first = _encode(array)
+    with patch("time.time", return_value=2_000_000.0):
+        second = _encode(array)
+    assert first == second
 
 
 def _decode(obj):
