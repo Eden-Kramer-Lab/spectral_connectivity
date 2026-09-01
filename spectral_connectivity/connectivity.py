@@ -2455,9 +2455,12 @@ class Connectivity:
         denominator = xp.sqrt(denominator_squared)
         # The only mathematically valid zero-denominator case also has a zero
         # numerator (perfect zero- or pi-lag locking). Define that limit as 0.
+        # A NaN PLV (zero-power channel) must stay NaN rather than fall into
+        # that zero limit, matching every other phase-locking measure.
         result = xp.zeros_like(numerator)
         nonzero = denominator > xp.finfo(denominator.dtype).tiny
         result[nonzero] = numerator[nonzero] / denominator[nonzero]
+        result[xp.isnan(complex_plv)] = xp.nan
         return xp.clip(result, 0.0, 1.0)
 
     @cached_property

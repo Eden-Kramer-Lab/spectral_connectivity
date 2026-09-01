@@ -2640,7 +2640,14 @@ def test_single_frequency_bin_raises_clear_error(measure):
         getattr(conn, measure)()
 
 
-@mark.parametrize("measure", ["phase_locking_value", "pairwise_phase_consistency"])
+@mark.parametrize(
+    "measure",
+    [
+        "phase_locking_value",
+        "pairwise_phase_consistency",
+        "corrected_imaginary_phase_locking_value",
+    ],
+)
 def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
     """A dead (zero) channel yields NaN with a UserWarning, not a RuntimeWarning."""
     import warnings
@@ -2652,7 +2659,10 @@ def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
         warnings.simplefilter("error", RuntimeWarning)  # no leaked divide warning
         with pytest.warns(UserWarning, match="zero magnitude"):
             result = getattr(conn, measure)()
-    assert np.isnan(result).any()
+    # Every pair involving the dead channel is undefined, never a finite value.
+    assert np.isnan(result[..., 1, :]).all()
+    assert np.isnan(result[..., :, 1]).all()
+    assert np.isfinite(result[..., 0, 0]).all()
 
 
 def test_connectivity_jackknife_recomputes_leave_one_out_measure():
