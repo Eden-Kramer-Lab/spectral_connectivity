@@ -2902,10 +2902,15 @@ class Connectivity:
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction conditioned on all others.
 
-        For each ordered source-target pair, the result compares the full model
-        containing source, target, and every remaining signal with the reduced
-        model containing target and the remaining conditioning signals. With
-        two signals this reduces to ordinary pairwise spectral Granger.
+        For each ordered source-target pair, the influence of the source on the
+        target is measured after accounting for every remaining signal, using
+        the frequency-domain conditional measure of Chen, Bressler and Ding
+        (2006): the full model containing every signal and the reduced model
+        omitting the source are each spectrally factorized, and the reduced
+        model's innovation spectrum for the target is split into the part
+        explained by the target's own full-model innovations and the remainder
+        attributable to the source. With two signals this reduces to ordinary
+        pairwise spectral Granger.
 
         Returns
         -------
@@ -2916,61 +2921,74 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: theoretically ``[0, ∞)``. Tiny negative values caused by
-        subtracting two spectral decompositions are clipped to zero. Bins where
-        the intrinsic spectrum is not positive-definite are returned as NaN.
+        **Range**: ``[0, ∞)``. The measure is a log-ratio of a total to an
+        intrinsic innovation spectrum, so it is non-negative up to roundoff;
+        bins where either spectrum is not positive (a degenerate factorization)
+        are returned as NaN with a warning.
 
-        **Cost**: this performs on the order of ``n_signals ** 2`` minimum-phase
-        factorizations of ``(n_signals - 1)``-channel subsystems, so it can be
-        slow for large channel counts (tens of signals); prefer a coarser
-        grouping via :meth:`blockwise_spectral_granger_prediction` when possible.
+        **Cost**: ``n_signals + 1`` minimum-phase factorizations (the full
+        system once, plus one ``(n_signals - 1)``-channel system per source),
+        each shared by every target.
+
+        References
+        ----------
+        .. [1] Chen, Y., Bressler, S.L., and Ding, M. (2006). Frequency
+               decomposition of conditional Granger causality and application
+               to multivariate neural field potential data. Journal of
+               Neuroscience Methods 150, 228-237.
+        .. [2] Geweke, J.F. (1984). Measures of conditional linear dependence
+               and feedback between time series. Journal of the American
+               Statistical Association 79, 907-915.
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
         spectrum = self._expectation_cross_spectral_matrix()
         n_nonnegative = spectrum.shape[-3] // 2 + 1
-        output_shape = (
-            *spectrum.shape[:-3],
-            n_nonnegative,
-            self.n_signals,
-            self.n_signals,
-        )
+        n_signals = self.n_signals
+        output_shape = (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals)
         result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
+        tolerance = self._minimum_phase_tolerance
+        max_iterations = self._minimum_phase_max_iterations
 
-        all_indices = np.arange(self.n_signals)
-        for target in range(self.n_signals):
-            # The "joint" model always includes every signal except the target
-            # (its source block is {source} + conditioning = all - target), and
-            # the block-Granger value is invariant to the ordering of that source
-            # block. So it is identical for every source and only needs to be
-            # factorized once per target rather than n_signals - 1 times.
-            other_indices = all_indices[all_indices != target]
-            if other_indices.size == 0:
-                continue
-            joint = _estimate_block_spectral_granger_prediction(
-                spectrum,
-                np.array([target]),
-                other_indices,
-                minimum_phase_tolerance=self._minimum_phase_tolerance,
-                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-            )
-            for source in range(self.n_signals):
-                if source == target:
-                    continue
-                conditioning = all_indices[
-                    (all_indices != target) & (all_indices != source)
-                ]
-                if conditioning.size:
-                    conditioned = _estimate_block_spectral_granger_prediction(
+        if n_signals == 2:
+            # No conditioning set: the measure is pairwise Geweke Granger.
+            for target, source in permutations(range(2), 2):
+                result[..., target, source] = (
+                    _estimate_block_spectral_granger_prediction(
                         spectrum,
                         np.array([target]),
-                        conditioning,
-                        minimum_phase_tolerance=self._minimum_phase_tolerance,
-                        minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+                        np.array([source]),
+                        minimum_phase_tolerance=tolerance,
+                        minimum_phase_max_iterations=max_iterations,
                     )
-                    value = _sanitized_nonnegative_granger(joint - conditioned)
-                else:
-                    value = joint
-                result[..., target, source] = value
+                )
+            return result
+
+        full_transfer, full_covariance = _var_model_from_spectrum(
+            spectrum,
+            minimum_phase_tolerance=tolerance,
+            minimum_phase_max_iterations=max_iterations,
+        )
+        all_indices = np.arange(n_signals)
+        for source in range(n_signals):
+            reduced_indices = all_indices[all_indices != source]
+            reduced_transfer, _ = _var_model_from_spectrum(
+                spectrum[..., reduced_indices[:, None], reduced_indices[None, :]],
+                minimum_phase_tolerance=tolerance,
+                minimum_phase_max_iterations=max_iterations,
+            )
+            reduced_inverse_transfer = _regularized_inverse(reduced_transfer)
+            for target in range(n_signals):
+                if target == source:
+                    continue
+                result[..., target, source] = (
+                    _estimate_conditional_spectral_granger_prediction(
+                        full_transfer,
+                        full_covariance,
+                        reduced_inverse_transfer,
+                        reduced_indices,
+                        target,
+                    )
+                )
         return result
 
     def blockwise_spectral_granger_prediction(
@@ -4834,6 +4852,134 @@ def _estimate_spectral_granger_prediction(
     predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
     return predictive_power
+
+
+def _var_model_from_spectrum(
+    csm: NDArray[np.complexfloating],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+    """Wilson-factorize a cross-spectrum into a transfer function and noise covariance.
+
+    Parameters
+    ----------
+    csm : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+
+    Returns
+    -------
+    transfer_function : array
+        Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+    noise_covariance : array, shape (..., n_signals, n_signals)
+    """
+    minimum_phase = minimum_phase_decomposition(
+        csm,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
+    )
+    n_nonnegative = csm.shape[-3] // 2 + 1
+    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    return transfer, _estimate_noise_covariance(minimum_phase)
+
+
+def _estimate_conditional_spectral_granger_prediction(
+    full_transfer: NDArray[np.complexfloating],
+    full_covariance: NDArray[np.floating],
+    reduced_inverse_transfer: NDArray[np.complexfloating],
+    reduced_indices: NDArray[np.integer],
+    target: int,
+) -> NDArray[np.floating]:
+    """Conditional spectral Granger ``source -> target | rest`` (Chen et al. 2006).
+
+    ``full_transfer``/``full_covariance`` describe the full model of every
+    signal and ``reduced_inverse_transfer`` is the inverse transfer function of
+    the reduced model over ``reduced_indices`` (every signal but the source).
+
+    The full-model innovations are first transformed so that the target's
+    innovation is uncorrelated with all others (Geweke's normalization). The
+    reduced model's innovation for the target then decomposes, through
+    ``Q = G_ext^{-1} H``, into a term driven by the target's own innovation
+    (the intrinsic spectrum) plus a positive semidefinite remainder driven by
+    the other innovations. The measure is the log-ratio of the total to the
+    intrinsic spectrum, so it is non-negative up to roundoff.
+
+    Parameters
+    ----------
+    full_transfer : array, shape (..., n_frequencies, n_signals, n_signals)
+    full_covariance : array, shape (..., n_signals, n_signals)
+    reduced_inverse_transfer : array
+        Shape ``(..., n_frequencies, n_signals - 1, n_signals - 1)``.
+    reduced_indices : array, shape (n_signals - 1,)
+        Full-model indices of the reduced model's signals, in reduced order.
+    target : int
+        Full-model index of the target signal; must be in ``reduced_indices``.
+
+    Returns
+    -------
+    conditional_granger : array, shape (..., n_frequencies)
+    """
+    n_signals = full_covariance.shape[-1]
+    reduced_indices = np.asarray(reduced_indices, dtype=int)
+    (target_reduced,) = np.flatnonzero(reduced_indices == target)
+
+    # Geweke normalization: P = I - coupling e_t^T removes the correlation of
+    # every other innovation with the target's, leaving Sigma' = P Sigma P^T
+    # with a zero target row/column off the diagonal and H' = H P^{-1}.
+    identity = xp.eye(n_signals, dtype=full_covariance.dtype)
+    unit_target = identity[:, target]
+    coupling = (
+        full_covariance[..., :, target]
+        / full_covariance[..., target : target + 1, target]
+    )
+    coupling = coupling - unit_target  # zero at the target itself
+    normalizer = identity - coupling[..., :, xp.newaxis] * unit_target
+    inverse_normalizer = identity + coupling[..., :, xp.newaxis] * unit_target
+    normalized_covariance = xp.matmul(
+        xp.matmul(normalizer, full_covariance), normalizer.swapaxes(-1, -2)
+    )
+    normalized_covariance = (
+        normalized_covariance + normalized_covariance.swapaxes(-1, -2)
+    ) / 2.0
+    normalized_transfer = xp.matmul(
+        full_transfer, inverse_normalizer[..., xp.newaxis, :, :]
+    )
+
+    # Target row of Q = G_ext^{-1} H', where G_ext embeds the reduced model's
+    # inverse transfer function with an identity block for the omitted source.
+    reduced_rows = xp.asarray(reduced_indices)
+    q_target = xp.matmul(
+        reduced_inverse_transfer[..., target_reduced : target_reduced + 1, :],
+        normalized_transfer[..., reduced_rows, :],
+    )  # (..., n_frequencies, 1, n_signals)
+    total = xp.real(
+        xp.matmul(
+            xp.matmul(
+                q_target, normalized_covariance.astype(q_target.dtype)[..., None, :, :]
+            ),
+            _conjugate_transpose(q_target),
+        )
+    )[..., 0, 0]
+    intrinsic = (
+        _squared_magnitude(q_target[..., 0, target])
+        * normalized_covariance[..., target : target + 1, target]
+    )
+
+    positive = (total > 0) & (intrinsic > 0)
+    if not bool(xp.all(positive)):
+        warnings.warn(
+            "Conditional spectral Granger: the total or intrinsic innovation "
+            "spectrum of the target was not positive at some time-frequency "
+            "bins (a degenerate factorization, typically from near-singular "
+            "conditioning). Those bins are returned as NaN. Consider increasing "
+            "minimum_phase_max_iterations or checking for collinear channels.",
+            UserWarning,
+            stacklevel=3,
+        )
+    safe_total = xp.where(positive, total, 1.0)
+    safe_intrinsic = xp.where(positive, intrinsic, 1.0)
+    value = _sanitized_nonnegative_granger(xp.log(safe_total) - xp.log(safe_intrinsic))
+    return xp.where(positive, value, xp.nan)
 
 
 def _estimate_block_spectral_granger_prediction(

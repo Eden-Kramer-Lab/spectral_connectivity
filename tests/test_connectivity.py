@@ -1489,6 +1489,27 @@ def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
             assert np.all(result[finite] >= 0.0), name
 
 
+def test_conditional_granger_factorizes_each_channel_set_once():
+    """The full system and each leave-one-source-out system are factorized once.
+
+    Every (target, source) pair reuses those factorizations, so the cost is
+    ``n_signals + 1`` Wilson factorizations rather than ``n_signals ** 2``.
+    """
+    from spectral_connectivity import connectivity as connectivity_module
+
+    rng = np.random.default_rng(1)
+    shape = (1, 20, 3, 32, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+    with patch.object(
+        connectivity_module,
+        "minimum_phase_decomposition",
+        wraps=connectivity_module.minimum_phase_decomposition,
+    ) as factorize:
+        conn.conditional_spectral_granger_prediction()
+    assert factorize.call_count == shape[-1] + 1
+
+
 def test_complex64_directed_measure_uses_viable_wilson_precision():
     """Correlated complex64 spectra must converge at the default 1e-8 tolerance."""
     rng = np.random.default_rng(0)

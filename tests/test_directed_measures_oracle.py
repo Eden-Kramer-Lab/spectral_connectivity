@@ -251,10 +251,16 @@ def test_conditional_granger_removes_mediated_influence():
 
     # Unconditional 0 -> 2 (row 2, col 0) is clearly non-zero via the mediator.
     assert np.nanmax(pairwise[..., 2, 0]) > 0.05
+    # The analytic spectrum is well conditioned, so every off-diagonal entry is
+    # a finite, non-negative value; a true-null direction must not degrade into
+    # NaN through roundoff-negative estimates.
+    off_diagonal = ~np.eye(3, dtype=bool)
+    assert np.isfinite(conditional[..., off_diagonal]).all()
+    assert (conditional[..., off_diagonal] >= 0).all()
     # Conditioning on signal 1 removes it: 0 -> 2 | 1 collapses toward zero.
-    assert np.nanmax(conditional[..., 2, 0]) < 1e-3
+    assert conditional[..., 2, 0].max() < 1e-3
     # The genuine direct link 1 -> 2 | 0 survives conditioning.
-    assert np.nanmax(conditional[..., 2, 1]) > 0.05
+    assert conditional[..., 2, 1].max() > 0.05
 
 
 def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
