@@ -1453,33 +1453,40 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
     assert np.isnan(sanitized[4])
 
 
-@mark.parametrize(
-    "seed",
-    [0, 1, 2, 3, 4],
-)
-def test_spectral_granger_variants_never_return_negative(seed):
-    """Every spectral Granger variant honors the non-negativity invariant.
+def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
+    """Every Granger path sanitizes a nonempty set of finite results.
 
-    Rank-deficient (collinear) channels drive the Wilson factorization toward
-    degeneracy, where log-determinant differences can go numerically negative.
-    Regardless, no variant may report a materially-negative finite influence:
-    every finite output must be ``>= 0``; degenerate bins are NaN.
+    A well-conditioned input avoids the all-NaN degeneracy that would make a
+    non-negativity assertion pass vacuously. This seed also produces materially
+    negative conditional differences before sanitization, so removing that
+    call exposes a finite negative result. Tracking the helper additionally
+    guards the pairwise and blockwise wiring even when their raw values happen
+    to be non-negative for this input.
     """
-    rng = np.random.default_rng(seed)
-    n_time, n_trials, n_tapers, n_fft, n_signals = 1, 6, 3, 32, 4
+    rng = np.random.default_rng(0)
+    n_time, n_trials, n_tapers, n_fft, n_signals = 1, 20, 3, 32, 4
     shape = (n_time, n_trials, n_tapers, n_fft, n_signals)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    # Make the last channel a near-duplicate of the first to force degeneracy.
-    coefficients[..., -1] = coefficients[..., 0] + 1e-6 * coefficients[..., -1]
     conn = Connectivity(coefficients)
 
-    pairwise = conn.pairwise_spectral_granger_prediction()
-    conditional = conn.conditional_spectral_granger_prediction()
-    blockwise, _ = conn.blockwise_spectral_granger_prediction(np.array([0, 0, 1, 1]))
-
-    for result in (pairwise, conditional, blockwise):
-        finite = np.isfinite(result)
-        assert np.all(result[finite] >= 0.0)
+    computations = {
+        "pairwise": conn.pairwise_spectral_granger_prediction,
+        "conditional": conn.conditional_spectral_granger_prediction,
+        "blockwise": lambda: conn.blockwise_spectral_granger_prediction(
+            np.array([0, 0, 1, 1])
+        )[0],
+    }
+    with patch(
+        "spectral_connectivity.connectivity._sanitized_nonnegative_granger",
+        wraps=_sanitized_nonnegative_granger,
+    ) as sanitizer:
+        for name, compute in computations.items():
+            sanitizer.reset_mock()
+            result = compute()
+            assert sanitizer.call_count > 0, f"{name} bypassed the shared sanitizer"
+            finite = np.isfinite(result)
+            assert finite.any(), f"{name} returned no finite values"
+            assert np.all(result[finite] >= 0.0), name
 
 
 def test_complex64_directed_measure_uses_viable_wilson_precision():
