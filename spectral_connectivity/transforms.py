@@ -1590,7 +1590,7 @@ class ShortTimeFourierTransform(Multitaper):
         ):
             if value is not None and not is_positive_integer(value):
                 raise ValueError(f"{name} must be a positive integer.")
-        data_shape = getattr(time_series, "shape", ())
+        data_shape: tuple[int, ...] = tuple(getattr(time_series, "shape", ()))
         if len(data_shape) != 3:
             raise ValueError(
                 "time_series must have shape (n_time_samples, n_trials, n_signals)."

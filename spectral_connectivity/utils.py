@@ -28,7 +28,7 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
     return (
         not isinstance(value, bool)
         and isinstance(value, (int, np.integer))
-        and value >= minimum
+        and bool(value >= minimum)
     )
 
 
