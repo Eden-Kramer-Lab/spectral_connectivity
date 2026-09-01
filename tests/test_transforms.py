@@ -849,6 +849,25 @@ def test_morlet_edge_validity_ignores_zero_weight_kernel_samples():
     assert np.array_equal(weights[:, 1, :] > 0, unsmoothed.valid_time_frequency)
 
 
+def test_morlet_boxcar_edge_mask_error_names_edge_mode():
+    """The debiased-measure guard must point at the knob that actually made the
+    weights non-uniform (edge masking), not at a kernel already in use."""
+    data = np.random.default_rng(925).standard_normal((400, 1, 2))
+    transform = MorletWavelet(
+        data,
+        200,
+        np.array([10.0, 20.0, 40.0]),
+        smoothing_kernel="boxcar",
+        edge_mode="nan",
+        smoothing_time=0.2,
+    )
+    connectivity = Connectivity.from_transform(
+        transform, expectation_type="time_trials_tapers"
+    )
+    with pytest.raises(ValueError, match="edge_mode"):
+        connectivity.pairwise_phase_consistency()
+
+
 def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
     rng = np.random.default_rng(920)
     data = rng.standard_normal((128, 3, 2))

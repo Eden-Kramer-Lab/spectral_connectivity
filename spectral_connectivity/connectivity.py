@@ -817,8 +817,12 @@ class Connectivity:
             raise ValueError(
                 f"{measure} does not support non-uniform observation_weights. "
                 "Its finite-sample correction assumes equally weighted "
-                "independent observations; use a non-debiased measure or "
-                "smoothing_kernel='boxcar'."
+                "independent observations. Non-uniform weights come from a "
+                "smoothing_kernel other than 'boxcar', or from edge_mode='nan' "
+                "when the time axis is part of the expectation (the edge mask "
+                "zeroes some observations). Use a non-debiased measure, "
+                "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or "
+                "an expectation_type that keeps the time axis."
             )
 
     def _warn_single_observation_degenerate(self, measure: str) -> None:
