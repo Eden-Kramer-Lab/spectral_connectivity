@@ -2831,6 +2831,12 @@ class Connectivity:
 
         Notes
         -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
         Output [i,j] corresponds to causal influence j → i.
 
@@ -2939,6 +2945,12 @@ class Connectivity:
 
         Notes
         -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
         **Range**: ``[0, ∞)``. The measure is a log-ratio of a total to an
         intrinsic innovation spectrum, so it is non-negative up to roundoff;
         bins where either spectrum is not positive (a degenerate factorization)
@@ -3062,6 +3074,12 @@ class Connectivity:
 
         Notes
         -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
         **Range**: [0, 1] (normalized). Represents proportion of inflow
         via transfer function.
 
