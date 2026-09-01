@@ -30,6 +30,7 @@ import warnings
 import numpy as np
 import pytest
 from pytest import mark
+from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity
 from spectral_connectivity.wrapper import _connectivity_result_to_xarray
@@ -224,6 +225,108 @@ def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
     # No NaN masquerading as "no result"; the absent direction is a finite ~0.
     assert not np.isnan(non_causal).all()
     assert np.nanmax(np.abs(non_causal)) < 1e-6
+
+
+def _state_space_conditional_granger(
+    coefficients, noise_covariance, n_fft, target, source
+):
+    """Conditional spectral Granger ``source -> target | others`` via state space.
+
+    Independent oracle following Barnett & Seth (2015): the VAR is written in
+    innovations form, the reduced model without ``source`` is obtained from the
+    discrete algebraic Riccati equation (no reduced regression and no spectral
+    factorization), and Geweke's conditional formula is evaluated with the
+    reduced model's inverse transfer function. Returns values on the
+    non-negative FFT grid.
+    """
+    n_lags, n_signals, _ = coefficients.shape
+    C = np.concatenate(list(coefficients), axis=1)
+    A = np.zeros((n_signals * n_lags, n_signals * n_lags))
+    A[:n_signals] = C
+    if n_lags > 1:
+        A[n_signals:, :-n_signals] = np.eye(n_signals * (n_lags - 1))
+    K = np.zeros((n_signals * n_lags, n_signals))
+    K[:n_signals] = np.eye(n_signals)
+    V = noise_covariance
+    reduced = [i for i in range(n_signals) if i != source]
+    C_r = C[reduced]
+    Q, R, S = K @ V @ K.T, V[np.ix_(reduced, reduced)], K @ V[:, reduced]
+    P = solve_discrete_are(A.T, C_r.T, Q, R, s=S)
+    V_r = C_r @ P @ C_r.T + R
+    K_r = (A @ P @ C_r.T + S) @ np.linalg.inv(V_r)
+    target_r = reduced.index(target)
+    others = [i for i in range(n_signals) if i != target]
+    partial = (
+        V[np.ix_(others, others)]
+        - np.outer(V[others, target], V[target, others]) / V[target, target]
+    )
+    L = np.linalg.cholesky(partial)
+    identity = np.eye(n_signals * n_lags)
+    omegas = 2 * np.pi * np.arange(n_fft // 2 + 1) / n_fft
+    values = np.empty(omegas.size)
+    for k, omega in enumerate(omegas):
+        z = np.exp(1j * omega)
+        H = np.eye(n_signals) + C @ np.linalg.solve(z * identity - A, K)
+        B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(
+            z * identity - (A - K_r @ C_r), K_r
+        )
+        H_r = B_r[target_r] @ H[np.ix_(reduced, others)] @ L
+        values[k] = np.log(V_r[target_r, target_r]) - np.log(
+            V_r[target_r, target_r] - np.real(H_r @ H_r.conj())
+        )
+    return values
+
+
+_DENSE_COEFFICIENTS = np.stack(
+    [
+        np.array([[0.5, 0.2, -0.1], [0.4, 0.5, 0.15], [0.1, 0.4, 0.5]]),
+        np.array([[-0.6, 0.1, 0.0], [0.0, -0.6, -0.1], [0.05, 0.0, -0.6]]),
+    ]
+)
+_CORRELATED_NOISE = np.array([[1.0, 0.3, 0.0], [0.3, 1.0, 0.2], [0.0, 0.2, 1.0]])
+_CHAIN_COEFFICIENTS = np.stack(
+    [
+        np.array([[0.5, 0.0, 0.0], [0.4, 0.5, 0.0], [0.0, 0.4, 0.5]]),
+        -0.6 * np.eye(3),
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    "coefficients, noise_covariance",
+    [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
+    ids=["chain", "dense_correlated"],
+)
+@pytest.mark.parametrize(
+    "n_fft, atol", [(128, 2e-5), (1024, 1e-10)], ids=["nfft128", "nfft1024"]
+)
+def test_conditional_granger_matches_state_space_oracle(
+    coefficients, noise_covariance, n_fft, atol
+):
+    """The reduced-model factorization agrees pointwise with the state-space
+    (Riccati) route used by MVGC, so the result does not depend on how the
+    reduced model is obtained. The residual shrinks with the Wilson
+    factorization's own frequency-discretization error."""
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(spectrum),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        conditional = connectivity.conditional_spectral_granger_prediction()[0]
+    assert np.isfinite(conditional[..., ~np.eye(3, dtype=bool)]).all()
+    for target in range(3):
+        for source in range(3):
+            if target == source:
+                continue
+            oracle = _state_space_conditional_granger(
+                coefficients, noise_covariance, n_fft, target, source
+            )
+            np.testing.assert_allclose(
+                conditional[:, target, source], oracle, atol=atol, rtol=0
+            )
 
 
 def test_conditional_granger_removes_mediated_influence():
