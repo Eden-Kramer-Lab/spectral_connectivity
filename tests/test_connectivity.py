@@ -1505,6 +1505,34 @@ def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
             assert np.all(result[finite] >= 0.0), name
 
 
+def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
+    """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
+    use it. Emulate that restriction on NumPy and exercise every path that
+    divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
+    from spectral_connectivity import MorletWavelet, Multitaper
+
+    real_divide = np.divide
+
+    def strict_divide(*args, **kwargs):
+        if "where" in kwargs:
+            raise TypeError("Wrong arguments {'where': ...}")
+        return real_divide(*args, **kwargs)
+
+    monkeypatch.setattr(np, "divide", strict_divide)
+    rng = np.random.default_rng(7)
+    data = rng.standard_normal((600, 3, 3))
+    wavelet = MorletWavelet(
+        data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
+    )
+    weighted = Connectivity.from_transform(wavelet)
+    assert np.isfinite(weighted.power()).any()
+    assert np.isfinite(weighted.coherence_magnitude()).any()
+    adaptive = Multitaper(data, 200.0, taper_weighting="adaptive")
+    assert np.isfinite(adaptive.fft()).all()
+    conn = Connectivity.from_multitaper(Multitaper(data, 200.0))
+    assert np.isfinite(conn.canonical_coherency(np.array([0, 0, 1])).scores).any()
+
+
 def test_conditional_granger_factorizes_each_channel_set_once():
     """The full system and each leave-one-source-out system are factorized once.
 

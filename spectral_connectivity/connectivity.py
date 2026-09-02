@@ -24,6 +24,7 @@ from spectral_connectivity.statistics import (
     coherence_significance_pvalue,
     jackknife_confidence_interval,
 )
+from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
     is_gpu_enabled,
@@ -1031,12 +1032,8 @@ class Connectivity:
         if weights is None:
             return cross_spectral_matrix / n_observations
         denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
-        result = xp.full_like(cross_spectral_matrix, xp.nan)
-        return xp.divide(
-            cross_spectral_matrix,
-            denominator,
-            out=result,
-            where=denominator > 0,
+        return _divide_where(
+            cross_spectral_matrix, denominator, denominator > 0, xp.nan
         )
 
     @cached_property
@@ -1131,8 +1128,7 @@ class Connectivity:
         weights = self._observation_weights[..., 0].reshape(weight_shape)
         numerator = xp.sum(values * weights, axis=self._expectation_axes)
         denominator = xp.sum(weights, axis=self._expectation_axes)
-        result = xp.full_like(numerator, xp.nan)
-        return xp.divide(numerator, denominator, out=result, where=denominator > 0)
+        return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
     @cached_property
     def _observation_weights_are_uniform(self) -> bool:
@@ -3793,11 +3789,8 @@ def _optimize_canonical_coherency_phase(
         backward = objective(phase - step)
         first_derivative = (forward - backward) / (2 * step)
         second_derivative = (forward - 2 * centre + backward) / step**2
-        newton_step = xp.divide(
-            first_derivative,
-            second_derivative,
-            out=xp.zeros_like(first_derivative),
-            where=xp.abs(second_derivative) > 1e-12,
+        newton_step = _divide_where(
+            first_derivative, second_derivative, xp.abs(second_derivative) > 1e-12, 0.0
         )
         phase = phase - xp.clip(newton_step, -0.1, 0.1)
     projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)

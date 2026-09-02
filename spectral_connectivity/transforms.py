@@ -504,6 +504,22 @@ else:
     from scipy.signal import detrend as _backend_detrend
 
 
+def _divide_where(
+    numerator: BackendArray,
+    denominator: BackendArray,
+    condition: BackendArray,
+    fill: float,
+) -> BackendArray:
+    """Elementwise ``numerator / denominator`` where ``condition``, else ``fill``.
+
+    Backend-neutral replacement for ``xp.divide(..., where=...)``: CuPy ufuncs
+    do not accept the public ``where`` keyword, and the substituted unit
+    denominator also avoids NumPy divide warnings.
+    """
+    quotient = numerator / xp.where(condition, denominator, 1)
+    return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
+
+
 def _immutable_array_snapshot(value: Any) -> BackendArray:
     """Copy an input array and make the owned snapshot read-only when supported."""
     return mark_readonly_if_supported(xp.array(value, copy=True))
@@ -2493,19 +2509,19 @@ def _apply_adaptive_taper_weights(
     for _ in range(max_iterations):
         expanded_spectrum = spectrum[:, :, xp.newaxis, :, :]
         denominator = concentration * expanded_spectrum + (1.0 - concentration) * noise
-        weights = xp.divide(
+        weights = _divide_where(
             root_concentration * expanded_spectrum,
             denominator,
-            out=xp.zeros_like(taper_power, dtype=taper_power.dtype),
-            where=xp.abs(denominator) > eps,
+            xp.abs(denominator) > eps,
+            0.0,
         )
         weight_power = weights**2
         weight_sum = xp.sum(weight_power, axis=2)
-        updated = xp.divide(
+        updated = _divide_where(
             xp.sum(weight_power * taper_power, axis=2),
             weight_sum,
-            out=xp.zeros_like(spectrum),
-            where=weight_sum > eps,
+            weight_sum > eps,
+            0.0,
         )
         scale = xp.maximum(xp.abs(spectrum), eps)
         if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
@@ -2523,12 +2539,7 @@ def _apply_adaptive_taper_weights(
         )
 
     rms = xp.sqrt(xp.mean(weights**2, axis=2, keepdims=True))
-    normalized_weights = xp.divide(
-        weights,
-        rms,
-        out=xp.ones_like(weights),
-        where=rms > eps,
-    )
+    normalized_weights = _divide_where(weights, rms, rms > eps, 1.0)
     return coefficients * normalized_weights
 
 
