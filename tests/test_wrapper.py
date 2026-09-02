@@ -2449,7 +2449,9 @@ def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
 
 def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     data = np.random.default_rng(319).standard_normal((192, 5, 2))
-    frequencies = np.array([4.0, 8.0, 12.0, 20.0])
+    # Adjacent-bin measures require a uniform grid; the band below still
+    # selects the two interior bins.
+    frequencies = np.array([4.0, 8.0, 12.0, 16.0])
     transform = MorletWavelet(
         data,
         64,
