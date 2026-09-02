@@ -1531,6 +1531,30 @@ def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
             assert np.all(result[finite] >= 0.0), name
 
 
+def test_jackknife_requires_three_observations():
+    """With two observations each replicate has one, which forces magnitude-
+    normalized measures to 1 and yields a zero-width interval."""
+    rng = np.random.default_rng(8)
+    shape = (1, 2, 1, 8, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+    with pytest.raises(ValueError, match="at least 3 observations"):
+        connectivity.jackknife("coherence_magnitude")
+
+
+def test_jackknife_rejects_structured_result_measures():
+    """Component-result measures are not arrays; fail with a clear message
+    rather than deep inside the interval computation."""
+    rng = np.random.default_rng(9)
+    shape = (1, 6, 2, 16, 3)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+    with pytest.raises(TypeError, match="real array result"):
+        connectivity.jackknife("canonical_coherency", group_labels=np.array([0, 0, 1]))
+
+
 def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
     """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
     use it. Emulate that restriction on NumPy and exercise every path that

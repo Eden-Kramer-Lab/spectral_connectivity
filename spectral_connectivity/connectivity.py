@@ -1296,6 +1296,13 @@ class Connectivity:
                 f"jackknife does not support tuple-valued measure {method!r}."
             )
         full_estimate = np.asarray(full_estimate)
+        if full_estimate.dtype == object:
+            raise TypeError(
+                f"jackknife requires a real array result from {method!r}; it "
+                f"returned a structured result. Jackknife the scalar score "
+                "measure instead (e.g. canonical_coherence rather than "
+                "canonical_coherency)."
+            )
         if np.iscomplexobj(full_estimate):
             raise TypeError(
                 f"jackknife requires a real-valued measure; {method!r} is complex."
@@ -1332,9 +1339,12 @@ class Connectivity:
             observation_axis = 2
             n_observations = coefficients.shape[observation_axis]
             replicate_expectation = "tapers"
-        if n_observations < 2:
+        if n_observations < 3:
             raise ValueError(
-                f"jackknife requires at least 2 observations, got {n_observations}."
+                f"jackknife requires at least 3 observations, got {n_observations}. "
+                "With two, each leave-one-out replicate has a single observation, "
+                "which forces magnitude-normalized measures to 1 and yields a "
+                "zero-width interval."
             )
 
         replicates: list[NDArray[np.floating]] = []
