@@ -1024,6 +1024,15 @@ def frequency_band_reduce(
         Same type as ``result`` with the ``frequency`` dimension replaced by a
         ``band`` dimension holding the band names, and the band definitions
         recorded in ``attrs["frequency_bands_json"]``.
+
+    Notes
+    -----
+    Spatial filters, spatial patterns, and global-coherence vectors have an
+    arbitrary sign or complex phase independently at each frequency. A Dataset
+    containing those variables is therefore rejected instead of averaging them
+    into a scientifically undefined band projection. Select the scalar score
+    variable from the Dataset and reduce that DataArray when only band scores
+    are needed.
     """
     if "frequency" not in result.dims:
         raise ValueError("result must have a 'frequency' dimension.")
@@ -1094,6 +1103,26 @@ def frequency_band_reduce(
 
     if isinstance(result, xr.DataArray):
         return _reduce_dataarray(result)
+
+    non_reducible_variables = sorted(
+        str(name)
+        for name, data in result.data_vars.items()
+        if "frequency" in data.dims
+        and (
+            name == "global_coherence_vectors"
+            or str(name).endswith(("_filters", "_patterns"))
+        )
+    )
+    if non_reducible_variables:
+        names = ", ".join(repr(name) for name in non_reducible_variables)
+        raise ValueError(
+            "Frequency-band reduction is not defined for spatial filters, "
+            "patterns, or component vectors because their sign/phase is "
+            f"arbitrary at each frequency; offending variables: {names}. "
+            "Select the scalar score variable from the Dataset and pass that "
+            "DataArray to frequency_band_reduce, or keep the full "
+            "frequency-resolved Dataset."
+        )
 
     data_vars = {
         name: _reduce_dataarray(data) if "frequency" in data.dims else data

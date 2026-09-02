@@ -2229,6 +2229,36 @@ def test_frequency_band_reduce_uses_circular_phase_mean():
     assert abs(float(reduced.sel(band="alpha"))) == pytest.approx(np.pi)
 
 
+@pytest.mark.parametrize(
+    ("method", "connectivity_kwargs", "score_name"),
+    [
+        ("global_coherence", {}, "global_coherence"),
+        (
+            "canonical_coherency",
+            {"group_labels": [0, 0, 1, 1]},
+            "canonical_coherency",
+        ),
+    ],
+)
+def test_frequency_band_reduce_rejects_unidentifiable_projection_averages(
+    method, connectivity_kwargs, score_name
+):
+    """Frequency-specific vectors cannot be averaged without phase alignment."""
+    result = multitaper_connectivity(
+        np.random.default_rng(321).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=method,
+        connectivity_kwargs=connectivity_kwargs,
+    )
+
+    with pytest.raises(ValueError, match="sign/phase is arbitrary"):
+        frequency_band_reduce(result, {"alpha": (8, 12)})
+
+    score = frequency_band_reduce(result[score_name], {"alpha": (8, 12)})
+    assert "band" in score.dims
+    assert "frequency" not in score.dims
+
+
 def test_frequency_band_integral_is_restricted_to_spectral_densities():
     score = xr.DataArray(
         [0.25, 0.5],
