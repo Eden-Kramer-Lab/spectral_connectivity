@@ -798,6 +798,37 @@ class Connectivity:
                 f"fourier_coefficients[..., channel_index]."
             )
 
+    def _require_uniform_frequency_grid(self, measure: str) -> None:
+        """Raise if the frequency coordinate is not equally spaced.
+
+        Measures that combine adjacent bins (phase slope, delay estimates)
+        interpret one bin step as one frequency step; a wavelet transform can
+        expose an arbitrary grid, on which those combinations are meaningless.
+        """
+        steps = np.diff(to_numpy(self.frequencies))
+        if steps.size and not np.allclose(steps, steps[0], rtol=1e-6, atol=0.0):
+            raise ValueError(
+                f"{measure} requires uniformly spaced frequencies because it "
+                f"combines adjacent frequency bins, but the grid steps range "
+                f"from {steps.min():g} to {steps.max():g} Hz. Use a linearly "
+                "spaced frequency grid (e.g. MorletWavelet(frequencies="
+                "np.arange(low, high, step)))."
+            )
+
+    def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
+        """Raise if observation weights are non-uniform for a measure that
+        assumes equally weighted independent observations."""
+        if self._observation_weights_are_uniform:
+            return
+        raise ValueError(
+            f"{measure} does not support non-uniform observation_weights. "
+            f"{reason} Non-uniform weights come from a smoothing_kernel other "
+            "than 'boxcar', or from edge_mode='nan' when the time axis is part "
+            "of the expectation (the edge mask zeroes some observations). Use "
+            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
+            "expectation_type that keeps the time axis."
+        )
+
     def _validate_debiasing_observations(self, measure: str) -> None:
         """Raise if a bias-corrected measure has too few observations.
 
@@ -816,17 +847,11 @@ class Connectivity:
                 f"single observation. Use more trials/tapers, or the "
                 f"non-debiased measure (phase_lag_index / phase_locking_value)."
             )
-        if not self._observation_weights_are_uniform:
-            raise ValueError(
-                f"{measure} does not support non-uniform observation_weights. "
-                "Its finite-sample correction assumes equally weighted "
-                "independent observations. Non-uniform weights come from a "
-                "smoothing_kernel other than 'boxcar', or from edge_mode='nan' "
-                "when the time axis is part of the expectation (the edge mask "
-                "zeroes some observations). Use a non-debiased measure, "
-                "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or "
-                "an expectation_type that keeps the time axis."
-            )
+        self._require_uniform_observation_weights(
+            measure,
+            "Its finite-sample correction assumes equally weighted independent "
+            "observations; use a non-debiased measure instead.",
+        )
 
     def _warn_single_observation_degenerate(self, measure: str) -> None:
         """Warn that a magnitude-normalized measure is degenerate for one observation.
@@ -3349,6 +3374,13 @@ class Connectivity:
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("group_delay")
+        self._require_uniform_frequency_grid("group_delay")
+        self._require_uniform_observation_weights(
+            "group_delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null, which assumes equally "
+            "weighted observations.",
+        )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -3472,6 +3504,13 @@ class Connectivity:
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("delay")
+        self._require_uniform_frequency_grid("delay")
+        self._require_uniform_observation_weights(
+            "delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null, which assumes equally "
+            "weighted observations.",
+        )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -3577,6 +3616,7 @@ class Connectivity:
         )
 
         self._require_multiple_frequencies("phase_slope_index")
+        self._require_uniform_frequency_grid("phase_slope_index")
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution

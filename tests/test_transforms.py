@@ -862,6 +862,22 @@ def test_morlet_hann_kernel_has_nonzero_endpoints():
     assert np.all(MorletWavelet._kernel_values(2, "hann") > 0)
 
 
+@pytest.mark.parametrize("measure", ["phase_slope_index", "delay", "group_delay"])
+def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
+    """Measures that combine adjacent bins need equal spacing; a wavelet grid
+    is arbitrary, so a non-uniform grid must be rejected, not silently used."""
+    data = np.random.default_rng(927).standard_normal((2000, 2, 2))
+    non_uniform = Connectivity.from_transform(
+        MorletWavelet(data, 200, [4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
+    )
+    with pytest.raises(ValueError, match="uniformly spaced"):
+        getattr(non_uniform, measure)()
+    uniform = Connectivity.from_transform(
+        MorletWavelet(data, 200, [10.0, 20.0, 30.0, 40.0], smoothing_time=0.5)
+    )
+    getattr(uniform, measure)()
+
+
 def test_morlet_boxcar_edge_mask_error_names_edge_mode():
     """The debiased-measure guard must point at the knob that actually made the
     weights non-uniform (edge masking), not at a kernel already in use."""
