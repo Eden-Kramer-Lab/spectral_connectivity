@@ -2936,6 +2936,14 @@ class Connectivity:
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Output ``[i, j]`` is the time-reversed influence ``j -> i``.
 
+        Notes
+        -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
         References
         ----------
         .. [1] Winkler, I., Panknin, D., Bartz, D., Müller, K.-R., and Haufe,

@@ -77,7 +77,10 @@ directly with results from 2.x.
   decimated, or reduced into named frequency bands; phase uses a circular mean
   and integration is restricted to spectral densities. The standalone
   `frequency_band_reduce(result, bands, reduction=...)` applies the same
-  band reduction to an already-computed labeled result.
+  band reduction to an already-computed labeled result. Datasets holding
+  spatial filters, patterns, or global-coherence vectors are rejected, since
+  their sign and phase are arbitrary per frequency; reduce the score variable
+  instead.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` provide
   leave-one-trial/taper bias correction, standard errors, and confidence
   intervals with automatic variance-stabilizing transformations: log for power,
