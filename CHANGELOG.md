@@ -154,6 +154,26 @@ directly with results from 2.x.
 
 ### Changed
 
+- `canonical_coherency` fixes the sign of each spatial filter by the dominant
+  coefficient of its pattern, so the canonical phase is no longer ambiguous by
+  pi; single-channel groups reproduce the conjugate pairwise coherency.
+- `phase_slope_index`, `delay`, and `group_delay` require a uniformly spaced
+  frequency grid, and `delay`/`group_delay` reject non-uniform observation
+  weights, because their adjacent-bin combinations and coherence null assume
+  equal spacing and equally weighted observations (wavelet grids and Hann
+  smoothing violate these silently).
+- `Connectivity.jackknife` requires at least three observations and rejects
+  structured (component) results with a clear error.
+- `frequency_band_reduce` treats a band containing any NaN bin as undefined for
+  both reductions (previously the mean skipped NaN) and records per-band
+  validity in a `valid_time_band` coordinate when the input carries
+  `valid_time_frequency`.
+- `fourier_connectivity` warns when neither a frequency coordinate nor
+  `is_one_sided` is given and a two-sided spectrum is assumed.
+- Group measures require at least two groups and a label per signal
+  (`canonical_coherence` previously returned an empty array for one group), and
+  `Multitaper` reports non-positive or non-finite sampling rates as
+  "sampling_frequency must be finite and positive".
 - `global_coherence`, `power`, `phase_slope_index`, `delay`, and
   `Multitaper.time` now follow the definitions in the migration table.
 - Public connectivity methods reject single-signal inputs with an actionable
