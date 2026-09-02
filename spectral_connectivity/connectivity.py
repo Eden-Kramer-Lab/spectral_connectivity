@@ -1298,9 +1298,9 @@ class Connectivity:
             or not inspect.isfunction(method_attribute)
         ):
             raise ValueError("method must name a public connectivity measure.")
-        measure = getattr(self, method, None)
-        if not callable(measure):
-            raise ValueError(f"Unknown connectivity method {method!r}.")
+        # The static check above guarantees ``method`` names a public function
+        # on the class, so the bound attribute is always callable here.
+        measure = getattr(self, method)
 
         full_estimate = measure(**method_kwargs)
         if isinstance(full_estimate, tuple):
