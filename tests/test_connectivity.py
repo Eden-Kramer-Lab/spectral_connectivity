@@ -17,6 +17,7 @@ from spectral_connectivity.connectivity import (
     _max_psd_discrepancy,
     _remove_instantaneous_causality,
     _reshape,
+    _sanitized_nonnegative_granger,
     _set_diagonal_to_zero,
     _squared_magnitude,
     _total_inflow,
@@ -78,6 +79,22 @@ def test_subset_cross_spectrum():
         assert np.allclose(actual, expected)
 
 
+def test_minimum_phase_reconstruction_error_is_exposed_on_connectivity():
+    """The public diagnostic evaluates the factor used by directed measures."""
+    target_cross_spectrum = np.array([[2.0, 0.4], [0.4, 1.0]])
+    cholesky_factor = np.linalg.cholesky(target_cross_spectrum)
+    taper_coefficients = (np.sqrt(2.0) * cholesky_factor.T).astype(np.complex128)
+    coefficients = np.broadcast_to(taper_coefficients[:, np.newaxis, :], (2, 16, 2))[
+        np.newaxis, np.newaxis
+    ].copy()
+    connectivity = Connectivity(coefficients)
+
+    error = connectivity.minimum_phase_reconstruction_error()
+
+    assert error.shape == (1,)
+    assert error[0] < 1e-7
+
+
 @mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
@@ -96,6 +113,24 @@ def test_power(dtype):
 
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
     assert np.allclose(expected_power, this_Conn.power())
+
+
+@mark.parametrize("n_fft_samples", [5, 6])
+def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
+    n_fft_samples,
+):
+    """CSD uses the same one-sided scaling as public power."""
+    rng = np.random.default_rng(101)
+    coefficients = rng.standard_normal((2, 3, 2, n_fft_samples, 3)) + 1j * (
+        rng.standard_normal((2, 3, 2, n_fft_samples, 3))
+    )
+    conn = Connectivity(coefficients)
+    csd = conn.cross_spectral_density()
+
+    assert csd.shape == (2, n_fft_samples // 2 + 1, 3, 3)
+    np.testing.assert_allclose(csd, np.conj(np.swapaxes(csd, -1, -2)))
+    diagonal = np.diagonal(csd, axis1=-2, axis2=-1).real
+    np.testing.assert_allclose(diagonal, conn.power())
 
 
 @mark.parametrize(
@@ -177,6 +212,45 @@ def test_imaginary_coherence():
     )
 
 
+def test_imaginary_coherency_preserves_pair_orientation():
+    coefficients = np.empty((1, 8, 1, 1, 2), dtype=complex)
+    coefficients[..., 0] = np.exp(1j * np.pi / 2)
+    coefficients[..., 1] = 1.0
+    signed = Connectivity(coefficients).imaginary_coherency().squeeze()
+
+    assert signed[0, 1] == pytest.approx(1.0)
+    assert signed[1, 0] == pytest.approx(-1.0)
+    assert np.isnan(signed[0, 0])
+
+
+def test_partial_coherence_matches_inverse_spectral_matrix_definition():
+    rng = np.random.default_rng(102)
+    coefficients = rng.standard_normal((1, 200, 3, 4, 3)) + 1j * (
+        rng.standard_normal((1, 200, 3, 4, 3))
+    )
+    conn = Connectivity(coefficients)
+    actual = conn.partial_coherence(regularization=1e-10)
+
+    spectrum = conn._expectation_cross_spectral_matrix()
+    scale = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1), keepdims=True))
+    identity = np.eye(3)
+    precision = np.linalg.solve(spectrum + 1e-10 * scale * identity, identity)
+    diagonal = np.diagonal(precision, axis1=-2, axis2=-1).real
+    denominator = np.sqrt(diagonal[..., :, None] * diagonal[..., None, :])
+    expected = np.abs(-precision / denominator) ** 2
+    index = np.arange(3)
+    expected[..., index, index] = np.nan
+
+    np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
+
+
+@mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])
+def test_partial_coherence_rejects_invalid_regularization(regularization):
+    coefficients = np.ones((1, 2, 2, 2, 2), dtype=complex)
+    with pytest.raises(ValueError, match="regularization"):
+        Connectivity(coefficients).partial_coherence(regularization=regularization)
+
+
 def test_phase_locking_value():
     """Make sure phase locking value ignores magnitudes."""
     rng = np.random.default_rng(42)
@@ -194,6 +268,23 @@ def test_phase_locking_value():
     assert np.allclose(
         np.angle(this_Conn.phase_locking_value()), expected_phase_locking_value_angle
     )
+
+
+def test_corrected_imaginary_phase_locking_value():
+    """ciPLV rejects zero lag and retains consistent quadrature locking."""
+    zero_lag = np.ones((1, 10, 1, 1, 2), dtype=complex)
+    zero_result = (
+        Connectivity(zero_lag).corrected_imaginary_phase_locking_value().squeeze()
+    )
+    assert zero_result[0, 1] == 0.0
+
+    quadrature = zero_lag.copy()
+    quadrature[..., 0] = 1j
+    quadrature_result = (
+        Connectivity(quadrature).corrected_imaginary_phase_locking_value().squeeze()
+    )
+    assert quadrature_result[0, 1] == pytest.approx(1.0)
+    assert quadrature_result[1, 0] == pytest.approx(1.0)
 
 
 def test_phase_lag_index_sets_zero_phase_signals_to_zero():
@@ -229,6 +320,385 @@ def test_phase_lag_index_sets_angles_up_to_pi_to_same_value():
     this_Conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
     assert np.allclose(this_Conn.phase_lag_index().squeeze(), expected_phase_lag_index)
+
+
+def test_directed_phase_lag_index_orientation_and_complement():
+    coefficients = np.empty((1, 12, 1, 1, 2), dtype=complex)
+    coefficients[..., 0] = np.exp(1j * np.pi / 2)
+    coefficients[..., 1] = 1.0
+    dpli = Connectivity(coefficients).directed_phase_lag_index().squeeze()
+
+    assert dpli[0, 1] == 1.0
+    assert dpli[1, 0] == 0.0
+    assert dpli[0, 0] == 0.5
+    np.testing.assert_allclose(dpli + dpli.T, 1.0)
+
+
+def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
+    coefficients = np.empty((1, 20, 2, 1, 2), dtype=complex)
+    coefficients[..., 0] = 1j
+    coefficients[..., 1] = 1.0
+    conn = Connectivity(coefficients)
+
+    mic, mic_labels = conn.maximized_imaginary_coherency([0, 1])
+    mim, mim_labels = conn.multivariate_interaction_measure([0, 1])
+
+    np.testing.assert_array_equal(mic_labels, [0, 1])
+    np.testing.assert_array_equal(mim_labels, [0, 1])
+    assert mic.squeeze()[0, 1] == pytest.approx(1.0)
+    assert mim.squeeze()[0, 1] == pytest.approx(1.0)
+    assert np.isnan(mic.squeeze()[0, 0])
+
+
+def test_exact_cacoh_reduces_to_scalar_complex_coherency():
+    rng = np.random.default_rng(923)
+    first = rng.standard_normal(200) + 1j * rng.standard_normal(200)
+    second = 0.6 * np.exp(-0.8j) * first + 0.8 * (
+        rng.standard_normal(200) + 1j * rng.standard_normal(200)
+    )
+    coefficients = np.stack((first, second), axis=-1)[
+        np.newaxis, :, np.newaxis, np.newaxis
+    ]
+    connectivity = Connectivity(coefficients)
+
+    result = connectivity.canonical_coherency([0, 1])
+    score = result.scores.squeeze()
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    coherency = csd[0, 1] / np.sqrt(csd[0, 0].real * csd[1, 1].real)
+
+    assert abs(score) == pytest.approx(abs(coherency), rel=1e-9)
+    # Filter signs are fixed by the pattern convention, so the score is exactly
+    # the conjugate coherency, not merely equal up to a sign (a pi phase flip).
+    ratio = score / np.conjugate(coherency)
+    assert ratio.imag == pytest.approx(0.0, abs=1e-7)
+    assert ratio.real == pytest.approx(1.0, rel=1e-9)
+
+
+def test_cacoh_phase_distinguishes_lead_from_lag():
+    """A lagging seed must not be reported with its phase shifted by pi."""
+    from spectral_connectivity import Multitaper
+
+    fs = 500.0
+    t = np.arange(0, 4, 1 / fs)
+    rng = np.random.default_rng(3)
+    trials = []
+    for _ in range(20):
+        offset = rng.uniform(0, 2 * np.pi)
+        x = np.sin(2 * np.pi * 20 * t + offset)
+        y = np.sin(2 * np.pi * 20 * t + offset - 2.0)  # y lags x by 2 rad
+        trials.append(np.stack([y, x], 1) + 0.1 * rng.standard_normal((t.size, 2)))
+    data = np.stack(trials, 1)
+    connectivity = Connectivity.from_multitaper(
+        Multitaper(data, fs, time_window_duration=4.0, time_halfbandwidth_product=2)
+    )
+    index = np.argmin(np.abs(connectivity.frequencies - 20))
+    pairwise_phase = connectivity.coherence_phase()[0, index, 0, 1]
+    score = connectivity.canonical_coherency(np.array([0, 1])).scores[0, index, 0, 0]
+    # Scores use the conjugate convention: angle(score) == -coherence_phase.
+    assert np.angle(score) == pytest.approx(-pairwise_phase, abs=0.05)
+
+
+def test_exact_cacoh_matches_dense_phase_grid_oracle():
+    rng = np.random.default_rng(924)
+    coefficients = rng.standard_normal((1, 300, 1, 1, 4)) + 1j * rng.standard_normal(
+        (1, 300, 1, 1, 4)
+    )
+    connectivity = Connectivity(coefficients)
+    result = connectivity.canonical_coherency([0, 0, 1, 1], regularization=0.0)
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+
+    def inverse_sqrt(matrix):
+        values, vectors = np.linalg.eigh((matrix + matrix.T) / 2)
+        return (vectors / np.sqrt(values)[np.newaxis, :]) @ vectors.T
+
+    Taa = inverse_sqrt(csd[:2, :2].real)
+    Tbb = inverse_sqrt(csd[2:, 2:].real)
+    phases = np.linspace(0, np.pi, 20001)
+    grid_maximum = max(
+        np.linalg.svd(
+            Taa @ np.real(np.exp(-1j * phase) * csd[:2, 2:]) @ Tbb,
+            compute_uv=False,
+        )[0]
+        for phase in phases
+    )
+    assert abs(result.scores.squeeze()) == pytest.approx(grid_maximum, abs=2e-8)
+
+
+def test_rich_mic_scores_filters_and_patterns_match_svd_oracle():
+    rng = np.random.default_rng(925)
+    coefficients = rng.standard_normal((1, 250, 1, 1, 4)) + 1j * rng.standard_normal(
+        (1, 250, 1, 1, 4)
+    )
+    connectivity = Connectivity(coefficients)
+    result = connectivity.maximized_imaginary_coherency_components(
+        [0, 0, 1, 1], n_components=2, regularization=0.0
+    )
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    filters = result.filters.squeeze()
+    patterns = result.patterns.squeeze()
+    first_filters = filters[:, 0, :2].T
+    second_filters = filters[:, 1, 2:].T
+
+    reconstructed = np.asarray(
+        [
+            first_filters[:, component].T
+            @ csd[:2, 2:].imag
+            @ second_filters[:, component]
+            for component in range(2)
+        ]
+    )
+    np.testing.assert_allclose(result.scores.squeeze(), reconstructed, atol=1e-12)
+    assert np.all(np.diff(result.scores.squeeze()) <= 0)
+    np.testing.assert_allclose(patterns[:, 0, :2].T, csd[:2, :2].real @ first_filters)
+    np.testing.assert_allclose(patterns[:, 1, 2:].T, csd[2:, 2:].real @ second_filters)
+    assert np.isnan(filters[:, 0, 2:]).all()
+    assert np.isnan(filters[:, 1, :2]).all()
+
+
+def test_rich_cacoh_filters_and_patterns_match_definition():
+    rng = np.random.default_rng(931)
+    coefficients = rng.standard_normal((1, 300, 1, 1, 4)) + 1j * rng.standard_normal(
+        (1, 300, 1, 1, 4)
+    )
+    connectivity = Connectivity(coefficients)
+    result = connectivity.canonical_coherency([0, 0, 1, 1], regularization=0.0)
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    score = result.scores.squeeze()
+    filters = result.filters.squeeze()  # (side, signal)
+    patterns = result.patterns.squeeze()
+    filter_a = filters[0, :2]
+    filter_b = filters[1, 2:]
+
+    # The score magnitude is the filter-projected coherence at the fitted phase.
+    phi = -np.angle(score)
+    projected = np.real(np.exp(-1j * phi) * csd[:2, 2:])
+    assert abs(score) == pytest.approx(filter_a @ projected @ filter_b, abs=1e-8)
+    # Haufe patterns = within-group real CSD @ filter.
+    np.testing.assert_allclose(patterns[0, :2], csd[:2, :2].real @ filter_a, atol=1e-10)
+    np.testing.assert_allclose(patterns[1, 2:], csd[2:, 2:].real @ filter_b, atol=1e-10)
+    assert np.isnan(filters[0, 2:]).all()
+    assert np.isnan(filters[1, :2]).all()
+
+
+def test_multivariate_components_allow_more_components_for_larger_groups():
+    # Groups of unequal size: the (size-5, size-5) connection supports 3
+    # components while the connections touching the size-2 group return NaN for
+    # the unavailable third component (a per-connection, not global, bound).
+    rng = np.random.default_rng(932)
+    coefficients = rng.standard_normal((1, 8, 1, 1, 12)) + 1j * rng.standard_normal(
+        (1, 8, 1, 1, 12)
+    )
+    labels = [0, 0] + [1] * 5 + [2] * 5
+    result = Connectivity(coefficients).canonical_coherency(labels, n_components=3)
+    connection_labels = result.connections.tolist()
+    big = connection_labels.index([1, 2])
+    small = connection_labels.index([0, 1])
+    assert np.isfinite(result.scores[0, :, big, 2]).all()
+    assert np.isnan(result.scores[0, :, small, 2]).all()
+
+
+def test_multivariate_components_reject_when_no_connection_is_large_enough():
+    connectivity = Connectivity(np.ones((1, 4, 2, 1, 4), dtype=complex))
+    with pytest.raises(ValueError, match="largest per-connection"):
+        connectivity.canonical_coherency([0, 0, 1, 1], n_components=3)
+
+
+def test_multivariate_components_rank_truncates_whitening():
+    # rank equal to the group size is a no-op; a smaller rank keeps only the
+    # top whitening directions and changes the result (exercises the rank branch
+    # of the inverse-square-root whitening).
+    rng = np.random.default_rng(934)
+    coefficients = rng.standard_normal((1, 200, 1, 1, 6)) + 1j * rng.standard_normal(
+        (1, 200, 1, 1, 6)
+    )
+    labels = [0, 0, 0, 1, 1, 1]
+    connectivity = Connectivity(coefficients)
+    full = connectivity.maximized_imaginary_coherency_components(labels, rank=3)
+    same = connectivity.maximized_imaginary_coherency_components(labels, rank=None)
+    truncated = connectivity.maximized_imaginary_coherency_components(labels, rank=2)
+    np.testing.assert_allclose(full.scores, same.scores, atol=1e-10)
+    assert not np.allclose(full.scores, truncated.scores)
+
+
+def test_multivariate_components_warn_on_rank_deficient_group():
+    rng = np.random.default_rng(933)
+    coefficients = rng.standard_normal((1, 6, 2, 16, 6)) + 1j * rng.standard_normal(
+        (1, 6, 2, 16, 6)
+    )
+    coefficients[..., 2] = coefficients[..., 0]  # duplicate channel -> rank 2 of 3
+    connectivity = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="null space"):
+        connectivity.maximized_imaginary_coherency_components(
+            [0, 0, 0, 1, 1, 1], n_components=3
+        )
+
+
+def test_multicomponent_cacoh_deflates_previous_filters():
+    rng = np.random.default_rng(926)
+    coefficients = rng.standard_normal((1, 300, 1, 1, 6)) + 1j * rng.standard_normal(
+        (1, 300, 1, 1, 6)
+    )
+    result = Connectivity(coefficients).canonical_coherency(
+        [0, 0, 0, 1, 1, 1], n_components=3
+    )
+    filters = result.filters.squeeze()
+
+    for side, indices in enumerate((slice(0, 3), slice(3, 6))):
+        local = filters[:, side, indices]
+        np.testing.assert_allclose(
+            local @ local.T, np.diag(np.diag(local @ local.T)), atol=1e-8
+        )
+    assert result.group_membership.tolist() == [
+        [True, True, True, False, False, False],
+        [False, False, False, True, True, True],
+    ]
+
+
+@pytest.mark.parametrize(
+    "method", ["canonical_coherency", "maximized_imaginary_coherency_components"]
+)
+def test_multivariate_components_validate_group_geometry(method):
+    connectivity = Connectivity(np.ones((1, 4, 2, 1, 4), dtype=complex))
+    with pytest.raises(ValueError, match="length n_signals"):
+        getattr(connectivity, method)([0, 1])
+    with pytest.raises(ValueError, match="n_components"):
+        getattr(connectivity, method)([0, 0, 1, 1], n_components=3)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "canonical_coherence",
+        "canonical_coherency",
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+        "maximized_imaginary_coherency_components",
+    ],
+)
+@pytest.mark.parametrize("missing_label", [np.nan, None])
+def test_group_measures_reject_missing_labels(method, missing_label):
+    """A missing label must not create an empty, all-false signal group."""
+    rng = np.random.default_rng(924)
+    coefficients = rng.standard_normal((1, 6, 2, 8, 4)) + 1j * rng.standard_normal(
+        (1, 6, 2, 8, 4)
+    )
+    connectivity = Connectivity(coefficients)
+
+    with pytest.raises(ValueError, match="missing values"):
+        getattr(connectivity, method)([0, 0, 1, missing_label])
+
+
+def test_mic_rejects_single_group_and_non_positive_rank():
+    coefficients = np.empty((1, 20, 2, 1, 3), dtype=complex)
+    coefficients[..., 0] = 1j
+    coefficients[..., 1] = 1.0
+    coefficients[..., 2] = 0.5j
+    conn = Connectivity(coefficients)
+    with pytest.raises(ValueError, match="at least two groups"):
+        conn.maximized_imaginary_coherency([0, 0, 0])
+    with pytest.raises(ValueError, match="rank must be a positive integer"):
+        conn.multivariate_interaction_measure([0, 1, 1], rank=0)
+
+
+def test_partial_coherence_warns_and_nans_on_zero_power():
+    rng = np.random.default_rng(919)
+    coefficients = rng.standard_normal((1, 6, 2, 4, 3)) + 1j * rng.standard_normal(
+        (1, 6, 2, 4, 3)
+    )
+    coefficients[:, :, :, 0, :] = 0.0  # a fully dead frequency bin
+    conn = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="zero power"):
+        result = conn.partial_coherence(regularization=1e-10)
+    assert np.isnan(result[:, 0]).all()
+
+
+def test_mic_and_mim_are_invariant_to_within_group_real_mixing():
+    rng = np.random.default_rng(103)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    labels = np.array([0, 0, 1, 1])
+    original = Connectivity(coefficients)
+
+    first_mix = np.array([[2.0, 0.4], [-0.3, 1.2]])
+    second_mix = np.array([[0.8, -0.2], [0.5, 1.7]])
+    mixed = coefficients.copy()
+    mixed[..., :2] = np.einsum("...i,ji->...j", coefficients[..., :2], first_mix)
+    mixed[..., 2:] = np.einsum("...i,ji->...j", coefficients[..., 2:], second_mix)
+    transformed = Connectivity(mixed)
+
+    original_mic, _ = original.maximized_imaginary_coherency(labels)
+    mixed_mic, _ = transformed.maximized_imaginary_coherency(labels)
+    original_mim, _ = original.multivariate_interaction_measure(labels)
+    mixed_mim, _ = transformed.multivariate_interaction_measure(labels)
+
+    np.testing.assert_allclose(mixed_mic, original_mic, rtol=1e-9, atol=1e-10)
+    np.testing.assert_allclose(mixed_mim, original_mim, rtol=1e-9, atol=1e-10)
+
+
+def test_cacoh_magnitude_is_at_least_mic():
+    # CaCoh maximizes |Re(exp(-i*phi) * whitened CSD)| over all phases; MIC is
+    # the imaginary-axis (phi = pi/2) special case, so |CaCoh| >= MIC.
+    rng = np.random.default_rng(935)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    connectivity = Connectivity(coefficients)
+    labels = [0, 0, 1, 1]
+    cacoh = connectivity.canonical_coherency(labels, n_components=1)
+    mic = connectivity.maximized_imaginary_coherency_components(labels, n_components=1)
+    assert np.all(np.abs(cacoh.scores) >= mic.scores - 1e-9)
+
+
+def test_cacoh_zero_cross_spectrum_does_not_warn():
+    # Independent one-hot observations give identity within-group spectra and an
+    # exactly zero between-group spectrum. The phase objective is therefore flat:
+    # both finite-difference derivatives are zero throughout Newton refinement.
+    coefficients = np.zeros((1, 4, 1, 1, 4), dtype=complex)
+    coefficients[0, :, 0, 0, :] = np.eye(4)
+    connectivity = Connectivity(
+        coefficients, is_one_sided=True, frequencies=np.array([1.0])
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = connectivity.canonical_coherency([0, 0, 1, 1], n_components=2)
+
+    np.testing.assert_array_equal(result.scores, 0.0)
+
+
+def test_component_methods_invariant_to_within_group_real_mixing():
+    # Within-group whitening makes the scores invariant to invertible real
+    # within-group mixing. MIC components all come from one whitened SVD, so all
+    # are invariant; CaCoh's higher components deflate in (Euclidean) channel
+    # space, which mixing does not preserve, so only its first component is
+    # invariant (this matches mne-connectivity's deflation).
+    rng = np.random.default_rng(936)
+    coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
+        rng.standard_normal((1, 300, 2, 3, 4))
+    )
+    labels = np.array([0, 0, 1, 1])
+    original = Connectivity(coefficients)
+    first_mix = np.array([[2.0, 0.4], [-0.3, 1.2]])
+    second_mix = np.array([[0.8, -0.2], [0.5, 1.7]])
+    mixed = coefficients.copy()
+    mixed[..., :2] = np.einsum("...i,ji->...j", coefficients[..., :2], first_mix)
+    mixed[..., 2:] = np.einsum("...i,ji->...j", coefficients[..., 2:], second_mix)
+    transformed = Connectivity(mixed)
+
+    original_mic = original.maximized_imaginary_coherency_components(
+        labels, n_components=2
+    ).scores
+    mixed_mic = transformed.maximized_imaginary_coherency_components(
+        labels, n_components=2
+    ).scores
+    np.testing.assert_allclose(mixed_mic, original_mic, rtol=1e-7, atol=1e-9)
+
+    original_cacoh = original.canonical_coherency(labels, n_components=1).scores
+    mixed_cacoh = transformed.canonical_coherency(labels, n_components=1).scores
+    np.testing.assert_allclose(
+        np.abs(mixed_cacoh), np.abs(original_cacoh), rtol=1e-7, atol=1e-9
+    )
 
 
 def test_weighted_phase_lag_index_sets_zero_phase_signals_to_zero():
@@ -1026,6 +1496,153 @@ def test_subset_pairwise_granger_prediction_masks_global_diagonal():
     assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
 
 
+@mark.parametrize("dtype", [np.float32, np.float64])
+def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
+    """The shared sanitizer clips roundoff, NaNs real negatives, keeps the rest."""
+    eps = np.finfo(dtype).eps
+    tiny_negative = -10 * eps  # inside the 100 * eps roundoff band
+    material_negative = -1e-3  # far outside the roundoff band
+    value = np.array([0.0, 0.5, tiny_negative, material_negative, np.nan], dtype=dtype)
+
+    sanitized = _sanitized_nonnegative_granger(value)
+
+    # Exact zero (no causality) is preserved, not discarded as NaN.
+    assert sanitized[0] == 0.0
+    # A genuine positive influence passes through untouched.
+    assert sanitized[1] == dtype(0.5)
+    # Roundoff around a true zero is clipped up to exactly zero.
+    assert sanitized[2] == 0.0
+    # A materially-negative (invalid) value becomes NaN.
+    assert np.isnan(sanitized[3])
+    # NaN propagates unchanged.
+    assert np.isnan(sanitized[4])
+
+
+def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
+    """Every Granger path sanitizes a nonempty set of finite results.
+
+    A well-conditioned input avoids the all-NaN degeneracy that would make a
+    non-negativity assertion pass vacuously. This seed also produces materially
+    negative conditional differences before sanitization, so removing that
+    call exposes a finite negative result. Tracking the helper additionally
+    guards the pairwise and blockwise wiring even when their raw values happen
+    to be non-negative for this input.
+    """
+    rng = np.random.default_rng(0)
+    n_time, n_trials, n_tapers, n_fft, n_signals = 1, 20, 3, 32, 4
+    shape = (n_time, n_trials, n_tapers, n_fft, n_signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+
+    computations = {
+        "pairwise": conn.pairwise_spectral_granger_prediction,
+        "conditional": conn.conditional_spectral_granger_prediction,
+        "blockwise": lambda: conn.blockwise_spectral_granger_prediction(
+            np.array([0, 0, 1, 1])
+        )[0],
+    }
+    with patch(
+        "spectral_connectivity.connectivity._sanitized_nonnegative_granger",
+        wraps=_sanitized_nonnegative_granger,
+    ) as sanitizer:
+        for name, compute in computations.items():
+            sanitizer.reset_mock()
+            result = compute()
+            assert sanitizer.call_count > 0, f"{name} bypassed the shared sanitizer"
+            finite = np.isfinite(result)
+            assert finite.any(), f"{name} returned no finite values"
+            assert np.all(result[finite] >= 0.0), name
+
+
+def test_jackknife_requires_three_observations():
+    """With two observations each replicate has one, which forces magnitude-
+    normalized measures to 1 and yields a zero-width interval."""
+    rng = np.random.default_rng(8)
+    shape = (1, 2, 1, 8, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+    with pytest.raises(ValueError, match="at least 3 observations"):
+        connectivity.jackknife("coherence_magnitude")
+
+
+def test_jackknife_rejects_structured_result_measures():
+    """Component-result measures are not arrays; fail with a clear message
+    rather than deep inside the interval computation."""
+    rng = np.random.default_rng(9)
+    shape = (1, 6, 2, 16, 3)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+    with pytest.raises(TypeError, match="real array result"):
+        connectivity.jackknife("canonical_coherency", group_labels=np.array([0, 0, 1]))
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["minimum_phase_reconstruction_error", "from_transform", "from_multitaper"],
+)
+def test_jackknife_rejects_public_non_measure_methods(method):
+    """Diagnostics and alternate constructors are not connectivity measures."""
+    rng = np.random.default_rng(10)
+    shape = (1, 3, 2, 16, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+
+    with pytest.raises(ValueError, match="public connectivity measure"):
+        connectivity.jackknife(method)
+
+
+def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
+    """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
+    use it. Emulate that restriction on NumPy and exercise every path that
+    divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
+    from spectral_connectivity import MorletWavelet, Multitaper
+
+    real_divide = np.divide
+
+    def strict_divide(*args, **kwargs):
+        if "where" in kwargs:
+            raise TypeError("Wrong arguments {'where': ...}")
+        return real_divide(*args, **kwargs)
+
+    monkeypatch.setattr(np, "divide", strict_divide)
+    rng = np.random.default_rng(7)
+    data = rng.standard_normal((600, 3, 3))
+    wavelet = MorletWavelet(
+        data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
+    )
+    weighted = Connectivity.from_transform(wavelet)
+    assert np.isfinite(weighted.power()).any()
+    assert np.isfinite(weighted.coherence_magnitude()).any()
+    adaptive = Multitaper(data, 200.0, taper_weighting="adaptive")
+    assert np.isfinite(adaptive.fft()).all()
+    conn = Connectivity.from_multitaper(Multitaper(data, 200.0))
+    assert np.isfinite(conn.canonical_coherency(np.array([0, 0, 1])).scores).any()
+
+
+def test_conditional_granger_factorizes_each_channel_set_once():
+    """The full system and each leave-one-source-out system are factorized once.
+
+    Every (target, source) pair reuses those factorizations, so the cost is
+    ``n_signals + 1`` Wilson factorizations rather than ``n_signals ** 2``.
+    """
+    from spectral_connectivity import connectivity as connectivity_module
+
+    rng = np.random.default_rng(1)
+    shape = (1, 20, 3, 32, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+    with patch.object(
+        connectivity_module,
+        "minimum_phase_decomposition",
+        wraps=connectivity_module.minimum_phase_decomposition,
+    ) as factorize:
+        conn.conditional_spectral_granger_prediction()
+    assert factorize.call_count == shape[-1] + 1
+
+
 def test_complex64_directed_measure_uses_viable_wilson_precision():
     """Correlated complex64 spectra must converge at the default 1e-8 tolerance."""
     rng = np.random.default_rng(0)
@@ -1523,6 +2140,40 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
     reduced = conn._expectation_cross_spectral_matrix()
     reference = conn._expectation(conn._cross_spectral_matrix)
     np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
+
+
+def test_weighted_expectation_matches_manual_cross_spectrum():
+    rng = np.random.default_rng(922)
+    coefficients = rng.standard_normal((2, 3, 4, 5, 2)) + 1j * rng.standard_normal(
+        (2, 3, 4, 5, 2)
+    )
+    weights = rng.uniform(0.1, 1.0, size=(2, 3, 4, 5, 1))
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+
+    outer = coefficients[..., :, np.newaxis] * np.conjugate(
+        coefficients[..., np.newaxis, :]
+    )
+    expected = (
+        np.sum(outer * weights[..., np.newaxis], axis=(1, 2))
+        / np.sum(weights, axis=(1, 2))[..., np.newaxis]
+    )
+    np.testing.assert_allclose(
+        connectivity._expectation_cross_spectral_matrix(), expected
+    )
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        np.ones((2, 3, 4, 5)),
+        np.full((2, 3, 4, 5, 1), -1.0),
+        np.full((2, 3, 4, 5, 1), np.nan),
+    ],
+)
+def test_observation_weights_validation(weights):
+    coefficients = np.ones((2, 3, 4, 5, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="observation_weights"):
+        Connectivity(coefficients, observation_weights=weights)
 
 
 def _reference_normalized_cross_spectrum(conn):
@@ -2143,7 +2794,14 @@ def test_single_frequency_bin_raises_clear_error(measure):
         getattr(conn, measure)()
 
 
-@mark.parametrize("measure", ["phase_locking_value", "pairwise_phase_consistency"])
+@mark.parametrize(
+    "measure",
+    [
+        "phase_locking_value",
+        "pairwise_phase_consistency",
+        "corrected_imaginary_phase_locking_value",
+    ],
+)
 def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
     """A dead (zero) channel yields NaN with a UserWarning, not a RuntimeWarning."""
     import warnings
@@ -2155,4 +2813,87 @@ def test_phase_locking_zero_power_is_nan_without_runtime_warning(measure):
         warnings.simplefilter("error", RuntimeWarning)  # no leaked divide warning
         with pytest.warns(UserWarning, match="zero magnitude"):
             result = getattr(conn, measure)()
-    assert np.isnan(result).any()
+    # Every pair involving the dead channel is undefined, never a finite value.
+    assert np.isnan(result[..., 1, :]).all()
+    assert np.isnan(result[..., :, 1]).all()
+    assert np.isfinite(result[..., 0, 0]).all()
+
+
+def test_connectivity_jackknife_recomputes_leave_one_out_measure():
+    rng = np.random.default_rng(510)
+    coefficients = rng.standard_normal((1, 4, 3, 16, 2)) + 1j * rng.standard_normal(
+        (1, 4, 3, 16, 2)
+    )
+    connectivity = Connectivity(coefficients)
+
+    result = connectivity.jackknife("coherence_magnitude")
+
+    assert result.n_observations == 12
+    # coherence_magnitude is magnitude-*squared* coherence, so auto resolves to
+    # the atanh(sqrt(.)) variance-stabilizing transform, not plain atanh.
+    assert result.transformation == "fisher_squared"
+    assert result.estimate.shape == (1, 9, 2, 2)
+    assert result.standard_error.shape == result.estimate.shape
+    off_diagonal = result.estimate[..., 0, 1]
+    assert np.all(result.confidence_interval[0][..., 0, 1] <= off_diagonal)
+    assert np.all(result.confidence_interval[1][..., 0, 1] >= off_diagonal)
+
+
+def test_connectivity_jackknife_documents_and_accepts_fisher_squared():
+    """The public annotation and docstring must expose the supported transform."""
+    from typing import get_args
+
+    rng = np.random.default_rng(514)
+    coefficients = rng.standard_normal((1, 4, 2, 16, 2)) + 1j * rng.standard_normal(
+        (1, 4, 2, 16, 2)
+    )
+
+    annotation = Connectivity.jackknife.__annotations__["transformation"]
+    assert "fisher_squared" in get_args(annotation)
+    assert "fisher_squared" in (Connectivity.jackknife.__doc__ or "")
+    result = Connectivity(coefficients).jackknife(
+        "coherence_magnitude", transformation="fisher_squared"
+    )
+    assert result.transformation == "fisher_squared"
+
+
+def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result():
+    rng = np.random.default_rng(511)
+    coefficients = rng.standard_normal((1, 3, 2, 12, 2)) + 1j * rng.standard_normal(
+        (1, 3, 2, 12, 2)
+    )
+    connectivity = Connectivity(coefficients)
+
+    power = connectivity.jackknife("power")
+    assert power.transformation == "log"
+    assert np.all(power.confidence_interval[0] > 0)
+    with pytest.raises(TypeError, match="real-valued measure"):
+        connectivity.jackknife("coherency")
+
+
+@pytest.mark.parametrize("measure", ["coherence_magnitude", "phase_locking_value"])
+def test_single_observation_normalized_measure_warns(measure):
+    # A single observation (1 trial x 1 taper) forces every magnitude-normalized
+    # value to 1 (apparent perfect connectivity); this must warn rather than
+    # silently return a misleading result.
+    rng = np.random.default_rng(707)
+    coefficients = rng.standard_normal((1, 1, 1, 16, 3)) + 1j * rng.standard_normal(
+        (1, 1, 1, 16, 3)
+    )
+    connectivity = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="single observation"):
+        result = getattr(connectivity, measure)()
+    # And the degenerate result is indeed saturated at 1.
+    off_diagonal = result[..., 0, 1]
+    np.testing.assert_allclose(np.abs(off_diagonal), 1.0, atol=1e-6)
+
+
+def test_multiple_observations_normalized_measure_does_not_warn():
+    rng = np.random.default_rng(708)
+    coefficients = rng.standard_normal((1, 4, 3, 16, 3)) + 1j * rng.standard_normal(
+        (1, 4, 3, 16, 3)
+    )
+    connectivity = Connectivity(coefficients)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        connectivity.coherence_magnitude()

@@ -11,7 +11,44 @@ from spectral_connectivity.minimum_phase_decomposition import (
     _singular_matrix_mask,
     _solve_isolating_singular,
     minimum_phase_decomposition,
+    minimum_phase_reconstruction_error,
 )
+
+
+def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
+    """Analytic cross-spectrum S(f) of a VAR on the full FFT grid."""
+    n_lags, n_signals, _ = coefficients.shape
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    A = np.tile(np.eye(n_signals, dtype=complex), (n_fft, 1, 1))
+    for lag in range(n_lags):
+        A -= coefficients[lag][None] * np.exp(-1j * omega * (lag + 1))[:, None, None]
+    H = np.linalg.inv(A)
+    return (H @ noise_covariance.astype(complex) @ H.conj().swapaxes(-1, -2))[None]
+
+
+def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
+    """The diagnostic is tiny for a resolved spectrum and large when aliased."""
+    coefficients = np.array([[[0.9, 0.0], [0.8, 0.9]]])  # (1 lag, 2, 2)
+    noise = np.eye(2)
+
+    resolved = _analytic_var_spectrum(coefficients, noise, n_fft=1024)
+    coarse = _analytic_var_spectrum(coefficients, noise, n_fft=64)
+
+    resolved_error = float(minimum_phase_reconstruction_error(resolved)[0])
+    coarse_error = float(minimum_phase_reconstruction_error(coarse)[0])
+
+    assert resolved_error < 1e-4
+    assert coarse_error > 0.2
+    assert coarse_error > resolved_error
+
+
+def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():
+    coefficients = np.array([[[0.5, 0.0], [0.4, 0.5]]])
+    spectrum = _analytic_var_spectrum(coefficients, np.eye(2), n_fft=512)
+    factor = minimum_phase_decomposition(spectrum)
+    from_factor = minimum_phase_reconstruction_error(spectrum, factor)
+    recomputed = minimum_phase_reconstruction_error(spectrum)
+    np.testing.assert_allclose(from_factor, recomputed, rtol=1e-6, atol=1e-10)
 
 
 def test_minimum_phase_decomposition_non_convergence_warns_and_nans():

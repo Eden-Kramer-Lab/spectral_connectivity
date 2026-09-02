@@ -269,6 +269,69 @@ def _all_finite_units(
     return xp.isfinite(factor).reshape(*batch_shape, -1).all(axis=-1)
 
 
+def minimum_phase_reconstruction_error(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+    minimum_phase_factor: NDArray[np.complexfloating] | None = None,
+    *,
+    tolerance: float = 1e-8,
+    max_iterations: int = 500,
+) -> NDArray[np.floating]:
+    """Relative reconstruction error of a Wilson factorization, per sub-spectrum.
+
+    The Wilson iteration's convergence test only measures the change between
+    successive iterates; a stable iterate does not guarantee ``G Gᴴ ≈ S``. When
+    the cross-spectrum is under-resolved in frequency (its autocovariance has not
+    decayed within the window, so the periodic factorization aliases), the
+    iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
+    biasing every directed-connectivity measure built on it (spectral Granger,
+    DTF, PDC). This is an opt-in diagnostic: it returns
+    ``max_f ‖G Gᴴ − S‖ / max_f ‖S‖`` for each sub-spectrum so callers can check
+    factorization quality explicitly.
+
+    A relative error near machine precision indicates a faithful factorization;
+    values of a few percent are typical for finite-resolution estimated spectra;
+    tens of percent or more indicate the spectrum is too coarsely resolved to
+    trust the directed measures -- use a longer FFT (larger ``n_fft_samples`` /
+    ``n_time_samples_per_window``). The error is deliberately *not* raised as a
+    warning during factorization: it does not cleanly separate an under-resolved
+    spectrum from a merely short or noisy one, so an always-on threshold would
+    either cry wolf on ordinary short-window analyses or miss real problems.
+
+    Parameters
+    ----------
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
+        The cross-spectral matrix that was (or will be) factored.
+    minimum_phase_factor : NDArray[complexfloating], optional
+        A precomputed factor from :func:`minimum_phase_decomposition`. If omitted,
+        the factorization is computed here with ``tolerance`` / ``max_iterations``.
+    tolerance, max_iterations
+        Passed to :func:`minimum_phase_decomposition` when it must be computed.
+
+    Returns
+    -------
+    relative_error : NDArray[floating], shape (...,)
+        Maximum relative reconstruction error per sub-spectrum (the leading batch
+        dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN`` where the factor
+        is non-finite (the factorization did not converge).
+    """
+    if minimum_phase_factor is None:
+        minimum_phase_factor = minimum_phase_decomposition(
+            cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
+        )
+    batch_shape = cross_spectral_matrix.shape[:-3]
+    reconstructed = xp.matmul(
+        minimum_phase_factor, _conjugate_transpose(minimum_phase_factor)
+    )
+    reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
+    residual = xp.max(
+        xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
+    )
+    scale = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
+    scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
+    return residual / scale
+
+
 def _singular_matrix_mask(
     matrices: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
@@ -445,6 +508,16 @@ def minimum_phase_decomposition(
     "plus" operator (causal projection) until convergence. The algorithm
     may not converge for all time points; warnings are issued when the
     maximum iteration count is reached.
+
+    Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
+    factorization assumes the cross-spectrum is resolved finely enough in
+    frequency that the corresponding autocovariance decays within the analysis
+    window; an under-resolved (aliased) spectrum can satisfy the successive-
+    iterate convergence test yet reconstruct ``S`` poorly, silently biasing the
+    directed-connectivity measures built on it. Use
+    :func:`minimum_phase_reconstruction_error` to check factorization quality
+    explicitly, and a longer FFT (larger ``n_fft_samples`` /
+    ``n_time_samples_per_window``) if the error is large.
 
     References
     ----------

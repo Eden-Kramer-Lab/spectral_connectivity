@@ -52,8 +52,25 @@ def _encode(data):
             }
         }
     contiguous = np.ascontiguousarray(array, dtype=_STORE_DTYPE)
-    blob = base64.b64encode(gzip.compress(contiguous.tobytes(), 9)).decode("ascii")
+    # mtime=0 keeps the gzip header constant, so identical data serializes to
+    # identical bytes and a snapshot diff shows only arrays that changed.
+    blob = base64.b64encode(gzip.compress(contiguous.tobytes(), 9, mtime=0)).decode(
+        "ascii"
+    )
     return {"array": {"shape": list(array.shape), "gzip_b64": blob}}
+
+
+def test_encode_is_independent_of_wall_clock_time():
+    """Identical data must serialize to identical bytes on different days, so a
+    snapshot diff shows only arrays whose values changed."""
+    from unittest.mock import patch
+
+    array = np.arange(12.0).reshape(3, 4)
+    with patch("time.time", return_value=1_000_000.0):
+        first = _encode(array)
+    with patch("time.time", return_value=2_000_000.0):
+        second = _encode(array)
+    assert first == second
 
 
 def _decode(obj):
@@ -1014,12 +1031,8 @@ def test_ding_example1(snapshot):
     assert outputs == snapshot
 
 
-@pytest.mark.skip(
-    reason="conditional_spectral_granger_prediction is not implemented "
-    "(raises NotImplementedError); re-enable when it lands."
-)
-def test_nedungadi_example2(snapshot):
-    """Nedungadi Example 2: Conditional Granger (representative example showing confounds)."""
+def test_conditional_granger_three_signal_regression(snapshot):
+    """Regression coverage for conditional Granger on a three-signal VAR."""
     np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3

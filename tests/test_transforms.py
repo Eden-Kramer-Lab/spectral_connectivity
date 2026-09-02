@@ -1,16 +1,38 @@
+import warnings
+
 import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 from pytest import mark
 
+from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
+    MorletWavelet,
     Multitaper,
+    ShortTimeFourierTransform,
+    Welch,
     _add_axes,
     _get_low_bias_tapers,
     _multitaper_fft,
     _sliding_window,
     dpss_windows,
 )
+
+
+def test_transform_is_one_sided_flags():
+    """Every transform exposes an explicit is_one_sided layout flag.
+
+    The transform-neutral constructor consults this attribute when it is
+    present, so the base Multitaper should declare its layout rather than rely
+    solely on the backward-compatible ``getattr(..., False)`` fallback.
+    """
+    assert Multitaper.is_one_sided is False
+    assert ShortTimeFourierTransform.is_one_sided is False
+    assert Welch.is_one_sided is False
+    assert MorletWavelet.is_one_sided is True
+
+    time_series = np.ones((16, 1, 1))
+    assert Multitaper(time_series=time_series).is_one_sided is False
 
 
 def test__add_axes():
@@ -478,10 +500,10 @@ def test_multitaper_rejects_negative_sampling_freq():
     rng = np.random.default_rng(42)
     time_series = rng.standard_normal((100, 1, 1))
 
-    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+    with pytest.raises(ValueError, match=r"sampling_frequency must be finite"):
         Multitaper(time_series=time_series, sampling_frequency=-1000)
 
-    with pytest.raises(ValueError, match=r"sampling_frequency.*must be positive"):
+    with pytest.raises(ValueError, match=r"sampling_frequency must be finite"):
         Multitaper(time_series=time_series, sampling_frequency=0)
 
 
@@ -644,3 +666,543 @@ def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
     assert tuple(metadata) == m._PROVENANCE_FIELDS
     assert "unrelated_extension_attribute" not in metadata
     assert isinstance(metadata["start_time"], np.ndarray)
+
+
+def test_short_time_fourier_transform_hann_shape_and_peak():
+    sampling_frequency = 128
+    time = np.arange(256) / sampling_frequency
+    signal = np.sin(2 * np.pi * 16 * time)
+    data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
+    transform = ShortTimeFourierTransform(
+        data,
+        sampling_frequency=sampling_frequency,
+        time_window_duration=1,
+        time_window_step=0.5,
+    )
+
+    coefficients = transform.fft()
+    assert coefficients.shape == (3, 1, 1, 128, 2)
+    positive_power = np.abs(coefficients[0, 0, 0, :65, 0]) ** 2
+    assert transform.frequencies[np.argmax(positive_power)] == pytest.approx(16)
+    assert transform.frequency_resolution == pytest.approx(1.5)
+
+
+def test_welch_packs_segments_on_observation_axis():
+    data = np.random.default_rng(401).standard_normal((256, 3, 2))
+    transform = Welch(
+        data,
+        sampling_frequency=128,
+        n_time_samples_per_segment=64,
+        segment_overlap=0.5,
+    )
+
+    assert transform.n_segments == 7
+    assert transform.fft().shape == (1, 3, 7, 64, 2)
+    assert transform.time.shape == (1,)
+
+
+def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
+    sampling_frequency = 128
+    time = np.arange(256) / sampling_frequency
+    signal = np.sin(2 * np.pi * 16 * time)
+    data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
+    transform = MorletWavelet(
+        data,
+        sampling_frequency,
+        np.array([8.0, 16.0, 32.0]),
+        n_cycles=5,
+        smoothing_time=0.25,
+    )
+
+    coefficients = transform.fft()
+    assert coefficients.shape == (8, 1, 32, 3, 2)
+    mean_power = np.mean(np.abs(coefficients[..., 0]) ** 2, axis=(0, 1, 2))
+    assert transform.frequencies[np.argmax(mean_power)] == pytest.approx(16)
+
+    connectivity = Connectivity.from_transform(transform)
+    assert connectivity.power().shape[-2] == 3
+    np.testing.assert_array_equal(connectivity.frequencies, transform.frequencies)
+    canonical, _ = connectivity.canonical_coherence([0, 1])
+    mic, _ = connectivity.maximized_imaginary_coherency([0, 1])
+    assert canonical.shape[-3] == 3
+    assert mic.shape[-3] == 3
+    with pytest.raises(ValueError, match="full two-sided spectrum"):
+        connectivity.pairwise_spectral_granger_prediction()
+
+
+def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
+    """Both transforms report the one-sided PSD (2 * variance / fs) of white
+    noise, so wavelet and multitaper power are on the same scale."""
+    fs, variance = 500.0, 4.0
+    data = np.sqrt(variance) * np.random.default_rng(926).standard_normal(
+        (10000, 20, 1)
+    )
+    multitaper_power = Connectivity.from_multitaper(
+        Multitaper(data, fs, time_halfbandwidth_product=4, time_window_duration=2.0)
+    ).power()
+    morlet_power = Connectivity.from_transform(
+        MorletWavelet(
+            data,
+            fs,
+            [40.0, 80.0, 120.0],
+            n_cycles=7,
+            edge_mode="trim",
+            smoothing_time=0.5,
+        )
+    ).power()
+    expected = 2 * variance / fs
+    np.testing.assert_allclose(np.nanmean(multitaper_power), expected, rtol=0.05)
+    np.testing.assert_allclose(np.nanmean(morlet_power), expected, rtol=0.05)
+
+
+def test_morlet_default_zero_padding_matches_same_convolution():
+    from scipy.signal import fftconvolve
+
+    rng = np.random.default_rng(918)
+    data = rng.standard_normal((96, 2, 2))
+    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4)
+
+    sigma = 4 / (2 * np.pi * 8)
+    half_width = int(np.ceil(5 * sigma * 64))
+    wavelet_time = np.arange(-half_width, half_width + 1) / 64
+    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    expected = fftconvolve(
+        data,
+        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
+        mode="same",
+        axes=0,
+    ) * np.sqrt(2 / 64)
+
+    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
+
+
+@mark.parametrize("padding_mode", ["reflect", "edge"])
+def test_morlet_padding_modes_match_padded_convolution(padding_mode):
+    from scipy.signal import fftconvolve
+
+    rng = np.random.default_rng(920)
+    data = rng.standard_normal((96, 2, 2))
+    transform = MorletWavelet(
+        data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode
+    )
+
+    sigma = 4 / (2 * np.pi * 8)
+    half_width = int(np.ceil(5 * sigma * 64))
+    wavelet_time = np.arange(-half_width, half_width + 1) / 64
+    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
+    expected = fftconvolve(
+        padded,
+        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
+        mode="valid",
+        axes=0,
+    ) * np.sqrt(2 / 64)
+
+    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected, atol=1e-12)
+
+
+def test_morlet_edge_mask_nan_and_trim_contracts():
+    rng = np.random.default_rng(919)
+    data = rng.standard_normal((256, 2, 2))
+    frequencies = np.array([8.0, 16.0, 32.0])
+    kept = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        smoothing_time=0.25,
+        smoothing_frequency=3,
+        edge_mode="keep",
+    )
+    masked = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        smoothing_time=0.25,
+        smoothing_frequency=3,
+        edge_mode="nan",
+    )
+    trimmed = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=5,
+        edge_mode="trim",
+    )
+
+    np.testing.assert_array_equal(
+        kept.valid_time_frequency, masked.valid_time_frequency
+    )
+    assert not np.all(masked.valid_time_frequency)
+    masked_power = Connectivity.from_transform(masked).power()
+    np.testing.assert_array_equal(
+        np.isnan(masked_power[..., 0]), ~masked.valid_time_frequency
+    )
+    assert np.all(np.isfinite(Connectivity.from_transform(kept).power()))
+    assert np.all(trimmed.valid_time_frequency)
+    assert trimmed.time[0] >= trimmed.edge_half_width.max()
+    assert trimmed.time[-1] <= (len(data) - 1) / 128 - trimmed.edge_half_width.max()
+
+
+def test_morlet_hann_kernel_has_nonzero_endpoints():
+    """A Hann smoothing kernel must weight every sample in the window; a
+    symmetric Hann of the window size would zero its endpoints, so a size-3
+    kernel would not smooth at all."""
+    np.testing.assert_allclose(MorletWavelet._kernel_values(3, "hann"), [0.5, 1.0, 0.5])
+    np.testing.assert_allclose(
+        MorletWavelet._kernel_values(5, "hann"), [0.25, 0.75, 1.0, 0.75, 0.25]
+    )
+    assert np.all(MorletWavelet._kernel_values(2, "hann") > 0)
+
+
+@pytest.mark.parametrize("measure", ["phase_slope_index", "delay", "group_delay"])
+def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
+    """Measures that combine adjacent bins need equal spacing; a wavelet grid
+    is arbitrary, so a non-uniform grid must be rejected, not silently used."""
+    data = np.random.default_rng(927).standard_normal((2000, 2, 2))
+    non_uniform = Connectivity.from_transform(
+        MorletWavelet(data, 200, [4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
+    )
+    with pytest.raises(ValueError, match="uniformly spaced"):
+        getattr(non_uniform, measure)()
+    uniform = Connectivity.from_transform(
+        MorletWavelet(data, 200, [10.0, 20.0, 30.0, 40.0], smoothing_time=0.5)
+    )
+    getattr(uniform, measure)()
+
+
+@pytest.mark.parametrize("measure", ["delay", "group_delay"])
+def test_delay_significance_rejects_non_uniform_weights(measure):
+    """The zero-coherence null uses the raw observation count, which is wrong
+    for unequally weighted observations."""
+    data = np.random.default_rng(928).standard_normal((2000, 4, 2))
+    weighted = Connectivity.from_transform(
+        MorletWavelet(
+            data,
+            200,
+            np.arange(5.0, 60.0, 1.0),
+            smoothing_time=0.2,
+            smoothing_kernel="hann",
+        )
+    )
+    with pytest.raises(ValueError, match="non-uniform observation_weights"):
+        getattr(weighted, measure)(frequencies_of_interest=(10, 40))
+
+
+def test_morlet_boxcar_edge_mask_error_names_edge_mode():
+    """The debiased-measure guard must point at the knob that actually made the
+    weights non-uniform (edge masking), not at a kernel already in use."""
+    data = np.random.default_rng(925).standard_normal((400, 1, 2))
+    transform = MorletWavelet(
+        data,
+        200,
+        np.array([10.0, 20.0, 40.0]),
+        smoothing_kernel="boxcar",
+        edge_mode="nan",
+        smoothing_time=0.2,
+    )
+    connectivity = Connectivity.from_transform(
+        transform, expectation_type="time_trials_tapers"
+    )
+    with pytest.raises(ValueError, match="edge_mode"):
+        connectivity.pairwise_phase_consistency()
+
+
+def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
+    rng = np.random.default_rng(920)
+    data = rng.standard_normal((128, 3, 2))
+    frequencies = np.array([8.0, 12.0, 20.0])
+    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    smoothed = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        n_cycles=3,
+        smoothing_frequency=3,
+        smoothing_kernel="boxcar",
+    )
+    raw_coefficients = raw.fft()[:, :, 0]
+    # Reflection maps the first frequency neighborhood to [12, 8, 12] Hz.
+    expected = np.mean(
+        raw_coefficients[:, :, [1, 0, 1], :][..., :, :, np.newaxis]
+        * np.conjugate(raw_coefficients[:, :, [1, 0, 1], :][..., :, np.newaxis, :]),
+        axis=(1, 2),
+    )
+    actual = Connectivity.from_transform(smoothed).cross_spectral_density()[:, 0]
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
+    rng = np.random.default_rng(922)
+    data = rng.standard_normal((128, 3, 2))
+    frequencies = np.array([6.0, 8.0, 12.0, 16.0, 20.0])
+    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    smoothed = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        n_cycles=3,
+        smoothing_frequency=5,
+        smoothing_kernel="hann",
+    )
+    raw_coefficients = raw.fft()[:, :, 0]  # (time, trial, frequency, signal)
+    weights = np.array([0.25, 0.75, 1.0, 0.75, 0.25])  # interior of hann(7)
+
+    # Centre frequency (index 2): neighborhood [0, 1, 2, 3, 4], no reflection.
+    outer = raw_coefficients[..., :, np.newaxis] * np.conjugate(
+        raw_coefficients[..., np.newaxis, :]
+    )
+    weighted = (
+        np.sum(weights[None, None, :, None, None] * outer, axis=2) / weights.sum()
+    )
+    expected = weighted.mean(axis=1)  # unweighted mean over trials
+
+    actual = Connectivity.from_transform(smoothed).cross_spectral_density()[:, 2]
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
+    data = np.random.default_rng(921).standard_normal((128, 1, 2))
+    transform = MorletWavelet(
+        data,
+        64,
+        np.array([8.0, 12.0, 20.0]),
+        n_cycles=3,
+        smoothing_time=0.25,
+        smoothing_kernel="hann",
+    )
+    connectivity = Connectivity.from_transform(transform)
+
+    assert np.unique(transform.observation_weights).size > 1
+    with pytest.raises(ValueError, match="non-uniform observation_weights"):
+        connectivity.pairwise_phase_consistency()
+
+
+def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
+    rng = np.random.default_rng(923)
+    transform = MorletWavelet(
+        rng.standard_normal((192, 4, 4)),
+        64,
+        np.array([6.0, 10.0, 16.0, 24.0]),
+        n_cycles=3,
+        smoothing_time=0.25,
+        smoothing_kernel="hann",
+        edge_mode="nan",
+    )
+    connectivity = Connectivity.from_transform(transform)
+    scores, _ = connectivity.global_coherence()
+    canonical, _ = connectivity.canonical_coherence(np.array([0, 0, 1, 1]))
+
+    invalid = ~transform.valid_time_frequency
+    assert np.isnan(scores[..., 0][invalid]).all()
+    assert np.isnan(canonical[..., 0, 1][invalid]).all()
+
+    time_index, frequency_index = np.argwhere(transform.valid_time_frequency)[0]
+    coefficients = transform.fft()[time_index, :, :, frequency_index, :]
+    weights = transform.observation_weights[time_index, :, :, frequency_index, 0]
+    weighted = coefficients.reshape(-1, 4).T * np.sqrt(weights.reshape(-1))[None, :]
+
+    singular_values = np.linalg.svd(weighted, compute_uv=False)
+    expected_global = singular_values[0] ** 2 / np.sum(singular_values**2)
+    np.testing.assert_allclose(scores[time_index, frequency_index, 0], expected_global)
+
+    def _whiten_group(indices):
+        u, _, vh = np.linalg.svd(weighted[indices], full_matrices=False)
+        return u @ vh
+
+    first = _whiten_group([0, 1])
+    second = _whiten_group([2, 3])
+    expected_canonical = (
+        np.linalg.svd(first @ np.conjugate(second.T), compute_uv=False)[0] ** 2
+    )
+    np.testing.assert_allclose(
+        canonical[time_index, frequency_index, 0, 1], expected_canonical
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"smoothing_frequency": 2}, "positive odd integer"),
+        ({"smoothing_kernel": "triangle"}, "boxcar.*hann"),
+        ({"padding_mode": "wrap"}, "constant.*reflect.*edge"),
+        ({"edge_mode": "drop"}, "keep.*nan.*trim"),
+    ],
+)
+def test_morlet_rejects_invalid_edge_and_smoothing_controls(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        MorletWavelet(
+            np.ones((64, 1, 2)),
+            sampling_frequency=64,
+            frequencies=[8, 16],
+            **kwargs,
+        )
+
+
+def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
+    data = np.random.default_rng(402).standard_normal((256, 4, 2))
+    default = Multitaper(data, sampling_frequency=128, time_halfbandwidth_product=3)
+    uniform = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="uniform",
+    )
+    eigen = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="eigen",
+    )
+    adaptive = Multitaper(
+        data,
+        sampling_frequency=128,
+        time_halfbandwidth_product=3,
+        taper_weighting="adaptive",
+    )
+
+    np.testing.assert_array_equal(default.fft(), uniform.fft())
+    assert eigen.taper_eigenvalues is not None
+    assert len(eigen.taper_eigenvalues) == eigen.fft().shape[2]
+    assert np.all(np.isfinite(eigen.fft()))
+    assert np.all(np.isfinite(adaptive.fft()))
+    assert not np.allclose(adaptive.fft(), uniform.fft())
+
+
+def test_adaptive_weighting_matches_eigen_for_white_noise():
+    # For a flat (white) spectrum the process noise level equals the mean taper
+    # power, so Thomson's denominator collapses to the spectrum and the adaptive
+    # weights approach sqrt(eigenvalue) -- i.e. the eigenvalue weighting. This
+    # only holds when the noise term is on the same power-spectral-density scale
+    # as the periodogram; the previous code left it a factor of the sampling
+    # frequency too large, which this oracle would catch.
+    data = np.random.default_rng(913).standard_normal((3000, 1, 1))
+    eigen = Multitaper(
+        data,
+        sampling_frequency=500,
+        time_halfbandwidth_product=4,
+        taper_weighting="eigen",
+    ).fft()
+    adaptive = Multitaper(
+        data,
+        sampling_frequency=500,
+        time_halfbandwidth_product=4,
+        taper_weighting="adaptive",
+        adaptive_max_iterations=200,
+    ).fft()
+    relative_difference = np.abs(adaptive - eigen) / (np.abs(eigen) + 1e-12)
+    assert float(np.median(relative_difference)) < 0.05
+
+
+def test_adaptive_weighting_is_invariant_to_input_scale():
+    # The weights are ratios, so scaling the input must not change them once the
+    # noise term is on the periodogram's scale.
+    data = np.random.default_rng(914).standard_normal((1024, 1, 2))
+
+    def transform(values, weighting):
+        return Multitaper(
+            values,
+            sampling_frequency=256,
+            time_halfbandwidth_product=3,
+            taper_weighting=weighting,
+        ).fft()
+
+    uniform = transform(data, "uniform")
+    uniform_scaled = transform(data * 1000, "uniform")
+    adaptive = transform(data, "adaptive")
+    adaptive_scaled = transform(data * 1000, "adaptive")
+    weights = adaptive / uniform
+    weights_scaled = adaptive_scaled / uniform_scaled
+    np.testing.assert_allclose(weights, weights_scaled, rtol=1e-9, atol=1e-9)
+
+
+def test_adaptive_weighting_warns_on_non_convergence():
+    data = np.random.default_rng(915).standard_normal((512, 1, 2))
+    multitaper = Multitaper(
+        data,
+        sampling_frequency=256,
+        time_halfbandwidth_product=4,
+        taper_weighting="adaptive",
+        adaptive_max_iterations=1,
+        adaptive_tolerance=1e-15,
+    )
+    with pytest.warns(UserWarning, match="did not converge"):
+        multitaper.fft()
+
+
+def test_welch_default_segment_warns_on_coarse_resolution():
+    data = np.random.default_rng(916).standard_normal((30000, 1, 1))
+    with pytest.warns(UserWarning, match="default segment length"):
+        Welch(data, sampling_frequency=30000)
+
+
+def test_welch_explicit_segment_does_not_warn():
+    data = np.random.default_rng(917).standard_normal((30000, 1, 1))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        Welch(data, sampling_frequency=30000, segment_duration=1.0)
+
+
+@pytest.mark.parametrize("transform_cls", [ShortTimeFourierTransform, Welch])
+def test_transform_rejects_non_positive_sampling_frequency(transform_cls):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        transform_cls(np.ones((64, 1, 2)), sampling_frequency=0)
+
+
+def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
+    """A one-sample smoothing window with a larger step must still decimate
+    ``time`` and ``observation_weights`` to match ``fft()``."""
+    rng = np.random.default_rng(5)
+    wavelet = MorletWavelet(
+        rng.standard_normal((2000, 1, 2)),
+        sampling_frequency=1000.0,
+        frequencies=[10.0, 20.0],
+        smoothing_time=0.001,
+        smoothing_step=0.005,
+    )
+    n_time = wavelet.fft().shape[0]
+    assert n_time == 400
+    assert wavelet.time.shape == (n_time,)
+    assert wavelet.observation_weights.shape[0] == n_time
+    assert wavelet.valid_time_frequency.shape[0] == n_time
+    Connectivity.from_transform(wavelet)
+
+
+@pytest.mark.parametrize("bad_rate", [float("nan"), float("inf")])
+def test_multitaper_rejects_non_finite_sampling_frequency(bad_rate):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        Multitaper(np.ones((64, 1, 2)), sampling_frequency=bad_rate)
+
+
+def test_morlet_rejects_non_positive_sampling_frequency():
+    with pytest.raises(ValueError, match="sampling_frequency must be finite"):
+        MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=-1, frequencies=[4, 8])
+
+
+def test_morlet_rejects_frequencies_at_or_above_nyquist():
+    with pytest.raises(ValueError, match="below Nyquist"):
+        MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=100, frequencies=[10, 60])
+
+
+def test_welch_rejects_out_of_range_overlap():
+    with pytest.raises(ValueError, match="segment_overlap"):
+        Welch(np.ones((256, 1, 2)), sampling_frequency=128, segment_overlap=1.0)
+
+
+def test_nonuniform_weighting_rejects_custom_tapers():
+    with pytest.raises(ValueError, match="custom tapers"):
+        Multitaper(
+            np.ones((64, 2, 2)),
+            sampling_frequency=64,
+            time_halfbandwidth_product=2,
+            n_tapers=3,
+            tapers=np.ones((64, 3)),
+            taper_weighting="adaptive",
+        )

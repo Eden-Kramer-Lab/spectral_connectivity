@@ -19,6 +19,19 @@ BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
 
 
+def is_positive_integer(value: Any, minimum: int = 1) -> bool:
+    """Whether ``value`` is an integer (not a bool) of at least ``minimum``.
+
+    ``bool`` is an ``int`` subclass, so it is rejected explicitly; NumPy
+    integer scalars are accepted.
+    """
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, np.integer))
+        and bool(value >= minimum)
+    )
+
+
 def to_numpy(array: Any) -> NDArray:
     """Return an array on the host without implicit device conversion.
 

@@ -1,15 +1,17 @@
 """Transforms time domain signals to the frequency domain."""
 
 from logging import getLogger
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
+from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity.utils import (
     BackendArray,
     is_gpu_enabled,
+    is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
 )
@@ -33,6 +35,52 @@ MIN_EIGENVALUE_THRESHOLD = 0.9
 # - The -1 ensures we stay within the well-concentrated region
 # - Reference: Slepian (1978), "Prolate spheroidal wave functions"
 TAPER_MULTIPLIER = 2.0
+
+
+def _validate_sampling_frequency(sampling_frequency: float) -> None:
+    """Raise an actionable error for a non-finite or non-positive sampling rate.
+
+    Shared by every transform so the newer STFT/Welch/Morlet classes give the
+    same guidance as :class:`Multitaper` rather than a bare one-line message.
+    """
+    if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
+        raise ValueError(
+            f"sampling_frequency must be finite and positive, got "
+            f"{sampling_frequency!r}.\n"
+            "\n"
+            "The sampling frequency is the rate at which your data was collected.\n"
+            "Common values:\n"
+            "  - EEG: 250-1000 Hz\n"
+            "  - LFP/ephys: 1000-30000 Hz\n"
+            "  - fMRI: 0.5-2 Hz (1/TR)\n"
+            "\n"
+            "Check your data acquisition settings or metadata."
+        )
+
+
+def _resolve_sample_count(
+    explicit: int | None,
+    duration: float | None,
+    sampling_frequency: float,
+    mismatch_message: str,
+) -> int | None:
+    """Resolve a window/segment length from an explicit count or a duration.
+
+    Returns the sample count when either ``explicit`` or ``duration`` is given
+    (cross-checking that they agree when both are), or ``None`` when neither is
+    provided so the caller can apply its own default. Shared by the STFT window,
+    STFT step, and Welch segment resolution.
+    """
+    if explicit is not None:
+        samples = int(explicit)
+        if duration is not None and int(np.around(duration * sampling_frequency)) != (
+            samples
+        ):
+            raise ValueError(mismatch_message)
+        return samples
+    if duration is not None:
+        return int(np.around(duration * sampling_frequency))
+    return None
 
 
 class MultitaperParameters(TypedDict):
@@ -414,7 +462,7 @@ def suggest_parameters(
 if is_gpu_enabled():
     try:
         import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, next_fast_len
+        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
     except ImportError as exc:
         raise RuntimeError(
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
@@ -452,8 +500,24 @@ if is_gpu_enabled():
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
-    from scipy.fft import fft, fftfreq, next_fast_len
+    from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.signal import detrend as _backend_detrend
+
+
+def _divide_where(
+    numerator: BackendArray,
+    denominator: BackendArray,
+    condition: BackendArray,
+    fill: float,
+) -> BackendArray:
+    """Elementwise ``numerator / denominator`` where ``condition``, else ``fill``.
+
+    Backend-neutral replacement for ``xp.divide(..., where=...)``: CuPy ufuncs
+    do not accept the public ``where`` keyword, and the substituted unit
+    denominator also avoids NumPy divide warnings.
+    """
+    quotient = numerator / xp.where(condition, denominator, 1)
+    return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
 
 
 def _immutable_array_snapshot(value: Any) -> BackendArray:
@@ -549,6 +613,19 @@ class Multitaper:
         the analysis is already parallelized at a higher level (e.g. across
         trials or subjects). This is a CPU-only option; it is ignored on the GPU
         backend, whose FFT is already parallel.
+    taper_weighting : {"uniform", "eigen", "adaptive"}, default="uniform"
+        How DPSS eigencoefficients contribute to spectra. ``"uniform"`` keeps
+        historical equal weighting (a good default). ``"eigen"`` down-weights
+        the less concentrated tapers by their eigenvalues. ``"adaptive"``
+        iteratively estimates frequency- and signal-specific Thomson weights;
+        reach for it when high spectral dynamic range or line noise makes some
+        tapers systematically leakier, at the cost of extra iterations for a
+        typically modest bias reduction. Non-uniform modes require internally
+        generated DPSS tapers.
+    adaptive_max_iterations : int, default=50
+        Iteration ceiling for Thomson adaptive weighting.
+    adaptive_tolerance : float, default=1e-8
+        Relative convergence tolerance for the adaptive spectrum estimate.
 
     Attributes
     ----------
@@ -619,6 +696,10 @@ class Multitaper:
     Trials: 100, Signals: 5
     """
 
+    #: Multitaper returns the full two-sided FFT spectrum (both positive and
+    #: negative frequencies), so consumers must not assume a one-sided layout.
+    is_one_sided = False
+
     _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
         {
             "sampling_frequency",
@@ -626,6 +707,9 @@ class Multitaper:
             "detrend_type",
             "is_low_bias",
             "fft_workers",
+            "taper_weighting",
+            "adaptive_max_iterations",
+            "adaptive_tolerance",
         }
     )
     _PROVENANCE_FIELDS = (
@@ -642,6 +726,9 @@ class Multitaper:
         "nyquist_frequency",
         "sampling_frequency",
         "start_time",
+        "taper_weighting",
+        "adaptive_max_iterations",
+        "adaptive_tolerance",
         "time_halfbandwidth_product",
         "time_window_duration",
         "time_window_step",
@@ -675,6 +762,9 @@ class Multitaper:
         n_time_samples_per_step: int | None = None,
         is_low_bias: bool = True,
         fft_workers: int | None = None,
+        taper_weighting: Literal["uniform", "eigen", "adaptive"] = "uniform",
+        adaptive_max_iterations: int = 50,
+        adaptive_tolerance: float = 1e-8,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         self._time_series = _immutable_array_snapshot(time_series)
@@ -696,6 +786,33 @@ class Multitaper:
                 f"default) for SciPy's single-threaded FFT."
             )
         self.fft_workers = fft_workers
+        if taper_weighting not in {"uniform", "eigen", "adaptive"}:
+            raise ValueError(
+                "taper_weighting must be 'uniform', 'eigen', or 'adaptive', got "
+                f"{taper_weighting!r}. Use 'uniform' for the historical equal "
+                "weighting, 'eigen' to weight tapers by their spectral "
+                "concentration, or 'adaptive' for Thomson's iterative weighting."
+            )
+        if not is_positive_integer(adaptive_max_iterations):
+            raise ValueError(
+                "adaptive_max_iterations must be a positive integer, got "
+                f"{adaptive_max_iterations!r}."
+            )
+        if not np.isfinite(adaptive_tolerance) or adaptive_tolerance <= 0:
+            raise ValueError(
+                "adaptive_tolerance must be finite and positive, got "
+                f"{adaptive_tolerance!r}."
+            )
+        if tapers is not None and taper_weighting != "uniform":
+            raise ValueError(
+                "Eigenvalue/adaptive weighting requires internally generated "
+                "DPSS tapers; custom tapers do not provide concentration ratios. "
+                "Use taper_weighting='uniform' with custom tapers, or omit the "
+                "tapers argument to let Multitaper generate DPSS tapers."
+            )
+        self.taper_weighting = taper_weighting
+        self.adaptive_max_iterations = int(adaptive_max_iterations)
+        self.adaptive_tolerance = float(adaptive_tolerance)
 
         # Validate that time_series is 3D
         if self._time_series.ndim != 3:
@@ -738,19 +855,7 @@ class Multitaper:
 
             raise ValueError(error_msg)
 
-        # Validate sampling_frequency
-        if sampling_frequency <= 0:
-            raise ValueError(
-                f"sampling_frequency must be positive, got {sampling_frequency}.\n"
-                "\n"
-                "The sampling frequency is the rate at which your data was collected.\n"
-                "Common values:\n"
-                "  - EEG: 250-1000 Hz\n"
-                "  - LFP/ephys: 1000-30000 Hz\n"
-                "  - fMRI: 0.5-2 Hz (1/TR)\n"
-                "\n"
-                "Check your data acquisition settings or metadata."
-            )
+        _validate_sampling_frequency(sampling_frequency)
 
         # Validate time_halfbandwidth_product
         if time_halfbandwidth_product < 1:
@@ -890,6 +995,7 @@ class Multitaper:
         self._start_time = _immutable_array_snapshot(start_time)
         self._n_fft_samples = n_fft_samples
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
+        self._taper_eigenvalues: BackendArray | None = None
         # Reject a fractional n_tapers at construction so the reported
         # n_tapers metadata cannot disagree with the (integer) taper count used.
         if n_tapers is not None and (
@@ -1089,15 +1195,30 @@ FFT samples:          {self.n_fft_samples}
 
         """
         if self._tapers is None:
-            self._tapers = _make_tapers(
+            tapers, eigenvalues = dpss_windows(
                 self.n_time_samples_per_window,
-                self.sampling_frequency,
                 self.time_halfbandwidth_product,
                 self.n_tapers,
                 is_low_bias=self.is_low_bias,
             )
-            self._tapers = _immutable_array_snapshot(self._tapers)
+            self._tapers = _immutable_array_snapshot(
+                tapers.T * xp.sqrt(self.sampling_frequency)
+            )
+            self._taper_eigenvalues = _immutable_array_snapshot(eigenvalues)
         return _readonly_array_copy(self._tapers)
+
+    @property
+    def taper_eigenvalues(self) -> NDArray[np.floating] | None:
+        """DPSS spectral-concentration ratios used for taper weighting.
+
+        Returns ``None`` for custom tapers, whose concentration ratios are not
+        known. The returned array is a detached read-only copy.
+        """
+        if self._tapers is None:
+            _ = self.tapers
+        if self._taper_eigenvalues is None:
+            return None
+        return _readonly_array_copy(self._taper_eigenvalues)
 
     @property
     def time_window_duration(self) -> float:
@@ -1372,13 +1493,44 @@ FFT samples:          {self.n_fft_samples}
 
         logger.info(self)
 
-        return _multitaper_fft(
+        coefficients = _multitaper_fft(
             self._tapers_for_fft(),
             time_series,
             self.n_fft_samples,
             self.sampling_frequency,
             workers=self.fft_workers,
         ).swapaxes(2, -1)
+        if self.taper_weighting == "uniform":
+            return coefficients
+
+        assert self._taper_eigenvalues is not None
+        eigenvalues = self._taper_eigenvalues
+        if self.taper_weighting == "eigen":
+            weights = xp.sqrt(eigenvalues)
+            weights = weights / xp.sqrt(xp.mean(weights**2))
+            return (
+                coefficients
+                * weights[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
+            )
+
+        # Thomson's adaptive weights balance the taper periodogram against the
+        # process-noise level, which must be on the *same* power-spectral-density
+        # scale. ``fft()`` returns ``fft(taper * x) / sampling_frequency`` with
+        # tapers scaled by ``sqrt(sampling_frequency)``, so ``|coefficients| ** 2``
+        # is a PSD (signal ** 2 / Hz) while ``var(time_series)`` is a raw
+        # time-domain variance (signal ** 2). Dividing by ``sampling_frequency``
+        # puts the noise term on the PSD scale; without it the noise is inflated
+        # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
+        noise_power_spectral_density = (
+            xp.var(time_series, axis=-1) / self.sampling_frequency
+        )
+        return _apply_adaptive_taper_weights(
+            coefficients,
+            eigenvalues,
+            noise_power_spectral_density,
+            max_iterations=self.adaptive_max_iterations,
+            tolerance=self.adaptive_tolerance,
+        )
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot without an unnecessary public view."""
@@ -1388,6 +1540,681 @@ FFT samples:          {self.n_fft_samples}
             _ = self.tapers
         assert self._tapers is not None
         return self._tapers
+
+
+class ShortTimeFourierTransform(Multitaper):
+    """Short-time Fourier transform using an L2-normalized Hann window.
+
+    The returned coefficients follow the same five-dimensional contract as
+    :class:`Multitaper`, with a singleton taper axis. This makes the transform
+    directly usable with :meth:`Connectivity.from_transform` and
+    :func:`spectral_connectivity.wrapper.connectivity_to_xarray`.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float, default=1000
+        Samples per second (Hz).
+    detrend_type : {"constant", "linear"} or None, default="constant"
+        Detrending applied to each window before the FFT.
+    time_window_duration : float, optional
+        Window length in seconds. Give this or ``n_time_samples_per_window``.
+    time_window_step : float, optional
+        Step between successive windows in seconds (defaults to the window
+        duration, i.e. no overlap).
+    start_time : float or ndarray, default=0
+        Time of the first sample, in seconds.
+    n_fft_samples : int, optional
+        FFT length; defaults to the window length.
+    n_time_samples_per_window : int, optional
+        Window length in samples (alternative to ``time_window_duration``).
+    n_time_samples_per_step : int, optional
+        Step between windows in samples (alternative to ``time_window_step``).
+    fft_workers : int, optional
+        Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
+    """
+
+    _provenance_prefix = "stft_"
+    is_one_sided = False
+
+    def __init__(
+        self,
+        time_series: NDArray[np.floating],
+        sampling_frequency: float = 1000,
+        detrend_type: str | None = "constant",
+        time_window_duration: float | None = None,
+        time_window_step: float | None = None,
+        start_time: float | NDArray[np.floating] = 0,
+        n_fft_samples: int | None = None,
+        n_time_samples_per_window: int | None = None,
+        n_time_samples_per_step: int | None = None,
+        fft_workers: int | None = None,
+    ) -> None:
+        _validate_sampling_frequency(sampling_frequency)
+        for name, value in (
+            ("time_window_duration", time_window_duration),
+            ("time_window_step", time_window_step),
+        ):
+            if value is not None and (not np.isfinite(value) or value <= 0):
+                raise ValueError(f"{name} must be finite and positive.")
+        for name, value in (
+            ("n_time_samples_per_window", n_time_samples_per_window),
+            ("n_time_samples_per_step", n_time_samples_per_step),
+        ):
+            if value is not None and not is_positive_integer(value):
+                raise ValueError(f"{name} must be a positive integer.")
+        data_shape: tuple[int, ...] = tuple(getattr(time_series, "shape", ()))
+        if len(data_shape) != 3:
+            raise ValueError(
+                "time_series must have shape (n_time_samples, n_trials, n_signals)."
+            )
+        resolved_window = _resolve_sample_count(
+            n_time_samples_per_window,
+            time_window_duration,
+            sampling_frequency,
+            "time_window_duration and n_time_samples_per_window resolve to "
+            "different Hann window lengths.",
+        )
+        window_samples = (
+            int(data_shape[0]) if resolved_window is None else resolved_window
+        )
+        if window_samples < 2:
+            raise ValueError("A Hann transform window requires at least 2 samples.")
+
+        resolved_step = _resolve_sample_count(
+            n_time_samples_per_step,
+            time_window_step,
+            sampling_frequency,
+            "time_window_step and n_time_samples_per_step resolve to different "
+            "step lengths.",
+        )
+        step_samples = window_samples if resolved_step is None else resolved_step
+
+        window = scipy_hann(window_samples, sym=False)
+        norm = np.linalg.norm(window)
+        if norm == 0:
+            raise ValueError("The requested Hann window has zero energy.")
+        window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
+        super().__init__(
+            time_series,
+            sampling_frequency=sampling_frequency,
+            time_halfbandwidth_product=1,
+            detrend_type=detrend_type,
+            time_window_duration=window_samples / sampling_frequency,
+            time_window_step=step_samples / sampling_frequency,
+            n_tapers=1,
+            tapers=window,
+            start_time=start_time,
+            n_fft_samples=n_fft_samples,
+            n_time_samples_per_window=window_samples,
+            n_time_samples_per_step=step_samples,
+            is_low_bias=False,
+            fft_workers=fft_workers,
+        )
+
+    @property
+    def frequency_resolution(self) -> float:
+        """Equivalent-noise bandwidth of the periodic Hann window in Hz."""
+        return 1.5 / self.time_window_duration
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        metadata = super()._provenance_metadata()
+        for key in (
+            "time_halfbandwidth_product",
+            "is_low_bias",
+            "taper_weighting",
+            "adaptive_max_iterations",
+            "adaptive_tolerance",
+        ):
+            metadata.pop(key, None)
+        metadata["window"] = "hann_periodic"
+        return metadata
+
+
+class Welch:
+    """Welch spectral transform using overlapping Hann-windowed segments.
+
+    Segment coefficients are represented on the taper/observation axis, so the
+    default ``trials_tapers`` expectation averages both trials and Welch
+    segments and returns a single spectrum centered on the analyzed record.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float, default=1000
+        Samples per second (Hz).
+    segment_duration : float, optional
+        Segment length in seconds; sets the frequency resolution
+        (``1 / segment_duration`` Hz). Strongly recommended -- the fallback of
+        256 samples does not scale with the sampling rate. Give this or
+        ``n_time_samples_per_segment``.
+    segment_overlap : float, default=0.5
+        Fractional overlap between successive segments, in ``[0, 1)``.
+    n_time_samples_per_segment : int, optional
+        Segment length in samples (alternative to ``segment_duration``).
+    detrend_type : {"constant", "linear"} or None, default="constant"
+        Detrending applied to each segment before the FFT.
+    start_time : float or ndarray, default=0
+        Time of the first sample, in seconds.
+    n_fft_samples : int, optional
+        FFT length; defaults to the segment length.
+    fft_workers : int, optional
+        Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
+    """
+
+    _provenance_prefix = "welch_"
+    is_one_sided = False
+
+    def __init__(
+        self,
+        time_series: NDArray[np.floating],
+        sampling_frequency: float = 1000,
+        segment_duration: float | None = None,
+        segment_overlap: float = 0.5,
+        n_time_samples_per_segment: int | None = None,
+        detrend_type: str | None = "constant",
+        start_time: float | NDArray[np.floating] = 0,
+        n_fft_samples: int | None = None,
+        fft_workers: int | None = None,
+    ) -> None:
+        _validate_sampling_frequency(sampling_frequency)
+        if segment_duration is not None and (
+            not np.isfinite(segment_duration) or segment_duration <= 0
+        ):
+            raise ValueError("segment_duration must be finite and positive.")
+        if n_time_samples_per_segment is not None and not is_positive_integer(
+            n_time_samples_per_segment, minimum=2
+        ):
+            raise ValueError(
+                "n_time_samples_per_segment must be an integer of at least 2."
+            )
+        n_time_samples = int(getattr(time_series, "shape", (0,))[0])
+        segment_samples = _resolve_sample_count(
+            n_time_samples_per_segment,
+            segment_duration,
+            sampling_frequency,
+            "segment_duration and n_time_samples_per_segment resolve to different "
+            "lengths.",
+        )
+        if segment_samples is None:
+            import warnings
+
+            segment_samples = min(256, n_time_samples)
+            # SciPy's historical 256-sample default does not scale with the
+            # sampling rate, so at typical electrophysiology rates it yields a
+            # very short window and coarse frequency resolution (e.g. ~117 Hz at
+            # 30 kHz), collapsing neuroscience bands. Warn so the choice is
+            # explicit rather than silent.
+            frequency_resolution = sampling_frequency / segment_samples
+            if frequency_resolution > 4:
+                warnings.warn(
+                    f"Welch is using the default segment length of "
+                    f"{segment_samples} samples, giving a "
+                    f"{segment_samples / sampling_frequency * 1e3:.1f} ms window "
+                    f"and {frequency_resolution:.1f} Hz frequency resolution at "
+                    f"sampling_frequency={sampling_frequency:g} Hz. This is too "
+                    "coarse for typical neuroscience bands. Pass segment_duration "
+                    "(seconds) or n_time_samples_per_segment to set the resolution "
+                    "explicitly.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
+            raise ValueError("segment_overlap must satisfy 0 <= overlap < 1.")
+        step_samples = max(1, int(np.around(segment_samples * (1 - segment_overlap))))
+        self._stft = ShortTimeFourierTransform(
+            time_series,
+            sampling_frequency=sampling_frequency,
+            detrend_type=detrend_type,
+            start_time=start_time,
+            n_fft_samples=n_fft_samples,
+            n_time_samples_per_window=segment_samples,
+            n_time_samples_per_step=step_samples,
+            fft_workers=fft_workers,
+        )
+        self.sampling_frequency = sampling_frequency
+        self.segment_overlap = float(segment_overlap)
+        self.n_time_samples_per_segment = segment_samples
+        self.n_time_samples_per_step = step_samples
+
+    @property
+    def frequencies(self) -> NDArray[np.floating]:
+        return self._stft.frequencies
+
+    @property
+    def time(self) -> NDArray[np.floating]:
+        return xp.asarray(self._stft.time).mean(keepdims=True)
+
+    @property
+    def n_trials(self) -> int:
+        return self._stft.n_trials
+
+    @property
+    def n_signals(self) -> int:
+        return self._stft.n_signals
+
+    @property
+    def n_segments(self) -> int:
+        return len(self._stft.time)
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        coefficients = self._stft.fft()[:, :, 0, :, :]
+        return xp.transpose(coefficients, (1, 0, 2, 3))[xp.newaxis, ...]
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        return {
+            "detrend_type": self._stft.detrend_type or "None",
+            "fft_workers": self._stft.fft_workers
+            if self._stft.fft_workers is not None
+            else "None",
+            "n_fft_samples": self._stft.n_fft_samples,
+            "n_segments": self.n_segments,
+            "n_signals": self.n_signals,
+            "n_time_samples_per_segment": self.n_time_samples_per_segment,
+            "n_time_samples_per_step": self.n_time_samples_per_step,
+            "n_trials": self.n_trials,
+            "sampling_frequency": self.sampling_frequency,
+            "segment_overlap": self.segment_overlap,
+            "window": "hann_periodic",
+        }
+
+
+class MorletWavelet:
+    """Complex Morlet transform with explicit edge and 2-D smoothing controls.
+
+    Coefficients contain only the requested positive frequencies and therefore
+    support functional, but not Wilson-factorized directed, connectivity. With
+    multiple trials, the default expectation averages trials at each time point.
+    For a single continuous trial, set ``smoothing_time`` to collect neighboring
+    wavelet coefficients on the observation axis; otherwise normalized pairwise
+    measures are degenerate at unit magnitude.
+
+    Parameters
+    ----------
+    time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+    sampling_frequency : float
+        Samples per second (Hz).
+    frequencies : ndarray, shape (n_frequencies,)
+        Strictly increasing positive frequencies (Hz) below Nyquist.
+    n_cycles : float or ndarray, default=7.0
+        Number of oscillation cycles per wavelet, scalar or one per frequency.
+        Controls the time/frequency-resolution trade-off: more cycles give
+        sharper frequency but coarser time resolution.
+    decimation : int, default=1
+        Keep every ``decimation``-th output sample to reduce memory/compute.
+    smoothing_time : float, optional
+        Duration (seconds) of a sliding window whose coefficients are collected
+        onto the observation axis. Set this for single-trial data so normalized
+        measures (coherence, PLV) are not degenerate.
+    smoothing_step : float, optional
+        Step (seconds) between smoothing windows; defaults to ``smoothing_time``
+        and requires it.
+    smoothing_frequency : int, default=1
+        Odd number of adjacent requested frequency bins collected into each
+        local estimate. Frequency boundaries are reflected, matching the
+        boundary convention used by MNE's time-resolved spectral smoothing.
+    smoothing_kernel : {"boxcar", "hann"}, default="boxcar"
+        Separable time/frequency weights for the local estimate. ``"boxcar"``
+        preserves the historical equal-weight smoothing; ``"hann"`` reduces
+        discontinuities at the neighborhood boundary. The Hann weights are the
+        interior of a symmetric Hann window two samples wider than the
+        neighborhood, so every sample carries a non-zero weight (e.g.
+        ``smoothing_frequency=3`` weights the bins ``[0.5, 1, 0.5]``).
+    padding_mode : {"constant", "reflect", "edge"}, default="constant"
+        How the time series is extended before convolution. ``"constant"``
+        (zero padding) preserves the historical transform.
+    edge_mode : {"keep", "nan", "trim"}, default="keep"
+        Treatment of coefficients whose five-standard-deviation wavelet support
+        extends beyond the original record. ``"keep"`` retains padded values,
+        ``"nan"`` makes derived estimates NaN, and ``"trim"`` removes times
+        that are not valid for every requested frequency.
+    zero_mean : bool, default=True
+        Subtract the wavelet's mean so it has no DC response.
+    start_time : float, default=0.0
+        Time of the first sample, in seconds.
+    """
+
+    _provenance_prefix = "morlet_"
+    # Coefficients are already on the one-sided PSD scale (see fft), so
+    # Connectivity must not double them again.
+    is_one_sided = True
+
+    def __init__(
+        self,
+        time_series: NDArray[np.floating],
+        sampling_frequency: float,
+        frequencies: NDArray[np.floating],
+        n_cycles: float | NDArray[np.floating] = 7.0,
+        *,
+        decimation: int = 1,
+        smoothing_time: float | None = None,
+        smoothing_step: float | None = None,
+        smoothing_frequency: int = 1,
+        smoothing_kernel: Literal["boxcar", "hann"] = "boxcar",
+        padding_mode: Literal["constant", "reflect", "edge"] = "constant",
+        edge_mode: Literal["keep", "nan", "trim"] = "keep",
+        zero_mean: bool = True,
+        start_time: float = 0.0,
+    ) -> None:
+        data = xp.asarray(time_series)
+        if data.ndim != 3:
+            raise ValueError(
+                "time_series must have shape (n_time_samples, n_trials, n_signals)."
+            )
+        _validate_sampling_frequency(sampling_frequency)
+        frequency_values = np.asarray(frequencies, dtype=float)
+        if (
+            frequency_values.ndim != 1
+            or frequency_values.size == 0
+            or not np.all(np.isfinite(frequency_values))
+            or not np.all(frequency_values > 0)
+            or not np.all(np.diff(frequency_values) > 0)
+            or np.any(frequency_values >= sampling_frequency / 2)
+        ):
+            raise ValueError(
+                "frequencies must be a non-empty, finite, strictly increasing "
+                "positive array below Nyquist."
+            )
+        cycle_values = np.asarray(n_cycles, dtype=float)
+        if cycle_values.ndim == 0:
+            cycle_values = np.full(frequency_values.shape, float(cycle_values))
+        if cycle_values.shape != frequency_values.shape or not np.all(
+            np.isfinite(cycle_values) & (cycle_values > 0)
+        ):
+            raise ValueError(
+                "n_cycles must be a positive scalar or have one value per frequency."
+            )
+        if not is_positive_integer(decimation):
+            raise ValueError("decimation must be a positive integer.")
+        if smoothing_time is not None and (
+            not np.isfinite(smoothing_time) or smoothing_time <= 0
+        ):
+            raise ValueError("smoothing_time must be finite and positive.")
+        if smoothing_step is not None and (
+            smoothing_time is None
+            or not np.isfinite(smoothing_step)
+            or smoothing_step <= 0
+        ):
+            raise ValueError(
+                "smoothing_step requires smoothing_time and must be finite and positive."
+            )
+        if not is_positive_integer(smoothing_frequency) or smoothing_frequency % 2 == 0:
+            raise ValueError("smoothing_frequency must be a positive odd integer.")
+        if smoothing_kernel not in {"boxcar", "hann"}:
+            raise ValueError("smoothing_kernel must be 'boxcar' or 'hann'.")
+        if padding_mode not in {"constant", "reflect", "edge"}:
+            raise ValueError("padding_mode must be 'constant', 'reflect', or 'edge'.")
+        if padding_mode == "reflect" and data.shape[0] < 2:
+            raise ValueError("padding_mode='reflect' requires at least 2 time samples.")
+        if edge_mode not in {"keep", "nan", "trim"}:
+            raise ValueError("edge_mode must be 'keep', 'nan', or 'trim'.")
+
+        self._time_series = _immutable_array_snapshot(data)
+        self.sampling_frequency = float(sampling_frequency)
+        self._frequencies = _immutable_array_snapshot(frequency_values)
+        self._n_cycles = _immutable_array_snapshot(cycle_values)
+        self.decimation = int(decimation)
+        self.smoothing_time = smoothing_time
+        self.smoothing_step = smoothing_step
+        self.smoothing_frequency = int(smoothing_frequency)
+        self.smoothing_kernel = smoothing_kernel
+        self.padding_mode = padding_mode
+        self.edge_mode = edge_mode
+        self.zero_mean = bool(zero_mean)
+        self.start_time = float(start_time)
+
+        half_widths = np.maximum(
+            1,
+            np.ceil(
+                5
+                * cycle_values
+                / (2 * np.pi * frequency_values)
+                * self.sampling_frequency
+            ).astype(int),
+        )
+        self._edge_half_width_samples = _immutable_array_snapshot(half_widths)
+        sample_indices = np.arange(0, data.shape[0], self.decimation)
+        validity = (sample_indices[:, np.newaxis] >= half_widths) & (
+            sample_indices[:, np.newaxis] < data.shape[0] - half_widths
+        )
+        if edge_mode == "trim":
+            keep = np.all(validity, axis=1)
+            if not np.any(keep):
+                raise ValueError(
+                    "edge_mode='trim' leaves no samples valid for every requested "
+                    "frequency; use fewer cycles, a longer record, or edge_mode='nan'."
+                )
+            sample_indices = sample_indices[keep]
+            validity = validity[keep]
+        self._sample_indices = _immutable_array_snapshot(sample_indices)
+        self._base_validity = _immutable_array_snapshot(validity)
+
+        n_decimated = len(sample_indices)
+        if smoothing_time is None:
+            self._smoothing_samples = 1
+            self._smoothing_step_samples = 1
+        else:
+            output_rate = self.sampling_frequency / self.decimation
+            self._smoothing_samples = int(np.around(smoothing_time * output_rate))
+            step_time = smoothing_time if smoothing_step is None else smoothing_step
+            self._smoothing_step_samples = int(np.around(step_time * output_rate))
+            if self._smoothing_samples < 1 or self._smoothing_step_samples < 1:
+                raise ValueError(
+                    "smoothing_time/smoothing_step resolve to less than one "
+                    "decimated sample."
+                )
+            if self._smoothing_samples > n_decimated:
+                raise ValueError(
+                    "smoothing_time is longer than the decimated wavelet record."
+                )
+
+    @property
+    def frequencies(self) -> NDArray[np.floating]:
+        return _readonly_array_copy(self._frequencies)
+
+    @property
+    def n_cycles(self) -> NDArray[np.floating]:
+        return _readonly_array_copy(self._n_cycles)
+
+    @property
+    def n_trials(self) -> int:
+        return int(self._time_series.shape[1])
+
+    @property
+    def n_signals(self) -> int:
+        return int(self._time_series.shape[2])
+
+    @property
+    def time(self) -> NDArray[np.floating]:
+        sample_times = self.start_time + self._sample_indices / self.sampling_frequency
+        if self._smoothing_samples == 1 and self._smoothing_step_samples == 1:
+            return sample_times
+        return _sliding_window(
+            sample_times,
+            self._smoothing_samples,
+            self._smoothing_step_samples,
+            axis=0,
+        ).mean(axis=-1)
+
+    @property
+    def edge_half_width(self) -> NDArray[np.floating]:
+        """Wavelet half-support at each frequency, in seconds."""
+        return _readonly_array_copy(
+            self._edge_half_width_samples / self.sampling_frequency
+        )
+
+    def _smooth_frequency_axis(
+        self, array: BackendArray, frequency_axis: int
+    ) -> BackendArray:
+        """Reflect-pad and window ``frequency_axis`` for adjacent-bin smoothing.
+
+        Appends the smoothing-frequency window as a new trailing axis (or a
+        singleton axis when no frequency smoothing is requested). Shared by
+        :meth:`_windowed_validity` and :meth:`fft` so the padding convention
+        (reflect, or edge for a single frequency) cannot drift between the
+        validity mask and the coefficients it describes.
+        """
+        frequency_half_width = self.smoothing_frequency // 2
+        if not frequency_half_width:
+            return array[..., xp.newaxis]
+        frequency_mode = "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        pad_width = [(0, 0)] * array.ndim
+        pad_width[frequency_axis] = (frequency_half_width, frequency_half_width)
+        padded = xp.pad(array, tuple(pad_width), mode=frequency_mode)
+        return _sliding_window(padded, self.smoothing_frequency, axis=frequency_axis)
+
+    def _windowed_validity(self) -> BackendArray:
+        """Strict validity of every time/frequency output neighborhood.
+
+        Recomputed on each call rather than cached: ``MorletWavelet`` does not
+        enforce parameter immutability, so a cache keyed on object identity could
+        silently go stale if a smoothing parameter were mutated after first
+        access. The computation is a cheap boolean pad-and-window.
+        """
+        validity = xp.asarray(self._base_validity)
+        windows = _sliding_window(
+            validity,
+            self._smoothing_samples,
+            self._smoothing_step_samples,
+            axis=0,
+        )
+        windows = self._smooth_frequency_axis(windows, frequency_axis=1)
+        return xp.all(windows, axis=(-2, -1))
+
+    @property
+    def valid_time_frequency(self) -> NDArray[np.bool_]:
+        """Mask where the full wavelet and smoothing support is in-record."""
+        return _readonly_array_copy(self._windowed_validity())
+
+    @staticmethod
+    def _kernel_values(size: int, kernel: str) -> BackendArray:
+        if kernel == "boxcar" or size == 1:
+            return xp.ones(size, dtype=float)
+        # Interior of a symmetric Hann window two samples wider, so every
+        # sample in the window carries a non-zero weight (a symmetric Hann of
+        # ``size`` itself has zero endpoints, and a size-3 kernel would then
+        # weight only the centre sample).
+        return xp.asarray(scipy_hann(size + 2, sym=True)[1:-1])
+
+    def _smoothing_kernel_values(self) -> BackendArray:
+        """Time-by-frequency smoothing weights, shape (n_time_window, n_freq_window)."""
+        time_weights = self._kernel_values(
+            self._smoothing_samples, self.smoothing_kernel
+        )
+        frequency_weights = self._kernel_values(
+            self.smoothing_frequency, self.smoothing_kernel
+        )
+        return time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
+
+    @property
+    def observation_weights(self) -> NDArray[np.floating]:
+        """Weights consumed by :class:`Connectivity` for local expectations."""
+        kernel = self._smoothing_kernel_values().reshape(1, 1, -1, 1, 1)
+        shape = (
+            len(self.time),
+            self.n_trials,
+            self._smoothing_samples * self.smoothing_frequency,
+            len(self._frequencies),
+            1,
+        )
+        weights = xp.broadcast_to(kernel, shape).copy()
+        if self.edge_mode == "nan":
+            weights *= self._windowed_validity()[
+                :, xp.newaxis, xp.newaxis, :, xp.newaxis
+            ]
+        return _readonly_array_copy(weights)
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        # Pad once to the widest wavelet and transform the data once; each
+        # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
+        # Padding wider than a given wavelet needs does not change its 'valid'
+        # output: the extra samples never enter that wavelet's support.
+        n_time_samples = self._time_series.shape[0]
+        max_half_width = int(xp.max(self._edge_half_width_samples))
+        padded = xp.pad(
+            self._time_series,
+            ((max_half_width, max_half_width), (0, 0), (0, 0)),
+            mode=self.padding_mode,
+        )
+        n_fft = next_fast_len(padded.shape[0] + 2 * max_half_width)
+        # The wavelets are complex128; transform the data at that precision so
+        # a float32 record is not convolved in single precision.
+        data_spectrum = fft(padded.astype(xp.float64, copy=False), n=n_fft, axis=0)
+        # Unit-energy wavelet response scaled to a one-sided power spectral
+        # density: |coefficient|^2 is in signal^2 / Hz and, like Multitaper's
+        # power, counts the negative-frequency half of a real signal (the
+        # factor 2). This is FieldTrip's convention; MNE omits both factors.
+        scale = xp.sqrt(2.0 / self.sampling_frequency)
+
+        coefficients: list[BackendArray] = []
+        for frequency, cycles, half_width in zip(
+            self._frequencies,
+            self._n_cycles,
+            self._edge_half_width_samples,
+            strict=True,
+        ):
+            sigma = cycles / (2 * xp.pi * frequency)
+            half_width = int(half_width)
+            wavelet_time = (
+                xp.arange(-half_width, half_width + 1) / self.sampling_frequency
+            )
+            oscillation = xp.exp(2j * xp.pi * frequency * wavelet_time)
+            gaussian = xp.exp(-(wavelet_time**2) / (2 * sigma**2))
+            if self.zero_mean:
+                oscillation = oscillation - xp.exp(
+                    -0.5 * (2 * xp.pi * frequency * sigma) ** 2
+                )
+            wavelet = oscillation * gaussian
+            wavelet = wavelet / xp.sqrt(xp.sum(xp.abs(wavelet) ** 2))
+            kernel = xp.conjugate(wavelet[::-1])
+            kernel_spectrum = fft(kernel, n=n_fft)[:, xp.newaxis, xp.newaxis]
+            convolved = ifft(data_spectrum * kernel_spectrum, axis=0)
+            # The 'valid' output centred on original sample i sits at
+            # full-convolution index i + max_half_width + half_width.
+            start = max_half_width + half_width
+            coefficient = convolved[start : start + n_time_samples] * scale
+            coefficients.append(coefficient[self._sample_indices])
+
+        transformed = xp.stack(coefficients, axis=2)
+        windows = _sliding_window(
+            transformed,
+            self._smoothing_samples,
+            self._smoothing_step_samples,
+            axis=0,
+        )
+        windows = self._smooth_frequency_axis(windows, frequency_axis=2)
+        windows = xp.transpose(windows, (0, 1, 4, 5, 2, 3))
+        return windows.reshape(
+            windows.shape[0],
+            windows.shape[1],
+            self._smoothing_samples * self.smoothing_frequency,
+            windows.shape[4],
+            windows.shape[5],
+        )
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        return {
+            "decimation": self.decimation,
+            "frequencies_json": str(to_numpy(self._frequencies).tolist()),
+            "n_cycles_json": str(to_numpy(self._n_cycles).tolist()),
+            "n_signals": self.n_signals,
+            "n_trials": self.n_trials,
+            "sampling_frequency": self.sampling_frequency,
+            "edge_mode": self.edge_mode,
+            "padding_mode": self.padding_mode,
+            "smoothing_frequency": self.smoothing_frequency,
+            "smoothing_kernel": self.smoothing_kernel,
+            "smoothing_step": self.smoothing_step
+            if self.smoothing_step is not None
+            else "None",
+            "smoothing_time": self.smoothing_time
+            if self.smoothing_time is not None
+            else "None",
+            "zero_mean": self.zero_mean,
+        }
 
 
 def prepare_time_series(
@@ -1646,39 +2473,74 @@ def _multitaper_fft(
     )
 
 
-def _make_tapers(
-    n_time_samples_per_window: int,
-    sampling_frequency: float,
-    time_halfbandwidth_product: float,
-    n_tapers: int,
-    is_low_bias: bool = True,
-) -> NDArray[np.floating]:
-    """Return discrete prolate spheroidal sequences (tapers) for multitaper analysis.
+def _apply_adaptive_taper_weights(
+    coefficients: NDArray[np.complexfloating],
+    eigenvalues: NDArray[np.floating],
+    noise_power_spectral_density: NDArray[np.floating],
+    *,
+    max_iterations: int,
+    tolerance: float,
+) -> NDArray[np.complexfloating]:
+    """Apply Thomson adaptive DPSS weights to Fourier coefficients.
 
-    Returns the Discrete prolate spheroidal sequences (tapers) for
-    multi-taper spectral analysis.
+    The iterative spectrum estimate follows Thomson's frequency- and
+    signal-specific weighting. Returned weights are RMS-normalized across the
+    taper axis, allowing :class:`Connectivity`'s ordinary taper mean to compute
+    the corresponding weighted auto- and cross-spectra without changing their
+    scale.
 
-    Parameters
-    ----------
-    n_time_samples_per_window : int
-    sampling_frequency : int
-    time_halfbandwidth_product : float
-    n_tapers : int
-    is_low_bias : bool
-        Keep only tapers with eigenvalues > MIN_EIGENVALUE_THRESHOLD (0.9)
-
-    Returns
-    -------
-    tapers : array_like, shape (n_time_samples_per_window, n_tapers)
-
+    ``noise_power_spectral_density`` must already be on the same
+    power-spectral-density scale as ``|coefficients| ** 2`` (see the caller in
+    :meth:`Multitaper.fft`); a raw time-domain variance would over-weight the
+    noise term by a factor of the sampling frequency.
     """
-    tapers, _ = dpss_windows(
-        n_time_samples_per_window,
-        time_halfbandwidth_product,
-        n_tapers,
-        is_low_bias=is_low_bias,
-    )
-    return tapers.T * xp.sqrt(sampling_frequency)
+    import warnings
+
+    taper_power = xp.abs(coefficients) ** 2
+    n_initial = min(2, coefficients.shape[2])
+    spectrum = xp.mean(taper_power[:, :, :n_initial, :, :], axis=2)
+
+    concentration = eigenvalues[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
+    root_concentration = xp.sqrt(concentration)
+    noise = noise_power_spectral_density[:, :, xp.newaxis, xp.newaxis, :]
+    eps = xp.finfo(taper_power.dtype).eps
+
+    weights = xp.ones_like(taper_power, dtype=taper_power.dtype)
+    for _ in range(max_iterations):
+        expanded_spectrum = spectrum[:, :, xp.newaxis, :, :]
+        denominator = concentration * expanded_spectrum + (1.0 - concentration) * noise
+        weights = _divide_where(
+            root_concentration * expanded_spectrum,
+            denominator,
+            xp.abs(denominator) > eps,
+            0.0,
+        )
+        weight_power = weights**2
+        weight_sum = xp.sum(weight_power, axis=2)
+        updated = _divide_where(
+            xp.sum(weight_power * taper_power, axis=2),
+            weight_sum,
+            weight_sum > eps,
+            0.0,
+        )
+        scale = xp.maximum(xp.abs(spectrum), eps)
+        if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
+            spectrum = updated
+            break
+        spectrum = updated
+    else:
+        warnings.warn(
+            f"Adaptive taper weighting did not converge within {max_iterations} "
+            f"iterations (tolerance={tolerance:g}). The returned spectrum uses the "
+            "last iterate, which may bias power and connectivity estimates. "
+            "Increase adaptive_max_iterations or relax adaptive_tolerance.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    rms = xp.sqrt(xp.mean(weights**2, axis=2, keepdims=True))
+    normalized_weights = _divide_where(weights, rms, rms > eps, 1.0)
+    return coefficients * normalized_weights
 
 
 def dpss_windows(

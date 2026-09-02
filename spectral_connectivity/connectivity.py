@@ -1,9 +1,11 @@
 """Compute metrics for relating signals in the frequency domain."""
 
+import inspect
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from functools import cached_property, partial, wraps
-from itertools import combinations
+from itertools import combinations, permutations
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
@@ -14,13 +16,20 @@ from scipy.ndimage import label
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
+from spectral_connectivity.minimum_phase_decomposition import (
+    minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
+)
 from spectral_connectivity.statistics import (
+    JackknifeResult,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
+    jackknife_confidence_interval,
 )
+from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
     is_gpu_enabled,
+    is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
     to_numpy,
@@ -30,6 +39,11 @@ if TYPE_CHECKING:
     from spectral_connectivity.transforms import Multitaper
 
 logger = getLogger(__name__)
+
+# Public helpers on Connectivity that are not connectivity measures. Keep this
+# definition shared with the high-level wrapper so method discovery and
+# jackknife validation cannot drift apart.
+_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
 
 if is_gpu_enabled():
     try:
@@ -83,6 +97,69 @@ EXPECTATION = {
 # Tikhonov regularization factor for stabilizing matrix inversions
 # Used to prevent numerical instability with near-singular matrices
 TIKHONOV_REGULARIZATION_FACTOR = 1e-12
+
+
+@dataclass(frozen=True)
+class MultivariateConnectivityResult:
+    """Component-resolved multivariate connectivity and spatial projections.
+
+    ``scores`` has shape ``(..., frequency, connection, component)``. Filters
+    and patterns, when present, append ``(side, signal)`` where side 0 is the
+    first group and side 1 is the second. Entries for signals outside a side's
+    group are NaN. ``connections`` contains the corresponding group-label pair
+    for each connection and ``group_membership`` has shape ``(group, signal)``.
+
+    Attributes
+    ----------
+    method : str
+        Name of the measure that produced the result.
+    scores : NDArray[number], shape (..., frequency, connection, component)
+        Per-component connectivity. Complex for ``canonical_coherency``
+        (magnitude times ``exp(-1j * phi)``), real for MIC. A component a
+        connection cannot supply (its smaller group has fewer channels than the
+        requested ``n_components``) is NaN.
+    connections : NDArray, shape (connection, 2)
+        The ``(first_group_label, second_group_label)`` pair for each connection.
+    group_labels : NDArray, shape (group,)
+        Sorted unique group labels.
+    group_membership : NDArray[bool], shape (group, signal)
+        ``True`` where a signal belongs to a group.
+    filters : NDArray[floating] or None, shape (..., frequency, connection, component, side, signal)
+        Spatial filters mapping channel data to each component; NaN outside a
+        side's group.
+    patterns : NDArray[floating] or None, same shape as ``filters``
+        Haufe-style patterns (``within-group real CSD @ filter``) mapping each
+        component back to channel space.
+    """
+
+    method: str
+    scores: NDArray[np.number]
+    connections: NDArray[Any]
+    group_labels: NDArray[Any]
+    group_membership: NDArray[np.bool_]
+    filters: NDArray[np.floating] | None = None
+    patterns: NDArray[np.floating] | None = None
+
+
+def _validated_regularization(value: Any) -> float:
+    """Return a finite non-negative scalar regularization factor."""
+    message = f"regularization must be a finite non-negative scalar, got {value!r}."
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise ValueError(message)
+    regularization = float(value)
+    if not np.isfinite(regularization) or regularization < 0:
+        raise ValueError(message)
+    return regularization
+
+
+def _validated_rank(rank: int | None) -> int | None:
+    """Return a positive-integer rank or None, rejecting other values."""
+    if rank is not None and not is_positive_integer(rank):
+        raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+    return rank
+
 
 # global_coherence computes, per time-frequency bin, the strongest components of
 # the (n_signals, n_estimates) coefficient matrix. When the decomposition
@@ -196,6 +273,8 @@ def _non_negative_frequencies(axis: int) -> Callable:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             measure = connectivity_measure(*args, **kwargs)
             if measure is not None:
+                if args and getattr(args[0], "_is_one_sided", False):
+                    return measure
                 n_frequencies = measure.shape[axis]
                 non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
                 return xp.take(measure, indices=non_neg_index, axis=axis)
@@ -249,12 +328,21 @@ class Connectivity:
         directed measures return NaN with a non-convergence warning, increase
         this value. The factorization returns early once every sub-spectrum has
         converged, so a large ceiling is cheap for well-conditioned data.
+    is_one_sided : bool, default=False
+        Whether coefficients contain only non-negative frequencies. One-sided
+        transforms are returned without FFT half-spectrum slicing or power
+        doubling and cannot be used by Wilson-factorized directed measures.
+    observation_weights : ndarray, optional
+        Finite non-negative weights with shape ``(time, trial, taper,
+        frequency, 1)``. They are applied to every expectation and shared
+        across signals. Transform constructors supply these automatically when
+        smoothing uses a non-uniform kernel or masks invalid edge estimates.
 
     Attributes
     ----------
     n_observations : int
-        Effective number of independent observations after averaging,
-        used for statistical inference.
+        Number of trial/taper observations reduced by the expectation. This is
+        the raw count, not a weighted effective sample size.
 
     See Also
     --------
@@ -316,6 +404,8 @@ class Connectivity:
         dtype: np.dtype = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
+        is_one_sided: bool = False,
+        observation_weights: NDArray[np.floating] | None = None,
         *,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
@@ -331,12 +421,14 @@ class Connectivity:
         else:
             self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
+        self.observation_weights = observation_weights
         # Wilson minimum-phase factorization controls, used by the directed
         # measures. Near-singular cross-spectral matrices can need more than the
         # default iterations to converge; exposing these lets callers recover
         # (the non-convergence warning advises increasing max_iterations).
         self._minimum_phase_tolerance = minimum_phase_tolerance
         self._minimum_phase_max_iterations = minimum_phase_max_iterations
+        self._is_one_sided = bool(is_one_sided)
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -364,15 +456,67 @@ class Connectivity:
 
         if frequencies is not None:
             _validate_coordinate("frequencies", frequencies, n_fft_samples)
+            frequency_values = xp.asarray(frequencies)
+            if self._is_one_sided and (
+                bool(xp.any(frequency_values < 0))
+                or (
+                    frequency_values.size > 1
+                    and bool(xp.any(xp.diff(frequency_values) <= 0))
+                )
+            ):
+                raise ValueError(
+                    "One-sided frequencies must be non-negative and strictly "
+                    "increasing."
+                )
         if time is not None:
             _validate_coordinate("time", time, n_time_windows)
         if frequencies is None:
-            frequencies = xp.fft.fftfreq(n_fft_samples)
+            frequencies = (
+                xp.linspace(0.0, 0.5, n_fft_samples)
+                if self._is_one_sided
+                else xp.fft.fftfreq(n_fft_samples)
+            )
         if time is None:
             time = xp.arange(n_time_windows)
         self._frequencies = frequencies
         self._dtype = dtype
         self.time = to_numpy(time)
+
+    @property
+    def observation_weights(self) -> BackendArray | None:
+        """Non-negative weights used when averaging spectral observations.
+
+        Weights have shape ``(time, trial, taper, frequency, 1)`` and are
+        shared by every signal. A detached, read-only copy is returned so cached
+        expectations cannot be invalidated by mutation.
+        """
+        if self._observation_weights is None:
+            return None
+        return mark_readonly_if_supported(self._observation_weights.copy())
+
+    @observation_weights.setter
+    def observation_weights(self, value: NDArray[np.floating] | None) -> None:
+        if value is None:
+            self._observation_weights = None
+            self._clear_cached_intermediates()
+            return
+        weights = xp.asarray(value)
+        expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
+        if tuple(weights.shape) != expected_shape:
+            raise ValueError(
+                "observation_weights must have shape "
+                f"{expected_shape}, got {tuple(weights.shape)}. Weights must be "
+                "shared across signals."
+            )
+        if not bool(xp.all(xp.isfinite(weights))) or bool(xp.any(weights < 0)):
+            raise ValueError(
+                "observation_weights must contain only finite, non-negative values."
+            )
+        real_dtype = self._fourier_coefficients.real.dtype
+        self._observation_weights = mark_readonly_if_supported(
+            weights.astype(real_dtype, copy=True)
+        )
+        self._clear_cached_intermediates()
 
     def _clear_cached_intermediates(self) -> None:
         """Drop cached properties that depend on the spectral inputs.
@@ -487,19 +631,30 @@ class Connectivity:
         time_stale = (
             getattr(self, "time", None) is not None and len(self.time) != n_time_windows
         )
-        if frequencies_stale or time_stale:
+        observation_weights = getattr(self, "_observation_weights", None)
+        expected_weight_shape = (*value.shape[:-1], 1)
+        weights_stale = observation_weights is not None and (
+            tuple(observation_weights.shape) != expected_weight_shape
+        )
+        if frequencies_stale or time_stale or weights_stale:
             warnings.warn(
                 "Reassigning fourier_coefficients changed the FFT/time geometry; "
-                "the frequency/time coordinates were reset to defaults "
-                "(normalized frequencies / integer indices). Construct a new "
-                "Connectivity if you need specific coordinates for the new data.",
+                "incompatible frequency/time coordinates and observation weights "
+                "were reset to defaults or cleared. Construct a new Connectivity "
+                "if you need specific coordinates or weights for the new data.",
                 UserWarning,
                 stacklevel=2,
             )
             if frequencies_stale:
-                self._frequencies = xp.fft.fftfreq(n_fft_samples)
+                self._frequencies = (
+                    xp.linspace(0.0, 0.5, n_fft_samples)
+                    if getattr(self, "_is_one_sided", False)
+                    else xp.fft.fftfreq(n_fft_samples)
+                )
             if time_stale:
                 self.time = xp.arange(n_time_windows)
+            if weights_stale:
+                self._observation_weights = None
 
     @property
     def expectation_type(self) -> str:
@@ -584,6 +739,17 @@ class Connectivity:
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
+        # The transform contract (sidedness, observation weights) is part of the
+        # public constructor and must always reach the instance: a subclass that
+        # cannot accept it fails loudly here rather than silently computing on a
+        # one-sided or weighted spectrum as if it were two-sided and unweighted.
+        # The keywords are passed only when non-default so a subclass mirroring
+        # the older signature keeps working with a plain two-sided transform.
+        if bool(getattr(multitaper_instance, "is_one_sided", False)):
+            init_kwargs["is_one_sided"] = True
+        weights = getattr(multitaper_instance, "observation_weights", None)
+        if weights is not None:
+            init_kwargs["observation_weights"] = weights
         # fft() returns a freshly built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
         # pass the private keyword when the subclass has not overridden __init__:
@@ -592,6 +758,30 @@ class Connectivity:
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
         return cls(**init_kwargs)
+
+    @classmethod
+    def from_transform(
+        cls,
+        transform: Any,
+        expectation_type: str = "trials_tapers",
+        dtype: Any = xp.complex128,
+        minimum_phase_tolerance: float = 1e-8,
+        minimum_phase_max_iterations: int = 500,
+    ) -> "Connectivity":
+        """Construct from any supported spectral transform.
+
+        ``transform`` must expose ``fft()``, ``frequencies``, and ``time`` and
+        return the standard five-dimensional coefficient layout. This is the
+        transform-neutral spelling of :meth:`from_multitaper`; the older method
+        remains fully supported.
+        """
+        return cls.from_multitaper(
+            transform,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -614,6 +804,37 @@ class Connectivity:
                 f"fourier_coefficients[..., channel_index]."
             )
 
+    def _require_uniform_frequency_grid(self, measure: str) -> None:
+        """Raise if the frequency coordinate is not equally spaced.
+
+        Measures that combine adjacent bins (phase slope, delay estimates)
+        interpret one bin step as one frequency step; a wavelet transform can
+        expose an arbitrary grid, on which those combinations are meaningless.
+        """
+        steps = np.diff(to_numpy(self.frequencies))
+        if steps.size and not np.allclose(steps, steps[0], rtol=1e-6, atol=0.0):
+            raise ValueError(
+                f"{measure} requires uniformly spaced frequencies because it "
+                f"combines adjacent frequency bins, but the grid steps range "
+                f"from {steps.min():g} to {steps.max():g} Hz. Use a linearly "
+                "spaced frequency grid (e.g. MorletWavelet(frequencies="
+                "np.arange(low, high, step)))."
+            )
+
+    def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
+        """Raise if observation weights are non-uniform for a measure that
+        assumes equally weighted independent observations."""
+        if self._observation_weights_are_uniform:
+            return
+        raise ValueError(
+            f"{measure} does not support non-uniform observation_weights. "
+            f"{reason} Non-uniform weights come from a smoothing_kernel other "
+            "than 'boxcar', or from edge_mode='nan' when the time axis is part "
+            "of the expectation (the edge mask zeroes some observations). Use "
+            "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
+            "expectation_type that keeps the time axis."
+        )
+
     def _validate_debiasing_observations(self, measure: str) -> None:
         """Raise if a bias-corrected measure has too few observations.
 
@@ -631,6 +852,36 @@ class Connectivity:
                 f"that is zero when n_observations < 2, so it is undefined for a "
                 f"single observation. Use more trials/tapers, or the "
                 f"non-debiased measure (phase_lag_index / phase_locking_value)."
+            )
+        self._require_uniform_observation_weights(
+            measure,
+            "Its finite-sample correction assumes equally weighted independent "
+            "observations; use a non-debiased measure instead.",
+        )
+
+    def _warn_single_observation_degenerate(self, measure: str) -> None:
+        """Warn that a magnitude-normalized measure is degenerate for one observation.
+
+        Coherency, the phase-locking value, and every measure derived from them
+        normalize each cross-spectral entry by its magnitude. With a single
+        observation (one trial times one taper/window -- e.g. a single-trial
+        :class:`~spectral_connectivity.transforms.MorletWavelet` transform
+        without ``smoothing_time``) that normalization forces every magnitude to
+        exactly one, so the measure reports perfect connectivity between
+        unrelated signals and carries no information. This is a silent-failure
+        trap rather than an error, so it warns instead of raising.
+        """
+        if self.n_observations < 2:
+            warnings.warn(
+                f"{measure} is computed from a single observation "
+                "(n_observations == n_trials * n_tapers == 1), so every "
+                "magnitude-normalized value is mathematically forced to 1 "
+                "(apparent perfect connectivity) regardless of the data and "
+                "carries no information. Provide multiple trials/tapers, or set "
+                "smoothing_time on MorletWavelet to collect neighboring "
+                "coefficients on the observation axis.",
+                UserWarning,
+                stacklevel=3,
             )
 
     def _require_multiple_frequencies(self, measure: str) -> None:
@@ -650,6 +901,20 @@ class Connectivity:
                 f"n_time_samples_per_window)."
             )
 
+    def _require_two_sided_spectrum(self, measure: str) -> None:
+        """Reject directed factorization for positive-frequency-only inputs."""
+        if self._is_one_sided:
+            raise ValueError(
+                f"{measure} requires a full two-sided spectrum in standard FFT "
+                "order. One-sided transforms such as Morlet wavelets support "
+                "functional connectivity measures, but not Wilson-factorized "
+                "directed measures."
+            )
+
+    def _nonnegative_frequency_count(self, n_frequencies: int) -> int:
+        """Number of bins exposed by functional one-sided results."""
+        return n_frequencies if self._is_one_sided else n_frequencies // 2 + 1
+
     @property
     @_asnumpy
     def frequencies(self) -> NDArray[np.floating] | None:
@@ -662,6 +927,8 @@ class Connectivity:
 
         """
         if self._frequencies is not None:
+            if self._is_one_sided:
+                return self._frequencies
             # Extract non-negative frequencies (first N//2 + 1 for even N, (N+1)//2 for odd N)
             n_frequencies = len(self._frequencies)
             non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
@@ -779,6 +1046,13 @@ class Connectivity:
         observations = observations.reshape(
             (*observations.shape[: len(kept_axes) + 1], n_observations, n_signals)
         )
+        weights = None
+        if self._observation_weights is not None:
+            weights = xp.transpose(
+                self._observation_weights[..., 0],
+                [*kept_axes, frequency_axis, *average_axes],
+            ).reshape((*observations.shape[:-2], n_observations))
+            observations = observations * xp.sqrt(weights)[..., xp.newaxis]
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
         cross_spectral_matrix = xp.matmul(
@@ -786,7 +1060,12 @@ class Connectivity:
             xp.conj(observations),
             dtype=self._dtype,
         )
-        return cross_spectral_matrix / n_observations
+        if weights is None:
+            return cross_spectral_matrix / n_observations
+        denominator = xp.sum(weights, axis=-1)[..., xp.newaxis, xp.newaxis]
+        return _divide_where(
+            cross_spectral_matrix, denominator, denominator > 0, xp.nan
+        )
 
     @cached_property
     def _cached_reduced_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -843,6 +1122,7 @@ class Connectivity:
     # cached properties before accepting a replacement.
     @cached_property
     def _minimum_phase_factor(self) -> NDArray[np.complexfloating]:
+        self._require_two_sided_spectrum("Directed connectivity")
         return minimum_phase_decomposition(
             self._expectation_cross_spectral_matrix(),
             tolerance=self._minimum_phase_tolerance,
@@ -862,9 +1142,38 @@ class Connectivity:
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
         return _regularized_inverse(self._transfer_function)
 
-    @property
-    def _expectation(self) -> Callable:
-        return EXPECTATION[self.expectation_type]
+    def _expectation(
+        self, values: BackendArray, *, frequency_axis: int = 3
+    ) -> BackendArray:
+        """Average observation axes, applying optional spectral weights."""
+        if self._observation_weights is None:
+            return EXPECTATION[self.expectation_type](values)
+
+        if frequency_axis < 0:
+            frequency_axis += values.ndim
+        if frequency_axis < 3 or frequency_axis >= values.ndim:
+            raise ValueError("frequency_axis must follow the three observation axes.")
+        weight_shape = [1] * values.ndim
+        weight_shape[0:3] = self._observation_weights.shape[0:3]
+        weight_shape[frequency_axis] = self._observation_weights.shape[3]
+        weights = self._observation_weights[..., 0].reshape(weight_shape)
+        numerator = xp.sum(values * weights, axis=self._expectation_axes)
+        denominator = xp.sum(weights, axis=self._expectation_axes)
+        return _divide_where(numerator, denominator, denominator > 0, xp.nan)
+
+    @cached_property
+    def _observation_weights_are_uniform(self) -> bool:
+        """Whether every reduced bin gives its observations equal weight."""
+        if self._observation_weights is None:
+            return True
+        weights = self._observation_weights[..., 0]
+        kept_axes = [axis for axis in range(3) if axis not in self._expectation_axes]
+        order = [*kept_axes, 3, *self._expectation_axes]
+        reordered = xp.transpose(weights, order)
+        flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
+        if flattened.shape[-1] < 2:
+            return True
+        return bool(xp.all(flattened == flattened[..., :1]))
 
     @property
     def _expectation_axes(self) -> tuple[int, ...]:
@@ -895,6 +1204,215 @@ class Connectivity:
         """Number of signals represented by the Fourier coefficients."""
         return int(self._fourier_coefficients.shape[-1])
 
+    @property
+    def is_one_sided(self) -> bool:
+        """Whether the input contains only non-negative frequencies."""
+        return self._is_one_sided
+
+    @_asnumpy
+    def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:
+        """Return the relative reconstruction error of the Wilson factorization.
+
+        This diagnostic checks how faithfully the cached minimum-phase factor
+        reconstructs the expected cross-spectral matrix. One value is returned
+        per retained batch (normally time-window) dimension. Values near machine
+        precision indicate a faithful factorization; large values suggest that
+        the spectrum is too coarsely resolved for directed-connectivity measures.
+        Non-converged factorizations return ``NaN``.
+
+        Returns
+        -------
+        array, shape (...,)
+            Maximum relative reconstruction error for each sub-spectrum.
+
+        Notes
+        -----
+        A full two-sided spectrum is required, as for the directed measures that
+        use the Wilson factorization.
+        """
+        self._require_two_sided_spectrum("minimum_phase_reconstruction_error")
+        return _minimum_phase_reconstruction_error(
+            self._expectation_cross_spectral_matrix(),
+            self._minimum_phase_factor,
+        )
+
+    def jackknife(
+        self,
+        method: str,
+        *,
+        confidence_level: float = 0.95,
+        transformation: Literal[
+            "auto", "identity", "log", "fisher", "fisher_squared", "circular"
+        ] = "auto",
+        **method_kwargs: Any,
+    ) -> JackknifeResult:
+        """Estimate uncertainty by leaving out one trial/taper observation.
+
+        The configured expectation must average trials, tapers, or their
+        combination. For ``trials_tapers`` each trial-taper eigencoefficient is
+        treated as one observation. The method is recomputed for every
+        leave-one-out sample, so it supports nonlinear measures without an
+        analytic variance formula (at a computational cost proportional to
+        ``n_observations``).
+
+        Parameters
+        ----------
+        method : str
+            Name of a public, real-valued connectivity measure to recompute,
+            e.g. ``"coherence_magnitude"``. Complex-valued and tuple-valued
+            measures are not supported.
+        confidence_level : float, default=0.95
+            Two-sided coverage of the normal-approximation interval, in (0, 1).
+        transformation : {"auto", "identity", "log", "fisher",
+                          "fisher_squared", "circular"}
+            Scale on which the interval is formed. ``"auto"`` uses log power,
+            the ``fisher_squared`` (``atanh(sqrt(.))``) transform for
+            magnitude-squared coherence, circular phase, and the identity scale
+            for other real-valued measures.
+        **method_kwargs
+            Keyword arguments forwarded to ``method`` on every replicate.
+
+        Returns
+        -------
+        JackknifeResult
+            Estimate, bias-corrected estimate, standard error, and confidence
+            bounds, each with the measure's own shape (for a pairwise measure
+            ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
+
+        If the input Fourier coefficients were produced with
+        ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates
+        reuse the full-sample Thomson weights (the adaptive weights are not
+        recomputed for each reduced taper set), so the interval is an
+        approximation in that case.
+        """
+        if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
+            raise ValueError(
+                "jackknife supports expectation_type 'trials', 'tapers', or "
+                "'trials_tapers'; expectations involving time or retaining both "
+                "trial and taper axes have no single leave-one-out layout."
+            )
+        method_attribute = inspect.getattr_static(type(self), method, None)
+        if (
+            method.startswith("_")
+            or method in _NON_MEASURE_METHODS
+            or not inspect.isfunction(method_attribute)
+        ):
+            raise ValueError("method must name a public connectivity measure.")
+        # The static check above guarantees ``method`` names a public function
+        # on the class, so the bound attribute is always callable here.
+        measure = getattr(self, method)
+
+        full_estimate = measure(**method_kwargs)
+        if isinstance(full_estimate, tuple):
+            raise TypeError(
+                f"jackknife does not support tuple-valued measure {method!r}."
+            )
+        full_estimate = np.asarray(full_estimate)
+        if full_estimate.dtype == object:
+            raise TypeError(
+                f"jackknife requires a real array result from {method!r}; it "
+                f"returned a structured result. Jackknife the scalar score "
+                "measure instead (e.g. canonical_coherence rather than "
+                "canonical_coherency)."
+            )
+        if np.iscomplexobj(full_estimate):
+            raise TypeError(
+                f"jackknife requires a real-valued measure; {method!r} is complex."
+            )
+
+        coefficients = self._fourier_coefficients
+        observation_weights = self._observation_weights
+        if self.expectation_type == "trials_tapers":
+            n_observations = coefficients.shape[1] * coefficients.shape[2]
+            observation_coefficients = coefficients.reshape(
+                coefficients.shape[0],
+                n_observations,
+                1,
+                coefficients.shape[3],
+                coefficients.shape[4],
+            )
+            if observation_weights is not None:
+                observation_weights = observation_weights.reshape(
+                    observation_weights.shape[0],
+                    n_observations,
+                    1,
+                    observation_weights.shape[3],
+                    1,
+                )
+            observation_axis = 1
+            replicate_expectation = "trials_tapers"
+        elif self.expectation_type == "trials":
+            observation_coefficients = coefficients
+            observation_axis = 1
+            n_observations = coefficients.shape[observation_axis]
+            replicate_expectation = "trials"
+        else:
+            observation_coefficients = coefficients
+            observation_axis = 2
+            n_observations = coefficients.shape[observation_axis]
+            replicate_expectation = "tapers"
+        if n_observations < 3:
+            raise ValueError(
+                f"jackknife requires at least 3 observations, got {n_observations}. "
+                "With two, each leave-one-out replicate has a single observation, "
+                "which forces magnitude-normalized measures to 1 and makes the "
+                "interval degenerate (a zero standard error, or NaN under a "
+                "variance-stabilizing transform such as the coherence default)."
+            )
+
+        replicates: list[NDArray[np.floating]] = []
+        for omitted in range(n_observations):
+            keep = xp.arange(n_observations) != omitted
+            subset = xp.compress(keep, observation_coefficients, axis=observation_axis)
+            subset_weights = (
+                None
+                if observation_weights is None
+                else xp.compress(keep, observation_weights, axis=observation_axis)
+            )
+            # ``subset`` is a fresh, unshared compress() output, so adopt it in
+            # place instead of copying and re-scanning it for every replicate.
+            replicate_connectivity = Connectivity(
+                subset,
+                expectation_type=replicate_expectation,
+                frequencies=self._frequencies,
+                time=self.time,
+                dtype=self._dtype,
+                minimum_phase_tolerance=self._minimum_phase_tolerance,
+                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+                is_one_sided=self._is_one_sided,
+                observation_weights=subset_weights,
+                _adopt_fourier_coefficients=True,
+            )
+            replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+            if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
+                raise TypeError(
+                    f"jackknife requires a real array result from {method!r}."
+                )
+            replicates.append(np.asarray(replicate))
+
+        resolved_transformation: Literal[
+            "identity", "log", "fisher", "fisher_squared", "circular"
+        ]
+        if transformation == "auto":
+            if method == "power":
+                resolved_transformation = "log"
+            elif method == "coherence_magnitude":
+                # coherence_magnitude returns magnitude-*squared* coherence, whose
+                # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
+                resolved_transformation = "fisher_squared"
+            elif method == "coherence_phase":
+                resolved_transformation = "circular"
+            else:
+                resolved_transformation = "identity"
+        else:
+            resolved_transformation = transformation
+        return jackknife_confidence_interval(
+            full_estimate,
+            np.stack(replicates, axis=0),
+            confidence_level=confidence_level,
+            transformation=resolved_transformation,
+        )
+
     @_asnumpy
     def power(self) -> NDArray[np.floating]:
         """Return the one-sided power spectral density of the signal.
@@ -904,6 +1422,12 @@ class Connectivity:
         spectrum over frequency recovers the full signal power (the negative
         frequencies of a real signal carry equal power). The DC bin, and the
         Nyquist bin for an even FFT length, are not doubled.
+
+        For one-sided input (``is_one_sided=True``) the coefficients are
+        returned as provided: a one-sided transform such as
+        :class:`~spectral_connectivity.transforms.MorletWavelet` already
+        scales its coefficients to the one-sided density, and externally
+        supplied one-sided coefficients keep whatever scale they were given.
 
         Returns
         -------
@@ -917,6 +1441,8 @@ class Connectivity:
 
         """
         power = self._power
+        if self._is_one_sided:
+            return power
         n_fft_samples = power.shape[-2]
         one_sided = power[..., : n_fft_samples // 2 + 1, :]
 
@@ -932,6 +1458,40 @@ class Connectivity:
         # scale is 1-D over frequency (axis -2); add a trailing axis to broadcast
         # across signals.
         return one_sided * scale[:, xp.newaxis]
+
+    @_asnumpy
+    def cross_spectral_density(self) -> NDArray[np.complexfloating]:
+        """Return the one-sided cross-spectral density matrix.
+
+        The diagonal contains the one-sided power spectral densities returned
+        by :meth:`power`; off-diagonal entries retain both the amplitude and
+        relative-phase information between signal pairs.  Interior positive
+        frequency bins are doubled so that the one-sided result has the same
+        total power as the two-sided spectrum.  DC and, for an even FFT length,
+        Nyquist are not doubled.
+
+        Returns
+        -------
+        cross_spectral_density : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Notes
+        -----
+        The matrix is Hermitian at every time-frequency bin and has physical
+        units of signal squared per Hz when the input signal has physical
+        units.  Unlike connectivity measures normalized to ``[0, 1]``, its
+        magnitude has no finite upper bound.
+        """
+        cross_spectral_density = self._cached_reduced_cross_spectral_matrix
+        if self._is_one_sided:
+            return cross_spectral_density
+        n_fft_samples = cross_spectral_density.shape[-3]
+        one_sided = cross_spectral_density[..., : n_fft_samples // 2 + 1, :, :]
+        scale = xp.full((one_sided.shape[-3],), 2.0, dtype=one_sided.real.dtype)
+        scale[0] = 1.0
+        if n_fft_samples % 2 == 0:
+            scale[-1] = 1.0
+        return one_sided * scale[:, xp.newaxis, xp.newaxis]
 
     @_asnumpy
     def coherency(self) -> NDArray[np.complexfloating]:
@@ -962,6 +1522,7 @@ class Connectivity:
         ``phase_slope_index`` -- operate on device arrays without a premature
         host transfer; the public ``coherency`` converts the result to NumPy.
         """
+        self._warn_single_observation_degenerate("coherency")
         norm = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
         )
@@ -1069,10 +1630,144 @@ class Connectivity:
         # abs()/clip() leave the NaN-masked zero-power entries as NaN.
         return xp.clip(imaginary_coh, 0, 1)
 
+    @_asnumpy
+    def imaginary_coherency(self) -> NDArray[np.floating]:
+        """Return the signed imaginary component of coherency.
+
+        This is the signed counterpart of :meth:`imaginary_coherence`, which
+        returns its magnitude.  The sign is antisymmetric across a signal pair
+        and preserves the pair's phase-lead/phase-lag orientation.
+
+        Returns
+        -------
+        imaginary_coherency : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Notes
+        -----
+        **Range**: ``[-1, 1]``.  The diagonal and pairs involving zero-power
+        signals are undefined and returned as NaN, matching :meth:`coherency`.
+        """
+        imaginary = self._coherency().imag
+        diagonal = xp.arange(self.n_signals)
+        imaginary[..., diagonal, diagonal] = xp.nan
+        return imaginary
+
+    @_asnumpy
+    @_non_negative_frequencies(axis=-3)
+    def partial_coherence(
+        self,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> NDArray[np.floating]:
+        """Return magnitude-squared coherence conditional on all other signals.
+
+        Partial coherence is computed by normalizing the off-diagonal elements
+        of the inverse cross-spectral density (the spectral precision matrix).
+        It measures the remaining linear association between each pair after
+        conditioning on every other observed signal.
+
+        Parameters
+        ----------
+        regularization : float, default=1e-12
+            Non-negative relative diagonal loading applied independently to
+            each time-frequency cross-spectral matrix before inversion.  The
+            absolute loading is ``regularization * rms(abs(S))``. Increase this
+            value for statistically rank-deficient or ill-conditioned spectra.
+
+        Returns
+        -------
+        partial_coherence : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Notes
+        -----
+        **Range**: ``[0, 1]``. The diagonal is undefined and returned as NaN.
+        This undirected measure is distinct from partial directed coherence.
+        Regularization stabilizes inversion but also changes the estimand, so
+        analyses should report a non-default value.
+        """
+        self._validate_multiple_signals()
+        regularization = _validated_regularization(regularization)
+
+        cross_spectral_density = self._expectation_cross_spectral_matrix()
+        matrix_rms = xp.sqrt(
+            xp.mean(
+                xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
+                axis=(-2, -1),
+                keepdims=True,
+            )
+        )
+        zero_power = matrix_rms <= xp.finfo(matrix_rms.dtype).tiny
+        if bool(xp.any(zero_power)):
+            warnings.warn(
+                "Some time-frequency cross-spectral matrices have zero power, "
+                "so partial coherence is undefined there and is returned as NaN.",
+                UserWarning,
+                stacklevel=2,
+            )
+        identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
+        safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
+        precision = _regularized_inverse(safe_spectrum, regularization=regularization)
+        precision_diagonal = xp.maximum(
+            xp.real(xp.diagonal(precision, axis1=-2, axis2=-1)), 0.0
+        )
+        denominator = xp.sqrt(
+            precision_diagonal[..., :, xp.newaxis]
+            * precision_diagonal[..., xp.newaxis, :]
+        )
+        partial_coherency = _divide_masking_zero_denominator(
+            -precision,
+            denominator,
+            "Some spectral-precision diagonal entries are (near-)zero, so "
+            "partial coherence is undefined for those pairs and is returned as NaN.",
+        )
+        result = xp.clip(_squared_magnitude(partial_coherency), 0.0, 1.0)
+        result = xp.where(zero_power, xp.nan, result)
+        diagonal = xp.arange(self.n_signals)
+        result[..., diagonal, diagonal] = xp.nan
+        return result
+
+    def _validated_group_indices(
+        self, group_labels: NDArray[Any]
+    ) -> tuple[NDArray[Any], list[NDArray[np.intp]], NDArray[np.bool_]]:
+        """Validate a one-label-per-signal grouping and return its geometry."""
+        self._validate_multiple_signals()
+        labels_array = np.asarray(group_labels)
+        if labels_array.ndim != 1 or len(labels_array) != self.n_signals:
+            raise ValueError(
+                f"group_labels must be one-dimensional with length "
+                f"n_signals ({self.n_signals}), got shape {labels_array.shape}."
+            )
+        has_missing_label = False
+        for group_label in labels_array:
+            if group_label is None:
+                has_missing_label = True
+                break
+            try:
+                has_missing_label = not bool(group_label == group_label)
+            except (TypeError, ValueError):
+                # An indeterminate equality result (for example a nullable
+                # scalar) cannot define stable group membership either.
+                has_missing_label = True
+            if has_missing_label:
+                break
+        if has_missing_label:
+            raise ValueError(
+                "group_labels must not contain missing values such as NaN or None."
+            )
+        labels = np.unique(labels_array)
+        if len(labels) < 2:
+            raise ValueError("group_labels must define at least two groups.")
+        indices = [np.flatnonzero(labels_array == label) for label in labels]
+        membership = np.asarray(
+            np.stack([labels_array == label for label in labels]), dtype=bool
+        )
+        return labels, indices, membership
+
     def canonical_coherence(
         self, group_labels: NDArray[np.integer]
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
-        """Find the maximal coherence between each combination of groups.
+        """Return the historical magnitude-squared canonical correlation.
 
         The canonical coherence finds two sets of weights such that the
         coherence between the linear combination of group1 and the linear
@@ -1102,14 +1797,32 @@ class Connectivity:
                functional networks in humans with application to speech.
                Boston University.
 
+        See Also
+        --------
+        canonical_coherency
+            Exact complex, phase-optimised Vidaurre CaCoh with component
+            filters and patterns.
+
         """
-        self._validate_multiple_signals()
-        labels = np.unique(group_labels)
+        labels, _, _ = self._validated_group_indices(group_labels)
         n_frequencies = self._fourier_coefficients.shape[-2]
-        non_negative_frequencies = xp.arange(0, n_frequencies // 2 + 1)
+        non_negative_frequencies = xp.arange(
+            0, self._nonnegative_frequency_count(n_frequencies)
+        )
         fourier_coefficients = self._fourier_coefficients[
             ..., non_negative_frequencies, :
         ]
+        observation_weights = None
+        if self._observation_weights is not None:
+            observation_weights = self._observation_weights[
+                ..., non_negative_frequencies, :
+            ]
+            # Canonical correlation is computed from observation covariance
+            # matrices. Multiplying every observation by sqrt(weight) gives the
+            # weighted covariance while retaining the existing SVD whitening
+            # implementation. A shared normalization by sum(weight) cancels
+            # from the canonical correlation and is therefore unnecessary.
+            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
         normalized_fourier_coefficients = [
             _normalize_fourier_coefficients(
                 fourier_coefficients[..., xp.isin(group_labels, label)]
@@ -1132,6 +1845,13 @@ class Connectivity:
                 axis=-1,
             )
         )
+        if observation_weights is not None:
+            no_valid_observations = (
+                xp.sum(observation_weights[..., 0], axis=(1, 2)) <= 0
+            )
+            magnitude = xp.where(
+                no_valid_observations[..., xp.newaxis], xp.nan, magnitude
+            )
 
         canonical_coherence_magnitude = xp.full(new_shape, xp.nan)
         group_combination_ind = xp.array(list(combinations(xp.arange(n_groups), 2)))
@@ -1143,6 +1863,434 @@ class Connectivity:
         ] = magnitude
 
         return to_numpy(canonical_coherence_magnitude), to_numpy(labels)
+
+    def canonical_coherency(
+        self,
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None = None,
+        n_components: int = 1,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> MultivariateConnectivityResult:
+        """Return exact complex canonical coherency (CaCoh) components.
+
+        This implements Vidaurre et al.'s phase-optimised CaCoh definition: for
+        each candidate phase, the real projection of the between-group CSD is
+        whitened by the real within-group CSDs, and the phase giving the largest
+        singular value is selected. Scores are complex, with magnitude equal to
+        the maximised coherence and phase encoded using MNE's
+        ``magnitude * exp(-1j * phi)`` convention.
+
+        Unlike the historical :meth:`canonical_coherence`, this method returns
+        component-resolved scores, spatial filters, and Haufe-style patterns.
+        Additional components are fitted after projection onto the null spaces
+        of the previously selected filters.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group; every unordered pair of
+            groups is one connection.
+        rank : int, optional
+            Retain at most this many within-group whitening directions per group.
+            ``None`` keeps every numerically non-zero direction. Applied
+            identically to both groups of every connection.
+        n_components : int, default=1
+            Number of coherency components to return. A connection whose smaller
+            group has fewer channels returns NaN for the unavailable components.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        MultivariateConnectivityResult
+            Complex ``scores`` of shape ``(..., frequency, connection,
+            component)`` plus real filters and patterns; see the class docstring.
+
+        Notes
+        -----
+        **Range**: score magnitudes lie in ``[0, 1]``. The whitening,
+        singular-value decomposition, and phase optimization (a coarse grid
+        bracket followed by a batched Newton refinement) are vectorized over the
+        time/frequency axes on the active ``xp`` backend, so this runs on the GPU
+        when GPU support is enabled.
+
+        **Phase convention**: a spatial filter and its negative span the same
+        direction, so the canonical phase is intrinsically defined only modulo
+        pi. Each filter's sign is fixed so that the largest-magnitude
+        coefficient of its spatial pattern is positive; with that convention
+        the score is the conjugate of the canonical coherency between the
+        positively oriented components, and for single-channel groups it
+        reduces exactly to the conjugate pairwise coherency.
+
+        References
+        ----------
+        .. [1] Vidaurre C, et al. (2019) Canonical maximization of coherence: A
+               novel tool for investigation of neuronal interactions between two
+               datasets. NeuroImage 201:116009.
+        .. [2] Haufe S, et al. (2014) On the interpretation of weight vectors of
+               linear models in multivariate neuroimaging. NeuroImage 87:96-110.
+        """
+        return self._multivariate_component_result(
+            "canonical_coherency",
+            group_labels,
+            rank=rank,
+            n_components=n_components,
+            regularization=regularization,
+        )
+
+    def maximized_imaginary_coherency_components(
+        self,
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None = None,
+        n_components: int = 1,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> MultivariateConnectivityResult:
+        """Return component-resolved MIC scores, filters, and patterns.
+
+        The singular vectors of the whitened imaginary between-group CSD are
+        returned in descending singular-value order. Filters map channel data
+        to the components; patterns map the components back to channel space.
+        This is the component-resolved counterpart of the scalar
+        :meth:`maximized_imaginary_coherency`.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group; every unordered pair of
+            groups is one connection.
+        rank : int, optional
+            Retain at most this many within-group whitening directions per group.
+            ``None`` keeps every numerically non-zero direction.
+        n_components : int, default=1
+            Number of singular components to return. A connection whose smaller
+            group has fewer channels returns NaN for the unavailable components.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        MultivariateConnectivityResult
+            Real ``scores`` of shape ``(..., frequency, connection, component)``
+            plus filters and patterns; see the class docstring.
+
+        Notes
+        -----
+        **Range**: scores lie in ``[0, 1]``. The whitening and singular-value
+        decomposition are vectorized over the time/frequency axes on the active
+        ``xp`` backend, so this runs on the GPU when GPU support is enabled.
+
+        References
+        ----------
+        .. [1] Ewald A, et al. (2012) Estimating true brain connectivity from EEG/
+               MEG data invariant to linear and static transformations in sensor
+               space. NeuroImage 60(1):476-488.
+        """
+        return self._multivariate_component_result(
+            "maximized_imaginary_coherency_components",
+            group_labels,
+            rank=rank,
+            n_components=n_components,
+            regularization=regularization,
+        )
+
+    def _multivariate_component_result(
+        self,
+        method: Literal[
+            "canonical_coherency", "maximized_imaginary_coherency_components"
+        ],
+        group_labels: NDArray[Any],
+        *,
+        rank: int | None,
+        n_components: int,
+        regularization: float,
+    ) -> MultivariateConnectivityResult:
+        """Compute rich CaCoh/MIC results from the expected CSD."""
+        labels, group_indices, membership = self._validated_group_indices(group_labels)
+        rank = _validated_rank(rank)
+        if not is_positive_integer(n_components):
+            raise ValueError(
+                f"n_components must be a positive integer, got {n_components!r}."
+            )
+        regularization = _validated_regularization(regularization)
+        rank_cap = rank if rank is not None else self.n_signals
+        # ``pairs`` is the single connection ordering shared by the capacities,
+        # the ``connections`` labels, and the main loop below.
+        pairs = list(combinations(range(len(labels)), 2))
+        # The number of components a connection can support is bounded by the two
+        # groups *in that connection* (and the requested rank), not by the
+        # smallest group overall. Compute the per-connection capacity and reject
+        # only when no connection can supply n_components; connections whose
+        # groups are smaller return NaN for the unavailable components.
+        connection_capacities = [
+            min(len(group_indices[first]), len(group_indices[second]), rank_cap)
+            for first, second in pairs
+        ]
+        max_components = max(connection_capacities)
+        if n_components > max_components:
+            raise ValueError(
+                f"n_components ({n_components}) must not exceed the largest "
+                f"per-connection group rank/size ({max_components}); no group pair "
+                f"is large enough to supply that many components."
+            )
+
+        spectrum = self._expectation_cross_spectral_matrix()
+        spectrum = spectrum[
+            ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
+        ]
+        leading_shape = spectrum.shape[:-3]
+        n_frequencies = spectrum.shape[-3]
+        connections = np.asarray(
+            [(labels[first], labels[second]) for first, second in pairs]
+        )
+        n_connections = len(connections)
+        score_dtype = xp.complex128 if method == "canonical_coherency" else float
+        scores = xp.full(
+            (*leading_shape, n_frequencies, n_connections, n_components),
+            xp.nan,
+            dtype=score_dtype,
+        )
+        projection_shape = (
+            *leading_shape,
+            n_frequencies,
+            n_connections,
+            n_components,
+            2,
+            self.n_signals,
+        )
+        filters = xp.full(projection_shape, xp.nan, dtype=float)
+        patterns = xp.full(projection_shape, xp.nan, dtype=float)
+
+        component_fn = (
+            _canonical_coherency_components
+            if method == "canonical_coherency"
+            else _mic_components
+        )
+        any_phantom = False
+        for connection_index, (first, second) in enumerate(pairs):
+            first_indices = group_indices[first]
+            second_indices = group_indices[second]
+            n_first = len(first_indices)
+            # This connection can only supply as many components as its smaller
+            # group (and the rank cap); the rest stay NaN in the pre-filled array.
+            component_count = min(n_components, connection_capacities[connection_index])
+            combined = xp.asarray(np.concatenate((first_indices, second_indices)))
+            # Sub-CSD over every leading/frequency bin at once: (..., freq, m, m).
+            subsystem = spectrum[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
+            # A non-finite bin (e.g. a dead channel) would make the batched
+            # eigendecomposition fail; compute a placeholder there and mask it
+            # back to NaN afterward, matching the old per-bin skip.
+            finite_bin = xp.all(xp.isfinite(subsystem), axis=(-2, -1))
+            identity = xp.eye(combined.shape[0], dtype=subsystem.dtype)
+            safe = xp.where(
+                finite_bin[..., xp.newaxis, xp.newaxis], subsystem, identity
+            )
+            local_scores, (filter_a, filter_b), (pattern_a, pattern_b), rank_here = (
+                component_fn(
+                    safe[..., :n_first, :n_first],
+                    safe[..., :n_first, n_first:],
+                    safe[..., n_first:, n_first:],
+                    rank=rank,
+                    n_components=component_count,
+                    regularization=regularization,
+                )
+            )
+            valid = finite_bin[..., xp.newaxis]
+            scores[..., connection_index, :component_count] = xp.where(
+                valid, local_scores, xp.nan
+            )
+            for side, (indices, side_filter, side_pattern) in enumerate(
+                (
+                    (first_indices, filter_a, pattern_a),
+                    (second_indices, filter_b, pattern_b),
+                )
+            ):
+                masked_filter = xp.where(valid[..., xp.newaxis], side_filter, xp.nan)
+                masked_pattern = xp.where(valid[..., xp.newaxis], side_pattern, xp.nan)
+                signal_index = xp.asarray(indices)
+                # Assign one component at a time: a single trailing fancy index
+                # (the group's channels) with only integer indices before it keeps
+                # the scattered axis at the end, avoiding NumPy's mixed
+                # slice/advanced-index dimension reordering.
+                for component in range(component_count):
+                    filters[..., connection_index, component, side, signal_index] = (
+                        masked_filter[..., component]
+                    )
+                    patterns[..., connection_index, component, side, signal_index] = (
+                        masked_pattern[..., component]
+                    )
+            # A rank-deficient within-group block (collinear/duplicated channels)
+            # supplies fewer directions than requested; the extra "phantom"
+            # components come back with a ~0 score and an all-zero filter. Flag it
+            # via the eigenvalue-based rank (scale-invariant), not the filter norm.
+            if bool(xp.any(finite_bin & (rank_here < component_count))):
+                any_phantom = True
+
+        if any_phantom:
+            warnings.warn(
+                f"{method}: some requested components fall in the null space of a "
+                "rank-deficient within-group cross-spectrum (collinear or "
+                "duplicated channels), so they are returned with a zero score and "
+                "an all-zero spatial filter. Reduce n_components or pass an "
+                "explicit rank to avoid these phantom components.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        return MultivariateConnectivityResult(
+            method=method,
+            scores=to_numpy(scores),
+            connections=connections,
+            group_labels=np.asarray(labels),
+            group_membership=np.asarray(membership, dtype=bool),
+            filters=to_numpy(filters),
+            patterns=to_numpy(patterns),
+        )
+
+    def maximized_imaginary_coherency(
+        self,
+        group_labels: NDArray[np.integer],
+        rank: int | None = None,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Return maximized imaginary coherency (MIC) between signal groups.
+
+        Each group's real within-group cross-spectrum is whitened before the
+        largest singular value of the between-group imaginary cross-spectrum is
+        taken. This makes the result invariant to invertible, static real-valued
+        mixing within either group.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group.
+        rank : int, optional
+            Retain at most this many within-group whitening components. ``None``
+            retains every numerically non-zero component independently per bin.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        mic : array
+            Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
+        labels : array, shape (n_groups,)
+            Sorted unique group labels.
+
+        Notes
+        -----
+        **Range**: ``[0, 1]``. The diagonal is returned as NaN.
+        """
+        transformed, labels = self._group_imaginary_coherency(
+            group_labels, rank=rank, regularization=regularization
+        )
+        result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
+        result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
+        for first, second, matrix in transformed:
+            singular_values = xp.linalg.svd(
+                matrix, full_matrices=False, compute_uv=False
+            )
+            value = xp.clip(singular_values[..., 0], 0.0, 1.0)
+            result[..., first, second] = value
+            result[..., second, first] = value
+        return to_numpy(result), to_numpy(labels)
+
+    def multivariate_interaction_measure(
+        self,
+        group_labels: NDArray[np.integer],
+        rank: int | None = None,
+        regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Return the multivariate interaction measure (MIM) between groups.
+
+        MIM sums the squared singular values of the whitened imaginary
+        cross-spectrum, incorporating every phase-lagged interaction component
+        rather than only the strongest component returned by MIC.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to a group.
+        rank : int, optional
+            Retain at most this many within-group whitening components. ``None``
+            retains every numerically non-zero component independently per bin.
+        regularization : float, default=1e-12
+            Relative diagonal loading used by the whitening decomposition.
+
+        Returns
+        -------
+        mim : array
+            Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
+        labels : array, shape (n_groups,)
+            Sorted unique group labels.
+
+        Notes
+        -----
+        **Range**: ``[0, min(rank_group_1, rank_group_2)]``; unlike MIC, MIM can
+        exceed one. The diagonal is returned as NaN.
+
+        References
+        ----------
+        .. [1] Ewald, A., Marzetti, L., Zappasodi, F., Meinecke, F.C., and
+               Nolte, G. (2012). Estimating true brain connectivity from
+               EEG/MEG data invariant to linear and static transformations in
+               sensor space. NeuroImage 60, 476-488.
+        """
+        transformed, labels = self._group_imaginary_coherency(
+            group_labels, rank=rank, regularization=regularization
+        )
+        result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
+        result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
+        for first, second, matrix in transformed:
+            value = xp.sum(matrix**2, axis=(-2, -1))
+            result[..., first, second] = value
+            result[..., second, first] = value
+        return to_numpy(result), to_numpy(labels)
+
+    def _group_imaginary_coherency(
+        self,
+        group_labels: NDArray[np.integer],
+        *,
+        rank: int | None,
+        regularization: float,
+    ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer]]:
+        """Whiten imaginary CSD blocks for MIC/MIM."""
+        labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
+        rank = _validated_rank(rank)
+        regularization = _validated_regularization(regularization)
+
+        spectrum = self._expectation_cross_spectral_matrix()
+        spectrum = spectrum[
+            ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
+        ]
+        group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
+        inverse_square_roots = []
+        for indices in group_indices:
+            within = spectrum[..., indices[:, xp.newaxis], indices[xp.newaxis, :]].real
+            inverse_square_roots.append(
+                _batched_inverse_square_root(
+                    within,
+                    rank=rank,
+                    regularization=regularization,
+                )[0]
+            )
+
+        transformed: list[tuple[int, int, BackendArray]] = []
+        for first, second in combinations(range(len(labels)), 2):
+            first_indices = group_indices[first]
+            second_indices = group_indices[second]
+            between = spectrum[
+                ...,
+                first_indices[:, xp.newaxis],
+                second_indices[xp.newaxis, :],
+            ].imag
+            whitened = xp.matmul(
+                xp.matmul(inverse_square_roots[first], between),
+                inverse_square_roots[second],
+            )
+            transformed.append((first, second, whitened))
+        return transformed, labels
 
     def global_coherence(
         self,
@@ -1246,11 +2394,7 @@ class Connectivity:
         # size, so a float (NaN/inf included) or bool would either pick a
         # nonsensical chunk or blow up later inside range(). bool is an int
         # subclass, so reject it explicitly.
-        if (
-            isinstance(max_workspace_elements, bool)
-            or not isinstance(max_workspace_elements, (int, np.integer))
-            or max_workspace_elements < 1
-        ):
+        if not is_positive_integer(max_workspace_elements):
             raise ValueError(
                 f"max_workspace_elements must be a positive integer (e.g. "
                 f"1_000_000), got {max_workspace_elements!r}. It bounds the memory "
@@ -1258,8 +2402,18 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
+            fourier_coefficients = self._fourier_coefficients
+            if self._observation_weights is not None:
+                # The global-coherence eigenspectrum is formed from A @ A^H.
+                # Scaling each observation column by sqrt(weight) therefore
+                # produces the weighted cross-spectrum. The scalar division by
+                # sum(weight) cancels when component power is normalized by
+                # total power.
+                fourier_coefficients = fourier_coefficients * xp.sqrt(
+                    self._observation_weights
+                )
             global_coherence, unnormalized_global_coherence = _batched_global_coherence(
-                self._fourier_coefficients, max_rank, max_workspace_elements
+                fourier_coefficients, max_rank, max_workspace_elements
             )
         else:
             # A user who tuned max_workspace_elements for memory gets no effect
@@ -1294,6 +2448,13 @@ class Connectivity:
                         .reshape((n_trials * n_tapers, n_signals))
                         .T
                     )
+                    if self._observation_weights is not None:
+                        weights = self._observation_weights[
+                            time_ind, :, :, freq_ind, 0
+                        ].reshape(n_trials * n_tapers)
+                        fourier_coefficients = (
+                            fourier_coefficients * xp.sqrt(weights)[xp.newaxis, :]
+                        )
 
                     (
                         global_coherence[time_ind, freq_ind],
@@ -1325,6 +2486,7 @@ class Connectivity:
         # O(observations * signals**2). Kept on the active namespace (xp); the
         # public ``phase_locking_value`` wrapper converts to NumPy.
         self._validate_multiple_signals()
+        self._warn_single_observation_degenerate("phase_locking_value")
         # Normalize at the computation dtype (``self._dtype``, complex128 by
         # default): the previous materialized path formed the outer product at
         # that dtype, so normalizing complex64 inputs at their own precision here
@@ -1384,6 +2546,43 @@ class Connectivity:
         # is <= 1 mathematically, but floating-point rounding can leave it a few
         # ulp above 1 (matching the bounds clipping coherence_magnitude applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
+
+    @_asnumpy
+    def corrected_imaginary_phase_locking_value(self) -> NDArray[np.floating]:
+        """Return corrected imaginary phase-locking value (ciPLV).
+
+        ciPLV removes the contribution of zero- and pi-lag phase locking while
+        correcting the imaginary PLV for the reduction in its attainable range.
+
+        Returns
+        -------
+        corrected_imaginary_phase_locking_value : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Notes
+        -----
+        **Range**: ``[0, 1]``.  Exact zero- or pi-lag locking has a zero
+        numerator and denominator and is defined as zero.
+
+        References
+        ----------
+        .. [1] Bruña, R., Maestú, F., and Pereda, E. (2018). Phase locking
+               value revisited: teaching new tricks to an old dog. Journal of
+               Neural Engineering 15, 056011.
+        """
+        complex_plv = self._phase_locking_value()
+        numerator = xp.abs(complex_plv.imag)
+        denominator_squared = xp.maximum(0.0, 1.0 - complex_plv.real**2)
+        denominator = xp.sqrt(denominator_squared)
+        # The only mathematically valid zero-denominator case also has a zero
+        # numerator (perfect zero- or pi-lag locking). Define that limit as 0.
+        # A NaN PLV (zero-power channel) must stay NaN rather than fall into
+        # that zero limit, matching every other phase-locking measure.
+        result = xp.zeros_like(numerator)
+        nonzero = denominator > xp.finfo(denominator.dtype).tiny
+        result[nonzero] = numerator[nonzero] / denominator[nonzero]
+        result[xp.isnan(complex_plv)] = xp.nan
+        return xp.clip(result, 0.0, 1.0)
 
     @cached_property
     def _imaginary_moment_cache(self) -> dict[str, BackendArray]:
@@ -1526,6 +2725,37 @@ class Connectivity:
         # array is disconnected from the cached moment.
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
         return mean_sign.real.copy()
+
+    @_asnumpy
+    @_non_negative_frequencies(axis=-3)
+    def directed_phase_lag_index(self) -> NDArray[np.floating]:
+        """Return the directed phase-lag index (dPLI).
+
+        Values above 0.5 indicate that the row signal consistently phase-leads
+        the column signal; values below 0.5 indicate that it phase-lags.  A
+        value of 0.5 represents no preferred phase-lag direction, including an
+        exactly zero imaginary cross-spectrum.
+
+        Returns
+        -------
+        directed_phase_lag_index : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+
+        Notes
+        -----
+        **Range**: ``[0, 1]``.  With the convention ``H(0) = 0.5``, dPLI is
+        ``(1 + signed_PLI) / 2``. Consequently ``dPLI[i, j] = 1 - dPLI[j, i]``
+        and the diagonal is 0.5.
+
+        References
+        ----------
+        .. [1] Stam, C.J., and van Straaten, E.C.W. (2012). Go with the flow:
+               use of a directed phase lag index (dPLI) to characterize
+               patterns of phase relations in a large-scale model of brain
+               dynamics. NeuroImage 62, 1415-1428.
+        """
+        (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
+        return xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0)
 
     @_asnumpy
     @_non_negative_frequencies(-3)
@@ -1700,6 +2930,12 @@ class Connectivity:
 
         Notes
         -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
         Output [i,j] corresponds to causal influence j → i.
 
@@ -1710,6 +2946,7 @@ class Connectivity:
                American Statistical Association 77, 304.
 
         """
+        self._require_two_sided_spectrum("pairwise_spectral_granger_prediction")
         csm = self._expectation_cross_spectral_matrix()
         n_signals = csm.shape[-1]
         pairs = combinations(range(n_signals), 2)
@@ -1717,7 +2954,7 @@ class Connectivity:
         return _estimate_spectral_granger_prediction(
             total_power,
             csm,
-            pairs,  # type: ignore[arg-type]
+            pairs,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
@@ -1739,8 +2976,11 @@ class Connectivity:
             Spectral Granger prediction for specified pairs.
 
         """
+        self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
-        pair_csm = self._expectation(self._subset_cross_spectral_matrix(pairs))
+        pair_csm = self._expectation(
+            self._subset_cross_spectral_matrix(pairs), frequency_axis=4
+        )
         return _estimate_subset_spectral_granger_prediction(
             self._power,
             pair_csm,
@@ -1750,27 +2990,178 @@ class Connectivity:
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
 
-    def conditional_spectral_granger_prediction(self) -> None:
-        """Raise NotImplementedError for conditional spectral Granger prediction.
+    @_asnumpy
+    def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
+        """Return pairwise spectral Granger prediction after time reversal.
 
-        Raises
-        ------
-        NotImplementedError
-            This method is not yet implemented.
+        For a real stationary process, time reversal transposes the
+        cross-spectral matrix at every frequency. Contrasting this result with
+        :meth:`pairwise_spectral_granger_prediction` helps identify apparent
+        directionality caused by instantaneous mixing or data asymmetries.
 
+        Returns
+        -------
+        array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Output ``[i, j]`` is the time-reversed influence ``j -> i``.
+
+        Notes
+        -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
+        References
+        ----------
+        .. [1] Winkler, I., Panknin, D., Bartz, D., Müller, K.-R., and Haufe,
+               S. (2016). Validity of time reversal for testing Granger
+               causality. IEEE Transactions on Signal Processing 64, 2746-2760.
         """
-        raise NotImplementedError
+        self._require_two_sided_spectrum("time_reversed_spectral_granger_prediction")
+        csm = xp.swapaxes(self._expectation_cross_spectral_matrix(), -1, -2)
+        return _estimate_spectral_granger_prediction(
+            self._power,
+            csm,
+            combinations(range(self.n_signals), 2),
+            minimum_phase_tolerance=self._minimum_phase_tolerance,
+            minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+        )
 
-    def blockwise_spectral_granger_prediction(self) -> None:
-        """Raise NotImplementedError for blockwise spectral Granger prediction.
+    @_asnumpy
+    def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
+        """Return pairwise spectral Granger prediction conditioned on all others.
 
-        Raises
-        ------
-        NotImplementedError
-            This method is not yet implemented.
+        For each ordered source-target pair, the influence of the source on the
+        target is measured after accounting for every remaining signal, using
+        the frequency-domain conditional measure of Chen, Bressler and Ding
+        (2006): the full model containing every signal and the reduced model
+        omitting the source are each spectrally factorized, and the reduced
+        model's innovation spectrum for the target is split into the part
+        explained by the target's own full-model innovations and the remainder
+        attributable to the source. With two signals this reduces to ordinary
+        pairwise spectral Granger.
 
+        Returns
+        -------
+        conditional_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Output ``[i, j]`` is influence ``j -> i`` conditional on every
+            signal other than ``i`` and ``j``.
+
+        Notes
+        -----
+        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
+        Roundoff-negative estimates are clipped to ``0`` and materially negative
+        bins (a degenerate factorization) are returned as ``NaN``; use
+        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
+        **Range**: ``[0, ∞)``. The measure is a log-ratio of a total to an
+        intrinsic innovation spectrum, so it is non-negative up to roundoff;
+        bins where either spectrum is not positive (a degenerate factorization)
+        are returned as NaN with a warning.
+
+        **Cost**: ``n_signals + 1`` minimum-phase factorizations (the full
+        system once, plus one ``(n_signals - 1)``-channel system per source),
+        each shared by every target.
+
+        References
+        ----------
+        .. [1] Chen, Y., Bressler, S.L., and Ding, M. (2006). Frequency
+               decomposition of conditional Granger causality and application
+               to multivariate neural field potential data. Journal of
+               Neuroscience Methods 150, 228-237.
+        .. [2] Geweke, J.F. (1984). Measures of conditional linear dependence
+               and feedback between time series. Journal of the American
+               Statistical Association 79, 907-915.
         """
-        raise NotImplementedError
+        self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
+        spectrum = self._expectation_cross_spectral_matrix()
+        n_nonnegative = spectrum.shape[-3] // 2 + 1
+        n_signals = self.n_signals
+        output_shape = (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals)
+        result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
+        tolerance = self._minimum_phase_tolerance
+        max_iterations = self._minimum_phase_max_iterations
+
+        if n_signals == 2:
+            # No conditioning set: the measure is pairwise Geweke Granger.
+            for target, source in permutations(range(2), 2):
+                result[..., target, source] = (
+                    _estimate_block_spectral_granger_prediction(
+                        spectrum,
+                        np.array([target]),
+                        np.array([source]),
+                        minimum_phase_tolerance=tolerance,
+                        minimum_phase_max_iterations=max_iterations,
+                    )
+                )
+            return result
+
+        full_transfer, full_covariance = _var_model_from_spectrum(
+            spectrum,
+            minimum_phase_tolerance=tolerance,
+            minimum_phase_max_iterations=max_iterations,
+        )
+        all_indices = np.arange(n_signals)
+        for source in range(n_signals):
+            reduced_indices = all_indices[all_indices != source]
+            reduced_transfer, _ = _var_model_from_spectrum(
+                spectrum[..., reduced_indices[:, None], reduced_indices[None, :]],
+                minimum_phase_tolerance=tolerance,
+                minimum_phase_max_iterations=max_iterations,
+            )
+            reduced_inverse_transfer = _regularized_inverse(reduced_transfer)
+            for target in range(n_signals):
+                if target == source:
+                    continue
+                result[..., target, source] = (
+                    _estimate_conditional_spectral_granger_prediction(
+                        full_transfer,
+                        full_covariance,
+                        reduced_inverse_transfer,
+                        reduced_indices,
+                        target,
+                    )
+                )
+        return result
+
+    def blockwise_spectral_granger_prediction(
+        self, group_labels: NDArray[np.integer]
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Return spectral Granger prediction between multichannel groups.
+
+        Parameters
+        ----------
+        group_labels : array-like, shape (n_signals,)
+            Label assigning each signal to one non-overlapping group.
+
+        Returns
+        -------
+        blockwise_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
+            Output ``[..., i, j]`` is influence group ``j -> i``.
+        labels : array, shape (n_groups,)
+            Sorted unique group labels.
+        """
+        self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
+        labels, indices, _ = self._validated_group_indices(group_labels)
+
+        spectrum = self._expectation_cross_spectral_matrix()
+        n_nonnegative = spectrum.shape[-3] // 2 + 1
+        output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
+        result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
+        for target, source in permutations(range(len(labels)), 2):
+            result[..., target, source] = _estimate_block_spectral_granger_prediction(
+                spectrum,
+                indices[target],
+                indices[source],
+                minimum_phase_tolerance=self._minimum_phase_tolerance,
+                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            )
+        return to_numpy(result), to_numpy(labels)
 
     @_ignore_nan_propagation_warnings
     @_asnumpy
@@ -2023,6 +3414,13 @@ class Connectivity:
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("group_delay")
+        self._require_uniform_frequency_grid("group_delay")
+        self._require_uniform_observation_weights(
+            "group_delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null, which assumes equally "
+            "weighted observations.",
+        )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -2146,6 +3544,13 @@ class Connectivity:
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("delay")
+        self._require_uniform_frequency_grid("delay")
+        self._require_uniform_observation_weights(
+            "delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null, which assumes equally "
+            "weighted observations.",
+        )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -2251,6 +3656,7 @@ class Connectivity:
         )
 
         self._require_multiple_frequencies("phase_slope_index")
+        self._require_uniform_frequency_grid("phase_slope_index")
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -2345,16 +3751,18 @@ def _divide_masking_zero_denominator(
         ``numerator / denominator`` with (near-)zero-denominator entries NaN.
     """
     zero = denominator <= xp.finfo(denominator.dtype).tiny
+    invalid = zero | ~xp.isfinite(denominator)
     if xp.any(zero):
         warnings.warn(message, UserWarning, stacklevel=3)
-    safe = xp.where(zero, xp.asarray(1.0, dtype=denominator.dtype), denominator)
+    safe = xp.where(invalid, xp.asarray(1.0, dtype=denominator.dtype), denominator)
     result = numerator / safe
-    result[zero] = xp.nan
+    result[invalid] = xp.nan
     return result
 
 
 def _regularized_inverse(
     matrix: NDArray[_NumberT],
+    regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
 ) -> NDArray[_NumberT]:
     """Return the Tikhonov-regularized inverse of a batched matrix.
 
@@ -2371,13 +3779,15 @@ def _regularized_inverse(
     ----------
     matrix : NDArray, shape (..., n_signals, n_signals)
         Batched (real or complex) matrices to invert.
+    regularization : float, default=1e-12
+        Relative diagonal-loading factor.
 
     Returns
     -------
     NDArray, shape (..., n_signals, n_signals)
         Regularized inverse of each batched matrix.
     """
-    lam = TIKHONOV_REGULARIZATION_FACTOR * xp.sqrt(
+    lam = regularization * xp.sqrt(
         xp.mean(xp.real(xp.conj(matrix) * matrix), axis=(-2, -1), keepdims=True)
     )
     identity = xp.eye(matrix.shape[-1], dtype=matrix.dtype)
@@ -2385,6 +3795,227 @@ def _regularized_inverse(
     # the RHS shape (NumPy tolerates the mismatch; CuPy does not).
     identity_batched = xp.broadcast_to(identity, matrix.shape)
     return xp.linalg.solve(matrix + lam * identity_batched, identity_batched)
+
+
+def _batched_inverse_square_root(
+    matrices: NDArray[np.floating], *, rank: int | None, regularization: float
+) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+    """Inverse square root of batched real symmetric matrices, with kept rank.
+
+    ``matrices`` has shape ``(..., n, n)``; the eigendecomposition, rank mask and
+    regularization are applied independently per leading (time/frequency) bin on
+    the active ``xp`` backend. Returns ``(T, kept_rank)`` where ``kept_rank`` is
+    the number of retained (numerically non-zero, rank-capped) directions per
+    bin -- used to detect null-space "phantom" components scale-invariantly.
+    """
+    symmetric = (matrices + matrices.swapaxes(-1, -2)) / 2
+    eigenvalues, eigenvectors = xp.linalg.eigh(symmetric)
+    largest = xp.maximum(eigenvalues[..., -1:], 0.0)
+    tolerance = xp.finfo(eigenvalues.dtype).eps * matrices.shape[-1] * largest
+    keep = eigenvalues > tolerance
+    n_channels = matrices.shape[-1]
+    if rank is not None and rank < n_channels:
+        keep = keep & (xp.arange(n_channels) >= (n_channels - rank))
+    matrix_rms = xp.sqrt(xp.mean(symmetric**2, axis=(-2, -1)))[..., xp.newaxis]
+    safe_values = xp.where(keep, eigenvalues + regularization * matrix_rms, 1.0)
+    inverse_values = xp.where(keep, 1.0 / xp.sqrt(safe_values), 0.0)
+    transform = (
+        eigenvectors * inverse_values[..., xp.newaxis, :]
+    ) @ eigenvectors.swapaxes(-1, -2)
+    return transform, keep.sum(-1)
+
+
+def _dominant_sign(vectors: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Sign (+1/-1) of the largest-magnitude entry along the last axis, per bin."""
+    dominant = xp.take_along_axis(
+        vectors, xp.argmax(xp.abs(vectors), axis=-1)[..., xp.newaxis], axis=-1
+    )[..., 0]
+    return xp.where(dominant < 0, -1.0, 1.0)
+
+
+def _batched_orthogonal_complement(
+    filters: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Per-bin orthonormal basis for the complement of the filter columns.
+
+    ``filters`` has shape ``(..., n, k)``; returns ``(..., n, n - k)``.
+    """
+    left = xp.linalg.svd(filters, full_matrices=True)[0]
+    return left[..., :, filters.shape[-1] :]
+
+
+def _optimize_canonical_coherency_phase(
+    Cab: NDArray[np.complexfloating],
+    Taa: NDArray[np.floating],
+    Tbb: NDArray[np.floating],
+    *,
+    n_grid: int = 37,
+    n_refine: int = 12,
+) -> tuple[
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+    NDArray[np.floating],
+]:
+    """Vidaurre's phase objective, optimized per bin over batched leading axes.
+
+    A coarse grid brackets the (pi-periodic) single-lobe maximum, then a batched
+    Newton refinement on the finite-difference derivatives converges each bin to
+    the optimum. Fully vectorized over the leading (time/frequency) axes and
+    backend-agnostic (no per-bin ``scipy.optimize`` loop). Returns the maximized
+    magnitude, the optimizing phase, and the top left/right singular vectors of
+    the whitened real projection at that phase.
+    """
+    leading_shape = Cab.shape[:-2]
+
+    def objective(phase: NDArray[np.floating]) -> NDArray[np.floating]:
+        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
+        return xp.linalg.svd(Taa @ projected @ Tbb, compute_uv=False)[..., 0]
+
+    grid_values = [k * float(np.pi) / n_grid for k in range(n_grid)]
+    grid_scores = xp.stack(
+        [objective(xp.full(leading_shape, phase)) for phase in grid_values]
+    )
+    grid = xp.asarray(grid_values)
+    phase = grid[xp.argmax(grid_scores, axis=0)]
+    step = 1e-5
+    for _ in range(n_refine):
+        forward = objective(phase + step)
+        centre = objective(phase)
+        backward = objective(phase - step)
+        first_derivative = (forward - backward) / (2 * step)
+        second_derivative = (forward - 2 * centre + backward) / step**2
+        newton_step = _divide_where(
+            first_derivative, second_derivative, xp.abs(second_derivative) > 1e-12, 0.0
+        )
+        phase = phase - xp.clip(newton_step, -0.1, 0.1)
+    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
+    left, singular_values, right_h = xp.linalg.svd(
+        Taa @ projected @ Tbb, full_matrices=False
+    )
+    return (
+        singular_values[..., 0],
+        phase,
+        left[..., :, 0],
+        right_h.swapaxes(-1, -2)[..., :, 0],
+    )
+
+
+def _canonical_coherency_components(
+    Caa: NDArray[np.complexfloating],
+    Cab: NDArray[np.complexfloating],
+    Cbb: NDArray[np.complexfloating],
+    *,
+    rank: int | None,
+    n_components: int,
+    regularization: float,
+) -> tuple[
+    NDArray[np.complexfloating],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    NDArray[np.integer],
+]:
+    """Exact phase-optimised CaCoh components, batched over leading axes.
+
+    Each of ``Caa``/``Cab``/``Cbb`` has shape ``(..., n_a/n_b, n_a/n_b)`` with
+    arbitrary leading (time/frequency) axes. Returns per-component scores,
+    filters, patterns (all with a trailing ``component`` axis) plus the per-bin
+    effective within-group rank.
+    """
+    real_aa = xp.real(Caa)
+    real_bb = xp.real(Cbb)
+    leading_shape = Caa.shape[:-2]
+    n_a = Caa.shape[-1]
+    n_b = Cbb.shape[-1]
+    identity_a = xp.broadcast_to(xp.eye(n_a), (*leading_shape, n_a, n_a))
+    identity_b = xp.broadcast_to(xp.eye(n_b), (*leading_shape, n_b, n_b))
+    basis_a = xp.array(identity_a)
+    basis_b = xp.array(identity_b)
+    scores = xp.full((*leading_shape, n_components), xp.nan, dtype=Cab.dtype)
+    filters_a = xp.full((*leading_shape, n_a, n_components), xp.nan)
+    filters_b = xp.full((*leading_shape, n_b, n_components), xp.nan)
+    patterns_a = xp.full_like(filters_a, xp.nan)
+    patterns_b = xp.full_like(filters_b, xp.nan)
+    effective_rank = None
+
+    for component in range(n_components):
+        reduced_aa = basis_a.swapaxes(-1, -2) @ real_aa @ basis_a
+        reduced_ab = basis_a.swapaxes(-1, -2) @ Cab @ basis_b
+        reduced_bb = basis_b.swapaxes(-1, -2) @ real_bb @ basis_b
+        transform_aa, rank_a = _batched_inverse_square_root(
+            reduced_aa, rank=rank, regularization=regularization
+        )
+        transform_bb, rank_b = _batched_inverse_square_root(
+            reduced_bb, rank=rank, regularization=regularization
+        )
+        if effective_rank is None:
+            effective_rank = xp.minimum(rank_a, rank_b)
+        magnitude, phase, left, right = _optimize_canonical_coherency_phase(
+            reduced_ab, transform_aa, transform_bb
+        )
+        filter_a = (basis_a @ (transform_aa @ left[..., xp.newaxis]))[..., 0]
+        filter_b = (basis_b @ (transform_bb @ right[..., xp.newaxis]))[..., 0]
+        pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
+        pattern_b = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
+        # A spatial filter and its negative span the same direction, so the
+        # optimizer's phase is only defined modulo pi. Fix each filter's sign by
+        # its pattern's dominant coefficient; flipping one filter negates the
+        # projected coherency, i.e. shifts the phase by pi.
+        sign_a = _dominant_sign(pattern_a)
+        sign_b = _dominant_sign(pattern_b)
+        phase = xp.where(sign_a * sign_b < 0, phase + xp.pi, phase)
+        scores[..., component] = magnitude * xp.exp(-1j * phase)
+        filters_a[..., component] = filter_a * sign_a[..., xp.newaxis]
+        filters_b[..., component] = filter_b * sign_b[..., xp.newaxis]
+        patterns_a[..., component] = pattern_a * sign_a[..., xp.newaxis]
+        patterns_b[..., component] = pattern_b * sign_b[..., xp.newaxis]
+        if component + 1 < n_components:
+            basis_a = _batched_orthogonal_complement(filters_a[..., : component + 1])
+            basis_b = _batched_orthogonal_complement(filters_b[..., : component + 1])
+
+    assert effective_rank is not None  # n_components >= 1, so the loop always runs
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
+
+
+def _mic_components(
+    Caa: NDArray[np.complexfloating],
+    Cab: NDArray[np.complexfloating],
+    Cbb: NDArray[np.complexfloating],
+    *,
+    rank: int | None,
+    n_components: int,
+    regularization: float,
+) -> tuple[
+    NDArray[np.floating],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    NDArray[np.integer],
+]:
+    """MIC singular components and channel-space projections, batched.
+
+    Same batched shape contract as :func:`_canonical_coherency_components`.
+    """
+    real_aa = xp.real(Caa)
+    real_bb = xp.real(Cbb)
+    transform_aa, rank_a = _batched_inverse_square_root(
+        real_aa, rank=rank, regularization=regularization
+    )
+    transform_bb, rank_b = _batched_inverse_square_root(
+        real_bb, rank=rank, regularization=regularization
+    )
+    transformed = transform_aa @ xp.imag(Cab) @ transform_bb
+    left, singular_values, right_h = xp.linalg.svd(transformed, full_matrices=False)
+    left = left[..., :, :n_components]
+    right = right_h.swapaxes(-1, -2)[..., :, :n_components]
+    # MIC is a coherence in [0, 1]; clip roundoff excursions like the scalar
+    # ``maximized_imaginary_coherency`` does.
+    scores = xp.clip(singular_values[..., :n_components], 0.0, 1.0)
+    filters_a = transform_aa @ left
+    filters_b = transform_bb @ right
+    patterns_a = real_aa @ filters_a
+    patterns_b = real_bb @ filters_b
+    effective_rank = xp.minimum(rank_a, rank_b)
+    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
 
 
 def _estimate_transfer_function(
@@ -2417,6 +4048,24 @@ def _estimate_transfer_function(
     inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
     H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
     return xp.matmul(minimum_phase, _regularized_inverse(H_0))
+
+
+def _sanitized_nonnegative_granger(
+    value: NDArray[np.floating],
+) -> NDArray[np.floating]:
+    """Enforce the non-negativity invariant shared by every spectral Granger variant.
+
+    Spectral Granger prediction is ``>= 0`` by definition -- it is the log-ratio
+    of a total to an intrinsic spectral density, which is at least one. Two
+    numerically-computed log-determinants can still differ by a tiny negative
+    amount around a true zero (no causality) or, when the underlying
+    factorization is degenerate, by a materially negative amount. Clip the
+    roundoff band to exactly zero and mark materially-negative (invalid) values
+    as NaN. NaN inputs pass through unchanged.
+    """
+    tolerance = 100 * xp.finfo(value.dtype).eps
+    value = xp.where((value < 0) & (value > -tolerance), 0.0, value)
+    return xp.where(value < 0, xp.nan, value)
 
 
 def _estimate_predictive_power(
@@ -2452,7 +4101,9 @@ def _estimate_predictive_power(
         predictive_power = xp.log(total_power[..., xp.newaxis]) - xp.log(
             intrinsic_power
         )
-    predictive_power[predictive_power <= 0] = xp.nan
+    # A near-singular rotation can drive intrinsic_power above total_power,
+    # giving a negative log-ratio; clip roundoff to zero and NaN the rest.
+    predictive_power = _sanitized_nonnegative_granger(predictive_power)
     return predictive_power
 
 
@@ -3307,7 +4958,7 @@ def _estimate_global_coherence(
 def _estimate_spectral_granger_prediction(
     total_power: NDArray[np.floating],
     csm: NDArray[np.complexfloating],
-    pairs: list | NDArray[np.integer],
+    pairs: Iterable[tuple[int, int]] | NDArray[np.integer],
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
 ) -> NDArray[np.floating]:
@@ -3367,6 +5018,224 @@ def _estimate_spectral_granger_prediction(
     predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
     return predictive_power
+
+
+def _var_model_from_spectrum(
+    csm: NDArray[np.complexfloating],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+    """Wilson-factorize a cross-spectrum into a transfer function and noise covariance.
+
+    Parameters
+    ----------
+    csm : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+
+    Returns
+    -------
+    transfer_function : array
+        Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+    noise_covariance : array, shape (..., n_signals, n_signals)
+    """
+    minimum_phase = minimum_phase_decomposition(
+        csm,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
+    )
+    n_nonnegative = csm.shape[-3] // 2 + 1
+    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    return transfer, _estimate_noise_covariance(minimum_phase)
+
+
+def _estimate_conditional_spectral_granger_prediction(
+    full_transfer: NDArray[np.complexfloating],
+    full_covariance: NDArray[np.floating],
+    reduced_inverse_transfer: NDArray[np.complexfloating],
+    reduced_indices: NDArray[np.integer],
+    target: int,
+) -> NDArray[np.floating]:
+    """Conditional spectral Granger ``source -> target | rest`` (Chen et al. 2006).
+
+    ``full_transfer``/``full_covariance`` describe the full model of every
+    signal and ``reduced_inverse_transfer`` is the inverse transfer function of
+    the reduced model over ``reduced_indices`` (every signal but the source).
+
+    The full-model innovations are first transformed so that the target's
+    innovation is uncorrelated with all others (Geweke's normalization). The
+    reduced model's innovation for the target then decomposes, through
+    ``Q = G_ext^{-1} H``, into a term driven by the target's own innovation
+    (the intrinsic spectrum) plus a positive semidefinite remainder driven by
+    the other innovations. The measure is the log-ratio of the total to the
+    intrinsic spectrum, so it is non-negative up to roundoff.
+
+    Parameters
+    ----------
+    full_transfer : array, shape (..., n_frequencies, n_signals, n_signals)
+    full_covariance : array, shape (..., n_signals, n_signals)
+    reduced_inverse_transfer : array
+        Shape ``(..., n_frequencies, n_signals - 1, n_signals - 1)``.
+    reduced_indices : array, shape (n_signals - 1,)
+        Full-model indices of the reduced model's signals, in reduced order.
+    target : int
+        Full-model index of the target signal; must be in ``reduced_indices``.
+
+    Returns
+    -------
+    conditional_granger : array, shape (..., n_frequencies)
+    """
+    n_signals = full_covariance.shape[-1]
+    reduced_indices = np.asarray(reduced_indices, dtype=int)
+    (target_reduced,) = np.flatnonzero(reduced_indices == target)
+
+    # Geweke normalization: P = I - coupling e_t^T removes the correlation of
+    # every other innovation with the target's, leaving Sigma' = P Sigma P^T
+    # with a zero target row/column off the diagonal and H' = H P^{-1}.
+    identity = xp.eye(n_signals, dtype=full_covariance.dtype)
+    unit_target = identity[:, target]
+    coupling = (
+        full_covariance[..., :, target]
+        / full_covariance[..., target : target + 1, target]
+    )
+    coupling = coupling - unit_target  # zero at the target itself
+    normalizer = identity - coupling[..., :, xp.newaxis] * unit_target
+    inverse_normalizer = identity + coupling[..., :, xp.newaxis] * unit_target
+    normalized_covariance = xp.matmul(
+        xp.matmul(normalizer, full_covariance), normalizer.swapaxes(-1, -2)
+    )
+    normalized_covariance = (
+        normalized_covariance + normalized_covariance.swapaxes(-1, -2)
+    ) / 2.0
+    normalized_transfer = xp.matmul(
+        full_transfer, inverse_normalizer[..., xp.newaxis, :, :]
+    )
+
+    # Target row of Q = G_ext^{-1} H', where G_ext embeds the reduced model's
+    # inverse transfer function with an identity block for the omitted source.
+    reduced_rows = xp.asarray(reduced_indices)
+    q_target = xp.matmul(
+        reduced_inverse_transfer[..., target_reduced : target_reduced + 1, :],
+        normalized_transfer[..., reduced_rows, :],
+    )  # (..., n_frequencies, 1, n_signals)
+    total = xp.real(
+        xp.matmul(
+            xp.matmul(
+                q_target, normalized_covariance.astype(q_target.dtype)[..., None, :, :]
+            ),
+            _conjugate_transpose(q_target),
+        )
+    )[..., 0, 0]
+    intrinsic = (
+        _squared_magnitude(q_target[..., 0, target])
+        * normalized_covariance[..., target : target + 1, target]
+    )
+
+    positive = (total > 0) & (intrinsic > 0)
+    if not bool(xp.all(positive)):
+        warnings.warn(
+            "Conditional spectral Granger: the total or intrinsic innovation "
+            "spectrum of the target was not positive at some time-frequency "
+            "bins (a degenerate factorization, typically from near-singular "
+            "conditioning). Those bins are returned as NaN. Consider increasing "
+            "minimum_phase_max_iterations or checking for collinear channels.",
+            UserWarning,
+            stacklevel=3,
+        )
+    safe_total = xp.where(positive, total, 1.0)
+    safe_intrinsic = xp.where(positive, intrinsic, 1.0)
+    value = _sanitized_nonnegative_granger(xp.log(safe_total) - xp.log(safe_intrinsic))
+    return xp.where(positive, value, xp.nan)
+
+
+def _estimate_block_spectral_granger_prediction(
+    csm: NDArray[np.complexfloating],
+    target_indices: NDArray[np.integer],
+    source_indices: NDArray[np.integer],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+) -> NDArray[np.floating]:
+    """Estimate block spectral Granger from ``source`` to ``target``.
+
+    The selected subsystem is ordered ``[target, source]``. Its innovations are
+    block-orthogonalized while preserving the target innovations, and the
+    source contribution is removed from the target spectral block. The log
+    determinant ratio of total to intrinsic target spectra is Geweke's
+    multivariate spectral Granger measure.
+    """
+    target_indices = np.asarray(target_indices, dtype=int)
+    source_indices = np.asarray(source_indices, dtype=int)
+    if target_indices.ndim != 1 or target_indices.size == 0:
+        raise ValueError("target_indices must be a non-empty one-dimensional array.")
+    if source_indices.ndim != 1 or source_indices.size == 0:
+        raise ValueError("source_indices must be a non-empty one-dimensional array.")
+    if np.intersect1d(target_indices, source_indices).size:
+        raise ValueError("target_indices and source_indices must not overlap.")
+
+    combined = xp.asarray(np.concatenate((target_indices, source_indices)))
+    subsystem = csm[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
+    minimum_phase = minimum_phase_decomposition(
+        subsystem,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
+    )
+    n_nonnegative = csm.shape[-3] // 2 + 1
+    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    covariance = _estimate_noise_covariance(minimum_phase)
+
+    n_target = target_indices.size
+    covariance_xx = covariance[..., :n_target, :n_target]
+    covariance_xy = covariance[..., :n_target, n_target:]
+    covariance_yx = covariance[..., n_target:, :n_target]
+    covariance_yy = covariance[..., n_target:, n_target:]
+    conditional_source_covariance = covariance_yy - xp.matmul(
+        xp.matmul(covariance_yx, _regularized_inverse(covariance_xx)),
+        covariance_xy,
+    )
+
+    total_target_spectrum = subsystem[..., :n_nonnegative, :n_target, :n_target]
+    source_transfer = transfer[..., :n_target, n_target:]
+    source_contribution = xp.matmul(
+        xp.matmul(
+            source_transfer, conditional_source_covariance[..., xp.newaxis, :, :]
+        ),
+        _conjugate_transpose(source_transfer),
+    )
+    intrinsic = total_target_spectrum - source_contribution
+    # Remove tiny anti-Hermitian roundoff before determinant evaluation.
+    intrinsic = (intrinsic + _conjugate_transpose(intrinsic)) / 2.0
+    hermitian_total_target_spectrum = (
+        total_target_spectrum + _conjugate_transpose(total_target_spectrum)
+    ) / 2.0
+    _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
+    _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
+    value = _sanitized_nonnegative_granger(xp.real(total_logdet - intrinsic_logdet))
+    # ``intrinsic`` is a difference of spectral blocks and is only guaranteed
+    # positive-definite in exact arithmetic; near-degenerate conditioning can
+    # make it (or the total spectrum) indefinite/singular, in which case the
+    # log-determinant ratio is physically meaningless. Test positive-definiteness
+    # directly via the smallest eigenvalue of these Hermitian matrices -- a
+    # determinant-sign test would miss an even number of negative eigenvalues.
+    # Return NaN (and warn) rather than a plausible but wrong finite influence.
+    smallest_total_eigenvalue = xp.linalg.eigvalsh(hermitian_total_target_spectrum)[
+        ..., 0
+    ]
+    smallest_intrinsic_eigenvalue = xp.linalg.eigvalsh(intrinsic)[..., 0]
+    positive_definite = (smallest_total_eigenvalue > 0) & (
+        smallest_intrinsic_eigenvalue > 0
+    )
+    if not bool(xp.all(positive_definite)):
+        warnings.warn(
+            "Block spectral Granger: the intrinsic or total target spectrum was "
+            "not positive-definite at some time-frequency bins (typically from "
+            "near-singular conditioning after removing the source block). Those "
+            "bins are returned as NaN. Consider increasing regularization or "
+            "minimum_phase_max_iterations, or checking for collinear channels.",
+            UserWarning,
+            stacklevel=2,
+        )
+    return xp.where(positive_definite, value, xp.nan)
 
 
 def _estimate_subset_spectral_granger_prediction(

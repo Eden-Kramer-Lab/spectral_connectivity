@@ -9,6 +9,7 @@ connectivity analysis.
 
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -17,6 +18,227 @@ import scipy.stats
 from numpy.typing import NDArray
 
 from spectral_connectivity.utils import to_numpy
+
+
+@dataclass(frozen=True)
+class JackknifeResult:
+    """Leave-one-observation-out estimate and normal-approximation interval.
+
+    Every array attribute has the shape of the underlying measure, e.g.
+    ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a pairwise
+    connectivity measure.
+
+    Attributes
+    ----------
+    estimate : array
+        The full-sample estimate on the original scale.
+    bias_corrected : array
+        Jackknife bias-corrected estimate on the original scale.
+    standard_error : array
+        Standard error on the original scale (delta method through the
+        transformation).
+    confidence_interval : tuple of (lower, upper) arrays
+        Confidence bounds on the original scale.
+    n_observations : int
+        Number of leave-one-out replicates.
+    transformation : str
+        Variance-stabilizing transformation used for the interval.
+    """
+
+    estimate: NDArray[np.floating]
+    bias_corrected: NDArray[np.floating]
+    standard_error: NDArray[np.floating]
+    confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
+    n_observations: int
+    transformation: str
+
+
+def _identity(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return value
+
+
+def _wrap_phase(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.angle(np.exp(1j * value))
+
+
+def _exponential(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.exp(value)
+
+
+def _hyperbolic_tangent(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.tanh(value)
+
+
+def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    # Back-transform for magnitude-squared coherence: recover |coherence| =
+    # tanh(.), clamp it to the physical [0, 1] range (a lower confidence bound in
+    # atanh space can map to a negative magnitude), then square. Clamping before
+    # squaring keeps the mapping monotonic, so squaring cannot fold a negative
+    # magnitude back above the estimate.
+    return np.clip(np.tanh(value), 0, 1) ** 2
+
+
+def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
+    """Warn that a saturated coherence yields a delta-method standard error of 0.
+
+    At ``|coherence| == 1`` the Fisher delta-method derivative is exactly zero,
+    so the back-transformed standard error is reported as ``0`` -- implying
+    perfect certainty rather than a degenerate boundary. Surface it so the zero
+    is not mistaken for a genuinely tight estimate.
+    """
+    if bool(np.any(at_boundary)):
+        warnings.warn(
+            f"Fisher jackknife: {int(np.count_nonzero(at_boundary))} value(s) sit "
+            "at saturated coherence (|coherence| == 1), where the delta-method "
+            "standard error is exactly 0. This reflects a boundary, not perfect "
+            "certainty; interpret those standard errors with care.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def jackknife_confidence_interval(
+    estimate: NDArray[np.floating],
+    leave_one_out: NDArray[np.floating],
+    *,
+    confidence_level: float = 0.95,
+    transformation: Literal[
+        "identity", "log", "fisher", "fisher_squared", "circular"
+    ] = "identity",
+) -> JackknifeResult:
+    """Summarize leave-one-out replicates with a jackknife confidence interval.
+
+    Parameters
+    ----------
+    estimate : array, shape (...)
+        Full-sample estimate of a real-valued measure.
+    leave_one_out : array, shape (n_observations, ...)
+        Replicates with one observation omitted each, stacked on the first
+        axis; the remaining axes must match ``estimate``.
+    confidence_level : float, default=0.95
+        Two-sided coverage of the normal-approximation interval, in (0, 1).
+    transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
+        Scale on which the interval is formed. Log is appropriate for positive
+        spectra, Fisher's ``atanh`` for magnitude coherence in ``[-1, 1]``,
+        ``fisher_squared`` (``atanh(sqrt(.))``) for magnitude-squared coherence
+        in ``[0, 1]``, and circular for angles in radians.
+
+    Returns
+    -------
+    JackknifeResult
+        Estimate, bias-corrected estimate, standard error, and confidence
+        bounds, all on the original scale and with the shape of ``estimate``.
+        The standard error is converted back with the local delta method.
+    """
+    if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
+        raise ValueError(
+            "confidence_level must be finite and strictly between 0 and 1."
+        )
+    valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
+    if transformation not in valid_transformations:
+        raise ValueError(
+            "transformation must be 'identity', 'log', 'fisher', "
+            f"'fisher_squared', or 'circular'; got {transformation!r}."
+        )
+    estimate_array = np.asarray(estimate)
+    replicates = np.asarray(leave_one_out)
+    if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
+        raise TypeError("Jackknife intervals require a real-valued measure.")
+    if (
+        replicates.ndim != estimate_array.ndim + 1
+        or replicates.shape[1:] != estimate_array.shape
+    ):
+        raise ValueError(
+            "leave_one_out must have shape (n_observations, *estimate.shape)."
+        )
+    n_observations = replicates.shape[0]
+    if n_observations < 2:
+        raise ValueError("Jackknife inference requires at least 2 observations.")
+
+    if transformation == "identity":
+        transformed_estimate = estimate_array
+        transformed_replicates = replicates
+        inverse = _identity
+        derivative = np.ones_like(estimate_array)
+    elif transformation == "log":
+        n_nonpositive = int(
+            np.count_nonzero(estimate_array <= 0) + np.count_nonzero(replicates <= 0)
+        )
+        if n_nonpositive:
+            warnings.warn(
+                f"Jackknife log transform: {n_nonpositive} non-positive value(s) "
+                "map to NaN and propagate to the affected bins' confidence bounds "
+                "(a single non-positive replicate makes its whole bin NaN). This "
+                "usually indicates a spectral null or a non-power measure.",
+                UserWarning,
+                stacklevel=2,
+            )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            transformed_estimate = np.where(
+                estimate_array > 0, np.log(estimate_array), np.nan
+            )
+            transformed_replicates = np.where(
+                replicates > 0, np.log(replicates), np.nan
+            )
+        inverse = _exponential
+        derivative = estimate_array
+    elif transformation == "fisher":
+        _warn_fisher_boundary(np.abs(estimate_array) >= 1)
+        epsilon = np.finfo(float).eps
+        transformed_estimate = np.arctanh(
+            np.clip(estimate_array, -1 + epsilon, 1 - epsilon)
+        )
+        transformed_replicates = np.arctanh(
+            np.clip(replicates, -1 + epsilon, 1 - epsilon)
+        )
+        inverse = _hyperbolic_tangent
+        derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
+    elif transformation == "fisher_squared":
+        # Variance-stabilizing transform for magnitude-squared coherence in
+        # [0, 1] (Enochson & Goodman 1965): atanh(sqrt(MSC)) = atanh(|coherence|).
+        # Applying Fisher's atanh to the *unsquared* magnitude is the established
+        # transform; atanh(MSC) is not. The delta-method derivative back to the
+        # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC).
+        _warn_fisher_boundary(estimate_array >= 1)
+        epsilon = np.finfo(float).eps
+        clipped_estimate = np.clip(estimate_array, 0, 1)
+        transformed_estimate = np.arctanh(
+            np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon)
+        )
+        transformed_replicates = np.arctanh(
+            np.clip(np.sqrt(np.clip(replicates, 0, 1)), 0, 1 - epsilon)
+        )
+        inverse = _hyperbolic_tangent_squared
+        derivative = 2 * np.sqrt(clipped_estimate) * (1 - clipped_estimate)
+    else:
+        # Unwrap every replicate onto the branch nearest the full estimate.
+        transformed_estimate = estimate_array
+        transformed_replicates = estimate_array + np.angle(
+            np.exp(1j * (replicates - estimate_array))
+        )
+        inverse = _wrap_phase
+        derivative = np.ones_like(estimate_array)
+
+    replicate_mean = np.mean(transformed_replicates, axis=0)
+    bias_corrected_transformed = (
+        n_observations * transformed_estimate - (n_observations - 1) * replicate_mean
+    )
+    transformed_standard_error = np.sqrt(
+        (n_observations - 1)
+        / n_observations
+        * np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
+    )
+    critical_value = scipy.stats.norm.ppf(0.5 + confidence_level / 2)
+    lower = inverse(transformed_estimate - critical_value * transformed_standard_error)
+    upper = inverse(transformed_estimate + critical_value * transformed_standard_error)
+    return JackknifeResult(
+        estimate=estimate_array,
+        bias_corrected=inverse(bias_corrected_transformed),
+        standard_error=np.abs(derivative) * transformed_standard_error,
+        confidence_interval=(lower, upper),
+        n_observations=n_observations,
+        transformation=transformation,
+    )
 
 
 def _require_scipy_false_discovery_control() -> None:

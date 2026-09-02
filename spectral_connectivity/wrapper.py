@@ -1,8 +1,10 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import difflib
+import inspect
 import json
 import warnings
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, Literal, NamedTuple, TypeAlias
@@ -11,9 +13,18 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.connectivity import (
+    _NON_MEASURE_METHODS,
+    Connectivity,
+    MultivariateConnectivityResult,
+)
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import BackendArray, get_compute_backend, to_numpy
+from spectral_connectivity.utils import (
+    BackendArray,
+    get_compute_backend,
+    is_positive_integer,
+    to_numpy,
+)
 
 logger = getLogger(__name__)
 
@@ -150,17 +161,13 @@ def _store_provenance_item(
 
 
 class UnsupportedMeasureError(ValueError):
-    """A measure does not fit the ``(time, frequency, source, target)`` layout.
+    """A method has no registered semantic xarray output contract.
 
-    Raised by :func:`connectivity_to_xarray` for measures that cannot be
-    represented as a plain per-signal-pair xarray (``global_coherence``,
-    ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
-    and the conditional/blockwise spectral Granger measures). It subclasses
-    ``ValueError`` for backward compatibility, but is a
-    distinct type so :func:`multitaper_connectivity` can skip an unsupported
-    measure in a multi-measure batch *without* also swallowing a genuine
-    computation error (e.g. a measure that raises ``ValueError`` because the data
-    has too few observations).
+    Built-in nonstandard results (components, groups, delays, and multi-variable
+    outputs) have explicit schemas. This exception remains for unregistered
+    extensions whose returned shape cannot be inferred safely. It subclasses
+    ``ValueError`` for backward compatibility and lets multi-measure wrappers
+    distinguish structural incompatibility from genuine numerical errors.
     """
 
 
@@ -180,27 +187,46 @@ def _package_version() -> str:
 class _MeasureSpec:
     """Shape/capability metadata used by the xarray wrapper."""
 
-    output_kind: Literal["pairwise", "power", "unsupported"]
+    output_kind: Literal[
+        "pairwise",
+        "power",
+        "group_pairwise",
+        "delay",
+        "global",
+        "group_delay",
+        "phase_slope",
+        "multivariate_components",
+    ]
     is_default: bool = False
-    # Directed measures use the convention output[i, j] = influence j -> i (row
-    # = receiver, col = driver). The wrapper transposes them so the labeled
-    # (source, target) axes read source -> target; symmetric measures are
-    # unaffected by the transpose.
+    # Scientific directionality, native matrix orientation, and spectrum
+    # requirements are independent capabilities. For example dPLI and PSI are
+    # directional but already use source -> target orientation and do not need
+    # Wilson factorization.
     is_directed: bool = False
+    transpose_output: bool = False
+    requires_two_sided: bool = False
 
     def __post_init__(self) -> None:
         # Make the field couplings unrepresentable rather than merely unused, so
         # a future registry entry cannot silently violate them.
-        if self.is_directed and self.output_kind != "pairwise":
-            raise ValueError("is_directed requires output_kind='pairwise'.")
-        if self.is_default and self.output_kind == "unsupported":
-            raise ValueError("an unsupported measure cannot be a default.")
+        if self.transpose_output and self.output_kind not in {
+            "pairwise",
+            "group_pairwise",
+        }:
+            raise ValueError(
+                "transpose_output requires pairwise or group_pairwise output."
+            )
+        if self.transpose_output and not self.is_directed:
+            raise ValueError("transpose_output requires a directional measure.")
 
 
 _PAIRWISE_SPEC = _MeasureSpec("pairwise")
-_DIRECTED_PAIRWISE_SPEC = _MeasureSpec("pairwise", is_directed=True)
-_UNSUPPORTED_SPEC = _MeasureSpec("unsupported")
-
+_DIRECTED_PAIRWISE_SPEC = _MeasureSpec(
+    "pairwise",
+    is_directed=True,
+    transpose_output=True,
+    requires_two_sided=True,
+)
 # This is the single source of truth for wrapper capabilities and defaults.
 # Insertion order preserves the historical Dataset variable order.
 _MEASURE_SPECS: dict[str, _MeasureSpec] = {
@@ -213,14 +239,27 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "imaginary_coherence": _MeasureSpec("pairwise", is_default=True),
     "pairwise_phase_consistency": _MeasureSpec("pairwise", is_default=True),
     "pairwise_spectral_granger_prediction": _MeasureSpec(
-        "pairwise", is_default=True, is_directed=True
+        "pairwise",
+        is_default=True,
+        is_directed=True,
+        transpose_output=True,
+        requires_two_sided=True,
     ),
     "phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "phase_locking_value": _MeasureSpec("pairwise", is_default=True),
     "power": _MeasureSpec("power", is_default=True),
     "weighted_phase_lag_index": _MeasureSpec("pairwise", is_default=True),
     "coherency": _PAIRWISE_SPEC,
+    "cross_spectral_density": _PAIRWISE_SPEC,
+    "imaginary_coherency": _PAIRWISE_SPEC,
+    "partial_coherence": _PAIRWISE_SPEC,
+    "corrected_imaginary_phase_locking_value": _PAIRWISE_SPEC,
+    # dPLI's native row/column layout is already phase-leader -> phase-lagger,
+    # so it must not receive the transpose used by Granger/DTF-family outputs.
+    "directed_phase_lag_index": _MeasureSpec("pairwise", is_directed=True),
     "subset_pairwise_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
+    "conditional_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
+    "time_reversed_spectral_granger_prediction": _DIRECTED_PAIRWISE_SPEC,
     # Directed-transfer-function family: opt-in (not in the default set),
     # directed (output[i, j] = influence j -> i, transposed to source -> target),
     # and returning the full (time, frequency, source, target) layout.
@@ -229,18 +268,21 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     "partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
     "generalized_partial_directed_coherence": _DIRECTED_PAIRWISE_SPEC,
     "direct_directed_transfer_function": _DIRECTED_PAIRWISE_SPEC,
-    **dict.fromkeys(
-        (
-            "blockwise_spectral_granger_prediction",
-            "canonical_coherence",
-            "conditional_spectral_granger_prediction",
-            "delay",
-            "global_coherence",
-            "group_delay",
-            "phase_slope_index",
-        ),
-        _UNSUPPORTED_SPEC,
+    "blockwise_spectral_granger_prediction": _MeasureSpec(
+        "group_pairwise",
+        is_directed=True,
+        transpose_output=True,
+        requires_two_sided=True,
     ),
+    "canonical_coherence": _MeasureSpec("group_pairwise"),
+    "maximized_imaginary_coherency": _MeasureSpec("group_pairwise"),
+    "multivariate_interaction_measure": _MeasureSpec("group_pairwise"),
+    "canonical_coherency": _MeasureSpec("multivariate_components"),
+    "maximized_imaginary_coherency_components": _MeasureSpec("multivariate_components"),
+    "delay": _MeasureSpec("delay", is_directed=True),
+    "global_coherence": _MeasureSpec("global"),
+    "group_delay": _MeasureSpec("group_delay", is_directed=True),
+    "phase_slope_index": _MeasureSpec("phase_slope", is_directed=True),
 }
 
 DEFAULT_METHODS: tuple[str, ...] = tuple(
@@ -248,19 +290,181 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 )
 
 
-def _get_measure_spec(method: str) -> _MeasureSpec | None:
-    """Return wrapper metadata, rejecting known incompatible measures."""
-    measure_spec = _MEASURE_SPECS.get(method)
-    if measure_spec is None or measure_spec.output_kind != "unsupported":
-        return measure_spec
-    raise UnsupportedMeasureError(
-        f"The method '{method}' is not supported by the xarray interface "
-        f"(it does not return a plain (time, frequency, source, target) "
-        f"array). Please use the Connectivity class directly instead:\n\n"
-        f"from spectral_connectivity import Connectivity\n"
-        f"conn = Connectivity.from_multitaper(m)\n"
-        f"result = conn.{method}()\n"
+@dataclass(frozen=True)
+class MeasureInfo:
+    """A single connectivity measure the high-level wrapper can compute.
+
+    Attributes
+    ----------
+    name : str
+        Value to pass as ``method`` to :func:`multitaper_connectivity` or
+        :func:`fourier_connectivity`, and the name of the corresponding
+        :class:`~spectral_connectivity.Connectivity` method.
+    category : str
+        The output-shape contract, one of ``"pairwise"``, ``"power"``,
+        ``"group_pairwise"``, ``"multivariate_components"``, ``"delay"``,
+        ``"global"``, ``"group_delay"``, or ``"phase_slope"``.
+    description : str
+        One-line summary taken from the ``Connectivity`` method's docstring.
+    is_default : bool
+        Whether the measure is in the default set computed when ``method`` is
+        omitted (see ``DEFAULT_METHODS``).
+    is_directed : bool
+        Whether the measure is directional (``source -> target`` asymmetric).
+    requires_two_sided : bool
+        Whether the measure requires a full two-sided spectrum, including
+        negative-frequency bins.
+    """
+
+    name: str
+    category: str
+    description: str
+    is_default: bool
+    is_directed: bool
+    requires_two_sided: bool
+
+
+def _measure_description(name: str) -> str:
+    """Return the one-line summary from a ``Connectivity`` method docstring."""
+    docstring = getattr(Connectivity, name).__doc__ or ""
+    for line in docstring.strip().splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def list_measures(
+    *,
+    category: str | None = None,
+    default_only: bool = False,
+    directed: bool | None = None,
+) -> list[MeasureInfo]:
+    """List the connectivity measures the high-level wrapper can compute.
+
+    This is the discovery entry point: it enumerates every valid ``method``
+    name for :func:`multitaper_connectivity` and :func:`fourier_connectivity`,
+    together with each measure's output category, a one-line description, and
+    whether it is in the default set and/or directional.
+
+    Parameters
+    ----------
+    category : str, optional
+        Return only measures with this output category (e.g. ``"pairwise"``,
+        ``"power"``, ``"group_pairwise"``). Raises ``ValueError`` for an
+        unknown category.
+    default_only : bool, default False
+        Return only the measures computed when ``method`` is omitted.
+    directed : bool, optional
+        If ``True``, return only directional measures; if ``False``, only
+        non-directional ones; if ``None`` (default), return both. Non-directional
+        does not necessarily mean symmetric: for example, phase-valued measures
+        may be antisymmetric and complex coherency is Hermitian.
+
+    Returns
+    -------
+    measures : list of MeasureInfo
+        One record per measure, in the wrapper's canonical order.
+
+    Examples
+    --------
+    >>> from spectral_connectivity import list_measures
+    >>> [m.name for m in list_measures(default_only=True)][:3]
+    ['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+    >>> next(m for m in list_measures() if m.name == "power").description
+    'Return the one-sided power spectral density of the signal.'
+    """
+    valid_categories = {spec.output_kind for spec in _MEASURE_SPECS.values()}
+    if category is not None and category not in valid_categories:
+        raise ValueError(
+            f"Unknown category {category!r}. Valid categories are: "
+            f"{', '.join(sorted(valid_categories))}."
+        )
+
+    measures = []
+    for name, spec in _MEASURE_SPECS.items():
+        if default_only and not spec.is_default:
+            continue
+        if category is not None and spec.output_kind != category:
+            continue
+        if directed is not None and spec.is_directed != directed:
+            continue
+        measures.append(
+            MeasureInfo(
+                name=name,
+                category=spec.output_kind,
+                description=_measure_description(name),
+                is_default=spec.is_default,
+                is_directed=spec.is_directed,
+                requires_two_sided=spec.requires_two_sided,
+            )
+        )
+    return measures
+
+
+def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
+    """Rank plausible measure names for a misspelled or abbreviated request.
+
+    Substring matches (which handle abbreviations such as ``"granger"``) are
+    preferred over ``difflib`` fuzzy matches (which handle single-character
+    typos), since the former is what mistaken measure names usually look like.
+    """
+    lowered = name.lower()
+    ranked: list[str] = [
+        measure
+        for measure in _MEASURE_SPECS
+        if lowered in measure.lower() or measure.lower() in lowered
+    ]
+    lower_to_name = {measure.lower(): measure for measure in _MEASURE_SPECS}
+    for hit in difflib.get_close_matches(lowered, lower_to_name, n=limit, cutoff=0.5):
+        measure = lower_to_name[hit]
+        if measure not in ranked:
+            ranked.append(measure)
+    return ranked[:limit]
+
+
+def _is_extension_measure(name: str) -> bool:
+    """Whether ``name`` is a public instance method usable as a measure."""
+    if name.startswith("_") or name in _NON_MEASURE_METHODS:
+        return False
+    attribute = inspect.getattr_static(Connectivity, name, None)
+    return inspect.isfunction(attribute)
+
+
+def _validate_method_names(methods: Sequence[str]) -> None:
+    """Reject unknown measure names with a helpful, actionable message.
+
+    A name is accepted if it is either a registered measure or a public
+    instance method of ``Connectivity``, so subclass/monkeypatched extension
+    measures (which the wrapper supports) still pass. Properties, private
+    helpers, classmethods, and the non-measure ``jackknife`` driver are rejected
+    before they can produce an obscure ``TypeError``.
+    """
+    unknown = [
+        method
+        for method in methods
+        if method not in _MEASURE_SPECS and not _is_extension_measure(method)
+    ]
+    if not unknown:
+        return
+    parts = []
+    for name in unknown:
+        suggestions = _suggest_measure_names(name)
+        if suggestions:
+            hint = " Did you mean: " + ", ".join(repr(s) for s in suggestions) + "?"
+        else:
+            hint = ""
+        parts.append(f"{name!r} is not a known connectivity measure.{hint}")
+    parts.append(
+        f"Call spectral_connectivity.list_measures() to see the "
+        f"{len(_MEASURE_SPECS)} available measures."
     )
+    raise ValueError(" ".join(parts))
+
+
+def _get_measure_spec(method: str) -> _MeasureSpec | None:
+    """Return wrapper metadata for a registered measure, or None."""
+    return _MEASURE_SPECS.get(method)
 
 
 def _validated_signal_labels(
@@ -320,6 +524,28 @@ def _validated_signal_labels(
     return signal_coordinate.data
 
 
+def _check_method_accepts_kwargs(
+    method: str, measure: Callable[..., Any], kwargs: Mapping[str, Any]
+) -> None:
+    """Raise an actionable error when ``kwargs`` names a parameter ``measure``
+    does not accept.
+
+    ``connectivity_kwargs`` is broadcast to every requested method, so a
+    keyword needed by one measure (e.g. ``group_labels``) reaches the others.
+    """
+    parameters = inspect.signature(measure).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return
+    rejected = sorted(set(kwargs) - set(parameters))
+    if rejected:
+        raise TypeError(
+            f"{method} does not accept keyword argument(s) "
+            f"{', '.join(map(repr, rejected))}. connectivity_kwargs is passed to "
+            "every requested method, so request measures that need different "
+            "arguments in separate calls."
+        )
+
+
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
     method: str,
@@ -327,14 +553,16 @@ def _connectivity_result_to_xarray(
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
     **kwargs: Any,
-) -> xr.DataArray:
+) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
     """
     measure_spec = _get_measure_spec(method)
-    connectivity_mat = getattr(connectivity, method)(**kwargs)
+    measure = getattr(connectivity, method)
+    _check_method_accepts_kwargs(method, measure, kwargs)
+    numerical_result = measure(**kwargs)
 
     pairwise_shape = (
         len(connectivity.time),
@@ -343,8 +571,8 @@ def _connectivity_result_to_xarray(
         connectivity.n_signals,
     )
     power_shape = pairwise_shape[:-1]
-    actual_shape = tuple(connectivity_mat.shape)
     if measure_spec is None:
+        actual_shape = tuple(numerical_result.shape)
         if actual_shape != pairwise_shape:
             raise UnsupportedMeasureError(
                 f"The method '{method}' returned shape {actual_shape}, but an "
@@ -352,21 +580,6 @@ def _connectivity_result_to_xarray(
                 "Register its output contract or use Connectivity directly."
             )
         measure_spec = _PAIRWISE_SPEC
-    expected_shape = (
-        power_shape if measure_spec.output_kind == "power" else pairwise_shape
-    )
-    if actual_shape != expected_shape:
-        raise ValueError(
-            f"The method '{method}' returned shape {actual_shape}; its wrapper "
-            f"contract requires {expected_shape}."
-        )
-
-    if measure_spec.is_directed:
-        # Directed measures return output[i, j] = influence j -> i (row =
-        # receiver, col = driver). Transpose the trailing signal axes so the
-        # stored value at [i, j] is i -> j, matching the (source, target) labels
-        # applied below: sel(source=i, target=j) then reads "i drives j".
-        connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
@@ -375,7 +588,7 @@ def _connectivity_result_to_xarray(
     for key, value in kwargs.items():
         _store_provenance_item(attrs, "arg_", key, value)
 
-    coordinates: dict[str, Any] = {
+    base_coordinates: dict[str, Any] = {
         "time": (
             "time",
             connectivity.time,
@@ -386,12 +599,28 @@ def _connectivity_result_to_xarray(
             connectivity.frequencies,
             {"long_name": "Frequency", "units": "Hz"},
         ),
-        "source": (
-            "source",
-            signal_labels,
-            {"long_name": "Source signal"},
-        ),
     }
+    signal_coordinates = {
+        "source": ("source", signal_labels, {"long_name": "Source signal"}),
+        "target": ("target", signal_labels, {"long_name": "Target signal"}),
+    }
+
+    if measure_spec.output_kind in {"pairwise", "power"}:
+        connectivity_mat = np.asarray(numerical_result)
+        expected_shape = (
+            power_shape if measure_spec.output_kind == "power" else pairwise_shape
+        )
+        if tuple(connectivity_mat.shape) != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its wrapper contract requires {expected_shape}."
+            )
+        if measure_spec.transpose_output:
+            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
+        coordinates = {**base_coordinates, "source": signal_coordinates["source"]}
+    else:
+        coordinates = dict(base_coordinates)
+
     if measure_spec.output_kind == "power":
         # squeeze has no meaning for power (no target axis); it is a no-op here.
         xar = xr.DataArray(
@@ -401,12 +630,10 @@ def _connectivity_result_to_xarray(
             name=method,
             attrs=attrs,
         )
-    else:
-        coordinates["target"] = (
-            "target",
-            signal_labels,
-            {"long_name": "Target signal"},
-        )
+        return xar
+
+    if measure_spec.output_kind == "pairwise":
+        coordinates["target"] = signal_coordinates["target"]
         xar = xr.DataArray(
             connectivity_mat,
             coords=coordinates,
@@ -430,14 +657,278 @@ def _connectivity_result_to_xarray(
                 UserWarning,
                 stacklevel=2,
             )
+        return xar
 
-    return xar
+    if measure_spec.output_kind == "group_pairwise":
+        connectivity_mat, group_labels = numerical_result
+        connectivity_mat = np.asarray(connectivity_mat)
+        group_labels = np.asarray(group_labels)
+        expected_shape = (
+            len(connectivity.time),
+            len(connectivity.frequencies),
+            len(group_labels),
+            len(group_labels),
+        )
+        if connectivity_mat.shape != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its group-pairwise contract requires {expected_shape}."
+            )
+        if measure_spec.transpose_output:
+            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
+        coordinates.update(
+            {
+                "source_group": ("source_group", group_labels),
+                "target_group": ("target_group", group_labels),
+            }
+        )
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "frequency", "source_group", "target_group"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "delay":
+        connectivity_mat = np.asarray(numerical_result)
+        frequencies = np.asarray(connectivity.frequencies)
+        frequency_band = kwargs.get("frequencies_of_interest")
+        if frequency_band is not None:
+            frequencies = frequencies[
+                (frequency_band[0] < frequencies) & (frequencies < frequency_band[1])
+            ]
+        delay_expected_shape = (
+            len(connectivity.time),
+            len(frequencies),
+            connectivity_mat.shape[-3],
+            connectivity.n_signals,
+            connectivity.n_signals,
+        )
+        if connectivity_mat.shape != delay_expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its delay contract requires {delay_expected_shape}."
+            )
+        coordinates = {
+            "time": base_coordinates["time"],
+            "frequency": ("frequency", frequencies, {"units": "Hz"}),
+            "candidate": np.arange(
+                -int(kwargs.get("n_range", 3)), int(kwargs.get("n_range", 3)) + 1
+            ),
+            **signal_coordinates,
+        }
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "frequency", "candidate", "source", "target"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "phase_slope":
+        connectivity_mat = np.asarray(numerical_result)
+        expected_shape = (
+            len(connectivity.time),
+            connectivity.n_signals,
+            connectivity.n_signals,
+        )
+        if connectivity_mat.shape != expected_shape:
+            raise ValueError(
+                f"The method '{method}' returned shape {connectivity_mat.shape}; "
+                f"its phase-slope contract requires {expected_shape}."
+            )
+        band = kwargs.get("frequencies_of_interest")
+        if band is None:
+            band = (connectivity.frequencies[0], connectivity.frequencies[-1])
+        coordinates = {
+            "time": base_coordinates["time"],
+            **signal_coordinates,
+            "frequency_band_lower": float(band[0]),
+            "frequency_band_upper": float(band[1]),
+        }
+        return xr.DataArray(
+            connectivity_mat,
+            coords=coordinates,
+            dims=("time", "source", "target"),
+            name=method,
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "group_delay":
+        delay, slope, r_value = numerical_result
+        dataset_coordinates = {
+            "time": base_coordinates["time"],
+            **signal_coordinates,
+        }
+        variables = {
+            "group_delay": ("Group delay", np.asarray(delay), "s"),
+            "group_delay_slope": ("phase slope", np.asarray(slope), "rad/Hz"),
+            "group_delay_r_value": (
+                "phase-frequency correlation",
+                np.asarray(r_value),
+                "1",
+            ),
+        }
+        data_vars: dict[str, xr.DataArray] = {}
+        for name, (long_name, values, units) in variables.items():
+            if values.shape != (
+                len(connectivity.time),
+                connectivity.n_signals,
+                connectivity.n_signals,
+            ):
+                raise ValueError(f"The method '{method}' returned an invalid shape.")
+            variable_attrs = {**attrs, "long_name": long_name, "units": units}
+            data_vars[name] = xr.DataArray(
+                values,
+                coords=dataset_coordinates,
+                dims=("time", "source", "target"),
+                attrs=variable_attrs,
+            )
+        return xr.Dataset(data_vars, attrs=attrs)
+
+    if measure_spec.output_kind == "global":
+        scores, vectors = numerical_result
+        scores = np.asarray(scores)[..., : len(connectivity.frequencies), :]
+        vectors = np.asarray(vectors)[..., : len(connectivity.frequencies), :, :]
+        n_components = scores.shape[-1]
+        dataset_coordinates = {
+            **base_coordinates,
+            "component": np.arange(n_components),
+            "source": signal_coordinates["source"],
+        }
+        return xr.Dataset(
+            {
+                "global_coherence": xr.DataArray(
+                    scores,
+                    coords={
+                        key: dataset_coordinates[key]
+                        for key in ("time", "frequency", "component")
+                    },
+                    dims=("time", "frequency", "component"),
+                    attrs=attrs,
+                ),
+                "global_coherence_vectors": xr.DataArray(
+                    vectors,
+                    coords=dataset_coordinates,
+                    dims=("time", "frequency", "source", "component"),
+                    attrs={**attrs, "long_name": "Global coherence spatial vectors"},
+                ),
+            },
+            attrs=attrs,
+        )
+
+    if measure_spec.output_kind == "multivariate_components":
+        if not isinstance(numerical_result, MultivariateConnectivityResult):
+            raise TypeError(
+                f"The method '{method}' did not return MultivariateConnectivityResult."
+            )
+        n_connections = numerical_result.scores.shape[-2]
+        n_components = numerical_result.scores.shape[-1]
+        expected_scores = (
+            len(connectivity.time),
+            len(connectivity.frequencies),
+            n_connections,
+            n_components,
+        )
+        if numerical_result.scores.shape != expected_scores:
+            raise ValueError(
+                f"The method '{method}' returned score shape "
+                f"{numerical_result.scores.shape}; expected {expected_scores}."
+            )
+        component_coordinates = {
+            **base_coordinates,
+            "connection": np.arange(n_connections),
+            "component": np.arange(n_components),
+            # Per-connection group labels on the ``connection`` dimension. Named
+            # distinctly from the ``source_group``/``target_group`` *dimension*
+            # coordinates used by group-pairwise results so the two contracts
+            # never alias (and are silently overwritten) when merged in one
+            # Dataset.
+            "connection_seed_group": (
+                "connection",
+                numerical_result.connections[:, 0],
+            ),
+            "connection_target_group": (
+                "connection",
+                numerical_result.connections[:, 1],
+            ),
+            "side": ("side", ["seed", "target"]),
+            "signal": ("signal", signal_labels),
+            "group": ("group", numerical_result.group_labels),
+        }
+        data_vars = {
+            method: xr.DataArray(
+                numerical_result.scores,
+                coords={
+                    key: component_coordinates[key]
+                    for key in (
+                        "time",
+                        "frequency",
+                        "connection",
+                        "component",
+                        "connection_seed_group",
+                        "connection_target_group",
+                    )
+                },
+                dims=("time", "frequency", "connection", "component"),
+                attrs=attrs,
+            ),
+            "group_membership": xr.DataArray(
+                numerical_result.group_membership,
+                coords={
+                    "group": component_coordinates["group"],
+                    "signal": component_coordinates["signal"],
+                },
+                dims=("group", "signal"),
+            ),
+        }
+        projection_dims = (
+            "time",
+            "frequency",
+            "connection",
+            "component",
+            "side",
+            "signal",
+        )
+        projection_coordinates = {
+            key: component_coordinates[key]
+            for key in (
+                "time",
+                "frequency",
+                "connection",
+                "component",
+                "connection_seed_group",
+                "connection_target_group",
+                "side",
+                "signal",
+            )
+        }
+        if numerical_result.filters is not None:
+            data_vars[f"{method}_filters"] = xr.DataArray(
+                numerical_result.filters,
+                coords=projection_coordinates,
+                dims=projection_dims,
+                attrs={**attrs, "long_name": "Spatial filters"},
+            )
+        if numerical_result.patterns is not None:
+            data_vars[f"{method}_patterns"] = xr.DataArray(
+                numerical_result.patterns,
+                coords=projection_coordinates,
+                dims=projection_dims,
+                attrs={**attrs, "long_name": "Spatial patterns"},
+            )
+        return xr.Dataset(data_vars, attrs=attrs)
+
+    raise AssertionError(f"unreachable: unknown output kind for {method!r}")
 
 
 def _shared_provenance_attrs(
     connectivity: Connectivity,
-    multitaper_metadata: Mapping[str, Any],
+    transform_metadata: Mapping[str, Any],
     input_attrs: Mapping[Any, Any] | None = None,
+    *,
+    transform_prefix: str = "mt_",
 ) -> dict[str, Any]:
     """Provenance shared by every measure computed from one transform.
 
@@ -452,7 +943,7 @@ def _shared_provenance_attrs(
     # Namespace transform settings so they cannot collide with measure-level or
     # package-level provenance attributes.
     attrs: dict[str, Any] = {
-        "mt_" + attr: value for attr, value in multitaper_metadata.items()
+        transform_prefix + attr: value for attr, value in transform_metadata.items()
     }
     attrs["package"] = "spectral_connectivity"
     attrs["package_version"] = _package_version()
@@ -470,18 +961,263 @@ def _shared_provenance_attrs(
     return attrs
 
 
+def _inclusive_frequency_mask(
+    label: str,
+    bounds: Any,
+    frequencies: NDArray[np.floating],
+) -> tuple[NDArray[np.bool_], tuple[float, float]]:
+    """Validate ``(low, high)`` bounds and return the inclusive bin mask.
+
+    Shared by ``frequency_range`` and ``frequency_bands`` so both arguments keep
+    the same semantics and error messages; ``label`` names the offending
+    argument or band in those messages.
+    """
+    try:
+        lower, upper = bounds
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"{label} must contain exactly two bounds (low, high)."
+        ) from error
+    lower = float(lower)
+    upper = float(upper)
+    if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
+        raise ValueError(
+            f"{label} must have finite bounds with low <= high; "
+            f"got ({lower!r}, {upper!r})."
+        )
+    mask = (frequencies >= lower) & (frequencies <= upper)
+    if not np.any(mask):
+        raise ValueError(f"{label} ({lower:g}, {upper:g}) contains no frequency bins.")
+    return mask, (lower, upper)
+
+
+def frequency_band_reduce(
+    result: xr.DataArray | xr.Dataset,
+    bands: Mapping[str, tuple[float, float]],
+    *,
+    reduction: Literal["mean", "integral"] = "mean",
+) -> xr.DataArray | xr.Dataset:
+    """Reduce a frequency-resolved result into labeled frequency bands.
+
+    ``reduction="mean"`` averages the already-computed connectivity score over
+    the bins in each inclusive band. Phase is treated specially: a
+    ``coherence_phase`` result uses a circular mean, while complex-valued
+    measures use their ordinary complex (vector) mean. ``reduction="integral"``
+    computes a trapezoidal integral and is intentionally restricted to spectral
+    densities (``power`` and ``cross_spectral_density``), where it represents
+    band power/covariance rather than a frequency-averaged score.
+
+    Parameters
+    ----------
+    result : xarray.DataArray or xarray.Dataset
+        Result with a one-dimensional ``frequency`` coordinate.
+    bands : mapping of str to (float, float)
+        Inclusive lower and upper frequency bounds in the coordinate's units.
+    reduction : {"mean", "integral"}, default="mean"
+        Scientifically defined reduction to apply within each band.
+
+    Returns
+    -------
+    xarray.DataArray or xarray.Dataset
+        Same type as ``result`` with the ``frequency`` dimension replaced by a
+        ``band`` dimension holding the band names, and the band definitions
+        recorded in ``attrs["frequency_bands_json"]``.
+
+    Notes
+    -----
+    Spatial filters, spatial patterns, and global-coherence vectors have an
+    arbitrary sign or complex phase independently at each frequency. A Dataset
+    containing those variables is therefore rejected instead of averaging them
+    into a scientifically undefined band projection. Select the scalar score
+    variable from the Dataset and reduce that DataArray when only band scores
+    are needed.
+
+    A band is undefined wherever any of its bins is ``NaN`` (for example an
+    edge-invalid ``MorletWavelet`` bin under ``edge_mode="nan"``): both
+    reductions return ``NaN`` there rather than silently reducing the valid
+    bins only. When the input carries a ``valid_time_frequency`` coordinate the
+    result gains a ``valid_time_band`` coordinate that is ``True`` only where
+    every bin of the band had full support.
+    """
+    if "frequency" not in result.dims:
+        raise ValueError("result must have a 'frequency' dimension.")
+    if reduction not in {"mean", "integral"}:
+        raise ValueError("reduction must be either 'mean' or 'integral'.")
+    if not isinstance(bands, Mapping) or len(bands) == 0:
+        raise ValueError("bands must be a non-empty mapping of names to bounds.")
+
+    frequencies = np.asarray(result.coords["frequency"].values)
+    if frequencies.ndim != 1 or frequencies.size == 0:
+        raise ValueError("frequency must be a non-empty one-dimensional coordinate.")
+    if not np.all(np.isfinite(frequencies)):
+        raise ValueError("frequency must contain only finite values.")
+    if frequencies.size > 1 and not np.all(np.diff(frequencies) > 0):
+        raise ValueError("frequency must be strictly increasing for band reduction.")
+
+    band_names = list(bands)
+    if len(set(band_names)) != len(band_names) or not all(
+        isinstance(name, str) and name for name in band_names
+    ):
+        raise ValueError("band names must be unique, non-empty strings.")
+
+    band_masks: list[NDArray[np.bool_]] = [
+        _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)[0]
+        for name, bounds in bands.items()
+    ]
+
+    def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
+        measure = str(data.attrs.get("measure", data.name or ""))
+        if reduction == "integral" and measure not in {
+            "power",
+            "cross_spectral_density",
+        }:
+            raise ValueError(
+                "reduction='integral' is defined only for power and "
+                "cross_spectral_density; use reduction='mean' for "
+                f"{measure or 'this result'!r}."
+            )
+
+        reduced_bands: list[xr.DataArray] = []
+        band_validity: list[xr.DataArray] = []
+        for mask in band_masks:
+            selected = data.isel(frequency=np.flatnonzero(mask))
+            # A NaN bin (an edge-invalid or undefined estimate) makes the band
+            # value undefined for every reduction; skipping it silently would
+            # average a different set of bins per time point.
+            if reduction == "integral":
+                reduced = selected.integrate("frequency")
+            elif measure == "coherence_phase":
+                # Circular mean prevents phases near -pi and +pi from
+                # spuriously cancelling toward zero.
+                phase_vectors = xr.apply_ufunc(np.exp, 1j * selected)
+                reduced = xr.apply_ufunc(
+                    np.angle,
+                    phase_vectors.mean("frequency", skipna=False, keep_attrs=True),
+                    keep_attrs=True,
+                )
+            else:
+                reduced = selected.mean("frequency", skipna=False, keep_attrs=True)
+            # A trapezoidal integral over one point is zero even when that point
+            # is NaN. Apply the shared validity rule after every reduction so a
+            # one-bin invalid band cannot masquerade as zero spectral power.
+            reduced = reduced.where(selected.notnull().all("frequency"))
+            reduced_bands.append(reduced)
+            if "valid_time_frequency" in selected.coords:
+                band_validity.append(
+                    selected.coords["valid_time_frequency"].all("frequency")
+                )
+
+        band_coordinate = xr.IndexVariable("band", band_names)
+        reduced = xr.concat(reduced_bands, dim=band_coordinate)
+        if band_validity:
+            reduced = reduced.assign_coords(
+                valid_time_band=xr.concat(band_validity, dim=band_coordinate)
+                .transpose("time", "band")
+                .assign_attrs(
+                    long_name="Every bin of the band has full wavelet and smoothing support"
+                )
+            )
+        desired_dims = tuple(
+            "band" if dimension == "frequency" else dimension for dimension in data.dims
+        )
+        reduced = reduced.transpose(*desired_dims)
+        reduced.attrs = dict(data.attrs)
+        reduced.attrs["frequency_bands_json"] = _canonical_json(bands)
+        reduced.attrs["frequency_reduction"] = reduction
+        return reduced
+
+    if isinstance(result, xr.DataArray):
+        return _reduce_dataarray(result)
+
+    non_reducible_variables = sorted(
+        str(name)
+        for name, data in result.data_vars.items()
+        if "frequency" in data.dims
+        and (
+            name == "global_coherence_vectors"
+            or str(name).endswith(("_filters", "_patterns"))
+        )
+    )
+    if non_reducible_variables:
+        names = ", ".join(repr(name) for name in non_reducible_variables)
+        raise ValueError(
+            "Frequency-band reduction is not defined for spatial filters, "
+            "patterns, or component vectors because their sign/phase is "
+            f"arbitrary at each frequency; offending variables: {names}. "
+            "Select the scalar score variable from the Dataset and pass that "
+            "DataArray to frequency_band_reduce, or keep the full "
+            "frequency-resolved Dataset."
+        )
+
+    data_vars = {
+        name: _reduce_dataarray(data) if "frequency" in data.dims else data
+        for name, data in result.data_vars.items()
+    }
+    reduced_dataset = xr.Dataset(data_vars, attrs=dict(result.attrs))
+    reduced_dataset.attrs["frequency_bands_json"] = _canonical_json(bands)
+    reduced_dataset.attrs["frequency_reduction"] = reduction
+    return reduced_dataset
+
+
+def _select_and_reduce_frequencies(
+    result: xr.DataArray | xr.Dataset,
+    *,
+    frequency_range: tuple[float, float] | None,
+    frequency_decimation: int,
+    frequency_bands: Mapping[str, tuple[float, float]] | None,
+    frequency_reduction: Literal["mean", "integral"],
+) -> xr.DataArray | xr.Dataset:
+    """Apply the wrapper's shared, coordinate-aware frequency operations."""
+    if not is_positive_integer(frequency_decimation):
+        raise ValueError("frequency_decimation must be a positive integer.")
+
+    selected = result
+    requests_frequency_operation = (
+        frequency_range is not None
+        or frequency_decimation != 1
+        or frequency_bands is not None
+    )
+    if requests_frequency_operation and "frequency" not in selected.dims:
+        raise ValueError(
+            "This result has no frequency dimension: the requested method "
+            "already reduces frequency (for example phase_slope_index or "
+            "group_delay), so frequency_range, frequency_decimation, and "
+            "frequency_bands cannot be applied afterward. Pass the method's "
+            "frequencies_of_interest argument through connectivity_kwargs instead."
+        )
+    if frequency_range is not None:
+        mask, (lower, upper) = _inclusive_frequency_mask(
+            "frequency_range",
+            frequency_range,
+            np.asarray(selected.coords["frequency"].values),
+        )
+        selected = selected.isel(frequency=np.flatnonzero(mask))
+        selected.attrs = dict(selected.attrs)
+        selected.attrs["frequency_range_json"] = _canonical_json((lower, upper))
+
+    if frequency_decimation != 1:
+        selected = selected.isel(frequency=slice(None, None, frequency_decimation))
+        selected.attrs = dict(selected.attrs)
+        selected.attrs["frequency_decimation"] = int(frequency_decimation)
+
+    if frequency_bands is not None:
+        selected = frequency_band_reduce(
+            selected, frequency_bands, reduction=frequency_reduction
+        )
+    return selected
+
+
 def connectivity_to_xarray(
-    m: Multitaper,
+    m: Any,
     method: str = "coherence_magnitude",
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     **kwargs: Any,
-) -> xr.DataArray:
+) -> xr.DataArray | xr.Dataset:
     """Calculate one connectivity measure and return a labeled array.
 
-    Pairwise measures use ``(time, frequency, source, target)`` dimensions;
-    power uses ``(time, frequency, source)``. Measures with different output
-    contracts should be called on :class:`Connectivity` directly.
+    Ordinary pairwise measures return a DataArray; component-resolved or
+    multi-quantity measures return a Dataset with explicit semantic axes.
 
     Examples
     --------
@@ -494,11 +1230,165 @@ def connectivity_to_xarray(
     """
     _get_measure_spec(method)
     metadata = m._provenance_metadata()
-    connectivity = Connectivity.from_multitaper(m)
+    connectivity = Connectivity.from_transform(m)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
-    shared_attrs = _shared_provenance_attrs(connectivity, metadata)
-    return _connectivity_result_to_xarray(
+    shared_attrs = _shared_provenance_attrs(
+        connectivity,
+        metadata,
+        transform_prefix=getattr(m, "_provenance_prefix", "mt_"),
+    )
+    result = _connectivity_result_to_xarray(
         connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
+    )
+    valid_time_frequency = getattr(m, "valid_time_frequency", None)
+    if valid_time_frequency is not None:
+        validity = to_numpy(valid_time_frequency).astype(bool)
+        expected_shape = (len(connectivity.time), len(connectivity.frequencies))
+        if validity.shape != expected_shape:
+            raise ValueError(
+                "transform.valid_time_frequency must have shape "
+                f"{expected_shape}, got {validity.shape}."
+            )
+        validity_attrs = {
+            "long_name": "Full wavelet and smoothing support is in-record"
+        }
+        if "frequency" in result.dims:
+            full_validity = xr.DataArray(
+                validity,
+                coords={
+                    "time": np.asarray(connectivity.time),
+                    "frequency": np.asarray(connectivity.frequencies),
+                },
+                dims=("time", "frequency"),
+                attrs=validity_attrs,
+            )
+            # Delay and other nonstandard schemas may retain only a requested
+            # frequency band. Select the matching validity bins rather than
+            # attaching the transform's full frequency axis to the result.
+            result_frequencies = np.asarray(result.coords["frequency"])
+            aligned_validity = full_validity.sel(frequency=result_frequencies)
+            result = result.assign_coords(valid_time_frequency=aligned_validity)
+        elif "time" in result.dims:
+            # PSI and group delay aggregate a frequency band. They have no
+            # frequency dimension on which a 2-D coordinate can live, so expose
+            # whether every frequency contributing to each time point has full
+            # wavelet/smoothing support.
+            frequencies = np.asarray(connectivity.frequencies)
+            frequency_band = kwargs.get("frequencies_of_interest")
+            if frequency_band is None:
+                frequency_index = np.ones(frequencies.shape, dtype=bool)
+            else:
+                frequency_index = (frequency_band[0] < frequencies) & (
+                    frequencies < frequency_band[1]
+                )
+            valid_time = validity[:, frequency_index].all(axis=1)
+            result = result.assign_coords(
+                valid_time=(("time",), valid_time, validity_attrs)
+            )
+    return result
+
+
+def _combine_formatted_results(
+    results: Sequence[xr.DataArray | xr.Dataset],
+    shared_attrs: Mapping[str, Any],
+) -> xr.Dataset:
+    """Merge heterogeneous formatted measures without losing sub-variables."""
+    datasets = [
+        result.to_dataset(name=result.name)
+        if isinstance(result, xr.DataArray)
+        else result
+        for result in results
+    ]
+    try:
+        combined = xr.merge(datasets, compat="no_conflicts", join="exact")
+    except ValueError as error:
+        raise ValueError(
+            "Requested measures produced conflicting xarray variables or "
+            "coordinates; request them separately or use compatible group labels."
+        ) from error
+    combined.attrs = dict(shared_attrs)
+    return combined
+
+
+def _format_and_reduce_measures(
+    connectivity: Connectivity,
+    methods: list[str],
+    *,
+    return_dataarray: bool,
+    signal_labels: Sequence[_SignalLabel],
+    squeeze: bool,
+    shared_attrs: Mapping[str, Any],
+    connectivity_kwargs: Mapping[str, Any],
+    frequency_range: tuple[float, float] | None,
+    frequency_decimation: int,
+    frequency_bands: Mapping[str, tuple[float, float]] | None,
+    frequency_reduction: Literal["mean", "integral"],
+) -> xr.DataArray | xr.Dataset:
+    """Format the requested measures to xarray and apply frequency reduction.
+
+    Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
+    honors ``squeeze`` only for a single-measure DataArray, formats each measure
+    (skipping structurally-unsupported ones in a multi-measure batch), merges the
+    survivors, and applies any frequency crop/decimation/band reduction.
+    """
+    if squeeze and not return_dataarray:
+        # squeeze reduces a pairwise measure to a (time, frequency) array whose
+        # source/target become scalar coordinates; in a Dataset those scalars are
+        # shared across variables and collide with a sibling's axes, so squeeze is
+        # honored only for a single-method DataArray.
+        warnings.warn(
+            "squeeze=True is ignored for multi-measure results (a Dataset); "
+            "request a single method (a string) to get a squeezed DataArray.",
+            UserWarning,
+            stacklevel=3,
+        )
+        squeeze = False
+
+    if return_dataarray:
+        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
+            connectivity,
+            methods[0],
+            signal_labels,
+            squeeze,
+            shared_attrs,
+            **connectivity_kwargs,
+        )
+    else:
+        formatted_results: list[xr.DataArray | xr.Dataset] = []
+        for this_method in methods:
+            try:
+                formatted_results.append(
+                    _connectivity_result_to_xarray(
+                        connectivity,
+                        this_method,
+                        signal_labels,
+                        False,
+                        shared_attrs,
+                        **connectivity_kwargs,
+                    )
+                )
+            except UnsupportedMeasureError as error:
+                # A measure whose result shape does not fit the xarray layout can
+                # be skipped in a batch. In-package structural incompatibility is
+                # surfaced as UnsupportedMeasureError before the measure runs; a
+                # genuine NotImplementedError is not caught, so a broken measure
+                # fails loudly instead of silently vanishing from the Dataset.
+                if len(methods) == 1:
+                    raise
+                logger.warning("Skipping %s: %s", this_method, error)
+        if not formatted_results:
+            raise UnsupportedMeasureError(
+                "None of the requested methods produced a compatible result "
+                f"for the xarray interface: {methods!r}."
+            )
+        result = _combine_formatted_results(formatted_results, shared_attrs)
+
+    return _select_and_reduce_frequencies(
+        result,
+        frequency_range=frequency_range,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+        frequency_reduction=frequency_reduction,
     )
 
 
@@ -1003,6 +1893,10 @@ def multitaper_connectivity(
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
     *,
+    frequency_range: tuple[float, float] | None = None,
+    frequency_decimation: int = 1,
+    frequency_bands: Mapping[str, tuple[float, float]] | None = None,
+    frequency_reduction: Literal["mean", "integral"] = "mean",
     time_dim: Hashable | None = None,
     trial_dim: Hashable | None = None,
     signal_dim: Hashable | None = None,
@@ -1057,12 +1951,12 @@ def multitaper_connectivity(
         (``directed_transfer_function``, ``directed_coherence``,
         ``partial_directed_coherence``, ``generalized_partial_directed_coherence``,
         ``direct_directed_transfer_function``) is also opt-in by name (see the
-        Notes on directed orientation). Other measures that do not fit the
-        ``(time, frequency, source, target)`` layout — ``global_coherence``,
-        ``phase_slope_index``, ``group_delay``, ``delay``, ``canonical_coherence``,
-        and the conditional/blockwise spectral Granger measures — are *not*
-        available through this wrapper at all (requesting one raises with a
-        pointer to use ``Connectivity`` directly). Examples:
+        Notes on directed orientation). Measures with nonstandard layouts,
+        including ``global_coherence``, ``phase_slope_index``, ``group_delay``,
+        ``delay``, ``canonical_coherence``, and blockwise spectral Granger, are
+        available by name and return labeled DataArrays or Datasets with their
+        component, group, candidate-delay, or frequency-reduced dimensions.
+        Examples:
         "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
@@ -1083,6 +1977,17 @@ def multitaper_connectivity(
         is ignored with a warning.
     connectivity_kwargs : dict, optional
         Additional keyword arguments passed to connectivity methods.
+    frequency_range : (float, float), optional
+        Inclusive frequency interval retained in the labeled result.
+    frequency_decimation : int, default=1
+        Keep every Nth frequency bin after applying ``frequency_range``.
+    frequency_bands : mapping of str to (float, float), optional
+        Reduce the selected bins into named, inclusive bands. With
+        ``frequency_reduction="mean"``, scores are averaged, complex measures
+        use a complex vector mean, and ``coherence_phase`` uses a circular mean.
+    frequency_reduction : {"mean", "integral"}, default="mean"
+        Band reduction. Integration is restricted to ``power`` and
+        ``cross_spectral_density``, where it yields band power/covariance.
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.
@@ -1100,9 +2005,10 @@ def multitaper_connectivity(
     Returns
     -------
     result : xarray.DataArray or xarray.Dataset
-        - DataArray if single method requested: connectivity values with dimensions
-          ['time', 'frequency', 'source', 'target'] or ['time', 'frequency'] if squeezed
-        - Dataset if multiple methods: collection of DataArrays, one per method
+        A plain single-quantity method returns a DataArray. Component-resolved
+        and multi-quantity methods return a Dataset even when requested alone;
+        multiple methods are merged into one Dataset without flattening their
+        semantic dimensions.
 
     Examples
     --------
@@ -1219,10 +2125,8 @@ def multitaper_connectivity(
     return_dataarray = False  # Default: return dataset
     if method is None:
         # The explicit, portably serializable / xarray-compatible default set
-        # (see DEFAULT_METHODS). Not every Connectivity method — coherency
-        # (complex), global_coherence / phase_slope_index, and the directed-
-        # transfer-function family are excluded from the default (the last is
-        # still opt-in by name).
+        # (see DEFAULT_METHODS). Complex, component/group, frequency-reduced,
+        # and directed-transfer-function results remain opt-in by name.
         method = list(DEFAULT_METHODS)
     elif isinstance(method, str):
         method = [method]  # Convert to list
@@ -1233,19 +2137,7 @@ def multitaper_connectivity(
         raise ValueError(
             "method must name at least one connectivity measure; got an empty list."
         )
-    if squeeze and not return_dataarray:
-        # squeeze reduces a pairwise measure to a (time, frequency) array whose
-        # source/target become scalar coordinates. In a Dataset those scalars are
-        # shared across all variables and would collide with a sibling variable's
-        # axes (e.g. power's ``source`` dimension), so squeeze is honored only
-        # when a single method is requested and the result is a DataArray.
-        warnings.warn(
-            "squeeze=True is ignored for multi-measure results (a Dataset); "
-            "request a single method (a string) to get a squeezed DataArray.",
-            UserWarning,
-            stacklevel=2,
-        )
-        squeeze = False
+    _validate_method_names(method)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -1270,43 +2162,475 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    if return_dataarray:
-        return _connectivity_result_to_xarray(
-            shared_connectivity,
-            method[0],
-            signal_labels,
-            squeeze,
-            shared_attrs,
-            **connectivity_kwargs,
+    return _format_and_reduce_measures(
+        shared_connectivity,
+        method,
+        return_dataarray=return_dataarray,
+        signal_labels=signal_labels,
+        squeeze=squeeze,
+        shared_attrs=shared_attrs,
+        connectivity_kwargs=connectivity_kwargs,
+        frequency_range=frequency_range,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+        frequency_reduction=frequency_reduction,
+    )
+
+
+_FOURIER_ROLE_SYNONYMS: dict[str, frozenset[str]] = {
+    "time": frozenset(
+        {"time", "times", "window", "windows", "time_window", "time_windows"}
+    ),
+    "trial": _ROLE_SYNONYMS["trial"] | frozenset({"observation", "observations"}),
+    "taper": frozenset({"taper", "tapers"}),
+    "frequency": frozenset({"frequency", "frequencies", "freq", "freqs"}),
+    "signal": _ROLE_SYNONYMS["signal"],
+}
+
+
+def _coordinates_agree(explicit: Any, labeled: NDArray[Any]) -> bool:
+    """Whether an explicit numeric coordinate matches its DataArray coordinate."""
+    explicit_values = np.asarray(explicit)
+    labeled_values = np.asarray(labeled)
+    if explicit_values.shape != labeled_values.shape:
+        return False
+    try:
+        return bool(np.allclose(explicit_values, labeled_values, rtol=1e-12, atol=0))
+    except TypeError:
+        return bool(np.array_equal(explicit_values, labeled_values))
+
+
+def _unwrap_fourier_input(
+    fourier_coefficients: NDArray[np.complexfloating] | xr.DataArray,
+    *,
+    frequencies: NDArray[np.floating] | None,
+    time: NDArray[np.floating] | None,
+    signal_names: Sequence[_SignalLabel] | None,
+    time_dim: Hashable | None,
+    trial_dim: Hashable | None,
+    taper_dim: Hashable | None,
+    frequency_dim: Hashable | None,
+    signal_dim: Hashable | None,
+) -> tuple[
+    BackendArray,
+    NDArray[np.floating] | None,
+    NDArray[np.floating] | None,
+    Sequence[_SignalLabel] | None,
+    Mapping[Any, Any] | None,
+]:
+    """Normalize external coefficients to the core's five-dimensional layout."""
+    dimension_arguments = {
+        "time": time_dim,
+        "trial": trial_dim,
+        "taper": taper_dim,
+        "frequency": frequency_dim,
+        "signal": signal_dim,
+    }
+    if not isinstance(fourier_coefficients, xr.DataArray):
+        if any(dimension is not None for dimension in dimension_arguments.values()):
+            raise TypeError(
+                "The *_dim arguments apply only to an xarray.DataArray input."
+            )
+        data = fourier_coefficients
+        ndim = getattr(data, "ndim", None)
+        if ndim == 3:
+            # (observation, frequency, signal)
+            data = data[np.newaxis, :, np.newaxis, :, :]
+        elif ndim == 4:
+            # (trial, taper, frequency, signal)
+            data = data[np.newaxis, :, :, :, :]
+        elif ndim != 5:
+            raise ValueError(
+                "fourier_coefficients must have 3, 4, or 5 dimensions: "
+                "(observation, frequency, signal), (trial, taper, frequency, "
+                "signal), or (time, trial, taper, frequency, signal)."
+            )
+        return data, frequencies, time, signal_names, None
+
+    coefficient_array = fourier_coefficients
+    if coefficient_array.ndim < 3 or coefficient_array.ndim > 5:
+        raise ValueError("A Fourier coefficient DataArray must have 3 to 5 dimensions.")
+    _reject_unmaterialized_backing(coefficient_array.data)
+
+    role_to_dimension: dict[str, Hashable] = {}
+    claimed_dimensions: set[Hashable] = set()
+    for role, dimension in dimension_arguments.items():
+        if dimension is None:
+            continue
+        if dimension not in coefficient_array.dims:
+            raise ValueError(
+                f"{role}_dim={dimension!r} is not one of the DataArray "
+                f"dimensions {coefficient_array.dims!r}."
+            )
+        if dimension in claimed_dimensions:
+            raise ValueError(
+                f"DataArray dimension {dimension!r} was assigned to more than one role."
+            )
+        role_to_dimension[role] = dimension
+        claimed_dimensions.add(dimension)
+
+    for role, synonyms in _FOURIER_ROLE_SYNONYMS.items():
+        if role in role_to_dimension:
+            continue
+        candidates = [
+            dimension
+            for dimension in coefficient_array.dims
+            if dimension not in claimed_dimensions
+            and str(dimension).lower() in synonyms
+        ]
+        if len(candidates) > 1:
+            raise ValueError(
+                f"Multiple dimensions look like the Fourier {role} axis: "
+                f"{candidates!r}. Pass {role}_dim explicitly."
+            )
+        if candidates:
+            role_to_dimension[role] = candidates[0]
+            claimed_dimensions.add(candidates[0])
+
+    for required_role in ("frequency", "signal"):
+        if required_role not in role_to_dimension:
+            raise ValueError(
+                f"Could not identify the Fourier {required_role} dimension. "
+                f"Use {required_role}_dim=... explicitly."
+            )
+
+    unclaimed = [
+        dimension
+        for dimension in coefficient_array.dims
+        if dimension not in claimed_dimensions
+    ]
+    # A lone coefficient-observation dimension is unambiguously a trial axis.
+    # More than one unnamed observation axis could be time/trial/taper in several
+    # scientifically different ways, so require the caller to label it.
+    if len(unclaimed) == 1 and "trial" not in role_to_dimension:
+        role_to_dimension["trial"] = unclaimed.pop()
+    if unclaimed:
+        raise ValueError(
+            f"Could not infer the roles of Fourier dimensions {unclaimed!r}. "
+            "Name them time/trial/taper, or pass the corresponding *_dim arguments."
         )
 
-    data_vars: dict[str, xr.DataArray] = {}
-    for this_method in method:
-        try:
-            data_vars[this_method] = _connectivity_result_to_xarray(
-                shared_connectivity,
-                this_method,
-                signal_labels,
-                squeeze,
-                shared_attrs,
-                **connectivity_kwargs,
-            )
-        except UnsupportedMeasureError as e:
-            # A measure whose result shape does not fit the xarray layout can be
-            # skipped in a batch. Every in-package structural incompatibility is
-            # already surfaced as UnsupportedMeasureError by ``_get_measure_spec``
-            # before the measure runs; a genuine NotImplementedError from the
-            # numeric/backend path is *not* caught, so a broken measure fails
-            # loudly instead of silently vanishing from the Dataset.
-            if len(method) == 1:
-                raise
-            logger.warning("Skipping %s: %s", this_method, e)
-    if not data_vars:
-        raise UnsupportedMeasureError(
-            "None of the requested methods produced a compatible result "
-            f"for the xarray interface: {method!r}."
+    ordered_roles = ("time", "trial", "taper", "frequency", "signal")
+    present_dimensions = [
+        role_to_dimension[role] for role in ordered_roles if role in role_to_dimension
+    ]
+    data = coefficient_array.transpose(*present_dimensions).data
+    if "time" not in role_to_dimension:
+        data = data[np.newaxis, ...]
+    if "trial" not in role_to_dimension:
+        data = data[:, np.newaxis, ...]
+    if "taper" not in role_to_dimension:
+        data = data[:, :, np.newaxis, ...]
+
+    frequency_dimension = role_to_dimension["frequency"]
+    has_frequency_coordinate = frequency_dimension in coefficient_array.coords
+    frequency_coordinate_is_1d = has_frequency_coordinate and coefficient_array.coords[
+        frequency_dimension
+    ].dims == (frequency_dimension,)
+    coordinate_frequencies = (
+        coefficient_array.coords[frequency_dimension].to_numpy()
+        if frequency_coordinate_is_1d
+        else None
+    )
+    if (
+        has_frequency_coordinate
+        and not frequency_coordinate_is_1d
+        and frequencies is None
+    ):
+        warnings.warn(
+            f"The DataArray frequency coordinate {frequency_dimension!r} is not "
+            "one-dimensional and was ignored; the result falls back to normalized "
+            "FFT-bin labels. Pass a 1-D `frequencies` array to keep meaningful "
+            "frequency labels.",
+            UserWarning,
+            stacklevel=3,
         )
-    # Shared coordinates are aligned once during construction. Dataset-level
-    # provenance makes a multi-measure result self-describing without requiring
-    # callers to inspect an individual variable.
-    return xr.Dataset(data_vars=data_vars, attrs=dict(shared_attrs))
+    if frequencies is None:
+        frequencies = coordinate_frequencies
+    elif coordinate_frequencies is not None and not _coordinates_agree(
+        frequencies, coordinate_frequencies
+    ):
+        raise ValueError(
+            "frequencies conflicts with the DataArray frequency coordinate."
+        )
+
+    if "time" in role_to_dimension:
+        time_dimension = role_to_dimension["time"]
+        coordinate_time = (
+            coefficient_array.coords[time_dimension].to_numpy()
+            if time_dimension in coefficient_array.coords
+            and coefficient_array.coords[time_dimension].dims == (time_dimension,)
+            else None
+        )
+        if time is None:
+            time = coordinate_time
+        elif coordinate_time is not None and not _coordinates_agree(
+            time, coordinate_time
+        ):
+            raise ValueError("time conflicts with the DataArray time coordinate.")
+
+    if signal_names is None:
+        signal_names = _signal_labels_from_dataarray(
+            coefficient_array, role_to_dimension["signal"]
+        )
+    return data, frequencies, time, signal_names, dict(coefficient_array.attrs)
+
+
+def fourier_connectivity(
+    fourier_coefficients: NDArray[np.complexfloating] | xr.DataArray,
+    frequencies: NDArray[np.floating] | None = None,
+    time: NDArray[np.floating] | None = None,
+    method: str | list[str] | None = None,
+    signal_names: Sequence[_SignalLabel] | None = None,
+    squeeze: bool = False,
+    connectivity_kwargs: dict[str, Any] | None = None,
+    is_one_sided: bool | None = None,
+    *,
+    frequency_range: tuple[float, float] | None = None,
+    frequency_decimation: int = 1,
+    frequency_bands: Mapping[str, tuple[float, float]] | None = None,
+    frequency_reduction: Literal["mean", "integral"] = "mean",
+    time_dim: Hashable | None = None,
+    trial_dim: Hashable | None = None,
+    taper_dim: Hashable | None = None,
+    frequency_dim: Hashable | None = None,
+    signal_dim: Hashable | None = None,
+    dtype: np.dtype = np.dtype(np.complex128),
+    minimum_phase_tolerance: float = 1e-8,
+    minimum_phase_max_iterations: int = 500,
+) -> xr.DataArray | xr.Dataset:
+    """Compute labeled connectivity from externally estimated FFT coefficients.
+
+    The labeled output has one time axis, so the expectation is always
+    ``"trials_tapers"``; use :class:`Connectivity` directly for expectations
+    that retain trial/taper axes or average over time.
+
+    Parameters
+    ----------
+    fourier_coefficients : array or xarray.DataArray
+        Complex coefficients in ``(n_observations, n_frequencies, n_signals)``,
+        ``(n_trials, n_tapers, n_frequencies, n_signals)``, or the core's full
+        ``(n_time, n_trials, n_tapers, n_frequencies, n_signals)`` layout. A
+        DataArray is transposed by semantic dimension names (or the explicit
+        ``*_dim`` arguments) and its frequency, time, and signal coordinates
+        and attributes are preserved.
+    frequencies : array, shape (n_frequencies,), optional
+        Frequency of each bin in Hz. A two-sided coordinate must be in standard
+        FFT order; a non-negative, strictly increasing coordinate is treated as
+        one-sided when ``is_one_sided`` is omitted. Taken from the DataArray
+        coordinate when not given.
+    time : array, shape (n_time,), optional
+        Center time of each window in seconds; defaults to window indices.
+    method : str or list of str, optional
+        Measure name(s) from :func:`list_measures`. A single name returns a
+        DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
+        Dataset with one variable per measure.
+    signal_names : sequence, optional
+        Labels for the ``source``/``target`` coordinates; defaults to the
+        DataArray signal coordinate or ``"0"``, ``"1"``, ....
+    squeeze : bool, default=False
+        Drop length-one dimensions from a single-measure result.
+    connectivity_kwargs : dict, optional
+        Keyword arguments passed to every requested measure (for example
+        ``group_labels`` for group measures). Measures that need different
+        arguments must be requested in separate calls.
+    is_one_sided : bool, optional
+        Declare whether the coefficients cover only non-negative frequencies.
+        When no frequency coordinate is available the sidedness cannot be
+        inferred: pass ``True`` for one-sided input (e.g. ``rfft`` output) or
+        ``False`` for a full FFT-order spectrum. Leaving it unset in that case
+        assumes two-sided and warns. With a frequency coordinate it is inferred
+        from ``frequencies``.
+    frequency_range : (float, float), optional
+        Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
+        or band reduction.
+    frequency_decimation : int, default=1
+        Keep every ``frequency_decimation``-th frequency bin.
+    frequency_bands : mapping of str to (float, float), optional
+        Named inclusive bands to reduce the frequency axis into; see
+        :func:`frequency_band_reduce`.
+    frequency_reduction : {"mean", "integral"}, default="mean"
+        Within-band reduction used with ``frequency_bands``.
+    time_dim, trial_dim, taper_dim, frequency_dim, signal_dim : hashable, optional
+        DataArray dimension names for each axis role, when they cannot be
+        inferred from common names.
+    dtype : numpy.dtype, default=complex128
+        Working precision for the connectivity computations.
+    minimum_phase_tolerance : float, default=1e-8
+        Relative convergence tolerance of the Wilson factorization used by the
+        directed measures.
+    minimum_phase_max_iterations : int, default=500
+        Maximum Wilson iterations for the directed measures.
+
+    Returns
+    -------
+    xarray.DataArray or xarray.Dataset
+        Labeled result with ``time``, ``frequency`` (or ``band``),
+        and measure-specific dimensions such as ``source``/``target``; a
+        DataArray for a single ``method`` name, otherwise a Dataset. Directed
+        measures are oriented so ``sel(source=a, target=b)`` is the influence
+        from ``a`` to ``b``. One-sided coefficients support functional
+        measures, but measures that need a full two-sided spectrum raise.
+    """
+    (
+        coefficient_data,
+        frequencies,
+        time,
+        signal_names,
+        input_attrs,
+    ) = _unwrap_fourier_input(
+        fourier_coefficients,
+        frequencies=frequencies,
+        time=time,
+        signal_names=signal_names,
+        time_dim=time_dim,
+        trial_dim=trial_dim,
+        taper_dim=taper_dim,
+        frequency_dim=frequency_dim,
+        signal_dim=signal_dim,
+    )
+    if getattr(getattr(coefficient_data, "dtype", None), "kind", None) != "c":
+        raise TypeError("fourier_coefficients must be complex-valued.")
+    inferred_one_sided = False
+    if is_one_sided is not None and not isinstance(is_one_sided, (bool, np.bool_)):
+        raise TypeError("is_one_sided must be a boolean or None.")
+    if frequencies is not None:
+        frequency_values = np.asarray(frequencies, dtype=float)
+        if frequency_values.ndim != 1:
+            raise ValueError("frequencies must be a one-dimensional coordinate.")
+        inferred_one_sided = bool(
+            frequency_values.size > 0 and not np.any(frequency_values < 0)
+        )
+        one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
+        # A one-sided coordinate (non-negative, strictly increasing) is validated
+        # by Connectivity itself; only the two-sided FFT-order check lives here.
+        if not one_sided and frequency_values.size == 1 and frequency_values[0] != 0.0:
+            raise ValueError(
+                "frequencies must be uniformly spaced in standard FFT "
+                "order (a one-bin two-sided spectrum can contain only zero Hz)."
+            )
+        if not one_sided and frequency_values.size > 1:
+            frequency_step = (
+                frequency_values[1] - frequency_values[0]
+                if frequency_values.size > 2
+                else abs(frequency_values[1])
+            )
+            expected_frequencies = np.fft.fftfreq(
+                frequency_values.size,
+                d=1.0 / (frequency_step * frequency_values.size),
+            )
+            tolerance = max(abs(frequency_step) * 1e-9, np.finfo(float).eps)
+            if frequency_step <= 0 or not np.allclose(
+                frequency_values,
+                expected_frequencies,
+                rtol=1e-9,
+                atol=tolerance,
+            ):
+                raise ValueError(
+                    "frequencies must be uniformly spaced in standard FFT "
+                    "order (zero and positive bins followed by negative bins)."
+                )
+    else:
+        if is_one_sided is None:
+            warnings.warn(
+                "fourier_connectivity received no frequency coordinate and no "
+                "is_one_sided flag; assuming a two-sided spectrum in standard "
+                "FFT order. For rfft or wavelet coefficients (non-negative "
+                "frequencies only) pass is_one_sided=True, otherwise "
+                "is_one_sided=False to silence this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+        one_sided = bool(is_one_sided) if is_one_sided is not None else False
+
+    connectivity = Connectivity(
+        coefficient_data,
+        expectation_type="trials_tapers",
+        frequencies=frequencies,
+        time=time,
+        dtype=dtype,
+        minimum_phase_tolerance=minimum_phase_tolerance,
+        minimum_phase_max_iterations=minimum_phase_max_iterations,
+        is_one_sided=one_sided,
+    )
+    if connectivity_kwargs is None:
+        connectivity_kwargs = {}
+
+    return_dataarray = isinstance(method, str)
+    if method is None:
+        methods = [
+            name
+            for name in DEFAULT_METHODS
+            if not (
+                one_sided
+                and name in _MEASURE_SPECS
+                and _MEASURE_SPECS[name].requires_two_sided
+            )
+        ]
+    elif isinstance(method, str):
+        methods = [method]
+    else:
+        methods = list(method)
+    if not methods:
+        raise ValueError(
+            "method must name at least one connectivity measure; got an empty list."
+        )
+    _validate_method_names(methods)
+    if frequencies is None:
+        # Without a frequency coordinate, orientation and two-sidedness cannot be
+        # verified, so the default ``is_one_sided=False`` lets a one-sided input
+        # (e.g. rfft/wavelet coefficients) reach Wilson factorization and produce
+        # a silently wrong Wilson-factorized result. Reject methods that declare
+        # the full-spectrum requirement; other directional measures such as dPLI
+        # and PSI remain valid on one-sided coefficients.
+        two_sided_methods = [
+            name
+            for name in methods
+            if name in _MEASURE_SPECS and _MEASURE_SPECS[name].requires_two_sided
+        ]
+        if two_sided_methods and one_sided:
+            # The caller already declared one-sided input, so no frequency vector
+            # would enable Wilson factorization -- give the accurate reason.
+            raise ValueError(
+                f"Measures {sorted(set(two_sided_methods))} require a full "
+                "two-sided spectrum in standard FFT order. One-sided transforms "
+                "(is_one_sided=True) support functional connectivity measures but "
+                "not Wilson-factorized measures. Request only one-sided-compatible "
+                "measures, or supply full two-sided coefficients."
+            )
+        if two_sided_methods:
+            raise ValueError(
+                f"Measures {sorted(set(two_sided_methods))} require a full "
+                "two-sided spectrum in standard FFT order, which cannot be verified "
+                "without a frequency coordinate. Pass `frequencies` (the FFT "
+                "frequency vector, including negative bins) so two-sidedness can be "
+                "checked, or request only one-sided-compatible measures."
+            )
+    signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
+    metadata = {
+        "source": "external_fourier_coefficients",
+        "coefficient_shape_json": _canonical_json(tuple(coefficient_data.shape)),
+        "frequency_coordinate": "provided" if frequencies is not None else "normalized",
+        "time_coordinate": "provided" if time is not None else "index",
+        "is_one_sided": one_sided,
+        "one_sided_inferred": is_one_sided is None and inferred_one_sided,
+    }
+    shared_attrs = _shared_provenance_attrs(
+        connectivity,
+        metadata,
+        input_attrs=input_attrs,
+        transform_prefix="fourier_",
+    )
+    return _format_and_reduce_measures(
+        connectivity,
+        methods,
+        return_dataarray=return_dataarray,
+        signal_labels=signal_labels,
+        squeeze=squeeze,
+        shared_attrs=shared_attrs,
+        connectivity_kwargs=connectivity_kwargs,
+        frequency_range=frequency_range,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+        frequency_reduction=frequency_reduction,
+    )

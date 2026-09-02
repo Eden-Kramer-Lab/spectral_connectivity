@@ -12,19 +12,30 @@ The following summarizes the theoretical value ranges for common connectivity me
 | Metric | Range | Notes |
 |---|---|---|
 | **Power** | [0, ∞) | Power spectral density; always non-negative. |
+| **Cross-spectral density** | Complex, unbounded magnitude | Hermitian spectral matrix; diagonal equals power. |
 | **Coherency (complex)** | \|C_{xy}(f)\| ∈ [0, 1]; phase ∈ [−π, π] | Values lie in the unit disk of the complex plane. |
 | **Coherence phase** | [−π, π] | Phase angles of complex coherency. |
 | **Coherence magnitude** | [0, 1] | 0: none; 1: perfect linear dependence at frequency f. |
 | **Imaginary coherence** | [0, 1] (magnitude) | Raw imaginary part ranges [−1, 1]; magnitude version. |
-| **Canonical coherence** | [0, 1] | Maximal coherence between groups. |
+| **Imaginary coherency** | [−1, 1] | Signed imaginary component; antisymmetric across pairs. |
+| **Partial coherence** | [0, 1] | Magnitude-squared association conditional on all other signals. |
+| **Canonical coherence (legacy)** | [0, 1] | Historical magnitude-squared canonical-correlation estimator. |
+| **CaCoh / canonical coherency** | Complex unit disk | Exact phase-optimised Vidaurre CaCoh; magnitude is in [0, 1], phase uses MNE's `exp(-1j * phi)` convention. |
+| **MIC (maximized imaginary coherency)** | [0, 1] | Whitened phase-lagged singular components; the rich result includes scores, filters, and patterns. |
+| **MIM (multivariate interaction measure)** | [0, min(group ranks)] | Sum of squared phase-lagged interaction components. |
 | **Global coherence** | [0, 1] | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
 | **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
+| **ciPLV (corrected imaginary PLV)** | [0, 1] | Suppresses zero-/pi-lag phase locking. |
 | **PLI (Phase‑Lag Index)** | [−1, 1] | Signed version; unsigned in [0, 1]. |
+| **dPLI (directed PLI)** | [0, 1] | >0.5: row phase-leads column; <0.5: row phase-lags column. |
 | **wPLI (Weighted PLI)** | [−1, 1] | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value. |
 | **dwPLI (Debiased PLI²)** | [−1/(N−1), 1] | Unbiased squared PLI estimate; finite-sample values can be negative. |
 | **dwPLI² (Debiased squared wPLI)** | [−1, 1] | Unbiased weighted PLI² estimate; finite-sample values can be negative. |
 | **PPC (Pairwise Phase Consistency)** | [−1/(N−1), 1] | Unbiased phase consistency; finite-sample values can be negative. |
 | **Spectral Granger causality** | [0, ∞) | Non‑negative; no finite upper bound. |
+| **Conditional spectral Granger** | [0, ∞) | Pairwise influence conditioned on all other observed signals. |
+| **Blockwise spectral Granger** | [0, ∞) | Directed influence between multichannel groups. |
+| **Time-reversed spectral Granger** | [0, ∞) | Pairwise Granger after reversing temporal orientation. |
 | **DTF (Directed Transfer Function)** | [0, 1] (normalized) | Proportion of inflow via transfer function. |
 | **Directed coherence** | [0, 1] (normalized) | DTF scaled by noise variance. |
 | **PDC (Partial Directed Coherence)** | [0, 1] (normalized) | Directional influence via AR coefficients. |
@@ -46,7 +57,12 @@ The following summarizes the theoretical value ranges for common connectivity me
 
 - **coherence_magnitude**: Magnitude-squared coherence
 - **imaginary_coherence**: Magnitude of imaginary coherency
-- **canonical_coherence**: Maximal coherence between groups
+- **partial_coherence**: Magnitude-squared precision-matrix coherence
+- **corrected_imaginary_phase_locking_value**: Zero-lag-corrected PLV
+- **directed_phase_lag_index**: Probability-like signed phase-leading score
+- **maximized_imaginary_coherency**: Strongest whitened imaginary interaction
+- **canonical_coherence**: Historical magnitude-squared canonical correlation
+- **canonical_coherency**: Magnitude of exact complex phase-optimised CaCoh
 - **phase_locking_value**: Phase consistency measure
 - **directed_transfer_function**: Normalized directional influence
 - **directed_coherence**: DTF scaled by noise variance
@@ -74,6 +90,9 @@ The following summarizes the theoretical value ranges for common connectivity me
 
 - **power**: Power spectral density
 - **pairwise_spectral_granger_prediction**: Spectral Granger causality
+- **conditional_spectral_granger_prediction**: Pairwise Granger conditioned on all other signals
+- **blockwise_spectral_granger_prediction**: Granger between multichannel groups
+- **time_reversed_spectral_granger_prediction**: Pairwise Granger on the time-reversed spectrum
 
 ### Unbounded Metrics (−∞, ∞)
 
@@ -83,3 +102,4 @@ The following summarizes the theoretical value ranges for common connectivity me
 ### Complex-valued Metrics
 
 - **coherency**: Complex coherence with magnitude ∈ [0, 1] and phase ∈ [−π, π]
+- **cross_spectral_density**: Hermitian spectral covariance with unbounded magnitude

@@ -7,17 +7,18 @@ import pytest
 import xarray as xr
 from pytest import mark
 
-from spectral_connectivity import Multitaper
+from spectral_connectivity import MorletWavelet, Multitaper, Welch
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
-    UnsupportedMeasureError,
     _canonical_json,
     _json_compatible,
     _MeasureSpec,
     _netcdf_provenance_value,
     _reject_unmaterialized_backing,
     connectivity_to_xarray,
+    fourier_connectivity,
+    frequency_band_reduce,
     multitaper_connectivity,
 )
 
@@ -51,38 +52,183 @@ def test_multitaper_coherence_magnitude(time_window_duration):
     assert not (np.isnan(m.values)).all()
 
 
-# Measures that do not fit the wrapper's (time, frequency, source, target) /
-# (time, frequency, source) xarray layouts. Requesting one raises
-# UnsupportedMeasureError with a pointer to use Connectivity directly.
-_WRAPPER_UNSUPPORTED_METHODS = [
-    "canonical_coherence",
-    "group_delay",
-    "delay",
-    "global_coherence",
-    "phase_slope_index",
-    "conditional_spectral_granger_prediction",
-    "blockwise_spectral_granger_prediction",
-]
-
-
-@mark.parametrize("method", _WRAPPER_UNSUPPORTED_METHODS)
-def test_multitaper_connectivity_rejects_unsupported_methods(method):
-    """A measure without a plain xarray layout is rejected, not silently skipped.
-
-    Replaces an earlier loop that caught the errors and then asserted against the
-    *previous* iteration's result, so a raising regression in a supported measure
-    could pass unnoticed. Supported measures are exercised non-degenerately by
-    ``test_multitaper_n_signals`` / ``test_multitaper_connectivities_n_signals``.
-    """
+@mark.parametrize(
+    "method",
+    [
+        "canonical_coherence",
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+    ],
+)
+def test_connectivity_to_xarray_exposes_group_pairwise_results(method):
     rng = np.random.default_rng(42)
-    time_series = rng.random((7201, 10, 2))
-    with pytest.raises(UnsupportedMeasureError):
+    transform = Multitaper(rng.standard_normal((256, 6, 4)), sampling_frequency=128)
+    result = connectivity_to_xarray(
+        transform,
+        method=method,
+        signal_names=["a", "b", "c", "d"],
+        group_labels=[10, 10, 20, 20],
+    )
+
+    assert result.dims == ("time", "frequency", "source_group", "target_group")
+    assert result.source_group.values.tolist() == [10, 20]
+    assert result.target_group.values.tolist() == [10, 20]
+
+
+def test_group_pairwise_directed_orientation_is_source_to_target(monkeypatch):
+    transform = Multitaper(
+        np.random.default_rng(427).standard_normal((128, 3, 4)),
+        sampling_frequency=64,
+    )
+
+    def blockwise(self, group_labels):
+        values = np.zeros((len(self.time), len(self.frequencies), 2, 2))
+        values[..., 1, 0] = 7.0  # native convention: group 0 -> group 1
+        return values, np.array([10, 20])
+
+    monkeypatch.setattr(
+        Connectivity, "blockwise_spectral_granger_prediction", blockwise
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method="blockwise_spectral_granger_prediction",
+        group_labels=[10, 10, 20, 20],
+    )
+
+    assert np.all(result.sel(source_group=10, target_group=20) == 7)
+    assert np.all(result.sel(source_group=20, target_group=10) == 0)
+
+
+def test_connectivity_to_xarray_exposes_rich_multivariate_components():
+    rng = np.random.default_rng(43)
+    transform = Multitaper(rng.standard_normal((256, 8, 4)), sampling_frequency=128)
+    result = connectivity_to_xarray(
+        transform,
+        method="canonical_coherency",
+        signal_names=["a", "b", "c", "d"],
+        group_labels=[10, 10, 20, 20],
+        n_components=2,
+    )
+
+    assert set(result.data_vars) == {
+        "canonical_coherency",
+        "canonical_coherency_filters",
+        "canonical_coherency_patterns",
+        "group_membership",
+    }
+    assert result.canonical_coherency.dims == (
+        "time",
+        "frequency",
+        "connection",
+        "component",
+    )
+    assert result.canonical_coherency_filters.dims == (
+        "time",
+        "frequency",
+        "connection",
+        "component",
+        "side",
+        "signal",
+    )
+    assert result.connection_seed_group.values.tolist() == [10]
+    assert result.connection_target_group.values.tolist() == [20]
+    assert result.group_membership.sel(group=10, signal="a").item()
+
+
+def test_connectivity_to_xarray_exposes_global_components():
+    transform = Multitaper(
+        np.random.default_rng(44).standard_normal((256, 6, 3)),
+        sampling_frequency=128,
+    )
+    result = connectivity_to_xarray(
+        transform,
+        method="global_coherence",
+        signal_names=["a", "b", "c"],
+        max_rank=2,
+    )
+
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
+    assert result.global_coherence.dims == ("time", "frequency", "component")
+    assert result.global_coherence_vectors.dims == (
+        "time",
+        "frequency",
+        "source",
+        "component",
+    )
+    assert result.sizes["component"] == 2
+
+
+def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
+    transform = Multitaper(
+        np.random.default_rng(45).standard_normal((256, 12, 2)),
+        sampling_frequency=128,
+    )
+    delay = connectivity_to_xarray(
+        transform,
+        method="delay",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+        n_range=1,
+    )
+    psi = connectivity_to_xarray(
+        transform,
+        method="phase_slope_index",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+    )
+    group_delay = connectivity_to_xarray(
+        transform,
+        method="group_delay",
+        signal_names=["a", "b"],
+        frequencies_of_interest=(8, 40),
+    )
+
+    assert delay.dims == ("time", "frequency", "candidate", "source", "target")
+    assert delay.candidate.values.tolist() == [-1, 0, 1]
+    assert np.all((delay.frequency > 8) & (delay.frequency < 40))
+    assert psi.dims == ("time", "source", "target")
+    assert psi.frequency_band_lower.item() == 8
+    assert psi.frequency_band_upper.item() == 40
+    assert set(group_delay.data_vars) == {
+        "group_delay",
+        "group_delay_slope",
+        "group_delay_r_value",
+    }
+    assert group_delay.group_delay.attrs["units"] == "s"
+
+
+def test_frequency_operations_reject_already_reduced_output():
+    data = np.random.default_rng(428).standard_normal((256, 4, 2))
+    with pytest.raises(ValueError, match="no frequency dimension"):
         multitaper_connectivity(
-            time_series,
-            sampling_frequency=1500,
-            method=method,
-            time_window_duration=0.1,
+            data,
+            sampling_frequency=128,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequencies_of_interest": (8, 40)},
+            frequency_range=(10, 30),
         )
+
+
+def test_fourier_connectivity_exposes_global_dataset():
+    rng = np.random.default_rng(429)
+    coefficients = rng.standard_normal((2, 4, 2, 16, 3)) + 1j * rng.standard_normal(
+        (2, 4, 2, 16, 3)
+    )
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.fft.fftfreq(16, d=1 / 128),
+        method="global_coherence",
+        connectivity_kwargs={"max_rank": 2},
+    )
+
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
+    assert result.sizes["frequency"] == 9
 
 
 @mark.parametrize("n_signals", range(2, 5))
@@ -582,10 +728,10 @@ def test_dataarray_non_scalar_start_time_is_rejected():
 
 def test_measure_spec_rejects_inconsistent_field_combinations():
     """Illegal capability combinations are unrepresentable, not merely unused."""
-    with pytest.raises(ValueError, match="is_directed requires"):
-        _MeasureSpec("power", is_directed=True)
-    with pytest.raises(ValueError, match="unsupported measure cannot be a default"):
-        _MeasureSpec("unsupported", is_default=True)
+    with pytest.raises(ValueError, match="transpose_output requires pairwise"):
+        _MeasureSpec("power", is_directed=True, transpose_output=True)
+    with pytest.raises(ValueError, match="requires a directional measure"):
+        _MeasureSpec("pairwise", transpose_output=True)
 
 
 def test_dataarray_numeric_time_coordinate_sets_output_time():
@@ -1219,6 +1365,74 @@ def test_to_numpy_handles_device_arrays():
     np.testing.assert_array_equal(to_numpy(device), np.arange(5.0))
 
 
+def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
+    """``valid_time_frequency`` may live on the device (CuPy); the wrapper must
+    transfer it explicitly rather than rely on implicit ``np.asarray``."""
+
+    class _DeviceLike:
+        def __init__(self, host_array):
+            self._host = host_array
+
+        def get(self):
+            return self._host
+
+        def __array__(self, dtype=None, copy=None):
+            raise TypeError("Implicit conversion to a NumPy array is not allowed.")
+
+    rng = np.random.default_rng(11)
+    transform = MorletWavelet(
+        rng.standard_normal((512, 2, 2)),
+        sampling_frequency=128,
+        frequencies=np.array([4.0, 8.0, 16.0]),
+        edge_mode="nan",
+    )
+    host_mask = np.asarray(transform.valid_time_frequency)
+
+    class DeviceMaskTransform:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        @property
+        def valid_time_frequency(self):
+            return _DeviceLike(host_mask)
+
+    result = connectivity_to_xarray(
+        DeviceMaskTransform(transform), method="coherence_magnitude"
+    )
+    np.testing.assert_array_equal(result["valid_time_frequency"].values, host_mask)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "jackknife",
+        "minimum_phase_reconstruction_error",
+        "from_transform",
+        "_clear_cached_intermediates",
+    ],
+)
+def test_non_measure_callables_are_rejected_as_unknown_measures(name):
+    rng = np.random.default_rng(12)
+    with pytest.raises(ValueError, match="not a known connectivity measure"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)), sampling_frequency=250, method=name
+        )
+
+
+def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
+    rng = np.random.default_rng(13)
+    with pytest.raises(TypeError, match="passed to every requested method"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)),
+            sampling_frequency=250,
+            method=["coherence_magnitude", "canonical_coherence"],
+            connectivity_kwargs={"group_labels": [0, 0, 1]},
+        )
+
+
 def test_multi_method_shares_single_fft():
     """A multi-method call computes the FFT once, not once per measure.
 
@@ -1382,6 +1596,34 @@ def test_from_multitaper_supports_subclass_overriding_init():
     assert base._fourier_coefficients.base is not None
 
 
+def test_from_transform_subclass_overriding_init_keeps_transform_contract():
+    """A subclass with a pass-through __init__ must receive the transform's
+    sidedness and observation weights, not silently fall back to two-sided,
+    unweighted defaults."""
+    rng = np.random.default_rng(4)
+    mw = MorletWavelet(
+        rng.standard_normal((1000, 2, 2)),
+        sampling_frequency=500,
+        frequencies=[10.0, 20.0, 30.0, 40.0, 50.0],
+        smoothing_time=0.1,
+        smoothing_kernel="hann",
+    )
+
+    class PassThrough(Connectivity):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    sub = PassThrough.from_transform(mw)
+    base = Connectivity.from_transform(mw)
+    assert sub._is_one_sided is True
+    assert sub._observation_weights is not None
+    np.testing.assert_array_equal(sub.frequencies, base.frequencies)
+    np.testing.assert_allclose(sub.power(), base.power())
+    np.testing.assert_allclose(
+        sub.coherence_magnitude(), base.coherence_magnitude(), equal_nan=True
+    )
+
+
 def test_result_carries_descriptive_coordinate_metadata():
     """Coordinates carry unambiguous axis labels and physical units."""
     rng = np.random.default_rng(0)
@@ -1518,14 +1760,7 @@ def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
     assert data_array.dims == ("time", "frequency", "source", "target")
 
 
-def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
-    """A batch mixing a supported and an xarray-incompatible measure drops the
-    latter with a warning rather than aborting.
-
-    ``connectivity_to_xarray`` raises ``ValueError`` (not ``NotImplementedError``)
-    for ``global_coherence``; the batch loop must catch it so the supported
-    measure is still returned.
-    """
+def test_multitaper_connectivity_merges_nonstandard_dataset_in_batch():
     rng = np.random.default_rng(0)
     result = multitaper_connectivity(
         rng.standard_normal((256, 4, 3)),
@@ -1533,17 +1768,68 @@ def test_multitaper_connectivity_skips_unsupported_measure_in_batch():
         method=["coherence_magnitude", "global_coherence"],
     )
     assert "coherence_magnitude" in result
-    assert "global_coherence" not in result
+    assert "global_coherence" in result
+    assert "global_coherence_vectors" in result
+
+
+def test_frequency_bands_on_mixed_dataset_leaves_frequency_free_variables():
+    # A batch mixing a frequency-carrying measure with one that has no frequency
+    # axis (group_delay): band reduction applies to the former and passes the
+    # latter through unchanged, rather than erroring on the frequency-free var.
+    result = multitaper_connectivity(
+        np.random.default_rng(452).standard_normal((512, 4, 3)),
+        sampling_frequency=200,
+        method=["coherence_magnitude", "group_delay"],
+        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+    )
+    assert result["coherence_magnitude"].dims == ("time", "band", "source", "target")
+    assert result["group_delay"].dims == ("time", "source", "target")
+    assert result.band.values.tolist() == ["alpha", "beta"]
+
+
+def test_multitaper_connectivity_merges_rich_multivariate_datasets():
+    result = multitaper_connectivity(
+        np.random.default_rng(430).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=[
+            "canonical_coherency",
+            "maximized_imaginary_coherency_components",
+        ],
+        connectivity_kwargs={
+            "group_labels": [0, 0, 1, 1],
+            "n_components": 1,
+        },
+    )
+
+    assert "canonical_coherency_filters" in result
+    assert "maximized_imaginary_coherency_components_patterns" in result
+    assert list(result.data_vars).count("group_membership") == 1
+
+
+def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_not_collide():
+    # A group-pairwise measure uses source_group/target_group as *dimensions*;
+    # components use connection_seed_group/connection_target_group as per-
+    # connection coordinates. Merging them must keep the per-connection labels
+    # intact rather than overwrite them with the group dimension index.
+    result = multitaper_connectivity(
+        np.random.default_rng(451).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=["blockwise_spectral_granger_prediction", "canonical_coherency"],
+        connectivity_kwargs={"group_labels": [0, 0, 1, 1]},
+    )
+    assert result["target_group"].dims == ("target_group",)
+    assert result["connection_target_group"].dims == ("connection",)
+    assert result.connection_seed_group.values.tolist() == [0]
+    assert result.connection_target_group.values.tolist() == [1]
 
 
 def test_multitaper_connectivity_genuine_error_not_swallowed():
     """A real computation error in a batch surfaces; it is not silently dropped.
 
     A debiased measure requires >= 2 observations. With one trial and one taper
-    it raises ValueError — a genuine data problem, distinct from a measure that
-    structurally does not fit the xarray layout (UnsupportedMeasureError). It
-    must propagate, not leave the user with a Dataset that silently omits the
-    requested measure alongside the ones that happened to succeed.
+    it raises ValueError and must propagate, rather than leave the user with a
+    Dataset that silently omits the requested measure alongside the ones that
+    happened to succeed.
     """
     rng = np.random.default_rng(0)
     ts = rng.standard_normal((256, 1, 3))  # one trial
@@ -1556,15 +1842,17 @@ def test_multitaper_connectivity_genuine_error_not_swallowed():
         )
 
 
-def test_multitaper_connectivity_single_unsupported_measure_raises():
-    """Requesting only an xarray-incompatible measure re-raises, not swallowed."""
+def test_multitaper_connectivity_single_dataset_measure_is_dataset():
     rng = np.random.default_rng(0)
-    with pytest.raises(ValueError):
-        multitaper_connectivity(
-            rng.standard_normal((256, 4, 3)),
-            sampling_frequency=500,
-            method=["global_coherence"],
-        )
+    result = multitaper_connectivity(
+        rng.standard_normal((256, 4, 3)),
+        sampling_frequency=500,
+        method=["global_coherence"],
+    )
+    assert set(result.data_vars) == {
+        "global_coherence",
+        "global_coherence_vectors",
+    }
 
 
 def test_metadata_survives_netcdf_round_trip(tmp_path):
@@ -1656,14 +1944,16 @@ def test_multitaper_connectivity_rejects_empty_method_list():
         )
 
 
-def test_multitaper_connectivity_raises_when_no_method_is_compatible():
+def test_multitaper_connectivity_merges_frequency_and_band_only_outputs():
     rng = np.random.default_rng(0)
-    with pytest.raises(UnsupportedMeasureError, match="None of the requested methods"):
-        multitaper_connectivity(
-            rng.standard_normal((256, 3, 2)),
-            sampling_frequency=256,
-            method=["global_coherence", "phase_slope_index"],
-        )
+    result = multitaper_connectivity(
+        rng.standard_normal((256, 3, 2)),
+        sampling_frequency=256,
+        method=["global_coherence", "phase_slope_index"],
+    )
+    assert "global_coherence" in result
+    assert "phase_slope_index" in result
+    assert "frequency" not in result.phase_slope_index.dims
 
 
 def test_multitaper_connectivity_rejects_duplicate_signal_names():
@@ -1855,3 +2145,435 @@ def test_multitaper_connectivity_dataset_carries_shared_provenance():
     assert ds.attrs["mt_sampling_frequency"] == 500
     # The shared attrs must not include per-measure fields.
     assert "measure" not in ds.attrs
+
+
+def test_fourier_connectivity_matches_multitaper_adapter():
+    """Externally supplied FFT coefficients reuse the same numerical contract."""
+    rng = np.random.default_rng(301)
+    transform = Multitaper(
+        rng.standard_normal((256, 5, 3)),
+        sampling_frequency=128,
+        time_halfbandwidth_product=2,
+    )
+    expected = connectivity_to_xarray(
+        transform,
+        method="coherence_magnitude",
+        signal_names=["a", "b", "c"],
+    )
+    actual = fourier_connectivity(
+        transform.fft(),
+        frequencies=transform.frequencies,
+        time=transform.time,
+        method="coherence_magnitude",
+        signal_names=["a", "b", "c"],
+    )
+
+    xr.testing.assert_allclose(actual, expected)
+    assert actual.attrs["fourier_source"] == "external_fourier_coefficients"
+
+
+def test_fourier_connectivity_infers_and_transposes_labeled_dimensions():
+    """A coefficient DataArray carries frequency, time, and signal coordinates."""
+    rng = np.random.default_rng(302)
+    transform = Multitaper(
+        rng.standard_normal((256, 4, 2)),
+        sampling_frequency=128,
+        time_window_duration=1,
+        time_halfbandwidth_product=2,
+    )
+    coefficients = transform.fft()
+    labeled = xr.DataArray(
+        coefficients.transpose(4, 3, 1, 0, 2),
+        dims=("channel", "frequency", "epoch", "window", "taper"),
+        coords={
+            "channel": ["left", "right"],
+            "frequency": transform.frequencies,
+            "window": transform.time,
+        },
+        attrs={"subject": "rat-1"},
+    )
+    actual = fourier_connectivity(labeled, method="power")
+    expected = fourier_connectivity(
+        coefficients,
+        frequencies=transform.frequencies,
+        time=transform.time,
+        signal_names=["left", "right"],
+        method="power",
+    )
+
+    xr.testing.assert_allclose(actual, expected)
+    assert json.loads(actual.attrs["input_attrs_json"]) == {"subject": "rat-1"}
+
+
+def test_multitaper_frequency_crop_decimation_and_band_mean():
+    """Frequency operations are coordinate-based and preserve axis order."""
+    result = multitaper_connectivity(
+        np.random.default_rng(303).standard_normal((256, 3)),
+        sampling_frequency=128,
+        method="coherence_magnitude",
+        frequency_range=(8, 32),
+        frequency_decimation=2,
+        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+    )
+
+    assert result.dims == ("time", "band", "source", "target")
+    assert result.band.values.tolist() == ["alpha", "beta"]
+    assert result.attrs["frequency_reduction"] == "mean"
+
+
+def test_frequency_band_reduce_uses_circular_phase_mean():
+    """Phases straddling the branch cut average near pi, not zero."""
+    phase = xr.DataArray(
+        np.array([np.pi - 0.1, -np.pi + 0.1]),
+        dims=("frequency",),
+        coords={"frequency": [10.0, 11.0]},
+        name="coherence_phase",
+        attrs={"measure": "coherence_phase"},
+    )
+    reduced = frequency_band_reduce(phase, {"alpha": (8, 12)})
+
+    assert abs(float(reduced.sel(band="alpha"))) == pytest.approx(np.pi)
+
+
+@pytest.mark.parametrize(
+    ("method", "connectivity_kwargs", "score_name"),
+    [
+        ("global_coherence", {}, "global_coherence"),
+        (
+            "canonical_coherency",
+            {"group_labels": [0, 0, 1, 1]},
+            "canonical_coherency",
+        ),
+    ],
+)
+def test_frequency_band_reduce_rejects_unidentifiable_projection_averages(
+    method, connectivity_kwargs, score_name
+):
+    """Frequency-specific vectors cannot be averaged without phase alignment."""
+    result = multitaper_connectivity(
+        np.random.default_rng(321).standard_normal((128, 5, 4)),
+        sampling_frequency=64,
+        method=method,
+        connectivity_kwargs=connectivity_kwargs,
+    )
+
+    with pytest.raises(ValueError, match="sign/phase is arbitrary"):
+        frequency_band_reduce(result, {"alpha": (8, 12)})
+
+    score = frequency_band_reduce(result[score_name], {"alpha": (8, 12)})
+    assert "band" in score.dims
+    assert "frequency" not in score.dims
+
+
+def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
+    """A band containing an edge-invalid bin is undefined for both reductions,
+    and the per-band validity is carried as a coordinate."""
+    transform = MorletWavelet(
+        np.random.default_rng(324).standard_normal((2400, 1, 2)),
+        200,
+        np.array([4.0, 8.0, 16.0, 32.0]),
+        smoothing_time=0.5,
+        edge_mode="nan",
+    )
+    coherence = connectivity_to_xarray(transform, method="coherence_magnitude")
+    power = connectivity_to_xarray(transform, method="power")
+    bands = {"low": (4, 8), "all": (4, 32)}
+    mean = frequency_band_reduce(coherence, bands)
+    integral = frequency_band_reduce(power, bands, reduction="integral")
+
+    validity = np.asarray(transform.valid_time_frequency)
+    expected_valid = np.stack([validity[:, :2].all(axis=1), validity.all(axis=1)], 1)
+    assert not expected_valid.all() and expected_valid.any()  # a real edge case
+    np.testing.assert_array_equal(mean.valid_time_band.values, expected_valid)
+    np.testing.assert_array_equal(integral.valid_time_band.values, expected_valid)
+    # NaN exactly where the band is not fully valid, for both reductions.
+    np.testing.assert_array_equal(
+        np.isnan(mean.sel(source="0", target="1").values), ~expected_valid
+    )
+    np.testing.assert_array_equal(
+        np.isnan(integral.sel(source="0").values), ~expected_valid
+    )
+
+
+def test_single_bin_band_integral_preserves_nan():
+    """A zero-width band must not turn an invalid spectral bin into zero power."""
+    power = xr.DataArray(
+        [[np.nan, 2.0]],
+        dims=("time", "frequency"),
+        coords={
+            "time": [0.0],
+            "frequency": [10.0, 20.0],
+            "valid_time_frequency": (
+                ("time", "frequency"),
+                [[False, True]],
+            ),
+        },
+        name="power",
+        attrs={"measure": "power"},
+    )
+
+    reduced = frequency_band_reduce(
+        power, {"invalid": (10.0, 10.0)}, reduction="integral"
+    )
+
+    assert np.isnan(reduced.sel(band="invalid")).all()
+    assert not reduced.valid_time_band.sel(band="invalid").any()
+
+
+def test_frequency_band_integral_is_restricted_to_spectral_densities():
+    score = xr.DataArray(
+        [0.25, 0.5],
+        dims=("frequency",),
+        coords={"frequency": [1.0, 2.0]},
+        name="coherence_magnitude",
+        attrs={"measure": "coherence_magnitude"},
+    )
+    with pytest.raises(ValueError, match="defined only for power"):
+        frequency_band_reduce(score, {"low": (1, 2)}, reduction="integral")
+
+
+def test_multitaper_frequency_crop_and_decimation_select_correct_bins():
+    """Cropping and decimation select the expected frequency-coordinate values."""
+    result = multitaper_connectivity(
+        np.random.default_rng(313).standard_normal((256, 2)),
+        sampling_frequency=128,
+        method="coherence_magnitude",
+        frequency_range=(8, 32),
+        frequency_decimation=2,
+    )
+
+    # Full grid bins are multiples of 128/256 = 0.5 Hz; cropping keeps [8, 32]
+    # and decimation by 2 keeps every other surviving bin.
+    full_frequencies = np.fft.rfftfreq(256, d=1 / 128)
+    in_band = full_frequencies[(full_frequencies >= 8) & (full_frequencies <= 32)]
+    expected = in_band[::2]
+    np.testing.assert_allclose(result.frequency.values, expected)
+
+
+def test_frequency_band_integral_equals_analytic_area():
+    """Band integral of a flat spectral density equals value times bandwidth."""
+    frequencies = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    flat_power = xr.DataArray(
+        np.full_like(frequencies, 2.0),
+        dims=("frequency",),
+        coords={"frequency": frequencies},
+        name="power",
+        attrs={"measure": "power"},
+    )
+    reduced = frequency_band_reduce(
+        flat_power, {"band": (1.0, 5.0)}, reduction="integral"
+    )
+    # Trapezoidal integral of the constant 2.0 over [1, 5] Hz is 2 * (5 - 1) = 8.
+    assert float(reduced.sel(band="band")) == pytest.approx(8.0)
+
+
+def test_fourier_connectivity_rejects_unlabeled_directed_measure():
+    """Directed measures need a frequency coordinate to verify two-sidedness."""
+    coefficients = np.ones((3, 8, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="two-sided spectrum"):
+        fourier_connectivity(
+            coefficients,
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+def test_fourier_connectivity_allows_unlabeled_undirected_measure():
+    coefficients = np.random.default_rng(314).standard_normal(
+        (4, 8, 2)
+    ) + 1j * np.random.default_rng(315).standard_normal((4, 8, 2))
+    result = fourier_connectivity(coefficients, method="coherence_magnitude")
+    assert "frequency" in result.dims
+
+
+def test_fourier_connectivity_accepts_one_sided_functional_input():
+    rng = np.random.default_rng(316)
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal((4, 9, 2))
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.linspace(0, 40, 9),
+        method="coherence_magnitude",
+    )
+
+    assert result.dims == ("time", "frequency", "source", "target")
+    np.testing.assert_array_equal(result.frequency, np.linspace(0, 40, 9))
+    assert result.attrs["fourier_is_one_sided"]
+    assert result.attrs["fourier_one_sided_inferred"]
+
+
+def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
+    rng = np.random.default_rng(320)
+    coefficients = rng.standard_normal((5, 9, 2)) + 1j * rng.standard_normal((5, 9, 2))
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.linspace(0, 40, 9),
+    )
+
+    expected = tuple(
+        name
+        for name in DEFAULT_METHODS
+        if name != "pairwise_spectral_granger_prediction"
+    )
+    assert tuple(result.data_vars) == expected
+
+
+def test_fourier_connectivity_warns_when_sidedness_is_assumed():
+    """Without a frequency coordinate or an explicit flag, the two-sided
+    assumption silently truncates one-sided input, so it must be announced."""
+    rng = np.random.default_rng(323)
+    coefficients = rng.standard_normal((6, 16, 2)) + 1j * rng.standard_normal(
+        (6, 16, 2)
+    )
+    with pytest.warns(UserWarning, match="assuming a two-sided"):
+        fourier_connectivity(coefficients, method="coherence_magnitude")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fourier_connectivity(
+            coefficients, method="coherence_magnitude", is_one_sided=False
+        )
+        fourier_connectivity(
+            coefficients, method="coherence_magnitude", is_one_sided=True
+        )
+
+
+def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
+    """A positive singleton coordinate must not enable directed measures."""
+    rng = np.random.default_rng(322)
+    coefficients = rng.standard_normal((5, 1, 2)) + 1j * rng.standard_normal((5, 1, 2))
+    result = fourier_connectivity(coefficients, frequencies=np.array([10.0]))
+
+    assert result.attrs["fourier_is_one_sided"]
+    assert result.attrs["fourier_one_sided_inferred"]
+    assert "pairwise_spectral_granger_prediction" not in result
+
+    with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.array([10.0]),
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+@pytest.mark.parametrize("frequency", [-10.0, -1e-12])
+def test_fourier_connectivity_rejects_negative_singleton_frequency(frequency):
+    """A lone negative bin cannot be a complete two-sided FFT spectrum."""
+    coefficients = np.ones((5, 1, 2), dtype=np.complex128)
+
+    with pytest.raises(ValueError, match="standard FFT order"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.array([frequency]),
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+def test_fourier_connectivity_rejects_directed_one_sided_input():
+    coefficients = np.ones((3, 9, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.linspace(0, 40, 9),
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+def test_fourier_connectivity_explicit_one_sided_without_frequencies():
+    rng = np.random.default_rng(317)
+    coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal((4, 9, 2))
+    result = fourier_connectivity(
+        coefficients,
+        method="coherence_magnitude",
+        is_one_sided=True,
+    )
+
+    assert np.all(result.frequency >= 0)
+    assert result.attrs["fourier_is_one_sided"]
+
+
+def test_fourier_connectivity_rejects_fftshifted_coordinate():
+    coefficients = np.ones((3, 8, 2), dtype=np.complex128)
+    with pytest.raises(ValueError, match="standard FFT order"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.fft.fftshift(np.fft.fftfreq(8, d=0.01)),
+            method="coherence_magnitude",
+        )
+
+
+def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
+    data = np.random.default_rng(304).standard_normal((128, 3, 2))
+    welch = connectivity_to_xarray(
+        Welch(data, sampling_frequency=64, n_time_samples_per_segment=32),
+        method="coherence_magnitude",
+    )
+    morlet = connectivity_to_xarray(
+        MorletWavelet(data, 64, np.array([4.0, 8.0, 16.0])),
+        method="coherence_magnitude",
+    )
+
+    assert welch.attrs["welch_window"] == "hann_periodic"
+    assert morlet.attrs["morlet_decimation"] == 1
+    assert morlet.frequency.values.tolist() == [4.0, 8.0, 16.0]
+    assert morlet.valid_time_frequency.dims == ("time", "frequency")
+    assert morlet.attrs["morlet_edge_mode"] == "keep"
+    assert morlet.attrs["morlet_smoothing_kernel"] == "boxcar"
+
+
+def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
+    data = np.random.default_rng(318).standard_normal((128, 2, 2))
+    transform = MorletWavelet(
+        data,
+        64,
+        np.array([4.0, 8.0, 16.0]),
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
+    result = connectivity_to_xarray(transform, method="power")
+
+    np.testing.assert_array_equal(
+        result.isnull().all("source"), ~result.valid_time_frequency
+    )
+
+
+def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
+    data = np.random.default_rng(319).standard_normal((192, 5, 2))
+    # Adjacent-bin measures require a uniform grid; the band below still
+    # selects the two interior bins.
+    frequencies = np.array([4.0, 8.0, 12.0, 16.0])
+    transform = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
+
+    phase_slope = connectivity_to_xarray(transform, method="phase_slope_index")
+    assert phase_slope.dims == ("time", "source", "target")
+    assert phase_slope.valid_time.dims == ("time",)
+    np.testing.assert_array_equal(
+        phase_slope.valid_time, transform.valid_time_frequency.all(axis=1)
+    )
+
+    band = (5.0, 15.0)
+    delay = connectivity_to_xarray(
+        transform,
+        method="delay",
+        frequencies_of_interest=band,
+    )
+    np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
+    np.testing.assert_array_equal(
+        delay.valid_time_frequency,
+        transform.valid_time_frequency[:, [1, 2]],
+    )
+
+    group_delay = connectivity_to_xarray(
+        transform,
+        method="group_delay",
+        frequencies_of_interest=band,
+    )
+    assert "frequency" not in group_delay.dims
+    assert group_delay.valid_time.dims == ("time",)
+    np.testing.assert_array_equal(
+        group_delay.valid_time,
+        transform.valid_time_frequency[:, [1, 2]].all(axis=1),
+    )

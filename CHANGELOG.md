@@ -24,6 +24,7 @@ directly with results from 2.x.
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
+| Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
@@ -31,16 +32,90 @@ directly with results from 2.x.
 
 ### Added
 
+- Spectral primitives and pairwise measures: one-sided
+  `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
+  corrected imaginary PLV, and directed PLI.
+- Multivariate/group measures: maximized imaginary coherency (MIC),
+  multivariate interaction measure (MIM), conditional spectral Granger
+  (the Chen, Bressler & Ding 2006 frequency decomposition, computed from one
+  full-system and one reduced-system factorization per source), blockwise
+  spectral Granger, and time-reversed spectral Granger.
+- Exact complex `canonical_coherency` (Vidaurre CaCoh) performs phase
+  optimisation and component deflation and returns component scores, spatial
+  filters, patterns, connections, and group membership. The new
+  `maximized_imaginary_coherency_components` exposes the same rich result schema
+  for multiple MIC singular components; the historical score-only APIs remain
+  available unchanged. Both are vectorized over the time/frequency axes on the
+  active backend (GPU-capable), with the CaCoh phase search done as a batched
+  grid-and-Newton optimization rather than a per-bin loop.
+- `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
+  relative reconstruction error of the Wilson factorization per sub-spectrum, so
+  callers can check whether a cross-spectrum is resolved finely enough in
+  frequency to trust the directed measures built on it (an under-resolved
+  spectrum can converge yet reconstruct poorly).
+- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
+  output is explicitly one-sided and rejects Wilson-factorized directed
+  measures, which require a full two-sided spectrum. Morlet coefficients are
+  scaled so that `power()` is the one-sided PSD in signal²/Hz, on the same
+  scale as `Multitaper` (FieldTrip's convention; MNE's wavelet power is
+  `2 * sampling_frequency` times larger).
+- Morlet transforms now expose strict time-frequency edge validity and support
+  constant/reflect/edge convolution padding, keep/NaN/trim edge policies,
+  adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
+  Connectivity expectations consume the local weights directly, and xarray
+  results carry the `valid_time_frequency` mask.
+- Multitaper `taper_weighting` supports historical uniform weighting,
+  eigenvalue weighting, and Thomson adaptive frequency/signal-specific
+  weighting. Adaptive weighting compares the periodogram against the process
+  noise on a matched power-spectral-density scale and warns if the iteration
+  does not converge.
+- `fourier_connectivity` accepts externally computed Fourier coefficients as
+  NumPy arrays or labeled DataArrays. Functional measures support one-sided
+  coefficients (inferred from a labeled non-negative frequency coordinate or
+  declared with `is_one_sided=True`), while directed factorization still
+  requires a full two-sided spectrum. High-level results can be cropped,
+  decimated, or reduced into named frequency bands; phase uses a circular mean
+  and integration is restricted to spectral densities. The standalone
+  `frequency_band_reduce(result, bands, reduction=...)` applies the same
+  band reduction to an already-computed labeled result. Datasets holding
+  spatial filters, patterns, or global-coherence vectors are rejected, since
+  their sign and phase are arbitrary per frequency; reduce the score variable
+  instead.
+- `Connectivity.jackknife` and `jackknife_confidence_interval` provide
+  leave-one-trial/taper bias correction, standard errors, and confidence
+  intervals with automatic variance-stabilizing transformations: log for power,
+  `atanh(sqrt(.))` for magnitude-squared coherence (`transformation=
+  "fisher_squared"`), and circular for phase.
+- Magnitude-normalized measures (coherency, phase-locking value, and everything
+  derived from them) warn when computed from a single observation, where they
+  are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
+  provide multiple trials/tapers. `Welch` warns when its default segment length
+  yields coarse frequency resolution. `fourier_connectivity` rejects directed
+  measures on unlabeled coefficients whose two-sidedness cannot be verified.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,
   `direct_directed_transfer_function`) by name. They are opt-in (not in the
   default set) and, like the spectral Granger measures, are oriented so
   `sel(source=a, target=b)` is the influence from `a` to `b`.
+- `list_measures()` enumerates every wrapper-supported `method` name with its
+  output category, a one-line description sourced from the `Connectivity`
+  method docstring, and whether it is a default and/or directed measure;
+  filter with `category`, `default_only`, and `directed`. An unknown `method`
+  passed to `multitaper_connectivity` or `fourier_connectivity` now raises a
+  `ValueError` that suggests the closest measure names and points to
+  `list_measures()`, instead of a bare `AttributeError`.
+- A doctested `docs/cookbook.md` collects short, copy-pasteable recipes for the
+  most common tasks (functional and directed connectivity, reading the labeled
+  output, frequency bands, and bringing your own Fourier coefficients).
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
   variable.
+- The xarray interfaces now expose every built-in nonstandard result contract:
+  group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
+  and membership, delay candidates, global-coherence scores/vectors,
+  group-delay quantities, and frequency-reduced phase-slope matrices.
 - Wrapper results carry descriptive time/frequency metadata plus NetCDF-safe
   measure, package-version, backend, expectation, transform, and method-argument
   provenance. Scalar method arguments are stored under `arg_<key>`; structured
@@ -79,6 +154,29 @@ directly with results from 2.x.
 
 ### Changed
 
+- `canonical_coherency` fixes the sign of each spatial filter by the dominant
+  coefficient of its pattern, so the canonical phase is no longer ambiguous by
+  pi; single-channel groups reproduce the conjugate pairwise coherency.
+- `phase_slope_index`, `delay`, and `group_delay` require a uniformly spaced
+  frequency grid, and `delay`/`group_delay` reject non-uniform observation
+  weights, because their adjacent-bin combinations and coherence null assume
+  equal spacing and equally weighted observations (wavelet grids and Hann
+  smoothing violate these silently).
+- `Connectivity.jackknife` requires at least three observations, rejects
+  diagnostics, alternate constructors, and structured (component) results with
+  a clear error, and documents the supported explicit `fisher_squared`
+  transformation.
+- `frequency_band_reduce` treats a band containing any NaN bin as undefined for
+  both reductions (previously the mean skipped NaN) and records per-band
+  validity in a `valid_time_band` coordinate when the input carries
+  `valid_time_frequency`.
+- `fourier_connectivity` warns when neither a frequency coordinate nor
+  `is_one_sided` is given and a two-sided spectrum is assumed, and rejects a
+  lone negative-frequency bin because it cannot be a complete FFT spectrum.
+- Group measures require at least two groups and a non-missing label per signal
+  (`canonical_coherence` previously returned an empty array for one group), and
+  `Multitaper` reports non-positive or non-finite sampling rates as
+  "sampling_frequency must be finite and positive".
 - `global_coherence`, `power`, `phase_slope_index`, `delay`, and
   `Multitaper.time` now follow the definitions in the migration table.
 - Public connectivity methods reject single-signal inputs with an actionable

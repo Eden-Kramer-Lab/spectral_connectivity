@@ -48,6 +48,15 @@ coherence = multitaper_connectivity(
 )
 ```
 
+The wrapper also provides coordinate-aware frequency cropping, decimation, and
+named-band reduction through `frequency_range`, `frequency_decimation`, and
+`frequency_bands`. Phase bands use a circular mean, complex results use a
+complex-vector mean, and integration is limited to power/cross-spectral density.
+
+Use `fourier_connectivity` when coefficients were computed elsewhere. It accepts
+NumPy arrays or labeled DataArrays, preserves their time/frequency/signal
+coordinates, and uses the same result and provenance contract.
+
 `time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
 names define axis roles; positions do not.** Common dimension names are
 inferred and transposed automatically; for domain-specific names, pass
@@ -92,22 +101,55 @@ For finer control, use the `Multitaper` and `Connectivity` classes directly:
 from spectral_connectivity import Multitaper, Connectivity
 
 # Compute multitaper spectral estimate
-m = Multitaper(time_series=signals,
-               sampling_frequency=sampling_frequency,
-               time_halfbandwidth_product=time_halfbandwidth_product,
-               time_window_duration=0.060,
-               time_window_step=0.060,
-               start_time=time[0])
+m = Multitaper(
+    time_series=signals,
+    sampling_frequency=sampling_frequency,
+    time_halfbandwidth_product=time_halfbandwidth_product,
+    time_window_duration=0.060,
+    time_window_step=0.060,
+    start_time=time[0],
+)
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-c = Connectivity.from_multitaper(m)
+# (`from_multitaper` is a backward-compatible alias for the transform-neutral
+# `from_transform`.)
+c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
-power = c.power() # spectral power
+power = c.power()  # spectral power
 coherence = c.coherence_magnitude()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
+cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
+mic = c.maximized_imaginary_coherency_components(brain_area_labels, n_components=2)
 ```
+
+The xarray wrappers retain nonstandard scientific shapes instead of flattening
+them: group-pair matrices have `source_group`/`target_group`; rich CaCoh/MIC
+results include `connection`, `component`, `side`, `signal`, filters, patterns,
+and group membership; delay has a `candidate` axis; and global coherence and
+group delay return multi-variable Datasets. Phase slope and group delay have no
+frequency dimension because their band has already been reduced.
+
+`ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` provide alternative
+spectral transforms with the same coefficient interface. Morlet output is
+positive-frequency-only and is therefore limited to functional measures;
+directed Wilson factorization requires a full two-sided FFT. For single-trial
+Morlet data, `smoothing_time` and `smoothing_frequency` collect a local
+time/frequency neighborhood; `smoothing_kernel` selects boxcar or Hann weights.
+`padding_mode` controls convolution boundaries, while `edge_mode` retains,
+masks, or trims estimates without full wavelet support. The strict
+`valid_time_frequency` mask is also exposed by the xarray wrapper. `Welch`
+resolves `1 / segment_duration` Hz, so set `segment_duration` explicitly for
+electrophysiology data. Multitaper DPSS coefficients support uniform
+(historical), eigenvalue, or Thomson adaptive taper weighting through
+`taper_weighting`.
+
+For uncertainty estimates, `Connectivity.jackknife(method)` recomputes a
+real-valued measure while leaving out each trial/taper observation and returns a
+bias-corrected estimate, standard error, and confidence interval, applying an
+automatic variance-stabilizing transformation (log for power, `atanh(sqrt(.))`
+for magnitude-squared coherence, and circular for phase).
 
 ## Citation
 
@@ -120,15 +162,18 @@ For citation, please use the following:
 Functional
 
 1. coherency
-2. canonical_coherence
-3. imaginary_coherence
-4. phase_locking_value
-5. phase_lag_index
-6. weighted_phase_lag_index
-7. debiased_squared_phase_lag_index
-8. debiased_squared_weighted_phase_lag_index
-9. pairwise_phase_consistency
-10. global coherence
+2. cross_spectral_density
+3. coherence_magnitude and coherence_phase
+4. imaginary_coherence and signed imaginary_coherency
+5. partial_coherence
+6. canonical_coherence and exact complex canonical_coherency (CaCoh)
+7. maximized_imaginary_coherency (score-only or component-resolved) and multivariate_interaction_measure
+8. phase_locking_value and corrected_imaginary_phase_locking_value
+9. phase_lag_index, directed_phase_lag_index, and weighted_phase_lag_index
+10. debiased_squared_phase_lag_index
+11. debiased_squared_weighted_phase_lag_index
+12. pairwise_phase_consistency
+13. global_coherence
 
 Directed
 
@@ -138,8 +183,10 @@ Directed
 4. generalized_partial_directed_coherence
 5. direct_directed_transfer_function
 6. group_delay
-7. phase_lag_index
-8. pairwise_spectral_granger_prediction
+7. pairwise_spectral_granger_prediction
+8. conditional_spectral_granger_prediction
+9. blockwise_spectral_granger_prediction
+10. time_reversed_spectral_granger_prediction
 
 ## Package Dependencies
 
@@ -203,6 +250,7 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 :hidden:
 :maxdepth: 2
 
+cookbook
 CONNECTIVITY_METRIC_RANGES
 STYLE
 NOTEBOOK_SNAPSHOT_TESTS
