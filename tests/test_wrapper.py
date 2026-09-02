@@ -2295,6 +2295,31 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
     )
 
 
+def test_single_bin_band_integral_preserves_nan():
+    """A zero-width band must not turn an invalid spectral bin into zero power."""
+    power = xr.DataArray(
+        [[np.nan, 2.0]],
+        dims=("time", "frequency"),
+        coords={
+            "time": [0.0],
+            "frequency": [10.0, 20.0],
+            "valid_time_frequency": (
+                ("time", "frequency"),
+                [[False, True]],
+            ),
+        },
+        name="power",
+        attrs={"measure": "power"},
+    )
+
+    reduced = frequency_band_reduce(
+        power, {"invalid": (10.0, 10.0)}, reduction="integral"
+    )
+
+    assert np.isnan(reduced.sel(band="invalid")).all()
+    assert not reduced.valid_time_band.sel(band="invalid").any()
+
+
 def test_frequency_band_integral_is_restricted_to_spectral_densities():
     score = xr.DataArray(
         [0.25, 0.5],
@@ -2424,6 +2449,19 @@ def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
         fourier_connectivity(
             coefficients,
             frequencies=np.array([10.0]),
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
+@pytest.mark.parametrize("frequency", [-10.0, -1e-12])
+def test_fourier_connectivity_rejects_negative_singleton_frequency(frequency):
+    """A lone negative bin cannot be a complete two-sided FFT spectrum."""
+    coefficients = np.ones((5, 1, 2), dtype=np.complex128)
+
+    with pytest.raises(ValueError, match="standard FFT order"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.array([frequency]),
             method="pairwise_spectral_granger_prediction",
         )
 

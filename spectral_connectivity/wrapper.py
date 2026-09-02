@@ -14,6 +14,7 @@ import xarray as xr
 from numpy.typing import NDArray
 
 from spectral_connectivity.connectivity import (
+    _NON_MEASURE_METHODS,
     Connectivity,
     MultivariateConnectivityResult,
 )
@@ -420,9 +421,6 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
         if measure not in ranked:
             ranked.append(measure)
     return ranked[:limit]
-
-
-_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
 
 
 def _is_extension_measure(name: str) -> bool:
@@ -1092,6 +1090,10 @@ def frequency_band_reduce(
                 )
             else:
                 reduced = selected.mean("frequency", skipna=False, keep_attrs=True)
+            # A trapezoidal integral over one point is zero even when that point
+            # is NaN. Apply the shared validity rule after every reduction so a
+            # one-bin invalid band cannot masquerade as zero spectral power.
+            reduced = reduced.where(selected.notnull().all("frequency"))
             reduced_bands.append(reduced)
             if "valid_time_frequency" in selected.coords:
                 band_validity.append(
@@ -2493,6 +2495,11 @@ def fourier_connectivity(
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
         # A one-sided coordinate (non-negative, strictly increasing) is validated
         # by Connectivity itself; only the two-sided FFT-order check lives here.
+        if not one_sided and frequency_values.size == 1 and frequency_values[0] != 0.0:
+            raise ValueError(
+                "frequencies must be uniformly spaced in standard FFT "
+                "order (a one-bin two-sided spectrum can contain only zero Hz)."
+            )
         if not one_sided and frequency_values.size > 1:
             frequency_step = (
                 frequency_values[1] - frequency_values[0]
