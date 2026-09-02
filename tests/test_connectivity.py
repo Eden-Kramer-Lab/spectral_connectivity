@@ -350,7 +350,7 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert np.isnan(mic.squeeze()[0, 0])
 
 
-def test_exact_cacoh_reduces_to_scalar_complex_coherency_up_to_sign():
+def test_exact_cacoh_reduces_to_scalar_complex_coherency():
     rng = np.random.default_rng(923)
     first = rng.standard_normal(200) + 1j * rng.standard_normal(200)
     second = 0.6 * np.exp(-0.8j) * first + 0.8 * (
@@ -367,9 +367,35 @@ def test_exact_cacoh_reduces_to_scalar_complex_coherency_up_to_sign():
     coherency = csd[0, 1] / np.sqrt(csd[0, 0].real * csd[1, 1].real)
 
     assert abs(score) == pytest.approx(abs(coherency), rel=1e-9)
+    # Filter signs are fixed by the pattern convention, so the score is exactly
+    # the conjugate coherency, not merely equal up to a sign (a pi phase flip).
     ratio = score / np.conjugate(coherency)
     assert ratio.imag == pytest.approx(0.0, abs=1e-7)
-    assert abs(ratio.real) == pytest.approx(1.0, rel=1e-9)
+    assert ratio.real == pytest.approx(1.0, rel=1e-9)
+
+
+def test_cacoh_phase_distinguishes_lead_from_lag():
+    """A lagging seed must not be reported with its phase shifted by pi."""
+    from spectral_connectivity import Multitaper
+
+    fs = 500.0
+    t = np.arange(0, 4, 1 / fs)
+    rng = np.random.default_rng(3)
+    trials = []
+    for _ in range(20):
+        offset = rng.uniform(0, 2 * np.pi)
+        x = np.sin(2 * np.pi * 20 * t + offset)
+        y = np.sin(2 * np.pi * 20 * t + offset - 2.0)  # y lags x by 2 rad
+        trials.append(np.stack([y, x], 1) + 0.1 * rng.standard_normal((t.size, 2)))
+    data = np.stack(trials, 1)
+    connectivity = Connectivity.from_multitaper(
+        Multitaper(data, fs, time_window_duration=4.0, time_halfbandwidth_product=2)
+    )
+    index = np.argmin(np.abs(connectivity.frequencies - 20))
+    pairwise_phase = connectivity.coherence_phase()[0, index, 0, 1]
+    score = connectivity.canonical_coherency(np.array([0, 1])).scores[0, index, 0, 0]
+    # Scores use the conjugate convention: angle(score) == -coherence_phase.
+    assert np.angle(score) == pytest.approx(-pairwise_phase, abs=0.05)
 
 
 def test_exact_cacoh_matches_dense_phase_grid_oracle():

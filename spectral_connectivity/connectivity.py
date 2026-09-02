@@ -1850,6 +1850,14 @@ class Connectivity:
         time/frequency axes on the active ``xp`` backend, so this runs on the GPU
         when GPU support is enabled.
 
+        **Phase convention**: a spatial filter and its negative span the same
+        direction, so the canonical phase is intrinsically defined only modulo
+        pi. Each filter's sign is fixed so that the largest-magnitude
+        coefficient of its spatial pattern is positive; with that convention
+        the score is the conjugate of the canonical coherency between the
+        positively oriented components, and for single-channel groups it
+        reduces exactly to the conjugate pairwise coherency.
+
         References
         ----------
         .. [1] Vidaurre C, et al. (2019) Canonical maximization of coherence: A
@@ -3737,6 +3745,14 @@ def _batched_inverse_square_root(
     return transform, keep.sum(-1)
 
 
+def _dominant_sign(vectors: NDArray[np.floating]) -> NDArray[np.floating]:
+    """Sign (+1/-1) of the largest-magnitude entry along the last axis, per bin."""
+    dominant = xp.take_along_axis(
+        vectors, xp.argmax(xp.abs(vectors), axis=-1)[..., xp.newaxis], axis=-1
+    )[..., 0]
+    return xp.where(dominant < 0, -1.0, 1.0)
+
+
 def _batched_orthogonal_complement(
     filters: NDArray[np.floating],
 ) -> NDArray[np.floating]:
@@ -3859,11 +3875,20 @@ def _canonical_coherency_components(
         )
         filter_a = (basis_a @ (transform_aa @ left[..., xp.newaxis]))[..., 0]
         filter_b = (basis_b @ (transform_bb @ right[..., xp.newaxis]))[..., 0]
+        pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
+        pattern_b = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
+        # A spatial filter and its negative span the same direction, so the
+        # optimizer's phase is only defined modulo pi. Fix each filter's sign by
+        # its pattern's dominant coefficient; flipping one filter negates the
+        # projected coherency, i.e. shifts the phase by pi.
+        sign_a = _dominant_sign(pattern_a)
+        sign_b = _dominant_sign(pattern_b)
+        phase = xp.where(sign_a * sign_b < 0, phase + xp.pi, phase)
         scores[..., component] = magnitude * xp.exp(-1j * phase)
-        filters_a[..., component] = filter_a
-        filters_b[..., component] = filter_b
-        patterns_a[..., component] = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
-        patterns_b[..., component] = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
+        filters_a[..., component] = filter_a * sign_a[..., xp.newaxis]
+        filters_b[..., component] = filter_b * sign_b[..., xp.newaxis]
+        patterns_a[..., component] = pattern_a * sign_a[..., xp.newaxis]
+        patterns_b[..., component] = pattern_b * sign_b[..., xp.newaxis]
         if component + 1 < n_components:
             basis_a = _batched_orthogonal_complement(filters_a[..., : component + 1])
             basis_b = _batched_orthogonal_complement(filters_b[..., : component + 1])
