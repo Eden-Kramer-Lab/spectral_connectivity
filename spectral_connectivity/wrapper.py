@@ -2499,6 +2499,16 @@ def fourier_connectivity(
                     "order (zero and positive bins followed by negative bins)."
                 )
     else:
+        if is_one_sided is None:
+            warnings.warn(
+                "fourier_connectivity received no frequency coordinate and no "
+                "is_one_sided flag; assuming a two-sided spectrum in standard "
+                "FFT order. For rfft or wavelet coefficients (non-negative "
+                "frequencies only) pass is_one_sided=True, otherwise "
+                "is_one_sided=False to silence this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
         one_sided = bool(is_one_sided) if is_one_sided is not None else False
 
     connectivity = Connectivity(

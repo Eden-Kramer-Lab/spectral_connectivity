@@ -2361,6 +2361,25 @@ def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
     assert tuple(result.data_vars) == expected
 
 
+def test_fourier_connectivity_warns_when_sidedness_is_assumed():
+    """Without a frequency coordinate or an explicit flag, the two-sided
+    assumption silently truncates one-sided input, so it must be announced."""
+    rng = np.random.default_rng(323)
+    coefficients = rng.standard_normal((6, 16, 2)) + 1j * rng.standard_normal(
+        (6, 16, 2)
+    )
+    with pytest.warns(UserWarning, match="assuming a two-sided"):
+        fourier_connectivity(coefficients, method="coherence_magnitude")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fourier_connectivity(
+            coefficients, method="coherence_magnitude", is_one_sided=False
+        )
+        fourier_connectivity(
+            coefficients, method="coherence_magnitude", is_one_sided=True
+        )
+
+
 def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
     """A positive singleton coordinate must not enable directed measures."""
     rng = np.random.default_rng(322)
