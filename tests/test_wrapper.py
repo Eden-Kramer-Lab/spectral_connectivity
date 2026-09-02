@@ -2265,6 +2265,36 @@ def test_frequency_band_reduce_rejects_unidentifiable_projection_averages(
     assert "frequency" not in score.dims
 
 
+def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
+    """A band containing an edge-invalid bin is undefined for both reductions,
+    and the per-band validity is carried as a coordinate."""
+    transform = MorletWavelet(
+        np.random.default_rng(324).standard_normal((2400, 1, 2)),
+        200,
+        np.array([4.0, 8.0, 16.0, 32.0]),
+        smoothing_time=0.5,
+        edge_mode="nan",
+    )
+    coherence = connectivity_to_xarray(transform, method="coherence_magnitude")
+    power = connectivity_to_xarray(transform, method="power")
+    bands = {"low": (4, 8), "all": (4, 32)}
+    mean = frequency_band_reduce(coherence, bands)
+    integral = frequency_band_reduce(power, bands, reduction="integral")
+
+    validity = np.asarray(transform.valid_time_frequency)
+    expected_valid = np.stack([validity[:, :2].all(axis=1), validity.all(axis=1)], 1)
+    assert not expected_valid.all() and expected_valid.any()  # a real edge case
+    np.testing.assert_array_equal(mean.valid_time_band.values, expected_valid)
+    np.testing.assert_array_equal(integral.valid_time_band.values, expected_valid)
+    # NaN exactly where the band is not fully valid, for both reductions.
+    np.testing.assert_array_equal(
+        np.isnan(mean.sel(source="0", target="1").values), ~expected_valid
+    )
+    np.testing.assert_array_equal(
+        np.isnan(integral.sel(source="0").values), ~expected_valid
+    )
+
+
 def test_frequency_band_integral_is_restricted_to_spectral_densities():
     score = xr.DataArray(
         [0.25, 0.5],

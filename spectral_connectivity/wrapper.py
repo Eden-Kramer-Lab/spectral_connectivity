@@ -1073,8 +1073,12 @@ def frequency_band_reduce(
             )
 
         reduced_bands: list[xr.DataArray] = []
+        band_validity: list[xr.DataArray] = []
         for mask in band_masks:
             selected = data.isel(frequency=np.flatnonzero(mask))
+            # A NaN bin (an edge-invalid or undefined estimate) makes the band
+            # value undefined for every reduction; skipping it silently would
+            # average a different set of bins per time point.
             if reduction == "integral":
                 reduced = selected.integrate("frequency")
             elif measure == "coherence_phase":
@@ -1083,15 +1087,27 @@ def frequency_band_reduce(
                 phase_vectors = xr.apply_ufunc(np.exp, 1j * selected)
                 reduced = xr.apply_ufunc(
                     np.angle,
-                    phase_vectors.mean("frequency", keep_attrs=True),
+                    phase_vectors.mean("frequency", skipna=False, keep_attrs=True),
                     keep_attrs=True,
                 )
             else:
-                reduced = selected.mean("frequency", keep_attrs=True)
+                reduced = selected.mean("frequency", skipna=False, keep_attrs=True)
             reduced_bands.append(reduced)
+            if "valid_time_frequency" in selected.coords:
+                band_validity.append(
+                    selected.coords["valid_time_frequency"].all("frequency")
+                )
 
         band_coordinate = xr.IndexVariable("band", band_names)
         reduced = xr.concat(reduced_bands, dim=band_coordinate)
+        if band_validity:
+            reduced = reduced.assign_coords(
+                valid_time_band=xr.concat(band_validity, dim=band_coordinate)
+                .transpose("time", "band")
+                .assign_attrs(
+                    long_name="Every bin of the band has full wavelet and smoothing support"
+                )
+            )
         desired_dims = tuple(
             "band" if dimension == "frequency" else dimension for dimension in data.dims
         )
