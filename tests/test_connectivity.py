@@ -565,6 +565,29 @@ def test_multivariate_components_validate_group_geometry(method):
         getattr(connectivity, method)([0, 0, 1, 1], n_components=3)
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "canonical_coherence",
+        "canonical_coherency",
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+        "maximized_imaginary_coherency_components",
+    ],
+)
+@pytest.mark.parametrize("missing_label", [np.nan, None])
+def test_group_measures_reject_missing_labels(method, missing_label):
+    """A missing label must not create an empty, all-false signal group."""
+    rng = np.random.default_rng(924)
+    coefficients = rng.standard_normal((1, 6, 2, 8, 4)) + 1j * rng.standard_normal(
+        (1, 6, 2, 8, 4)
+    )
+    connectivity = Connectivity(coefficients)
+
+    with pytest.raises(ValueError, match="missing values"):
+        getattr(connectivity, method)([0, 0, 1, missing_label])
+
+
 def test_mic_rejects_single_group_and_non_positive_rank():
     coefficients = np.empty((1, 20, 2, 1, 3), dtype=complex)
     coefficients[..., 0] = 1j
@@ -1553,6 +1576,22 @@ def test_jackknife_rejects_structured_result_measures():
     )
     with pytest.raises(TypeError, match="real array result"):
         connectivity.jackknife("canonical_coherency", group_labels=np.array([0, 0, 1]))
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["minimum_phase_reconstruction_error", "from_transform", "from_multitaper"],
+)
+def test_jackknife_rejects_public_non_measure_methods(method):
+    """Diagnostics and alternate constructors are not connectivity measures."""
+    rng = np.random.default_rng(10)
+    shape = (1, 3, 2, 16, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    )
+
+    with pytest.raises(ValueError, match="public connectivity measure"):
+        connectivity.jackknife(method)
 
 
 def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
@@ -2798,6 +2837,24 @@ def test_connectivity_jackknife_recomputes_leave_one_out_measure():
     off_diagonal = result.estimate[..., 0, 1]
     assert np.all(result.confidence_interval[0][..., 0, 1] <= off_diagonal)
     assert np.all(result.confidence_interval[1][..., 0, 1] >= off_diagonal)
+
+
+def test_connectivity_jackknife_documents_and_accepts_fisher_squared():
+    """The public annotation and docstring must expose the supported transform."""
+    from typing import get_args
+
+    rng = np.random.default_rng(514)
+    coefficients = rng.standard_normal((1, 4, 2, 16, 2)) + 1j * rng.standard_normal(
+        (1, 4, 2, 16, 2)
+    )
+
+    annotation = Connectivity.jackknife.__annotations__["transformation"]
+    assert "fisher_squared" in get_args(annotation)
+    assert "fisher_squared" in (Connectivity.jackknife.__doc__ or "")
+    result = Connectivity(coefficients).jackknife(
+        "coherence_magnitude", transformation="fisher_squared"
+    )
+    assert result.transformation == "fisher_squared"
 
 
 def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result():

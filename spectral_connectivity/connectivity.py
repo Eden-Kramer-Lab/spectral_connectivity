@@ -1,5 +1,6 @@
 """Compute metrics for relating signals in the frequency domain."""
 
+import inspect
 import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -38,6 +39,11 @@ if TYPE_CHECKING:
     from spectral_connectivity.transforms import Multitaper
 
 logger = getLogger(__name__)
+
+# Public helpers on Connectivity that are not connectivity measures. Keep this
+# definition shared with the high-level wrapper so method discovery and
+# jackknife validation cannot drift apart.
+_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
 
 if is_gpu_enabled():
     try:
@@ -1236,7 +1242,7 @@ class Connectivity:
         *,
         confidence_level: float = 0.95,
         transformation: Literal[
-            "auto", "identity", "log", "fisher", "circular"
+            "auto", "identity", "log", "fisher", "fisher_squared", "circular"
         ] = "auto",
         **method_kwargs: Any,
     ) -> JackknifeResult:
@@ -1257,7 +1263,8 @@ class Connectivity:
             measures are not supported.
         confidence_level : float, default=0.95
             Two-sided coverage of the normal-approximation interval, in (0, 1).
-        transformation : {"auto", "identity", "log", "fisher", "circular"}
+        transformation : {"auto", "identity", "log", "fisher",
+                          "fisher_squared", "circular"}
             Scale on which the interval is formed. ``"auto"`` uses log power,
             the ``fisher_squared`` (``atanh(sqrt(.))``) transform for
             magnitude-squared coherence, circular phase, and the identity scale
@@ -1284,7 +1291,12 @@ class Connectivity:
                 "'trials_tapers'; expectations involving time or retaining both "
                 "trial and taper axes have no single leave-one-out layout."
             )
-        if method.startswith("_") or method == "jackknife":
+        method_attribute = inspect.getattr_static(type(self), method, None)
+        if (
+            method.startswith("_")
+            or method in _NON_MEASURE_METHODS
+            or not inspect.isfunction(method_attribute)
+        ):
             raise ValueError("method must name a public connectivity measure.")
         measure = getattr(self, method, None)
         if not callable(measure):
@@ -1724,6 +1736,23 @@ class Connectivity:
             raise ValueError(
                 f"group_labels must be one-dimensional with length "
                 f"n_signals ({self.n_signals}), got shape {labels_array.shape}."
+            )
+        has_missing_label = False
+        for group_label in labels_array:
+            if group_label is None:
+                has_missing_label = True
+                break
+            try:
+                has_missing_label = not bool(group_label == group_label)
+            except (TypeError, ValueError):
+                # An indeterminate equality result (for example a nullable
+                # scalar) cannot define stable group membership either.
+                has_missing_label = True
+            if has_missing_label:
+                break
+        if has_missing_label:
+            raise ValueError(
+                "group_labels must not contain missing values such as NaN or None."
             )
         labels = np.unique(labels_array)
         if len(labels) < 2:
