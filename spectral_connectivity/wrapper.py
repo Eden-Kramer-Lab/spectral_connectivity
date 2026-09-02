@@ -2443,7 +2443,7 @@ def fourier_connectivity(
         if frequency_values.ndim != 1:
             raise ValueError("frequencies must be a one-dimensional coordinate.")
         inferred_one_sided = bool(
-            frequency_values.size > 1 and not np.any(frequency_values < 0)
+            frequency_values.size > 0 and not np.any(frequency_values < 0)
         )
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
         # A one-sided coordinate (non-negative, strictly increasing) is validated

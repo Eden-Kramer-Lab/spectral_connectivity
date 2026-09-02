@@ -2325,6 +2325,24 @@ def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
     assert tuple(result.data_vars) == expected
 
 
+def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
+    """A positive singleton coordinate must not enable directed measures."""
+    rng = np.random.default_rng(322)
+    coefficients = rng.standard_normal((5, 1, 2)) + 1j * rng.standard_normal((5, 1, 2))
+    result = fourier_connectivity(coefficients, frequencies=np.array([10.0]))
+
+    assert result.attrs["fourier_is_one_sided"]
+    assert result.attrs["fourier_one_sided_inferred"]
+    assert "pairwise_spectral_granger_prediction" not in result
+
+    with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.array([10.0]),
+            method="pairwise_spectral_granger_prediction",
+        )
+
+
 def test_fourier_connectivity_rejects_directed_one_sided_input():
     coefficients = np.ones((3, 9, 2), dtype=np.complex128)
     with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
