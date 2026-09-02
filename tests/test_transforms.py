@@ -878,6 +878,24 @@ def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
     getattr(uniform, measure)()
 
 
+@pytest.mark.parametrize("measure", ["delay", "group_delay"])
+def test_delay_significance_rejects_non_uniform_weights(measure):
+    """The zero-coherence null uses the raw observation count, which is wrong
+    for unequally weighted observations."""
+    data = np.random.default_rng(928).standard_normal((2000, 4, 2))
+    weighted = Connectivity.from_transform(
+        MorletWavelet(
+            data,
+            200,
+            np.arange(5.0, 60.0, 1.0),
+            smoothing_time=0.2,
+            smoothing_kernel="hann",
+        )
+    )
+    with pytest.raises(ValueError, match="non-uniform observation_weights"):
+        getattr(weighted, measure)(frequencies_of_interest=(10, 40))
+
+
 def test_morlet_boxcar_edge_mask_error_names_edge_mode():
     """The debiased-measure guard must point at the knob that actually made the
     weights non-uniform (edge masking), not at a kernel already in use."""
