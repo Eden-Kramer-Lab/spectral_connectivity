@@ -1355,8 +1355,9 @@ class Connectivity:
             raise ValueError(
                 f"jackknife requires at least 3 observations, got {n_observations}. "
                 "With two, each leave-one-out replicate has a single observation, "
-                "which forces magnitude-normalized measures to 1 and yields a "
-                "zero-width interval."
+                "which forces magnitude-normalized measures to 1 and makes the "
+                "interval degenerate (a zero standard error, or NaN under a "
+                "variance-stabilizing transform such as the coherence default)."
             )
 
         replicates: list[NDArray[np.floating]] = []

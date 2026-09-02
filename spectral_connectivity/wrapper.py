@@ -1031,6 +1031,13 @@ def frequency_band_reduce(
     into a scientifically undefined band projection. Select the scalar score
     variable from the Dataset and reduce that DataArray when only band scores
     are needed.
+
+    A band is undefined wherever any of its bins is ``NaN`` (for example an
+    edge-invalid ``MorletWavelet`` bin under ``edge_mode="nan"``): both
+    reductions return ``NaN`` there rather than silently reducing the valid
+    bins only. When the input carries a ``valid_time_frequency`` coordinate the
+    result gains a ``valid_time_band`` coordinate that is ``True`` only where
+    every bin of the band had full support.
     """
     if "frequency" not in result.dims:
         raise ValueError("result must have a 'frequency' dimension.")
@@ -2429,9 +2436,11 @@ def fourier_connectivity(
         arguments must be requested in separate calls.
     is_one_sided : bool, optional
         Declare whether the coefficients cover only non-negative frequencies.
-        Required when no frequency coordinate is available and the input is
-        one-sided (e.g. ``rfft`` output); otherwise inferred from
-        ``frequencies``.
+        When no frequency coordinate is available the sidedness cannot be
+        inferred: pass ``True`` for one-sided input (e.g. ``rfft`` output) or
+        ``False`` for a full FFT-order spectrum. Leaving it unset in that case
+        assumes two-sided and warns. With a frequency coordinate it is inferred
+        from ``frequencies``.
     frequency_range : (float, float), optional
         Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
         or band reduction.
