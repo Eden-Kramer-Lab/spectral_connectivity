@@ -79,6 +79,22 @@ def test_subset_cross_spectrum():
         assert np.allclose(actual, expected)
 
 
+def test_minimum_phase_reconstruction_error_is_exposed_on_connectivity():
+    """The public diagnostic evaluates the factor used by directed measures."""
+    target_cross_spectrum = np.array([[2.0, 0.4], [0.4, 1.0]])
+    cholesky_factor = np.linalg.cholesky(target_cross_spectrum)
+    taper_coefficients = (np.sqrt(2.0) * cholesky_factor.T).astype(np.complex128)
+    coefficients = np.broadcast_to(taper_coefficients[:, np.newaxis, :], (2, 16, 2))[
+        np.newaxis, np.newaxis
+    ].copy()
+    connectivity = Connectivity(coefficients)
+
+    error = connectivity.minimum_phase_reconstruction_error()
+
+    assert error.shape == (1,)
+    assert error[0] < 1e-7
+
+
 @mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)

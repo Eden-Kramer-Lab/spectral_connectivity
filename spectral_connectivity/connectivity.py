@@ -15,6 +15,9 @@ from scipy.ndimage import label
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
 )
+from spectral_connectivity.minimum_phase_decomposition import (
+    minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
+)
 from spectral_connectivity.statistics import (
     JackknifeResult,
     adjust_for_multiple_comparisons,
@@ -1178,6 +1181,33 @@ class Connectivity:
     def is_one_sided(self) -> bool:
         """Whether the input contains only non-negative frequencies."""
         return self._is_one_sided
+
+    @_asnumpy
+    def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:
+        """Return the relative reconstruction error of the Wilson factorization.
+
+        This diagnostic checks how faithfully the cached minimum-phase factor
+        reconstructs the expected cross-spectral matrix. One value is returned
+        per retained batch (normally time-window) dimension. Values near machine
+        precision indicate a faithful factorization; large values suggest that
+        the spectrum is too coarsely resolved for directed-connectivity measures.
+        Non-converged factorizations return ``NaN``.
+
+        Returns
+        -------
+        array, shape (...,)
+            Maximum relative reconstruction error for each sub-spectrum.
+
+        Notes
+        -----
+        A full two-sided spectrum is required, as for the directed measures that
+        use the Wilson factorization.
+        """
+        self._require_two_sided_spectrum("minimum_phase_reconstruction_error")
+        return _minimum_phase_reconstruction_error(
+            self._expectation_cross_spectral_matrix(),
+            self._minimum_phase_factor,
+        )
 
     def jackknife(
         self,
@@ -3074,12 +3104,6 @@ class Connectivity:
 
         Notes
         -----
-        **Non-negativity**: spectral Granger is ``>= 0`` by definition.
-        Roundoff-negative estimates are clipped to ``0`` and materially negative
-        bins (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
-        packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
-
         **Range**: [0, 1] (normalized). Represents proportion of inflow
         via transfer function.
 

@@ -422,7 +422,7 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
     return ranked[:limit]
 
 
-_NON_MEASURE_METHODS = frozenset({"jackknife"})
+_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
 
 
 def _is_extension_measure(name: str) -> bool:

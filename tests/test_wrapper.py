@@ -1406,7 +1406,13 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
 
 
 @pytest.mark.parametrize(
-    "name", ["jackknife", "from_transform", "_clear_cached_intermediates"]
+    "name",
+    [
+        "jackknife",
+        "minimum_phase_reconstruction_error",
+        "from_transform",
+        "_clear_cached_intermediates",
+    ],
 )
 def test_non_measure_callables_are_rejected_as_unknown_measures(name):
     rng = np.random.default_rng(12)
