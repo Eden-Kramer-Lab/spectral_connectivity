@@ -1442,7 +1442,9 @@ class Connectivity:
         """
         power = self._power
         if self._is_one_sided:
-            return power
+            # Detach from the cached ``_power`` so a caller mutating the result
+            # cannot corrupt measures that reuse the cache.
+            return power.copy()
         n_fft_samples = power.shape[-2]
         one_sided = power[..., : n_fft_samples // 2 + 1, :]
 
@@ -1484,7 +1486,9 @@ class Connectivity:
         """
         cross_spectral_density = self._cached_reduced_cross_spectral_matrix
         if self._is_one_sided:
-            return cross_spectral_density
+            # Detach from the cached matrix so a caller mutating the result
+            # cannot corrupt measures that reuse the cache.
+            return cross_spectral_density.copy()
         n_fft_samples = cross_spectral_density.shape[-3]
         one_sided = cross_spectral_density[..., : n_fft_samples // 2 + 1, :, :]
         scale = xp.full((one_sided.shape[-3],), 2.0, dtype=one_sided.real.dtype)

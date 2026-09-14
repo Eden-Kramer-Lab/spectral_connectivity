@@ -115,6 +115,27 @@ def test_power(dtype):
     assert np.allclose(expected_power, this_Conn.power())
 
 
+def test_one_sided_power_and_csd_return_detached_arrays():
+    """A returned array must not alias an internal cache: mutating it must not
+    change later results. The one-sided path returned the cache directly."""
+    rng = np.random.default_rng(6)
+    coefficients = rng.standard_normal((1, 20, 3, 9, 2)) + 1j * rng.standard_normal(
+        (1, 20, 3, 9, 2)
+    )
+    connectivity = Connectivity(coefficients, is_one_sided=True)
+
+    power = connectivity.power()
+    power *= 2.0
+    np.testing.assert_allclose(connectivity.power(), power / 2.0, equal_nan=True)
+
+    coherence_before = connectivity.coherence_magnitude()
+    csd = connectivity.cross_spectral_density()
+    csd *= 3.0
+    np.testing.assert_allclose(
+        connectivity.coherence_magnitude(), coherence_before, equal_nan=True
+    )
+
+
 @mark.parametrize("n_fft_samples", [5, 6])
 def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
     n_fft_samples,
