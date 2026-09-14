@@ -1112,7 +1112,10 @@ def frequency_band_reduce(
         if band_validity:
             reduced = reduced.assign_coords(
                 valid_time_band=xr.concat(band_validity, dim=band_coordinate)
-                .transpose("time", "band")
+                # Any surviving non-frequency axes (typically "time", but none
+                # if the caller already selected a single time point) come
+                # first; "band" is placed last without naming "time" explicitly.
+                .transpose(..., "band")
                 .assign_attrs(
                     long_name="Every bin of the band has full wavelet and smoothing support"
                 )

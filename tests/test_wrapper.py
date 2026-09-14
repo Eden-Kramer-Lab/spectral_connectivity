@@ -2295,6 +2295,23 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
     )
 
 
+def test_frequency_band_reduce_after_time_selection():
+    """Band reduction must work on a single selected time point; the band
+    validity coordinate cannot assume a surviving 'time' dimension."""
+    transform = MorletWavelet(
+        np.random.default_rng(325).standard_normal((1500, 2, 3)),
+        250,
+        np.arange(5.0, 45.0, 5.0),
+        smoothing_time=0.3,
+        edge_mode="nan",
+    )
+    result = connectivity_to_xarray(transform, method="coherence_magnitude")
+    reduced = frequency_band_reduce(result.isel(time=10), {"a": (5, 15), "b": (20, 40)})
+    assert "time" not in reduced.dims
+    assert "band" in reduced.dims
+    assert reduced.valid_time_band.dims == ("band",)
+
+
 def test_single_bin_band_integral_preserves_nan():
     """A zero-width band must not turn an invalid spectral bin into zero power."""
     power = xr.DataArray(
