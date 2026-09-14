@@ -2186,17 +2186,17 @@ class Connectivity:
         -----
         **Range**: ``[0, 1]``. The diagonal is returned as NaN.
         """
-        transformed, labels, finite_bin = self._group_imaginary_coherency(
+        transformed, labels = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
         )
         result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
         result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
-        for first, second, matrix in transformed:
+        for first, second, matrix, connection_finite in transformed:
             singular_values = xp.linalg.svd(
                 matrix, full_matrices=False, compute_uv=False
             )
             value = xp.where(
-                finite_bin, xp.clip(singular_values[..., 0], 0.0, 1.0), xp.nan
+                connection_finite, xp.clip(singular_values[..., 0], 0.0, 1.0), xp.nan
             )
             result[..., first, second] = value
             result[..., second, first] = value
@@ -2243,13 +2243,15 @@ class Connectivity:
                EEG/MEG data invariant to linear and static transformations in
                sensor space. NeuroImage 60, 476-488.
         """
-        transformed, labels, finite_bin = self._group_imaginary_coherency(
+        transformed, labels = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
         )
         result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
         result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
-        for first, second, matrix in transformed:
-            value = xp.where(finite_bin, xp.sum(matrix**2, axis=(-2, -1)), xp.nan)
+        for first, second, matrix, connection_finite in transformed:
+            value = xp.where(
+                connection_finite, xp.sum(matrix**2, axis=(-2, -1)), xp.nan
+            )
             result[..., first, second] = value
             result[..., second, first] = value
         return to_numpy(result), to_numpy(labels)
@@ -2260,14 +2262,16 @@ class Connectivity:
         *,
         rank: int | None,
         regularization: float,
-    ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer], BackendArray]:
+    ) -> tuple[list[tuple[int, int, BackendArray, BackendArray]], NDArray[np.integer]]:
         """Whiten imaginary CSD blocks for MIC/MIM.
 
-        Returns the whitened between-group blocks, the sorted labels, and a
-        per-bin ``finite`` mask. Invalid bins (for example the NaN edges of an
-        ``edge_mode="nan"`` Morlet transform) are replaced with the identity
-        before the batched eigendecomposition/SVD so they cannot fail; callers
-        restore ``NaN`` there using the returned mask.
+        Returns one ``(first, second, whitened, finite_bin)`` entry per group
+        pair and the sorted labels. Invalid bins (for example the NaN edges of
+        an ``edge_mode="nan"`` Morlet transform) are replaced with a safe value
+        before the batched eigendecomposition/SVD so they cannot fail. Validity
+        is tracked per group and combined per connection, so a NaN confined to
+        one group only invalidates connections that include it -- an unrelated
+        connection between two healthy groups is preserved.
         """
         labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
@@ -2277,39 +2281,48 @@ class Connectivity:
         spectrum = spectrum[
             ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
         ]
-        # Substitute the identity at non-finite bins so eigh/SVD converge; the
-        # real within-group blocks become invertible and the imaginary
-        # between-group blocks vanish, so callers mask the result to NaN there.
-        finite_bin = xp.all(xp.isfinite(spectrum), axis=(-2, -1))
-        identity = xp.eye(spectrum.shape[-1], dtype=spectrum.dtype)
-        spectrum = xp.where(finite_bin[..., xp.newaxis, xp.newaxis], spectrum, identity)
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
+        # Whiten each group's within-block, substituting the identity at that
+        # group's non-finite bins so the eigendecomposition converges there.
         inverse_square_roots = []
+        group_finite = []
         for indices in group_indices:
             within = spectrum[..., indices[:, xp.newaxis], indices[xp.newaxis, :]].real
+            finite = xp.all(xp.isfinite(within), axis=(-2, -1))
+            identity = xp.eye(indices.shape[0], dtype=within.dtype)
+            safe_within = xp.where(
+                finite[..., xp.newaxis, xp.newaxis], within, identity
+            )
             inverse_square_roots.append(
                 _batched_inverse_square_root(
-                    within,
+                    safe_within,
                     rank=rank,
                     regularization=regularization,
                 )[0]
             )
+            group_finite.append(finite)
 
-        transformed: list[tuple[int, int, BackendArray]] = []
+        transformed: list[tuple[int, int, BackendArray, BackendArray]] = []
         for first, second in combinations(range(len(labels)), 2):
             first_indices = group_indices[first]
             second_indices = group_indices[second]
+            # A connection is valid only where both of its groups are finite;
+            # zero the between-block elsewhere so the SVD stays finite.
+            connection_finite = group_finite[first] & group_finite[second]
             between = spectrum[
                 ...,
                 first_indices[:, xp.newaxis],
                 second_indices[xp.newaxis, :],
             ].imag
+            between = xp.where(
+                connection_finite[..., xp.newaxis, xp.newaxis], between, 0.0
+            )
             whitened = xp.matmul(
                 xp.matmul(inverse_square_roots[first], between),
                 inverse_square_roots[second],
             )
-            transformed.append((first, second, whitened))
-        return transformed, labels, finite_bin
+            transformed.append((first, second, whitened, connection_finite))
+        return transformed, labels
 
     def global_coherence(
         self,

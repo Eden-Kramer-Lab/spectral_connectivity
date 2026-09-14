@@ -396,6 +396,30 @@ def test_scalar_mic_mim_handle_edge_masked_morlet_data():
         assert np.all(np.isfinite(off_diagonal[validity]))  # valid bins computed
 
 
+def test_scalar_mic_mim_mask_only_participating_groups():
+    """A NaN confined to one group must not invalidate a connection between two
+    other, healthy groups; each connection is masked using only its own groups."""
+    rng = np.random.default_rng(8)
+    coefficients = rng.standard_normal((1, 40, 2, 6, 3)) + 1j * rng.standard_normal(
+        (1, 40, 2, 6, 3)
+    )
+    coefficients[..., 2] = np.nan  # group 2 is entirely invalid
+    connectivity = Connectivity(coefficients)
+    labels = np.array([0, 1, 2])
+
+    for measure in (
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+    ):
+        value, _ = getattr(connectivity, measure)(labels)
+        # The 0<->1 connection uses only healthy groups and must stay finite.
+        assert np.all(np.isfinite(value[..., 0, 1]))
+        assert np.all(np.isfinite(value[..., 1, 0]))
+        # Connections that include the invalid group 2 are NaN.
+        assert np.all(np.isnan(value[..., 0, 2]))
+        assert np.all(np.isnan(value[..., 1, 2]))
+
+
 def test_exact_cacoh_reduces_to_scalar_complex_coherency():
     rng = np.random.default_rng(923)
     first = rng.standard_normal(200) + 1j * rng.standard_normal(200)
