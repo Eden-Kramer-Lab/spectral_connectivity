@@ -2504,6 +2504,12 @@ def _apply_adaptive_taper_weights(
     root_concentration = xp.sqrt(concentration)
     noise = noise_power_spectral_density[:, :, xp.newaxis, xp.newaxis, :]
     eps = xp.finfo(taper_power.dtype).eps
+    # The denominator and spectrum are power-spectral densities, so an absolute
+    # epsilon floor would discard valid low-power estimates once the signal is
+    # scaled down (its PSD can fall below machine epsilon). Floor relative to a
+    # per-signal PSD scale instead, keeping the weighting invariant to input
+    # scale; a genuinely dead channel has a zero scale and is still masked out.
+    psd_floor = eps * xp.mean(taper_power, axis=(0, 1, 2, 3))
 
     weights = xp.ones_like(taper_power, dtype=taper_power.dtype)
     for _ in range(max_iterations):
@@ -2512,7 +2518,7 @@ def _apply_adaptive_taper_weights(
         weights = _divide_where(
             root_concentration * expanded_spectrum,
             denominator,
-            xp.abs(denominator) > eps,
+            xp.abs(denominator) > psd_floor,
             0.0,
         )
         weight_power = weights**2
@@ -2523,7 +2529,7 @@ def _apply_adaptive_taper_weights(
             weight_sum > eps,
             0.0,
         )
-        scale = xp.maximum(xp.abs(spectrum), eps)
+        scale = xp.maximum(xp.abs(spectrum), psd_floor)
         if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
             spectrum = updated
             break

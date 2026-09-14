@@ -1115,12 +1115,17 @@ def test_adaptive_weighting_is_invariant_to_input_scale():
         ).fft()
 
     uniform = transform(data, "uniform")
-    uniform_scaled = transform(data * 1000, "uniform")
     adaptive = transform(data, "adaptive")
-    adaptive_scaled = transform(data * 1000, "adaptive")
     weights = adaptive / uniform
-    weights_scaled = adaptive_scaled / uniform_scaled
-    np.testing.assert_allclose(weights, weights_scaled, rtol=1e-9, atol=1e-9)
+    # Scaling up and, critically, far down (so the power spectral density falls
+    # below machine epsilon) must leave the ratio weights unchanged: an absolute
+    # epsilon floor on the PSD-valued denominator would discard these low-power
+    # estimates.
+    for scale in (1000.0, 1e-7):
+        scaled = transform(data * scale, "adaptive") / transform(
+            data * scale, "uniform"
+        )
+        np.testing.assert_allclose(weights, scaled, rtol=1e-9, atol=1e-9)
 
 
 def test_adaptive_weighting_warns_on_non_convergence():
