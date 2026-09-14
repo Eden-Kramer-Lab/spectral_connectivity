@@ -3974,6 +3974,17 @@ def _canonical_coherency_components(
             basis_b = _batched_orthogonal_complement(filters_b[..., : component + 1])
 
     assert effective_rank is not None  # n_components >= 1, so the loop always runs
+    # Deflation only removes the extracted *filters*, not the group's null
+    # space, so a component beyond the joint within-group rank still optimizes a
+    # spurious direction. Force those phantom components to a zero score and an
+    # all-zero filter/pattern, matching the caller's warning.
+    supported = xp.arange(n_components) < effective_rank[..., xp.newaxis]
+    scores = xp.where(supported, scores, 0.0)
+    supported_sides = supported[..., xp.newaxis, :]
+    filters_a = xp.where(supported_sides, filters_a, 0.0)
+    filters_b = xp.where(supported_sides, filters_b, 0.0)
+    patterns_a = xp.where(supported_sides, patterns_a, 0.0)
+    patterns_b = xp.where(supported_sides, patterns_b, 0.0)
     return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
 
 
