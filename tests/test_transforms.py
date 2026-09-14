@@ -1128,6 +1128,31 @@ def test_adaptive_weighting_is_invariant_to_input_scale():
         np.testing.assert_allclose(weights, scaled, rtol=1e-9, atol=1e-9)
 
 
+def test_adaptive_weighting_isolates_nan_windows():
+    """A NaN confined to one time window must not change the adaptive weights of
+    the other, healthy windows: the PSD-scale floor is per window/trial."""
+    rng = np.random.default_rng(916)
+    data = rng.standard_normal((4096, 5, 1))
+
+    def adaptive(values):
+        return Multitaper(
+            values,
+            sampling_frequency=256,
+            time_halfbandwidth_product=3,
+            taper_weighting="adaptive",
+            time_window_duration=8.0,  # two 2048-sample windows
+        ).fft()
+
+    clean = adaptive(data)
+    assert clean.shape[0] == 2  # two windows
+    corrupted = data.copy()
+    corrupted[3000, 0, 0] = np.nan  # a single NaN inside the second window only
+    contaminated = adaptive(corrupted)
+
+    # The first window's data is untouched, so its coefficients must be unchanged.
+    np.testing.assert_allclose(contaminated[0], clean[0], rtol=1e-9, atol=1e-12)
+
+
 def test_adaptive_weighting_warns_on_non_convergence():
     data = np.random.default_rng(915).standard_normal((512, 1, 2))
     multitaper = Multitaper(
