@@ -2186,7 +2186,7 @@ class Connectivity:
         -----
         **Range**: ``[0, 1]``. The diagonal is returned as NaN.
         """
-        transformed, labels = self._group_imaginary_coherency(
+        transformed, labels, finite_bin = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
         )
         result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
@@ -2195,7 +2195,9 @@ class Connectivity:
             singular_values = xp.linalg.svd(
                 matrix, full_matrices=False, compute_uv=False
             )
-            value = xp.clip(singular_values[..., 0], 0.0, 1.0)
+            value = xp.where(
+                finite_bin, xp.clip(singular_values[..., 0], 0.0, 1.0), xp.nan
+            )
             result[..., first, second] = value
             result[..., second, first] = value
         return to_numpy(result), to_numpy(labels)
@@ -2241,13 +2243,13 @@ class Connectivity:
                EEG/MEG data invariant to linear and static transformations in
                sensor space. NeuroImage 60, 476-488.
         """
-        transformed, labels = self._group_imaginary_coherency(
+        transformed, labels, finite_bin = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
         )
         result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
         result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
         for first, second, matrix in transformed:
-            value = xp.sum(matrix**2, axis=(-2, -1))
+            value = xp.where(finite_bin, xp.sum(matrix**2, axis=(-2, -1)), xp.nan)
             result[..., first, second] = value
             result[..., second, first] = value
         return to_numpy(result), to_numpy(labels)
@@ -2258,8 +2260,15 @@ class Connectivity:
         *,
         rank: int | None,
         regularization: float,
-    ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer]]:
-        """Whiten imaginary CSD blocks for MIC/MIM."""
+    ) -> tuple[list[tuple[int, int, BackendArray]], NDArray[np.integer], BackendArray]:
+        """Whiten imaginary CSD blocks for MIC/MIM.
+
+        Returns the whitened between-group blocks, the sorted labels, and a
+        per-bin ``finite`` mask. Invalid bins (for example the NaN edges of an
+        ``edge_mode="nan"`` Morlet transform) are replaced with the identity
+        before the batched eigendecomposition/SVD so they cannot fail; callers
+        restore ``NaN`` there using the returned mask.
+        """
         labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
@@ -2268,6 +2277,12 @@ class Connectivity:
         spectrum = spectrum[
             ..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :
         ]
+        # Substitute the identity at non-finite bins so eigh/SVD converge; the
+        # real within-group blocks become invertible and the imaginary
+        # between-group blocks vanish, so callers mask the result to NaN there.
+        finite_bin = xp.all(xp.isfinite(spectrum), axis=(-2, -1))
+        identity = xp.eye(spectrum.shape[-1], dtype=spectrum.dtype)
+        spectrum = xp.where(finite_bin[..., xp.newaxis, xp.newaxis], spectrum, identity)
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
         inverse_square_roots = []
         for indices in group_indices:
@@ -2294,7 +2309,7 @@ class Connectivity:
                 inverse_square_roots[second],
             )
             transformed.append((first, second, whitened))
-        return transformed, labels
+        return transformed, labels, finite_bin
 
     def global_coherence(
         self,

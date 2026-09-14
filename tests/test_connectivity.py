@@ -371,6 +371,31 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert np.isnan(mic.squeeze()[0, 0])
 
 
+def test_scalar_mic_mim_handle_edge_masked_morlet_data():
+    """Edge-masked Morlet data supplies NaN bins; scalar MIC/MIM must mask them
+    (as the component-resolved path does) rather than crash the batched SVD."""
+    from spectral_connectivity import MorletWavelet
+
+    rng = np.random.default_rng(7)
+    wavelet = MorletWavelet(
+        rng.standard_normal((1500, 4, 4)),
+        sampling_frequency=250.0,
+        frequencies=np.array([10.0, 20.0, 40.0]),
+        smoothing_time=0.3,
+        edge_mode="nan",
+    )
+    connectivity = Connectivity.from_transform(wavelet)
+    labels = np.array([0, 0, 1, 1])
+    mic, _ = connectivity.maximized_imaginary_coherency(labels)
+    mim, _ = connectivity.multivariate_interaction_measure(labels)
+
+    validity = np.asarray(wavelet.valid_time_frequency)  # (time, frequency)
+    for value in (mic, mim):
+        off_diagonal = value[..., 0, 1]
+        assert np.all(np.isnan(off_diagonal[~validity]))  # invalid bins are NaN
+        assert np.all(np.isfinite(off_diagonal[validity]))  # valid bins computed
+
+
 def test_exact_cacoh_reduces_to_scalar_complex_coherency():
     rng = np.random.default_rng(923)
     first = rng.standard_normal(200) + 1j * rng.standard_normal(200)
