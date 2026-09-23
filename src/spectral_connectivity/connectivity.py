@@ -1349,10 +1349,18 @@ class Connectivity:
             Two-sided coverage of the normal-approximation interval, in (0, 1).
         transformation : {"auto", "identity", "log", "fisher",
                           "fisher_squared", "circular"}
-            Scale on which the interval is formed. ``"auto"`` uses log power,
-            the ``fisher_squared`` (``atanh(sqrt(.))``) transform for
-            magnitude-squared coherence, circular phase, and the identity scale
-            for other real-valued measures.
+            Scale on which the interval is formed. ``"auto"`` resolves to:
+
+            - ``"log"`` for ``power``;
+            - ``"fisher_squared"`` (``atanh(sqrt(.))``) for the
+              magnitude-squared measures in ``[0, 1]``: ``coherence_magnitude``
+              and ``partial_coherence``;
+            - ``"fisher"`` (``atanh(.)``) for the magnitudes in ``[0, 1]``:
+              ``phase_locking_value`` and ``imaginary_coherence``
+              (``phase_locking_value``'s diagonal is identically 1, so the
+              Fisher scale reports those entries as saturated);
+            - ``"circular"`` for ``coherence_phase``;
+            - ``"identity"`` for every other measure.
         **method_kwargs
             Keyword arguments forwarded to ``method`` on every replicate.
 
@@ -1378,6 +1386,11 @@ class Connectivity:
 
         Notes
         -----
+        Circular confidence bounds are wrapped to ``(-pi, pi]``, so when the
+        interval crosses ``+/-pi`` the lower bound exceeds the upper bound;
+        the interval is then the arc from ``lower`` up through ``pi`` and on
+        to ``upper``.
+
         If the input Fourier coefficients were produced with
         ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates
         reuse the full-sample Thomson weights (the adaptive weights are not
@@ -1512,10 +1525,13 @@ class Connectivity:
         if transformation == "auto":
             if method == "power":
                 resolved_transformation = "log"
-            elif method == "coherence_magnitude":
-                # coherence_magnitude returns magnitude-*squared* coherence, whose
+            elif method in {"coherence_magnitude", "partial_coherence"}:
+                # These return magnitude-*squared* coherence, whose
                 # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
                 resolved_transformation = "fisher_squared"
+            elif method in {"phase_locking_value", "imaginary_coherence"}:
+                # Unsquared magnitudes in [0, 1]: Fisher's atanh applies directly.
+                resolved_transformation = "fisher"
             elif method == "coherence_phase":
                 resolved_transformation = "circular"
             else:

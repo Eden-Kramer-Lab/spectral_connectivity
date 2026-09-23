@@ -1726,6 +1726,36 @@ def test_jackknife_rejects_structured_result_measures():
 
 
 @pytest.mark.parametrize(
+    ("measure", "expected"),
+    [
+        ("coherence_magnitude", "fisher_squared"),
+        ("partial_coherence", "fisher_squared"),
+        ("phase_locking_value", "fisher"),
+        ("imaginary_coherence", "fisher"),
+        ("coherence_phase", "circular"),
+        ("power", "log"),
+        ("phase_lag_index", "identity"),
+    ],
+)
+def test_jackknife_auto_transformation_matches_the_measure_range(measure, expected):
+    """``"auto"`` picks the variance-stabilizing scale for each measure family:
+    atanh(sqrt(.)) for magnitude-squared measures in [0, 1], atanh(.) for
+    magnitudes in [0, 1], circular for phases, log for power, identity otherwise.
+    """
+    rng = np.random.default_rng(11)
+    shape = (1, 6, 2, 8, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    if measure == "phase_locking_value":
+        # PLV's diagonal is identically 1 (the coherency-derived measures NaN
+        # theirs), so the Fisher scale reports those entries as saturated.
+        with pytest.warns(UserWarning, match="saturated coherence"):
+            result = connectivity.jackknife(measure)
+    else:
+        result = connectivity.jackknife(measure)
+    assert result.transformation == expected
+
+
+@pytest.mark.parametrize(
     "method",
     ["minimum_phase_reconstruction_error", "from_transform", "from_multitaper"],
 )
