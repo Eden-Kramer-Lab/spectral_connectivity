@@ -13,10 +13,11 @@ Please note that we **cannot**, in general, answer questions about particular co
 Code contributions are always welcome, from simple bug fixes to new features. To contribute code:
 
 1. Please [fork the project](https://github.com/Eden-Kramer-Lab/spectral_connectivity/fork) into your own repository and make changes there. Follow the Developer Installation instructions in the README to set up an environment with all the necessary software packages.
-2. Run code quality tools on your changes:
-   - Format with [ruff](https://github.com/astral-sh/ruff): `ruff format src/ tests/`
-   - Lint with [ruff](https://github.com/astral-sh/ruff): `ruff check src/ tests/`
-   - Type check with [mypy](https://mypy.readthedocs.io/): `mypy src/`
+2. Run code quality tools on your changes, through `uv run` so they are the
+   versions pinned in `uv.lock` that CI uses:
+   - Format with [ruff](https://github.com/astral-sh/ruff): `uv run ruff format src/ tests/`
+   - Lint with [ruff](https://github.com/astral-sh/ruff): `uv run ruff check src/ tests/`
+   - Type check with [mypy](https://mypy.readthedocs.io/): `uv run mypy src/`
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
    For GPU-specific changes, also run `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv
    run --extra gpu pytest -m gpu` on a CUDA machine.

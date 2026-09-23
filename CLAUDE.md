@@ -44,14 +44,14 @@ pip install -e .[dev]
 
 ### Testing
 ```bash
-# Run all tests with coverage
-pytest --cov=spectral_connectivity tests/ --cov-report=lcov:coverage.lcov -v
+# Run all tests (pyproject.toml adds coverage of src/spectral_connectivity)
+uv run pytest
 
 # Run specific test file
-pytest tests/test_connectivity.py -v
+uv run pytest tests/test_connectivity.py -v
 
 # Run single test
-pytest tests/test_connectivity.py::TestConnectivity::test_coherence -v
+uv run pytest tests/test_connectivity.py::test_power_one_sided_preserves_total_power -v
 ```
 
 ### Code Quality
