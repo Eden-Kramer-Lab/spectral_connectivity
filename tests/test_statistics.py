@@ -403,7 +403,9 @@ def test_power_fisher_z_transform_rejects_nonpositive_power():
 @pytest.mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
 def test_power_confidence_intervals_rejects_out_of_range_ci(bad_ci):
     """ci must be in [0.5, 1.0); out-of-range values raise instead of inverting."""
-    with pytest.raises(ValueError, match="ci"):
+    with pytest.raises(
+        ValueError, match=r"Confidence level `ci` must be in the range \[0\.5, 1\.0\)"
+    ):
         power_confidence_intervals(n_tapers=5, power=1.0, ci=bad_ci)
 
 
