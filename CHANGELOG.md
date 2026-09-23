@@ -279,8 +279,10 @@ directly with results from 2.x.
   longer accepts `NaN`. A single-element array such as `time[0]` of a column
   time axis is accepted as one start time.
 - `frequencies_of_interest` for `phase_slope_index`, `delay`, and `group_delay`
-  is validated (two finite values, lower < upper) and its band edges are
-  documented as exclusive.
+  is validated (two finite values, lower < upper, at least one frequency bin
+  strictly inside) and its band edges are documented as exclusive. A band with
+  no bin, such as one beyond Nyquist or between two adjacent bins, previously
+  gave all-NaN `group_delay` results and an empty `delay` frequency axis.
 - The `taper_weighting="adaptive"` documentation states that the Thomson
   weights are applied per signal, so coherence between signals with different
   spectra is shrunk by the cosine similarity of their weight vectors and cannot

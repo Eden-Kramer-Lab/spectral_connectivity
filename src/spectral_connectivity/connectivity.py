@@ -4469,7 +4469,8 @@ class Connectivity:
         frequencies_of_interest : array-like, shape (2,), optional
             Frequency band ``(low, high)`` to fit over, in the units of
             ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band are used. ``None`` uses every frequency.
+            inside the band are used, and at least one must be. ``None`` uses
+            every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
@@ -4629,7 +4630,8 @@ class Connectivity:
         frequencies_of_interest : array-like, shape (2,), optional
             Frequency band ``(low, high)`` to evaluate, in the units of
             ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band are returned. ``None`` uses every frequency.
+            inside the band are returned, and at least one must be. ``None``
+            uses every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
@@ -4762,7 +4764,8 @@ class Connectivity:
         frequencies_of_interest : array-like, shape (2,), optional
             Frequency band ``(low, high)`` to sum over, in the units of
             ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band contribute. ``None`` uses every frequency.
+            inside the band contribute, and at least one must. ``None`` uses
+            every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
 
@@ -5688,7 +5691,7 @@ def _bandpass(
     ------
     ValueError
         If ``frequencies_of_interest`` is not two finite values with
-        ``low < high``.
+        ``low < high``, or no frequency lies strictly inside the band.
 
     """
     if frequencies_of_interest is None:
@@ -5702,6 +5705,14 @@ def _bandpass(
         )
         raise ValueError(msg)
     frequency_index = (band[0] < frequencies) & (frequencies < band[1])
+    if not bool(frequency_index.any()):
+        msg = (
+            f"frequencies_of_interest {frequencies_of_interest!r} contains no "
+            "frequency bin: band edges are exclusive, and the frequencies span "
+            f"{float(frequencies.min())} to {float(frequencies.max())} "
+            f"({frequencies.shape[0]} bins). Widen the band."
+        )
+        raise ValueError(msg)
     return (
         xp.take(data, frequency_index.nonzero()[0], axis=axis),
         frequencies[frequency_index],

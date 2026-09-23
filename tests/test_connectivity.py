@@ -1216,6 +1216,30 @@ def test_frequencies_of_interest_must_be_two_finite_increasing_values(measure, b
         getattr(connectivity, measure)(frequencies_of_interest=band)
 
 
+@pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
+@pytest.mark.parametrize(
+    "band",
+    [
+        pytest.param([60.0, 70.0], id="beyond-nyquist"),
+        pytest.param([12.6, 15.5], id="between-adjacent-bins"),
+    ],
+)
+def test_frequencies_of_interest_must_contain_a_frequency_bin(measure, band):
+    """A well-formed band holding no bin must raise, not return a silent result.
+
+    Regression: group_delay returned all-NaN delays and delay an empty
+    frequency axis without a warning; only phase_slope_index raised.
+    """
+    rng = np.random.default_rng(19)
+    shape = (1, 6, 2, 32, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        frequencies=np.fft.fftfreq(32, d=1 / 100.0),  # bins every 3.125 Hz to 50 Hz
+    )
+    with pytest.raises(ValueError, match="contains no frequency bin"):
+        getattr(connectivity, measure)(frequencies_of_interest=band)
+
+
 @pytest.mark.parametrize(
     ("frequency_difference", "frequency_resolution", "expected_step"),
     [(2.0, 5.0, 3), (5.0, 2.0, 1), (2.0, 2.0, 1)],
