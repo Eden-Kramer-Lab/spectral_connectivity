@@ -413,8 +413,9 @@ def suggest_parameters(
             )
             raise ValueError(msg)
 
-        # If window would give us fewer than 3 time windows, increase NW slightly
-        # to reduce window duration (at the cost of coarser freq resolution)
+        # If the window would give fewer than 3 time windows, shorten it and lower
+        # NW so the target resolution (2 * NW / T) is kept, at the cost of fewer
+        # tapers (noisier estimates). Only the NW >= 1 floor below coarsens it.
         min_n_windows = 3
         max_window_for_min_windows = signal_duration / min_n_windows
         if time_window_duration > max_window_for_min_windows:
