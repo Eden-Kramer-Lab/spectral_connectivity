@@ -5,7 +5,7 @@ import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cached_property, partial, wraps
-from itertools import combinations, permutations
+from itertools import combinations
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
@@ -3097,7 +3097,8 @@ class Connectivity:
 
         **Cost**: ``n_signals + 1`` minimum-phase factorizations (the full
         system once, plus one ``(n_signals - 1)``-channel system per source),
-        each shared by every target.
+        each shared by every target. The full-system factorization is cached
+        and shared with the other directed measures.
 
         References
         ----------
@@ -3120,23 +3121,21 @@ class Connectivity:
 
         if n_signals == 2:
             # No conditioning set: the measure is pairwise Geweke Granger.
-            for target, source in permutations(range(2), 2):
-                result[..., target, source] = (
-                    _estimate_block_spectral_granger_prediction(
-                        spectrum,
-                        np.array([target]),
-                        np.array([source]),
-                        minimum_phase_tolerance=tolerance,
-                        minimum_phase_max_iterations=max_iterations,
-                    )
+            result[..., 0, 1], result[..., 1, 0] = (
+                _estimate_block_spectral_granger_prediction(
+                    spectrum,
+                    np.array([0]),
+                    np.array([1]),
+                    minimum_phase_tolerance=tolerance,
+                    minimum_phase_max_iterations=max_iterations,
                 )
+            )
             return result
 
-        full_transfer, full_covariance = _var_model_from_spectrum(
-            spectrum,
-            minimum_phase_tolerance=tolerance,
-            minimum_phase_max_iterations=max_iterations,
-        )
+        # The full model is the instance's cached factorization (the same CSM,
+        # tolerance and iteration cap), shared with the other directed measures.
+        full_transfer = self._transfer_function
+        full_covariance = self._noise_covariance
         all_indices = np.arange(n_signals)
         for source in range(n_signals):
             reduced_indices = all_indices[all_indices != source]
@@ -3185,13 +3184,16 @@ class Connectivity:
         n_nonnegative = spectrum.shape[-3] // 2 + 1
         output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
         result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
-        for target, source in permutations(range(len(labels)), 2):
-            result[..., target, source] = _estimate_block_spectral_granger_prediction(
-                spectrum,
-                indices[target],
-                indices[source],
-                minimum_phase_tolerance=self._minimum_phase_tolerance,
-                minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+        # One factorization per unordered group pair supplies both directions.
+        for first, second in combinations(range(len(labels)), 2):
+            result[..., first, second], result[..., second, first] = (
+                _estimate_block_spectral_granger_prediction(
+                    spectrum,
+                    indices[first],
+                    indices[second],
+                    minimum_phase_tolerance=self._minimum_phase_tolerance,
+                    minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+                )
             )
         return to_numpy(result), to_numpy(labels)
 
@@ -5221,41 +5223,98 @@ def _estimate_conditional_spectral_granger_prediction(
 
 def _estimate_block_spectral_granger_prediction(
     csm: NDArray[np.complexfloating],
-    target_indices: NDArray[np.integer],
-    source_indices: NDArray[np.integer],
+    first_indices: NDArray[np.integer],
+    second_indices: NDArray[np.integer],
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
-) -> NDArray[np.floating]:
-    """Estimate block spectral Granger from ``source`` to ``target``.
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """Estimate block spectral Granger in both directions between two blocks.
 
-    The selected subsystem is ordered ``[target, source]``. Its innovations are
+    The subsystem ``[first, second]`` is factorized once. Because the
+    spectral factorization with ``H(0) = I`` is unique, permuting its signals
+    permutes the transfer function and noise covariance the same way, so the
+    reverse direction reuses the same model with the blocks swapped.
+
+    Parameters
+    ----------
+    csm : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+    first_indices, second_indices : array, shape (n_first,), (n_second,)
+        Non-overlapping signal indices of the two blocks.
+
+    Returns
+    -------
+    first_from_second : array, shape (..., n_nonnegative_frequencies)
+        Influence ``second -> first``.
+    second_from_first : array, shape (..., n_nonnegative_frequencies)
+        Influence ``first -> second``.
+    """
+    first_indices = np.asarray(first_indices, dtype=int)
+    second_indices = np.asarray(second_indices, dtype=int)
+    if first_indices.ndim != 1 or first_indices.size == 0:
+        raise ValueError("first_indices must be a non-empty one-dimensional array.")
+    if second_indices.ndim != 1 or second_indices.size == 0:
+        raise ValueError("second_indices must be a non-empty one-dimensional array.")
+    if np.intersect1d(first_indices, second_indices).size:
+        raise ValueError("first_indices and second_indices must not overlap.")
+
+    combined = xp.asarray(np.concatenate((first_indices, second_indices)))
+    subsystem = csm[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
+    transfer, covariance = _var_model_from_spectrum(
+        subsystem,
+        minimum_phase_tolerance=minimum_phase_tolerance,
+        minimum_phase_max_iterations=minimum_phase_max_iterations,
+    )
+    n_first = first_indices.size
+    swapped = xp.asarray(
+        np.concatenate((np.arange(n_first, combined.shape[0]), np.arange(n_first)))
+    )
+
+    def swap_blocks(matrix: NDArray[Any]) -> NDArray[Any]:
+        return matrix[..., swapped[:, xp.newaxis], swapped[xp.newaxis, :]]
+
+    return (
+        _block_spectral_granger_from_model(subsystem, transfer, covariance, n_first),
+        _block_spectral_granger_from_model(
+            swap_blocks(subsystem),
+            swap_blocks(transfer),
+            swap_blocks(covariance),
+            second_indices.size,
+        ),
+    )
+
+
+def _block_spectral_granger_from_model(
+    subsystem: NDArray[np.complexfloating],
+    transfer: NDArray[np.complexfloating],
+    covariance: NDArray[np.floating],
+    n_target: int,
+) -> NDArray[np.floating]:
+    """Block spectral Granger from the trailing (source) to the leading (target) block.
+
+    The subsystem is ordered ``[target, source]``. Its innovations are
     block-orthogonalized while preserving the target innovations, and the
     source contribution is removed from the target spectral block. The log
     determinant ratio of total to intrinsic target spectra is Geweke's
     multivariate spectral Granger measure.
+
+    Parameters
+    ----------
+    subsystem : array, shape (..., n_fft_samples, n_sub, n_sub)
+        Two-sided cross-spectral matrix of the ``[target, source]`` subsystem.
+    transfer : array, shape (..., n_nonnegative_frequencies, n_sub, n_sub)
+        Transfer function of the subsystem's VAR model.
+    covariance : array, shape (..., n_sub, n_sub)
+        Innovation covariance of the subsystem's VAR model.
+    n_target : int
+        Number of leading target signals.
+
+    Returns
+    -------
+    block_granger : array, shape (..., n_nonnegative_frequencies)
     """
-    target_indices = np.asarray(target_indices, dtype=int)
-    source_indices = np.asarray(source_indices, dtype=int)
-    if target_indices.ndim != 1 or target_indices.size == 0:
-        raise ValueError("target_indices must be a non-empty one-dimensional array.")
-    if source_indices.ndim != 1 or source_indices.size == 0:
-        raise ValueError("source_indices must be a non-empty one-dimensional array.")
-    if np.intersect1d(target_indices, source_indices).size:
-        raise ValueError("target_indices and source_indices must not overlap.")
-
-    combined = xp.asarray(np.concatenate((target_indices, source_indices)))
-    subsystem = csm[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
-    minimum_phase = minimum_phase_decomposition(
-        subsystem,
-        tolerance=minimum_phase_tolerance,
-        max_iterations=minimum_phase_max_iterations,
-    )
-    n_nonnegative = csm.shape[-3] // 2 + 1
-    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
-    covariance = _estimate_noise_covariance(minimum_phase)
-
-    n_target = target_indices.size
+    n_nonnegative = transfer.shape[-3]
     covariance_xx = covariance[..., :n_target, :n_target]
     covariance_xy = covariance[..., :n_target, n_target:]
     covariance_yx = covariance[..., n_target:, :n_target]
@@ -5304,7 +5363,7 @@ def _estimate_block_spectral_granger_prediction(
             "bins are returned as NaN. Consider increasing regularization or "
             "minimum_phase_max_iterations, or checking for collinear channels.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
     return xp.where(positive_definite, value, xp.nan)
 

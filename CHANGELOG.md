@@ -39,7 +39,8 @@ directly with results from 2.x.
   multivariate interaction measure (MIM), conditional spectral Granger
   (the Chen, Bressler & Ding 2006 frequency decomposition, computed from one
   full-system and one reduced-system factorization per source), blockwise
-  spectral Granger, and time-reversed spectral Granger.
+  spectral Granger (one factorization per group pair), and time-reversed
+  spectral Granger.
 - Exact complex `canonical_coherency` (Vidaurre CaCoh) performs phase
   optimisation and component deflation and returns component scores, spatial
   filters, patterns, connections, and group membership. The new
