@@ -1843,6 +1843,34 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     assert factorize.call_count == shape[-1] + 1
 
 
+@pytest.mark.parametrize(
+    ("measure", "kwargs"),
+    [
+        ("conditional_spectral_granger_prediction", {}),
+        ("blockwise_spectral_granger_prediction", {"group_labels": [0, 0, 1]}),
+    ],
+)
+def test_complex64_granger_variants_report_the_working_precision(measure, kwargs):
+    """Every spectral Granger variant is computed from the same Wilson
+    factorization, which runs at complex128 (or better) regardless of the
+    requested dtype, so all of them must report the same float64 result dtype
+    as pairwise_spectral_granger_prediction rather than downcasting to the
+    complex64 spectrum's float32 and misrepresenting the working precision."""
+    rng = np.random.default_rng(0)
+    shape = (1, 10, 3, 32, 3)
+    shared = rng.standard_normal((*shape[:-1], 1)) + 1j * rng.standard_normal((*shape[:-1], 1))
+    noise = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    connectivity = Connectivity(
+        (shared + 0.35 * noise).astype(np.complex64), dtype=np.complex64
+    )
+
+    result = getattr(connectivity, measure)(**kwargs)
+    result = result[0] if isinstance(result, tuple) else result
+    pairwise = connectivity.pairwise_spectral_granger_prediction()
+    assert pairwise.dtype == np.float64
+    assert result.dtype == pairwise.dtype
+
+
 def test_complex64_directed_measure_uses_viable_wilson_precision():
     """Correlated complex64 spectra must converge at the default 1e-8 tolerance."""
     rng = np.random.default_rng(0)

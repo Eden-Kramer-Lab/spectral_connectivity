@@ -3827,7 +3827,7 @@ class Connectivity:
         n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
         n_signals = self.n_signals
         output_shape = (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals)
-        result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
+        result = xp.full(output_shape, xp.nan, dtype=_granger_result_dtype(spectrum))
         tolerance = self._minimum_phase_tolerance
         max_iterations = self._minimum_phase_max_iterations
 
@@ -3918,7 +3918,7 @@ class Connectivity:
         spectrum = self._expectation_cross_spectral_matrix()
         n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
         output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
-        result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
+        result = xp.full(output_shape, xp.nan, dtype=_granger_result_dtype(spectrum))
         # One factorization per unordered group pair supplies both directions.
         for first, second in combinations(range(len(labels)), 2):
             result[..., first, second], result[..., second, first] = (
@@ -5050,6 +5050,20 @@ def _estimate_transfer_function(
         minimum_phase, _regularized_inverse(H_0)
     )
     return transfer_function
+
+
+def _granger_result_dtype(spectrum: NDArray[np.complexfloating]) -> np.dtype[Any]:
+    """Real dtype at which the spectral Granger variants report their results.
+
+    The Wilson factorization behind every variant runs at ``complex128`` or
+    better whatever the spectrum's precision (see
+    :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`),
+    and the pairwise variant and DTF report that working precision. The
+    conditional and blockwise variants pre-allocate their output, so they use
+    the same rule rather than downcasting to a ``complex64`` spectrum's
+    ``float32``.
+    """
+    return xp.result_type(spectrum.real.dtype, xp.float64)
 
 
 def _sanitized_nonnegative_granger(
