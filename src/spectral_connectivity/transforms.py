@@ -1545,16 +1545,38 @@ FFT samples:          {self.n_fft_samples}
         phase consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test (``Beta(1, n_observations - 1)`` null) all assume it
         does. Always ``True`` for this transform. The flag describes the
-        observations within one window; overlapping windows
-        (``time_window_step`` < ``time_window_duration``) are correlated along
-        the time axis, which only matters for expectations that also average
-        over time.
+        observations within one window; correlation between overlapping
+        windows, which matters only for expectations that also average over
+        time, is reported by :attr:`time_bins_are_independent`.
 
         Returns
         -------
         bool
         """
         return True
+
+    @property
+    def time_bins_are_independent(self) -> bool:
+        """Whether the time windows may be counted as independent observations.
+
+        An expectation that averages over time (``"time"``, ``"time_tapers"``,
+        ...) counts every window in ``n_observations``. Windows that share
+        samples are correlated, so beyond some overlap that count overstates
+        the effective sample size and biases the measures that rely on it
+        (pairwise phase consistency of independent signals, for example, is
+        no longer centered on 0). Like :class:`Welch`,
+        which treats segments overlapping by at most 50% as approximately
+        independent (Welch 1967; Percival & Walden 1993, sec. 6.17), windows
+        count as independent when ``n_time_samples_per_step`` is at least half
+        of ``n_time_samples_per_window``. :class:`Connectivity` warns when an
+        expectation averages over correlated time bins.
+
+        Returns
+        -------
+        bool
+            ``True`` when successive windows overlap by at most half.
+        """
+        return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the fast Fourier transform using the multitaper method.
@@ -2248,7 +2270,9 @@ class MorletWavelet:
         this flag before the jackknife, the debiased measures (pairwise phase
         consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test, whose finite-sample corrections assume independent
-        observations.
+        observations. Correlation between successive time bins, which matters
+        only for expectations that also average over time, is reported by
+        :attr:`time_bins_are_independent`.
 
         Returns
         -------
@@ -2257,6 +2281,36 @@ class MorletWavelet:
             (no smoothing, or a one-sample window that merely decimates).
         """
         return self._smoothing_samples * self.smoothing_frequency == 1
+
+    @property
+    def time_bins_are_independent(self) -> bool:
+        """Whether the output time bins may be counted as independent observations.
+
+        An expectation that averages over time (``"time_trials"``, ...) counts
+        every time bin in ``n_observations``. Wavelet coefficients closer than
+        a few envelope standard deviations ``sigma_t = n_cycles / (2 pi f)``
+        are strongly autocorrelated (coefficient autocorrelation
+        ~ ``exp(-dt^2 / (4 sigma_t^2))``), so without decimation adjacent
+        samples are nearly duplicates and that count overstates the effective
+        sample size. Bins count as independent when the closest coefficients
+        of successive bins are at least ``4 * sigma_t`` apart at the widest
+        wavelet, the spacing the ``smoothing_time`` guidance also uses.
+        :class:`Connectivity` warns when an expectation averages over
+        correlated time bins.
+
+        Returns
+        -------
+        bool
+            ``True`` when decimation and the smoothing step leave at least
+            ``4 * n_cycles / (2 pi f_min)`` seconds between successive bins.
+        """
+        sigma_t = to_numpy(self._n_cycles) / (2 * np.pi * to_numpy(self._frequencies))
+        # The last coefficient of one smoothing window and the first of the next
+        # are (step - window + 1) decimated samples apart; without smoothing
+        # both are 1, leaving one decimated sample between bins.
+        gap_samples = self._smoothing_step_samples - self._smoothing_samples + 1
+        gap = gap_samples * self.decimation / self.sampling_frequency
+        return bool(gap >= 4 * np.max(sigma_t))
 
     def _smooth_frequency_axis(self, array: BackendArray, frequency_axis: int) -> BackendArray:
         """Reflect-pad and window ``frequency_axis`` for adjacent-bin smoothing.

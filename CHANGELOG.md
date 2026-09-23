@@ -174,7 +174,16 @@ directly with results from 2.x.
   `Connectivity.jackknife` consume it: the former warn once per call, and
   `jackknife` refuses leave-one-taper-out replicates on correlated observations
   (leave-one-trial-out remains allowed). Previously a Morlet transform with
-  smoothing produced 95% intervals that covered about 30%.
+  smoothing produced 95% intervals that covered about 30%. A companion
+  `time_bins_are_independent` flag (also forwarded by `from_transform`) covers
+  expectations that average over time: `Multitaper` and
+  `ShortTimeFourierTransform` report `False` when windows overlap by more than
+  half, and `MorletWavelet` when successive time bins are closer than four
+  wavelet standard deviations (always, without decimation). Those measures then
+  warn for `"time"`-averaging expectations only; before, pairwise phase
+  consistency of independent white noise averaged over 90%-overlapping STFT
+  windows or unsmoothed Morlet samples was biased to about +0.006 to +0.008
+  without a warning.
 - `MorletWavelet` warns when `smoothing_time` is shorter than four wavelet
   standard deviations (`4 * n_cycles / (2 pi f)` at the widest wavelet), where
   the smoothed samples are so correlated that normalized measures are forced

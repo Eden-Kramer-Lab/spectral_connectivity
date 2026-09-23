@@ -358,6 +358,14 @@ class Connectivity:
         or ``Welch`` segments overlapping by more than half). Measures whose
         finite-sample corrections or null distributions count observations
         warn in that case, and ``jackknife`` refuses to leave out tapers.
+    time_bins_are_independent : bool, default=True
+        Whether the time bins may be counted as independent observations when
+        the expectation averages over time. Transform constructors set this
+        ``False`` when successive time bins are correlated (``Multitaper`` or
+        ``ShortTimeFourierTransform`` windows overlapping by more than half, or
+        ``MorletWavelet`` samples closer than four wavelet standard
+        deviations). The measures that count observations then warn for
+        expectations that include time; it has no effect otherwise.
 
     Attributes
     ----------
@@ -454,6 +462,7 @@ class Connectivity:
         is_one_sided: bool = False,
         observation_weights: NDArray[np.floating] | None = None,
         observations_are_independent: bool = True,
+        time_bins_are_independent: bool = True,
         *,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
@@ -478,6 +487,7 @@ class Connectivity:
         self._minimum_phase_max_iterations = minimum_phase_max_iterations
         self._is_one_sided = bool(is_one_sided)
         self._observations_are_independent = bool(observations_are_independent)
+        self._time_bins_are_independent = bool(time_bins_are_independent)
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -787,8 +797,8 @@ class Connectivity:
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
         # The transform contract (sidedness, observation weights, observation
-        # independence) is part of the public constructor and must always reach
-        # the instance: a subclass that cannot accept it fails loudly here rather
+        # and time-bin independence) is part of the public constructor and must
+        # always reach the instance: a subclass that cannot accept it fails loudly here rather
         # than silently computing on a one-sided, weighted, or correlated
         # spectrum as if it were two-sided, unweighted, and independent. The
         # keywords are passed only when non-default so a subclass mirroring the
@@ -800,6 +810,8 @@ class Connectivity:
             init_kwargs["observation_weights"] = weights
         if not bool(getattr(multitaper_instance, "observations_are_independent", True)):
             init_kwargs["observations_are_independent"] = False
+        if not bool(getattr(multitaper_instance, "time_bins_are_independent", True)):
+            init_kwargs["time_bins_are_independent"] = False
         # fft() returns a freshly built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
         # pass the private keyword when the subclass has not overridden __init__:
@@ -921,24 +933,46 @@ class Connectivity:
     def _warn_correlated_observations(self, measure: str, assumption: str) -> None:
         """Warn once that ``measure`` counts correlated observations as independent.
 
-        ``n_observations`` is a raw trial x taper count. When the transform
-        reports ``observations_are_independent=False`` (a MorletWavelet
-        smoothing neighborhood or Welch segments overlapping by more than half
-        on the observation axis) that count overstates the effective sample
-        size, biasing every consumer that uses it as a degrees-of-freedom or
-        bias-correction factor. ``assumption`` states what ``measure`` uses the
-        count for so the message is actionable.
+        ``n_observations`` is a raw count of the averaged observations. When
+        the transform reports ``observations_are_independent=False`` (a
+        MorletWavelet smoothing neighborhood or Welch segments overlapping by
+        more than half on the observation axis), or the expectation averages
+        over time bins it reports as correlated
+        (``time_bins_are_independent=False``: overlapping Multitaper/STFT
+        windows or closely spaced Morlet samples), that count overstates the
+        effective sample size, biasing every consumer that uses it as a
+        degrees-of-freedom or bias-correction factor. ``assumption`` states
+        what ``measure`` uses the count for so the message is actionable.
         """
-        if self._observations_are_independent:
+        averages_correlated_time_bins = (
+            not self._time_bins_are_independent and 0 in self._expectation_axes
+        )
+        if self._observations_are_independent and not averages_correlated_time_bins:
             return
+        reasons = []
+        if not self._observations_are_independent:
+            reasons.append(
+                "this transform's trial/taper observations are correlated "
+                "(observations_are_independent is False: a MorletWavelet smoothing "
+                "neighborhood, or Welch segments overlapping by more than half; use "
+                "a Multitaper transform, Welch with segment_overlap <= 0.5, or "
+                "MorletWavelet without smoothing)"
+            )
+        if averages_correlated_time_bins:
+            reasons.append(
+                f"expectation_type={self.expectation_type!r} averages over time "
+                "bins that are correlated (time_bins_are_independent is False: "
+                "Multitaper or ShortTimeFourierTransform windows overlapping by "
+                "more than half, or MorletWavelet samples closer than 4 wavelet "
+                "standard deviations; use time_window_step >= time_window_duration "
+                "/ 2, more MorletWavelet decimation, or an expectation_type that "
+                "does not average over time)"
+            )
         warnings.warn(
-            f"{measure} assumes independent observations, but this transform's "
-            f"observations are correlated (observations_are_independent is "
-            f"False: a MorletWavelet smoothing neighborhood, or Welch segments "
-            f"overlapping by more than half). {assumption}, so n_observations "
-            f"== {self.n_observations} overstates the effective sample size "
-            f"and the result is biased. Use a Multitaper transform, Welch with "
-            f"segment_overlap <= 0.5, or MorletWavelet without smoothing.",
+            f"{measure} assumes independent observations, but "
+            f"{' and '.join(reasons)}. {assumption}, so n_observations == "
+            f"{self.n_observations} overstates the effective sample size and the "
+            f"result is biased.",
             UserWarning,
             stacklevel=3,
         )
@@ -1318,6 +1352,22 @@ class Connectivity:
         treat tapers as leave-one-out units.
         """
         return self._observations_are_independent
+
+    @property
+    def time_bins_are_independent(self) -> bool:
+        """Whether the time bins may be counted as independent observations.
+
+        ``False`` when the transform's successive time bins are correlated
+        (:class:`~spectral_connectivity.transforms.Multitaper` or
+        :class:`~spectral_connectivity.transforms.ShortTimeFourierTransform`
+        windows overlapping by more than half, or
+        :class:`~spectral_connectivity.transforms.MorletWavelet` samples closer
+        than four wavelet standard deviations). It matters only when the
+        expectation averages over time: ``n_observations`` then counts the
+        correlated bins and overstates the effective sample size, so the
+        measures that rely on it warn.
+        """
+        return self._time_bins_are_independent
 
     @_asnumpy
     def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:

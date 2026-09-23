@@ -100,6 +100,58 @@ def test_morlet_observations_are_independent_only_for_one_sample_neighborhoods()
     assert frequency_smoothed.observations_are_independent is False
 
 
+@pytest.mark.parametrize(
+    ("n_time_samples_per_step", "expected"),
+    [(32, True), (16, True), (15, False), (1, False)],
+)
+def test_multitaper_and_stft_time_bins_are_independent_up_to_half_overlap(
+    n_time_samples_per_step, expected
+):
+    """Windows overlapping by at most half are counted as independent time
+    bins, the threshold Welch uses for its segments; more overlap correlates
+    neighboring windows."""
+    data = np.zeros((256, 1, 2))
+    multitaper = Multitaper(
+        data,
+        sampling_frequency=64,
+        n_time_samples_per_window=32,
+        n_time_samples_per_step=n_time_samples_per_step,
+    )
+    assert multitaper.time_bins_are_independent is expected
+    stft = ShortTimeFourierTransform(
+        data,
+        sampling_frequency=64,
+        n_time_samples_per_window=32,
+        n_time_samples_per_step=n_time_samples_per_step,
+    )
+    assert stft.time_bins_are_independent is expected
+
+
+def test_multitaper_single_window_time_bins_are_independent():
+    assert Multitaper(np.zeros((256, 1, 2)), sampling_frequency=64).time_bins_are_independent
+
+
+def test_morlet_time_bins_are_independent_only_four_sigma_apart():
+    """Adjacent wavelet coefficients are autocorrelated over a few envelope
+    standard deviations sigma_t = n_cycles / (2 pi f), so unsmoothed samples
+    are independent time bins only when decimated to >= 4 sigma_t apart."""
+    data = np.zeros((1024, 1, 2))
+    frequencies = [8.0, 16.0]
+    # Widest wavelet: sigma_t = 3 / (2 pi 8) ~ 0.06 s, so 4 sigma_t ~ 0.24 s.
+    assert MorletWavelet(data, 128, frequencies, n_cycles=3).time_bins_are_independent is False
+    # 16-fold decimation at 128 Hz spaces the samples 0.125 s apart (< 4 sigma_t).
+    assert (
+        MorletWavelet(
+            data, 128, frequencies, n_cycles=3, decimation=16
+        ).time_bins_are_independent
+        is False
+    )
+    # 32-fold decimation spaces them 0.25 s apart (>= 4 sigma_t).
+    assert MorletWavelet(
+        data, 128, frequencies, n_cycles=3, decimation=32
+    ).time_bins_are_independent
+
+
 def test__add_axes():
     # Add dimension if no trials
     n_time_samples, n_signals = (2, 3)

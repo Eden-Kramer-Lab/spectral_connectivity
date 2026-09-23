@@ -5,7 +5,10 @@ smoothing neighborhood is collected on the observation axis, or Welch segments
 overlapping by more than half) expose ``observations_are_independent=False``.
 ``Connectivity`` records the flag so consumers that assume independent
 trial-taper observations (finite-sample bias corrections, the zero-coherence
-null, leave-one-out intervals) can warn or refuse.
+null, leave-one-out intervals) can warn or refuse. The companion
+``time_bins_are_independent`` flag marks correlated time bins (overlapping
+windows, closely spaced Morlet samples), which matter only for expectations
+that average over time.
 """
 
 import warnings
@@ -13,7 +16,7 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, MorletWavelet, Welch
+from spectral_connectivity import Connectivity, MorletWavelet, Multitaper, Welch
 
 
 class _StubTransform:
@@ -73,6 +76,7 @@ def test_from_transform_does_not_pass_the_keyword_to_an_older_subclass():
         def __init__(self, fourier_coefficients, expectation_type="trials_tapers", **kwargs):
             kwargs.pop("is_one_sided", None)
             assert "observations_are_independent" not in kwargs
+            assert "time_bins_are_independent" not in kwargs
             super().__init__(fourier_coefficients, expectation_type, **kwargs)
 
     stub = _StubTransform(_coefficients(np.random.default_rng(3)))
@@ -135,6 +139,94 @@ def test_jackknife_over_trials_is_allowed_with_correlated_tapers():
     )
     result = conn.jackknife("phase_lag_index")
     assert np.isfinite(result.standard_error).any()
+
+
+def test_connectivity_defaults_to_independent_time_bins():
+    conn = Connectivity(_coefficients(np.random.default_rng(0)))
+    assert conn.time_bins_are_independent is True
+    correlated = Connectivity(
+        _coefficients(np.random.default_rng(0)), time_bins_are_independent=False
+    )
+    assert correlated.time_bins_are_independent is False
+    with pytest.raises(AttributeError):
+        correlated.time_bins_are_independent = True  # read-only
+
+
+def test_from_transform_forwards_correlated_time_bins():
+    stub = _StubTransform(_coefficients(np.random.default_rng(1), shape=(4, 2, 3, 16, 3)))
+    stub.time_bins_are_independent = False
+    assert Connectivity.from_transform(stub).time_bins_are_independent is False
+
+
+@pytest.mark.parametrize("measure", OBSERVATION_COUNTING_MEASURES)
+@pytest.mark.parametrize("expectation_type", ["time", "time_trials", "time_trials_tapers"])
+def test_measures_warn_when_averaging_correlated_time_bins(measure, expectation_type):
+    conn = Connectivity(
+        _coefficients(np.random.default_rng(5), shape=(4, 4, 3, 16, 3)),
+        expectation_type=expectation_type,
+        time_bins_are_independent=False,
+    )
+    with pytest.warns(UserWarning, match=f"{measure} .*correlated") as record:
+        getattr(conn, measure)()
+    correlated = [w for w in record if "correlated" in str(w.message)]
+    assert len(correlated) == 1
+
+
+@pytest.mark.parametrize("measure", OBSERVATION_COUNTING_MEASURES)
+def test_correlated_time_bins_are_silent_when_time_is_not_averaged(measure):
+    """Each time bin is its own estimate under a trial/taper expectation, so
+    correlation between bins does not enter the observation count."""
+    conn = Connectivity(
+        _coefficients(np.random.default_rng(5), shape=(4, 4, 3, 16, 3)),
+        time_bins_are_independent=False,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        getattr(conn, measure)()
+
+
+def test_overlapping_multitaper_windows_warn_only_when_time_is_averaged():
+    series = np.random.default_rng(9).standard_normal((2000, 1, 2))
+    overlapping = Multitaper(
+        series,
+        sampling_frequency=200,
+        time_halfbandwidth_product=2,
+        time_window_duration=0.5,
+        time_window_step=0.05,
+    )
+    with pytest.warns(UserWarning, match="pairwise_phase_consistency .*correlated"):
+        Connectivity.from_transform(
+            overlapping, expectation_type="time_tapers"
+        ).pairwise_phase_consistency()
+    half_overlap = Multitaper(
+        series,
+        sampling_frequency=200,
+        time_halfbandwidth_product=2,
+        time_window_duration=0.5,
+        time_window_step=0.25,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        Connectivity.from_transform(overlapping).pairwise_phase_consistency()
+        Connectivity.from_transform(
+            half_overlap, expectation_type="time_tapers"
+        ).pairwise_phase_consistency()
+
+
+def test_unsmoothed_morlet_warns_when_averaging_over_time():
+    series = np.random.default_rng(10).standard_normal((800, 3, 2))
+    morlet = MorletWavelet(
+        series, sampling_frequency=200, frequencies=[20.0, 40.0], n_cycles=5
+    )
+    with pytest.warns(UserWarning, match="pairwise_phase_consistency .*correlated"):
+        Connectivity.from_transform(
+            morlet, expectation_type="time_trials"
+        ).pairwise_phase_consistency()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        Connectivity.from_transform(
+            morlet, expectation_type="trials"
+        ).pairwise_phase_consistency()
 
 
 def _two_channel_series(rng, n_time=800, n_trials=3):
