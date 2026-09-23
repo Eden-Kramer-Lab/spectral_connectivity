@@ -355,10 +355,32 @@ class Connectivity:
     spectral_connectivity.transforms.Multitaper : Produce the Fourier
         coefficients this class consumes.
     spectral_connectivity.wrapper.multitaper_connectivity : High-level interface
-        returning labeled xarray results.
+        returning labeled xarray results with explicit ``source``/``target``
+        axes.
 
     Notes
     -----
+    **Array orientation**: pairwise measures end in an ``(n_signals, n_signals)``
+    pair (``(n_groups, n_groups)`` for group measures), and its meaning depends
+    on the family of the measure:
+
+    - *Directed measures* (the spectral Granger family, directed transfer
+      function, directed coherence, (generalized) partial directed coherence,
+      and direct directed transfer function) are in target-source order:
+      ``result[..., i, j]`` is the influence of signal ``j`` on signal ``i``
+      (``j -> i``).
+    - *Lead/lag measures* (``directed_phase_lag_index``, ``phase_slope_index``,
+      ``group_delay``, ``delay``) and the antisymmetric phase measures
+      (``coherence_phase``, ``imaginary_coherency``, ``phase_lag_index``,
+      ``weighted_phase_lag_index``) are in source-target order: positive
+      ``result[..., i, j]`` (above 0.5 for ``directed_phase_lag_index``) means
+      signal ``i`` leads signal ``j``.
+
+    The labeled wrappers :func:`~spectral_connectivity.multitaper_connectivity`
+    and :func:`~spectral_connectivity.fourier_connectivity` resolve this: for
+    every directional measure, ``result.sel(source=a, target=b)`` is ``a -> b``
+    (or "``a`` leads ``b``"). Prefer them unless you need this lower-level API.
+
     Expensive intermediates (the minimum-phase factor, transfer function, noise
     covariance, and MVAR coefficients) are cached on first access. Reassigning
     ``fourier_coefficients`` or ``expectation_type`` automatically invalidates
@@ -1435,13 +1457,30 @@ class Connectivity:
         Returns
         -------
         NDArray[floating]
-            One-sided power spectral density for non-negative frequencies.
+            One-sided power spectral density for non-negative frequencies, shape
+            ``(..., n_nonnegative_frequencies, n_signals)``.
 
         Notes
         -----
         **Range**: [0, ∞). Power spectral density is always non-negative
         with no finite upper bound.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> power = connectivity.power()
+        >>> power.shape  # (n_time_windows, n_frequencies, n_signals)
+        (1, 501, 2)
+        >>> connectivity.frequencies[[0, -1]]  # 0 Hz up to Nyquist in 0.5 Hz steps
+        array([  0., 250.])
         """
         power = self._power
         if self._is_one_sided:
@@ -1486,6 +1525,26 @@ class Connectivity:
         units of signal squared per Hz when the input signal has physical
         units.  Unlike connectivity measures normalized to ``[0, 1]``, its
         magnitude has no finite upper bound.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> csd = connectivity.cross_spectral_density()
+        >>> csd.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # The diagonal is the power spectrum; the matrix is Hermitian.
+        >>> bool(np.allclose(csd[..., 0, 0].real, connectivity.power()[..., 0]))
+        True
+        >>> bool(np.allclose(csd[..., 0, 1], np.conj(csd[..., 1, 0])))
+        True
         """
         cross_spectral_density = self._cached_reduced_cross_spectral_matrix
         if self._is_one_sided:
@@ -1510,8 +1569,10 @@ class Connectivity:
 
         Returns
         -------
-        complex_coherency : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Complex coherency between all signal pairs.
+        complex_coherency : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Complex coherency between all signal pairs; Hermitian in the signal
+            pair, with its angle given by :meth:`coherence_phase`.
 
         Notes
         -----
@@ -1519,6 +1580,26 @@ class Connectivity:
         [-π, π].
         Values lie in the unit disk of the complex plane.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> coherency = connectivity.coherency()
+        >>> coherency.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # At 10 Hz (bin 20) the magnitude is the coupling strength and a positive
+        >>> # angle at [..., 0, 1] means signal 0 leads signal 1.
+        >>> round(float(abs(coherency[0, 20, 0, 1])), 1)
+        0.8
+        >>> bool(np.angle(coherency[0, 20, 0, 1]) > 0)
+        True
         """
         return self._coherency()
 
@@ -1551,13 +1632,36 @@ class Connectivity:
 
         Returns
         -------
-        phase : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Phase angles in radians.
+        phase : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Phase angles in radians. Positive ``[..., i, j]`` means signal ``i``
+            leads signal ``j``; the result is antisymmetric in the signal pair.
 
         Notes
         -----
         **Range**: [-π, π]. Phase angles in radians for complex coherency.
+        A pure delay ``tau`` (seconds) gives a phase of ``2 * pi * f * tau``
+        (wrapped into ``[-π, π]``).
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> phase = connectivity.coherence_phase()
+        >>> phase.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # Signal 0 leads, so [..., 0, 1] is positive: about 2 * pi * 10 Hz * 6 ms at 10 Hz.
+        >>> round(float(phase[0, 20, 0, 1]), 1)  # bin 20 is 10 Hz
+        0.4
+        >>> round(float(phase[0, 20, 1, 0]), 1)
+        -0.4
         """
         phase: NDArray[np.floating] = xp.angle(self._coherency())
         return phase
@@ -1572,8 +1676,9 @@ class Connectivity:
 
         Returns
         -------
-        magnitude : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Magnitude-squared coherence values.
+        magnitude : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Magnitude-squared coherence values (symmetric in the signal pair).
 
         Notes
         -----
@@ -1587,6 +1692,22 @@ class Connectivity:
                International Conference on Acoustics, Speech and Signal
                Processing (ICASSP), pp 4240-4243.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> coherence = connectivity.coherence_magnitude()
+        >>> coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> round(float(coherence[0, 20, 0, 1]), 1)  # strong coupling at 10 Hz (bin 20)
+        0.6
         """
         magnitude = _squared_magnitude(self._coherency())
         clipped: NDArray[np.floating] = xp.clip(magnitude, 0, 1)
@@ -1608,8 +1729,9 @@ class Connectivity:
         Returns
         -------
         imaginary_coherence_magnitude : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Imaginary coherence magnitudes.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Imaginary coherence magnitudes (symmetric in the signal pair; see
+            :meth:`imaginary_coherency` for the signed, lead/lag-aware version).
 
         Notes
         -----
@@ -1623,6 +1745,23 @@ class Connectivity:
                EEG data using the imaginary part of coherency. Clinical
                Neurophysiology 115, 2292-2307.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> imaginary_coherence = connectivity.imaginary_coherence()
+        >>> imaginary_coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # The 6 ms lag is not zero-phase, so the imaginary part survives (10 Hz = bin 20).
+        >>> bool(imaginary_coherence[0, 20, 0, 1] > 0.2)
+        True
         """
         denominator = xp.sqrt(
             self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
@@ -1651,11 +1790,30 @@ class Connectivity:
         -------
         imaginary_coherency : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Positive ``[..., i, j]`` means signal ``i`` leads signal ``j``.
 
         Notes
         -----
         **Range**: ``[-1, 1]``.  The diagonal and pairs involving zero-power
         signals are undefined and returned as NaN, matching :meth:`coherency`.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> imaginary_coherency = connectivity.imaginary_coherency()
+        >>> imaginary_coherency.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # Signal 0 leads, so [..., 0, 1] is positive and [..., 1, 0] negative (10 Hz).
+        >>> bool(imaginary_coherency[0, 20, 0, 1] > 0 > imaginary_coherency[0, 20, 1, 0])
+        True
         """
         imaginary = self._coherency().imag
         diagonal = xp.arange(self.n_signals)
@@ -1693,6 +1851,26 @@ class Connectivity:
         This undirected measure is distinct from partial directed coherence.
         Regularization stabilizes inversion but also changes the estimand, so
         analyses should report a non-default value.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1000, 20, 1))
+        >>> # Signals 1 and 2 are noisy copies of signal 0 and share nothing else.
+        >>> copies = leader + 0.5 * rng.standard_normal((1000, 20, 2))
+        >>> signals = np.concatenate([leader, copies], axis=-1)  # (time, trials, signals)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> partial = connectivity.partial_coherence()
+        >>> partial.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 3, 3)
+        >>> # Signals 1 and 2 are coherent, but not once signal 0 is accounted for (10 Hz).
+        >>> bool(connectivity.coherence_magnitude()[0, 20, 1, 2] > 0.5)
+        True
+        >>> bool(partial[0, 20, 1, 2] < 0.05)
+        True
         """
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
@@ -1796,8 +1974,8 @@ class Connectivity:
         Returns
         -------
         canonical_coherence : array
-            Shape (n_time_samples, n_fft_samples, n_groups, n_groups).
-            The maximal coherence for each group pair.
+            Shape ``(n_time_windows, n_nonnegative_frequencies, n_groups, n_groups)``.
+            The maximal coherence for each group pair (symmetric; NaN diagonal).
         labels : array, shape (n_groups,)
             The sorted unique group labels that correspond to `n_groups`.
 
@@ -1822,6 +2000,25 @@ class Connectivity:
             Exact complex, phase-optimised Vidaurre CaCoh with component
             filters and patterns.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> coherence, labels = connectivity.canonical_coherence(["a", "a", "b", "b"])
+        >>> coherence.shape  # (n_time_windows, n_frequencies, n_groups, n_groups)
+        (1, 501, 2, 2)
+        >>> labels
+        array(['a', 'b'], dtype='<U1')
+        >>> bool(coherence[0, 20, 0, 1] > 0.5)  # strong a-b coupling at 10 Hz (bin 20)
+        True
         """
         labels, group_indices, _ = self._validated_group_indices(group_labels)
         # The estimate treats trials x tapers as observations. When a group pair
@@ -1959,6 +2156,28 @@ class Connectivity:
                datasets. NeuroImage 201:116009.
         .. [2] Haufe S, et al. (2014) On the interpretation of weight vectors of
                linear models in multivariate neuroimaging. NeuroImage 87:96-110.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> result = connectivity.canonical_coherency(["a", "a", "b", "b"])
+        >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
+        (1, 501, 1, 1)
+        >>> result.connections  # one row per group pair
+        array([['a', 'b']], dtype='<U1')
+        >>> result.filters.shape  # (..., n_connections, n_components, side, n_signals)
+        (1, 501, 1, 1, 2, 4)
+        >>> bool(abs(result.scores[0, 20, 0, 0]) > 0.5)  # |CaCoh| at 10 Hz (bin 20)
+        True
         """
         return self._multivariate_component_result(
             "canonical_coherency",
@@ -2015,6 +2234,29 @@ class Connectivity:
         .. [1] Ewald A, et al. (2012) Estimating true brain connectivity from EEG/
                MEG data invariant to linear and static transformations in sensor
                space. NeuroImage 60(1):476-488.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> labels = ["a", "a", "b", "b"]
+        >>> result = connectivity.maximized_imaginary_coherency_components(labels)
+        >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
+        (1, 501, 1, 1)
+        >>> result.connections  # one row per group pair
+        array([['a', 'b']], dtype='<U1')
+        >>> result.patterns.shape  # (..., n_connections, n_components, side, n_signals)
+        (1, 501, 1, 1, 2, 4)
+        >>> bool(result.scores[0, 20, 0, 0] > 0.2)  # lagged a-b coupling at 10 Hz (bin 20)
+        True
         """
         return self._multivariate_component_result(
             "maximized_imaginary_coherency_components",
@@ -2202,6 +2444,26 @@ class Connectivity:
         Notes
         -----
         **Range**: ``[0, 1]``. The diagonal is returned as NaN.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> mic, labels = connectivity.maximized_imaginary_coherency(["a", "a", "b", "b"])
+        >>> mic.shape  # (n_time_windows, n_frequencies, n_groups, n_groups)
+        (1, 501, 2, 2)
+        >>> labels
+        array(['a', 'b'], dtype='<U1')
+        >>> bool(mic[0, 20, 0, 1] > 0.2)  # lagged a-b coupling at 10 Hz (bin 20)
+        True
         """
         transformed, labels = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
@@ -2257,6 +2519,26 @@ class Connectivity:
                Nolte, G. (2012). Estimating true brain connectivity from
                EEG/MEG data invariant to linear and static transformations in
                sensor space. NeuroImage 60, 476-488.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> mim, labels = connectivity.multivariate_interaction_measure(["a", "a", "b", "b"])
+        >>> mim.shape  # (n_time_windows, n_frequencies, n_groups, n_groups)
+        (1, 501, 2, 2)
+        >>> labels
+        array(['a', 'b'], dtype='<U1')
+        >>> bool(mim[0, 20, 0, 1] > 0.05)  # lagged a-b interaction at 10 Hz (bin 20)
+        True
         """
         transformed, labels = self._group_imaginary_coherency(
             group_labels, rank=rank, regularization=regularization
@@ -2397,6 +2679,26 @@ class Connectivity:
                general anesthesia by using global coherence analysis.
                Proceedings of the National Academy of Sciences 108, 8832-8837.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> global_coherence, vectors = connectivity.global_coherence(max_rank=1)
+        >>> # Unlike the pairwise measures, the frequency axis spans all FFT bins.
+        >>> global_coherence.shape  # (n_time_windows, n_fft_samples, n_components)
+        (1, 1000, 1)
+        >>> vectors.shape  # (n_time_windows, n_fft_samples, n_signals, n_components)
+        (1, 1000, 2, 1)
+        >>> # One component captures most of the power of the coupled pair (10 Hz = bin 20).
+        >>> bool(global_coherence[0, 20, 0] > 0.8)
+        True
         """
         self._validate_multiple_signals()
         (
@@ -2567,7 +2869,8 @@ class Connectivity:
 
         Returns
         -------
-        phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
+        phase_locking_value : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Phase locking values between all signal pairs.
 
         Notes
@@ -2581,6 +2884,22 @@ class Connectivity:
                and others (1999). Measuring phase synchrony in brain
                signals. Human Brain Mapping 8, 194-208.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> plv = connectivity.phase_locking_value()
+        >>> plv.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> bool(plv[0, 20, 0, 1] > 0.5)  # consistent phase difference at 10 Hz (bin 20)
+        True
         """
         # Clip to the documented [0, 1] range: |mean of unit-magnitude entries|
         # is <= 1 mathematically, but floating-point rounding can leave it a few
@@ -2609,6 +2928,24 @@ class Connectivity:
         .. [1] Bruña, R., Maestú, F., and Pereda, E. (2018). Phase locking
                value revisited: teaching new tricks to an old dog. Journal of
                Neural Engineering 15, 056011.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> ciplv = connectivity.corrected_imaginary_phase_locking_value()
+        >>> ciplv.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # The 6 ms lag is not zero-phase, so lagged locking remains (10 Hz = bin 20).
+        >>> bool(ciplv[0, 20, 0, 1] > 0.2)
+        True
         """
         complex_plv = self._phase_locking_value()
         numerator = xp.abs(complex_plv.imag)
@@ -2745,8 +3082,10 @@ class Connectivity:
 
         Returns
         -------
-        phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Phase lag index values for all signal pairs.
+        phase_lag_index : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Signed phase lag index values for all signal pairs. Positive
+            ``[..., i, j]`` means signal ``i`` leads signal ``j``.
 
         Notes
         -----
@@ -2760,6 +3099,23 @@ class Connectivity:
                channel EEG and MEG with diminished bias from common
                sources. Human Brain Mapping 28, 1178-1193.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> pli = connectivity.phase_lag_index()
+        >>> pli.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # Signal 0 leads, so [..., 0, 1] is positive and [..., 1, 0] negative (10 Hz).
+        >>> bool(pli[0, 20, 0, 1] > 0 > pli[0, 20, 1, 0])
+        True
         """
 
         # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
@@ -2772,15 +3128,17 @@ class Connectivity:
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
 
-        Values above 0.5 indicate that the row signal consistently phase-leads
-        the column signal; values below 0.5 indicate that it phase-lags.  A
-        value of 0.5 represents no preferred phase-lag direction, including an
-        exactly zero imaginary cross-spectrum.
+        Values above 0.5 indicate that one signal consistently phase-leads the
+        other; values below 0.5 indicate that it phase-lags.  A value of 0.5
+        represents no preferred phase-lag direction, including an exactly zero
+        imaginary cross-spectrum.
 
         Returns
         -------
         directed_phase_lag_index : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            ``[..., i, j]`` above 0.5 means signal ``i`` leads signal ``j``;
+            below 0.5 means signal ``i`` lags signal ``j``.
 
         Notes
         -----
@@ -2794,6 +3152,24 @@ class Connectivity:
                use of a directed phase lag index (dPLI) to characterize
                patterns of phase relations in a large-scale model of brain
                dynamics. NeuroImage 62, 1415-1428.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> dpli = connectivity.directed_phase_lag_index()
+        >>> dpli.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # Signal 0 leads signal 1, so [..., 0, 1] > 0.5 > [..., 1, 0] (10 Hz = bin 20).
+        >>> bool(dpli[0, 20, 0, 1] > 0.5 > dpli[0, 20, 1, 0])
+        True
         """
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
         directed_pli: NDArray[np.floating] = xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0)
@@ -2814,14 +3190,15 @@ class Connectivity:
         Returns
         -------
         weighted_phase_lag_index : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Weighted phase lag index values.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Signed weighted phase lag index values. Positive ``[..., i, j]``
+            means signal ``i`` leads signal ``j``.
 
         Notes
         -----
         **Range**: [-1, 1] (signed version). For the unsigned version (as in
-        [1]), take the absolute value to get range [0, 1]. The sign depends on
-        the ordering of the signal pair (wpli[i, j] = -wpli[j, i]).
+        [1]), take the absolute value to get range [0, 1]. The result is
+        antisymmetric in the signal pair (``wpli[..., i, j] = -wpli[..., j, i]``).
 
         References
         ----------
@@ -2831,6 +3208,23 @@ class Connectivity:
                presence of volume-conduction, noise and sample-size bias.
                NeuroImage 55, 1548-1565.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> wpli = connectivity.weighted_phase_lag_index()
+        >>> wpli.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # Signal 0 leads, so [..., 0, 1] is positive and [..., 1, 0] negative (10 Hz).
+        >>> bool(wpli[0, 20, 0, 1] > 0 > wpli[0, 20, 1, 0])
+        True
         """
 
         mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
@@ -2851,8 +3245,10 @@ class Connectivity:
 
         Returns
         -------
-        phase_lag_index : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Debiased squared phase lag index values.
+        phase_lag_index : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Debiased squared phase lag index values (symmetric in the signal
+            pair, so they carry no lead/lag direction).
 
         Notes
         -----
@@ -2868,6 +3264,22 @@ class Connectivity:
                presence of volume-conduction, noise and sample-size bias.
                NeuroImage 55, 1548-1565.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> debiased_pli = connectivity.debiased_squared_phase_lag_index()
+        >>> debiased_pli.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> bool(debiased_pli[0, 20, 0, 1] > 0.05)  # lagged coupling at 10 Hz (bin 20)
+        True
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
@@ -2885,8 +3297,9 @@ class Connectivity:
         Returns
         -------
         weighted_phase_lag_index : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Debiased squared weighted phase lag index values.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Debiased squared weighted phase lag index values (symmetric in the
+            signal pair, so they carry no lead/lag direction).
 
         Notes
         -----
@@ -2902,6 +3315,22 @@ class Connectivity:
                presence of volume-conduction, noise and sample-size bias.
                NeuroImage 55, 1548-1565.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> debiased_wpli = connectivity.debiased_squared_weighted_phase_lag_index()
+        >>> debiased_wpli.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> bool(debiased_wpli[0, 20, 0, 1] > 0.3)  # lagged coupling at 10 Hz (bin 20)
+        True
         """
         self._validate_debiasing_observations("debiased_squared_weighted_phase_lag_index")
         n_observations = self.n_observations
@@ -2927,7 +3356,8 @@ class Connectivity:
 
         Returns
         -------
-        phase_locking_value : array, shape (..., n_fft_samples, n_signals, n_signals)
+        phase_locking_value : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Pairwise phase consistency values.
 
         Notes
@@ -2943,6 +3373,22 @@ class Connectivity:
                bias-free measure of rhythmic neuronal synchronization.
                NeuroImage 51, 112-122.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> ppc = connectivity.pairwise_phase_consistency()
+        >>> ppc.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> bool(ppc[0, 20, 0, 1] > 0.3)  # consistent phase difference at 10 Hz (bin 20)
+        True
         """
         self._validate_debiasing_observations("pairwise_phase_consistency")
         n_observations = self.n_observations
@@ -2963,8 +3409,10 @@ class Connectivity:
 
         Returns
         -------
-        array
-            Spectral Granger prediction values.
+        pairwise_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Spectral Granger prediction values. Output ``[..., i, j]`` is the
+            influence of signal ``j`` on signal ``i`` (``j -> i``).
 
         Notes
         -----
@@ -2975,7 +3423,6 @@ class Connectivity:
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
-        Output [i,j] corresponds to causal influence j → i.
 
         References
         ----------
@@ -2983,6 +3430,23 @@ class Connectivity:
                Feedback Between Multiple Time Series. Journal of the
                American Statistical Association 77, 304.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> granger = connectivity.pairwise_spectral_granger_prediction()
+        >>> granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        True
         """
         self._require_two_sided_spectrum("pairwise_spectral_granger_prediction")
         csm = self._expectation_cross_spectral_matrix()
@@ -3005,14 +3469,36 @@ class Connectivity:
 
         Parameters
         ----------
-        pairs : array_like
-            Pairs of signal indices.
+        pairs : array_like, shape (n_pairs, 2)
+            Pairs of signal indices. Each pair is estimated in both directions.
 
         Returns
         -------
-        array
-            Spectral Granger prediction for specified pairs.
+        pairwise_granger : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Spectral Granger prediction for the specified pairs; entries for
+            pairs not requested (and the diagonal) are NaN. Output ``[..., i, j]``
+            is the influence of signal ``j`` on signal ``i`` (``j -> i``).
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz); signal 2 is noise.
+        >>> signals = np.stack([leader[3:], leader[:-3], np.zeros((1000, 20))], axis=-1)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> granger = connectivity.subset_pairwise_spectral_granger_prediction(pairs=[(0, 1)])
+        >>> granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 3, 3)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        True
+        >>> bool(np.isnan(granger[0, 20, 2, 0]))  # pair (0, 2) was not requested
+        True
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
@@ -3039,9 +3525,10 @@ class Connectivity:
 
         Returns
         -------
-        array
+        time_reversed_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[i, j]`` is the time-reversed influence ``j -> i``.
+            Output ``[..., i, j]`` is the influence of signal ``j`` on signal
+            ``i`` (``j -> i``) in the time-reversed data.
 
         Notes
         -----
@@ -3056,6 +3543,24 @@ class Connectivity:
         .. [1] Winkler, I., Panknin, D., Bartz, D., Müller, K.-R., and Haufe,
                S. (2016). Validity of time reversal for testing Granger
                causality. IEEE Transactions on Signal Processing 64, 2746-2760.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> reversed_granger = connectivity.time_reversed_spectral_granger_prediction()
+        >>> reversed_granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # A genuine 0 -> 1 lead flips under time reversal: 1 -> 0 ([..., 0, 1]) dominates.
+        >>> bool(reversed_granger[0, 20, 0, 1] > 10 * reversed_granger[0, 20, 1, 0])
+        True
         """
         self._require_two_sided_spectrum("time_reversed_spectral_granger_prediction")
         csm = xp.swapaxes(self._expectation_cross_spectral_matrix(), -1, -2)
@@ -3085,8 +3590,9 @@ class Connectivity:
         -------
         conditional_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[i, j]`` is influence ``j -> i`` conditional on every
-            signal other than ``i`` and ``j``.
+            Output ``[..., i, j]`` is the influence of signal ``j`` on signal
+            ``i`` (``j -> i``), conditional on every signal other than ``i``
+            and ``j``. The diagonal is NaN.
 
         Notes
         -----
@@ -3115,6 +3621,29 @@ class Connectivity:
         .. [2] Geweke, J.F. (1984). Measures of conditional linear dependence
                and feedback between time series. Journal of the American
                Statistical Association 79, 907-915.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> # Chain 0 -> 1 -> 2: each signal is the previous one delayed 3 samples, plus noise.
+        >>> source = rng.standard_normal((1006, 20))
+        >>> middle = source[:-3] + 0.5 * rng.standard_normal((1003, 20))
+        >>> target = middle[:-3] + 0.5 * rng.standard_normal((1000, 20))
+        >>> signals = np.stack([source[6:], middle[3:], target], axis=-1)  # (time, trials, 3)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> conditional = connectivity.conditional_spectral_granger_prediction()
+        >>> conditional.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 3, 3)
+        >>> # [..., i, j] is j -> i. Pairwise Granger sees the indirect 0 -> 2 ([..., 2, 0]),
+        >>> # but conditioning on signal 1 removes it while keeping 1 -> 2 (10 Hz = bin 20).
+        >>> pairwise = connectivity.pairwise_spectral_granger_prediction()
+        >>> bool(pairwise[0, 20, 2, 0] > 0.5), bool(conditional[0, 20, 2, 0] < 0.05)
+        (True, True)
+        >>> bool(conditional[0, 20, 2, 1] > 0.5)
+        True
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
         spectrum = self._expectation_cross_spectral_matrix()
@@ -3177,9 +3706,34 @@ class Connectivity:
         -------
         blockwise_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
-            Output ``[..., i, j]`` is influence group ``j -> i``.
+            Output ``[..., i, j]`` is the influence of group ``j`` on group ``i``
+            (``j -> i``), with groups ordered as in ``labels``. The diagonal is
+            NaN.
         labels : array, shape (n_groups,)
             Sorted unique group labels.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Group "a": two noisy copies of signal 0; "b": two of its 6 ms-delayed copy.
+        >>> pair = np.stack([leader[3:], leader[:-3]], axis=-1)
+        >>> signals = np.repeat(pair, 2, axis=-1)  # (time, trials, 4 signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> granger, labels = connectivity.blockwise_spectral_granger_prediction(
+        ...     ["a", "a", "b", "b"]
+        ... )
+        >>> granger.shape  # (n_time_windows, n_frequencies, n_groups, n_groups)
+        (1, 501, 2, 2)
+        >>> labels
+        array(['a', 'b'], dtype='<U1')
+        >>> # [..., i, j] is group j -> group i, so a -> b is [..., 1, 0] (10 Hz = bin 20).
+        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        True
         """
         self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
         labels, indices, _ = self._validated_group_indices(group_labels)
@@ -3214,13 +3768,15 @@ class Connectivity:
         Returns
         -------
         directed_transfer_function : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Directed transfer function values.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Directed transfer function values. Output ``[..., i, j]`` is the
+            influence of signal ``j`` on signal ``i`` (``j -> i``).
 
         Notes
         -----
         **Range**: [0, 1] (normalized). Represents proportion of inflow
-        via transfer function.
+        via transfer function; each target's values sum to 1 over sources
+        (``result.sum(axis=-1)`` is 1).
 
         References
         ----------
@@ -3228,6 +3784,23 @@ class Connectivity:
                the description of the information flow in the brain
                structures. Biological Cybernetics 65, 203-210.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> dtf = connectivity.directed_transfer_function()
+        >>> dtf.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(dtf[0, 20, 1, 0] > 10 * dtf[0, 20, 0, 1])
+        True
         """
         return _squared_magnitude(
             self._transfer_function / _total_inflow(self._transfer_function)
@@ -3247,8 +3820,10 @@ class Connectivity:
 
         Returns
         -------
-        directed_coherence : array, shape (..., n_fft_samples, n_signals, n_signals)
-            Squared directed coherence values.
+        directed_coherence : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Squared directed coherence values. Output ``[..., i, j]`` is the
+            influence of signal ``j`` on signal ``i`` (``j -> i``).
 
         Notes
         -----
@@ -3271,6 +3846,23 @@ class Connectivity:
                brain structures via directed coherence and Granger
                causality. Applied Signal Processing 5, 40.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> directed_coherence = connectivity.directed_coherence()
+        >>> directed_coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(directed_coherence[0, 20, 1, 0] > 10 * directed_coherence[0, 20, 0, 1])
+        True
         """
         # Directed coherence normalizes the noise-weighted inflow over sources
         # (axis -1), so the per-source noise variance must vary along that axis.
@@ -3323,12 +3915,14 @@ class Connectivity:
         Returns
         -------
         partial_directed_coherence : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Partial directed coherence values.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Partial directed coherence values. Output ``[..., i, j]`` is the
+            influence of signal ``j`` on signal ``i`` (``j -> i``).
 
         Notes
         -----
-        **Range**: [0, 1]. Normalized direct coupling measure.
+        **Range**: [0, 1]. Normalized direct coupling measure; each source's
+        values sum to 1 over targets (``result.sum(axis=-2)`` is 1).
 
         References
         ----------
@@ -3336,6 +3930,23 @@ class Connectivity:
                coherence: a new concept in neural structure determination.
                Biological Cybernetics 84, 463-474.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> pdc = connectivity.partial_directed_coherence()
+        >>> pdc.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(pdc[0, 20, 1, 0] > 10 * pdc[0, 20, 0, 1])
+        True
         """
         return self._partial_directed_coherence()
 
@@ -3357,8 +3968,9 @@ class Connectivity:
         Returns
         -------
         generalized_partial_directed_coherence : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Generalized partial directed coherence values.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Generalized partial directed coherence values. Output ``[..., i, j]``
+            is the influence of signal ``j`` on signal ``i`` (``j -> i``).
 
         Notes
         -----
@@ -3371,6 +3983,23 @@ class Connectivity:
                Processing, 2007 15th International Conference on, (IEEE),
                pp. 163-166.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> gpdc = connectivity.generalized_partial_directed_coherence()
+        >>> gpdc.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 2, 2)
+        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
+        >>> bool(gpdc[0, 20, 1, 0] > 10 * gpdc[0, 20, 0, 1])
+        True
         """
         noise_variance = _get_noise_variance(self._noise_covariance)
         return _squared_magnitude(
@@ -3400,8 +4029,9 @@ class Connectivity:
         Returns
         -------
         direct_directed_transfer_function : array
-            Shape (..., n_nonnegative_frequencies, n_signals, n_signals).
-            Output ``[..., i, j]`` is the direct influence ``j -> i``.
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+            Output ``[..., i, j]`` is the direct influence of signal ``j`` on
+            signal ``i`` (``j -> i``).
 
         Notes
         -----
@@ -3418,6 +4048,25 @@ class Connectivity:
                modified directed transfer function (dDTF) method.
                Journal of Neuroscience Methods 125, 195-207.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> # Chain 0 -> 1 -> 2: each signal is the previous one delayed 3 samples, plus noise.
+        >>> source = rng.standard_normal((1006, 20))
+        >>> middle = source[:-3] + 0.5 * rng.standard_normal((1003, 20))
+        >>> target = middle[:-3] + 0.5 * rng.standard_normal((1000, 20))
+        >>> signals = np.stack([source[6:], middle[3:], target], axis=-1)  # (time, trials, 3)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> ddtf = connectivity.direct_directed_transfer_function()
+        >>> ddtf.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+        (1, 501, 3, 3)
+        >>> # [..., i, j] is j -> i. The direct 1 -> 2 ([..., 2, 1]) far exceeds the
+        >>> # indirect 0 -> 2 ([..., 2, 0]) that is relayed through signal 1 (10 Hz = bin 20).
+        >>> bool(ddtf[0, 20, 2, 1] > 10 * ddtf[0, 20, 2, 0])
+        True
         """
         full_frequency_dtf = _squared_magnitude(
             self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))
@@ -3460,11 +4109,14 @@ class Connectivity:
         Returns
         -------
         delay : array, shape (..., n_signals, n_signals)
-            Time delays between signal pairs.
+            Time delays between signal pairs, in seconds. Positive
+            ``[..., i, j]`` means signal ``i`` leads signal ``j``. The diagonal
+            is NaN.
         slope : array, shape (..., n_signals, n_signals)
-            Slope of phase vs frequency.
+            Slope of the coherence phase vs frequency, in radians per Hz
+            (``delay = slope / (2 * pi)``); same sign convention as ``delay``.
         r_value : array, shape (..., n_signals, n_signals)
-            Correlation coefficient of linear fit.
+            Correlation coefficient of the linear phase-frequency fit.
 
         Notes
         -----
@@ -3477,6 +4129,25 @@ class Connectivity:
                seizure propagation. Electroencephalography and Clinical
                Neurophysiology 56, 501-514.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> delay, slope, r_value = connectivity.group_delay(frequencies_of_interest=[5, 50])
+        >>> delay.shape  # (n_time_windows, n_signals, n_signals)
+        (1, 2, 2)
+        >>> # Signal 0 leads signal 1 by 6 ms, so [..., 0, 1] is +0.006 s.
+        >>> round(float(delay[0, 0, 1]), 3), round(float(delay[0, 1, 0]), 3)
+        (0.006, -0.006)
+        >>> bool(r_value[0, 0, 1] > 0.9)  # phase is linear in frequency
+        True
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("group_delay")
@@ -3593,12 +4264,33 @@ class Connectivity:
         Returns
         -------
         possible_delays : array
-            Shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals).
-            Array of possible time delays in seconds. The true delay is the
-            candidate that is consistent (frequency-independent) across the
-            band. Frequencies without significant coherence, and the 0 Hz (DC)
-            bin, are undefined and returned as NaN.
+            Shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals),
+            where ``n_frequencies`` counts only the frequencies inside
+            ``frequencies_of_interest``. Candidate ``k`` (index ``k + n_range``)
+            adds ``k`` cycles of phase. Array of possible time delays in
+            seconds; positive ``[..., i, j]`` means signal ``i`` leads signal
+            ``j``. The true delay is the candidate that is consistent
+            (frequency-independent) across the band. Frequencies without
+            significant coherence, and the 0 Hz (DC) bin, are undefined and
+            returned as NaN.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> delays = connectivity.delay(frequencies_of_interest=[5, 50], n_range=3)
+        >>> delays.shape  # (n_time_windows, n_band_freqs, n_candidates, n_signals, n_signals)
+        (1, 89, 7, 2, 2)
+        >>> # The zero-wrap candidate (index n_range) recovers the 6 ms lead of signal 0.
+        >>> round(float(np.nanmedian(delays[0, :, 3, 0, 1])), 3)
+        0.006
         """
         frequencies = self.frequencies
         self._require_multiple_frequencies("delay")
@@ -3694,7 +4386,8 @@ class Connectivity:
         Returns
         -------
         phase_slope_index : array, shape (..., n_signals, n_signals)
-            Phase slope index values.
+            Phase slope index values. Positive ``[..., i, j]`` means signal
+            ``i`` leads signal ``j``; the result is antisymmetric.
 
         Notes
         -----
@@ -3707,6 +4400,23 @@ class Connectivity:
                Estimating the Flow Direction of Information in Complex
                Physical Systems. Physical Review Letters 100.
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> leader = rng.standard_normal((1003, 20))
+        >>> # Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz), plus noise.
+        >>> signals = np.stack([leader[3:], leader[:-3]], axis=-1)  # (time, trials, signals)
+        >>> signals += 0.5 * rng.standard_normal(signals.shape)
+        >>> multitaper = Multitaper(signals, sampling_frequency=500)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> psi = connectivity.phase_slope_index(frequencies_of_interest=[5, 50])
+        >>> psi.shape  # (n_time_windows, n_signals, n_signals)
+        (1, 2, 2)
+        >>> # Signal 0 leads signal 1, so [..., 0, 1] is positive and [..., 1, 0] negative.
+        >>> bool(psi[0, 0, 1] > 0 > psi[0, 1, 0])
+        True
         """
         frequencies = self.frequencies
         bandpassed_coherency, bandpassed_frequencies = _bandpass(

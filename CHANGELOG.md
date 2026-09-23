@@ -116,6 +116,8 @@ directly with results from 2.x.
   includes the sign convention, and `array_orientation`, the index order of a
   directed measure in the lower-level `Connectivity` arrays. The measure table
   in `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
+- Every `Connectivity` measure's docstring has a runnable example, and every
+  directed measure states its array orientation.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
