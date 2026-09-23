@@ -2110,9 +2110,23 @@ class MorletWavelet:
         return time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
 
     @property
-    def observation_weights(self) -> NDArray[np.floating]:
-        """Weights consumed by :class:`Connectivity` for local expectations."""
-        kernel = self._smoothing_kernel_values().reshape(1, 1, -1, 1, 1)
+    def observation_weights(self) -> NDArray[np.floating] | None:
+        """Weights consumed by :class:`Connectivity` for local expectations.
+
+        Returns
+        -------
+        observation_weights : array or None
+            Shape ``(n_time, n_trials, n_smoothing_time * n_smoothing_frequency,
+            n_frequencies, 1)``. ``None`` when every observation has equal weight
+            (a uniform smoothing kernel without ``edge_mode="nan"`` masking), so
+            :class:`Connectivity` uses its plain, unweighted expectation.
+        """
+        kernel_values = self._smoothing_kernel_values()
+        if self.edge_mode != "nan" and bool(
+            xp.all(kernel_values == kernel_values[0, 0])
+        ):
+            return None
+        kernel = kernel_values.reshape(1, 1, -1, 1, 1)
         shape = (
             len(self.time),
             self.n_trials,

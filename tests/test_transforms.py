@@ -985,6 +985,39 @@ def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
         connectivity.pairwise_phase_consistency()
 
 
+@pytest.mark.parametrize("edge_mode", ["keep", "trim"])
+def test_morlet_uniform_weights_take_unweighted_path(edge_mode):
+    """Equal-weight (boxcar) smoothing without edge masking supplies no
+    observation weights, so Connectivity uses the plain mean; the result equals
+    the explicitly weighted expectation with all-one weights."""
+    rng = np.random.default_rng(924)
+    transform = MorletWavelet(
+        rng.standard_normal((192, 3, 3)),
+        64,
+        np.array([8.0, 12.0]),
+        n_cycles=3,
+        smoothing_time=0.25,
+        edge_mode=edge_mode,
+    )
+    assert transform.observation_weights is None
+    connectivity = Connectivity.from_transform(transform)
+    assert connectivity.observation_weights is None
+
+    coefficients = transform.fft()
+    weighted = Connectivity(
+        coefficients,
+        is_one_sided=True,
+        observation_weights=np.ones((*coefficients.shape[:-1], 1)),
+    )
+    np.testing.assert_allclose(connectivity.power(), weighted.power(), rtol=1e-12)
+    np.testing.assert_allclose(
+        connectivity.coherence_magnitude(),
+        weighted.coherence_magnitude(),
+        rtol=1e-12,
+        equal_nan=True,
+    )
+
+
 def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
     rng = np.random.default_rng(923)
     transform = MorletWavelet(
@@ -1213,6 +1246,7 @@ def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
         frequencies=[10.0, 20.0],
         smoothing_time=0.001,
         smoothing_step=0.005,
+        edge_mode="nan",  # masks edges, so the weights are non-uniform
     )
     n_time = wavelet.fft().shape[0]
     assert n_time == 400
