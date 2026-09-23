@@ -48,6 +48,21 @@ jobs:
         run: mypy spectral_connectivity/
       - name: Run docstring examples (doctests)
         run: pytest --doctest-modules spectral_connectivity/
+      - name: Lint the workflow itself
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
+        with:
+          persona: regular
+
+  lockfile:
+    name: uv.lock is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: Check the lockfile against pyproject.toml
+        run: uv lock --check
 
   test:
     name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -141,7 +156,7 @@ jobs:
   build:
     name: Build distribution
     runs-on: ubuntu-latest
-    needs: [quality, test, test-min-deps]
+    needs: [quality, lockfile, test, test-min-deps]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
