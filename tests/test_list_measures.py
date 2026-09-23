@@ -198,8 +198,8 @@ _CATEGORY_STRUCTURE = {
 def test_metadata_describes_the_computed_output(
     coupled_results, coupled_results_doubled, measure
 ):
-    """category, dims, dtype, value range, units, labels, and default membership
-    match what the wrapper returns."""
+    """category, dims, dtype, value range, units, and labels match what the
+    wrapper returns."""
     result = coupled_results[measure.name]
     variable = _main_variable(result, measure.name)
 
@@ -207,7 +207,6 @@ def test_metadata_describes_the_computed_output(
     assert isinstance(result, result_type)
     assert variable.dims == category_dims
     assert variable.dims == measure.dims
-    assert measure.is_default == (measure.name in DEFAULT_METHODS)
     assert np.iscomplexobj(variable) == measure.is_complex
     values = np.abs(variable.values) if measure.is_complex else variable.values
     finite = values[np.isfinite(values)]
@@ -215,6 +214,10 @@ def test_metadata_describes_the_computed_output(
     lower, upper = measure.value_range
     assert finite.min() >= lower - 1e-12
     assert finite.max() <= upper + 1e-12
+    # A declared negative bound must be reachable, so a range that is too loose
+    # for a non-negative measure (e.g. coherence as [-1, 1]) is caught too.
+    if lower < 0:
+        assert finite.min() < 0
     assert variable.attrs["long_name"] == measure.long_name
     assert measure.interpretation
 
@@ -255,6 +258,70 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
                 compute(**kwargs)
         else:
             compute(**kwargs)
+
+
+# What users get when ``method`` is omitted. Pinned explicitly: every other
+# check derives the default set from the same registry flag it would test.
+_DEFAULT_MEASURES = {
+    "coherence_magnitude",
+    "coherence_phase",
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "imaginary_coherence",
+    "pairwise_phase_consistency",
+    "pairwise_spectral_granger_prediction",
+    "phase_lag_index",
+    "phase_locking_value",
+    "power",
+    "weighted_phase_lag_index",
+}
+
+
+def test_is_default_matches_the_measures_computed_without_a_method(coupled_time_series):
+    """``is_default`` names exactly the measures the wrapper computes when
+    ``method`` is omitted, and that set is the documented default."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = multitaper_connectivity(
+            coupled_time_series, sampling_frequency=500, time_window_duration=0.5
+        )
+    assert set(result.data_vars) == _DEFAULT_MEASURES
+    assert {m.name for m in list_measures() if m.is_default} == _DEFAULT_MEASURES
+
+
+def test_time_and_angle_units_match_a_known_lag():
+    """Signal 1 is signal 0 delayed by 3 samples (6 ms at 500 Hz): the measures
+    in seconds report that delay, and the angle in radians is 2 pi f * 6 ms."""
+    units = {measure.name: measure.units for measure in list_measures()}
+    assert {name for name, unit in units.items() if unit == "s"} == {"delay", "group_delay"}
+    assert {name for name, unit in units.items() if unit == "rad"} == {"coherence_phase"}
+
+    rng = np.random.default_rng(53)
+    leader = rng.standard_normal((1003, 20))
+    time_series = np.stack([leader[3:], leader[:-3]], axis=-1)
+    time_series += 0.3 * rng.standard_normal(time_series.shape)
+    kwargs = {"sampling_frequency": 500, "time_halfbandwidth_product": 3}
+    band = {"frequencies_of_interest": [5.0, 50.0]}
+    lag = 3 / 500
+
+    group_delay = multitaper_connectivity(
+        time_series, method="group_delay", connectivity_kwargs=band, **kwargs
+    )["group_delay"].sel(source="0", target="1")
+    assert float(group_delay.squeeze()) == pytest.approx(lag, rel=0.05)
+
+    delay = multitaper_connectivity(
+        time_series, method="delay", connectivity_kwargs=band, **kwargs
+    ).sel(source="0", target="1")
+    zero_wrap = delay.isel(candidate=delay.sizes["candidate"] // 2)
+    assert float(np.nanmedian(zero_wrap.values)) == pytest.approx(lag, rel=0.05)
+
+    phase = (
+        multitaper_connectivity(time_series, method="coherence_phase", **kwargs)
+        .sel(source="0", target="1")
+        .sel(frequency=20.0, method="nearest")
+    )
+    frequency = float(phase.frequency)
+    assert float(phase.squeeze()) == pytest.approx(2 * np.pi * frequency * lag, rel=0.05)
 
 
 def test_units_name_the_input_dependence_of_spectral_densities():
