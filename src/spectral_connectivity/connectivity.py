@@ -172,6 +172,11 @@ GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
 # trial/taper/time-resolved outer product is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
 
+# Machine epsilons of E[|Im S_ij|] relative to sqrt(P_i P_j) below which a pair
+# has no phase lag. In-phase signals leave only rounding noise, measured at up
+# to about 1 eps; a genuine lag of this size (~4e-15 rad) is not resolvable.
+_ZERO_PHASE_LAG_EPSILONS = 16
+
 # Largest relative gap between the diagonal-noise-power denominator that
 # ``directed_coherence`` uses and the true power spectral density, tolerated
 # before it warns that its diagonal-noise-covariance assumption is violated (see
@@ -3141,6 +3146,30 @@ class Connectivity:
         """Lazily populated phase-lag moments tied to the current inputs."""
         return {}
 
+    def _has_no_phase_lag(self, mean_absolute: NDArray[np.floating]) -> NDArray[np.bool_]:
+        """Pairs whose imaginary cross-spectrum is zero up to rounding.
+
+        For in-phase signals (a channel and a scaled copy of it) each
+        observation's ``Im(X_i conj(X_j))`` is rounding noise of order
+        ``eps * |X_i| |X_j|``, not exactly 0, so ``E[|Im S_ij|]`` is compared
+        with the pair's power scale ``sqrt(P_i P_j)`` rather than with 0. The
+        test is relative, so it does not depend on the signal's amplitude.
+
+        Parameters
+        ----------
+        mean_absolute : array, shape (..., n_frequencies, n_signals, n_signals)
+            ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`.
+
+        Returns
+        -------
+        no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
+        """
+        power = self._power
+        scale = xp.sqrt(power[..., :, xp.newaxis] * power[..., xp.newaxis, :])
+        tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
+        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * scale
+        return no_lag
+
     def _imaginary_cross_spectrum_moments(
         self, *keys: str
     ) -> tuple[NDArray[np.floating], ...]:
@@ -3420,16 +3449,14 @@ class Connectivity:
         mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "absolute"
         )
-        # E[|Im|] is exactly 0 only where every observation's imaginary
-        # cross-spectrum is exactly 0 (in-phase signals, the zeroed diagonal);
-        # there E[Im] is 0 too and the 0/0 is defined as 0, matching
-        # phase_lag_index's sign(0) == 0. The guard must be an exact-zero test:
-        # E[|Im|] carries signal**2 units, so an absolute epsilon threshold
-        # would replace genuine weights for small-amplitude inputs. Copy before
-        # the in-place guard so the cached moment is not mutated.
+        # Pairs with no phase lag (in-phase signals, the zeroed diagonal) have
+        # E[Im] and E[|Im|] both at rounding level, so their ratio is noise; the
+        # 0/0 is defined as 0, matching phase_lag_index's sign(0) == 0. Copy
+        # before the in-place guard so the cached moment is not mutated.
+        no_lag = self._has_no_phase_lag(mean_absolute)
         weights = mean_absolute.copy()
-        weights[weights == 0] = 1
-        return mean_imaginary / weights
+        weights[no_lag] = 1
+        return xp.where(no_lag, 0.0, mean_imaginary / weights)
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -3484,11 +3511,12 @@ class Connectivity:
         n_observations = self.n_observations
         mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
         # Vinck's closed form assumes sign(Im) is +/-1 for every observation.
-        # Where Im is exactly 0 for all of them (E[|Im|] == 0: in-phase signals,
-        # the zeroed diagonal) the sign is 0 and the form would report the
-        # spurious lower bound -1 / (n - 1); there is no lag to estimate, so 0.
+        # Where there is no phase lag (in-phase signals, the zeroed diagonal)
+        # the signs are 0 or rounding noise and the form would report the
+        # spurious lower bound -1 / (n - 1) or a noise value; there is no lag
+        # to estimate, so 0.
         debiased = (n_observations * mean_sign.real**2 - 1.0) / (n_observations - 1.0)
-        return xp.where(mean_absolute == 0, 0.0, debiased)
+        return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
     @_asnumpy
     @_non_negative_frequencies(-3)

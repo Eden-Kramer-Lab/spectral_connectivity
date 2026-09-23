@@ -2928,6 +2928,29 @@ def test_debiased_squared_phase_lag_index_is_zero_for_exactly_zero_imaginary_par
     np.testing.assert_array_equal(connectivity.debiased_squared_phase_lag_index(), 0.0)
 
 
+@pytest.mark.parametrize("scale", [1e-9, 1.0, 3.0, -0.7, 1e9])
+def test_phase_lag_family_is_zero_for_in_phase_signals(scale):
+    """A channel paired with a scaled copy of itself (zero-lag coupling, e.g.
+    volume conduction) has no phase lag. Its per-observation imaginary
+    cross-spectrum is rounding noise, not exactly 0, so an exact-zero guard
+    reports wPLI as a ratio of rounding errors (|wPLI| up to 0.6).
+
+    Regression: the zero-lag test compared E[|Im S_xy|] with exactly 0 instead
+    of with the signals' own power.
+    """
+    from spectral_connectivity import Multitaper
+
+    source = np.random.default_rng(18).standard_normal((1000, 20))
+    time_series = np.stack([source, scale * source], axis=-1)
+    connectivity = Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
+    )
+    np.testing.assert_array_equal(connectivity.weighted_phase_lag_index()[..., 0, 1], 0.0)
+    np.testing.assert_array_equal(
+        connectivity.debiased_squared_phase_lag_index()[..., 0, 1], 0.0
+    )
+
+
 def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""

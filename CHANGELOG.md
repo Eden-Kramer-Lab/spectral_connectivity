@@ -349,9 +349,11 @@ directly with results from 2.x.
   and `Welch` no longer step one sample short of their reported step.
 - `weighted_phase_lag_index` collapsed toward 0 for small-amplitude inputs
   because of an absolute epsilon guard, and `debiased_squared_phase_lag_index`
-  returned `-1/(n-1)` instead of 0 where the imaginary cross-spectrum is exactly
-  zero (including the diagonal); the phase-lag family is now invariant to the
-  signal's amplitude scale.
+  returned `-1/(n-1)` instead of 0 where there is no phase lag (including the
+  diagonal); the phase-lag family is now invariant to the signal's amplitude
+  scale. "No phase lag" is judged relative to the pair's power, so a channel
+  paired with a scaled copy of itself (zero-lag coupling, whose imaginary
+  cross-spectrum is rounding noise rather than exactly 0) gives 0 for both.
 - `fourier_connectivity(is_one_sided=False)` on unlabeled coefficients honors
   the declaration and runs the two-sided-only measures; only `is_one_sided=None`
   warns and rejects them.
