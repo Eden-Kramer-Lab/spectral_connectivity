@@ -23,7 +23,10 @@ repos:
         exclude: '^(tests/__snapshots__/.*|.*\.ipynb)$'
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.8
+    # Pinned to the ruff version in uv.lock so pre-commit, CI (`uv sync --frozen`),
+    # and local `uv run ruff` all format and lint identically. Bump this together
+    # with `uv lock --upgrade-package ruff`.
+    rev: v0.16.5
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
