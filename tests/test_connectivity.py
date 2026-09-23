@@ -230,7 +230,7 @@ def test_imaginary_coherence_matches_hand_computed_definition():
     actual = Connectivity(coefficients).imaginary_coherence().squeeze()
     assert actual[0, 1] == pytest.approx(expected, rel=1e-12)
     assert actual[1, 0] == pytest.approx(expected, rel=1e-12)
-    np.testing.assert_array_equal(np.diag(actual), 0.0)
+    np.testing.assert_allclose(np.diag(actual), 0.0, atol=1e-15)  # roundoff on some NumPy
 
     quadrature = np.ones((1, 10, 1, 1, 2), dtype=complex)
     quadrature[..., 0] = 2j * rng.uniform(0.5, 2.0, (1, 10, 1, 1))
