@@ -1506,6 +1506,109 @@ def test_adaptive_weighting_warns_on_non_convergence():
         multitaper.fft()
 
 
+_ADAPTIVE_ORACLE_KWARGS = {
+    "sampling_frequency": 500.0,
+    "time_halfbandwidth_product": 4.0,
+    "n_tapers": 8,  # all 2 * NW tapers, matching nitime's Kmax with low_bias=False
+    "detrend_type": None,
+    "is_low_bias": False,
+    "n_fft_samples": 2048,
+}
+
+
+def _sharp_ar2(rng, n_time_samples):
+    """AR(2) process with a sharp spectral peak (poles near the unit circle)."""
+    from scipy.signal import lfilter
+
+    x = lfilter([1.0], [1.0, -1.8, 0.9], rng.standard_normal(n_time_samples + 200))[200:]
+    return x - x.mean()
+
+
+def test_adaptive_power_matches_nitime_thomson_estimate():
+    """Oracle: nitime's adaptive multitaper PSD on one window with the same
+    tapers. nitime estimates the broadband noise level from the
+    eigenvalue-weighted spectrum rather than the time-domain variance, so the
+    agreement is close but not exact; the eigen and uniform estimates differ
+    from it by far more at low-power bins, which is what the adaptive weights
+    correct (the signal has ~50 dB of dynamic range plus a 60 Hz line)."""
+    from nitime.algorithms.spectral import multi_taper_psd
+
+    fs, n = (
+        _ADAPTIVE_ORACLE_KWARGS["sampling_frequency"],
+        _ADAPTIVE_ORACLE_KWARGS["n_fft_samples"],
+    )
+    x = _sharp_ar2(np.random.default_rng(7), n) + 5 * np.sin(
+        2 * np.pi * 60 * np.arange(n) / fs
+    )
+    x -= x.mean()
+
+    def two_sided_power(weighting):
+        transform = Multitaper(
+            x[:, np.newaxis, np.newaxis], taper_weighting=weighting, **_ADAPTIVE_ORACLE_KWARGS
+        )
+        return np.mean(np.abs(transform.fft()[0, 0, :, :, 0]) ** 2, axis=0)
+
+    _, expected, _ = multi_taper_psd(
+        x,
+        Fs=fs,
+        NW=4.0,
+        adaptive=True,
+        jackknife=False,
+        low_bias=False,
+        sides="twosided",
+        NFFT=n,
+    )
+    adaptive = two_sided_power("adaptive")
+    np.testing.assert_allclose(adaptive, expected, rtol=0.02)
+    assert np.median(np.abs(adaptive - expected) / expected) < 1e-3
+    # The tolerance is tight enough to tell adaptive weighting from the others.
+    eigen = two_sided_power("eigen")
+    assert np.median(np.abs(eigen - expected) / expected) > 0.05
+
+
+def test_adaptive_coherence_is_joint_estimate_shrunk_by_weight_cosine_similarity():
+    """Adaptive weights are baked into each signal's coefficients, so the
+    cross-spectrum is normalized by sqrt(sum d_x^2 sum d_y^2) instead of
+    Thomson's joint sum(d_x d_y). The package coherence therefore equals the
+    jointly normalized coherence times the cosine similarity of the two weight
+    vectors: it is bounded by 1 but, for a perfectly coherent pair whose
+    spectra (hence weights) differ, does not reach it."""
+    from scipy.signal import lfilter
+
+    n = _ADAPTIVE_ORACLE_KWARGS["n_fft_samples"]
+    x = _sharp_ar2(np.random.default_rng(7), n)
+    y = lfilter(np.ones(20) / 20.0, [1.0], x)  # a linear filter of x: true coherence 1
+    data = np.stack([x, y], axis=-1)[:, np.newaxis, :]
+    uniform = Multitaper(data, taper_weighting="uniform", **_ADAPTIVE_ORACLE_KWARGS)
+    adaptive = Multitaper(data, taper_weighting="adaptive", **_ADAPTIVE_ORACLE_KWARGS)
+
+    coefficients = uniform.fft()[0, 0]  # (n_tapers, n_fft, 2): unweighted Y_k
+    weights = np.abs(adaptive.fft()[0, 0] / coefficients)  # RMS-normalized d_k per signal
+    assert np.all(np.isfinite(weights))
+    d_x, d_y = weights[..., 0], weights[..., 1]
+    y_x, y_y = coefficients[..., 0], coefficients[..., 1]
+    joint_cross = np.sum(d_x * d_y * y_x * np.conj(y_y), axis=0) / np.sum(d_x * d_y, axis=0)
+    power_x = np.sum(d_x**2 * np.abs(y_x) ** 2, axis=0) / np.sum(d_x**2, axis=0)
+    power_y = np.sum(d_y**2 * np.abs(y_y) ** 2, axis=0) / np.sum(d_y**2, axis=0)
+    joint_coherence = np.abs(joint_cross) / np.sqrt(power_x * power_y)
+    cosine_similarity = np.sum(d_x * d_y, axis=0) / np.sqrt(
+        np.sum(d_x**2, axis=0) * np.sum(d_y**2, axis=0)
+    )
+
+    connectivity = Connectivity.from_multitaper(adaptive)
+    package = np.abs(connectivity.coherency()[0, :, 0, 1])
+    n_frequencies = len(connectivity.frequencies)
+    np.testing.assert_allclose(
+        package, (joint_coherence * cosine_similarity)[:n_frequencies], rtol=1e-9
+    )
+    assert np.all(package <= 1 + 1e-12)
+    # The shrinkage is material: the jointly normalized estimate recovers the
+    # true coherence of 1 at most frequencies, the package estimate does not.
+    assert np.median(joint_coherence[:n_frequencies]) > 0.99
+    assert np.median(package) < 0.95
+    assert np.median(cosine_similarity[:n_frequencies]) < 0.95
+
+
 def test_welch_default_segment_warns_on_coarse_resolution():
     data = np.random.default_rng(916).standard_normal((30000, 1, 1))
     with pytest.warns(UserWarning, match="default segment length"):

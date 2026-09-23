@@ -626,6 +626,22 @@ class Multitaper:
         tapers systematically leakier, at the cost of extra iterations for a
         typically modest bias reduction. Non-uniform modes require internally
         generated DPSS tapers.
+
+        The adaptive weights are applied to the coefficients themselves: each
+        signal's weights ``d_k(f)`` are RMS-normalized over tapers and
+        multiplied into its eigencoefficients, so the downstream taper mean of
+        ``|coefficient|**2`` is exactly Thomson's adaptive auto-spectrum
+        ``sum_k d_k^2 |Y_k|^2 / sum_k d_k^2``. A cross-spectrum between
+        signals x and y, however, becomes
+        ``sum_k d_xk d_yk Y_xk conj(Y_yk) / sqrt(sum_k d_xk^2 sum_k d_yk^2)``
+        rather than Thomson's joint ``... / sum_k d_xk d_yk``. By the
+        Cauchy-Schwarz inequality the two differ by the cosine similarity of
+        the two weight vectors, so adaptive coherence (and every normalized
+        cross-signal measure) is shrunk by that factor wherever the signals'
+        spectra, and hence their weights, differ: a perfectly coherent pair
+        with different spectra does not reach ``|coherence| = 1``. The
+        shrinkage vanishes when the weights agree (white spectra, or the
+        ``"eigen"`` mode, whose weights are signal-independent).
     adaptive_max_iterations : int, default=50
         Iteration ceiling for Thomson adaptive weighting.
     adaptive_tolerance : float, default=1e-8
@@ -2677,10 +2693,15 @@ def _apply_adaptive_taper_weights(
     """Apply Thomson adaptive DPSS weights to Fourier coefficients.
 
     The iterative spectrum estimate follows Thomson's frequency- and
-    signal-specific weighting. Returned weights are RMS-normalized across the
-    taper axis, allowing :class:`Connectivity`'s ordinary taper mean to compute
-    the corresponding weighted auto- and cross-spectra without changing their
-    scale.
+    signal-specific weighting. The weights are RMS-normalized across the taper
+    axis and multiplied into the coefficients, so :class:`Connectivity`'s
+    ordinary taper mean of ``|coefficient|**2`` is exactly Thomson's adaptive
+    auto-spectrum ``sum_k d_k^2 |Y_k|^2 / sum_k d_k^2``. Cross-spectra do not
+    follow Thomson's joint normalization, however: the taper mean gives
+    ``sum_k d_xk d_yk Y_xk conj(Y_yk) / sqrt(sum_k d_xk^2 sum_k d_yk^2)``
+    instead of ``/ sum_k d_xk d_yk``, which by Cauchy-Schwarz shrinks coherence
+    by the cosine similarity of the two signals' weight vectors. A joint
+    normalization would need pairwise weights inside the expectation.
 
     ``noise_power_spectral_density`` must already be on the same
     power-spectral-density scale as ``|coefficients| ** 2`` (see the caller in
