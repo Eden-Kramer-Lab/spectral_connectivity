@@ -2465,6 +2465,80 @@ def test_frequency_band_integral_of_power_recovers_the_variance():
     assert float(reduced.sel(band="all").squeeze()) == pytest.approx(9.0, rel=0.03)
 
 
+@pytest.mark.parametrize("n_fft_samples", [4000, 4001], ids=["even-nfft", "odd-nfft"])
+def test_frequency_band_integral_over_every_bin_is_parseval_exact(n_fft_samples):
+    """A DC offset puts most of the power in the DC bin, which the one-sided
+    spectrum does not double. Integrating over a band that covers every bin
+    must weight that bin (and a Nyquist bin) with a full spacing, so the result
+    equals ``sum(power) * spacing`` exactly and ``mean(x**2)`` physically."""
+    rng = np.random.default_rng(46)
+    time_series = 10.0 + 0.1 * rng.standard_normal((4000, 1, 1))
+    power = multitaper_connectivity(
+        time_series,
+        sampling_frequency=100,
+        method="power",
+        detrend_type=None,
+        n_fft_samples=n_fft_samples,
+        time_halfbandwidth_product=1,
+    )
+    assert power.frequency.size == n_fft_samples // 2 + 1
+    spacing = float(power.frequency[1] - power.frequency[0])
+    integral = float(
+        frequency_band_reduce(power, {"all": (0.0, 50.0)}, reduction="integral").squeeze()
+    )
+    assert integral == pytest.approx(
+        float(power.sum("frequency").squeeze()) * spacing, rel=1e-12
+    )
+    assert integral == pytest.approx(float(np.mean(time_series**2)), rel=1e-3)
+
+
+def test_frequency_band_integral_counts_the_nyquist_bin_fully():
+    """A tone at the Nyquist frequency lands in the last one-sided bin, which is
+    not doubled either; integrating over [0, Nyquist] must recover its power."""
+    rng = np.random.default_rng(47)
+    n_time = 4000
+    tone = 10.0 * (-1.0) ** np.arange(n_time) + 0.1 * rng.standard_normal(n_time)
+    power = multitaper_connectivity(
+        tone[:, None, None],
+        sampling_frequency=100,
+        method="power",
+        detrend_type=None,
+        time_halfbandwidth_product=1,
+    )
+    assert float(power.frequency[-1]) == 50.0
+    spacing = float(power.frequency[1] - power.frequency[0])
+    integral = float(
+        frequency_band_reduce(power, {"all": (0.0, 50.0)}, reduction="integral").squeeze()
+    )
+    # Most of the power sits in the Nyquist bin, so this exercises its weight.
+    assert float(power.isel(frequency=-1).squeeze()) * spacing > 0.8 * integral
+    assert integral == pytest.approx(float(np.mean(tone**2)), rel=1e-3)
+
+
+def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():
+    """Folding the DC and Nyquist cells must keep adjacent bands additive and
+    must not touch ``reduction="mean"``."""
+    frequencies = np.arange(0.0, 51.0, 2.0)
+    density = xr.DataArray(
+        np.random.default_rng(48).uniform(0.5, 3.0, frequencies.size),
+        dims=("frequency",),
+        coords={"frequency": frequencies},
+        name="power",
+        attrs={"measure": "power"},
+    )
+    reduced = frequency_band_reduce(
+        density,
+        {"low": (0.0, 0.7), "mid": (0.7, 49.2), "high": (49.2, 50.0), "all": (0.0, 50.0)},
+        reduction="integral",
+    )
+    assert float(
+        reduced.sel(band="low") + reduced.sel(band="mid") + reduced.sel(band="high")
+    ) == (pytest.approx(float(reduced.sel(band="all"))))
+    assert float(reduced.sel(band="all")) == pytest.approx(float(density.sum()) * 2.0)
+    mean = frequency_band_reduce(density, {"all": (0.0, 50.0)})
+    assert float(mean.sel(band="all")) == pytest.approx(float(density.mean()))
+
+
 def test_fourier_connectivity_rejects_unlabeled_directed_measure():
     """Directed measures need a frequency coordinate to verify two-sidedness."""
     coefficients = np.ones((3, 8, 2), dtype=np.complex128)

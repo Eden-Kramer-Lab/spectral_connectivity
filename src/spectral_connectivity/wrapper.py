@@ -1465,6 +1465,16 @@ def _band_integration_weights(
     cells extend half a spacing, and never below 0 Hz on a non-negative grid),
     so ``sum(weights * density)`` integrates a piecewise-constant density
     exactly: any band edges, one-bin bands, and bands that tile additively.
+
+    A grid anchored at 0 Hz is the one-sided spectrum of a real signal. Its DC
+    and Nyquist bins are not doubled by the folding convention because each is
+    its own mirror image (0 Hz) or alias (Nyquist), so their cells are folded
+    onto the grid -- ``[0, spacing / 2]`` and ``[f_last - spacing / 2, f_last]``
+    -- and weighted twice. Each edge bin then still contributes a full spacing
+    of power and a band covering every bin integrates to
+    ``sum(density) * spacing`` (Parseval). The last bin of such a grid is taken
+    to be the Nyquist bin; for an odd FFT length or a grid cropped below Nyquist
+    this only moves that bin's power into the half-spacing below it.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -1473,9 +1483,13 @@ def _band_integration_weights(
     upper = np.concatenate(
         (midpoints, [frequencies[-1] + (frequencies[-1] - frequencies[-2]) / 2])
     )
+    scale = np.ones(frequencies.shape)
     if frequencies[0] >= 0:
         lower = np.maximum(lower, 0.0)
-    weights: NDArray[np.floating] = np.clip(
+    if frequencies[0] == 0.0:
+        upper[-1] = frequencies[-1]
+        scale[[0, -1]] = 2.0
+    weights: NDArray[np.floating] = scale * np.clip(
         np.minimum(upper, high) - np.maximum(lower, low), 0.0, None
     )
     return weights
@@ -1500,7 +1514,12 @@ def frequency_band_reduce(
     stands for the frequency cell between the midpoints to its neighbours, and
     contributes its density times the part of that cell inside the band, so
     band edges need not fall on bins, a one-bin band is not zero, and adjacent
-    bands add up to their union.
+    bands add up to their union. On a one-sided grid starting at 0 Hz the DC
+    bin and the last (Nyquist) bin own only the half-cell toward their
+    neighbour but count with a full spacing, matching the one-sided convention
+    in which those two bins are not doubled; integrating ``power`` over a band
+    that covers every bin therefore reproduces the total signal power
+    (Parseval).
 
     Parameters
     ----------
