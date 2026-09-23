@@ -6605,11 +6605,13 @@ def _block_spectral_granger_from_model(
     hermitian_total_target_spectrum = (
         total_target_spectrum + _conjugate_transpose(total_target_spectrum)
     ) / 2.0
-    _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
-    _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
-    # A target block with no power has both log-determinants at -inf; their
-    # difference is NaN, which the calling measure reports by pair.
-    with np.errstate(invalid="ignore"):
+    # A failed factorization leaves NaN in ``intrinsic``, and a target block
+    # with no power is singular (both log-determinants -inf, their difference
+    # NaN). The calling measure reports those NaN pairs, so the floating-point
+    # flags some LAPACK builds (OpenBLAS) raise for them are silenced here.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
+        _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
         value = _sanitized_nonnegative_granger(xp.real(total_logdet - intrinsic_logdet))
     # ``intrinsic`` is a difference of spectral blocks and is only guaranteed
     # positive-definite in exact arithmetic; near-degenerate conditioning can
