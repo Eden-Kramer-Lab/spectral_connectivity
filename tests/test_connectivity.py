@@ -2896,7 +2896,10 @@ def test_power_one_sided_preserves_total_power():
     rng = np.random.default_rng(0)
     for n_time in (512, 511):  # even and odd FFT lengths
         time_series = rng.standard_normal((n_time, 4, 2))
-        conn = Connectivity.from_multitaper(Multitaper(time_series, sampling_frequency=256))
+        # Pass the FFT length: by default 511 samples are padded to 512.
+        multitaper = Multitaper(time_series, sampling_frequency=256, n_fft_samples=n_time)
+        assert multitaper.n_fft_samples == n_time
+        conn = Connectivity.from_multitaper(multitaper)
         one_sided = conn.power()  # non-negative frequencies, interior doubled
         two_sided = conn._power  # full spectrum
         np.testing.assert_allclose(one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10)
@@ -2918,9 +2921,14 @@ def test_power_one_sided_integrates_to_signal_power():
     sampling_frequency = 200.0
     for n_time in (512, 511):  # even and odd FFT lengths
         time_series = rng.standard_normal((n_time, 3, 2)) + 2.5  # DC offset
+        # Pass the FFT length: by default 511 samples are padded to 512.
         multitaper = Multitaper(
-            time_series, sampling_frequency=sampling_frequency, detrend_type=None
+            time_series,
+            sampling_frequency=sampling_frequency,
+            detrend_type=None,
+            n_fft_samples=n_time,
         )
+        assert multitaper.n_fft_samples == n_time
         conn = Connectivity.from_transform(multitaper)
         frequency_step = conn.frequencies[1] - conn.frequencies[0]
         recovered = conn.power()[0].sum(axis=0) * frequency_step  # (n_signals,)
@@ -2937,6 +2945,7 @@ def test_power_one_sided_integrates_to_signal_power():
                 np.full((n_time, 2, 2), 3.0),
                 sampling_frequency=sampling_frequency,
                 detrend_type=None,
+                n_fft_samples=n_time,
             )
         )
         np.testing.assert_allclose(
