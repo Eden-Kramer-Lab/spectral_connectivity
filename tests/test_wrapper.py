@@ -1330,7 +1330,8 @@ def test_to_numpy_handles_device_arrays():
             return self._host
 
         def __array__(self, dtype=None):
-            raise TypeError("Implicit conversion to a NumPy array is not allowed.")
+            msg = "Implicit conversion to a NumPy array is not allowed."
+            raise TypeError(msg)
 
     device = _DeviceLike(np.arange(5.0))
     with pytest.raises(TypeError):
@@ -1350,7 +1351,8 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
             return self._host
 
         def __array__(self, dtype=None, copy=None):
-            raise TypeError("Implicit conversion to a NumPy array is not allowed.")
+            msg = "Implicit conversion to a NumPy array is not allowed."
+            raise TypeError(msg)
 
     rng = np.random.default_rng(11)
     transform = MorletWavelet(
@@ -1690,7 +1692,8 @@ def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
     rng = np.random.default_rng(9)
 
     def broken_measure(connectivity):
-        raise NotImplementedError("backend cannot compute this")
+        msg = "backend cannot compute this"
+        raise NotImplementedError(msg)
 
     monkeypatch.setattr(Connectivity, "broken_measure", broken_measure, raising=False)
 

@@ -68,11 +68,12 @@ if not TYPE_CHECKING and is_gpu_enabled():
         except Exception:
             logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
-        raise RuntimeError(
+        msg = (
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        ) from exc
+        )
+        raise RuntimeError(msg) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp
@@ -151,7 +152,8 @@ def _validated_regularization(value: Any) -> float:
 def _validated_rank(rank: int | None) -> int | None:
     """Return a positive-integer rank or None, rejecting other values."""
     if rank is not None and not is_positive_integer(rank):
-        raise ValueError(f"rank must be a positive integer or None, got {rank!r}.")
+        msg = f"rank must be a positive integer or None, got {rank!r}."
+        raise ValueError(msg)
     return rank
 
 
@@ -454,13 +456,14 @@ class Connectivity:
         def _validate_coordinate(name: str, coord: Any, expected_length: int) -> None:
             arr = xp.asarray(coord)
             if arr.ndim != 1:
-                raise ValueError(f"{name} must be a 1-D array, got shape {tuple(arr.shape)}.")
+                msg = f"{name} must be a 1-D array, got shape {tuple(arr.shape)}."
+                raise ValueError(msg)
             if arr.shape[0] != expected_length:
-                raise ValueError(
-                    f"{name} must have length {expected_length}, got {arr.shape[0]}."
-                )
+                msg = f"{name} must have length {expected_length}, got {arr.shape[0]}."
+                raise ValueError(msg)
             if not bool(xp.all(xp.isfinite(arr))):
-                raise ValueError(f"{name} must contain only finite values.")
+                msg = f"{name} must contain only finite values."
+                raise ValueError(msg)
 
         if frequencies is not None:
             _validate_coordinate("frequencies", frequencies, n_fft_samples)
@@ -469,9 +472,8 @@ class Connectivity:
                 bool(xp.any(frequency_values < 0))
                 or (frequency_values.size > 1 and bool(xp.any(xp.diff(frequency_values) <= 0)))
             ):
-                raise ValueError(
-                    "One-sided frequencies must be non-negative and strictly increasing."
-                )
+                msg = "One-sided frequencies must be non-negative and strictly increasing."
+                raise ValueError(msg)
         if time is not None:
             _validate_coordinate("time", time, n_time_windows)
         if frequencies is None:
@@ -506,15 +508,15 @@ class Connectivity:
         weights = xp.asarray(value)
         expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
         if tuple(weights.shape) != expected_shape:
-            raise ValueError(
+            msg = (
                 "observation_weights must have shape "
                 f"{expected_shape}, got {tuple(weights.shape)}. Weights must be "
                 "shared across signals."
             )
+            raise ValueError(msg)
         if not bool(xp.all(xp.isfinite(weights))) or bool(xp.any(weights < 0)):
-            raise ValueError(
-                "observation_weights must contain only finite, non-negative values."
-            )
+            msg = "observation_weights must contain only finite, non-negative values."
+            raise ValueError(msg)
         real_dtype = self._fourier_coefficients.real.dtype
         self._observation_weights = mark_readonly_if_supported(
             weights.astype(real_dtype, copy=True)
@@ -569,7 +571,7 @@ class Connectivity:
         self, value: NDArray[np.complexfloating], *, adopt: bool
     ) -> None:
         if value.ndim != 5:
-            raise ValueError(
+            msg = (
                 f"fourier_coefficients must be 5-dimensional, got {value.ndim}D array.\n"
                 f"Expected shape: (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)\n"
                 f"Got shape: {value.shape}\n\n"
@@ -578,6 +580,7 @@ class Connectivity:
                 f"  m = Multitaper(time_series, sampling_frequency=your_fs, ...)\n"
                 f"  fourier_coefficients = m.fft()"
             )
+            raise ValueError(msg)
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
@@ -793,7 +796,7 @@ class Connectivity:
         """
         n_signals = self._fourier_coefficients.shape[-1]
         if n_signals < 2:
-            raise ValueError(
+            msg = (
                 f"Connectivity measures require at least 2 signals, but "
                 f"fourier_coefficients has {n_signals} signal "
                 f"(shape[-1] == {n_signals}).\n"
@@ -803,6 +806,7 @@ class Connectivity:
                 f"fourier_coefficients[..., [channel_index]] rather than "
                 f"fourier_coefficients[..., channel_index]."
             )
+            raise ValueError(msg)
 
     def _require_uniform_frequency_grid(self, measure: str) -> None:
         """Raise if the frequency coordinate is not equally spaced.
@@ -813,20 +817,21 @@ class Connectivity:
         """
         steps = np.diff(to_numpy(self.frequencies))
         if steps.size and not np.allclose(steps, steps[0], rtol=1e-6, atol=0.0):
-            raise ValueError(
+            msg = (
                 f"{measure} requires uniformly spaced frequencies because it "
                 f"combines adjacent frequency bins, but the grid steps range "
                 f"from {steps.min():g} to {steps.max():g} Hz. Use a linearly "
                 "spaced frequency grid (e.g. MorletWavelet(frequencies="
                 "np.arange(low, high, step)))."
             )
+            raise ValueError(msg)
 
     def _require_uniform_observation_weights(self, measure: str, reason: str) -> None:
         """Raise if observation weights are non-uniform for a measure that
         assumes equally weighted independent observations."""
         if self._observation_weights_are_uniform:
             return
-        raise ValueError(
+        msg = (
             f"{measure} does not support non-uniform observation_weights. "
             f"{reason} Non-uniform weights come from a smoothing_kernel other "
             "than 'boxcar', or from edge_mode='nan' when the time axis is part "
@@ -834,6 +839,7 @@ class Connectivity:
             "smoothing_kernel='boxcar' with edge_mode='trim' or 'keep', or an "
             "expectation_type that keeps the time axis."
         )
+        raise ValueError(msg)
 
     def _validate_debiasing_observations(self, measure: str) -> None:
         """Raise if a bias-corrected measure has too few observations.
@@ -845,7 +851,7 @@ class Connectivity:
         """
         n_observations = self.n_observations
         if n_observations < 2:
-            raise ValueError(
+            msg = (
                 f"{measure} requires at least 2 observations "
                 f"(n_observations == n_trials * n_tapers), but got "
                 f"{n_observations}. This bias correction divides by a factor "
@@ -853,6 +859,7 @@ class Connectivity:
                 f"single observation. Use more trials/tapers, or the "
                 f"non-debiased measure (phase_lag_index / phase_locking_value)."
             )
+            raise ValueError(msg)
         self._require_uniform_observation_weights(
             measure,
             "Its finite-sample correction assumes equally weighted independent "
@@ -894,21 +901,23 @@ class Connectivity:
         """
         n_frequencies = len(self.frequencies)
         if n_frequencies < 2:
-            raise ValueError(
+            msg = (
                 f"{measure} requires at least 2 frequency bins, but the data has "
                 f"{n_frequencies}. Use a longer FFT (larger n_fft_samples / "
                 f"n_time_samples_per_window)."
             )
+            raise ValueError(msg)
 
     def _require_two_sided_spectrum(self, measure: str) -> None:
         """Reject directed factorization for positive-frequency-only inputs."""
         if self._is_one_sided:
-            raise ValueError(
+            msg = (
                 f"{measure} requires a full two-sided spectrum in standard FFT "
                 "order. One-sided transforms such as Morlet wavelets support "
                 "functional connectivity measures, but not Wilson-factorized "
                 "directed measures."
             )
+            raise ValueError(msg)
 
     def _nonnegative_frequency_count(self, n_frequencies: int) -> int:
         """Number of non-negative-frequency bins among ``n_frequencies``.
@@ -1096,12 +1105,15 @@ class Connectivity:
         """
         pair_indices = xp.asarray(pairs, dtype=int)
         if pair_indices.ndim != 2 or pair_indices.shape[1] != 2:
-            raise ValueError("pairs must have shape (n_pairs, 2).")
+            msg = "pairs must have shape (n_pairs, 2)."
+            raise ValueError(msg)
         if pair_indices.size == 0:
-            raise ValueError("pairs must contain at least one signal pair.")
+            msg = "pairs must contain at least one signal pair."
+            raise ValueError(msg)
         n_signals = self._fourier_coefficients.shape[-1]
         if bool(xp.any(pair_indices < 0)) or bool(xp.any(pair_indices >= n_signals)):
-            raise IndexError(f"pair indices must be between 0 and {n_signals - 1}.")
+            msg = f"pair indices must be between 0 and {n_signals - 1}."
+            raise IndexError(msg)
         # Advanced-index the signal axis into (..., frequency, pair, 2), then put
         # pair before frequency so frequency remains axis -3 as required by the
         # Wilson factorization after the observation expectation is applied.
@@ -1145,7 +1157,8 @@ class Connectivity:
         if frequency_axis < 0:
             frequency_axis += values.ndim
         if frequency_axis < 3 or frequency_axis >= values.ndim:
-            raise ValueError("frequency_axis must follow the three observation axes.")
+            msg = "frequency_axis must follow the three observation axes."
+            raise ValueError(msg)
         weight_shape = [1] * values.ndim
         weight_shape[0:3] = self._observation_weights.shape[0:3]
         weight_shape[frequency_axis] = self._observation_weights.shape[3]
@@ -1276,37 +1289,40 @@ class Connectivity:
         approximation in that case.
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
-            raise ValueError(
+            msg = (
                 "jackknife supports expectation_type 'trials', 'tapers', or "
                 "'trials_tapers'; expectations involving time or retaining both "
                 "trial and taper axes have no single leave-one-out layout."
             )
+            raise ValueError(msg)
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
             method.startswith("_")
             or method in _NON_MEASURE_METHODS
             or not inspect.isfunction(method_attribute)
         ):
-            raise ValueError("method must name a public connectivity measure.")
+            msg = "method must name a public connectivity measure."
+            raise ValueError(msg)
         # The static check above guarantees ``method`` names a public function
         # on the class, so the bound attribute is always callable here.
         measure = getattr(self, method)
 
         full_estimate = measure(**method_kwargs)
         if isinstance(full_estimate, tuple):
-            raise TypeError(f"jackknife does not support tuple-valued measure {method!r}.")
+            msg = f"jackknife does not support tuple-valued measure {method!r}."
+            raise TypeError(msg)
         full_estimate = np.asarray(full_estimate)
         if full_estimate.dtype == object:
-            raise TypeError(
+            msg = (
                 f"jackknife requires a real array result from {method!r}; it "
                 f"returned a structured result. Jackknife the scalar score "
                 "measure instead (e.g. canonical_coherence rather than "
                 "canonical_coherency)."
             )
+            raise TypeError(msg)
         if np.iscomplexobj(full_estimate):
-            raise TypeError(
-                f"jackknife requires a real-valued measure; {method!r} is complex."
-            )
+            msg = f"jackknife requires a real-valued measure; {method!r} is complex."
+            raise TypeError(msg)
 
         coefficients = self._fourier_coefficients
         observation_weights = self._observation_weights
@@ -1340,13 +1356,14 @@ class Connectivity:
             n_observations = coefficients.shape[observation_axis]
             replicate_expectation = "tapers"
         if n_observations < 3:
-            raise ValueError(
+            msg = (
                 f"jackknife requires at least 3 observations, got {n_observations}. "
                 "With two, each leave-one-out replicate has a single observation, "
                 "which forces magnitude-normalized measures to 1 and makes the "
                 "interval degenerate (a zero standard error, or NaN under a "
                 "variance-stabilizing transform such as the coherence default)."
             )
+            raise ValueError(msg)
 
         replicates: list[NDArray[np.floating]] = []
         for omitted in range(n_observations):
@@ -1373,7 +1390,8 @@ class Connectivity:
             )
             replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
-                raise TypeError(f"jackknife requires a real array result from {method!r}.")
+                msg = f"jackknife requires a real array result from {method!r}."
+                raise TypeError(msg)
             replicates.append(np.asarray(replicate))
 
         resolved_transformation: Literal[
@@ -1731,10 +1749,11 @@ class Connectivity:
         self._validate_multiple_signals()
         labels_array = np.asarray(group_labels)
         if labels_array.ndim != 1 or len(labels_array) != self.n_signals:
-            raise ValueError(
+            msg = (
                 f"group_labels must be one-dimensional with length "
                 f"n_signals ({self.n_signals}), got shape {labels_array.shape}."
             )
+            raise ValueError(msg)
         has_missing_label = False
         for group_label in labels_array:
             if group_label is None:
@@ -1749,12 +1768,12 @@ class Connectivity:
             if has_missing_label:
                 break
         if has_missing_label:
-            raise ValueError(
-                "group_labels must not contain missing values such as NaN or None."
-            )
+            msg = "group_labels must not contain missing values such as NaN or None."
+            raise ValueError(msg)
         labels = np.unique(labels_array)
         if len(labels) < 2:
-            raise ValueError("group_labels must define at least two groups.")
+            msg = "group_labels must define at least two groups."
+            raise ValueError(msg)
         indices = [np.flatnonzero(labels_array == label) for label in labels]
         membership = np.asarray(
             np.stack([labels_array == label for label in labels]), dtype=bool
@@ -1995,7 +2014,8 @@ class Connectivity:
         labels, group_indices, membership = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
         if not is_positive_integer(n_components):
-            raise ValueError(f"n_components must be a positive integer, got {n_components!r}.")
+            msg = f"n_components must be a positive integer, got {n_components!r}."
+            raise ValueError(msg)
         regularization = _validated_regularization(regularization)
         rank_cap = rank if rank is not None else self.n_signals
         # ``pairs`` is the single connection ordering shared by the capacities,
@@ -2012,11 +2032,12 @@ class Connectivity:
         ]
         max_components = max(connection_capacities)
         if n_components > max_components:
-            raise ValueError(
+            msg = (
                 f"n_components ({n_components}) must not exceed the largest "
                 f"per-connection group rank/size ({max_components}); no group pair "
                 f"is large enough to supply that many components."
             )
+            raise ValueError(msg)
 
         spectrum = self._expectation_cross_spectral_matrix()
         spectrum = spectrum[..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :]
@@ -2390,12 +2411,13 @@ class Connectivity:
         # nonsensical chunk or blow up later inside range(). bool is an int
         # subclass, so reject it explicitly.
         if not is_positive_integer(max_workspace_elements):
-            raise ValueError(
+            msg = (
                 f"max_workspace_elements must be a positive integer (e.g. "
                 f"1_000_000), got {max_workspace_elements!r}. It bounds the memory "
                 f"budget, in array elements, for global_coherence's batched "
                 f"decomposition; lower it to reduce peak memory."
             )
+            raise ValueError(msg)
         if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
             fourier_coefficients = self._fourier_coefficients
             if self._observation_weights is not None:
@@ -2624,7 +2646,8 @@ class Connectivity:
             valid_keys = {"sign", "imaginary", "absolute", "squared"}
             unknown = set(missing) - valid_keys
             if unknown:
-                raise ValueError(f"unknown imaginary moment key(s): {sorted(unknown)}")
+                msg = f"unknown imaginary moment key(s): {sorted(unknown)}"
+                raise ValueError(msg)
 
             coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
             n_signals = coefficients.shape[-1]
@@ -3656,12 +3679,13 @@ class Connectivity:
         # "no directionality" result.
         n_band_frequencies = bandpassed_coherency.shape[-3]
         if n_band_frequencies < 2:
-            raise ValueError(
+            msg = (
                 f"phase_slope_index needs at least 2 frequency bins in the band "
                 f"after subsampling, but got {n_band_frequencies}. Widen "
                 f"frequencies_of_interest, or decrease frequency_resolution so "
                 f"more than one independent frequency remains."
             )
+            raise ValueError(msg)
 
         # Nolte et al. (2008): sum conj(C(f)) * C(f + df) over adjacent
         # (independent) frequency bins, then take the imaginary part. The
@@ -4293,7 +4317,8 @@ def _get_noise_variance(
     elif axis == -1:
         return noise_variance[..., xp.newaxis, xp.newaxis, :]
     else:
-        raise ValueError(f"axis must be -2 (target) or -1 (source), got {axis}")
+        msg = f"axis must be -2 (target) or -1 (source), got {axis}"
+        raise ValueError(msg)
 
 
 def _max_psd_discrepancy(
@@ -4526,10 +4551,11 @@ def _get_independent_frequency_step(
     if frequency_resolution is None:
         return 1
     if not np.isfinite(frequency_resolution) or frequency_resolution <= 0:
-        raise ValueError(
+        msg = (
             f"frequency_resolution must be a finite positive number when "
             f"provided, got {frequency_resolution}."
         )
+        raise ValueError(msg)
     return int(xp.ceil(frequency_resolution / frequency_difference))
 
 
@@ -5194,11 +5220,14 @@ def _estimate_block_spectral_granger_prediction(
     first_indices = np.asarray(first_indices, dtype=int)
     second_indices = np.asarray(second_indices, dtype=int)
     if first_indices.ndim != 1 or first_indices.size == 0:
-        raise ValueError("first_indices must be a non-empty one-dimensional array.")
+        msg = "first_indices must be a non-empty one-dimensional array."
+        raise ValueError(msg)
     if second_indices.ndim != 1 or second_indices.size == 0:
-        raise ValueError("second_indices must be a non-empty one-dimensional array.")
+        msg = "second_indices must be a non-empty one-dimensional array."
+        raise ValueError(msg)
     if np.intersect1d(first_indices, second_indices).size:
-        raise ValueError("first_indices and second_indices must not overlap.")
+        msg = "first_indices and second_indices must not overlap."
+        raise ValueError(msg)
 
     combined = xp.asarray(np.concatenate((first_indices, second_indices)))
     subsystem = csm[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]

@@ -21,11 +21,12 @@ if not TYPE_CHECKING and is_gpu_enabled():
         import cupy as xp
         from cupyx.scipy.fft import fft, ifft
     except ImportError as exc:
-        raise RuntimeError(
+        msg = (
             "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
             "but CuPy is not installed. Please install CuPy with: "
             "'pip install cupy' or 'conda install cupy'"
-        ) from exc
+        )
+        raise RuntimeError(msg) from exc
 else:
     import numpy as xp
     from scipy.fft import fft, ifft
@@ -527,12 +528,14 @@ def minimum_phase_decomposition(
            causality. NeuroImage, 41(2), 354-362.
     """
     if not np.isfinite(tolerance) or tolerance <= 0:
-        raise ValueError(f"tolerance must be a finite positive number, got {tolerance}.")
+        msg = f"tolerance must be a finite positive number, got {tolerance}."
+        raise ValueError(msg)
     if (
         not isinstance(max_iterations, (int, np.integer))  # type: ignore[redundant-expr]  # user input
         or max_iterations < 1
     ):
-        raise ValueError(f"max_iterations must be a positive integer, got {max_iterations}.")
+        msg = f"max_iterations must be a positive integer, got {max_iterations}."
+        raise ValueError(msg)
     n_signals = cross_spectral_matrix.shape[-1]
     # Wilson's default relative tolerance (1e-8) is below float32 epsilon. A
     # complex64 iteration therefore stalls at its rounding floor and otherwise

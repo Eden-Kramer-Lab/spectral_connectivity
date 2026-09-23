@@ -1648,7 +1648,8 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
 
     def strict_divide(*args, **kwargs):
         if "where" in kwargs:
-            raise TypeError("Wrong arguments {'where': ...}")
+            msg = "Wrong arguments {'where': ...}"
+            raise TypeError(msg)
         return real_divide(*args, **kwargs)
 
     monkeypatch.setattr(np, "divide", strict_divide)

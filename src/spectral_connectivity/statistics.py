@@ -131,25 +131,30 @@ def jackknife_confidence_interval(
         The standard error is converted back with the local delta method.
     """
     if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
-        raise ValueError("confidence_level must be finite and strictly between 0 and 1.")
+        msg = "confidence_level must be finite and strictly between 0 and 1."
+        raise ValueError(msg)
     valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
     if transformation not in valid_transformations:
-        raise ValueError(
+        msg = (
             "transformation must be 'identity', 'log', 'fisher', "
             f"'fisher_squared', or 'circular'; got {transformation!r}."
         )
+        raise ValueError(msg)
     estimate_array = np.asarray(estimate)
     replicates = np.asarray(leave_one_out)
     if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
-        raise TypeError("Jackknife intervals require a real-valued measure.")
+        msg = "Jackknife intervals require a real-valued measure."
+        raise TypeError(msg)
     if (
         replicates.ndim != estimate_array.ndim + 1
         or replicates.shape[1:] != estimate_array.shape
     ):
-        raise ValueError("leave_one_out must have shape (n_observations, *estimate.shape).")
+        msg = "leave_one_out must have shape (n_observations, *estimate.shape)."
+        raise ValueError(msg)
     n_observations = replicates.shape[0]
     if n_observations < 2:
-        raise ValueError("Jackknife inference requires at least 2 observations.")
+        msg = "Jackknife inference requires at least 2 observations."
+        raise ValueError(msg)
 
     if transformation == "identity":
         transformed_estimate = estimate_array
@@ -239,13 +244,14 @@ def _require_scipy_false_discovery_control() -> None:
     states the requirement, the installed version, and the fix.
     """
     if not hasattr(scipy.stats, "false_discovery_control"):
-        raise RuntimeError(
+        msg = (
             f"scipy.stats.false_discovery_control is unavailable: "
             f"spectral_connectivity requires scipy>=1.11 for the "
             f"Benjamini-Hochberg procedure, but scipy {scipy.__version__} is "
             f"installed. Upgrade with `pip install -U 'scipy>=1.11'` (or the "
             f"conda/mamba equivalent)."
         )
+        raise RuntimeError(msg)
 
 
 def _validate_alpha(alpha: float) -> None:
@@ -256,9 +262,8 @@ def _validate_alpha(alpha: float) -> None:
         or not np.isfinite(alpha)
         or not 0 < alpha < 1
     ):
-        raise ValueError(
-            f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
-        )
+        msg = f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
+        raise ValueError(msg)
 
 
 def _warn_all_p_values_nonfinite(procedure_name: str) -> None:
@@ -343,14 +348,15 @@ def Benjamini_Hochberg_procedure(
                 # A ValueError not caused by out-of-range p-values: don't
                 # misattribute it -- surface the original error unchanged.
                 raise
-            raise ValueError(
+            msg = (
                 "p_values must all be in [0, 1]; "
                 f"got {out_of_range.size} value(s) outside that range "
                 f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g}). "
                 "If these came from a connectivity measure, pass p-values (e.g. "
                 "from coherence_significance_pvalue), not coherence magnitudes or "
                 "correlations."
-            ) from exc
+            )
+            raise ValueError(msg) from exc
         is_significant[valid] = adjusted <= alpha
     elif p_values.size > 0:
         _warn_all_p_values_nonfinite("Benjamini_Hochberg_procedure")
@@ -393,11 +399,12 @@ def Bonferroni_correction(
     finite_values = p_values[valid]
     out_of_range = finite_values[(finite_values < 0) | (finite_values > 1)]
     if out_of_range.size:
-        raise ValueError(
+        msg = (
             "p_values must all be in [0, 1]; "
             f"got {out_of_range.size} value(s) outside that range "
             f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g})."
         )
+        raise ValueError(msg)
     if finite_values.size:
         # Undefined (NaN/inf) tests are excluded from the family, matching the BH
         # implementation above, and remain False in the returned mask.
@@ -460,9 +467,8 @@ def adjust_for_multiple_comparisons(
         correction = MULTIPLE_COMPARISONS[method]
     except KeyError as exc:
         choices = ", ".join(sorted(MULTIPLE_COMPARISONS))
-        raise ValueError(
-            f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
-        ) from exc
+        msg = f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
+        raise ValueError(msg) from exc
     return correction(p_values, alpha=alpha)
 
 
@@ -522,12 +528,14 @@ def coherence_fisher_z_transform(
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
     # and non-finite/fractional counts give NaN with a runtime warning.
     if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 2:
-        raise ValueError(f"n_obs1 must be a finite integer >= 2, got {n_obs1}.")
+        msg = f"n_obs1 must be a finite integer >= 2, got {n_obs1}."
+        raise ValueError(msg)
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
-        raise ValueError(
+        msg = (
             f"n_obs2 must be a finite integer equal to 0 (one-sample test) or "
             f">= 2, got {n_obs2}."
         )
+        raise ValueError(msg)
     coherence_magnitude1 = np.abs(coherency1)
     coherence_magnitude1[coherence_magnitude1 >= 1] = 1 - np.finfo(float).eps
 
@@ -638,13 +646,14 @@ def coherence_significance_pvalue(
         or int(n_observations) != n_observations
         or n_observations < 2
     ):
-        raise ValueError(
+        msg = (
             f"n_observations must be a finite integer >= 2 for the "
             f"zero-coherence null distribution (Beta(1, n_observations - 1)), "
             f"got {n_observations}. With fewer observations the coherence "
             f"estimate is degenerate; a non-finite or non-integer count gives a "
             f"NaN or degenerate p-value."
         )
+        raise ValueError(msg)
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
     )
@@ -745,15 +754,17 @@ def coherence_rate_adjustment(
            statistics. Journal of Neuroscience Methods 240, 141-153.
     """
     if not np.isfinite(firing_rate_condition1) or firing_rate_condition1 <= 0:
-        raise ValueError(
+        msg = (
             f"firing_rate_condition1 must be a finite positive number, got "
             f"{firing_rate_condition1}."
         )
+        raise ValueError(msg)
     if not np.isfinite(firing_rate_condition2) or firing_rate_condition2 <= 0:
-        raise ValueError(
+        msg = (
             f"firing_rate_condition2 must be a finite positive number, got "
             f"{firing_rate_condition2}."
         )
+        raise ValueError(msg)
     # alpha in [1]
     firing_rate_ratio = firing_rate_condition2 / firing_rate_condition1
     adjusted_firing_rate = (
@@ -832,26 +843,29 @@ def power_confidence_intervals(
            data analysis: a guide for the practicing neuroscientist (MIT Press).
     """
     if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers or n_tapers < 1:
-        raise ValueError(
+        msg = (
             f"n_tapers must be a finite positive integer, got {n_tapers}. It sets "
             f"the chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
             f"non-finite, or fractional value gives NaN or meaningless intervals."
         )
+        raise ValueError(msg)
     if not 0.5 <= ci < 1.0:
-        raise ValueError(
+        msg = (
             f"Confidence level `ci` must be in the range [0.5, 1.0), got {ci}. "
             "`ci` is the total probability mass inside the interval (e.g. 0.95 "
             "for a 95% confidence interval)."
         )
+        raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds
     # negative and reversed (e.g. power=-1 -> ~(-0.488, -3.080)), and a
     # non-finite value gives NaN/Inf bounds. Reject both explicitly.
     power_values = np.asarray(power, dtype=float)
     if not np.all(np.isfinite(power_values)) or np.any(power_values < 0):
-        raise ValueError(
+        msg = (
             "power must be finite and non-negative (it is a power spectral "
             "density); got a non-finite or negative value."
         )
+        raise ValueError(msg)
     # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
     # evenly between the two tails, so the chi-squared quantiles are taken at
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
@@ -985,26 +999,28 @@ def power_fisher_z_transform(
     # digamma/trigamma at n_obs, which have poles at 0; non-finite or fractional
     # counts would silently produce NaN z-scores.
     if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 1:
-        raise ValueError(f"n_obs1 must be a finite integer >= 1, got {n_obs1}.")
+        msg = f"n_obs1 must be a finite integer >= 1, got {n_obs1}."
+        raise ValueError(msg)
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or n_obs2 < 0:
-        raise ValueError(
-            f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), got {n_obs2}."
-        )
+        msg = f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), got {n_obs2}."
+        raise ValueError(msg)
     # The test operates on log(power); non-finite or non-positive inputs would
     # produce silent -inf/nan z-scores. Fail loudly instead.
     spectrum1_values = np.asarray(spectrum1, dtype=float)
     if not np.all(np.isfinite(spectrum1_values)) or np.any(spectrum1_values <= 0):
-        raise ValueError(
+        msg = (
             "spectrum1 must be finite and strictly positive (the test uses "
             "log(power)); got a non-finite or <= 0 value."
         )
+        raise ValueError(msg)
     spectrum2_values = np.asarray(spectrum2, dtype=float)
     if not np.all(np.isfinite(spectrum2_values)) or np.any(spectrum2_values <= 0):
-        raise ValueError(
+        msg = (
             "spectrum2 must be finite and strictly positive (the test uses "
             "log(power)); got a non-finite or <= 0 value. For a one-sample test, "
             "pass a positive baseline power as spectrum2 (default 1.0)."
         )
+        raise ValueError(msg)
 
     bias1 = power_bias(n_obs1)
     variance1 = power_variance(n_obs1)

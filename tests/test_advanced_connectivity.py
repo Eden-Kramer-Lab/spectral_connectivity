@@ -18,7 +18,8 @@ def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkey
             self._array = np.asarray(array)
 
         def __array__(self, *args, **kwargs):
-            raise TypeError("implicit device-to-host conversion is forbidden")
+            msg = "implicit device-to-host conversion is forbidden"
+            raise TypeError(msg)
 
         def get(self):
             return self._array.copy()
