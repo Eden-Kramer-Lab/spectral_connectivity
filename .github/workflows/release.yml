@@ -156,6 +156,10 @@ jobs:
           assert not mismatched, f"floors were upgraded: {mismatched}"
           PY
       - name: Run tests against minimum dependencies
+        # pyproject.toml turns every warning into an error, but the pinned floors
+        # are old releases that emit their own deprecation warnings, which are
+        # not this package's to fix. Warnings are therefore disabled for this job
+        # only; the main matrix keeps warnings-as-errors.
         run: pytest tests/ --ignore=tests/test_notebooks.py -p no:warnings
 
   build:

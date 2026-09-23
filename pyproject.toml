@@ -46,6 +46,7 @@ classifiers = [
 # out of sync with the code. Raise a floor only when a feature requires it (with
 # a comment saying why) or to follow the Scientific Python SPEC 0 support window.
 dependencies = [
+    # <3.0: untested against a future NumPy major; lift once the suite passes on it.
     "numpy>=1.24,<3.0",
     "scipy>=1.11.1",  # false_discovery_control (statistics.py); 1.11.0 is yanked
     "xarray>=2023.1",
@@ -239,7 +240,20 @@ source = "vcs"
 version-file = "src/spectral_connectivity/_version.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/examples", "README.md", "LICENSE", "CITATION.cff"]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+    # tests/test_docs.py and tests/test_cookbook.py read these, so the suite must
+    # be runnable from the sdist.
+    "/docs/generate_measure_table.py",
+    "/docs/CONNECTIVITY_METRIC_RANGES.md",
+    "/docs/cookbook.md",
+    "/docs/llm_guide.md",
+    "README.md",
+    "LICENSE",
+    "CITATION.cff",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/spectral_connectivity"]
