@@ -385,13 +385,15 @@ def test_scalar_mic_mim_handle_edge_masked_morlet_data():
     from spectral_connectivity import MorletWavelet
 
     rng = np.random.default_rng(7)
-    wavelet = MorletWavelet(
-        rng.standard_normal((1500, 4, 4)),
-        sampling_frequency=250.0,
-        frequencies=np.array([10.0, 20.0, 40.0]),
-        smoothing_time=0.3,
-        edge_mode="nan",
-    )
+    # 0.3 s is under 4 sigma_t at 10 Hz; the window is short on purpose here.
+    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
+        wavelet = MorletWavelet(
+            rng.standard_normal((1500, 4, 4)),
+            sampling_frequency=250.0,
+            frequencies=np.array([10.0, 20.0, 40.0]),
+            smoothing_time=0.3,
+            edge_mode="nan",
+        )
     connectivity = Connectivity.from_transform(wavelet)
     labels = np.array([0, 0, 1, 1])
     mic, _ = connectivity.maximized_imaginary_coherency(labels)
@@ -1777,9 +1779,10 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
 
     rng = np.random.default_rng(7)
     data = rng.standard_normal((600, 3, 3))
-    wavelet = MorletWavelet(
-        data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
-    )
+    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
+        wavelet = MorletWavelet(
+            data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
+        )
     weighted = Connectivity.from_transform(wavelet)
     assert np.isfinite(weighted.power()).any()
     assert np.isfinite(weighted.coherence_magnitude()).any()

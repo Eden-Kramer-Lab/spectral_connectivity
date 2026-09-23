@@ -19,6 +19,15 @@ from spectral_connectivity.transforms import (
 )
 
 
+def _short_smoothing_window():
+    """Expect the guidance warning for a Morlet smoothing window under 4 sigma_t.
+
+    Several tests below exercise smoothing mechanics (shapes, masks, weights)
+    with deliberately short windows; the warning is intended for them.
+    """
+    return pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations")
+
+
 def test_transform_is_one_sided_flags():
     """Every transform exposes an explicit is_one_sided layout flag.
 
@@ -932,13 +941,14 @@ def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
     time = np.arange(256) / sampling_frequency
     signal = np.sin(2 * np.pi * 16 * time)
     data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
-    transform = MorletWavelet(
-        data,
-        sampling_frequency,
-        np.array([8.0, 16.0, 32.0]),
-        n_cycles=5,
-        smoothing_time=0.25,
-    )
+    with _short_smoothing_window():
+        transform = MorletWavelet(
+            data,
+            sampling_frequency,
+            np.array([8.0, 16.0, 32.0]),
+            n_cycles=5,
+            smoothing_time=0.25,
+        )
 
     coefficients = transform.fft()
     assert coefficients.shape == (8, 1, 32, 3, 2)
@@ -977,6 +987,42 @@ def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
     expected = 2 * variance / fs
     np.testing.assert_allclose(np.nanmean(multitaper_power), expected, rtol=0.05)
     np.testing.assert_allclose(np.nanmean(morlet_power), expected, rtol=0.05)
+
+
+def test_morlet_warns_when_smoothing_window_is_shorter_than_four_wavelet_sigmas():
+    """Coefficients closer than a few sigma_t = n_cycles / (2 pi f) are strongly
+    autocorrelated, so a 0.1 s window at 10 Hz with 7 cycles (sigma_t = 0.111 s)
+    holds fewer than ~2 independent samples and pushes coherence toward 1."""
+    data = np.random.default_rng(929).standard_normal((4000, 1, 2))
+    with pytest.warns(
+        UserWarning, match="shorter than 4 wavelet standard deviations"
+    ) as record:
+        MorletWavelet(data, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.1)
+    message = str(record[0].message)
+    assert "smoothing_time=0.1 s" in message
+    assert "10 Hz" in message
+    assert "0.111 s" in message  # sigma_t at the lowest frequency
+    assert "0.446 s" in message  # 4 * sigma_t, the recommended minimum
+    assert "multiple trials" in message
+
+
+def test_morlet_smoothing_warning_uses_the_widest_wavelet_not_the_lowest_frequency():
+    """With per-frequency cycles the widest envelope can sit at a higher
+    frequency; the guidance must be computed from max(sigma_t)."""
+    data = np.random.default_rng(930).standard_normal((4000, 1, 2))
+    # sigma_t = [3 / (2 pi 10), 12 / (2 pi 20)] = [0.048, 0.095] s -> 4 sigma_t max = 0.38 s.
+    with pytest.warns(UserWarning, match="at 20 Hz"):
+        MorletWavelet(data, 1000.0, [10.0, 20.0], n_cycles=[3.0, 12.0], smoothing_time=0.3)
+
+
+def test_morlet_does_not_warn_for_an_adequate_smoothing_window_or_without_smoothing():
+    """pyproject turns warnings into errors, so constructing here asserts that
+    no smoothing warning is emitted."""
+    data = np.random.default_rng(931).standard_normal((4000, 1, 2))
+    MorletWavelet(
+        data, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.5
+    )  # 4 sigma_t = 0.446
+    MorletWavelet(data, 1000.0, [10.0, 40.0], n_cycles=7)
 
 
 def test_morlet_default_zero_padding_matches_same_convolution():
@@ -1033,24 +1079,25 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
     rng = np.random.default_rng(919)
     data = rng.standard_normal((256, 2, 2))
     frequencies = np.array([8.0, 16.0, 32.0])
-    kept = MorletWavelet(
-        data,
-        128,
-        frequencies,
-        n_cycles=5,
-        smoothing_time=0.25,
-        smoothing_frequency=3,
-        edge_mode="keep",
-    )
-    masked = MorletWavelet(
-        data,
-        128,
-        frequencies,
-        n_cycles=5,
-        smoothing_time=0.25,
-        smoothing_frequency=3,
-        edge_mode="nan",
-    )
+    with _short_smoothing_window():
+        kept = MorletWavelet(
+            data,
+            128,
+            frequencies,
+            n_cycles=5,
+            smoothing_time=0.25,
+            smoothing_frequency=3,
+            edge_mode="keep",
+        )
+        masked = MorletWavelet(
+            data,
+            128,
+            frequencies,
+            n_cycles=5,
+            smoothing_time=0.25,
+            smoothing_frequency=3,
+            edge_mode="nan",
+        )
     trimmed = MorletWavelet(
         data,
         128,
@@ -1085,9 +1132,10 @@ def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
     """Measures that combine adjacent bins need equal spacing; a wavelet grid
     is arbitrary, so a non-uniform grid must be rejected, not silently used."""
     data = np.random.default_rng(927).standard_normal((2000, 2, 2))
-    non_uniform = Connectivity.from_transform(
-        MorletWavelet(data, 200, [4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
-    )
+    with _short_smoothing_window():
+        non_uniform = Connectivity.from_transform(
+            MorletWavelet(data, 200, [4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
+        )
     with pytest.raises(ValueError, match="uniformly spaced"):
         getattr(non_uniform, measure)()
     uniform = Connectivity.from_transform(
@@ -1101,15 +1149,16 @@ def test_delay_significance_rejects_non_uniform_weights(measure):
     """The zero-coherence null uses the raw observation count, which is wrong
     for unequally weighted observations."""
     data = np.random.default_rng(928).standard_normal((2000, 4, 2))
-    weighted = Connectivity.from_transform(
-        MorletWavelet(
-            data,
-            200,
-            np.arange(5.0, 60.0, 1.0),
-            smoothing_time=0.2,
-            smoothing_kernel="hann",
+    with _short_smoothing_window():
+        weighted = Connectivity.from_transform(
+            MorletWavelet(
+                data,
+                200,
+                np.arange(5.0, 60.0, 1.0),
+                smoothing_time=0.2,
+                smoothing_kernel="hann",
+            )
         )
-    )
     with pytest.raises(ValueError, match="non-uniform observation_weights"):
         getattr(weighted, measure)(frequencies_of_interest=(10, 40))
 
@@ -1118,14 +1167,15 @@ def test_morlet_boxcar_edge_mask_error_names_edge_mode():
     """The debiased-measure guard must point at the knob that actually made the
     weights non-uniform (edge masking), not at a kernel already in use."""
     data = np.random.default_rng(925).standard_normal((400, 1, 2))
-    transform = MorletWavelet(
-        data,
-        200,
-        np.array([10.0, 20.0, 40.0]),
-        smoothing_kernel="boxcar",
-        edge_mode="nan",
-        smoothing_time=0.2,
-    )
+    with _short_smoothing_window():
+        transform = MorletWavelet(
+            data,
+            200,
+            np.array([10.0, 20.0, 40.0]),
+            smoothing_kernel="boxcar",
+            edge_mode="nan",
+            smoothing_time=0.2,
+        )
     connectivity = Connectivity.from_transform(
         transform, expectation_type="time_trials_tapers"
     )
@@ -1236,15 +1286,16 @@ def test_morlet_uniform_weights_take_unweighted_path(edge_mode):
 
 def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
     rng = np.random.default_rng(923)
-    transform = MorletWavelet(
-        rng.standard_normal((192, 4, 4)),
-        64,
-        np.array([6.0, 10.0, 16.0, 24.0]),
-        n_cycles=3,
-        smoothing_time=0.25,
-        smoothing_kernel="hann",
-        edge_mode="nan",
-    )
+    with _short_smoothing_window():
+        transform = MorletWavelet(
+            rng.standard_normal((192, 4, 4)),
+            64,
+            np.array([6.0, 10.0, 16.0, 24.0]),
+            n_cycles=3,
+            smoothing_time=0.25,
+            smoothing_kernel="hann",
+            edge_mode="nan",
+        )
     connectivity = Connectivity.from_transform(transform)
     # Edge bins masked by edge_mode="nan" carry zero weight, hence zero power.
     with pytest.warns(UserWarning, match="zero total power"):
@@ -1478,14 +1529,15 @@ def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
     """A one-sample smoothing window with a larger step must still decimate
     ``time`` and ``observation_weights`` to match ``fft()``."""
     rng = np.random.default_rng(5)
-    wavelet = MorletWavelet(
-        rng.standard_normal((2000, 1, 2)),
-        sampling_frequency=1000.0,
-        frequencies=[10.0, 20.0],
-        smoothing_time=0.001,
-        smoothing_step=0.005,
-        edge_mode="nan",  # masks edges, so the weights are non-uniform
-    )
+    with _short_smoothing_window():
+        wavelet = MorletWavelet(
+            rng.standard_normal((2000, 1, 2)),
+            sampling_frequency=1000.0,
+            frequencies=[10.0, 20.0],
+            smoothing_time=0.001,
+            smoothing_step=0.005,
+            edge_mode="nan",  # masks edges, so the weights are non-uniform
+        )
     n_time = wavelet.fft().shape[0]
     assert n_time == 400
     assert wavelet.time.shape == (n_time,)

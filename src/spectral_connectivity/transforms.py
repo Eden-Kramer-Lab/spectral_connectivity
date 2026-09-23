@@ -1950,7 +1950,16 @@ class MorletWavelet:
     smoothing_time : float, optional
         Duration (seconds) of a sliding window whose coefficients are collected
         onto the observation axis. Set this for single-trial data so normalized
-        measures (coherence, PLV) are not degenerate.
+        measures (coherence, PLV) are not degenerate. Coefficients closer than
+        a few wavelet standard deviations ``sigma_t = n_cycles / (2 pi f)`` are
+        strongly autocorrelated, so the window must span several sigma_t to
+        hold more than one effectively independent sample: use at least
+        ``4 * n_cycles / (2 * pi * f_min)`` seconds (0.45 s for 7 cycles at
+        10 Hz), and expect the effective sample count to stay well below the
+        number of coefficients in the window. A shorter window emits a
+        ``UserWarning`` and biases normalized measures of independent signals
+        toward 1 for a single trial; supplying multiple trials adds independent
+        realizations instead.
     smoothing_step : float, optional
         Step (seconds) between smoothing windows; defaults to ``smoothing_time``
         and requires it.
@@ -2115,6 +2124,31 @@ class MorletWavelet:
             if self._smoothing_samples > n_decimated:
                 msg = "smoothing_time is longer than the decimated wavelet record."
                 raise ValueError(msg)
+            # Coefficients within a few envelope standard deviations
+            # sigma_t = n_cycles / (2 pi f) of each other are strongly
+            # autocorrelated (coefficient autocorrelation ~ exp(-dt^2 / (4 sigma_t^2))),
+            # so a window shorter than ~4 sigma_t holds fewer than ~2 effectively
+            # independent samples and normalized measures are forced toward 1.
+            # The widest wavelet (largest sigma_t) sets the requirement.
+            sigma_t = cycle_values / (2 * np.pi * frequency_values)
+            widest = int(np.argmax(sigma_t))
+            minimum_smoothing_time = 4 * sigma_t[widest]
+            if smoothing_time < minimum_smoothing_time:
+                warnings.warn(
+                    f"smoothing_time={smoothing_time:g} s is shorter than 4 wavelet "
+                    f"standard deviations at {frequency_values[widest]:g} Hz "
+                    f"(sigma_t = n_cycles / (2 pi f) = {sigma_t[widest]:.3g} s, so "
+                    f"4 sigma_t = {minimum_smoothing_time:.3g} s). Wavelet "
+                    "coefficients closer than a few sigma_t are strongly "
+                    "autocorrelated, so this window holds fewer than ~2 effectively "
+                    "independent samples and normalized measures (coherence, PLV, "
+                    "PPC) of a single trial are biased toward 1. Either lengthen "
+                    "smoothing_time to at least 4 * n_cycles / (2 * pi * f_min) = "
+                    f"{minimum_smoothing_time:.3g} s, or supply multiple trials so "
+                    "the expectation also averages independent realizations.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
