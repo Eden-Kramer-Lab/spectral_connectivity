@@ -125,7 +125,13 @@ def test_non_causal_direction_is_zero(var_oracle, measure):
     assert np.isfinite(non_causal).all(), measure
     assert np.isfinite(causal).all(), measure
     assert np.max(np.abs(non_causal)) < 1e-8, (measure, np.max(np.abs(non_causal)))
-    assert np.max(causal) > 0.05, (measure, np.max(causal))
+    # dDTF is normalized over all frequencies at once, so compare its
+    # frequency-summed share of the target's inflow; the others are per bin.
+    if measure == "direct_directed_transfer_function":
+        causal_strength = np.sum(causal)
+    else:
+        causal_strength = np.max(causal)
+    assert causal_strength > 0.05, (measure, causal_strength)
 
 
 # A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with unequal, uncorrelated
@@ -141,7 +147,7 @@ def _analytic_directed_measures(A, H, noise_covariance):
 
     ``[..., i, j]`` is the influence ``j -> i``. ``A`` and ``H`` are on the full
     FFT grid; ``noise_covariance`` must be diagonal (variances ``sigma``).
-    Returns squared DTF, PDC, DC, and gPDC, and the (unsquared) dDTF.
+    Returns squared DTF, PDC, DC, gPDC, and dDTF.
     """
     n_non_negative = A.shape[0] // 2 + 1
     A, H = A[:n_non_negative], H[:n_non_negative]
@@ -154,10 +160,17 @@ def _analytic_directed_measures(A, H, noise_covariance):
     pdc = A2 / A2.sum(axis=-2, keepdims=True)
     weighted = A2 / sigma[:, np.newaxis]
     gpdc = weighted / weighted.sum(axis=-2, keepdims=True)
-    # dDTF: full-frequency DTF (inflow summed over sources and frequencies)
-    # times the PDC magnitude.
-    full_frequency_dtf = np.abs(H) / np.sqrt(H2.sum(axis=(-1, -3), keepdims=True))
-    ddtf = full_frequency_dtf * np.sqrt(pdc)
+    # dDTF (Korzeniewska et al. 2003): chi^2_ij = ffDTF^2_ij * kappa^2_ij, the
+    # full-frequency DTF (inflow summed over sources and frequencies) times the
+    # squared partial coherence from the inverse spectral matrix
+    # G = A^H Sigma^-1 A, kappa^2_ij = |G_ij|^2 / (G_ii G_jj).
+    full_frequency_dtf = H2 / H2.sum(axis=(-1, -3), keepdims=True)
+    inverse_spectrum = np.conj(np.swapaxes(A, -1, -2)) @ np.linalg.inv(noise_covariance) @ A
+    g_diagonal = np.real(np.diagonal(inverse_spectrum, axis1=-2, axis2=-1))
+    partial_coherence = np.abs(inverse_spectrum) ** 2 / (
+        g_diagonal[..., :, np.newaxis] * g_diagonal[..., np.newaxis, :]
+    )
+    ddtf = full_frequency_dtf * partial_coherence
     return {
         "directed_transfer_function": dtf,
         "partial_directed_coherence": pdc,
@@ -195,6 +208,12 @@ def test_chain_oracle_distinguishes_the_measures(chain_oracle):
     # Unequal noise variances make the noise-weighted measures differ.
     assert np.abs(dc - dtf).max() > 0.1
     assert np.abs(gpdc - pdc).max() > 0.1
+    # dDTF keeps only direct links: zero on the indirect 0 -> 2 path, positive on
+    # the direct 0 -> 1 and 1 -> 2 links.
+    ddtf = measures["direct_directed_transfer_function"]
+    np.testing.assert_allclose(ddtf[:, 2, 0], 0.0, atol=1e-15)
+    assert ddtf[:, 1, 0].max() > 0
+    assert ddtf[:, 2, 1].max() > 0
 
 
 @pytest.mark.parametrize(

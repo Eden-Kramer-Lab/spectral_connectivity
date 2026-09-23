@@ -3379,21 +3379,33 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_asnumpy
     def direct_directed_transfer_function(self) -> NDArray[np.floating]:
-        """Return combination of directed transfer function and partial coherence.
+        """Return the direct directed transfer function (dDTF).
 
-        A combination of the directed transfer function estimate of
-        directional influence between signals and the partial coherence's
-        accounting for the influence of other signals.
+        The squared dDTF of Korzeniewska et al. (2003) multiplies the
+        full-frequency DTF, which keeps direct and indirect (cascade) influence,
+        by the squared partial coherence, which is zero between two signals
+        whose relation is fully explained by the others. The product therefore
+        keeps only direct influence:
+
+        ``chi^2_ij(f) = ffDTF^2_ij(f) * kappa^2_ij(f)``, with
+        ``ffDTF^2_ij(f) = |H_ij(f)|^2 / sum_f' sum_k |H_ik(f')|^2`` (summed over
+        the non-negative frequencies) and
+        ``kappa^2_ij(f) = |G_ij(f)|^2 / (G_ii(f) G_jj(f))``, where
+        ``G = A^H Sigma^-1 A`` is the inverse spectral matrix of the MVAR model
+        (``A = H^-1``, ``Sigma`` the innovation covariance).
 
         Returns
         -------
         direct_directed_transfer_function : array
-            Shape (..., n_fft_samples, n_signals, n_signals).
-            Direct directed transfer function values.
+            Shape (..., n_nonnegative_frequencies, n_signals, n_signals).
+            Output ``[..., i, j]`` is the direct influence ``j -> i``.
 
         Notes
         -----
-        **Range**: [0, 1]. Normalized combination of DTF and partial coherence.
+        **Range**: [0, 1]. Like :meth:`directed_transfer_function`, this
+        returns the squared quantity; SCoT and ConnectiviPy report its square
+        root, ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
+        each signal with itself (``kappa_ii = 1``).
 
         References
         ----------
@@ -3404,10 +3416,26 @@ class Connectivity:
                Journal of Neuroscience Methods 125, 195-207.
 
         """
-        full_frequency_DTF = self._transfer_function / _total_inflow(
-            self._transfer_function, axis=(-1, -3)
+        full_frequency_dtf = _squared_magnitude(
+            self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))
         )
-        return xp.abs(full_frequency_DTF) * xp.sqrt(self._partial_directed_coherence())
+        mvar_coefficients = self._MVAR_Fourier_coefficients
+        inverse_noise_covariance = _regularized_inverse(self._noise_covariance)
+        inverse_spectrum = xp.matmul(
+            xp.matmul(
+                _conjugate_transpose(mvar_coefficients),
+                inverse_noise_covariance[..., xp.newaxis, :, :],
+            ),
+            mvar_coefficients,
+        )
+        inverse_spectrum_diagonal = xp.real(xp.diagonal(inverse_spectrum, axis1=-2, axis2=-1))
+        squared_partial_coherence: NDArray[np.floating] = _squared_magnitude(
+            inverse_spectrum
+        ) / (
+            inverse_spectrum_diagonal[..., :, xp.newaxis]
+            * inverse_spectrum_diagonal[..., xp.newaxis, :]
+        )
+        return full_frequency_dtf * squared_partial_coherence
 
     def group_delay(
         self,
