@@ -2553,6 +2553,48 @@ def test_power_one_sided_preserves_total_power():
         np.testing.assert_allclose(one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10)
 
 
+def test_power_one_sided_integrates_to_signal_power():
+    """Parseval oracle for the one-sided PSD convention.
+
+    Integrating the returned one-sided density over the non-negative grid,
+    ``sum(power) * df``, must recover the tapered signal's mean square,
+    ``mean_k sum_t (u_k(t) x(t))**2`` for unit-energy tapers ``u_k``; for a
+    constant signal that is exactly its squared value. ``detrend_type=None``
+    keeps a DC offset so the undoubled DC bin -- and, for an even FFT length,
+    the undoubled Nyquist bin -- carry power and are exercised.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(3)
+    sampling_frequency = 200.0
+    for n_time in (512, 511):  # even and odd FFT lengths
+        time_series = rng.standard_normal((n_time, 3, 2)) + 2.5  # DC offset
+        multitaper = Multitaper(
+            time_series, sampling_frequency=sampling_frequency, detrend_type=None
+        )
+        conn = Connectivity.from_transform(multitaper)
+        frequency_step = conn.frequencies[1] - conn.frequencies[0]
+        recovered = conn.power()[0].sum(axis=0) * frequency_step  # (n_signals,)
+
+        # Multitaper scales its tapers to energy fs; undo that for the identity.
+        unit_tapers = np.asarray(multitaper.tapers) / np.sqrt(sampling_frequency)
+        assert unit_tapers.shape[0] == n_time
+        tapered = unit_tapers[:, :, np.newaxis, np.newaxis] * time_series[:, np.newaxis]
+        expected = (tapered**2).sum(axis=0).mean(axis=(0, 1))  # over tapers, trials
+        np.testing.assert_allclose(recovered, expected, rtol=1e-10)
+
+        constant = Connectivity.from_transform(
+            Multitaper(
+                np.full((n_time, 2, 2), 3.0),
+                sampling_frequency=sampling_frequency,
+                detrend_type=None,
+            )
+        )
+        np.testing.assert_allclose(
+            constant.power()[0].sum(axis=0) * frequency_step, 9.0, rtol=1e-10
+        )
+
+
 def test_power_preserves_float32_dtype():
     """power() must not upcast a float32 (complex64) spectrum to float64.
 
