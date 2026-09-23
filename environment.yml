@@ -11,10 +11,11 @@ dependencies:
 - "matplotlib >= 3.7"
 - nitime
 
-# Development and testing
+# Development and testing (match the `dev` extra in pyproject.toml)
 - "pytest >= 8.0"
 - "pytest-cov >= 4.1"
-- "mypy >= 1.8"
+- "syrupy >= 4.0"
+- "mypy >= 1.11"  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
 - scipy-stubs
 - netcdf4
 - h5netcdf

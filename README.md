@@ -310,7 +310,7 @@ Directed
 + scipy
 + xarray
 
-See [environment.yml](environment.yml) for the most current list of dependencies.
+See [pyproject.toml](pyproject.toml) for the authoritative list of dependencies and their minimum versions.
 
 ### GPU Acceleration
 
