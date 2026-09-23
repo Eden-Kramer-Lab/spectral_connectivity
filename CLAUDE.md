@@ -56,20 +56,20 @@ pytest tests/test_connectivity.py::TestConnectivity::test_coherence -v
 
 ### Code Quality
 ```bash
-# Format code
-ruff format .
+# Format code (examples/ holds Jupytext tutorials and is excluded from ruff)
+uv run ruff format src/ tests/
 
-# Check formatting
-ruff format --check .
+# Check formatting (what CI runs)
+uv run ruff format --check src/ tests/
 
-# Lint code
-ruff check .
+# Lint code (what CI runs)
+uv run ruff check src/ tests/
 
 # Fix auto-fixable linting issues
-ruff check --fix .
+uv run ruff check --fix src/ tests/
 
 # Type checking
-mypy src/
+uv run mypy src/
 ```
 
 ### Building and Release

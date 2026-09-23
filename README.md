@@ -221,9 +221,7 @@ from spectral_connectivity import (
     Welch,
 )
 
-stft = ShortTimeFourierTransform(
-    time_series, sampling_frequency, time_window_duration=1
-)
+stft = ShortTimeFourierTransform(time_series, sampling_frequency, time_window_duration=1)
 welch = Welch(time_series, sampling_frequency, segment_duration=1)
 # For a single continuous trial, collect a local time/frequency neighborhood so
 # normalized measures are estimated over multiple observations. Invalid wavelet

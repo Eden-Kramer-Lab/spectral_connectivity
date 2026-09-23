@@ -153,6 +153,7 @@ line-length = 95
 extend-exclude = [
     ".venv",
     "docs",
+    "examples",  # Jupytext tutorial notebooks are deliberately not linted or formatted
     "build",
     "dist",
     "*.egg-info",
@@ -196,11 +197,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "tests/*" = ["ARG"]  # pytest fixtures are used by name, not by value
-# examples/ are Jupytext notebook scripts, not modules: cells legitimately
-# import after markdown/code cells (E402), bare expressions display values in a
-# cell (B018), print results (T201), zip demo arrays (B905), and narrative text
-# contains unicode such as non-breaking spaces (RUF002, RUF003).
-"examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
