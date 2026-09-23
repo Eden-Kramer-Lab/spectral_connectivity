@@ -24,6 +24,11 @@ def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkey
         def get(self):
             return self._array.copy()
 
+        @property
+        def __cuda_array_interface__(self):
+            # Like cupy.ndarray: marks this as a device array.
+            return {"version": 3}
+
     rng = np.random.default_rng(11)
     shape = (1, 4, 3, 16, 2)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)

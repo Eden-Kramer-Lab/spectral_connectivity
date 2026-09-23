@@ -505,6 +505,20 @@ def test_start_time_must_be_a_finite_scalar(make_transform, start_time):
         make_transform(np.zeros((100, 3, 1)), start_time)
 
 
+@pytest.mark.parametrize("argument", ["frequencies", "n_cycles"])
+def test_morlet_accepts_pandas_series_parameters(argument):
+    """A pandas Series has a ``get`` method, but it is a host array-like, not a
+    CuPy array; treating it as one called ``Series.get()`` without a key."""
+    import pandas as pd
+
+    time_series = np.random.default_rng(52).standard_normal((500, 3, 2))
+    values = {"frequencies": [4.0, 8.0], "n_cycles": [5.0, 7.0]}
+    as_list = MorletWavelet(time_series, 250, **values).fft()
+    values[argument] = pd.Series(values[argument])
+    as_series = MorletWavelet(time_series, 250, **values).fft()
+    np.testing.assert_array_equal(as_series, as_list)
+
+
 def test_morlet_start_time_accepts_a_single_element_array():
     """MorletWavelet takes the same start_time as the windowed transforms, so
     the ``time[0]`` of a column time axis offsets its sample times."""
@@ -1758,6 +1772,11 @@ def test_morlet_accepts_device_arrays_for_frequencies_and_n_cycles():
 
         def get(self):
             return self._values.copy()
+
+        @property
+        def __cuda_array_interface__(self):
+            # Like cupy.ndarray: marks this as a device array.
+            return {"shape": self._values.shape, "version": 3}
 
     transform = MorletWavelet(
         np.ones((64, 1, 2)),

@@ -104,6 +104,11 @@ class _DeviceArray:
         return self._array.copy()
 
     @property
+    def __cuda_array_interface__(self):
+        # Like cupy.ndarray; the backend identifies device arrays by it.
+        return {"shape": self._array.shape, "version": 3}
+
+    @property
     def flags(self):
         return _Flags()
 

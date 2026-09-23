@@ -1473,6 +1473,11 @@ def test_to_numpy_handles_device_arrays():
             msg = "Implicit conversion to a NumPy array is not allowed."
             raise TypeError(msg)
 
+        @property
+        def __cuda_array_interface__(self):
+            # Like cupy.ndarray: marks this as a device array.
+            return {"version": 3}
+
     device = _DeviceLike(np.arange(5.0))
     with pytest.raises(TypeError):
         np.asarray(device)  # guards the premise: implicit conversion fails
@@ -1493,6 +1498,11 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
         def __array__(self, dtype=None, copy=None):
             msg = "Implicit conversion to a NumPy array is not allowed."
             raise TypeError(msg)
+
+        @property
+        def __cuda_array_interface__(self):
+            # Like cupy.ndarray: marks this as a device array.
+            return {"version": 3}
 
     rng = np.random.default_rng(11)
     transform = MorletWavelet(

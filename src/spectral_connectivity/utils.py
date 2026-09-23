@@ -41,11 +41,15 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
 def to_numpy(array: Any) -> NDArray[Any]:
     """Return an array on the host without implicit device conversion.
 
-    CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. NumPy
-    arrays and ordinary array-likes pass directly through ``np.asarray``.
+    CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. They
+    are recognized by also exposing the CUDA array interface, since host
+    array-likes such as a pandas Series have an unrelated ``get`` method.
+    NumPy arrays and ordinary array-likes pass directly through ``np.asarray``.
     """
     get = getattr(array, "get", None)
-    return np.asarray(get() if callable(get) else array)
+    if callable(get) and hasattr(type(array), "__cuda_array_interface__"):
+        return np.asarray(get())
+    return np.asarray(array)
 
 
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
