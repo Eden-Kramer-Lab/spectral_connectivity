@@ -1566,7 +1566,9 @@ class ShortTimeFourierTransform(Multitaper):
     start_time : float or ndarray, default=0
         Time of the first sample, in seconds.
     n_fft_samples : int, optional
-        FFT length; defaults to the window length.
+        FFT length. Defaults to ``scipy.fft.next_fast_len`` of the window
+        length, which may zero-pad (e.g. a 257-sample window gives 264 bins);
+        pass the window length explicitly for an unpadded frequency grid.
     n_time_samples_per_window : int, optional
         Window length in samples (alternative to ``time_window_duration``).
     n_time_samples_per_step : int, optional
@@ -1699,7 +1701,9 @@ class Welch:
     start_time : float or ndarray, default=0
         Time of the first sample, in seconds.
     n_fft_samples : int, optional
-        FFT length; defaults to the segment length.
+        FFT length. Defaults to ``scipy.fft.next_fast_len`` of the segment
+        length, which may zero-pad (e.g. a 257-sample segment gives 264 bins);
+        pass the segment length explicitly for an unpadded frequency grid.
     fft_workers : int, optional
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
