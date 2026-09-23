@@ -897,6 +897,36 @@ class Connectivity:
             "Its finite-sample correction assumes equally weighted independent "
             "observations; use a non-debiased measure instead.",
         )
+        self._warn_correlated_observations(
+            measure,
+            "Its finite-sample bias correction treats every observation as an "
+            "independent sample",
+        )
+
+    def _warn_correlated_observations(self, measure: str, assumption: str) -> None:
+        """Warn once that ``measure`` counts correlated observations as independent.
+
+        ``n_observations`` is a raw trial x taper count. When the transform
+        reports ``observations_are_independent=False`` (a MorletWavelet
+        smoothing neighborhood or Welch segments overlapping by more than half
+        on the observation axis) that count overstates the effective sample
+        size, biasing every consumer that uses it as a degrees-of-freedom or
+        bias-correction factor. ``assumption`` states what ``measure`` uses the
+        count for so the message is actionable.
+        """
+        if self._observations_are_independent:
+            return
+        warnings.warn(
+            f"{measure} assumes independent observations, but this transform's "
+            f"observations are correlated (observations_are_independent is "
+            f"False: a MorletWavelet smoothing neighborhood, or Welch segments "
+            f"overlapping by more than half). {assumption}, so n_observations "
+            f"== {self.n_observations} overstates the effective sample size "
+            f"and the result is biased. Use a Multitaper transform, Welch with "
+            f"segment_overlap <= 0.5, or MorletWavelet without smoothing.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     def _warn_single_observation_degenerate(self, measure: str) -> None:
         """Warn that a magnitude-normalized measure is degenerate for one observation.
@@ -1220,12 +1250,17 @@ class Connectivity:
 
     @property
     def n_observations(self) -> int:
-        """Return number of observations.
+        """Return the raw number of observations averaged by the expectation.
 
         Returns
         -------
         int
-            Effective number of independent observations after averaging.
+            Product of the lengths of the averaged observation axes (for the
+            default ``"trials_tapers"`` expectation, ``n_trials * n_tapers``).
+            This is a raw count, not an effective number of independent
+            observations: it ignores ``observation_weights`` and is not reduced
+            when the transform's observations are correlated (see
+            ``observations_are_independent``).
 
         """
         return int(
@@ -1331,6 +1366,18 @@ class Connectivity:
             measures ``[..., i, j]`` is the influence ``j -> i``, the transpose
             of the xarray wrapper's ``sel(source=j, target=i)`` layout.
 
+        Raises
+        ------
+        ValueError
+            If the expectation averages tapers (``"tapers"`` or
+            ``"trials_tapers"``) but ``observations_are_independent`` is
+            ``False``: correlated observations (a MorletWavelet smoothing
+            neighborhood, overlapping Welch segments) are not valid
+            leave-one-out units. Jackknife over trials
+            (``expectation_type="trials"``) or use a Multitaper transform.
+
+        Notes
+        -----
         If the input Fourier coefficients were produced with
         ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates
         reuse the full-sample Thomson weights (the adaptive weights are not
@@ -1342,6 +1389,21 @@ class Connectivity:
                 "jackknife supports expectation_type 'trials', 'tapers', or "
                 "'trials_tapers'; expectations involving time or retaining both "
                 "trial and taper axes have no single leave-one-out layout."
+            )
+            raise ValueError(msg)
+        if not self._observations_are_independent and self.expectation_type in {
+            "tapers",
+            "trials_tapers",
+        }:
+            msg = (
+                f"jackknife with expectation_type={self.expectation_type!r} leaves "
+                "out one taper observation at a time, but this transform's "
+                "observations are correlated (observations_are_independent is "
+                "False: a MorletWavelet smoothing neighborhood, or Welch segments "
+                "overlapping by more than half), so leave-one-out intervals over "
+                "them are invalid. Use expectation_type='trials' to jackknife "
+                "over independent trials, or a Multitaper transform whose tapers "
+                "are independent."
             )
             raise ValueError(msg)
         method_attribute = inspect.getattr_static(type(self), method, None)
@@ -4187,6 +4249,11 @@ class Connectivity:
             "degrees of freedom of the zero-coherence null, which assumes equally "
             "weighted observations.",
         )
+        self._warn_correlated_observations(
+            "group_delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null",
+        )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(
             frequency_difference, frequency_resolution
@@ -4329,6 +4396,11 @@ class Connectivity:
             "Its coherence significance test uses the observation count as the "
             "degrees of freedom of the zero-coherence null, which assumes equally "
             "weighted observations.",
+        )
+        self._warn_correlated_observations(
+            "delay",
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null",
         )
         frequency_difference = frequencies[1] - frequencies[0]
         independent_frequency_step = _get_independent_frequency_step(

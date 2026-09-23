@@ -8,6 +8,8 @@ trial-taper observations (finite-sample bias corrections, the zero-coherence
 null, leave-one-out intervals) can warn or refuse.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -82,3 +84,54 @@ def test_flag_survives_coefficient_reassignment():
     conn = Connectivity(_coefficients(rng), observations_are_independent=False)
     conn.fourier_coefficients = _coefficients(rng)
     assert conn.observations_are_independent is False
+
+
+# Every measure that reads ``n_observations`` as a count of independent samples:
+# the finite-sample bias corrections and the zero-coherence significance null.
+OBSERVATION_COUNTING_MEASURES = [
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "pairwise_phase_consistency",
+    "group_delay",
+    "delay",
+]
+
+
+@pytest.mark.parametrize("measure", OBSERVATION_COUNTING_MEASURES)
+def test_observation_counting_measures_warn_once_for_correlated_observations(measure):
+    conn = Connectivity(
+        _coefficients(np.random.default_rng(5)), observations_are_independent=False
+    )
+    with pytest.warns(UserWarning, match=f"{measure} .*correlated") as record:
+        getattr(conn, measure)()
+    correlated = [w for w in record if "correlated" in str(w.message)]
+    assert len(correlated) == 1  # one warning per call, not one per bin/pair
+
+
+@pytest.mark.parametrize("measure", OBSERVATION_COUNTING_MEASURES)
+def test_observation_counting_measures_are_silent_for_independent_observations(measure):
+    conn = Connectivity(_coefficients(np.random.default_rng(5)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        getattr(conn, measure)()
+
+
+@pytest.mark.parametrize("expectation_type", ["tapers", "trials_tapers"])
+def test_jackknife_refuses_to_leave_out_correlated_taper_observations(expectation_type):
+    conn = Connectivity(
+        _coefficients(np.random.default_rng(6)),
+        expectation_type=expectation_type,
+        observations_are_independent=False,
+    )
+    with pytest.raises(ValueError, match="observations_are_independent"):
+        conn.jackknife("phase_lag_index")
+
+
+def test_jackknife_over_trials_is_allowed_with_correlated_tapers():
+    conn = Connectivity(
+        _coefficients(np.random.default_rng(6)),
+        expectation_type="trials",
+        observations_are_independent=False,
+    )
+    result = conn.jackknife("phase_lag_index")
+    assert np.isfinite(result.standard_error).any()
