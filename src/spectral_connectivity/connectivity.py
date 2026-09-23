@@ -3337,10 +3337,15 @@ class Connectivity:
         mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "absolute"
         )
-        # Copy before the in-place zero-weight guard so the cached moment is not
-        # mutated.
+        # E[|Im|] is exactly 0 only where every observation's imaginary
+        # cross-spectrum is exactly 0 (in-phase signals, the zeroed diagonal);
+        # there E[Im] is 0 too and the 0/0 is defined as 0, matching
+        # phase_lag_index's sign(0) == 0. The guard must be an exact-zero test:
+        # E[|Im|] carries signal**2 units, so an absolute epsilon threshold
+        # would replace genuine weights for small-amplitude inputs. Copy before
+        # the in-place guard so the cached moment is not mutated.
         weights = mean_absolute.copy()
-        weights[weights < xp.finfo(float).eps] = 1
+        weights[weights == 0] = 1
         return mean_imaginary / weights
 
     @_asnumpy
@@ -3390,7 +3395,13 @@ class Connectivity:
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
-        return (n_observations * self.phase_lag_index() ** 2 - 1.0) / (n_observations - 1.0)
+        mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
+        # Vinck's closed form assumes sign(Im) is +/-1 for every observation.
+        # Where Im is exactly 0 for all of them (E[|Im|] == 0: in-phase signals,
+        # the zeroed diagonal) the sign is 0 and the form would report the
+        # spurious lower bound -1 / (n - 1); there is no lag to estimate, so 0.
+        debiased = (n_observations * mean_sign.real**2 - 1.0) / (n_observations - 1.0)
+        return xp.where(mean_absolute == 0, 0.0, debiased)
 
     @_asnumpy
     @_non_negative_frequencies(-3)
@@ -3399,6 +3410,7 @@ class Connectivity:
 
         The square of the weighted phase lag index corrected for the
         positive bias induced by using the magnitude of the complex
+    @_non_negative_frequencies(axis=-3)
         cross-spectrum.
 
         Returns
@@ -3417,6 +3429,9 @@ class Connectivity:
         References
         ----------
         .. [1] Vinck, M., Oostenveld, R., van Wingerden, M., Battaglia, F.,
+        Pairs whose imaginary cross-spectrum is exactly zero for every
+        observation (in-phase signals, and the diagonal) have no phase lag to
+        estimate and are returned as 0 rather than the lower bound.
                and Pennartz, C.M.A. (2011). An improved index of
                phase-synchronization for electrophysiological data in the
                presence of volume-conduction, noise and sample-size bias.

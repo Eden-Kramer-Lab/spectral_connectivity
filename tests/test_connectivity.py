@@ -2630,6 +2630,48 @@ def test_directed_measures_are_scale_invariant(measure):
     np.testing.assert_allclose(scaled[finite], base[finite], rtol=1e-6, atol=1e-9)
 
 
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "directed_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+    ],
+)
+@pytest.mark.parametrize("scale", [1e-9, 1e9])
+def test_phase_lag_family_is_scale_invariant(measure, scale):
+    """The phase-lag measures are ratios of imaginary cross-spectrum moments,
+    so rescaling the signal (e.g. volts vs microvolts) must not change them.
+
+    Regression: weighted_phase_lag_index guarded its denominator with an
+    absolute ``finfo(float).eps`` threshold on a quantity in signal**2 units,
+    so inputs of order 1e-9 saw every weight replaced by 1 and wPLI collapsed
+    toward 0.
+    """
+    rng = np.random.default_rng(16)
+    shape = (1, 3, 4, 8, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    mixing = rng.standard_normal((3, 3)) + 1j * rng.standard_normal((3, 3))
+    coefficients = coefficients @ mixing.T  # correlated, phase-lagged channels
+    reference = getattr(Connectivity(coefficients), measure)()
+    scaled = getattr(Connectivity(coefficients * scale), measure)()
+    np.testing.assert_allclose(scaled, reference, rtol=1e-9, atol=1e-12)
+
+
+def test_debiased_squared_phase_lag_index_is_zero_for_exactly_zero_imaginary_part():
+    """Vinck's closed form ``(n * PLI**2 - 1) / (n - 1)`` assumes every sign is
+    +/-1. When Im S_xy is exactly 0 for every observation (in-phase real
+    signals, and the diagonal) the sign is 0, and the estimate must be 0 rather
+    than the spurious lower bound ``-1 / (n - 1)``."""
+    rng = np.random.default_rng(17)
+    shape = (1, 3, 4, 8, 3)
+    real_coefficients = rng.standard_normal(shape).astype(complex)
+    connectivity = Connectivity(real_coefficients)
+    np.testing.assert_array_equal(connectivity.debiased_squared_phase_lag_index(), 0.0)
+
+
 def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""
