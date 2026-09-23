@@ -1560,23 +1560,24 @@ def test_debiased_weighted_pli_requires_multiple_observations():
 
 def test_subset_pairwise_granger_prediction():
     rng = np.random.default_rng(0)
-    T = 64
+    n_trials, n_time = 20, 64
 
-    # Generate causal signals: x -> y
-    x = rng.standard_normal((2, T))
-    y = np.zeros_like(x)
-    for t in range(1, T):
-        y[:, t] = 0.8 * x[:, t - 1]
+    # Causal signals x -> y, with independent noise on y so the spectrum is
+    # full rank.
+    x = rng.standard_normal((n_trials, n_time))
+    y = 0.1 * rng.standard_normal((n_trials, n_time))
+    y[:, 1:] += 0.8 * x[:, :-1]
 
-    # Stack to [trials, signals, time]
-    data = np.stack([x, y], axis=1)
-
-    fft_data = np.fft.rfft(data, axis=-1)
-    fourier_coefficients = fft_data[None, :, None, :, :]
+    # (n_trials, n_time, n_signals) -> two-sided FFT over time, then
+    # (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+    fft_data = np.fft.fft(np.stack([x, y], axis=-1), axis=1)
+    fourier_coefficients = fft_data[np.newaxis, :, np.newaxis, :, :]
     c = Connectivity(fourier_coefficients=fourier_coefficients)
-    pairs = np.array([[0, 0], [0, 1]])
+    pairs = np.array([[0, 1]])
     gp_subset = c.subset_pairwise_spectral_granger_prediction(pairs)
     gp_all = c.pairwise_spectral_granger_prediction()
+    # Output [i, j] is j -> i: the x -> y influence dominates y -> x.
+    assert np.nanmean(gp_all[..., 1, 0]) > 10 * np.nanmean(gp_all[..., 0, 1])
     assert gp_subset.shape == gp_all.shape
     for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)
