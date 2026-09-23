@@ -109,6 +109,7 @@ def baccala_example2():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -159,6 +160,7 @@ def baccala_example3():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -206,6 +208,7 @@ def baccala_example4():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -254,6 +257,7 @@ def baccala_example5():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -302,6 +306,7 @@ def baccala_example6():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -345,6 +350,7 @@ def ding_example1():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -393,6 +399,7 @@ def ding_example2a():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -441,6 +448,7 @@ def ding_example2b():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=100,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -496,6 +504,7 @@ def ding_example3():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -534,6 +543,7 @@ def Nedungadi_example1():
             n_time_samples=n_time_samples,
             n_trials=1000,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -572,6 +582,7 @@ def Nedungadi_example2():
             n_time_samples=n_time_samples,
             n_trials=1000,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -618,6 +629,7 @@ def Wen_example1():
             n_time_samples=n_time_samples,
             n_trials=500,
             n_burnin_samples=500,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -669,6 +681,7 @@ def Wen_example2():
             n_time_samples=n_time_samples,
             n_trials=200,
             n_burnin_samples=100,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -708,6 +721,7 @@ def Dhamala_example1():
             n_time_samples=n_time_samples,
             n_trials=4000,
             n_burnin_samples=1000,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -743,6 +757,7 @@ def Dhamala_example2a():
             n_time_samples=n_time_samples,
             n_trials=1000,
             n_burnin_samples=1000,
+            random_state=0,
         ),
         sampling_frequency,
     )
@@ -768,6 +783,7 @@ def Dhamala_example2b():
             n_time_samples=n_time_samples,
             n_trials=1000,
             n_burnin_samples=1000,
+            random_state=0,
         ),
         sampling_frequency,
     )
