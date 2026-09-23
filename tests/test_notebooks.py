@@ -87,7 +87,9 @@ def _numeric_allclose(a, b):
     if isinstance(a, dict) and isinstance(b, dict):
         return a.keys() == b.keys() and all(_numeric_allclose(a[k], b[k]) for k in a)
     if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(_numeric_allclose(x, y) for x, y in zip(a, b))
+        return len(a) == len(b) and all(
+            _numeric_allclose(x, y) for x, y in zip(a, b, strict=True)
+        )
     a, b = np.asarray(a), np.asarray(b)
     return a.shape == b.shape and bool(
         np.allclose(a, b, rtol=_RTOL, atol=_ATOL, equal_nan=True)

@@ -11,7 +11,7 @@ from typing import Any, Literal, NamedTuple, TypeAlias
 
 import numpy as np
 import xarray as xr
-from numpy.typing import NDArray
+from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity.connectivity import (
     _NON_MEASURE_METHODS,
@@ -623,14 +623,13 @@ def _connectivity_result_to_xarray(
 
     if measure_spec.output_kind == "power":
         # squeeze has no meaning for power (no target axis); it is a no-op here.
-        xar = xr.DataArray(
+        return xr.DataArray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source"),
             name=method,
             attrs=attrs,
         )
-        return xar
 
     if measure_spec.output_kind == "pairwise":
         coordinates["target"] = signal_coordinates["target"]
@@ -1376,7 +1375,7 @@ def _format_and_reduce_measures(
                         **connectivity_kwargs,
                     )
                 )
-            except UnsupportedMeasureError as error:
+            except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
                 # A measure whose result shape does not fit the xarray layout can
                 # be skipped in a batch. In-package structural incompatibility is
                 # surfaced as UnsupportedMeasureError before the measure runs; a
@@ -2415,7 +2414,7 @@ def fourier_connectivity(
     taper_dim: Hashable | None = None,
     frequency_dim: Hashable | None = None,
     signal_dim: Hashable | None = None,
-    dtype: np.dtype = np.dtype(np.complex128),
+    dtype: DTypeLike = np.complex128,
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
 ) -> xr.DataArray | xr.Dataset:

@@ -203,7 +203,7 @@ def test_get_initial_conditions_isolates_non_positive_definite_units():
 
 
 @pytest.mark.parametrize(
-    "dtype, small",
+    ("dtype", "small"),
     [
         (np.complex128, 1e-12),  # below eps(float64)-scaled floors
         (np.complex64, 1e-7),  # below eps(float32)-scaled floors, but PD

@@ -105,7 +105,7 @@ def test_category_filter_selects_matching_output_kind():
 
 def test_invalid_category_lists_valid_categories():
     """An unknown category raises and names the valid categories."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Unknown category 'not_a_category'") as excinfo:
         list_measures(category="not_a_category")
     message = str(excinfo.value)
     assert "not_a_category" in message

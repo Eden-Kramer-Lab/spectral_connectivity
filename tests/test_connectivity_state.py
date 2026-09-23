@@ -7,7 +7,6 @@ from functools import cached_property
 
 import numpy as np
 import pytest
-from pytest import mark
 
 from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
@@ -136,7 +135,7 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy, not a view of the snapshot
     assert returned.flags.writeable is False
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read-only"):
         returned[...] = 0.0
     # Even re-enabling writeability (permitted on an owning copy) and mutating it
     # cannot reach the instance: the copy shares no buffer with the snapshot.
@@ -162,7 +161,8 @@ def test_fourier_coefficients_getter_returns_fresh_independent_copy():
     # Distinct objects, neither aliasing the backing snapshot.
     assert first is not second
     assert first is not c._fourier_coefficients
-    assert first.base is None and second.base is None
+    assert first.base is None
+    assert second.base is None
     np.testing.assert_array_equal(first, c._fourier_coefficients)
 
     # Re-enable and mutate one copy; the other copy, the snapshot, and the cache
@@ -220,11 +220,11 @@ def test_from_multitaper_adopts_without_copying():
     base = stored
     while base.base is not None:
         base = base.base
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read-only"):
         base[(0,) * base.ndim] = 0.0
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "make",
     [
         lambda m: Connectivity.from_multitaper(m),  # adoption path (frozen view)
@@ -424,7 +424,7 @@ class _StringSlottedConnectivity(Connectivity):
     __slots__ = "extra_metadata"
 
 
-@mark.parametrize("subclass", [_SlottedConnectivity, _StringSlottedConnectivity])
+@pytest.mark.parametrize("subclass", [_SlottedConnectivity, _StringSlottedConnectivity])
 def test_pickle_and_copy_preserve_subclass_slots(subclass):
     """Python\'s default state handling preserves subclass slots."""
 

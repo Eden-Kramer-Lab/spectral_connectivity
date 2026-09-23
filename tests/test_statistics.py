@@ -4,7 +4,6 @@ import warnings
 
 import numpy as np
 import pytest
-from pytest import mark
 
 from spectral_connectivity.statistics import (
     Benjamini_Hochberg_procedure,
@@ -73,8 +72,8 @@ def test_fisher_z_transform():
     )
 
 
-@mark.parametrize(
-    "p_values, expected_is_significant",
+@pytest.mark.parametrize(
+    ("p_values", "expected_is_significant"),
     [
         (np.ones((10, 2)), np.zeros((10, 2), dtype=bool)),
         (np.zeros((10, 2)), np.ones((10, 2), dtype=bool)),
@@ -137,7 +136,7 @@ def test_Benjamini_Hochberg_warns_when_whole_family_undefined():
 
 def test_Benjamini_Hochberg_out_of_range_error_names_values():
     """The out-of-range error reports how many values and their min/max."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match=r"p_values must all be in \[0, 1\]") as excinfo:
         Benjamini_Hochberg_procedure(np.array([0.1, 1.5, -0.2, 0.3]), alpha=0.05)
     message = str(excinfo.value)
     assert "2 value(s) outside" in message
@@ -169,8 +168,8 @@ def test_Benjamini_Hochberg_rejects_out_of_range_pvalues():
         Benjamini_Hochberg_procedure(np.array([0.1, 1.5, 0.2]), alpha=0.05)
 
 
-@mark.parametrize(
-    "p_values, expected_is_significant",
+@pytest.mark.parametrize(
+    ("p_values", "expected_is_significant"),
     [
         (np.ones((10, 2)), np.zeros((10, 2), dtype=bool)),
         (np.zeros((10, 2)), np.ones((10, 2), dtype=bool)),
@@ -351,7 +350,7 @@ def test_power_fisher_z_transform_rejects_nonpositive_power():
         power_fisher_z_transform(np.array([1.0, 2.0]), n_obs1=30, spectrum2=0.0)
 
 
-@mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
+@pytest.mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
 def test_power_confidence_intervals_rejects_out_of_range_ci(bad_ci):
     """ci must be in [0.5, 1.0); out-of-range values raise instead of inverting."""
     with pytest.raises(ValueError, match="ci"):

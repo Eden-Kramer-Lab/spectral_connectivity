@@ -29,7 +29,6 @@ import warnings
 
 import numpy as np
 import pytest
-from pytest import mark
 from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity
@@ -94,7 +93,7 @@ def test_injected_cross_spectrum_matches_analytic(var_oracle):
     np.testing.assert_allclose(csm, var_oracle["S"], atol=1e-8)
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "measure",
     [
         "directed_transfer_function",
@@ -289,12 +288,12 @@ _CHAIN_COEFFICIENTS = np.stack(
 
 
 @pytest.mark.parametrize(
-    "coefficients, noise_covariance",
+    ("coefficients", "noise_covariance"),
     [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
     ids=["chain", "dense_correlated"],
 )
 @pytest.mark.parametrize(
-    "n_fft, atol", [(128, 2e-5), (1024, 1e-10)], ids=["nfft128", "nfft1024"]
+    ("n_fft", "atol"), [(128, 2e-5), (1024, 1e-10)], ids=["nfft128", "nfft1024"]
 )
 def test_conditional_granger_matches_state_space_oracle(
     coefficients, noise_covariance, n_fft, atol

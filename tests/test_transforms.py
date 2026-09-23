@@ -3,7 +3,6 @@ import warnings
 import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
-from pytest import mark
 
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
@@ -54,8 +53,8 @@ def test__add_axes():
     assert np.allclose(_add_axes(test_data).shape, expected_shape)
 
 
-@mark.parametrize(
-    "test_array, window_size, step_size, axis, expected_array",
+@pytest.mark.parametrize(
+    ("test_array", "window_size", "step_size", "axis", "expected_array"),
     [
         (np.arange(1, 6), 3, 1, -1, np.array([[1, 2, 3], [2, 3, 4], [3, 4, 5]])),
         (np.arange(1, 6), 3, 2, -1, np.array([[1, 2, 3], [3, 4, 5]])),
@@ -93,7 +92,7 @@ def test__sliding_window(test_array, window_size, step_size, axis, expected_arra
     )
 
 
-@mark.parametrize("axis", [2, 3, -3, -4])
+@pytest.mark.parametrize("axis", [2, 3, -3, -4])
 def test__sliding_window_rejects_out_of_range_axis(axis):
     """An out-of-range axis must raise, not wrap onto a real dimension.
 
@@ -105,7 +104,7 @@ def test__sliding_window_rejects_out_of_range_axis(axis):
         _sliding_window(data, window_size=2, axis=axis)
 
 
-@mark.parametrize("step_size", [0, -1, -2])
+@pytest.mark.parametrize("step_size", [0, -1, -2])
 def test__sliding_window_rejects_non_positive_step(step_size):
     """A non-positive step is not a forward slide and must raise.
 
@@ -115,7 +114,9 @@ def test__sliding_window_rejects_non_positive_step(step_size):
         _sliding_window(np.arange(6), window_size=2, step_size=step_size)
 
 
-@mark.parametrize("time_halfbandwidth_product, expected_n_tapers", [(3, 5), (1, 1), (1.75, 2)])
+@pytest.mark.parametrize(
+    ("time_halfbandwidth_product", "expected_n_tapers"), [(3, 5), (1, 1), (1.75, 2)]
+)
 def test_n_tapers(time_halfbandwidth_product, expected_n_tapers):
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
@@ -125,8 +126,8 @@ def test_n_tapers(time_halfbandwidth_product, expected_n_tapers):
     assert m.n_tapers == expected_n_tapers
 
 
-@mark.parametrize(
-    "sampling_frequency, time_window_duration, expected_duration",
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_duration", "expected_duration"),
     [(1000, None, 0.1), (2000, None, 0.05), (1000, 0.1, 0.1)],
 )
 def test_time_window_duration(sampling_frequency, time_window_duration, expected_duration):
@@ -140,8 +141,8 @@ def test_time_window_duration(sampling_frequency, time_window_duration, expected
     assert m.time_window_duration == expected_duration
 
 
-@mark.parametrize(
-    "sampling_frequency, time_window_step, expected_step",
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_step", "expected_step"),
     [(1000, None, 0.1), (2000, None, 0.05), (1000, 0.1, 0.1)],
 )
 def test_time_window_step(sampling_frequency, time_window_step, expected_step):
@@ -155,8 +156,8 @@ def test_time_window_step(sampling_frequency, time_window_step, expected_step):
     assert m.time_window_step == expected_step
 
 
-@mark.parametrize(
-    ("sampling_frequency, time_window_duration,expected_n_time_samples_per_window"),
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_duration", "expected_n_time_samples_per_window"),
     [(1000, None, 100), (1000, 0.1, 100), (2000, 0.025, 50)],
 )
 def test_n_time_samples(
@@ -172,8 +173,8 @@ def test_n_time_samples(
     assert m.n_time_samples_per_window == expected_n_time_samples_per_window
 
 
-@mark.parametrize(
-    ("sampling_frequency, time_window_duration, n_fft_samples,expected_n_fft_samples"),
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_duration", "n_fft_samples", "expected_n_fft_samples"),
     [(1000, None, 128, 128), (1000, 0.1, None, 100)],
 )
 def test_n_fft_samples(
@@ -240,8 +241,8 @@ def test_n_trials():
     assert m.n_trials == 1
 
 
-@mark.parametrize(
-    ("time_halfbandwidth_product, time_window_duration, expected_frequency_resolution"),
+@pytest.mark.parametrize(
+    ("time_halfbandwidth_product", "time_window_duration", "expected_frequency_resolution"),
     [(3, 0.10, 60), (1, 0.02, 100), (5, 1, 10)],
 )
 def test_frequency_resolution(
@@ -257,8 +258,8 @@ def test_frequency_resolution(
     assert m.frequency_resolution == expected_frequency_resolution
 
 
-@mark.parametrize(
-    ("time_window_step, n_time_samples_per_step, expected_n_samples_per_time_step"),
+@pytest.mark.parametrize(
+    ("time_window_step", "n_time_samples_per_step", "expected_n_samples_per_time_step"),
     [(None, None, 100), (0.001, None, 1), (0.002, None, 2), (None, 10, 10)],
 )
 def test_n_samples_per_time_step(
@@ -276,7 +277,7 @@ def test_n_samples_per_time_step(
     assert m.n_time_samples_per_step == expected_n_samples_per_time_step
 
 
-@mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
+@pytest.mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
 def test_time(time_window_duration):
     sampling_frequency = 1500
     start_time, end_time = -2.4, 2.4
@@ -309,8 +310,8 @@ def test_tapers():
     assert np.allclose(m.tapers.shape, (10, 3))
 
 
-@mark.parametrize(
-    "eigenvalues, expected_n_tapers",
+@pytest.mark.parametrize(
+    ("eigenvalues", "expected_n_tapers"),
     [
         (np.array([0.95, 0.95, 0.95]), 3),
         (np.array([0.95, 0.8, 0.95]), 2),
@@ -323,8 +324,8 @@ def test__get_low_bias_tapers(eigenvalues, expected_n_tapers):
     assert filtered_tapers.shape[0] == filtered_eigenvalues.shape[0] == expected_n_tapers
 
 
-@mark.parametrize(
-    "n_time_samples, time_halfbandwidth_product, n_tapers",
+@pytest.mark.parametrize(
+    ("n_time_samples", "time_halfbandwidth_product", "n_tapers"),
     [(1000, 3, 5), (31, 6, 4), (31, 7, 4)],
 )
 def test_dpss_windows(n_time_samples, time_halfbandwidth_product, n_tapers):
@@ -757,7 +758,7 @@ def test_morlet_default_zero_padding_matches_same_convolution():
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
 
 
-@mark.parametrize("padding_mode", ["reflect", "edge"])
+@pytest.mark.parametrize("padding_mode", ["reflect", "edge"])
 def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     from scipy.signal import fftconvolve
 

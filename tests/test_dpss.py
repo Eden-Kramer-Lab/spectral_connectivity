@@ -6,14 +6,13 @@ These live outside ``test_transforms.py`` so they do not depend on the optional
 
 import numpy as np
 import pytest
-from pytest import mark
 from scipy.signal.windows import dpss as scipy_dpss
 
 from spectral_connectivity.transforms import dpss_windows
 
 
-@mark.parametrize(
-    "n_time_samples, time_halfbandwidth_product, n_tapers",
+@pytest.mark.parametrize(
+    ("n_time_samples", "time_halfbandwidth_product", "n_tapers"),
     [(8, 2, 3), (16, 3, 5), (7, 2, 3)],
 )
 def test_dpss_windows_no_nan_matches_scipy(
@@ -50,23 +49,24 @@ def test_dpss_low_bias_keeps_valid_tapers():
     assert np.all(eigenvalues > 0.9)
 
 
-@mark.parametrize(
-    "n, nw, k",
+@pytest.mark.parametrize(
+    ("n", "nw", "k", "match"),
     [
-        (3, 2, 3),  # NW >= n/2 -> invalid (eigenvalues could exceed 1)
-        (8, 5, 3),  # NW >= n/2
-        (8, 2, 20),  # n_tapers > window length
-        (8, 2, 0),  # n_tapers < 1
-        (1, 0.25, 1),  # window length < 2
+        # NW >= n/2 -> invalid (eigenvalues could exceed 1)
+        (3, 2, 3, "time_halfbandwidth_product"),
+        (8, 5, 3, "time_halfbandwidth_product"),  # NW >= n/2
+        (8, 2, 20, "n_tapers must satisfy"),  # n_tapers > window length
+        (8, 2, 0, "n_tapers must satisfy"),  # n_tapers < 1
+        (1, 0.25, 1, "n_time_samples_per_window must be >= 2"),  # window length < 2
     ],
 )
-def test_dpss_windows_rejects_invalid_bandwidth_or_taper_count(n, nw, k):
+def test_dpss_windows_rejects_invalid_bandwidth_or_taper_count(n, nw, k, match):
     """Invalid NW/window/n_tapers combinations must raise, not return bad tapers."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=match):
         dpss_windows(n, nw, k, is_low_bias=False)
 
 
-@mark.parametrize("nw", [0.25, 0.5, 0.9])
+@pytest.mark.parametrize("nw", [0.25, 0.5, 0.9])
 def test_dpss_windows_two_sample_two_tapers_raises_clearly(nw):
     """A two-sample window with two tapers must raise a clear error.
 
@@ -84,7 +84,7 @@ def test_dpss_windows_two_sample_two_tapers_raises_clearly(nw):
     assert np.isfinite(tapers).all()
 
 
-@mark.parametrize("bad_n_tapers", [2.9, 1.5, np.nan])
+@pytest.mark.parametrize("bad_n_tapers", [2.9, 1.5, np.nan])
 def test_dpss_windows_rejects_fractional_n_tapers(bad_n_tapers):
     """A fractional n_tapers must raise, not be silently truncated."""
     with pytest.raises(ValueError, match="n_tapers must be an integer"):
@@ -99,6 +99,6 @@ def test_multitaper_rejects_fractional_n_tapers():
     """
     from spectral_connectivity.transforms import Multitaper
 
+    time_series = np.random.default_rng(0).standard_normal((100, 1, 2))
     with pytest.raises(ValueError, match="n_tapers must be an integer"):
-        rng = np.random.default_rng(0)
-        Multitaper(rng.standard_normal((100, 1, 2)), sampling_frequency=100.0, n_tapers=2.9)
+        Multitaper(time_series, sampling_frequency=100.0, n_tapers=2.9)

@@ -46,7 +46,9 @@ def test_invalid_expectation_type_raises_error():
 
     invalid_type = "invalid_option"
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(
+        ValueError, match="Invalid expectation_type 'invalid_option'"
+    ) as exc_info:
         Connectivity(fourier_coefficients=fourier_coefficients, expectation_type=invalid_type)
 
     error_msg = str(exc_info.value)
@@ -69,7 +71,7 @@ def test_case_sensitive_expectation_type():
     ).astype(np.complex128)
 
     # Should fail - case sensitivity
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Invalid expectation_type 'TRIALS'"):
         Connectivity(
             fourier_coefficients=fourier_coefficients,
             expectation_type="TRIALS",  # uppercase should fail

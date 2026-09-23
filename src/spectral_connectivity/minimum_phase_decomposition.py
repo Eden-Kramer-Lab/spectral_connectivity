@@ -28,7 +28,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
         )
         raise RuntimeError(msg) from exc
 else:
-    import numpy as xp
+    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import fft, ifft
 
 
@@ -127,7 +127,7 @@ def _get_initial_conditions(
         for index in range(flat_zero_lag.shape[0]):
             try:
                 xp.linalg.cholesky(flat_zero_lag[index])
-            except xp.linalg.LinAlgError:
+            except xp.linalg.LinAlgError:  # noqa: PERF203 -- per-unit on purpose (see above)
                 not_positive_definite[index] = True
         # Deterministic well-conditioned PD start for the failed units. The
         # previous code averaged N_RAND=1000 random Wishart draws
@@ -289,7 +289,7 @@ def minimum_phase_reconstruction_error(
     iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
     biasing every directed-connectivity measure built on it (spectral Granger,
     DTF, PDC). This is an opt-in diagnostic: it returns
-    ``max_f ‖G Gᴴ − S‖ / max_f ‖S‖`` for each sub-spectrum so callers can check
+    ``max_f ‖G Gᴴ - S‖ / max_f ‖S‖`` for each sub-spectrum so callers can check
     factorization quality explicitly.
 
     A relative error near machine precision indicates a faithful factorization;
@@ -561,7 +561,10 @@ def minimum_phase_decomposition(
         # every iteration; guard it so it only runs when debug logging is on.
         if logger.isEnabledFor(DEBUG):
             logger.debug(
-                f"iteration: {iteration}, {int(is_converged.sum())} of {n_units} converged"
+                "iteration: %d, %d of %d converged",
+                iteration,
+                int(is_converged.sum()),
+                n_units,
             )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         # A rank-deficient sub-spectrum makes the batched solve inside

@@ -145,40 +145,48 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# Enable pycodestyle (E, W), Pyflakes (F), isort (I), numpy-specific (NPY),
-# pydocstyle (D), pyupgrade (UP), and more
 select = [
-    "E",     # pycodestyle errors
-    "W",     # pycodestyle warnings
-    "F",     # Pyflakes
-    "I",     # isort
-    "N",     # pep8-naming
-    "UP",    # pyupgrade
-    "B",     # flake8-bugbear
-    "C4",    # flake8-comprehensions
-    "NPY",   # numpy-specific rules
-    "RUF",   # Ruff-specific rules
-    "EM",    # exception messages assigned before the raise
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "NPY",  # numpy-specific rules
+    "PD",   # pandas-vet
+    "RUF",  # ruff-specific rules
+    "ARG",  # unused arguments
+    "EM",   # exception messages assigned before the raise
+    "EXE",  # shebangs
+    "FURB", # refurb modernizations
+    "G",    # logging format
+    "ICN",  # import conventions
+    "ISC",  # implicit string concatenation
+    "PERF", # performance anti-patterns
+    "PGH",  # pygrep hooks (blanket noqa, type: ignore without code)
+    "PIE",  # misc lints
+    "PT",   # pytest style
+    "PTH",  # pathlib over os.path
+    "RET",  # return statements
+    "SIM",  # simplifications
+    "T20",  # print statements
+    "YTT",  # sys.version misuse
 ]
 ignore = [
-    "E501",  # line too long (handled by the formatter)
-    "B008",  # do not perform function calls in argument defaults
-    "B905",  # zip without explicit strict parameter
-    "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
-    "N803",  # argument name should be lowercase (conflicts with scientific notation)
-    "N806",  # variable in function should be lowercase (conflicts with scientific notation)
-    "RUF002", # docstring contains ambiguous unicode characters (mathematical symbols are intentional)
+    "E501",    # line too long (handled by ruff format)
+    "ISC001",  # conflicts with the formatter
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
-"tests/*.py" = ["D"]      # Don't require docstrings in tests
+"tests/*" = ["ARG"]  # pytest fixtures are used by name, not by value
 # examples/ are Jupytext notebook scripts, not modules: cells legitimately
 # import after markdown/code cells (E402), bare expressions display values in a
-# cell (B018), and narrative comments contain unicode such as non-breaking
-# spaces (RUF003, mirroring the already-ignored RUF002 for docstrings).
-# They also mirror the notebooks' seeded legacy np.random draws (NPY002).
-"examples/*.py" = ["E402", "B018", "RUF003", "NPY002"]
+# cell (B018), print results (T201), zip demo arrays (B905), and narrative text
+# contains unicode such as non-breaking spaces (RUF002, RUF003). They also
+# mirror the notebooks' seeded legacy np.random draws (NPY002).
+"examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003", "NPY002"]
 "*.ipynb" = ["NPY002"]  # legacy np.random kept for pedagogical simplicity
 # The snapshot tests reproduce the notebooks' seeded legacy np.random data;
 # switching generators would change every snapshotted value.

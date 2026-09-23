@@ -64,7 +64,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
                 # Fallback to compute capability
                 compute_cap = device.compute_capability
                 device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-            logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+            logger.info("Using GPU for spectral_connectivity on %s", device_name)
         except Exception:
             logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
@@ -76,7 +76,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
         raise RuntimeError(msg) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp
+    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import ifft
     from scipy.sparse.linalg import svds
 
@@ -1517,7 +1517,7 @@ class Connectivity:
         Notes
         -----
         **Range**: Magnitude :math:`|C_{xy}(f)|` is in [0, 1]; phase is in
-        [−π, π].
+        [-π, π].
         Values lie in the unit disk of the complex plane.
 
         """
@@ -1557,7 +1557,7 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: [−π, π]. Phase angles in radians for complex coherency.
+        **Range**: [-π, π]. Phase angles in radians for complex coherency.
 
         """
         phase: NDArray[np.floating] = xp.angle(self._coherency())
@@ -1586,7 +1586,7 @@ class Connectivity:
         .. [1] Hansson-Sandsten M (2011) Cross-spectrum and coherence function
                estimation using time-delayed Thomson multitapers. In: 2011 IEEE
                International Conference on Acoustics, Speech and Signal
-               Processing (ICASSP), pp 4240–4243.
+               Processing (ICASSP), pp 4240-4243.
 
         """
         magnitude = _squared_magnitude(self._coherency())
@@ -2372,7 +2372,7 @@ class Connectivity:
                Salazar-Gomez, A.F., Harrell, P.G., Tavares-Stoeckel, C.,
                Habeeb, K., and Brown, E.N. (2011). Tracking brain states under
                general anesthesia by using global coherence analysis.
-               Proceedings of the National Academy of Sciences 108, 8832–8837.
+               Proceedings of the National Academy of Sciences 108, 8832-8837.
 
         """
         self._validate_multiple_signals()
@@ -3417,7 +3417,7 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: (−∞, ∞). Time delays can be positive or negative.
+        **Range**: (-∞, ∞). Time delays can be positive or negative.
 
         References
         ----------
@@ -3647,7 +3647,7 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: (−∞, ∞). Signed directional measure with no bounds.
+        **Range**: (-∞, ∞). Signed directional measure with no bounds.
 
         References
         ----------
@@ -4155,8 +4155,7 @@ def _estimate_predictive_power(
         predictive_power = xp.log(total_power[..., xp.newaxis]) - xp.log(intrinsic_power)
     # A near-singular rotation can drive intrinsic_power above total_power,
     # giving a negative log-ratio; clip roundoff to zero and NaN the rest.
-    predictive_power = _sanitized_nonnegative_granger(predictive_power)
-    return predictive_power
+    return _sanitized_nonnegative_granger(predictive_power)
 
 
 def _squared_magnitude(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
@@ -4314,11 +4313,10 @@ def _get_noise_variance(
     noise_variance = xp.diagonal(noise_covariance, axis1=-1, axis2=-2)
     if axis == -2:
         return noise_variance[..., xp.newaxis, :, xp.newaxis]
-    elif axis == -1:
+    if axis == -1:
         return noise_variance[..., xp.newaxis, xp.newaxis, :]
-    else:
-        msg = f"axis must be -2 (target) or -1 (source), got {axis}"
-        raise ValueError(msg)
+    msg = f"axis must be -2 (target) or -1 (source), got {axis}"
+    raise ValueError(msg)
 
 
 def _max_psd_discrepancy(
@@ -4588,8 +4586,7 @@ def _find_largest_significant_group(
         max_group = label_groups[np.argmax(label_counts)]
         in_largest: NDArray[np.bool_] = labeled == max_group
         return in_largest
-    else:
-        return np.zeros(is_significant.shape, dtype=bool)
+    return np.zeros(is_significant.shape, dtype=bool)
 
 
 def _get_independent_frequencies(

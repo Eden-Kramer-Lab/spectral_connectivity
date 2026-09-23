@@ -30,7 +30,7 @@ def test_constant_detrend_removes_mean():
     np.testing.assert_allclose(result, x - x.mean(), atol=1e-12)
 
 
-@pytest.mark.parametrize("alias,full", [("l", "linear"), ("c", "constant")])
+@pytest.mark.parametrize(("alias", "full"), [("l", "linear"), ("c", "constant")])
 def test_short_type_aliases_match_full_names(alias, full):
     """The ``'l'``/``'c'`` aliases map to linear/constant, not silently to one.
 

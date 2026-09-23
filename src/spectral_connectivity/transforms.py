@@ -116,7 +116,7 @@ class MultitaperParameters(TypedDict):
 
 
 def estimate_frequency_resolution(
-    sampling_frequency: float,
+    sampling_frequency: float,  # noqa: ARG001 -- public API; resolution does not use it
     time_window_duration: float,
     time_halfbandwidth_product: float,
 ) -> float:
@@ -498,12 +498,12 @@ if not TYPE_CHECKING and is_gpu_enabled():
             # Fallback to compute capability
             compute_cap = device.compute_capability
             device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-        logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+        logger.info("Using GPU for spectral_connectivity on %s", device_name)
     except Exception:
         logger.info("Using GPU for spectral_connectivity...")
 else:
     logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp
+    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.signal import detrend as _backend_detrend
 
@@ -1159,7 +1159,7 @@ class Multitaper:
             )
             overlap_desc = f"({overlap_percent:.0f}% overlap)"
 
-        summary = f"""Multitaper Spectral Analysis Configuration
+        return f"""Multitaper Spectral Analysis Configuration
 ===========================================
 
 Data Shape
@@ -1187,8 +1187,6 @@ Nyquist frequency:    {self.nyquist_frequency:.1f} Hz
 Frequency range:      0.0 - {self.nyquist_frequency:.1f} Hz
 FFT samples:          {self.n_fft_samples}
 """
-
-        return summary
 
     @property
     def tapers(self) -> NDArray[np.floating]:
@@ -2345,8 +2343,8 @@ def prepare_time_series(
     -----
     **Common mistake:** Using 2D data without specifying the axis parameter.
     A 2D array (100, 5) could mean either:
-    - 100 time points × 5 signals (1 trial) → use axis="signals"
-    - 100 time points × 5 trials (1 signal) → use axis="trials"
+    - 100 time points x 5 signals (1 trial) → use axis="signals"
+    - 100 time points x 5 trials (1 signal) → use axis="trials"
 
     You must explicitly specify which interpretation is correct.
 
@@ -2361,7 +2359,7 @@ def prepare_time_series(
         # Single time series: (n_time,) → (n_time, 1, 1)
         return time_series_array[:, xp.newaxis, xp.newaxis]
 
-    elif ndim == 2:
+    if ndim == 2:
         # Ambiguous case - require explicit axis specification
         if axis is None:
             msg = (
@@ -2383,23 +2381,20 @@ def prepare_time_series(
         if axis == "signals":
             # (n_time, n_signals) → (n_time, 1, n_signals)
             return time_series_array[:, xp.newaxis, :]
-        elif axis == "trials":
+        if axis == "trials":
             # (n_time, n_trials) → (n_time, n_trials, 1)
             return time_series_array[:, :, xp.newaxis]
-        else:
-            msg = f"axis must be either 'signals' or 'trials', got: {axis!r}"
-            raise ValueError(msg)
+        msg = f"axis must be either 'signals' or 'trials', got: {axis!r}"
+        raise ValueError(msg)
 
-    elif ndim == 3:
+    if ndim == 3:
         # Already in correct format
         return time_series_array
 
-    else:
-        msg = (
-            f"Expected 1D, 2D, or 3D array, got {ndim}D array with shape "
-            f"{time_series_array.shape}"
-        )
-        raise ValueError(msg)
+    msg = (
+        f"Expected 1D, 2D, or 3D array, got {ndim}D array with shape {time_series_array.shape}"
+    )
+    raise ValueError(msg)
 
 
 def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -2407,10 +2402,9 @@ def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
     n_axes = len(time_series.shape)
     if n_axes == 1:  # add trials and signals axes
         return time_series[:, xp.newaxis, xp.newaxis]
-    elif n_axes == 2:  # add trials axis
+    if n_axes == 2:  # add trials axis
         return time_series[:, xp.newaxis, ...]
-    else:
-        return time_series
+    return time_series
 
 
 def _sliding_window(

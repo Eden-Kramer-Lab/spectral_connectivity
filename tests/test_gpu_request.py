@@ -23,7 +23,7 @@ def test_gpu_behavior_without_cupy():
     """Test behavior when CuPy is not available in the current environment."""
     # Try to import cupy - if it fails, this validates our error path would trigger
     try:
-        import cupy  # noqa
+        import cupy  # noqa: F401
 
         pytest.skip("CuPy is installed in this environment")
     except ImportError:

@@ -5,7 +5,6 @@ import warnings
 import numpy as np
 import pytest
 import xarray as xr
-from pytest import mark
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
 from spectral_connectivity.connectivity import Connectivity
@@ -23,7 +22,7 @@ from spectral_connectivity.wrapper import (
 )
 
 
-@mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
+@pytest.mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
 def test_multitaper_coherence_magnitude(time_window_duration):
     rng = np.random.default_rng(42)
     sampling_frequency = 1500
@@ -52,7 +51,7 @@ def test_multitaper_coherence_magnitude(time_window_duration):
     assert not (np.isnan(m.values)).all()
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "method",
     [
         "canonical_coherence",
@@ -229,7 +228,7 @@ def test_fourier_connectivity_exposes_global_dataset():
     assert result.sizes["frequency"] == 9
 
 
-@mark.parametrize("n_signals", range(2, 5))
+@pytest.mark.parametrize("n_signals", range(2, 5))
 def test_multitaper_n_signals(n_signals):
     """
     Test dataarray interface
@@ -264,7 +263,7 @@ def test_multitaper_n_signals(n_signals):
         assert not (np.isnan(m.values)).all()
 
 
-@mark.parametrize("n_signals", range(2, 5))
+@pytest.mark.parametrize("n_signals", range(2, 5))
 def test_multitaper_connectivities_n_signals(n_signals):
     np.random.default_rng(42)
     time_window_duration = 0.1
@@ -1102,7 +1101,8 @@ class TestProvenanceSerialization:
         assert _json_compatible(np.array([1, 2, 3])) == [1, 2, 3]
         # No numpy reprs leak into the JSON string.
         encoded = _canonical_json({"w": np.array([1.0, 2.0])})
-        assert "float64" not in encoded and "array" not in encoded
+        assert "float64" not in encoded
+        assert "array" not in encoded
 
     def test_nested_mapping_is_sorted_and_deterministic(self):
         value = {"b": 1, "a": {"d": 2, "c": 3}}
@@ -1309,9 +1309,11 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     gpu_multitaper = Multitaper(time_series, sampling_frequency=500, fft_workers=-1)
     _ = gpu_multitaper.tapers
     recorded = []
-    with patch.object(transforms, "is_gpu_enabled", lambda: True):
-        with patch.object(transforms, "fft", spying_fft(recorded)):
-            gpu_multitaper.fft()
+    with (
+        patch.object(transforms, "is_gpu_enabled", lambda: True),
+        patch.object(transforms, "fft", spying_fft(recorded)),
+    ):
+        gpu_multitaper.fft()
     assert recorded == ["MISSING"]
 
 
@@ -1508,7 +1510,7 @@ def test_default_method_set_is_explicit_and_ordered():
         "power",
         "weighted_phase_lag_index",
     )
-    assert DEFAULT_METHODS == expected
+    assert expected == DEFAULT_METHODS
     # The deliberately excluded measures must not be in the default.
     for excluded in ("coherency", "global_coherence", "phase_slope_index"):
         assert excluded not in DEFAULT_METHODS
@@ -2058,7 +2060,7 @@ _DTF_FAMILY = [
 ]
 
 
-@mark.parametrize("method", _DTF_FAMILY)
+@pytest.mark.parametrize("method", _DTF_FAMILY)
 def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
     """The DTF family is opt-in through the wrapper and oriented source -> target.
 
@@ -2249,7 +2251,8 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
 
     validity = np.asarray(transform.valid_time_frequency)
     expected_valid = np.stack([validity[:, :2].all(axis=1), validity.all(axis=1)], 1)
-    assert not expected_valid.all() and expected_valid.any()  # a real edge case
+    assert not expected_valid.all()
+    assert expected_valid.any()
     np.testing.assert_array_equal(mean.valid_time_band.values, expected_valid)
     np.testing.assert_array_equal(integral.valid_time_band.values, expected_valid)
     # NaN exactly where the band is not fully valid, for both reductions.

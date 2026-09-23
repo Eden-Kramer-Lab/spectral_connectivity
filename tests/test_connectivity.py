@@ -4,7 +4,6 @@ from unittest.mock import PropertyMock, patch
 
 import numpy as np
 import pytest
-from pytest import mark
 
 from spectral_connectivity.connectivity import (
     Connectivity,
@@ -26,8 +25,8 @@ from spectral_connectivity.connectivity import (
 )
 
 
-@mark.parametrize("axis", [(0), (1), (2), (3)])
-@mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("axis", [(0), (1), (2), (3)])
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_cross_spectrum(axis, dtype):
     """Test that the cross spectrum is correct for each dimension."""
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (2, 2, 2, 2, 2)
@@ -96,7 +95,7 @@ def test_minimum_phase_reconstruction_error_is_exposed_on_connectivity():
     assert error[0] < 1e-7
 
 
-@mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
     fourier_coefficients = np.zeros(
@@ -137,7 +136,7 @@ def test_one_sided_power_and_csd_return_detached_arrays():
     )
 
 
-@mark.parametrize("n_fft_samples", [5, 6])
+@pytest.mark.parametrize("n_fft_samples", [5, 6])
 def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
     n_fft_samples,
 ):
@@ -155,8 +154,8 @@ def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
     np.testing.assert_allclose(diagonal, conn.power())
 
 
-@mark.parametrize(
-    "expectation_type, expected_shape",
+@pytest.mark.parametrize(
+    ("expectation_type", "expected_shape"),
     [("trials_tapers", (1, 4, 5)), ("trials", (1, 3, 4, 5)), ("tapers", (1, 2, 4, 5))],
 )
 def test_expectation(expectation_type, expected_shape):
@@ -173,8 +172,8 @@ def test_expectation(expectation_type, expected_shape):
     assert np.allclose(expected_shape, expectation_function(fourier_coefficients).shape)
 
 
-@mark.parametrize(
-    "expectation_type, expected_n_observations",
+@pytest.mark.parametrize(
+    ("expectation_type", "expected_n_observations"),
     [("trials_tapers", 6), ("trials", 2), ("tapers", 3)],
 )
 def test_n_observations(expectation_type, expected_n_observations):
@@ -190,7 +189,7 @@ def test_n_observations(expectation_type, expected_n_observations):
     assert this_Conn.n_observations == expected_n_observations
 
 
-@mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_coherency(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
@@ -264,7 +263,7 @@ def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
 
 
-@mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])
+@pytest.mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])
 def test_partial_coherence_rejects_invalid_regularization(regularization):
     coefficients = np.ones((1, 2, 2, 2, 2), dtype=complex)
     with pytest.raises(ValueError, match="regularization"):
@@ -969,8 +968,8 @@ def test__bandpass():
     )
 
 
-@mark.parametrize(
-    "frequency_difference, frequency_resolution, expected_step",
+@pytest.mark.parametrize(
+    ("frequency_difference", "frequency_resolution", "expected_step"),
     [(2.0, 5.0, 3), (5.0, 2.0, 1), (2.0, 2.0, 1)],
 )
 def test__get_independent_frequency_step(
@@ -980,8 +979,8 @@ def test__get_independent_frequency_step(
     assert step == expected_step
 
 
-@mark.parametrize(
-    "is_significant, expected_is_significant",
+@pytest.mark.parametrize(
+    ("is_significant", "expected_is_significant"),
     [
         (
             np.array([False, True, True, False, True, True, True, False]),
@@ -1019,8 +1018,8 @@ def test__get_independent_frequencies():
     )
 
 
-@mark.parametrize(
-    "min_group_size, expected_is_significant",
+@pytest.mark.parametrize(
+    ("min_group_size", "expected_is_significant"),
     [
         (3, np.zeros((10,), dtype=bool)),
         (
@@ -1546,7 +1545,7 @@ def test_subset_pairwise_granger_prediction_masks_global_diagonal():
     assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
 
 
-@mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
     """The shared sanitizer clips roundoff, NaNs real negatives, keeps the rest."""
     eps = np.finfo(dtype).eps
@@ -1731,7 +1730,7 @@ def test_subset_cross_spectral_matrix_is_compact_and_fully_initialized():
         np.testing.assert_allclose(actual, expected)
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "expectation_type",
     [
         "time",
@@ -2024,40 +2023,40 @@ def test_connectivity_rejects_wrong_ndim():
     import pytest
 
     # Test 1D array
+    fourier_1d = np.ones(10, dtype=np.complex128)
     with pytest.raises(ValueError, match="must be 5-dimensional, got 1D"):
-        fourier_1d = np.ones(10, dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_1d)
 
     # Test 2D array
+    fourier_2d = np.ones((10, 5), dtype=np.complex128)
     with pytest.raises(ValueError, match="must be 5-dimensional, got 2D"):
-        fourier_2d = np.ones((10, 5), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_2d)
 
     # Test 3D array
+    fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
     with pytest.raises(ValueError, match="must be 5-dimensional, got 3D"):
-        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_3d)
 
     # Test 4D array
+    fourier_4d = np.ones((10, 5, 2, 100), dtype=np.complex128)
     with pytest.raises(ValueError, match="must be 5-dimensional, got 4D"):
-        fourier_4d = np.ones((10, 5, 2, 100), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_4d)
 
     # Test 6D array
+    fourier_6d = np.ones((10, 5, 2, 100, 3, 4), dtype=np.complex128)
     with pytest.raises(ValueError, match="must be 5-dimensional, got 6D"):
-        fourier_6d = np.ones((10, 5, 2, 100, 3, 4), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_6d)
 
     # Verify error message contains helpful information
+    fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
     with pytest.raises(
         ValueError, match=r"Expected shape.*n_time_windows.*n_trials.*n_tapers"
     ):
-        fourier_3d = np.ones((10, 5, 2), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_3d)
 
     # Verify error message suggests using Multitaper
+    fourier_2d = np.ones((10, 5), dtype=np.complex128)
     with pytest.raises(ValueError, match="use the Multitaper class"):
-        fourier_2d = np.ones((10, 5), dtype=np.complex128)
         Connectivity(fourier_coefficients=fourier_2d)
 
 
@@ -2226,9 +2225,9 @@ def _reference_normalized_cross_spectrum(conn):
     return reduced[..., : reduced.shape[-3] // 2 + 1, :, :]
 
 
-@mark.parametrize("dtype", [np.complex64, np.complex128])
-@mark.parametrize("dead", [False, True])
-@mark.parametrize(
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("dead", [False, True])
+@pytest.mark.parametrize(
     "expectation_type",
     [
         "time",
@@ -2335,7 +2334,7 @@ def test_default_coordinates_created_when_omitted():
     conn.group_delay()
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "measure",
     [
         "directed_transfer_function",
@@ -2468,7 +2467,7 @@ def _correlated_fixture():
     return Multitaper(sig, sampling_frequency=sf, time_halfbandwidth_product=2, n_tapers=3)
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "measure",
     [
         "directed_transfer_function",
@@ -2510,7 +2509,7 @@ def test_minimum_phase_max_iterations_is_configurable():
     assert np.isfinite(dtf_high).mean() > 0.5
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "measure",
     ["directed_transfer_function", "pairwise_spectral_granger_prediction"],
 )
@@ -2790,7 +2789,7 @@ def test_phase_slope_index_raises_with_fewer_than_two_bins():
         conn.phase_slope_index(frequency_resolution=1e6)
 
 
-@mark.parametrize("bad_resolution", [0.0, -1.0, np.nan, np.inf])
+@pytest.mark.parametrize("bad_resolution", [0.0, -1.0, np.nan, np.inf])
 def test_frequency_resolution_must_be_finite_positive(bad_resolution):
     """delay/phase_slope_index reject an invalid frequency_resolution."""
     from spectral_connectivity.transforms import Multitaper
@@ -2806,7 +2805,7 @@ def test_frequency_resolution_must_be_finite_positive(bad_resolution):
         conn.phase_slope_index(frequency_resolution=bad_resolution)
 
 
-@mark.parametrize("measure", ["delay", "group_delay", "phase_slope_index"])
+@pytest.mark.parametrize("measure", ["delay", "group_delay", "phase_slope_index"])
 def test_single_frequency_bin_raises_clear_error(measure):
     """One frequency bin must raise a clear ValueError, not a raw IndexError."""
     # n_fft_samples = 1 -> a single non-negative frequency bin.
@@ -2817,7 +2816,7 @@ def test_single_frequency_bin_raises_clear_error(measure):
         getattr(conn, measure)()
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "measure",
     [
         "phase_locking_value",

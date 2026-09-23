@@ -693,7 +693,7 @@ def coherence_bias(n_observations: int) -> float:
            (2007). Comparing
            spectra and coherences for groups of unequal size.
            Journal of Neuroscience Methods 159,
-           337–345. 10.1016/j.jneumeth.2006.07.011.
+           337-345. 10.1016/j.jneumeth.2006.07.011.
     """
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)

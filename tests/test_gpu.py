@@ -63,19 +63,19 @@ class TestGetComputeBackend:
 
     def test_gpu_mode_when_cupy_not_available(self):
         """Test GPU mode when CuPy is not available."""
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}):
-            # Mock cupy as not available
-            with patch.dict(sys.modules, {"cupy": None}):
-                result = get_compute_backend()
+        # Request the GPU while mocking cupy as not available
+        with (
+            patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}),
+            patch.dict(sys.modules, {"cupy": None}),
+        ):
+            result = get_compute_backend()
 
-                # Should report that GPU was requested but not available
-                assert "gpu_enabled" in result
-                assert "gpu_available" in result
-                assert result["gpu_available"] is False
-                assert "message" in result
-                assert (
-                    "cupy" in result["message"].lower() or "gpu" in result["message"].lower()
-                )
+            # Should report that GPU was requested but not available
+            assert "gpu_enabled" in result
+            assert "gpu_available" in result
+            assert result["gpu_available"] is False
+            assert "message" in result
+            assert "cupy" in result["message"].lower() or "gpu" in result["message"].lower()
 
     def test_return_value_structure(self):
         """Test that return value has all required keys."""
@@ -188,9 +188,11 @@ class TestIsGpuEnabled:
     def test_unrecognized_value_warns_and_falls_back(self):
         from spectral_connectivity.utils import is_gpu_enabled
 
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "maybe"}):
-            with pytest.warns(UserWarning, match="not a recognized value"):
-                assert is_gpu_enabled() is False
+        with (
+            patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "maybe"}),
+            pytest.warns(UserWarning, match="not a recognized value"),
+        ):
+            assert is_gpu_enabled() is False
 
 
 class TestBackendDetection:

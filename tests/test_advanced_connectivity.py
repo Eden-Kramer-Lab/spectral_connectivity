@@ -418,7 +418,8 @@ class TestGlobalCoherence:
         gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(
             max_rank=n_signals
         )
-        assert np.all(gc >= 0) and np.all(gc <= 1.0 + 1e-9)
+        assert np.all(gc >= 0)
+        assert np.all(gc <= 1.0 + 1e-9)
         assert np.all(gc[..., 0] >= gc[..., 1] - 1e-9)  # strongest first
         np.testing.assert_allclose(gc, gc_scaled, rtol=1e-6)
 
@@ -437,7 +438,8 @@ class TestGlobalCoherence:
         )
         # max_rank=3 < n_signals - 1 = 5 -> sparse branch.
         gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=3)
-        assert np.all(gc >= 0) and np.all(gc <= 1.0 + 1e-9)
+        assert np.all(gc >= 0)
+        assert np.all(gc <= 1.0 + 1e-9)
         # Component 0 is the strongest at every time/frequency.
         assert np.all(gc[..., 0] >= gc[..., 1] - 1e-9)
         assert np.all(gc[..., 1] >= gc[..., 2] - 1e-9)
@@ -982,7 +984,8 @@ class TestAdvancedConnectivityIntegration:
             assert r_value.shape == (m.time.size, n_signals, n_signals)
         except ValueError as e:
             # If no frequencies are significant, this is acceptable
-            assert "zero-size array" in str(e)
+            if "zero-size array" not in str(e):
+                raise
 
         # All measures should produce finite values (or controlled NaNs)
         assert np.all(np.isfinite(canonical_coh) | np.isnan(canonical_coh))

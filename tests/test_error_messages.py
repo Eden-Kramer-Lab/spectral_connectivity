@@ -21,7 +21,7 @@ class TestDetrendErrorMessages:
         rng = np.random.default_rng(0)
         data = rng.standard_normal(100)
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="Invalid trend type") as excinfo:
             detrend(data, type="invalid")
 
         error_msg = str(excinfo.value)
@@ -44,7 +44,7 @@ class TestDetrendErrorMessages:
         rng = np.random.default_rng(0)
         data = rng.standard_normal(100)
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="outside the valid range") as excinfo:
             detrend(data, type="linear", bp=[150])  # Breakpoint beyond data length
 
         error_msg = str(excinfo.value)
@@ -70,7 +70,9 @@ class TestExpectationTypeErrorMessages:
             (10, 5, 3, 50, 2)
         ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="Invalid expectation_type 'invalid_type'"
+        ) as excinfo:
             Connectivity(fourier_coefficients, expectation_type="invalid_type")
 
         error_msg = str(excinfo.value)
@@ -93,7 +95,9 @@ class TestExpectationTypeErrorMessages:
         ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
         # Try common mistake: wrong order (e.g., "tapers_trials" instead of "trials_tapers")
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="Invalid expectation_type 'tapers_trials'"
+        ) as excinfo:
             Connectivity(fourier_coefficients, expectation_type="tapers_trials")
 
         error_msg = str(excinfo.value)
@@ -115,7 +119,9 @@ class TestMultitaperParameterErrorMessages:
         rng = np.random.default_rng(0)
         time_series = rng.standard_normal((100, 1, 2))
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="sampling_frequency must be finite and positive"
+        ) as excinfo:
             Multitaper(time_series, sampling_frequency=-500.0)
 
         error_msg = str(excinfo.value)
@@ -132,7 +138,9 @@ class TestMultitaperParameterErrorMessages:
         rng = np.random.default_rng(0)
         time_series = rng.standard_normal((100, 1, 2))
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="time_halfbandwidth_product must be at least 1"
+        ) as excinfo:
             Multitaper(
                 time_series,
                 sampling_frequency=500.0,
@@ -154,7 +162,9 @@ class TestMultitaperParameterErrorMessages:
         time_series = rng.standard_normal((1000, 1, 2))
         # 0.0004 s * 1000 Hz = 0.4 samples -> rounds to 0.
         mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=0.0004)
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="n_time_samples_per_window resolved to 0"
+        ) as excinfo:
             mt.fft()
         error_msg = str(excinfo.value)
         assert "time_window_duration" in error_msg
@@ -170,7 +180,9 @@ class TestMultitaperParameterErrorMessages:
             time_window_duration=0.05,
             time_window_step=0.0004,  # -> 0 samples
         )
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(
+            ValueError, match="n_time_samples_per_step resolved to 0"
+        ) as excinfo:
             mt.fft()
         error_msg = str(excinfo.value)
         assert "time_window_step" in error_msg
@@ -180,7 +192,7 @@ class TestMultitaperParameterErrorMessages:
         rng = np.random.default_rng(0)
         time_series = rng.standard_normal((1000, 1, 2))  # 1 s at 1000 Hz
         mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=5.0)
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="larger than the signal length") as excinfo:
             mt.fft()
         error_msg = str(excinfo.value)
         assert "time_window_duration" in error_msg
@@ -228,7 +240,7 @@ class TestErrorMessagePatterns:
             (10, 5, 3, 50, 2)
         ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="Invalid expectation_type 'wrong'") as excinfo:
             Connectivity(fourier_coefficients, expectation_type="wrong")
 
         # Should include the actual wrong value
@@ -240,7 +252,7 @@ class TestErrorMessagePatterns:
         rng = np.random.default_rng(0)
         fourier_coefficients = rng.standard_normal((100, 2))  # Wrong shape
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="must be 5-dimensional") as excinfo:
             Connectivity(fourier_coefficients)
 
         error_msg = str(excinfo.value)

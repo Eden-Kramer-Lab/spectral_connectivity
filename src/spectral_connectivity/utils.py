@@ -1,5 +1,6 @@
 """Utility functions for spectral_connectivity package."""
 
+import contextlib
 import os
 import sys
 import warnings
@@ -56,10 +57,8 @@ def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
     already-detached copy for ownership there, not on the flag.
     """
     backend_array: Any = array
-    try:
+    with contextlib.suppress(AttributeError, ValueError):
         backend_array.flags.writeable = False
-    except (AttributeError, ValueError):
-        pass
     return array
 
 

@@ -37,7 +37,9 @@ def test_extension_measure_is_not_rejected_by_validation(time_series, monkeypatc
 
 def test_unknown_method_raises_valueerror_not_attributeerror(time_series):
     """A misspelled measure name fails as a ValueError, not AttributeError."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(
+        ValueError, match="'granger' is not a known connectivity measure"
+    ) as excinfo:
         multitaper_connectivity(time_series, sampling_frequency=200, method="granger")
     assert not isinstance(excinfo.value, AttributeError)
     assert "granger" in str(excinfo.value)
@@ -45,14 +47,18 @@ def test_unknown_method_raises_valueerror_not_attributeerror(time_series):
 
 def test_unknown_method_suggests_close_match(time_series):
     """A near-miss name points the user at the real measure."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(
+        ValueError, match="'coherence' is not a known connectivity measure"
+    ) as excinfo:
         multitaper_connectivity(time_series, sampling_frequency=200, method="coherence")
     assert "coherence_magnitude" in str(excinfo.value)
 
 
 def test_unknown_method_points_to_list_measures(time_series):
     """The error tells the user how to enumerate valid measures."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(
+        ValueError, match="'bogus_measure_xyz' is not a known connectivity measure"
+    ) as excinfo:
         multitaper_connectivity(
             time_series, sampling_frequency=200, method="bogus_measure_xyz"
         )
@@ -61,7 +67,9 @@ def test_unknown_method_points_to_list_measures(time_series):
 
 def test_unknown_method_in_a_list_is_validated(time_series):
     """One bad name among valid ones is still caught before computing."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(
+        ValueError, match="'not_real' is not a known connectivity measure"
+    ) as excinfo:
         multitaper_connectivity(
             time_series,
             sampling_frequency=200,
@@ -76,7 +84,9 @@ def test_fourier_connectivity_validates_method_names():
     # (observation, frequency, signal)
     fourier_coefficients = rng.random((5, 4, 2)) + 0j
     frequencies = np.linspace(0, 100, 4)
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(
+        ValueError, match="'coherence' is not a known connectivity measure"
+    ) as excinfo:
         fourier_connectivity(
             fourier_coefficients,
             frequencies=frequencies,
