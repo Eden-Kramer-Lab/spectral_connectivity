@@ -1785,25 +1785,51 @@ class Welch:
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
+        """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        Returns
+        -------
+        frequencies : array, shape (n_fft_samples,)
+        """
         return self._stft.frequencies
 
     @property
     def time(self) -> NDArray[np.floating]:
+        """Mean of the segment center times, in seconds.
+
+        Returns
+        -------
+        time : array, shape (1,)
+            Welch averages all segments into a single time bin.
+        """
         return xp.asarray(self._stft.time).mean(keepdims=True)
 
     @property
     def n_trials(self) -> int:
+        """Number of trials in the time series."""
         return self._stft.n_trials
 
     @property
     def n_signals(self) -> int:
+        """Number of signals in the time series."""
         return self._stft.n_signals
 
     @property
     def n_segments(self) -> int:
+        """Number of (overlapping) segments averaged by the estimate."""
         return len(self._stft.time)
 
     def fft(self) -> NDArray[np.complexfloating]:
+        """Compute the Hann-windowed Fourier coefficients of every segment.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape ``(1, n_trials, n_segments, n_fft_samples, n_signals)``.
+            Segments occupy the taper axis, so :class:`Connectivity`'s
+            trial/taper expectation averages over segments (and trials) into a
+            single time bin.
+        """
         coefficients = self._stft.fft()[:, :, 0, :, :]
         return xp.transpose(coefficients, (1, 0, 2, 3))[xp.newaxis, ...]
 
@@ -2017,22 +2043,39 @@ class MorletWavelet:
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
+        """Wavelet center frequencies in Hz.
+
+        Returns
+        -------
+        frequencies : array, shape (n_frequencies,)
+        """
         return _readonly_array_copy(self._frequencies)
 
     @property
     def n_cycles(self) -> NDArray[np.floating]:
+        """Number of wavelet cycles at each frequency, shape (n_frequencies,)."""
         return _readonly_array_copy(self._n_cycles)
 
     @property
     def n_trials(self) -> int:
+        """Number of trials in the time series."""
         return int(self._time_series.shape[1])
 
     @property
     def n_signals(self) -> int:
+        """Number of signals in the time series."""
         return int(self._time_series.shape[2])
 
     @property
     def time(self) -> NDArray[np.floating]:
+        """Center time of each output time bin, in seconds.
+
+        Returns
+        -------
+        time : array, shape (n_time,)
+            Decimated sample times, averaged over each smoothing window when
+            time smoothing is enabled.
+        """
         sample_times = self.start_time + self._sample_indices / self.sampling_frequency
         if self._smoothing_samples == 1 and self._smoothing_step_samples == 1:
             return sample_times
@@ -2146,6 +2189,18 @@ class MorletWavelet:
         return _readonly_array_copy(weights)
 
     def fft(self) -> NDArray[np.complexfloating]:
+        """Compute one-sided Morlet coefficients grouped by smoothing neighborhood.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape ``(n_time, n_trials, n_smoothing_time * n_smoothing_frequency,
+            n_frequencies, n_signals)``. The neighboring time samples and
+            frequencies of each smoothing window occupy the taper axis, so
+            :class:`Connectivity`'s trial/taper expectation (weighted by
+            :attr:`observation_weights`) forms the local smoothed estimate.
+            ``|coefficient|**2`` is a one-sided power spectral density.
+        """
         # Pad once to the widest wavelet and transform the data once; each
         # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
         # Padding wider than a given wavelet needs does not change its 'valid'
