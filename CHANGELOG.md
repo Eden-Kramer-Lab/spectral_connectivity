@@ -366,9 +366,14 @@ directly with results from 2.x.
   give silently wrong Granger values, those measures warn when the declared
   coefficients are not conjugate-symmetric (as the FFT of real-valued signals
   is), which is also expected for complex-valued signals.
-- DataArray time coordinates are judged uniform relative to the sampling
-  interval (one part in 1e6), so axes built with `np.cumsum` are accepted with
-  or without `sampling_frequency`.
+- DataArray time coordinates are judged uniform step by step: each step must be
+  within a quarter of the sampling interval, and the axis may drift from the
+  regular grid by at most a quarter interval plus one part in 1e6 of the
+  elapsed time. Axes built with `np.cumsum` or `np.linspace` (hours long, at
+  any start offset) and timestamps jittered by a small fraction of an interval
+  are therefore accepted with or without `sampling_frequency`, while a single
+  dropped or duplicated sample, or an explicit rate that disagrees with the
+  axis, is still rejected.
 - CuPy backend: `Connectivity` moves host coefficients and frequencies to the
   device, `canonical_coherence` indexes with device group indices, `time` stays
   a host array after coefficient reassignment, and `MorletWavelet` accepts

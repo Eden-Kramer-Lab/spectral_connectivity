@@ -16,6 +16,7 @@ from spectral_connectivity.wrapper import (
     _MeasureSpec,
     _netcdf_provenance_value,
     _reject_unmaterialized_backing,
+    _time_axis_from_dataarray,
     connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
@@ -1060,6 +1061,100 @@ def test_dataarray_time_coordinate_with_a_dropped_sample_is_rejected():
         multitaper_connectivity(data, method="power")
     with pytest.raises(ValueError, match="spacing does not match"):
         multitaper_connectivity(data, sampling_frequency=1000, method="power")
+
+
+def _time_only_dataarray(times: np.ndarray) -> xr.DataArray:
+    """A 1-D DataArray carrying only a ``time`` coordinate, for axis validation."""
+    return xr.DataArray(np.zeros(times.size), dims=("time",), coords={"time": times})
+
+
+@pytest.mark.parametrize(
+    ("sampling_frequency", "n_samples"),
+    [(1000.0, 200_000), (30_000.0, 300_000), (2000.0, 600_000), (1000.0, 3_600_000)],
+    ids=["1kHz-200s", "30kHz-10s", "2kHz-5min", "1kHz-1h"],
+)
+@pytest.mark.parametrize("start_time", [0.0, 1000.0])
+@pytest.mark.parametrize("construction", ["cumsum", "linspace"])
+def test_dataarray_float64_time_axes_are_uniform_at_recording_lengths(
+    sampling_frequency, n_samples, start_time, construction
+):
+    """Accumulated round-off grows along a ``cumsum`` axis (to ~1e-4 intervals
+    after an hour at 1 kHz) while every individual step stays exact to ~1e-10
+    intervals, so realistic float64 axes must be accepted with and without an
+    explicit rate, and the inferred rate must stay accurate."""
+    interval = 1.0 / sampling_frequency
+    if construction == "cumsum":
+        times = np.cumsum(np.r_[start_time, np.full(n_samples - 1, interval)])
+    else:
+        times = np.linspace(start_time, start_time + (n_samples - 1) * interval, n_samples)
+    data = _time_only_dataarray(times)
+
+    inferred = _time_axis_from_dataarray(data, "time", None)
+    explicit = _time_axis_from_dataarray(data, "time", sampling_frequency)
+
+    assert inferred.inferred_sampling_frequency == pytest.approx(sampling_frequency, rel=1e-8)
+    assert inferred.start_time == explicit.start_time == times[0]
+    assert explicit.inferred_sampling_frequency is None
+
+
+@pytest.mark.parametrize("sampling_frequency", [30_000.0, 1000.0])
+def test_dataarray_time_axis_accepts_timestamp_jitter(sampling_frequency):
+    """Hardware timestamps jitter by a small fraction of an interval (1e-6 s is
+    0.03 intervals at 30 kHz); up to 0.05 intervals per sample is still one
+    sample per step and must be accepted with and without an explicit rate."""
+    n_samples = 300_000
+    rng = np.random.default_rng(38)
+    jitter = rng.uniform(-0.05, 0.05, n_samples) / sampling_frequency
+    times = np.arange(n_samples) / sampling_frequency + jitter
+    data = _time_only_dataarray(times)
+
+    inferred = _time_axis_from_dataarray(data, "time", None)
+    _time_axis_from_dataarray(data, "time", sampling_frequency)
+
+    assert inferred.inferred_sampling_frequency == pytest.approx(sampling_frequency, rel=1e-6)
+
+
+@pytest.mark.parametrize("n_samples", [1000, 3_600_000], ids=["1s", "1h"])
+@pytest.mark.parametrize("position", ["start", "middle", "end"])
+def test_dataarray_time_axis_rejects_one_dropped_sample_anywhere(n_samples, position):
+    """A single missing sample is a two-interval step wherever it falls, even on
+    a long ``cumsum`` axis whose accumulated round-off is otherwise tolerated."""
+    times = np.cumsum(np.full(n_samples + 1, 0.001))
+    dropped_index = {"start": 1, "middle": n_samples // 2, "end": n_samples - 1}[position]
+    data = _time_only_dataarray(np.delete(times, dropped_index))
+
+    with pytest.raises(ValueError, match="not uniformly spaced"):
+        _time_axis_from_dataarray(data, "time", None)
+    with pytest.raises(ValueError, match="spacing does not match"):
+        _time_axis_from_dataarray(data, "time", 1000.0)
+
+
+@pytest.mark.parametrize("position", ["start", "middle", "end"])
+def test_dataarray_time_axis_rejects_one_duplicated_timestamp_anywhere(position):
+    times = np.arange(1000) / 1000.0
+    duplicated_index = {"start": 0, "middle": 500, "end": 999}[position]
+    data = _time_only_dataarray(np.insert(times, duplicated_index, times[duplicated_index]))
+
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _time_axis_from_dataarray(data, "time", None)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _time_axis_from_dataarray(data, "time", 1000.0)
+
+
+def test_dataarray_time_axis_rejects_rate_errors_below_one_step():
+    """Every step of a 1024 Hz axis is within 2.4% of a 1 kHz interval, but the
+    axis ends 23 samples away from the explicit 1 kHz grid; likewise an axis
+    whose rate changes halfway is far from any single regular grid."""
+    rate_mismatch = _time_only_dataarray(np.arange(1000) / 1024.0)
+    with pytest.raises(ValueError, match="spacing does not match"):
+        _time_axis_from_dataarray(rate_mismatch, "time", 1000.0)
+
+    first_half = np.arange(500) / 1000.0
+    rate_change = _time_only_dataarray(
+        np.r_[first_half, first_half[-1] + np.arange(1, 501) / 1100.0]
+    )
+    with pytest.raises(ValueError, match="not uniformly spaced"):
+        _time_axis_from_dataarray(rate_change, "time", None)
 
 
 def test_dataarray_millisecond_time_coordinate_mismatches_explicit_rate():

@@ -2090,11 +2090,20 @@ _SPECTRAL_DIM_NAMES = _FREQUENCY_DIM_NAMES | frozenset({"band", "bands"})
 # rate at 100 parts per million of the observed time span.
 _MAX_INFERRED_RATE_RELATIVE_RESOLUTION = 1e-4
 
-# A time coordinate counts as uniformly spaced when every sample lies within
-# this fraction of one sampling interval of the regular grid. Accumulating the
-# interval (``np.cumsum``) leaves round-off of order 1e-7 intervals after 1e5
-# samples, whereas a dropped sample is off by a whole interval and a unit
-# mismatch (ms vs s) by a factor of 1000, so 1e-6 separates the two cleanly.
+# A time coordinate counts as uniformly spaced when every step is within
+# _TIME_STEP_TOLERANCE sampling intervals of the expected interval and every
+# sample lies within that plus _TIME_COORDINATE_RELATIVE_TOLERANCE of its
+# elapsed time from the regular grid. Measured on float64 axes built with
+# ``np.cumsum``, each step is exact to 2e-8 intervals even after 1e8 samples,
+# while the accumulated deviation from the grid grows roughly quadratically with
+# length (1e-6 intervals at 30 kHz x 10 s, 2e-4 at 1 kHz x 1 h, 0.2 at
+# 30 kHz x 1 h) yet stays below 2e-9 per elapsed interval. A dropped sample is a
+# step off by a whole interval (a duplicated timestamp, a zero step, already
+# fails the strictly-increasing check), and timestamp jitter of 0.05 intervals
+# moves a step by at most 0.1, so a quarter interval separates them. The drift allowance admits accumulated round-off at any
+# practical length yet rejects an explicit rate that is off by more than a part
+# per million over a long axis (a unit mismatch fails every step).
+_TIME_STEP_TOLERANCE = 0.25
 _TIME_COORDINATE_RELATIVE_TOLERANCE = 1e-6
 
 
@@ -2404,12 +2413,15 @@ def _time_axis_from_dataarray(
         coordinate_resolution,
         np.spacing(coordinate_scale) * 8,
     )
-    expected_coordinates = times[0] + np.arange(times.size) * expected_interval
-    if not np.allclose(
-        times,
-        expected_coordinates,
-        rtol=0,
-        atol=coordinate_tolerance,
+    # Judge each step separately so accumulated round-off (which grows with the
+    # axis length) cannot mask or mimic a dropped or duplicated sample, and the
+    # whole axis against the regular grid so a rate that is slightly off, or
+    # changes partway, cannot pass as uniform one step at a time.
+    step_tolerance = max(expected_interval * _TIME_STEP_TOLERANCE, coordinate_tolerance)
+    elapsed = np.arange(times.size) * expected_interval
+    grid_tolerance = step_tolerance + elapsed * _TIME_COORDINATE_RELATIVE_TOLERANCE
+    if np.any(np.abs(differences - expected_interval) > step_tolerance) or np.any(
+        np.abs(times - (times[0] + elapsed)) > grid_tolerance
     ):
         observed_median = float(np.median(differences))
         if sampling_frequency is None:
