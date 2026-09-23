@@ -218,8 +218,10 @@ def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
     assert delay.candidate.values.tolist() == [-1, 0, 1]
     assert np.all((delay.frequency > 8) & (delay.frequency < 40))
     assert psi.dims == ("time", "source", "target")
-    assert psi.frequency_band_lower.item() == 8
-    assert psi.frequency_band_upper.item() == 40
+    assert psi.attrs["frequency_band_lower"] == 8
+    assert psi.attrs["frequency_band_upper"] == 40
+    assert group_delay.group_delay.attrs["frequency_band_lower"] == 8
+    assert group_delay.group_delay.attrs["frequency_band_upper"] == 40
     assert set(group_delay.data_vars) == {
         "group_delay",
         "group_delay_slope",
@@ -2750,3 +2752,52 @@ def test_frequency_coordinate_attrs_do_not_depend_on_measure_order():
     for methods in (["delay", "coherence_magnitude"], ["coherence_magnitude", "delay"]):
         result = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
         assert result.frequency.attrs == {"long_name": "Frequency", "units": "Hz"}, methods
+
+
+def test_frequency_provenance_stays_on_the_variables_it_describes():
+    """A frequency-reduced measure's band must not leak onto other variables,
+    and a crop/decimation/band reduction is recorded only on the variables it
+    was applied to, so an extracted variable keeps its own record."""
+    time_series = np.random.default_rng(46).standard_normal((1000, 3, 2))
+    dataset = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method=["coherence_magnitude", "phase_slope_index"],
+        frequency_range=(4, 50),
+        frequency_decimation=2,
+    )
+    coherence, psi = dataset.coherence_magnitude, dataset.phase_slope_index
+    assert "frequency_band_lower" not in coherence.coords
+    assert "frequency_band_lower" not in coherence.attrs
+    # phase_slope_index used its own (default, full) band, not frequency_range.
+    assert psi.attrs["frequency_band_lower"] == 0.0
+    assert psi.attrs["frequency_band_upper"] == 250.0
+    assert json.loads(coherence.attrs["frequency_range_json"]) == [4.0, 50.0]
+    assert coherence.attrs["frequency_decimation"] == 2
+    for key in ("frequency_range_json", "frequency_decimation"):
+        assert key not in psi.attrs
+        assert key not in dataset.attrs
+
+    banded = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method=["coherence_magnitude", "phase_slope_index"],
+        frequency_bands={"beta": (13, 30)},
+    )
+    assert banded.coherence_magnitude.attrs["frequency_reduction"] == "mean"
+    for key in ("frequency_bands_json", "frequency_reduction"):
+        assert key not in banded.phase_slope_index.attrs
+        assert key not in banded.attrs
+
+
+def test_band_reduction_keeps_dataset_coordinates_not_on_any_variable():
+    power = xr.DataArray(
+        np.ones((2, 5)),
+        dims=("time", "frequency"),
+        coords={"time": [0.0, 1.0], "frequency": np.arange(5.0)},
+        name="power",
+        attrs={"measure": "power"},
+    )
+    dataset = power.to_dataset().assign_coords(run=("run", ["a", "b", "c"]))
+    reduced = frequency_band_reduce(dataset, {"low": (0.0, 2.0)})
+    assert reduced.run.values.tolist() == ["a", "b", "c"]

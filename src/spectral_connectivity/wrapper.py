@@ -550,6 +550,20 @@ def _check_method_accepts_kwargs(
         raise TypeError(msg)
 
 
+def _frequency_band_attrs(
+    connectivity: Connectivity, kwargs: Mapping[str, Any]
+) -> dict[str, float]:
+    """The band a frequency-reducing measure summarized, as variable attrs.
+
+    Stored on the measure's own variables rather than as scalar coordinates,
+    which a Dataset would broadcast onto every other variable.
+    """
+    band = kwargs.get("frequencies_of_interest")
+    if band is None:
+        band = (connectivity.frequencies[0], connectivity.frequencies[-1])
+    return {"frequency_band_lower": float(band[0]), "frequency_band_upper": float(band[1])}
+
+
 def _is_real_numeric_dtype(dtype: np.dtype[Any]) -> bool:
     """Whether ``dtype`` holds real numbers (not complex, boolean, or time types)."""
     return bool(
@@ -772,21 +786,12 @@ def _connectivity_result_to_xarray(
                 f"its phase-slope contract requires {expected_shape}."
             )
             raise ValueError(msg)
-        band = kwargs.get("frequencies_of_interest")
-        if band is None:
-            band = (connectivity.frequencies[0], connectivity.frequencies[-1])
-        coordinates = {
-            "time": base_coordinates["time"],
-            **signal_coordinates,
-            "frequency_band_lower": float(band[0]),
-            "frequency_band_upper": float(band[1]),
-        }
         return xr.DataArray(
             connectivity_mat,
-            coords=coordinates,
+            coords={"time": base_coordinates["time"], **signal_coordinates},
             dims=("time", "source", "target"),
             name=method,
-            attrs=attrs,
+            attrs={**attrs, **_frequency_band_attrs(connectivity, kwargs)},
         )
 
     if measure_spec.output_kind == "group_delay":
@@ -813,7 +818,12 @@ def _connectivity_result_to_xarray(
             ):
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
-            variable_attrs = {**attrs, "long_name": long_name, "units": units}
+            variable_attrs = {
+                **attrs,
+                **_frequency_band_attrs(connectivity, kwargs),
+                "long_name": long_name,
+                "units": units,
+            }
             data_vars[name] = xr.DataArray(
                 values,
                 coords=dataset_coordinates,
@@ -1232,14 +1242,39 @@ def frequency_band_reduce(
         )
         raise ValueError(msg)
 
-    data_vars = {
-        name: _reduce_dataarray(data) if "frequency" in data.dims else data
-        for name, data in result.data_vars.items()
-    }
-    reduced_dataset = xr.Dataset(data_vars, attrs=dict(result.attrs))
-    reduced_dataset.attrs["frequency_bands_json"] = _canonical_json(bands)
-    reduced_dataset.attrs["frequency_reduction"] = reduction
-    return reduced_dataset
+    # The band record lives on each reduced variable (see _reduce_dataarray).
+    # Start from the attrs and coordinates on no frequency axis, then re-add every
+    # variable in its original order.
+    return (
+        result.drop_vars(list(result.data_vars))
+        .drop_dims("frequency")
+        .assign(
+            {
+                name: _reduce_dataarray(data) if "frequency" in data.dims else data
+                for name, data in result.data_vars.items()
+            }
+        )
+    )
+
+
+def _with_frequency_attrs(
+    result: xr.DataArray | xr.Dataset, **new_attrs: Any
+) -> xr.DataArray | xr.Dataset:
+    """Record frequency-operation provenance on each variable with a frequency axis.
+
+    A Dataset may also hold frequency-reduced variables (phase_slope_index,
+    group_delay) that the operation did not touch, so the record goes on the
+    variables it describes, never on the Dataset as a whole.
+    """
+    if isinstance(result, xr.DataArray):
+        return result.assign_attrs(new_attrs)
+    return result.assign(
+        {
+            name: variable.assign_attrs(new_attrs)
+            for name, variable in result.data_vars.items()
+            if "frequency" in variable.dims
+        }
+    )
 
 
 def _select_and_reduce_frequencies(
@@ -1274,14 +1309,16 @@ def _select_and_reduce_frequencies(
             frequency_range,
             np.asarray(selected.coords["frequency"].values),
         )
-        selected = selected.isel(frequency=np.flatnonzero(mask))
-        selected.attrs = dict(selected.attrs)
-        selected.attrs["frequency_range_json"] = _canonical_json((lower, upper))
+        selected = _with_frequency_attrs(
+            selected.isel(frequency=np.flatnonzero(mask)),
+            frequency_range_json=_canonical_json((lower, upper)),
+        )
 
     if frequency_decimation != 1:
-        selected = selected.isel(frequency=slice(None, None, frequency_decimation))
-        selected.attrs = dict(selected.attrs)
-        selected.attrs["frequency_decimation"] = int(frequency_decimation)
+        selected = _with_frequency_attrs(
+            selected.isel(frequency=slice(None, None, frequency_decimation)),
+            frequency_decimation=int(frequency_decimation),
+        )
 
     if frequency_bands is not None:
         selected = frequency_band_reduce(
