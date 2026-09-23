@@ -2432,6 +2432,15 @@ class Connectivity:
         positively oriented components, and for single-channel groups it
         reduces exactly to the conjugate pairwise coherency.
 
+        **Relation to mne-connectivity**: the first component maximizes the
+        same objective as mne-connectivity's ``cacoh`` and matches it
+        (magnitude, and phase modulo pi) wherever both optimizers reach the
+        global maximum. Components ``>= 2`` differ from mne-connectivity 0.9,
+        which deflates the cross-spectrum with the previous components'
+        channel-space filters; the whitened-space deflation used here keeps
+        them uncorrelated within each group and invariant to invertible real
+        within-group mixing.
+
         References
         ----------
         .. [1] Vidaurre C, et al. (2019) Canonical maximization of coherence: A

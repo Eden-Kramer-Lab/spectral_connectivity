@@ -964,10 +964,10 @@ def test_cacoh_zero_cross_spectrum_does_not_warn():
 
 def test_component_methods_invariant_to_within_group_real_mixing():
     # Within-group whitening makes the scores invariant to invertible real
-    # within-group mixing. MIC components all come from one whitened SVD, so all
-    # are invariant; CaCoh's higher components deflate in (Euclidean) channel
-    # space, which mixing does not preserve, so only its first component is
-    # invariant (this matches mne-connectivity's deflation).
+    # within-group mixing. MIC components all come from one whitened SVD, and
+    # CaCoh deflates its higher components in whitened space, so every
+    # component of both is invariant. (mne-connectivity's CaCoh deflates with the
+    # channel-space filters instead, so its higher components are not.)
     rng = np.random.default_rng(936)
     coefficients = rng.standard_normal((1, 300, 2, 3, 4)) + 1j * (
         rng.standard_normal((1, 300, 2, 3, 4))
@@ -989,10 +989,14 @@ def test_component_methods_invariant_to_within_group_real_mixing():
     ).scores
     np.testing.assert_allclose(mixed_mic, original_mic, rtol=1e-7, atol=1e-9)
 
-    original_cacoh = original.canonical_coherency(labels, n_components=1).scores
-    mixed_cacoh = transformed.canonical_coherency(labels, n_components=1).scores
+    original_cacoh = original.canonical_coherency(labels, n_components=2).scores
+    mixed_cacoh = transformed.canonical_coherency(labels, n_components=2).scores
     np.testing.assert_allclose(
         np.abs(mixed_cacoh), np.abs(original_cacoh), rtol=1e-7, atol=1e-9
+    )
+    # The sign convention is not mixing-invariant: the phase is invariant mod pi.
+    np.testing.assert_allclose(
+        np.exp(2j * np.angle(mixed_cacoh)), np.exp(2j * np.angle(original_cacoh)), atol=1e-7
     )
 
 
