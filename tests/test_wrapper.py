@@ -636,6 +636,38 @@ def test_dataarray_single_unrecognized_dimension_warns_before_assuming_role():
     _assert_power_follows_labels(result)
 
 
+@pytest.mark.parametrize(
+    ("dims", "shape"),
+    [
+        (("time", "frequency"), (256, 8)),
+        (("time", "freq"), (256, 8)),
+        (("time", "trial", "band"), (256, 3, 4)),
+    ],
+    ids=["2d-frequency", "2d-freq", "3d-band"],
+)
+def test_dataarray_spectral_dimension_is_not_promoted_to_a_time_series_role(dims, shape):
+    """A ``frequency``/``band`` dimension marks an already-transformed input such
+    as a spectrogram. Filling the last role with it by elimination would run
+    frequency bins as channels, so it is rejected instead of merely warned."""
+    data = xr.DataArray(np.random.default_rng(42).standard_normal(shape), dims=dims)
+    with pytest.raises(ValueError, match="spectral") as excinfo:
+        multitaper_connectivity(data, sampling_frequency=256, method="power")
+    message = str(excinfo.value)
+    assert repr(dims[-1]) in message
+    assert "fourier_connectivity" in message
+    # Naming the role explicitly remains the escape hatch for a signal axis
+    # that really is called that.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        multitaper_connectivity(
+            data,
+            sampling_frequency=256,
+            method="power",
+            signal_dim=dims[-1],
+            **({"trial_dim": "trial"} if len(dims) == 3 else {}),
+        )
+
+
 def test_dataarray_explicit_role_conflicting_with_recognized_name_is_rejected():
     data = xr.DataArray(
         np.random.default_rng(41).standard_normal((256, 2)),

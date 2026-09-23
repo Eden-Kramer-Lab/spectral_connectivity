@@ -2025,6 +2025,11 @@ _ROLE_SYNONYMS: dict[str, frozenset[str]] = {
 _SYNONYM_TO_ROLE: dict[str, str] = {
     name: role for role, names in _ROLE_SYNONYMS.items() for name in names
 }
+# Axes a spectral result has but a time-domain input never does. One left over
+# in a DataArray marks an already-transformed input (a spectrogram or band
+# powers), so it must not be promoted to a time-series role by elimination.
+_FREQUENCY_DIM_NAMES = frozenset({"frequency", "frequencies", "freq", "freqs"})
+_SPECTRAL_DIM_NAMES = _FREQUENCY_DIM_NAMES | frozenset({"band", "bands"})
 
 # Inference is a convenience, so prefer requiring an explicit rate over silently
 # deriving a scientifically meaningful frequency scale from a precision-starved
@@ -2110,6 +2115,16 @@ def _resolve_dataarray_dimensions(
     for dimension in time_series.dims:
         if dimension in used_dimensions:
             continue
+        if str(dimension).lower() in _SPECTRAL_DIM_NAMES:
+            msg = (
+                f"Dimension {dimension!r} denotes a spectral (frequency or band) "
+                "axis, but multitaper_connectivity expects time-domain signals "
+                "with dimensions (time, signal) or (time, trial, signal). Drop or "
+                "reshape that dimension, or pass already-computed Fourier "
+                "coefficients to fourier_connectivity. If it really indexes "
+                f"signals, pass signal_dim={dimension!r}."
+            )
+            raise ValueError(msg)
         inferred_role = _dimension_role(dimension)
         if inferred_role is None:
             continue
@@ -2557,7 +2572,9 @@ def multitaper_connectivity(
         and ``signal_dim`` for domain-specific names. Ambiguous names raise rather
         than falling back to dimension position, though a single unrecognized
         dimension left for the one remaining role is assigned by elimination with
-        a warning. A dask-backed DataArray is rejected (materialize it first with
+        a warning (a spectral name such as ``frequency`` or ``band`` is rejected
+        instead, since it marks an already-transformed input). A dask-backed
+        DataArray is rejected (materialize it first with
         ``DataArray.compute()``). A numeric time index is
         interpreted as elapsed seconds (a ``sample`` index as sample numbers)
         and used to label output window centers. When ``sampling_frequency`` is
@@ -2836,7 +2853,7 @@ _FOURIER_ROLE_SYNONYMS: dict[str, frozenset[str]] = {
     "time": frozenset({"time", "times", "window", "windows", "time_window", "time_windows"}),
     "trial": _ROLE_SYNONYMS["trial"] | frozenset({"observation", "observations"}),
     "taper": frozenset({"taper", "tapers"}),
-    "frequency": frozenset({"frequency", "frequencies", "freq", "freqs"}),
+    "frequency": _FREQUENCY_DIM_NAMES,
     "signal": _ROLE_SYNONYMS["signal"],
 }
 
