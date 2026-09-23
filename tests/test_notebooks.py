@@ -1,10 +1,18 @@
 """Snapshot tests for tutorial notebooks.
 
-These tests verify that key numerical outputs from the tutorial
-notebooks remain stable across code changes. Tests are inspired
-by notebook examples but hand-written for clarity and focus.
+These tests verify that key numerical outputs from the tutorial notebooks
+remain stable across code changes. They are hand-written scenarios inspired by
+the notebook examples, seeded with ``np.random.default_rng(42)``, not
+executions of the notebooks themselves.
 
-Uses syrupy with a custom NumPy extension for approximate (allclose) equality.
+Snapshots use syrupy with a custom extension that stores every array as
+compressed float32 and compares element-wise with ``np.allclose``
+(``rtol=1e-6``, ``atol=1e-9``); they all live in one file,
+``tests/__snapshots__/test_notebooks.ambr``. Because that tolerance is tight,
+CI runs the snapshot tests (``-k "not executes"``) on a single reference
+platform. ``test_tutorial_notebook_executes`` (marked ``slow``) runs the two
+tutorial notebooks end to end with nbconvert; CI executes those same notebooks
+in a separate step.
 """
 
 import base64

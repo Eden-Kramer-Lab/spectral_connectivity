@@ -260,7 +260,6 @@ cookbook
 llm_guide
 CONNECTIVITY_METRIC_RANGES
 STYLE
-NOTEBOOK_SNAPSHOT_TESTS
 ```
 
 ```{toctree}
