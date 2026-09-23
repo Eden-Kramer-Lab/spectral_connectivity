@@ -250,9 +250,11 @@ directly with results from 2.x.
   and `partial_coherence`.
 - `multitaper_connectivity` rejects a leftover `frequency`/`freq`/`band`
   dimension instead of assigning it to the signal role by elimination.
-- `start_time` must be a finite scalar for `Multitaper`,
-  `ShortTimeFourierTransform`, and `Welch`; a per-trial array raises a clear
-  error instead of a broadcast failure.
+- `start_time` must be a single finite value for `Multitaper`,
+  `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`; a per-trial array
+  raises a clear error instead of a broadcast failure, and `MorletWavelet` no
+  longer accepts `NaN`. A single-element array such as `time[0]` of a column
+  time axis is accepted as one start time.
 - `frequencies_of_interest` for `phase_slope_index`, `delay`, and `group_delay`
   is validated (two finite values, lower < upper) and its band edges are
   documented as exclusive.

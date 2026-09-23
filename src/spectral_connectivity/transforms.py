@@ -522,6 +522,30 @@ def _divide_where(
     return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
 
 
+def _finite_scalar_start_time(start_time: Any) -> float:
+    """``start_time`` as a finite float, squeezing a single-element array.
+
+    The time axis is one-dimensional, so a per-trial start time cannot be
+    represented. A single-element array (``time[0]`` of a column time axis) is
+    one start time and is accepted.
+    """
+    value = to_numpy(start_time)
+    if value.size == 1:
+        try:
+            scalar = float(value.reshape(()))
+        except (TypeError, ValueError):
+            scalar = float("nan")
+        if np.isfinite(scalar):
+            return scalar
+    msg = (
+        f"start_time must be a finite scalar (the time in seconds of the first "
+        f"sample), got {start_time!r}. The time axis is one-dimensional, so a "
+        "per-trial start time is not supported; align trials before stacking "
+        "them or analyze them separately."
+    )
+    raise ValueError(msg)
+
+
 def _immutable_array_snapshot(value: Any) -> BackendArray:
     """Copy an input array and make the owned snapshot read-only when supported."""
     return mark_readonly_if_supported(xp.array(value, copy=True))
@@ -1020,16 +1044,8 @@ class Multitaper:
         self.is_low_bias = is_low_bias
         # ``time`` adds start_time to a 1-D array of window centers, so a
         # per-trial array would either broadcast-fail or silently produce a 2-D
-        # time axis; reject anything but a finite scalar here.
-        if np.ndim(start_time) != 0 or not np.isfinite(to_numpy(start_time)):
-            msg = (
-                f"start_time must be a finite scalar (the time in seconds of the "
-                f"first sample), got {start_time!r}. Multitaper.time is "
-                "one-dimensional, so a per-trial start time is not supported; "
-                "align trials before stacking them or analyze them separately."
-            )
-            raise ValueError(msg)
-        self._start_time = _immutable_array_snapshot(start_time)
+        # time axis.
+        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
         self._n_fft_samples = n_fft_samples
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
@@ -2097,7 +2113,7 @@ class MorletWavelet:
         self.padding_mode = padding_mode
         self.edge_mode = edge_mode
         self.zero_mean = bool(zero_mean)
-        self.start_time = float(start_time)
+        self.start_time = _finite_scalar_start_time(start_time)
 
         half_widths = np.maximum(
             1,

@@ -459,10 +459,12 @@ def test_time(time_window_duration):
 
 
 def test_start_time_offsets_window_centers_and_accepts_numpy_scalars():
-    """``start_time`` is the time of the first sample; NumPy scalars and 0-d
-    arrays (e.g. ``time[0]`` of a float32 time axis) are scalars too."""
+    """``start_time`` is the time of the first sample; NumPy scalars, 0-d
+    arrays (e.g. ``time[0]`` of a float32 time axis), and single-element arrays
+    (``time[0]`` of a column time axis, as the tutorials build it) are scalars
+    too."""
     expected = 2.5 + (np.arange(2) * 50 + 24.5) / 100
-    for start_time in (2.5, np.float32(2.5), np.array(2.5)):
+    for start_time in (2.5, np.float32(2.5), np.array(2.5), np.array([2.5]), [2.5]):
         m = Multitaper(
             np.zeros((100, 3, 1)),
             sampling_frequency=100,
@@ -485,8 +487,11 @@ def test_start_time_offsets_window_centers_and_accepts_numpy_scalars():
         lambda data, start_time: Welch(
             data, sampling_frequency=100, segment_duration=0.5, start_time=start_time
         ),
+        lambda data, start_time: MorletWavelet(
+            data, sampling_frequency=100, frequencies=[20.0], start_time=start_time
+        ),
     ],
-    ids=["Multitaper", "ShortTimeFourierTransform", "Welch"],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch", "MorletWavelet"],
 )
 @pytest.mark.parametrize(
     "start_time",
@@ -498,6 +503,19 @@ def test_start_time_must_be_a_finite_scalar(make_transform, start_time):
     represented; reject it at construction instead of failing in ``time``."""
     with pytest.raises(ValueError, match="start_time must be a finite scalar"):
         make_transform(np.zeros((100, 3, 1)), start_time)
+
+
+def test_morlet_start_time_accepts_a_single_element_array():
+    """MorletWavelet takes the same start_time as the windowed transforms, so
+    the ``time[0]`` of a column time axis offsets its sample times."""
+    morlet = MorletWavelet(
+        np.zeros((100, 3, 1)),
+        sampling_frequency=100,
+        frequencies=[20.0],
+        start_time=np.array([2.5]),
+    )
+    assert morlet.start_time == 2.5
+    np.testing.assert_allclose(morlet.time[0], 2.5)
 
 
 def test_tapers():
