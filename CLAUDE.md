@@ -95,7 +95,7 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
 
 - Unit tests in `tests/` directory mirror the source structure
 - CI (`.github/workflows/release.yml`) runs the quality gate (ruff format check,
-  ruff check, mypy) and a test matrix on Python 3.10–3.13 across Ubuntu, macOS,
+  ruff check, mypy) and a test matrix on Python 3.10–3.14 across Ubuntu, macOS,
   and Windows, followed by build/install checks and (on tag) trusted PyPI publish
 - Coverage reporting via Codecov (Linux, Python 3.12)
 - Notebook integration tests execute tutorial examples

@@ -55,7 +55,7 @@ This project uses an automated release workflow. To create a new release:
 3. **Automated workflow** (`.github/workflows/release.yml`)
    Pushing the tag runs the release workflow, which automatically:
    - Runs code quality checks (ruff format, ruff check, mypy)
-   - Runs tests on Python 3.10, 3.11, 3.12, and 3.13, plus the minimum
+   - Runs tests on Python 3.10, 3.11, 3.12, 3.13, and 3.14, plus the minimum
      dependency floors
    - Builds the source distribution and wheel and tests the built packages
    - Generates build-provenance attestations for the artifacts
