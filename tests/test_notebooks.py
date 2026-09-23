@@ -613,6 +613,26 @@ def test_pairwise_phase_consistency(snapshot):
     assert outputs == snapshot
 
 
+def _lagged_broadband_pair(rng, n_time_samples, lag_samples, leader, noise_sd, n_trials=None):
+    """Two noisy copies of one white-noise source, the leader ``lag_samples`` ahead.
+
+    A broadband source is needed: a pure sinusoid delayed by a whole number of
+    cycles (e.g. 200 Hz by 10 ms) is indistinguishable from the original, so it
+    carries no lag information for group delay or the phase slope index.
+    Returns shape ``(n_time_samples, n_signals)`` or, with ``n_trials``,
+    ``(n_time_samples, n_trials, n_signals)``.
+    """
+    extra = () if n_trials is None else (n_trials,)
+    source = rng.standard_normal((n_time_samples + lag_samples, *extra))
+    ahead, behind = (
+        source[lag_samples:],
+        source[:n_time_samples],
+    )  # behind[t] == ahead[t - lag]
+    pair = [ahead, behind] if leader == 0 else [behind, ahead]
+    signal = np.stack(pair, axis=-1)
+    return signal + rng.normal(0, noise_sd, signal.shape)
+
+
 def test_group_delay_signal1_leads(snapshot):
     """Group delay: Signal #1 leads Signal #2."""
     rng = np.random.default_rng(42)
@@ -621,19 +641,17 @@ def test_group_delay_signal1_leads(snapshot):
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
-    frequency_of_interest = 200
-    n_signals = 2
-    time_lag = 0.010  # 10 ms lag
-    signal = np.zeros((n_time_samples, n_signals))
-    signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-
-    # Create time-shifted version
-    time_shifted = time - time_lag
-    signal[:, 1] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    noise = rng.normal(0, 4, signal.shape)
+    time_lag = 0.010  # 10 ms = 15 samples
+    signal = _lagged_broadband_pair(
+        rng,
+        n_time_samples,
+        round(time_lag * sampling_frequency),
+        leader=0,
+        noise_sd=0.25,
+    )
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise, axis="signals"),
+        prepare_time_series(signal, axis="signals"),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -644,6 +662,9 @@ def test_group_delay_signal1_leads(snapshot):
         "group_delay": connectivity.group_delay(),
         "frequencies": connectivity.frequencies,
     }
+    delay = outputs["group_delay"][0]
+    np.testing.assert_allclose(delay[..., 0, 1], time_lag, atol=5e-4)
+    np.testing.assert_allclose(delay[..., 1, 0], -time_lag, atol=5e-4)
     assert outputs == snapshot
 
 
@@ -655,19 +676,17 @@ def test_group_delay_signal2_leads(snapshot):
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
-    frequency_of_interest = 200
-    n_signals = 2
-    time_lag = 0.010
-    signal = np.zeros((n_time_samples, n_signals))
-
-    # Signal 2 leads (appears first in time)
-    time_shifted = time + time_lag
-    signal[:, 0] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    signal[:, 1] = np.sin(2 * np.pi * time * frequency_of_interest)
-    noise = rng.normal(0, 4, signal.shape)
+    time_lag = 0.010  # 10 ms = 15 samples
+    signal = _lagged_broadband_pair(
+        rng,
+        n_time_samples,
+        round(time_lag * sampling_frequency),
+        leader=1,
+        noise_sd=0.25,
+    )
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise, axis="signals"),
+        prepare_time_series(signal, axis="signals"),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -678,6 +697,8 @@ def test_group_delay_signal2_leads(snapshot):
         "group_delay": connectivity.group_delay(),
         "frequencies": connectivity.frequencies,
     }
+    delay = outputs["group_delay"][0]
+    np.testing.assert_allclose(delay[..., 0, 1], -time_lag, atol=5e-4)
     assert outputs == snapshot
 
 
@@ -690,19 +711,19 @@ def test_group_delay_signal2_leads_over_time(snapshot):
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
-    frequency_of_interest = 200
-    n_signals = 2
-    time_lag = 0.010
-    signal = np.zeros((n_time_samples, n_trials, n_signals))
-
+    time_lag = 0.010  # 10 ms = 15 samples
     # Signal 2 leads (appears first in time)
-    time_shifted = time + time_lag
-    signal[:, :, 0] = np.sin(2 * np.pi * time_shifted[:, np.newaxis] * frequency_of_interest)
-    signal[:, :, 1] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
-    noise = rng.normal(0, 4, signal.shape)
+    signal = _lagged_broadband_pair(
+        rng,
+        n_time_samples,
+        round(time_lag * sampling_frequency),
+        leader=1,
+        noise_sd=1.0,
+        n_trials=n_trials,
+    )
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise),
+        prepare_time_series(signal),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=1,
         time_window_duration=0.080,
@@ -716,6 +737,8 @@ def test_group_delay_signal2_leads_over_time(snapshot):
         "frequencies": connectivity.frequencies,
         "time": connectivity.time,
     }
+    delay = outputs["group_delay"][0]
+    np.testing.assert_allclose(delay[..., 0, 1], -time_lag, atol=5e-4)  # every window
     assert outputs == snapshot
 
 
@@ -727,18 +750,17 @@ def test_phase_slope_index_signal1_leads(snapshot):
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
-    frequency_of_interest = 200
-    n_signals = 2
-    time_lag = 0.010
-    signal = np.zeros((n_time_samples, n_signals))
-    signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-
-    time_shifted = time - time_lag
-    signal[:, 1] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    noise = rng.normal(0, 4, signal.shape)
+    time_lag = 0.010  # 10 ms = 15 samples
+    signal = _lagged_broadband_pair(
+        rng,
+        n_time_samples,
+        round(time_lag * sampling_frequency),
+        leader=0,
+        noise_sd=0.25,
+    )
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise, axis="signals"),
+        prepare_time_series(signal, axis="signals"),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -749,6 +771,9 @@ def test_phase_slope_index_signal1_leads(snapshot):
         "phase_slope_index": connectivity.phase_slope_index(),
         "frequencies": connectivity.frequencies,
     }
+    psi = outputs["phase_slope_index"]
+    assert np.all(psi[..., 0, 1] > 0)  # positive [0, 1]: signal 1 leads signal 2
+    np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
     assert outputs == snapshot
 
 
@@ -760,18 +785,17 @@ def test_phase_slope_index_signal2_leads(snapshot):
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
-    frequency_of_interest = 200
-    n_signals = 2
-    time_lag = 0.010
-    signal = np.zeros((n_time_samples, n_signals))
-
-    time_shifted = time + time_lag
-    signal[:, 0] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    signal[:, 1] = np.sin(2 * np.pi * time * frequency_of_interest)
-    noise = rng.normal(0, 4, signal.shape)
+    time_lag = 0.010  # 10 ms = 15 samples
+    signal = _lagged_broadband_pair(
+        rng,
+        n_time_samples,
+        round(time_lag * sampling_frequency),
+        leader=1,
+        noise_sd=0.25,
+    )
 
     multitaper = Multitaper(
-        prepare_time_series(signal + noise, axis="signals"),
+        prepare_time_series(signal, axis="signals"),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -782,6 +806,9 @@ def test_phase_slope_index_signal2_leads(snapshot):
         "phase_slope_index": connectivity.phase_slope_index(),
         "frequencies": connectivity.frequencies,
     }
+    psi = outputs["phase_slope_index"]
+    assert np.all(psi[..., 0, 1] < 0)  # negative [0, 1]: signal 2 leads signal 1
+    np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
     assert outputs == snapshot
 
 
