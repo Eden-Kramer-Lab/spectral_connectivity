@@ -184,10 +184,8 @@ ignore = [
 # examples/ are Jupytext notebook scripts, not modules: cells legitimately
 # import after markdown/code cells (E402), bare expressions display values in a
 # cell (B018), print results (T201), zip demo arrays (B905), and narrative text
-# contains unicode such as non-breaking spaces (RUF002, RUF003). They also
-# mirror the notebooks' seeded legacy np.random draws (NPY002).
-"examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003", "NPY002"]
-"*.ipynb" = ["NPY002"]  # legacy np.random kept for pedagogical simplicity
+# contains unicode such as non-breaking spaces (RUF002, RUF003).
+"examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

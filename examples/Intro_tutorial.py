@@ -35,6 +35,7 @@
 # %%
 import numpy as np
 
+rng = np.random.default_rng(0)  # seeded, so the tutorial output is reproducible
 frequency_of_interest = 200
 sampling_frequency = 1000
 time_extent = (0, 60)
@@ -52,7 +53,7 @@ signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
 phase_offset = np.pi / 2
 signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
 
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 # %% [markdown]
 # We can plot these two signals with and without the noise added:
