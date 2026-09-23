@@ -159,7 +159,7 @@ multitaper.frequency_resolution
 multitaper.nyquist_frequency
 
 # %% [markdown]
-# Note that we haven't run the tranformation yet. To do this we can use the method `fft` to get the Fourier coefficients.
+# Note that we haven't run the transformation yet. To do this we can use the method `fft` to get the Fourier coefficients.
 #
 # This will have shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
 
