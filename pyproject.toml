@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]  # 1.27: PEP 639 license expressions
 build-backend = "hatchling.build"
 
 [project]
@@ -9,7 +9,8 @@ description = "Frequency domain functional and directed connectivity analysis to
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Eric Denovellis", email = "eric.denovellis@ucsf.edu" }]
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 keywords = [
     "python",
     "neuroscience",
@@ -25,7 +26,6 @@ keywords = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
