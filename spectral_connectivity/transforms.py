@@ -776,7 +776,7 @@ class Multitaper:
         # deep inside fft(). bool is an int subclass, so reject it explicitly.
         if fft_workers is not None and (
             isinstance(fft_workers, bool)
-            or not isinstance(fft_workers, (int, np.integer))
+            or not isinstance(fft_workers, (int, np.integer))  # type: ignore[redundant-expr]  # user input
             or fft_workers == 0
         ):
             raise ValueError(

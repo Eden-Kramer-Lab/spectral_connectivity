@@ -266,7 +266,7 @@ def _validate_alpha(alpha: float) -> None:
     """Validate a significance level shared by correction procedures."""
     if (
         isinstance(alpha, (bool, np.bool_))
-        or not isinstance(alpha, (int, float, np.integer, np.floating))
+        or not isinstance(alpha, (int, float, np.integer, np.floating))  # type: ignore[redundant-expr]  # user input
         or not np.isfinite(alpha)
         or not 0 < alpha < 1
     ):

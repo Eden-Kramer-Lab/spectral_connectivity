@@ -1043,7 +1043,7 @@ def frequency_band_reduce(
         raise ValueError("result must have a 'frequency' dimension.")
     if reduction not in {"mean", "integral"}:
         raise ValueError("reduction must be either 'mean' or 'integral'.")
-    if not isinstance(bands, Mapping) or len(bands) == 0:
+    if not isinstance(bands, Mapping) or len(bands) == 0:  # type: ignore[redundant-expr]  # user input
         raise ValueError("bands must be a non-empty mapping of names to bounds.")
 
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -1056,7 +1056,8 @@ def frequency_band_reduce(
 
     band_names = list(bands)
     if len(set(band_names)) != len(band_names) or not all(
-        isinstance(name, str) and name for name in band_names
+        isinstance(name, str) and name  # type: ignore[redundant-expr]  # user input
+        for name in band_names
     ):
         raise ValueError("band names must be unique, non-empty strings.")
 
@@ -1066,7 +1067,7 @@ def frequency_band_reduce(
     ]
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
-        measure = str(data.attrs.get("measure", data.name or ""))
+        measure = str(data.attrs.get("measure", "" if data.name is None else data.name))
         if reduction == "integral" and measure not in {
             "power",
             "cross_spectral_density",

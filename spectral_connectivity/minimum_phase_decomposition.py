@@ -531,7 +531,10 @@ def minimum_phase_decomposition(
         raise ValueError(
             f"tolerance must be a finite positive number, got {tolerance}."
         )
-    if not isinstance(max_iterations, (int, np.integer)) or max_iterations < 1:
+    if (
+        not isinstance(max_iterations, (int, np.integer))  # type: ignore[redundant-expr]  # user input
+        or max_iterations < 1
+    ):
         raise ValueError(
             f"max_iterations must be a positive integer, got {max_iterations}."
         )
