@@ -521,6 +521,7 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
 # replicates, t.ppf(0.975, df).
 _Z_975 = 1.959963984540054
 _T_975_DF2 = 4.302652729749462
+_T_975_DF3 = 3.182446305284263
 _T_975_DF4 = 2.7764451051977934
 
 
@@ -618,6 +619,67 @@ def test_jackknife_log_and_circular_transforms_return_original_scale():
         np.array(np.pi), phases, transformation="circular"
     )
     assert abs(circular.bias_corrected) > 3.0
+
+
+def test_jackknife_circular_interval_wider_than_the_circle_warns():
+    """A circular half-width >= pi is the whole circle, not a narrow interval.
+
+    The circular SE is a linear SE of the unwrapped replicates and is
+    unbounded; wrapping bounds that are more than 2*pi apart would report a
+    whole-circle interval as e.g. (-1.65, 1.65). Such bins must be pinned to
+    (-pi, pi) with a warning, while resolved bins keep their wrapped bounds.
+    """
+    wide = np.array([-2.0, 0.0, 2.0, -2.5, 2.5])
+    tight = np.array([0.9, 1.0, 1.1, 0.95, 1.05])
+    with pytest.warns(UserWarning, match="whole circle") as record:
+        result = jackknife_confidence_interval(
+            np.array([0.0, 1.0]), np.stack([wide, tight], axis=1), transformation="circular"
+        )
+    assert len(record) == 1
+    assert "1 value(s)" in str(record[0].message)
+    lower, upper = result.confidence_interval
+    # The unbounded standard error is still reported (sqrt(4/5 * 20.5) = 4.05).
+    np.testing.assert_allclose(result.standard_error[0], np.sqrt(0.8 * 20.5), rtol=1e-12)
+    assert (lower[0], upper[0]) == (-np.pi, np.pi)
+    # The resolved bin is untouched: a wrapped interval bracketing the estimate.
+    assert -np.pi < lower[1] < 1.0 < upper[1] <= np.pi
+    n = tight.size
+    tight_half_width = _T_975_DF4 * np.sqrt((n - 1) / n * np.sum((tight - tight.mean()) ** 2))
+    np.testing.assert_allclose(
+        (lower[1], upper[1]), (1.0 - tight_half_width, 1.0 + tight_half_width), rtol=1e-12
+    )
+    # A scalar estimate takes the same path.
+    with pytest.warns(UserWarning, match="whole circle"):
+        scalar = jackknife_confidence_interval(np.array(0.0), wide, transformation="circular")
+    assert scalar.confidence_interval == (-np.pi, np.pi)
+
+
+def test_jackknife_circular_interval_crossing_pi_has_lower_above_upper():
+    """Bounds are wrapped to (-pi, pi]; lower > upper marks a crossing of +/-pi.
+
+    Estimate 3.0 with replicates near +/-pi: the replicate at -3.1 is unwrapped
+    to 3.183 before the SE is formed, and the upper bound 3.0 + half-width
+    exceeds pi so it wraps negative. The interval is [lower, pi] U (-pi, upper].
+    """
+    replicates = np.array([3.1, 2.9, -3.1, 3.0])
+    estimate = 3.0
+    unwrapped = estimate + np.angle(np.exp(1j * (replicates - estimate)))
+    n = replicates.size
+    half_width = _T_975_DF3 * np.sqrt(
+        (n - 1) / n * np.sum((unwrapped - unwrapped.mean()) ** 2)
+    )
+    assert half_width < np.pi  # a resolved interval, so no warning is expected
+
+    result = jackknife_confidence_interval(
+        np.array(estimate), replicates, transformation="circular"
+    )
+
+    lower, upper = result.confidence_interval
+    assert lower > upper
+    np.testing.assert_allclose(lower, estimate - half_width, rtol=1e-12)
+    np.testing.assert_allclose(upper, estimate + half_width - 2 * np.pi, rtol=1e-12)
+    # The estimate lies in the [lower, pi] arm of the wrapped interval.
+    assert lower <= estimate <= np.pi
 
 
 def test_jackknife_fisher_squared_matches_atanh_of_magnitude():

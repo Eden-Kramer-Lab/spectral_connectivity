@@ -40,7 +40,12 @@ class JackknifeResult:
     confidence_interval : tuple of (lower, upper) arrays
         Confidence bounds on the original scale, formed on the transformed
         scale as ``estimate -/+ t * standard_error`` with the Student t
-        critical value on ``n_observations - 1`` degrees of freedom.
+        critical value on ``n_observations - 1`` degrees of freedom. For the
+        ``"circular"`` transformation the bounds are wrapped to ``(-pi, pi]``:
+        ``lower > upper`` means the interval crosses ``+/-pi`` and is
+        ``[lower, pi] U (-pi, upper]``, and a bin whose half-width reaches
+        ``pi`` (the whole circle, phase unresolved) is reported as
+        ``(-pi, pi)``.
     n_observations : int
         Number of leave-one-out replicates; the interval's critical value has
         ``n_observations - 1`` degrees of freedom.
@@ -62,6 +67,34 @@ def _identity(value: NDArray[np.floating]) -> NDArray[np.floating]:
 
 def _wrap_phase(value: NDArray[np.floating]) -> NDArray[np.floating]:
     return np.angle(np.exp(1j * value))
+
+
+def _pin_whole_circle_interval(
+    half_width: NDArray[np.floating],
+    lower: NDArray[np.floating],
+    upper: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """Report a circular interval with half-width >= pi as the whole circle.
+
+    The circular standard error is a linear standard error of the unwrapped
+    replicates and is unbounded, but wrapping bounds that are more than 2*pi
+    apart makes a whole-circle interval look narrow (a half-width of 11 rad
+    wraps to about (-1.65, 1.65)). Pin such bins to ``(-pi, pi)`` and warn that
+    the phase is not resolved there.
+    """
+    whole_circle = half_width >= np.pi
+    if bool(np.any(whole_circle)):
+        warnings.warn(
+            f"Jackknife circular interval: {int(np.count_nonzero(whole_circle))} "
+            "value(s) have a half-width of at least pi rad, so the interval covers "
+            "the whole circle and the phase is not resolved there. Those bounds are "
+            "reported as (-pi, pi).",
+            UserWarning,
+            stacklevel=3,
+        )
+        lower = np.where(whole_circle, -np.pi, lower)
+        upper = np.where(whole_circle, np.pi, upper)
+    return lower, upper
 
 
 def _exponential(value: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -136,6 +169,17 @@ def jackknife_confidence_interval(
         Estimate, bias-corrected estimate, standard error, and confidence
         bounds, all on the original scale and with the shape of ``estimate``.
         The standard error is converted back with the local delta method.
+
+    Notes
+    -----
+    For ``"circular"`` the replicates are unwrapped onto the branch nearest the
+    estimate, the interval is formed on that linear scale, and the bounds are
+    wrapped back to ``(-pi, pi]``. A bound that wraps past ``+/-pi`` leaves
+    ``lower > upper``; the interval is then ``[lower, pi] U (-pi, upper]``.
+    The circular standard error itself is not wrapped, so it can exceed
+    ``pi``; when the half-width is at least ``pi`` the interval covers the
+    whole circle, the phase is not resolved, and the bounds are reported as
+    ``(-pi, pi)`` with a ``UserWarning``.
 
     References
     ----------
@@ -237,8 +281,11 @@ def jackknife_confidence_interval(
     # Student t on n - 1 degrees of freedom: the jackknife variance is estimated
     # from n replicates, and the normal quantile under-covers at small n.
     critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=n_observations - 1)
-    lower = inverse(transformed_estimate - critical_value * transformed_standard_error)
-    upper = inverse(transformed_estimate + critical_value * transformed_standard_error)
+    half_width = critical_value * transformed_standard_error
+    lower = inverse(transformed_estimate - half_width)
+    upper = inverse(transformed_estimate + half_width)
+    if transformation == "circular":
+        lower, upper = _pin_whole_circle_interval(half_width, lower, upper)
     return JackknifeResult(
         estimate=estimate_array,
         bias_corrected=inverse(bias_corrected_transformed),
