@@ -1698,6 +1698,12 @@ class Connectivity:
         [-π, π].
         Values lie in the unit disk of the complex plane.
 
+        **Phase convention**: ``[..., i, j]`` is ``S_ij / sqrt(S_ii S_jj)``
+        with ``S_ij = E[X_i conj(X_j)]``, so a positive angle means signal
+        ``i`` leads signal ``j``. :meth:`canonical_coherency` uses the
+        conjugate convention (``magnitude * exp(-1j * phi)``): with
+        single-channel groups its score is ``conj`` of this coherency.
+
         Examples
         --------
         >>> import numpy as np
@@ -1759,7 +1765,9 @@ class Connectivity:
         -----
         **Range**: [-π, π]. Phase angles in radians for complex coherency.
         A pure delay ``tau`` (seconds) gives a phase of ``2 * pi * f * tau``
-        (wrapped into ``[-π, π]``).
+        (wrapped into ``[-π, π]``). :meth:`canonical_coherency` reports its
+        phase in the conjugate convention (``magnitude * exp(-1j * phi)``), so
+        for single-channel groups its angle is the negative of this one.
 
         Examples
         --------
@@ -2803,6 +2811,11 @@ class Connectivity:
 
         Notes
         -----
+        **Frequency axis**: unlike every other public measure, which returns
+        only the non-negative frequencies, this method returns all
+        ``n_fft_samples`` bins of the (two-sided) transform in FFT order;
+        index it with ``all_frequencies`` rather than ``frequencies``.
+
         **Range**: [0, 1]. Each value is the fraction of total coherent power
         in that component, so the measure is scale-invariant and the components
         sum to at most 1.
@@ -3594,8 +3607,10 @@ class Connectivity:
         Notes
         -----
         **Non-negativity**: spectral Granger is ``>= 0`` by definition.
-        Roundoff-negative estimates are clipped to ``0`` and materially negative
-        bins (a degenerate factorization) are returned as ``NaN``; use
+        Negative estimates within roundoff of zero -- above ``-100 * eps`` of
+        the result dtype on the log-ratio scale, about ``-2e-14`` for float64
+        -- are clipped to ``0``; materially negative bins below that threshold
+        (a degenerate factorization) are returned as ``NaN``; use
         :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
@@ -3710,8 +3725,10 @@ class Connectivity:
         Notes
         -----
         **Non-negativity**: spectral Granger is ``>= 0`` by definition.
-        Roundoff-negative estimates are clipped to ``0`` and materially negative
-        bins (a degenerate factorization) are returned as ``NaN``; use
+        Negative estimates within roundoff of zero -- above ``-100 * eps`` of
+        the result dtype on the log-ratio scale, about ``-2e-14`` for float64
+        -- are clipped to ``0``; materially negative bins below that threshold
+        (a degenerate factorization) are returned as ``NaN``; use
         :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
@@ -3775,8 +3792,10 @@ class Connectivity:
         Notes
         -----
         **Non-negativity**: spectral Granger is ``>= 0`` by definition.
-        Roundoff-negative estimates are clipped to ``0`` and materially negative
-        bins (a degenerate factorization) are returned as ``NaN``; use
+        Negative estimates within roundoff of zero -- above ``-100 * eps`` of
+        the result dtype on the log-ratio scale, about ``-2e-14`` for float64
+        -- are clipped to ``0``; materially negative bins below that threshold
+        (a degenerate factorization) are returned as ``NaN``; use
         :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 

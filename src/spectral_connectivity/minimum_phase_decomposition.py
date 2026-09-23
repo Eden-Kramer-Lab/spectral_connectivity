@@ -286,8 +286,17 @@ def minimum_phase_reconstruction_error(
     iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
     biasing every directed-connectivity measure built on it (spectral Granger,
     DTF, PDC). This is an opt-in diagnostic: it returns
-    ``max_f ‖G Gᴴ - S‖ / max_f ‖S‖`` for each sub-spectrum so callers can check
+    ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum -- the entrywise
+    maximum absolute residual over every frequency and matrix entry, relative
+    to the entrywise maximum magnitude of ``S`` -- so callers can check
     factorization quality explicitly.
+
+    ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
+    FFT order, as required by the factorization itself. This module-level
+    function cannot verify that from the array alone (a one-sided spectrum has
+    the same shape); the :meth:`Connectivity.minimum_phase_reconstruction_error
+    <spectral_connectivity.Connectivity.minimum_phase_reconstruction_error>`
+    method enforces it from the transform's declared sidedness.
 
     A relative error near machine precision indicates a faithful factorization;
     values of a few percent are typical for finite-resolution estimated spectra;
@@ -302,7 +311,8 @@ def minimum_phase_reconstruction_error(
     ----------
     cross_spectral_matrix : NDArray[complexfloating],
         shape (..., n_fft_samples, n_signals, n_signals)
-        The cross-spectral matrix that was (or will be) factored.
+        The two-sided cross-spectral matrix (standard FFT order, positive and
+        negative frequencies) that was (or will be) factored.
     minimum_phase_factor : NDArray[complexfloating], optional
         A precomputed factor from :func:`minimum_phase_decomposition`. If omitted,
         the factorization is computed here with ``tolerance`` / ``max_iterations``.
@@ -312,9 +322,9 @@ def minimum_phase_reconstruction_error(
     Returns
     -------
     relative_error : NDArray[floating], shape (...,)
-        Maximum relative reconstruction error per sub-spectrum (the leading batch
-        dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN`` where the factor
-        is non-finite (the factorization did not converge).
+        Entrywise max-abs relative reconstruction error per sub-spectrum (the
+        leading batch dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN``
+        where the factor is non-finite (the factorization did not converge).
     """
     if minimum_phase_factor is None:
         minimum_phase_factor = minimum_phase_decomposition(
