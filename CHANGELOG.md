@@ -364,6 +364,14 @@ directly with results from 2.x.
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
   and `Welch` no longer step one sample short of their reported step.
+  `Multitaper.time_window_step` and `time_window_duration` (and the
+  `mt_time_window_step`/`mt_time_window_duration` result attributes) report the
+  rounded step and window actually used rather than the request
+  (`time_window_step=0.01` at 250 Hz reported 0.01 s while stepping 2 samples,
+  0.008 s). Giving both a duration and a sample count for the window or the
+  step now raises `ValueError` when they disagree, as
+  `ShortTimeFourierTransform` already did; previously the window duration but
+  the step count silently won.
 - `weighted_phase_lag_index` collapsed toward 0 for small-amplitude inputs
   because of an absolute epsilon guard, and `debiased_squared_phase_lag_index`
   returned `-1/(n-1)` instead of 0 where there is no phase lag (including the

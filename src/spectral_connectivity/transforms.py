@@ -607,11 +607,13 @@ class Multitaper:
         - "linear": remove linear trend
         - None: no detrending
     time_window_duration : float, optional
-        Duration in seconds of sliding time windows. If None, analyzes entire
-        time series (no time resolution).
+        Duration in seconds of sliding time windows, rounded to the nearest
+        sample (the ``time_window_duration`` attribute reports the rounded
+        duration). If None, analyzes entire time series (no time resolution).
     time_window_step : float, optional
-        Step size in seconds between consecutive time windows. If None, uses
-        non-overlapping windows (step = window duration).
+        Step size in seconds between consecutive time windows, rounded to the
+        nearest sample (the ``time_window_step`` attribute reports the rounded
+        step). If None, uses non-overlapping windows (step = window duration).
     n_tapers : int, optional
         Number of DPSS tapers to use. If None, computed as
         floor(2 * time_halfbandwidth_product) - 1.
@@ -626,12 +628,13 @@ class Multitaper:
         to be fast for the FFT algorithm. The value is determined by
         scipy.fft.next_fast_len (or cupy.fft.next_fast_len when GPU is enabled).
     n_time_samples_per_window : int, optional
-        Number of samples per time window. Computed from time_window_duration
-        if not provided.
+        Number of samples per time window. Computed (to the nearest sample)
+        from time_window_duration if not provided; when both are given they
+        must resolve to the same count, otherwise a ``ValueError`` is raised.
     n_time_samples_per_step : int, optional
         Number of samples to advance between windows. Computed (to the nearest
-        sample) from time_window_step if not provided; when both are given the
-        sample count is used and ``time_window_step`` reports its duration.
+        sample) from time_window_step if not provided; when both are given they
+        must resolve to the same count, otherwise a ``ValueError`` is raised.
     is_low_bias : bool, default=True
         If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
     fft_workers : int, optional
@@ -1055,12 +1058,35 @@ class Multitaper:
             msg = f"n_tapers must be an integer, got {n_tapers}."
             raise ValueError(msg)
         self._n_tapers = n_tapers
+        # A duration and a sample count for the same window or step must name
+        # the same number of samples, as in ShortTimeFourierTransform: silently
+        # preferring either one would analyze windows the caller did not ask for.
+        for duration_name, duration, count_name, count in (
+            (
+                "time_window_duration",
+                time_window_duration,
+                "n_time_samples_per_window",
+                n_time_samples_per_window,
+            ),
+            (
+                "time_window_step",
+                time_window_step,
+                "n_time_samples_per_step",
+                n_time_samples_per_step,
+            ),
+        ):
+            if duration is not None and count is not None:
+                duration_samples = int(np.around(duration * sampling_frequency))
+                if duration_samples != count:
+                    msg = (
+                        f"{duration_name}={duration} s and {count_name}={count} "
+                        f"disagree: at sampling_frequency={sampling_frequency} Hz "
+                        f"the duration is {duration_samples} samples. Give only one "
+                        f"of them, or values that resolve to the same sample count."
+                    )
+                    raise ValueError(msg)
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
-        if n_time_samples_per_step is not None:
-            # An explicit sample count is the step actually taken; derive the
-            # reported duration from it so the two cannot disagree.
-            self._time_window_step = n_time_samples_per_step / sampling_frequency
         if self._tapers is not None:
             # Validate custom tapers now; a mismatch would otherwise surface as
             # an opaque broadcasting error inside fft().
@@ -1291,14 +1317,12 @@ FFT samples:          {self.n_fft_samples}
         Returns
         -------
         float
-            Duration in seconds of each time window.
+            Duration in seconds of each time window actually analyzed,
+            ``n_time_samples_per_window / sampling_frequency`` (a requested
+            duration is rounded to the nearest sample).
 
         """
-        if self._time_window_duration is None:
-            self._time_window_duration = (
-                self.n_time_samples_per_window / self.sampling_frequency
-            )
-        return self._time_window_duration
+        return self.n_time_samples_per_window / self.sampling_frequency
 
     @property
     def time_window_step(self) -> float:
@@ -1307,12 +1331,12 @@ FFT samples:          {self.n_fft_samples}
         Returns
         -------
         float
-            Step size in seconds between consecutive time windows.
+            Step size in seconds between consecutive time windows actually
+            taken, ``n_time_samples_per_step / sampling_frequency`` (a
+            requested step is rounded to the nearest sample).
 
         """
-        if self._time_window_step is None:
-            self._time_window_step = self.n_time_samples_per_step / self.sampling_frequency
-        return self._time_window_step
+        return self.n_time_samples_per_step / self.sampling_frequency
 
     @property
     def n_tapers(self) -> int:
@@ -1346,13 +1370,15 @@ FFT samples:          {self.n_fft_samples}
             If neither n_time_samples_per_window nor time_window_duration is set.
 
         """
-        if self._n_time_samples_per_window is None and self._time_window_duration is None:
-            self._n_time_samples_per_window = self._time_series.shape[0]
-        elif self._time_window_duration is not None:
-            self._n_time_samples_per_window = int(
-                xp.around(self.time_window_duration * self.sampling_frequency)
-            )
-        # Otherwise n_time_samples_per_window was set explicitly.
+        # An explicit n_time_samples_per_window is used as given (a duration
+        # given with it was checked to agree at construction).
+        if self._n_time_samples_per_window is None:
+            if self._time_window_duration is None:
+                self._n_time_samples_per_window = self._time_series.shape[0]
+            else:
+                self._n_time_samples_per_window = int(
+                    np.around(self._time_window_duration * self.sampling_frequency)
+                )
         assert self._n_time_samples_per_window is not None
         # Validate the resolved window length regardless of which input path set
         # it: an explicit n_time_samples_per_window=0 (or a duration rounding to

@@ -17,6 +17,7 @@ from spectral_connectivity.transforms import (
     _sliding_window,
     dpss_windows,
 )
+from spectral_connectivity.wrapper import multitaper_connectivity
 
 
 def _short_smoothing_window():
@@ -417,9 +418,89 @@ def test_step_duration_rounds_to_the_intended_sample_count(sampling_frequency, s
     assert m.n_time_samples_per_step == step
 
 
-def test_explicit_step_sample_count_takes_precedence_over_duration():
-    """When both are given, the integer sample count is the step actually
-    taken, and the reported duration agrees with it."""
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_step", "expected_samples"),
+    # 49.5 and 2.5 samples round half to even: to 50 and 2.
+    [(1000, 0.0495, 50), (250, 0.01, 2)],
+)
+def test_time_window_step_reports_the_step_actually_used(
+    sampling_frequency, time_window_step, expected_samples
+):
+    """A step that is not a whole number of samples is rounded; the reported
+    duration (and the mt_time_window_step provenance) must describe the
+    rounded step the windows actually advance by, not the request."""
+    time_series = np.random.default_rng(0).standard_normal((sampling_frequency, 1, 2))
+    m = Multitaper(
+        time_series,
+        sampling_frequency=sampling_frequency,
+        time_window_duration=0.2,
+        time_window_step=time_window_step,
+    )
+    actual_step = expected_samples / sampling_frequency
+    assert m.n_time_samples_per_step == expected_samples
+    assert m.time_window_step == actual_step
+    np.testing.assert_allclose(np.diff(m.time), actual_step)
+    result = multitaper_connectivity(
+        time_series,
+        sampling_frequency=sampling_frequency,
+        time_window_duration=0.2,
+        time_window_step=time_window_step,
+        method="power",
+    )
+    assert result.attrs["mt_time_window_step"] == actual_step
+
+
+@pytest.mark.parametrize(
+    ("sampling_frequency", "time_window_duration", "expected_samples"),
+    [(1000, 0.0995, 100), (250, 0.21, 52)],
+)
+def test_time_window_duration_reports_the_window_actually_used(
+    sampling_frequency, time_window_duration, expected_samples
+):
+    m = Multitaper(
+        np.zeros((sampling_frequency, 1, 1)),
+        sampling_frequency=sampling_frequency,
+        time_window_duration=time_window_duration,
+    )
+    assert m.n_time_samples_per_window == expected_samples
+    assert m.time_window_duration == expected_samples / sampling_frequency
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"time_window_duration": 0.2, "n_time_samples_per_window": 100},
+        {
+            "time_window_duration": 0.2,
+            "time_window_step": 0.05,
+            "n_time_samples_per_step": 20,
+        },
+    ],
+)
+def test_multitaper_rejects_a_duration_and_sample_count_that_disagree(kwargs):
+    """Given both spellings of the window or step, Multitaper must not silently
+    pick one (formerly the window duration but the step count won); like
+    ShortTimeFourierTransform, it raises when they resolve differently."""
+    with pytest.raises(ValueError, match="disagree"):
+        Multitaper(np.zeros((1000, 1, 1)), sampling_frequency=1000, **kwargs)
+
+
+def test_multitaper_accepts_a_duration_and_sample_count_that_agree():
+    m = Multitaper(
+        np.zeros((1000, 1, 1)),
+        sampling_frequency=1000,
+        time_window_duration=0.2,
+        n_time_samples_per_window=200,
+        time_window_step=0.0495,  # rounds to 50 samples
+        n_time_samples_per_step=50,
+    )
+    assert m.n_time_samples_per_window == 200
+    assert m.n_time_samples_per_step == 50
+
+
+def test_explicit_step_sample_count_agreeing_with_duration_is_used():
+    """When both are given and agree, the integer sample count is the step
+    actually taken, and the reported duration agrees with it."""
     time_series = np.zeros((1000, 1, 1))
     m = Multitaper(
         time_series,
