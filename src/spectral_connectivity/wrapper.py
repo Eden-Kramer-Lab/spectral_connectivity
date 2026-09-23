@@ -1204,6 +1204,7 @@ def frequency_band_reduce(
     bands: Mapping[str, tuple[float, float]],
     *,
     reduction: Literal["mean", "integral"] = "mean",
+    circular: bool | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Reduce a frequency-resolved result into labeled frequency bands.
 
@@ -1227,6 +1228,11 @@ def frequency_band_reduce(
         Inclusive lower and upper frequency bounds in the coordinate's units.
     reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
+    circular : bool, optional
+        Use a circular mean (for phase angles in radians). By default it is
+        inferred per variable: ``coherence_phase`` results and variables with
+        ``units="rad"`` are averaged circularly. Pass ``True``/``False`` to
+        override, e.g. for a phase array whose name and attrs were removed.
 
     Returns
     -------
@@ -1317,7 +1323,11 @@ def frequency_band_reduce(
             # average a different set of bins per time point.
             if reduction == "integral":
                 reduced = xr.dot(selected, xr.DataArray(weights[used], dims="frequency"))
-            elif measure == "coherence_phase":
+            elif (
+                circular
+                if circular is not None
+                else measure == "coherence_phase" or data.attrs.get("units") == "rad"
+            ):
                 # Circular mean prevents phases near -pi and +pi from
                 # spuriously cancelling toward zero.
                 phase_vectors = xr.apply_ufunc(np.exp, 1j * selected)

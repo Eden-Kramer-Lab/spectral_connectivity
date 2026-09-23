@@ -2934,3 +2934,29 @@ def test_large_array_input_attrs_are_summarized():
     assert record["montage"] == [1, 2, 3]
     assert record["raw_trace"] == {"summarized_array": {"shape": [50000], "dtype": "float64"}}
     assert len(result.attrs["input_attrs_json"]) < 500
+
+
+def _phases_near_pi():
+    return xr.DataArray(
+        np.array([3.10, -3.10, 3.12, -3.12]),
+        dims=("frequency",),
+        coords={"frequency": [1.0, 2.0, 3.0, 4.0]},
+    )
+
+
+def test_band_mean_of_phase_is_circular_when_units_are_radians():
+    """Phases near +/-pi average to ~pi circularly but ~0 arithmetically; a
+    renamed phase variable is recognized by its radian units."""
+    phase = _phases_near_pi().rename("my_phase").assign_attrs(units="rad")
+    reduced = frequency_band_reduce(phase, {"all": (1.0, 4.0)})
+    assert abs(float(reduced.sel(band="all"))) == pytest.approx(np.pi, abs=0.05)
+
+
+def test_band_mean_circular_can_be_requested_or_disabled_explicitly():
+    phase = _phases_near_pi()  # no name, no attrs: nothing to infer from
+    circular = frequency_band_reduce(phase, {"all": (1.0, 4.0)}, circular=True)
+    assert abs(float(circular.sel(band="all"))) == pytest.approx(np.pi, abs=0.05)
+    linear = frequency_band_reduce(
+        phase.assign_attrs(units="rad"), {"all": (1.0, 4.0)}, circular=False
+    )
+    assert float(linear.sel(band="all")) == pytest.approx(0.0, abs=1e-12)
