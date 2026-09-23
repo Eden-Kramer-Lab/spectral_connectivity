@@ -2534,7 +2534,13 @@ def _apply_adaptive_taper_weights(
             0.0,
         )
         scale = xp.maximum(xp.abs(spectrum), spectrum_floor)
-        if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
+        # A window/trial containing NaN has a NaN spectrum or PSD floor, so its
+        # scale is NaN and it can never meet the tolerance; don't let it block
+        # convergence of the finite bins.
+        settled = (xp.abs(updated - spectrum) <= tolerance * scale) | ~xp.isfinite(
+            scale
+        )
+        if bool(xp.all(settled)):
             spectrum = updated
             break
         spectrum = updated

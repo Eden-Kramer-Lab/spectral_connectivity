@@ -1153,6 +1153,23 @@ def test_adaptive_weighting_isolates_nan_windows():
     np.testing.assert_allclose(contaminated[0], clean[0], rtol=1e-9, atol=1e-12)
 
 
+def test_adaptive_weighting_converges_despite_nan_window():
+    """A NaN window's spectrum stays NaN and can never meet the tolerance; it
+    must not block convergence (and trigger a spurious warning) for the rest."""
+    data = np.random.default_rng(918).standard_normal((4096, 5, 1))
+    data[3000, 0, 0] = np.nan
+    multitaper = Multitaper(
+        data,
+        sampling_frequency=256,
+        time_halfbandwidth_product=3,
+        taper_weighting="adaptive",
+        time_window_duration=8.0,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*did not converge")
+        multitaper.fft()
+
+
 def test_adaptive_weighting_warns_on_non_convergence():
     data = np.random.default_rng(915).standard_normal((512, 1, 2))
     multitaper = Multitaper(
