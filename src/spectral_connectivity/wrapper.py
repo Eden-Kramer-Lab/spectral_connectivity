@@ -1457,7 +1457,10 @@ def _inclusive_frequency_mask(
 
 
 def _band_integration_weights(
-    frequencies: NDArray[np.floating], low: float, high: float
+    frequencies: NDArray[np.floating],
+    low: float,
+    high: float,
+    nyquist_frequency: float | None,
 ) -> NDArray[np.floating]:
     """Width of each bin's frequency cell that lies inside ``[low, high]``.
 
@@ -1472,9 +1475,9 @@ def _band_integration_weights(
     onto the grid -- ``[0, spacing / 2]`` and ``[f_last - spacing / 2, f_last]``
     -- and weighted twice. Each edge bin then still contributes a full spacing
     of power and a band covering every bin integrates to
-    ``sum(density) * spacing`` (Parseval). The last bin of such a grid is taken
-    to be the Nyquist bin; for an odd FFT length or a grid cropped below Nyquist
-    this only moves that bin's power into the half-spacing below it.
+    ``sum(density) * spacing`` (Parseval). Only the bin at
+    ``nyquist_frequency`` is folded at the top: after cropping, the last bin is
+    an ordinary interior bin whose density is already doubled.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -1487,12 +1490,29 @@ def _band_integration_weights(
     if frequencies[0] >= 0:
         lower = np.maximum(lower, 0.0)
     if frequencies[0] == 0.0:
+        scale[0] = 2.0
+    if nyquist_frequency is not None and frequencies[-1] == nyquist_frequency:
         upper[-1] = frequencies[-1]
-        scale[[0, -1]] = 2.0
+        scale[-1] = 2.0
     weights: NDArray[np.floating] = scale * np.clip(
         np.minimum(upper, high) - np.maximum(lower, low), 0.0, None
     )
     return weights
+
+
+def _grid_nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
+    """The Nyquist bin of ``result``'s frequency grid, as far as the grid shows.
+
+    A grid anchored at 0 Hz is taken to be a complete one-sided spectrum whose
+    last bin is Nyquist. Only the grid as computed can say so: cropping or
+    decimating it makes an interior bin the last one.
+    """
+    if "frequency" not in result.coords:
+        return None
+    frequencies = np.asarray(result.coords["frequency"].values)
+    if frequencies.ndim != 1 or frequencies.size < 2 or frequencies[0] != 0.0:
+        return None
+    return float(frequencies[-1])
 
 
 def frequency_band_reduce(
@@ -1557,6 +1577,33 @@ def frequency_band_reduce(
     bins only. When the input carries a ``valid_time_frequency`` coordinate the
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
+
+    The last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
+    reduce the result before cropping it; ``frequency_range`` in
+    :func:`multitaper_connectivity` and :func:`fourier_connectivity` keeps
+    track of the true Nyquist bin.
+    """
+    return _reduce_frequency_bands(
+        result,
+        bands,
+        reduction=reduction,
+        circular=circular,
+        nyquist_frequency=_grid_nyquist_frequency(result),
+    )
+
+
+def _reduce_frequency_bands(
+    result: xr.DataArray | xr.Dataset,
+    bands: Mapping[str, tuple[float, float]],
+    *,
+    reduction: Literal["mean", "integral"],
+    circular: bool | None,
+    nyquist_frequency: float | None,
+) -> xr.DataArray | xr.Dataset:
+    """:func:`frequency_band_reduce` with the grid's Nyquist bin given.
+
+    ``nyquist_frequency`` is the frequency of the one-sided spectrum's Nyquist
+    bin, or ``None`` if the grid does not reach it or is not one-sided.
     """
     if "frequency" not in result.dims:
         msg = "result must have a 'frequency' dimension."
@@ -1612,7 +1659,7 @@ def frequency_band_reduce(
         band_validity: list[xr.DataArray] = []
         for mask, (low, high) in band_masks_and_bounds:
             if reduction == "integral":
-                weights = _band_integration_weights(frequencies, low, high)
+                weights = _band_integration_weights(frequencies, low, high, nyquist_frequency)
                 # Bins inside the band count for validity even with zero weight
                 # (a zero-width band), so an invalid bin is never read as zero.
                 used = np.flatnonzero((weights > 0) | mask)
@@ -1749,6 +1796,8 @@ def _select_and_reduce_frequencies(
         raise ValueError(msg)
 
     selected = result
+    # Before cropping or decimation, which can make an interior bin the last.
+    nyquist_frequency = _grid_nyquist_frequency(result)
     requests_frequency_operation = (
         frequency_range is not None or frequency_decimation != 1 or frequency_bands is not None
     )
@@ -1779,8 +1828,12 @@ def _select_and_reduce_frequencies(
         )
 
     if frequency_bands is not None:
-        selected = frequency_band_reduce(
-            selected, frequency_bands, reduction=frequency_reduction
+        selected = _reduce_frequency_bands(
+            selected,
+            frequency_bands,
+            reduction=frequency_reduction,
+            circular=None,
+            nyquist_frequency=nyquist_frequency,
         )
     return selected
 

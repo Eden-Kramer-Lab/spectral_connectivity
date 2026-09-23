@@ -342,7 +342,10 @@ directly with results from 2.x.
 - `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
-  data is no longer short by half the DC cell.
+  data is no longer short by half the DC cell. The Nyquist bin is identified on
+  the grid before `frequency_range` or `frequency_decimation` crops it, so a
+  band ending at the crop edge is not integrated as if its last bin were
+  Nyquist (which added 3-15% to, e.g., a 4-8 Hz band cropped at 8 Hz).
 - A window step given in seconds is rounded to the nearest sample instead of
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`

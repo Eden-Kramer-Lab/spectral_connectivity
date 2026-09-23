@@ -2678,6 +2678,27 @@ def test_frequency_band_integral_counts_the_nyquist_bin_fully():
     assert integral == pytest.approx(float(np.mean(tone**2)), rel=1e-3)
 
 
+@pytest.mark.parametrize(
+    ("band", "frequency_range"),
+    [((0.0, 4.0), (0.0, 4.0)), ((4.0, 8.0), (0.0, 8.0)), ((10.0, 30.0), (0.0, 30.0))],
+)
+def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_range):
+    """Only the true Nyquist bin is undoubled. Cropping the grid with
+    frequency_range must not turn its new last bin into a Nyquist bin, or a
+    band ending at the crop edge integrates that bin twice (+3% to +15%)."""
+    time_series = np.random.default_rng(51).standard_normal((20000, 1, 1))
+    kwargs = {
+        "sampling_frequency": 1000,
+        "time_window_duration": 1.0,
+        "method": "power",
+        "frequency_bands": {"band": band},
+        "frequency_reduction": "integral",
+    }
+    uncropped = multitaper_connectivity(time_series, **kwargs)
+    cropped = multitaper_connectivity(time_series, frequency_range=frequency_range, **kwargs)
+    np.testing.assert_allclose(cropped.values, uncropped.values, rtol=1e-12)
+
+
 def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():
     """Folding the DC and Nyquist cells must keep adjacent bands additive and
     must not touch ``reduction="mean"``."""
