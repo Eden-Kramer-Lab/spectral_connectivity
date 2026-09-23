@@ -1277,6 +1277,9 @@ class Connectivity:
             Estimate, bias-corrected estimate, standard error, and confidence
             bounds, each with the measure's own shape (for a pairwise measure
             ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
+            The arrays keep ``Connectivity``'s native orientation: for directed
+            measures ``[..., i, j]`` is the influence ``j -> i``, the transpose
+            of the xarray wrapper's ``sel(source=j, target=i)`` layout.
 
         If the input Fourier coefficients were produced with
         ``Multitaper(taper_weighting="adaptive")``, the leave-one-out replicates

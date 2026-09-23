@@ -2960,3 +2960,26 @@ def test_band_mean_circular_can_be_requested_or_disabled_explicitly():
         phase.assign_attrs(units="rad"), {"all": (1.0, 4.0)}, circular=False
     )
     assert float(linear.sel(band="all")) == pytest.approx(0.0, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["coherence_phase", "imaginary_coherency", "phase_lag_index", "weighted_phase_lag_index"],
+)
+def test_signed_phase_measures_are_positive_when_source_leads(method):
+    """The documented convention: sel(source=a, target=b) > 0 when a leads b."""
+    rng = np.random.default_rng(51)
+    lag = 5  # a leads b by 10 ms at 500 Hz
+    source = rng.standard_normal((10_000 + lag, 10))
+    data = np.stack([source[lag:], source[:-lag]], axis=-1)
+    data = data + 0.5 * rng.standard_normal(data.shape)
+    result = multitaper_connectivity(
+        data,
+        sampling_frequency=500,
+        method=method,
+        signal_names=["a", "b"],
+        time_window_duration=1.0,
+    )
+    band = result.sel(frequency=slice(5, 20)).mean(["time", "frequency"])
+    assert float(band.sel(source="a", target="b")) > 0.3
+    assert float(band.sel(source="b", target="a")) < -0.3

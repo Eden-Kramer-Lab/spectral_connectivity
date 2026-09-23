@@ -2390,7 +2390,24 @@ def multitaper_connectivity(
     ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``.
     (The underlying ``Connectivity`` methods use the transposed convention
     ``output[i, j] = influence j -> i``; the wrapper transposes to the intuitive
-    source -> target layout.)
+    source -> target layout.) Signed undirected phase measures
+    (``coherence_phase``, ``imaginary_coherency``, ``phase_lag_index``,
+    ``weighted_phase_lag_index``) are positive at ``sel(source=a, target=b)``
+    when ``a`` leads ``b``.
+
+    Every variable has ``long_name`` and ``units`` attrs (``"1"`` for
+    dimensionless scores, ``"rad"`` for phase, ``"s"`` for delay; spectral
+    densities are ``"(<units>)^2/Hz"`` when an input DataArray states its
+    ``units``). Non-index coordinates on an input DataArray's signal dimension
+    (e.g. ``region``) are carried as ``source_<name>``/``target_<name>``.
+
+    Real-valued results write with any NetCDF engine (booleans are stored as
+    0/1). Complex results (``coherency``, ``cross_spectral_density``,
+    ``canonical_coherency``, and the global-coherence vectors) need an engine
+    that stores complex data, e.g.
+    ``result.to_netcdf("result.h5", engine="h5netcdf", invalid_netcdf=True)``,
+    or netCDF4 >= 1.7 with ``engine="netcdf4", auto_complex=True`` (open with the
+    same option).
 
     The result records provenance as NetCDF-safe attributes so a saved file is
     self-describing:
