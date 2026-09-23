@@ -18,5 +18,5 @@ def _load_generator():
 def test_measure_table_is_current():
     """Regenerate with ``python docs/generate_measure_table.py`` if this fails."""
     generator = _load_generator()
-    document = generator.DOCUMENT.read_text()
+    document = generator.DOCUMENT.read_text(encoding="utf-8")
     assert document == generator.render(document)

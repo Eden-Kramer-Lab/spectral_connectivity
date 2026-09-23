@@ -20,6 +20,7 @@ def test_cookbook_recipes_run(page):
     failures, attempted = doctest.testfile(
         str(document),
         module_relative=False,
+        encoding="utf-8",
         optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE,
         verbose=False,
     )

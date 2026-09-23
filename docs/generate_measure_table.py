@@ -60,4 +60,4 @@ def render(document: str) -> str:
 
 
 if __name__ == "__main__":
-    DOCUMENT.write_text(render(DOCUMENT.read_text()))
+    DOCUMENT.write_text(render(DOCUMENT.read_text(encoding="utf-8")), encoding="utf-8")
