@@ -2822,7 +2822,11 @@ def test_band_reduction_records_band_edges_as_coordinates():
         dims=("time", "frequency"),
         coords={
             "time": [0.0, 1.0],
-            "frequency": ("frequency", np.arange(11.0), {"long_name": "Frequency", "units": "Hz"}),
+            "frequency": (
+                "frequency",
+                np.arange(11.0),
+                {"long_name": "Frequency", "units": "Hz"},
+            ),
         },
         name="power",
         attrs={"measure": "power"},
@@ -2833,4 +2837,100 @@ def test_band_reduction_records_band_edges_as_coordinates():
     np.testing.assert_array_equal(reduced.band_upper, [8.0, 10.0])
     assert reduced.band_lower.dims == ("band",)
     assert reduced.band_lower.attrs["units"] == "Hz"
-    assert reduced.where(reduced.band_lower >= 8.0, drop=True).band.values.tolist() == ["alpha"]
+    assert reduced.where(reduced.band_lower >= 8.0, drop=True).band.values.tolist() == [
+        "alpha"
+    ]
+
+
+@pytest.fixture
+def labeled_channels():
+    """Two channels with a label index plus extra per-channel coordinates."""
+    return xr.DataArray(
+        np.random.default_rng(48).standard_normal((1000, 2)),
+        dims=("time", "channel"),
+        coords={
+            "channel": ["left", "right"],
+            "region": ("channel", ["CA1", "PFC"]),
+            "depth_um": ("channel", [120.0, 900.0]),
+        },
+        attrs={"units": "uV"},
+    )
+
+
+def test_per_signal_input_coordinates_follow_source_and_target(labeled_channels):
+    """Non-index coordinates on the signal dimension (e.g. brain region) are
+    carried onto the source/target axes instead of being dropped."""
+    coherence = multitaper_connectivity(
+        labeled_channels, sampling_frequency=500, method="coherence_magnitude"
+    )
+    assert coherence.source_region.values.tolist() == ["CA1", "PFC"]
+    assert coherence.target_region.values.tolist() == ["CA1", "PFC"]
+    np.testing.assert_array_equal(coherence.source_depth_um, [120.0, 900.0])
+    assert coherence.source_region.dims == ("source",)
+
+    power = multitaper_connectivity(labeled_channels, sampling_frequency=500, method="power")
+    assert power.source_region.values.tolist() == ["CA1", "PFC"]
+
+    squeezed = multitaper_connectivity(
+        labeled_channels, sampling_frequency=500, method="coherence_magnitude", squeeze=True
+    )
+    assert squeezed.source_region.item() == "CA1"
+    assert squeezed.target_region.item() == "PFC"
+
+
+def test_spectral_densities_carry_units_derived_from_the_input(labeled_channels):
+    result = multitaper_connectivity(
+        labeled_channels, sampling_frequency=500, method=["power", "cross_spectral_density"]
+    )
+    assert result.power.attrs["units"] == "(uV)^2/Hz"
+    assert result.cross_spectral_density.attrs["units"] == "(uV)^2/Hz"
+    unitless_input = multitaper_connectivity(
+        labeled_channels.values, sampling_frequency=500, method="power"
+    )
+    assert "units" not in unitless_input.attrs  # unknown input units are not invented
+    assert unitless_input.attrs["long_name"] == "Power spectral density"
+
+
+@pytest.mark.parametrize(
+    ("method", "units"),
+    [
+        ("coherence_magnitude", "1"),
+        ("coherence_phase", "rad"),
+        ("phase_locking_value", "1"),
+        ("pairwise_spectral_granger_prediction", "1"),
+        ("phase_slope_index", "1"),
+        ("delay", "s"),
+    ],
+)
+def test_every_measure_has_a_long_name_and_units(method, units):
+    result = multitaper_connectivity(
+        np.random.default_rng(49).standard_normal((1000, 3, 2)),
+        sampling_frequency=500,
+        method=method,
+    )
+    assert result.attrs["units"] == units
+    assert result.attrs["long_name"]
+
+
+def test_measure_labels_cover_every_measure():
+    from spectral_connectivity.wrapper import _MEASURE_LABELS, _MEASURE_SPECS
+
+    assert set(_MEASURE_LABELS) == set(_MEASURE_SPECS)
+
+
+def test_large_array_input_attrs_are_summarized():
+    """A large array attribute is recorded by shape and dtype, not copied into
+    every variable's JSON (a 50,000-sample attr made a 12 MB file)."""
+    data = xr.DataArray(
+        np.random.default_rng(50).standard_normal((512, 2)),
+        dims=("time", "channel"),
+        attrs={"subject": "m1", "raw_trace": np.arange(50_000.0), "montage": [1, 2, 3]},
+    )
+    result = multitaper_connectivity(
+        data, sampling_frequency=256, method="coherence_magnitude"
+    )
+    record = json.loads(result.attrs["input_attrs_json"])
+    assert record["subject"] == "m1"
+    assert record["montage"] == [1, 2, 3]
+    assert record["raw_trace"] == {"summarized_array": {"shape": [50000], "dtype": "float64"}}
+    assert len(result.attrs["input_attrs_json"]) < 500

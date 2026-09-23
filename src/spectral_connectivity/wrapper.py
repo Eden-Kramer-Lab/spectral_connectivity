@@ -56,6 +56,16 @@ class _TimeAxis(NamedTuple):
     start_time: float | None
 
 
+class _SignalMetadata(NamedTuple):
+    """What an input DataArray says about its signals, carried into results."""
+
+    # 1-D non-index coordinates on the signal dimension (e.g. brain region);
+    # each becomes ``<axis>_<name>`` on the result's source/target/signal axis.
+    coordinates: Mapping[str, NDArray[Any]]
+    # The input's ``units`` attribute; spectral densities report (units)^2/Hz.
+    units: str | None
+
+
 class _UnwrappedInput(NamedTuple):
     """Array data plus what a DataArray contributed, named to avoid swaps."""
 
@@ -64,6 +74,7 @@ class _UnwrappedInput(NamedTuple):
     inferred_sampling_frequency: float | None
     inferred_start_time: float | None
     input_attrs: Mapping[Any, Any] | None
+    signal_metadata: _SignalMetadata | None
 
 
 def _json_compatible(value: Any) -> Any:
@@ -564,6 +575,72 @@ def _frequency_band_attrs(
     return {"frequency_band_lower": float(band[0]), "frequency_band_upper": float(band[1])}
 
 
+# long_name and units per measure. Units follow UDUNITS spelling; "1" marks a
+# dimensionless score. None marks a spectral density, whose units derive from
+# the input's units (see _measure_label_attrs).
+_MEASURE_LABELS: dict[str, tuple[str, str | None]] = {
+    "coherence_magnitude": ("Magnitude-squared coherence", "1"),
+    "coherence_phase": ("Coherency phase", "rad"),
+    "coherency": ("Coherency", "1"),
+    "imaginary_coherence": ("Imaginary coherence (magnitude)", "1"),
+    "imaginary_coherency": ("Imaginary part of coherency", "1"),
+    "partial_coherence": ("Partial coherence", "1"),
+    "phase_locking_value": ("Phase-locking value", "1"),
+    "corrected_imaginary_phase_locking_value": (
+        "Corrected imaginary phase-locking value",
+        "1",
+    ),
+    "pairwise_phase_consistency": ("Pairwise phase consistency", "1"),
+    "phase_lag_index": ("Phase lag index", "1"),
+    "debiased_squared_phase_lag_index": ("Debiased squared phase lag index", "1"),
+    "weighted_phase_lag_index": ("Weighted phase lag index", "1"),
+    "debiased_squared_weighted_phase_lag_index": (
+        "Debiased squared weighted phase lag index",
+        "1",
+    ),
+    "directed_phase_lag_index": ("Directed phase lag index", "1"),
+    "power": ("Power spectral density", None),
+    "cross_spectral_density": ("Cross-spectral density", None),
+    "pairwise_spectral_granger_prediction": ("Spectral Granger prediction", "1"),
+    "subset_pairwise_spectral_granger_prediction": ("Spectral Granger prediction", "1"),
+    "conditional_spectral_granger_prediction": (
+        "Conditional spectral Granger prediction",
+        "1",
+    ),
+    "time_reversed_spectral_granger_prediction": (
+        "Time-reversed spectral Granger prediction",
+        "1",
+    ),
+    "blockwise_spectral_granger_prediction": ("Blockwise spectral Granger prediction", "1"),
+    "directed_transfer_function": ("Directed transfer function", "1"),
+    "directed_coherence": ("Directed coherence", "1"),
+    "partial_directed_coherence": ("Partial directed coherence", "1"),
+    "generalized_partial_directed_coherence": ("Generalized partial directed coherence", "1"),
+    "direct_directed_transfer_function": ("Direct directed transfer function", "1"),
+    "canonical_coherence": ("Canonical coherence", "1"),
+    "canonical_coherency": ("Canonical coherency", "1"),
+    "maximized_imaginary_coherency": ("Maximized imaginary coherency", "1"),
+    "maximized_imaginary_coherency_components": ("Maximized imaginary coherency", "1"),
+    "multivariate_interaction_measure": ("Multivariate interaction measure", "1"),
+    "global_coherence": ("Global coherence", "1"),
+    "delay": ("Delay", "s"),
+    "group_delay": ("Group delay", "s"),
+    "phase_slope_index": ("Phase slope index", "1"),
+}
+
+
+def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str]:
+    """``long_name``/``units`` attrs for a measure's main variable.
+
+    Spectral densities are in (input units)^2/Hz when the input's units are
+    known; otherwise they get no ``units`` rather than an invented one.
+    """
+    long_name, units = _MEASURE_LABELS.get(method, (method, ""))
+    if units is None:
+        units = f"({signal_units})^2/Hz" if signal_units else ""
+    return {"long_name": long_name, **({"units": units} if units else {})}
+
+
 def _is_real_numeric_dtype(dtype: np.dtype[Any]) -> bool:
     """Whether ``dtype`` holds real numbers (not complex, boolean, or time types)."""
     return bool(
@@ -601,6 +678,8 @@ def _connectivity_result_to_xarray(
     signal_labels: NDArray[Any],
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
+    *,
+    signal_metadata: _SignalMetadata | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
@@ -647,9 +726,28 @@ def _connectivity_result_to_xarray(
             frequency_attrs,
         ),
     }
-    signal_coordinates = {
+    signal_coordinates: dict[str, Any] = {
         "source": ("source", signal_labels, {"long_name": "Source signal"}),
         "target": ("target", signal_labels, {"long_name": "Target signal"}),
+    }
+    extra_signal_coordinates = (
+        {} if signal_metadata is None else dict(signal_metadata.coordinates)
+    )
+    source_extras = {
+        f"source_{name}": ("source", values)
+        for name, values in extra_signal_coordinates.items()
+    }
+    target_extras = {
+        f"target_{name}": ("target", values)
+        for name, values in extra_signal_coordinates.items()
+    }
+    signal_coordinates.update(source_extras)
+    signal_coordinates.update(target_extras)
+    measure_attrs = {
+        **attrs,
+        **_measure_label_attrs(
+            method, None if signal_metadata is None else signal_metadata.units
+        ),
     }
 
     if measure_spec.output_kind in {"pairwise", "power"}:
@@ -663,7 +761,11 @@ def _connectivity_result_to_xarray(
             raise ValueError(msg)
         if measure_spec.transpose_output:
             connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
-        coordinates = {**base_coordinates, "source": signal_coordinates["source"]}
+        coordinates = {
+            **base_coordinates,
+            "source": signal_coordinates["source"],
+            **source_extras,
+        }
     else:
         coordinates = dict(base_coordinates)
 
@@ -674,17 +776,18 @@ def _connectivity_result_to_xarray(
             coords=coordinates,
             dims=("time", "frequency", "source"),
             name=method,
-            attrs=attrs,
+            attrs=measure_attrs,
         )
 
     if measure_spec.output_kind == "pairwise":
         coordinates["target"] = signal_coordinates["target"]
+        coordinates.update(target_extras)
         xar = xr.DataArray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source", "target"),
             name=method,
-            attrs=attrs,
+            attrs=measure_attrs,
         )
         if squeeze and connectivity.n_signals == 2:
             # Reduce to the single ordered pair (first source, last target).
@@ -724,8 +827,8 @@ def _connectivity_result_to_xarray(
             connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates.update(
             {
-                "source_group": ("source_group", group_labels),
-                "target_group": ("target_group", group_labels),
+                "source_group": ("source_group", group_labels, {"long_name": "Source group"}),
+                "target_group": ("target_group", group_labels, {"long_name": "Target group"}),
             }
         )
         return xr.DataArray(
@@ -733,7 +836,7 @@ def _connectivity_result_to_xarray(
             coords=coordinates,
             dims=("time", "frequency", "source_group", "target_group"),
             name=method,
-            attrs=attrs,
+            attrs=measure_attrs,
         )
 
     if measure_spec.output_kind == "delay":
@@ -760,8 +863,13 @@ def _connectivity_result_to_xarray(
         coordinates = {
             "time": base_coordinates["time"],
             "frequency": ("frequency", frequencies, frequency_attrs),
-            "candidate": np.arange(
-                -int(kwargs.get("n_range", 3)), int(kwargs.get("n_range", 3)) + 1
+            "candidate": (
+                "candidate",
+                np.arange(-int(kwargs.get("n_range", 3)), int(kwargs.get("n_range", 3)) + 1),
+                {
+                    "long_name": "Phase-wrap candidate",
+                    "description": "k in delay = (phase + 2 pi k) / (2 pi f)",
+                },
             ),
             **signal_coordinates,
         }
@@ -770,7 +878,7 @@ def _connectivity_result_to_xarray(
             coords=coordinates,
             dims=("time", "frequency", "candidate", "source", "target"),
             name=method,
-            attrs=attrs,
+            attrs=measure_attrs,
         )
 
     if measure_spec.output_kind == "phase_slope":
@@ -791,7 +899,7 @@ def _connectivity_result_to_xarray(
             coords={"time": base_coordinates["time"], **signal_coordinates},
             dims=("time", "source", "target"),
             name=method,
-            attrs={**attrs, **_frequency_band_attrs(connectivity, kwargs)},
+            attrs={**measure_attrs, **_frequency_band_attrs(connectivity, kwargs)},
         )
 
     if measure_spec.output_kind == "group_delay":
@@ -839,8 +947,9 @@ def _connectivity_result_to_xarray(
         n_components = scores.shape[-1]
         dataset_coordinates = {
             **base_coordinates,
-            "component": np.arange(n_components),
+            "component": ("component", np.arange(n_components), {"long_name": "Component"}),
             "source": signal_coordinates["source"],
+            **source_extras,
         }
         return xr.Dataset(
             {
@@ -851,7 +960,7 @@ def _connectivity_result_to_xarray(
                         for key in ("time", "frequency", "component")
                     },
                     dims=("time", "frequency", "component"),
-                    attrs=attrs,
+                    attrs=measure_attrs,
                 ),
                 "global_coherence_vectors": xr.DataArray(
                     vectors,
@@ -883,8 +992,12 @@ def _connectivity_result_to_xarray(
             raise ValueError(msg)
         component_coordinates = {
             **base_coordinates,
-            "connection": np.arange(n_connections),
-            "component": np.arange(n_components),
+            "connection": (
+                "connection",
+                np.arange(n_connections),
+                {"long_name": "Group-pair connection"},
+            ),
+            "component": ("component", np.arange(n_components), {"long_name": "Component"}),
             # Per-connection group labels on the ``connection`` dimension. Named
             # distinctly from the ``source_group``/``target_group`` *dimension*
             # coordinates used by group-pairwise results so the two contracts
@@ -898,9 +1011,13 @@ def _connectivity_result_to_xarray(
                 "connection",
                 numerical_result.connections[:, 1],
             ),
-            "side": ("side", ["seed", "target"]),
-            "signal": ("signal", signal_labels),
-            "group": ("group", numerical_result.group_labels),
+            "side": ("side", ["seed", "target"], {"long_name": "Side of the connection"}),
+            "signal": ("signal", signal_labels, {"long_name": "Signal"}),
+            "group": ("group", numerical_result.group_labels, {"long_name": "Signal group"}),
+        }
+        signal_extras = {
+            f"signal_{name}": ("signal", values)
+            for name, values in extra_signal_coordinates.items()
         }
         data_vars = {
             method: xr.DataArray(
@@ -917,15 +1034,17 @@ def _connectivity_result_to_xarray(
                     )
                 },
                 dims=("time", "frequency", "connection", "component"),
-                attrs=attrs,
+                attrs=measure_attrs,
             ),
             "group_membership": xr.DataArray(
                 numerical_result.group_membership,
                 coords={
                     "group": component_coordinates["group"],
                     "signal": component_coordinates["signal"],
+                    **signal_extras,
                 },
                 dims=("group", "signal"),
+                attrs={"long_name": "Signal belongs to group"},
             ),
         }
         projection_dims = (
@@ -949,6 +1068,7 @@ def _connectivity_result_to_xarray(
                 "signal",
             )
         }
+        projection_coordinates.update(signal_extras)
         if numerical_result.filters is not None:
             data_vars[f"{method}_filters"] = xr.DataArray(
                 numerical_result.filters,
@@ -1004,8 +1124,26 @@ def _shared_provenance_attrs(
     # "1" collide, make a structured ``x`` collide with a literal ``x_json``,
     # and let characters such as "/" create an invalid NetCDF attribute name.
     if input_attrs:
-        attrs["input_attrs_json"] = _canonical_json(input_attrs)
+        attrs["input_attrs_json"] = _canonical_json(
+            {key: _summarized_if_large(value) for key, value in input_attrs.items()}
+        )
     return attrs
+
+
+# Input attrs are copied onto every result variable, so an array attribute
+# larger than this is recorded by shape and dtype instead of by value.
+_MAX_INPUT_ATTR_ARRAY_SIZE = 100
+
+
+def _summarized_if_large(value: Any) -> Any:
+    """Replace an array with more than ``_MAX_INPUT_ATTR_ARRAY_SIZE`` elements."""
+    if isinstance(value, (np.ndarray, list, tuple)):
+        array = np.asarray(value)
+        if array.size > _MAX_INPUT_ATTR_ARRAY_SIZE:
+            return {
+                "summarized_array": {"shape": list(array.shape), "dtype": str(array.dtype)}
+            }
+    return value
 
 
 def _inclusive_frequency_mask(
@@ -1472,6 +1610,7 @@ def _format_and_reduce_measures(
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
+    signal_metadata: _SignalMetadata | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Format the requested measures to xarray and apply frequency reduction.
 
@@ -1500,6 +1639,7 @@ def _format_and_reduce_measures(
             signal_labels,
             squeeze,
             shared_attrs,
+            signal_metadata=signal_metadata,
             **connectivity_kwargs,
         )
     else:
@@ -1513,6 +1653,7 @@ def _format_and_reduce_measures(
                         signal_labels,
                         False,
                         shared_attrs,
+                        signal_metadata=signal_metadata,
                         **connectivity_kwargs,
                     )
                 )
@@ -1974,6 +2115,17 @@ def _signal_labels_from_dataarray(
     return None
 
 
+def _signal_coordinates_from_dataarray(
+    data_array: xr.DataArray, signal_dimension: Hashable
+) -> dict[str, NDArray[Any]]:
+    """1-D non-index coordinates along the signal dimension (e.g. brain region)."""
+    return {
+        str(name): np.asarray(coordinate.to_numpy())
+        for name, coordinate in data_array.coords.items()
+        if name != signal_dimension and coordinate.dims == (signal_dimension,)
+    }
+
+
 def _reject_unmaterialized_backing(data: Any) -> None:
     """Reject a lazy backing array the positional spectral math cannot consume.
 
@@ -2015,7 +2167,7 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an xarray.DataArray input."
             )
             raise TypeError(msg)
-        return _UnwrappedInput(time_series, signal_names, None, None, None)
+        return _UnwrappedInput(time_series, signal_names, None, None, None, None)
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -2036,12 +2188,17 @@ def _unwrap_xarray_input(
 
     data = time_series.transpose(*dimension_order).data
     _reject_unmaterialized_backing(data)
+    units = time_series.attrs.get("units")
     return _UnwrappedInput(
         data,
         signal_names,
         inferred_sampling_frequency,
         inferred_start_time,
         dict(time_series.attrs),
+        _SignalMetadata(
+            _signal_coordinates_from_dataarray(time_series, signal_dimension),
+            units if isinstance(units, str) and units else None,
+        ),
     )
 
 
@@ -2262,6 +2419,7 @@ def multitaper_connectivity(
         inferred_sampling_frequency,
         inferred_start_time,
         input_attrs,
+        signal_metadata,
     ) = _unwrap_xarray_input(
         time_series,
         signal_names,
@@ -2333,6 +2491,7 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        signal_metadata=signal_metadata,
     )
 
 
@@ -2374,6 +2533,7 @@ def _unwrap_fourier_input(
     NDArray[np.floating] | None,
     Sequence[_SignalLabel] | None,
     Mapping[Any, Any] | None,
+    _SignalMetadata | None,
 ]:
     """Normalize external coefficients to the core's five-dimensional layout."""
     dimension_arguments = {
@@ -2402,7 +2562,7 @@ def _unwrap_fourier_input(
                 "signal), or (time, trial, taper, frequency, signal)."
             )
             raise ValueError(msg)
-        return data, frequencies, time, signal_names, None
+        return data, frequencies, time, signal_names, None, None
 
     coefficient_array = fourier_coefficients
     if coefficient_array.ndim < 3 or coefficient_array.ndim > 5:
@@ -2527,7 +2687,19 @@ def _unwrap_fourier_input(
         signal_names = _signal_labels_from_dataarray(
             coefficient_array, role_to_dimension["signal"]
         )
-    return data, frequencies, time, signal_names, dict(coefficient_array.attrs)
+    # Coefficient units are not time-series units, so no density units follow.
+    signal_metadata = _SignalMetadata(
+        _signal_coordinates_from_dataarray(coefficient_array, role_to_dimension["signal"]),
+        None,
+    )
+    return (
+        data,
+        frequencies,
+        time,
+        signal_names,
+        dict(coefficient_array.attrs),
+        signal_metadata,
+    )
 
 
 def fourier_connectivity(
@@ -2639,6 +2811,7 @@ def fourier_connectivity(
         time,
         signal_names,
         input_attrs,
+        signal_metadata,
     ) = _unwrap_fourier_input(
         fourier_coefficients,
         frequencies=frequencies,
@@ -2810,4 +2983,5 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        signal_metadata=signal_metadata,
     )

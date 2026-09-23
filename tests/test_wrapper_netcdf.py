@@ -121,6 +121,19 @@ def composite_results(time_series):
             two_sided, method="coherence_magnitude", is_one_sided=False
         ),
         "morlet_validity": morlet,
+        "labeled_input": multitaper_connectivity(
+            xr.DataArray(
+                time_series[:, 0, :],
+                dims=("time", "channel"),
+                coords={
+                    "channel": ["a", "b", "c", "d"],
+                    "region": ("channel", ["CA1", "CA1", "PFC", "PFC"]),
+                },
+                attrs={"units": "uV", "subject": "rat-1"},
+            ),
+            sampling_frequency=500,
+            method=["power", "coherence_magnitude"],
+        ),
         "morlet_band": frequency_band_reduce(morlet, {"lo": (4, 8)}),
     }
 
@@ -147,6 +160,7 @@ def test_every_measure_roundtrips(measure_results, method, engine, tmp_path):
         "fourier_unlabeled",
         "morlet_validity",
         "morlet_band",
+        "labeled_input",
     ],
 )
 def test_composite_results_roundtrip(composite_results, name, engine, tmp_path):
