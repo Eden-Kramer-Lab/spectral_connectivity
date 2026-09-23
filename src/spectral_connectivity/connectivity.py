@@ -2417,11 +2417,12 @@ class Connectivity:
         Notes
         -----
         **Range**: score magnitudes lie in ``[0, 1]``. The whitening,
-        singular-value decomposition, and phase optimization (a coarse grid
-        whose highest local maxima are each refined by a batched Newton
-        iteration, keeping the best so near-equal lobes are resolved) are
-        vectorized over the time/frequency axes on the active ``xp`` backend, so
-        this runs on the GPU when GPU support is enabled.
+        singular-value decomposition, and phase optimization (every local
+        maximum of a 74-point coarse phase grid is refined by a batched Newton
+        iteration and the best is kept, so near-equal lobes of the phase
+        objective are resolved unless two lie within about ``2 * pi / 74`` of
+        each other) are vectorized over the time/frequency axes on the active
+        ``xp`` backend, so this runs on the GPU when GPU support is enabled.
 
         **Phase convention**: a spatial filter and its negative span the same
         direction, so the canonical phase is intrinsically defined only modulo
@@ -4991,8 +4992,7 @@ def _dominant_sign(vectors: NDArray[np.floating]) -> NDArray[np.floating]:
 def _optimize_canonical_coherency_phase(
     whitened: NDArray[np.complexfloating],
     *,
-    n_grid: int = 37,
-    n_candidates: int = 3,
+    n_grid: int = 74,
     n_refine: int = 12,
 ) -> tuple[
     NDArray[np.floating],
@@ -5005,56 +5005,75 @@ def _optimize_canonical_coherency_phase(
     ``whitened`` is the whitened between-group cross-spectrum ``W = Taa Cab
     Tbb`` with shape ``(..., n_a, n_b)``. The objective
     ``sigma_max(Re(exp(-i phi) W))`` is pi-periodic and can have several lobes
-    of nearly equal height, so refining from the single best coarse-grid point
-    can settle on the wrong lobe. Instead, a coarse grid over ``[0, pi)``
-    locates the local maxima, the ``n_candidates`` highest are each refined by
-    a batched Newton iteration on finite-difference derivatives, and the best
-    refined candidate is kept -- never below the coarse-grid optimum, which
-    stays in the candidate set. Fully vectorized over the leading
-    (time/frequency) axes and backend-agnostic (no per-bin ``scipy.optimize``
-    loop). Returns the maximized magnitude, the optimizing phase, and the top
-    left/right singular vectors of ``Re(exp(-i phi) W)`` at that phase.
+    of nearly equal height, so refining only the best coarse-grid point (or a
+    fixed number of the highest) can settle on the wrong lobe. Instead, every
+    local maximum of a coarse ``n_grid``-point grid over ``[0, pi)`` is refined
+    by a batched Newton iteration on finite-difference derivatives, and the best
+    refined candidate is kept -- never below the coarse-grid optimum, hence at
+    least ``cos(pi / (2 n_grid))`` times the global maximum. Each lobe with its
+    own coarse-grid maximum is therefore found; two lobes within about two grid
+    steps (``2 pi / n_grid``) of each other can merge into one coarse-grid
+    maximum, whose refinement then settles on only one of them. Fully
+    vectorized over the leading (time/frequency) axes and backend-agnostic (no
+    per-bin ``scipy.optimize`` loop). Returns the maximized magnitude, the
+    optimizing phase, and the top left/right singular vectors of
+    ``Re(exp(-i phi) W)`` at that phase.
     """
     leading_shape = whitened.shape[:-2]
+    n_a, n_b = whitened.shape[-2:]
+    # One flat bin axis, so the local maxima of every bin form one Newton batch.
+    flat = whitened.reshape(-1, n_a, n_b)
+    n_bins = flat.shape[0]
 
-    def objective(phase: NDArray[np.floating]) -> NDArray[np.floating]:
-        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * whitened)
+    def objective(
+        phase: NDArray[np.floating], matrices: NDArray[np.complexfloating]
+    ) -> NDArray[np.floating]:
+        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * matrices)
         return xp.linalg.svd(projected, compute_uv=False)[..., 0]
 
     grid_values = [k * float(np.pi) / n_grid for k in range(n_grid)]
-    # One SVD batch per grid point keeps the transient at a single bin-batch.
-    grid_scores = xp.stack([objective(xp.full(leading_shape, phase)) for phase in grid_values])
+    # One SVD batch per grid point keeps the grid's transient at a single
+    # bin-batch; the Newton batch below holds one matrix per local maximum.
+    grid_scores = xp.stack([objective(xp.full(n_bins, phase), flat) for phase in grid_values])
     grid = xp.asarray(grid_values)
-    coarse_best = grid[xp.argmax(grid_scores, axis=0)]
-    # Local maxima of the pi-periodic grid (its ends are neighbours); bins with
-    # fewer than n_candidates maxima pad with -inf entries whose refinement is
-    # harmless because the coarse optimum is always a candidate below.
-    is_local_maximum = (grid_scores >= xp.roll(grid_scores, 1, axis=0)) & (
+    # Local maxima of the pi-periodic grid (its ends are neighbours), shape
+    # (n_grid, n_bins). The strict comparison on one side counts a flat top once,
+    # so no two maxima are adjacent: at most n_grid // 2 per bin, and typically
+    # one or two. A constant objective has none; its grid optimum stands.
+    is_local_maximum = (grid_scores > xp.roll(grid_scores, 1, axis=0)) & (
         grid_scores >= xp.roll(grid_scores, -1, axis=0)
     )
-    ranked = xp.argsort(xp.where(is_local_maximum, grid_scores, -xp.inf), axis=0)
-    phase = grid[ranked[-n_candidates:]]  # (n_candidates, *leading_shape)
+    grid_index, bin_index = xp.nonzero(is_local_maximum)
+    matrices = flat[bin_index]  # (n_maxima, n_a, n_b)
+    phase = grid[grid_index]
     step = 1e-5
     for _ in range(n_refine):
-        forward = objective(phase + step)
-        centre = objective(phase)
-        backward = objective(phase - step)
+        forward = objective(phase + step, matrices)
+        centre = objective(phase, matrices)
+        backward = objective(phase - step, matrices)
         first_derivative = (forward - backward) / (2 * step)
         second_derivative = (forward - 2 * centre + backward) / step**2
         newton_step = _divide_where(
             first_derivative, second_derivative, xp.abs(second_derivative) > 1e-12, 0.0
         )
         phase = phase - xp.clip(newton_step, -0.1, 0.1)
-    candidates = xp.concatenate([phase, coarse_best[xp.newaxis]], axis=0)
-    best = xp.argmax(objective(candidates), axis=0)
-    phase = xp.take_along_axis(candidates, best[xp.newaxis], axis=0)[0]
-    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * whitened)
+    # Each maximum keeps its refined phase only where that improves on its grid
+    # point, so the best per bin is never below the coarse-grid optimum.
+    refined = objective(phase, matrices)
+    improved = refined > grid_scores[grid_index, bin_index]
+    scores = grid_scores.copy()
+    phases = xp.broadcast_to(grid[:, xp.newaxis], grid_scores.shape).copy()
+    scores[grid_index, bin_index] = xp.where(improved, refined, scores[grid_index, bin_index])
+    phases[grid_index, bin_index] = xp.where(improved, phase, phases[grid_index, bin_index])
+    best = xp.argmax(scores, axis=0)
+    phase = xp.take_along_axis(phases, best[xp.newaxis], axis=0)[0]
+    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * flat)
     left, singular_values, right_h = xp.linalg.svd(projected, full_matrices=False)
     return (
-        singular_values[..., 0],
-        phase,
-        left[..., :, 0],
-        right_h.swapaxes(-1, -2)[..., :, 0],
+        singular_values[:, 0].reshape(leading_shape),
+        phase.reshape(leading_shape),
+        left[:, :, 0].reshape(*leading_shape, n_a),
+        right_h[:, 0, :].reshape(*leading_shape, n_b),
     )
 
 

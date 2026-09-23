@@ -246,8 +246,9 @@ directly with results from 2.x.
 - Multi-component `canonical_coherency` deflates in whitened space, so
   components beyond the first are uncorrelated within each group and invariant
   to invertible within-group mixing; single-component results are unchanged.
-  The phase search refines every candidate lobe of the objective, so two
-  near-equal lobes no longer yield a wrong canonical phase.
+  The phase search refines every local maximum of a 74-point coarse phase
+  grid, so near-equal lobes of the objective no longer yield a wrong canonical
+  phase unless two lie within about `2 * pi / 74` of each other.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` use a Student t
   critical value with `n_observations - 1` degrees of freedom (Thomson & Chave
   1991) instead of the normal quantile; intervals are wider at small `n`

@@ -759,7 +759,9 @@ def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
     coarse_scores = [_cacoh_phase_objective(whitened, phase) for phase in grid]
     assert np.argmax(coarse_scores) == 27  # premise: the coarse grid prefers lobe 2
 
-    magnitude, phase, left, right = _optimize_canonical_coherency_phase(whitened[np.newaxis])
+    magnitude, phase, left, right = _optimize_canonical_coherency_phase(
+        whitened[np.newaxis], n_grid=n_grid
+    )
 
     dense_best = max(
         _cacoh_phase_objective(whitened, phase) for phase in np.linspace(0, np.pi, 20001)
@@ -773,6 +775,39 @@ def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
     np.testing.assert_allclose(np.abs(right[0]), directions[0], atol=1e-6)
 
 
+def test_cacoh_phase_optimizer_refines_every_coarse_grid_lobe():
+    """With four near-equal lobes the true maximum, mid-way between two coarse
+    grid points, is only the fourth-highest coarse-grid local maximum, so
+    refining a fixed number of the highest ones misses it. Every local maximum
+    must be refined, independently in each bin of a batched leading shape."""
+    n_grid = 37
+    grid = np.arange(n_grid) * np.pi / n_grid
+    half_cell = np.pi / (2 * n_grid)
+    lobe_grid_indices = [3, 11, 19, 27]
+    # On the grid the true lobe (0.80, mid-cell) peaks at 0.80 * cos(half_cell);
+    # the other three sit exactly on grid points, just above that.
+    lower_height = 0.80 * np.cos(half_cell) + 1e-5
+    whitened = np.zeros((2, 2, 4, 4), dtype=complex)
+    true_phase = np.zeros((2, 2))
+    for bin_index, true_lobe in zip(np.ndindex(2, 2), range(4), strict=True):
+        heights = np.full(4, lower_height)
+        heights[true_lobe] = 0.80
+        phases = grid[lobe_grid_indices]
+        phases[true_lobe] += half_cell
+        whitened[bin_index] = np.diag(heights * np.exp(1j * phases))
+        true_phase[bin_index] = phases[true_lobe]
+        # Premise: the true lobe is the lowest of the four on the coarse grid.
+        coarse = np.array([_cacoh_phase_objective(whitened[bin_index], p) for p in grid])
+        lobe_peaks = [max(coarse[k], coarse[k + 1]) for k in lobe_grid_indices]
+        assert np.argmin(lobe_peaks) == true_lobe
+
+    magnitude, phase, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
+
+    np.testing.assert_allclose(magnitude, 0.80, rtol=0, atol=1e-9)
+    # The phase is defined modulo pi; it must be the true lobe's.
+    np.testing.assert_allclose(np.exp(2j * phase), np.exp(2j * true_phase), atol=1e-6)
+
+
 def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
     rng = np.random.default_rng(21)
     whitened = rng.standard_normal((40, 3, 4)) + 1j * rng.standard_normal((40, 3, 4))
@@ -781,7 +816,7 @@ def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
     coarse_best = np.array(
         [max(_cacoh_phase_objective(matrix, phase) for phase in grid) for matrix in whitened]
     )
-    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened)
+    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
     assert np.all(magnitude >= coarse_best - 1e-12)
 
 
