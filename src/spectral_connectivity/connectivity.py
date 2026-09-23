@@ -3747,6 +3747,7 @@ class Connectivity:
             combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+            measure="time_reversed_spectral_granger_prediction",
         )
 
     @_asnumpy
@@ -5987,6 +5988,8 @@ def _estimate_spectral_granger_prediction(
     pairs: Iterable[tuple[int, int]] | NDArray[np.integer],
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
+    *,
+    measure: str = "pairwise_spectral_granger_prediction",
 ) -> NDArray[np.floating]:
     """
     Estimate spectral granger causality.
@@ -6000,6 +6003,9 @@ def _estimate_spectral_granger_prediction(
     pairs : list of tuples
         The pairs of signals to estimate the spectral granger
         causality for.
+    measure : str
+        Name of the calling measure, used in the warning issued when a pair's
+        factorization raises ``LinAlgError`` and its values are set to NaN.
 
     Returns
     -------
@@ -6015,8 +6021,9 @@ def _estimate_spectral_granger_prediction(
     new_shape[-3] = non_neg_index.size
     predictive_power = xp.full(new_shape, xp.nan)
 
-    for pair_indices in pairs:
-        pair_indices = xp.array(pair_indices)[:, xp.newaxis]
+    failed_pairs: list[tuple[int, ...]] = []
+    for pair in pairs:
+        pair_indices = xp.array(pair)[:, xp.newaxis]
         try:
             minimum_phase_factor = minimum_phase_decomposition(
                 csm[..., pair_indices, pair_indices.T],
@@ -6036,6 +6043,19 @@ def _estimate_spectral_granger_prediction(
             )
         except np.linalg.LinAlgError:
             predictive_power[..., pair_indices, pair_indices.T] = xp.nan
+            failed_pairs.append(tuple(int(index) for index in pair))
+    if failed_pairs:
+        # Silently returning NaN would leave the user guessing which pairs
+        # failed and why; name them once rather than once per pair.
+        warnings.warn(
+            f"{measure}: the minimum-phase factorization raised LinAlgError "
+            f"(a singular matrix inversion) for signal pair(s) {failed_pairs}, so "
+            "their values are returned as NaN. This usually indicates a singular "
+            "cross-spectral matrix for that pair (collinear, duplicated, or dead "
+            "channels); check those channels or increase the regularization.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     n_signals = csm.shape[-1]
     diagonal_ind = xp.diag_indices(n_signals)

@@ -1848,6 +1848,35 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
     assert np.isfinite(conn.canonical_coherency(np.array([0, 0, 1])).scores).any()
 
 
+@pytest.mark.parametrize(
+    "measure",
+    ["pairwise_spectral_granger_prediction", "time_reversed_spectral_granger_prediction"],
+)
+def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeypatch):
+    """A LinAlgError inside one pair's factorization used to be swallowed
+    silently, leaving NaN with no explanation; it must warn once, naming the
+    measure and the affected pairs."""
+    from spectral_connectivity import connectivity as connectivity_module
+
+    rng = np.random.default_rng(18)
+    shape = (1, 6, 2, 16, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+
+    def failing_transfer_function(*args, **kwargs):
+        error_message = "Singular matrix"
+        raise np.linalg.LinAlgError(error_message)
+
+    monkeypatch.setattr(
+        connectivity_module, "_estimate_transfer_function", failing_transfer_function
+    )
+    with pytest.warns(
+        UserWarning, match=rf"{measure}.*\(0, 1\).*\(0, 2\).*\(1, 2\)"
+    ) as record:
+        result = getattr(connectivity, measure)()
+    assert np.isnan(result).all()
+    assert sum("LinAlgError" in str(w.message) for w in record) == 1
+
+
 def test_conditional_granger_factorizes_each_channel_set_once():
     """The full system and each leave-one-source-out system are factorized once.
 
