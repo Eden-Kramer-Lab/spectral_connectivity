@@ -220,6 +220,27 @@ def test_coherence_fisher_z_transform_one_sample_is_finite():
     assert high > low
 
 
+def test_coherence_fisher_z_transform_accepts_scalar_coherency():
+    """A Python or 0-d complex scalar must work and return a 0-d result.
+
+    ``np.abs`` of a scalar is a NumPy scalar, and clipping it by item
+    assignment raised ``TypeError: 'numpy.float64' object does not support
+    item assignment``.
+    """
+    expected = coherence_fisher_z_transform(np.array([0.5 + 0.2j]), 20)[0]
+    for scalar in (0.5 + 0.2j, np.array(0.5 + 0.2j), np.complex128(0.5 + 0.2j)):
+        result = coherence_fisher_z_transform(scalar, 20)
+        assert np.shape(result) == ()
+        assert result == pytest.approx(expected)
+    # A saturated scalar is clipped like an array element, not an error.
+    assert np.isfinite(coherence_fisher_z_transform(1.0 + 0j, 20))
+    # A scalar second sample broadcasts against an array first sample.
+    two_sample = coherence_fisher_z_transform(
+        np.array([0.5 + 0.2j, 0.3j]), 20, coherency2=0.4 + 0j, n_obs2=30
+    )
+    assert two_sample.shape == (2,)
+
+
 def test_coherence_fisher_z_transform_one_sample_matches_analytic():
     """One-sample statistic is (arctanh|C| - bias) / sqrt(bias)."""
     coh = np.array([0.5 + 0j])

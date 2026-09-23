@@ -545,9 +545,9 @@ def adjust_for_multiple_comparisons(
 
 
 def coherence_fisher_z_transform(
-    coherency1: NDArray[np.complexfloating],
+    coherency1: NDArray[np.complexfloating] | complex,
     n_obs1: int,
-    coherency2: NDArray[np.complexfloating] | float = 0,
+    coherency2: NDArray[np.complexfloating] | complex = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform coherence magnitude to approximately normal distribution.
@@ -558,8 +558,9 @@ def coherence_fisher_z_transform(
 
     Parameters
     ----------
-    coherency1 : NDArray[complexfloating], shape (...,)
-        Complex coherency values between signals.
+    coherency1 : NDArray[complexfloating] or complex, shape (...,)
+        Complex coherency values between signals. A scalar is accepted and
+        gives a scalar (0-d) result.
     n_obs1 : int
         Number of observations for coherency1 (n_tapers * n_trials).
     coherency2 : NDArray[complexfloating] or float, default=0
@@ -608,11 +609,12 @@ def coherence_fisher_z_transform(
             f">= 2, got {n_obs2}."
         )
         raise ValueError(msg)
-    coherence_magnitude1 = np.abs(coherency1)
-    coherence_magnitude1[coherence_magnitude1 >= 1] = 1 - np.finfo(float).eps
-
-    coherence_magnitude2 = np.array(np.abs(coherency2))
-    coherence_magnitude2[coherence_magnitude2 >= 1] = 1 - np.finfo(float).eps
+    # Clip saturated magnitudes below 1 so arctanh stays finite. np.minimum
+    # accepts Python and 0-d scalars (whose np.abs is a NumPy scalar that does
+    # not support item assignment) and preserves the input's shape.
+    largest_magnitude = 1 - np.finfo(float).eps
+    coherence_magnitude1 = np.minimum(np.abs(np.asarray(coherency1)), largest_magnitude)
+    coherence_magnitude2 = np.minimum(np.abs(np.asarray(coherency2)), largest_magnitude)
 
     bias1 = coherence_bias(n_obs1)
     # When there is no second sample (n_obs2 == 0) the comparison is against a
