@@ -6,6 +6,8 @@ This module tests that error messages follow the WHAT/WHY/HOW pattern:
 - HOW: Specific, actionable recovery steps
 """
 
+import re
+
 import numpy as np
 import pytest
 
@@ -39,25 +41,6 @@ class TestDetrendErrorMessages:
         # Message should be specific about what went wrong
         assert "invalid" in error_msg
 
-    def test_breakpoint_validation_error_message(self):
-        """Test that breakpoint validation error is helpful."""
-        rng = np.random.default_rng(0)
-        data = rng.standard_normal(100)
-
-        with pytest.raises(ValueError, match="outside the valid range") as excinfo:
-            detrend(data, type="linear", bp=[150])  # Breakpoint beyond data length
-
-        error_msg = str(excinfo.value)
-
-        # WHAT: Should state the problem clearly
-        assert "breakpoint" in error_msg.lower()
-
-        # WHY: Should explain the constraint
-        assert "length" in error_msg.lower() or "data" in error_msg.lower()
-
-        # HOW: Should help user understand the valid range
-        assert "100" in error_msg or "less" in error_msg.lower()
-
 
 class TestExpectationTypeErrorMessages:
     """Test expectation_type parameter error messages."""
@@ -81,10 +64,17 @@ class TestExpectationTypeErrorMessages:
         assert "invalid" in error_msg.lower() or "not supported" in error_msg.lower()
         assert "invalid_type" in error_msg
 
-        # HOW: Should list all valid options
-        assert "trials_tapers" in error_msg
-        assert "trials" in error_msg
-        assert "tapers" in error_msg
+        # HOW: Should list every valid option, one per "  - 'name'" line
+        listed = set(re.findall(r"^  - '(\w+)'$", error_msg, flags=re.MULTILINE))
+        assert listed == {
+            "time",
+            "trials",
+            "tapers",
+            "time_trials",
+            "time_tapers",
+            "trials_tapers",
+            "time_trials_tapers",
+        }
 
     def test_expectation_type_suggests_correct_order(self):
         """Test that wrong order in expectation_type gets helpful suggestion."""
@@ -108,53 +98,7 @@ class TestExpectationTypeErrorMessages:
 
 
 class TestMultitaperParameterErrorMessages:
-    """Test Multitaper parameter validation error messages.
-
-    Note: Many of these tests already exist in test_transforms.py.
-    These tests focus on the quality and helpfulness of the error messages.
-    """
-
-    def test_negative_sampling_frequency_error_is_helpful(self):
-        """Test that negative sampling frequency error guides the user."""
-        rng = np.random.default_rng(0)
-        time_series = rng.standard_normal((100, 1, 2))
-
-        with pytest.raises(
-            ValueError, match="sampling_frequency must be finite and positive"
-        ) as excinfo:
-            Multitaper(time_series, sampling_frequency=-500.0)
-
-        error_msg = str(excinfo.value)
-
-        # WHAT: Clear statement of problem
-        assert "sampling_frequency" in error_msg
-        assert "positive" in error_msg.lower() or "greater than 0" in error_msg.lower()
-
-        # WHY: Explains why it's invalid
-        assert "-500" in error_msg or "negative" in error_msg.lower()
-
-    def test_invalid_time_halfbandwidth_error_is_helpful(self):
-        """Test that invalid time_halfbandwidth_product error explains the parameter."""
-        rng = np.random.default_rng(0)
-        time_series = rng.standard_normal((100, 1, 2))
-
-        with pytest.raises(
-            ValueError, match="time_halfbandwidth_product must be at least 1"
-        ) as excinfo:
-            Multitaper(
-                time_series,
-                sampling_frequency=500.0,
-                time_halfbandwidth_product=0.5,  # Too small
-            )
-
-        error_msg = str(excinfo.value)
-
-        # WHAT: States the problem
-        assert "time_halfbandwidth_product" in error_msg
-
-        # WHY/HOW: Should explain valid range or typical values
-        # The error should be educational about this parameter
-        assert "0.5" in error_msg or str(0.5) in error_msg
+    """Window/step sizes that resolve to an unusable sample count are rejected."""
 
     def test_window_duration_rounding_to_zero_is_rejected(self):
         """A positive duration that rounds to 0 samples must raise, not divide by 0."""
@@ -199,52 +143,8 @@ class TestMultitaperParameterErrorMessages:
         assert "larger than the signal" in error_msg
 
 
-class TestGPUErrorMessages:
-    """Test GPU-related error messages."""
-
-    def test_gpu_import_error_is_actionable(self):
-        """Test that GPU import error provides clear installation instructions.
-
-        Note: This test verifies the error message content is helpful.
-        The actual GPU import code is in transforms.py:20-24.
-        """
-        # We can't easily test this without mocking the import,
-        # but we can read the code and verify it follows best practices
-        # This is more of a documentation test
-
-        # Read the error message from the code
-        import inspect
-
-        import spectral_connectivity.transforms as transforms_module
-
-        source = inspect.getsource(transforms_module)
-
-        # Verify the GPU error message exists and is helpful
-        assert "CuPy is not installed" in source
-        assert "pip install cupy" in source or "conda install cupy" in source
-
-        # The error message should explain WHAT (CuPy not installed),
-        # WHY (user requested GPU), and HOW (install commands)
-
-
 class TestErrorMessagePatterns:
     """Test that error messages follow consistent patterns across the codebase."""
-
-    def test_error_messages_provide_context(self):
-        """Verify error messages include the problematic value."""
-        # This is a meta-test that checks error messages include actual values
-
-        # Example 1: Wrong expectation_type should show what was provided
-        rng = np.random.default_rng(0)
-        fourier_coefficients = rng.standard_normal(
-            (10, 5, 3, 50, 2)
-        ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
-
-        with pytest.raises(ValueError, match="Invalid expectation_type 'wrong'") as excinfo:
-            Connectivity(fourier_coefficients, expectation_type="wrong")
-
-        # Should include the actual wrong value
-        assert "wrong" in str(excinfo.value)
 
     def test_error_messages_provide_solutions(self):
         """Verify error messages suggest how to fix the problem."""

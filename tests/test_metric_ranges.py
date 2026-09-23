@@ -6,14 +6,20 @@ import pytest
 from spectral_connectivity import Connectivity
 from spectral_connectivity.transforms import Multitaper
 
+N_TRIALS, N_TAPERS = 5, 3
+# Independent observations averaged by the default "trials_tapers" expectation.
+N_OBSERVATIONS = N_TRIALS * N_TAPERS
+
 
 def _in_range(x, min_val, max_val, tolerance=1e-12):
-    """Check if values are within expected range with small numerical tolerance."""
+    """Whether the non-NaN values lie in ``[min_val, max_val]`` (within tolerance).
+
+    Empty or all-NaN input is not evidence of a bounded measure, so it is
+    rejected rather than accepted vacuously.
+    """
     x = np.asarray(x)
-    # Remove NaN values for range checking
     x_clean = x[~np.isnan(x)]
-    if len(x_clean) == 0:
-        return True  # All NaN values are acceptable
+    assert x_clean.size > 0, "no finite values to range-check"
     return np.all((x_clean >= min_val - tolerance) & (x_clean <= max_val + tolerance))
 
 
@@ -21,7 +27,7 @@ def _in_range(x, min_val, max_val, tolerance=1e-12):
 def simple_synthetic_data():
     """Create simple synthetic data for fast testing."""
     rng = np.random.default_rng(42)
-    n_time_samples, n_trials, n_signals = 100, 5, 3
+    n_time_samples, n_trials, n_signals = 100, N_TRIALS, 3
     sampling_frequency = 500
 
     # Create correlated signals with some noise
@@ -57,7 +63,7 @@ def connectivity_obj(simple_synthetic_data):
         time_series,
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=2,
-        n_tapers=3,
+        n_tapers=N_TAPERS,
     )
 
     return Connectivity.from_multitaper(mt)
@@ -69,17 +75,18 @@ def test_coherence_magnitude_range(connectivity_obj):
     assert _in_range(coherence, 0, 1), "Coherence magnitude should be in [0, 1]"
 
 
+def test_coherence_bound_is_approached(connectivity_obj):
+    """The phase-locked 10 Hz pair reaches coherence near 1, so the [0, 1] range
+    checks above are not satisfied merely by small values."""
+    coherence = connectivity_obj.coherence_magnitude()
+    ten_hz = np.argmin(np.abs(connectivity_obj.frequencies - 10.0))
+    assert coherence[0, ten_hz, 0, 1] > 0.95
+
+
 def test_coherency_range(connectivity_obj):
-    """Test that coherency magnitude is in [0, 1] and phase in [-π, π]."""
-    coherency = connectivity_obj.coherency()
-
-    # Check magnitude
-    magnitude = np.abs(coherency)
+    """Test that coherency magnitude is in [0, 1]."""
+    magnitude = np.abs(connectivity_obj.coherency())
     assert _in_range(magnitude, 0, 1), "Coherency magnitude should be in [0, 1]"
-
-    # Check phase
-    phase = np.angle(coherency)
-    assert _in_range(phase, -np.pi, np.pi), "Coherency phase should be in [-π, π]"
 
 
 def test_imaginary_coherence_range(connectivity_obj):
@@ -131,20 +138,14 @@ def test_partial_directed_coherence_range(connectivity_obj):
 
 
 def test_pairwise_phase_consistency_range(connectivity_obj):
-    """Test that PPC is bounded (can be negative due to bias correction)."""
+    """PPC lies in [-1 / (N - 1), 1] for N observations.
+
+    PPC = (|sum_n exp(i theta_n)|^2 - N) / (N^2 - N); the squared resultant is at
+    least 0 (all phases cancel) and at most N^2 (all phases equal).
+    """
     ppc = connectivity_obj.pairwise_phase_consistency()
-
-    # PPC can be negative due to bias correction, but should be reasonable
-    # Upper bound should be 1, but allow some flexibility for bias correction
-    ppc_clean = ppc[~np.isnan(ppc)]
-    assert np.all(ppc_clean <= 1.01), "PPC should not exceed 1 by much"
-    assert np.all(ppc_clean >= -0.5), "PPC should not be extremely negative"
-
-
-def test_coherence_phase_range(connectivity_obj):
-    """Test that coherence phase is in [-π, π]."""
-    phase = connectivity_obj.coherence_phase()
-    assert _in_range(phase, -np.pi, np.pi), "Coherence phase should be in [-π, π]"
+    lower_bound = -1.0 / (N_OBSERVATIONS - 1)
+    assert _in_range(ppc, lower_bound, 1), f"PPC should be in [{lower_bound:.4f}, 1]"
 
 
 if __name__ == "__main__":

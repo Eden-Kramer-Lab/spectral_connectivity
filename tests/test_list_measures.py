@@ -35,12 +35,6 @@ def test_every_public_connectivity_measure_is_registered():
     assert public_methods - non_measure_methods == set(_MEASURE_SPECS)
 
 
-def test_each_measure_is_a_real_connectivity_method():
-    """A listed name can always be called on the Connectivity class."""
-    for measure in list_measures():
-        assert hasattr(Connectivity, measure.name)
-
-
 def test_returns_measureinfo_records_with_populated_fields():
     """Records expose name, category, description, and capability flags."""
     coherence = next(

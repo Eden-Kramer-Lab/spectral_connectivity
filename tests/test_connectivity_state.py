@@ -239,8 +239,8 @@ def test_getter_copy_defeats_base_reenable_attack(make):
     ``.base``, re-enable its ``writeable`` flag (NumPy allows this on an array
     that owns its data), then re-enable and mutate the view -- corrupting the
     snapshot behind the warmed caches. The getter therefore returns an
-    independent copy; walking to the root base and re-enabling it must not reach
-    ``c._fourier_coefficients``.
+    independent, owning copy (``base is None``, so there is no base to re-enable);
+    re-enabling and mutating that copy must not reach ``c._fourier_coefficients``.
     """
     rng = np.random.default_rng(23)
     m = Multitaper(
@@ -255,12 +255,8 @@ def test_getter_copy_defeats_base_reenable_attack(make):
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy: no reachable snapshot base
 
-    # Even performing the full attack on the returned copy's own root base leaves
-    # the instance untouched, because the copy shares no buffer with the snapshot.
-    root = returned
-    while root.base is not None:
-        root = root.base
-    root.flags.writeable = True
+    # Mutating the copy itself leaves the instance untouched, because the copy
+    # shares no buffer with the snapshot.
     returned.flags.writeable = True
     returned[...] = 0.0
 

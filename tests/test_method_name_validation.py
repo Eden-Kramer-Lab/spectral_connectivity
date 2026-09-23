@@ -37,12 +37,8 @@ def test_extension_measure_is_not_rejected_by_validation(time_series, monkeypatc
 
 def test_unknown_method_raises_valueerror_not_attributeerror(time_series):
     """A misspelled measure name fails as a ValueError, not AttributeError."""
-    with pytest.raises(
-        ValueError, match="'granger' is not a known connectivity measure"
-    ) as excinfo:
+    with pytest.raises(ValueError, match="'granger' is not a known connectivity measure"):
         multitaper_connectivity(time_series, sampling_frequency=200, method="granger")
-    assert not isinstance(excinfo.value, AttributeError)
-    assert "granger" in str(excinfo.value)
 
 
 def test_unknown_method_suggests_close_match(time_series):
@@ -97,7 +93,10 @@ def test_fourier_connectivity_validates_method_names():
 
 @pytest.mark.parametrize("property_name", ["frequencies", "n_signals"])
 def test_noncallable_connectivity_properties_are_rejected(time_series, property_name):
-    with pytest.raises(ValueError, match=property_name):
+    """Properties are not measures, even though they are Connectivity attributes."""
+    with pytest.raises(
+        ValueError, match=f"'{property_name}' is not a known connectivity measure"
+    ):
         multitaper_connectivity(
             time_series,
             sampling_frequency=200,

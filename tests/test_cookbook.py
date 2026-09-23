@@ -12,10 +12,11 @@ COOKBOOK = Path(__file__).resolve().parent.parent / "docs" / "cookbook.md"
 def test_cookbook_recipes_run():
     """All fenced code blocks in the cookbook execute with expected output."""
     assert COOKBOOK.exists(), f"cookbook not found at {COOKBOOK}"
-    failures, _ = doctest.testfile(
+    failures, attempted = doctest.testfile(
         str(COOKBOOK),
         module_relative=False,
         optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE,
         verbose=False,
     )
+    assert attempted > 0, "no doctest examples were found in the cookbook"
     assert failures == 0

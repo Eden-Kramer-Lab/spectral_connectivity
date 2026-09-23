@@ -1,164 +1,186 @@
-"""Tests for GPU backend detection and configuration."""
+"""Tests for GPU backend detection and configuration.
 
+The compute backend is fixed when ``spectral_connectivity`` is first imported
+(``transforms.xp`` is numpy or cupy), so patching the environment afterwards only
+changes what :func:`get_compute_backend` reports as *requested*
+(``gpu_enabled``), never the imported ``backend``. Assertions about the imported
+backend therefore depend on the session's actual ``transforms.xp``.
+"""
+
+import importlib.machinery
+import importlib.util
 import os
+import subprocess
 import sys
+import types
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from spectral_connectivity import get_compute_backend
+from spectral_connectivity import transforms as _transforms
+from spectral_connectivity.utils import GPU_ENV_VAR, is_gpu_enabled
+
+_SESSION_IS_CPU = _transforms.xp.__name__ == "numpy"
+cpu_session_only = pytest.mark.skipif(
+    not _SESSION_IS_CPU, reason="backend assertions assume a NumPy-backed import"
+)
+
+
+@pytest.fixture
+def cpu_transforms():
+    """Report a NumPy-backed import regardless of the session's real backend."""
+    fake_transforms = types.ModuleType("spectral_connectivity.transforms")
+    fake_transforms.xp = np
+    with patch.dict(sys.modules, {"spectral_connectivity.transforms": fake_transforms}):
+        yield
+
+
+@pytest.fixture
+def cupy_not_installed():
+    """Make CuPy both absent from ``sys.modules`` and unimportable."""
+    with patch.dict(sys.modules, {"cupy": None}):
+        yield
+
+
+@pytest.fixture
+def cupy_installed_not_imported(monkeypatch):
+    """Make CuPy discoverable by ``find_spec`` without importing it."""
+    monkeypatch.delitem(sys.modules, "cupy", raising=False)
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name, *args, **kwargs):
+        if name == "cupy":
+            return importlib.machinery.ModuleSpec("cupy", loader=None)
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
 
 
 class TestGetComputeBackend:
-    """Test get_compute_backend() function."""
-
-    def test_cpu_mode_default(self):
-        """Test that CPU mode is default when GPU not enabled."""
-        # Ensure env var is not set
-        with patch.dict(os.environ, {}, clear=False):
-            if "SPECTRAL_CONNECTIVITY_ENABLE_GPU" in os.environ:
-                del os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"]
-
-            result = get_compute_backend()
-
-            assert result["backend"] == "cpu"
-            assert result["gpu_enabled"] is False
-            assert result["gpu_available"] is not None  # Should report if CuPy is available
-            assert "device_name" in result
-            assert "message" in result
-            assert isinstance(result["message"], str)
-            assert len(result["message"]) > 0
-
-    def test_cpu_mode_explicit_false(self):
-        """Test CPU mode when explicitly set to false."""
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "false"}):
-            result = get_compute_backend()
-
-            assert result["backend"] == "cpu"
-            assert result["gpu_enabled"] is False
-
-    def test_gpu_mode_when_cupy_available(self):
-        """Test GPU mode when CuPy is available and enabled."""
-        # Only run if cupy is actually installed
-        try:
-            import cupy  # noqa: F401
-
-            cupy_available = True
-        except ImportError:
-            cupy_available = False
-
-        if not cupy_available:
-            pytest.skip("CuPy not installed, skipping GPU test")
-
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}):
-            # Need to reload modules to pick up env var change
-            # This test checks the function, not the actual module imports
-            result = get_compute_backend()
-
-            # When cupy is available and enabled
-            assert result["backend"] in ["cpu", "gpu"]  # Depends on current state
-            assert "gpu_available" in result
-            assert result["gpu_available"] is True
-            assert "message" in result
-
-    def test_gpu_mode_when_cupy_not_available(self):
-        """Test GPU mode when CuPy is not available."""
-        # Request the GPU while mocking cupy as not available
-        with (
-            patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}),
-            patch.dict(sys.modules, {"cupy": None}),
-        ):
-            result = get_compute_backend()
-
-            # Should report that GPU was requested but not available
-            assert "gpu_enabled" in result
-            assert "gpu_available" in result
-            assert result["gpu_available"] is False
-            assert "message" in result
-            assert "cupy" in result["message"].lower() or "gpu" in result["message"].lower()
+    """Test get_compute_backend() reporting."""
 
     def test_return_value_structure(self):
-        """Test that return value has all required keys."""
+        """The report has exactly the documented keys and value types."""
         result = get_compute_backend()
 
-        required_keys = {
+        assert set(result) == {
             "backend",
             "gpu_enabled",
             "gpu_available",
             "device_name",
             "message",
         }
-        assert set(result.keys()) == required_keys
-
-    def test_backend_values(self):
-        """Test that backend field only has valid values."""
-        result = get_compute_backend()
-
-        assert result["backend"] in ["cpu", "gpu"]
-
-    def test_boolean_fields(self):
-        """Test that boolean fields are actually booleans."""
-        result = get_compute_backend()
-
         assert isinstance(result["gpu_enabled"], bool)
         assert isinstance(result["gpu_available"], bool)
-
-    def test_device_name_present(self):
-        """Test that device_name is always a string."""
-        result = get_compute_backend()
-
         assert isinstance(result["device_name"], str)
-
-    def test_message_is_helpful(self):
-        """Test that message provides useful information."""
-        result = get_compute_backend()
-
-        # Message should explain the current state
-        assert len(result["message"]) > 20  # Should be a meaningful sentence
         assert isinstance(result["message"], str)
+        assert result["backend"] == ("cpu" if _SESSION_IS_CPU else "gpu")
 
-    def test_detect_cupy_import_state(self):
-        """Test that function detects if cupy is already imported."""
-        # Check if cupy is in sys.modules
-        cupy_was_imported = "cupy" in sys.modules
+    @pytest.mark.parametrize("value", ["true", "1", "yes"])
+    def test_gpu_enabled_reflects_env_request(self, value):
+        """A truthy env value is reported as a GPU request."""
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
+            assert get_compute_backend()["gpu_enabled"] is True
 
-        result = get_compute_backend()
+    @pytest.mark.parametrize("value", ["false", "0"])
+    def test_gpu_enabled_false_for_falsy_env(self, value):
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
+            assert get_compute_backend()["gpu_enabled"] is False
 
-        # If cupy was imported before calling get_compute_backend,
-        # gpu_available should reflect that
-        if cupy_was_imported:
-            assert result["gpu_available"] is True
+    def test_gpu_enabled_false_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv(GPU_ENV_VAR, raising=False)
+        assert get_compute_backend()["gpu_enabled"] is False
 
+    @pytest.mark.parametrize("value", ["true", "1", "false", "0", ""])
+    def test_gpu_enabled_matches_env_parser(self, value):
+        """gpu_enabled uses the same parser as the import-time backend switch."""
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
+            assert get_compute_backend()["gpu_enabled"] is is_gpu_enabled()
 
-class TestGPUModeConsistency:
-    """Test that GPU mode detection is consistent with actual module imports."""
-
-    def test_environment_variable_respected(self):
-        """Test that SPECTRAL_CONNECTIVITY_ENABLE_GPU env var is respected."""
-        result = get_compute_backend()
-
-        env_var = os.environ.get("SPECTRAL_CONNECTIVITY_ENABLE_GPU")
-
-        if env_var == "true":
-            assert result["gpu_enabled"] is True
-        else:
-            assert result["gpu_enabled"] is False
-
-    def test_cpu_backend_details(self):
-        """Test that CPU backend provides appropriate details."""
-        with patch.dict(os.environ, {}, clear=False):
-            if "SPECTRAL_CONNECTIVITY_ENABLE_GPU" in os.environ:
-                del os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"]
-
+    def test_requested_but_cupy_missing_message(self, cpu_transforms, cupy_not_installed):
+        """GPU requested without CuPy: say so and how to install it."""
+        with patch.dict(os.environ, {GPU_ENV_VAR: "true"}):
             result = get_compute_backend()
 
-            if result["backend"] == "cpu":
-                # CPU backend should indicate numpy
-                assert (
-                    "cpu" in result["message"].lower() or "numpy" in result["message"].lower()
-                )
-                # Device name should indicate CPU
-                assert "cpu" in result["device_name"].lower() or result["device_name"] == "CPU"
+        assert result["gpu_enabled"] is True
+        assert result["gpu_available"] is False
+        assert result["backend"] == "cpu"
+        assert result["device_name"] == "CPU"
+        assert "GPU acceleration was requested" in result["message"]
+        assert "CuPy is not installed" in result["message"]
+        assert "pip install cupy" in result["message"]
+
+    def test_cupy_installed_but_not_requested_message(
+        self, monkeypatch, cpu_transforms, cupy_installed_not_imported
+    ):
+        """CuPy importable but not requested: explain how to turn the GPU on."""
+        monkeypatch.delenv(GPU_ENV_VAR, raising=False)
+        result = get_compute_backend()
+
+        assert result["gpu_enabled"] is False
+        assert result["gpu_available"] is True
+        assert result["backend"] == "cpu"
+        assert "CuPy is installed and GPU acceleration is available" in result["message"]
+        assert f"{GPU_ENV_VAR}='true'" in result["message"]
+
+    def test_cpu_only_message(self, monkeypatch, cpu_transforms, cupy_not_installed):
+        """Neither requested nor installed: CPU device and setup instructions."""
+        monkeypatch.delenv(GPU_ENV_VAR, raising=False)
+        result = get_compute_backend()
+
+        assert result["gpu_enabled"] is False
+        assert result["gpu_available"] is False
+        assert result["backend"] == "cpu"
+        assert result["device_name"] == "CPU"
+        assert result["message"].startswith("Using CPU backend with NumPy.")
+        assert "Install CuPy" in result["message"]
+
+    def test_already_imported_cupy_counts_as_available(self, monkeypatch):
+        """A CuPy already in ``sys.modules`` is reported as available.
+
+        The fake module has no ``cuda`` attribute, so device probing fails and the
+        generic ``"GPU"`` device name is reported.
+        """
+        monkeypatch.setitem(sys.modules, "cupy", types.ModuleType("cupy"))
+        result = get_compute_backend()
+
+        assert result["gpu_available"] is True
+        assert result["device_name"] == "GPU"
+
+
+@cpu_session_only
+class TestCpuSessionBackend:
+    """In a NumPy-backed session, env changes never switch the reported backend."""
+
+    @pytest.mark.parametrize("value", ["true", "false"])
+    def test_backend_stays_cpu_after_env_change(self, value):
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
+            assert get_compute_backend()["backend"] == "cpu"
+
+
+def test_gpu_request_without_cupy_fails_import():
+    """Requesting the GPU without CuPy makes the package import fail loudly.
+
+    Runs in a fresh interpreter because the backend is chosen at import time;
+    CuPy is blocked before ``spectral_connectivity`` is imported.
+    """
+    code = "import sys\nsys.modules['cupy'] = None\nimport spectral_connectivity\n"
+    environment = {**os.environ, GPU_ENV_VAR: "true"}
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "RuntimeError: GPU support was explicitly requested" in result.stderr
+    assert "CuPy is not installed" in result.stderr
+    assert "pip install cupy" in result.stderr
 
 
 class TestIsGpuEnabled:
@@ -166,30 +188,21 @@ class TestIsGpuEnabled:
 
     @pytest.mark.parametrize("value", ["true", "True", "TRUE", "1", "yes", "on", " true "])
     def test_recognized_true_values(self, value):
-        from spectral_connectivity.utils import is_gpu_enabled
-
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": value}):
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
             assert is_gpu_enabled() is True
 
     @pytest.mark.parametrize("value", ["false", "0", "no", "off", ""])
     def test_recognized_false_values(self, value):
-        from spectral_connectivity.utils import is_gpu_enabled
-
-        with patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": value}):
+        with patch.dict(os.environ, {GPU_ENV_VAR: value}):
             assert is_gpu_enabled() is False
 
-    def test_unset_is_false(self):
-        from spectral_connectivity.utils import is_gpu_enabled
-
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
-            assert is_gpu_enabled() is False
+    def test_unset_is_false(self, monkeypatch):
+        monkeypatch.delenv(GPU_ENV_VAR, raising=False)
+        assert is_gpu_enabled() is False
 
     def test_unrecognized_value_warns_and_falls_back(self):
-        from spectral_connectivity.utils import is_gpu_enabled
-
         with (
-            patch.dict(os.environ, {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "maybe"}),
+            patch.dict(os.environ, {GPU_ENV_VAR: "maybe"}),
             pytest.warns(UserWarning, match="not a recognized value"),
         ):
             assert is_gpu_enabled() is False
@@ -199,30 +212,13 @@ class TestBackendDetection:
     """Test that get_compute_backend reports 'gpu' when xp is the cupy module."""
 
     def test_reports_gpu_when_transforms_xp_is_cupy(self):
-        import types
-
         fake_cupy = types.ModuleType("cupy")  # __name__ == "cupy"
         fake_transforms = types.ModuleType("spectral_connectivity.transforms")
         fake_transforms.xp = fake_cupy
 
-        with patch.dict(
-            sys.modules,
-            {"spectral_connectivity.transforms": fake_transforms},
-        ):
+        with patch.dict(sys.modules, {"spectral_connectivity.transforms": fake_transforms}):
             result = get_compute_backend()
             assert result["backend"] == "gpu"
 
-    def test_reports_cpu_when_transforms_xp_is_numpy(self):
-        import types
-
-        import numpy as np
-
-        fake_transforms = types.ModuleType("spectral_connectivity.transforms")
-        fake_transforms.xp = np  # __name__ == "numpy"
-
-        with patch.dict(
-            sys.modules,
-            {"spectral_connectivity.transforms": fake_transforms},
-        ):
-            result = get_compute_backend()
-            assert result["backend"] == "cpu"
+    def test_reports_cpu_when_transforms_xp_is_numpy(self, cpu_transforms):
+        assert get_compute_backend()["backend"] == "cpu"
