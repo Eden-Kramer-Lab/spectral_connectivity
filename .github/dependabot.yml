@@ -5,6 +5,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Let a release age a week before proposing it (supply-chain safety).
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns:

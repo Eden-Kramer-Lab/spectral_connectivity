@@ -144,6 +144,10 @@ convention = "numpy"
 [tool.ruff.lint.isort]
 known-first-party = ["spectral_connectivity"]
 
+[tool.codespell]
+# Notebook outputs embed base64 images, which read as misspellings.
+skip = "*.ipynb"
+
 [tool.mypy]
 # Target the Python version the quality/CI job runs on (3.12). NumPy's installed
 # stubs use PEP 695 `type` statements, which mypy only parses when the target is
