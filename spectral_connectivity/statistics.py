@@ -10,7 +10,7 @@ connectivity analysis.
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import scipy.special
@@ -421,7 +421,7 @@ def Bonferroni_correction(
     return is_significant
 
 
-MULTIPLE_COMPARISONS: dict[str, Callable] = {
+MULTIPLE_COMPARISONS: dict[str, Callable[..., NDArray[np.bool_]]] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,
 }
@@ -555,9 +555,10 @@ def coherence_fisher_z_transform(
     # would instead make ``sqrt(bias1 + bias2)`` negative and return NaN.
     bias2 = coherence_bias(n_obs2) if n_obs2 else 0.0
 
-    z1 = np.arctanh(coherence_magnitude1) - bias1
-    z2 = np.arctanh(coherence_magnitude2) - bias2
-    return (z1 - z2) / np.sqrt(bias1 + bias2)
+    z1: NDArray[np.floating] = np.arctanh(coherence_magnitude1) - bias1
+    z2: NDArray[np.floating] = np.arctanh(coherence_magnitude2) - bias2
+    scale: float = np.sqrt(bias1 + bias2)
+    return (z1 - z2) / scale
 
 
 def get_normal_distribution_p_values(
@@ -601,7 +602,11 @@ def get_normal_distribution_p_values(
     # Use the survival function (sf = 1 - cdf) rather than ``1 - cdf`` so that
     # far-tail p-values keep full precision: ``1 - norm.cdf(8.3)`` underflows to
     # exactly 0, while ``norm.sf(8.3)`` returns ~5.2e-17.
-    return scipy.stats.norm.sf(to_numpy(data), loc=mean, scale=std_deviation)
+    # scipy-stubs types distribution methods as returning Any.
+    return cast(
+        NDArray[np.floating],
+        scipy.stats.norm.sf(to_numpy(data), loc=mean, scale=std_deviation),
+    )
 
 
 def coherence_significance_pvalue(
@@ -654,7 +659,9 @@ def coherence_significance_pvalue(
             f"estimate is degenerate; a non-finite or non-integer count gives a "
             f"NaN or degenerate p-value."
         )
-    magnitude_squared_coherence = np.clip(np.abs(coherency) ** 2, 0.0, 1.0)
+    magnitude_squared_coherence: NDArray[np.floating] = np.clip(
+        np.abs(coherency) ** 2, 0.0, 1.0
+    )
     return (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
 
 
@@ -798,7 +805,7 @@ def power_confidence_intervals(
     n_tapers: int,
     power: NDArray[np.floating] | float = 1,
     ci: float = 0.95,
-) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
     Uses chi-squared distribution to compute confidence bounds for power
@@ -903,7 +910,7 @@ def power_bias(n_observations: int) -> float:
     >>> print(f"Bias with 1000 obs: {power_bias(1000):.6f}")
     Bias with 1000 obs: -0.000500
     """
-    return scipy.special.psi(n_observations) - np.log(n_observations)
+    return float(scipy.special.psi(n_observations) - np.log(n_observations))
 
 
 def power_variance(n_observations: int) -> float:
@@ -937,7 +944,7 @@ def power_variance(n_observations: int) -> float:
     variance of ``log(S_hat)`` is the trigamma function evaluated at the
     chi-squared shape parameter ``nu / 2 = n_observations``.
     """
-    return scipy.special.polygamma(1, n_observations)
+    return float(scipy.special.polygamma(1, n_observations))
 
 
 def power_fisher_z_transform(
@@ -1030,7 +1037,8 @@ def power_fisher_z_transform(
         variance2 = 0.0
 
     # Bias correction
-    z1 = np.log(spectrum1) - bias1
-    z2 = np.log(spectrum2) - bias2
+    z1: NDArray[np.floating] = np.log(spectrum1) - bias1
+    z2: NDArray[np.floating] = np.log(spectrum2) - bias2
 
-    return (z1 - z2) / np.sqrt(variance1 + variance2)
+    scale: float = np.sqrt(variance1 + variance2)
+    return (z1 - z2) / scale

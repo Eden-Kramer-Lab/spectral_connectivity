@@ -59,6 +59,7 @@ dev = [
     "nitime",
     "ruff>=0.8.0",
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
+    "scipy-stubs",
     "numpydoc>=1.6",
 ]
 # CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
@@ -149,18 +150,11 @@ known-first-party = ["spectral_connectivity"]
 # >= 3.12; a 3.10 target makes mypy reject the stubs before checking the project.
 # Runtime compatibility with 3.10+ is verified by the test matrix.
 python_version = "3.12"
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unused_configs = true
-strict_optional = true
-disallow_untyped_defs = false  # Will be enabled per-module
-disallow_incomplete_defs = false
-check_untyped_defs = true
-disallow_untyped_decorators = false
-warn_return_any = false
+strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-no_implicit_optional = true
+# xarray's IndexVariable constructor is unannotated.
+untyped_calls_exclude = ["xarray"]
 
 # Per-module options
 [[tool.mypy.overrides]]
@@ -168,24 +162,9 @@ module = [
     "nitime.*",
     "cupy.*",
     "cupyx.*",
-    "scipy.*",
     "xarray.*"
 ]
 ignore_missing_imports = true
-
-# Enable stricter type checking for fully-annotated modules
-[[tool.mypy.overrides]]
-module = [
-    "spectral_connectivity.simulate",
-    "spectral_connectivity.utils",
-    "spectral_connectivity.wrapper",
-    "spectral_connectivity.minimum_phase_decomposition",
-    "spectral_connectivity.statistics",
-    "spectral_connectivity._version",
-    "spectral_connectivity.transforms",
-    "spectral_connectivity.connectivity"
-]
-disallow_untyped_defs = true
 
 [tool.hatch.version]
 source = "vcs"

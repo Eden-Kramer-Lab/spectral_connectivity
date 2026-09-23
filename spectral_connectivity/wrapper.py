@@ -470,7 +470,7 @@ def _get_measure_spec(method: str) -> _MeasureSpec | None:
 def _validated_signal_labels(
     signal_names: Sequence[_SignalLabel] | None,
     n_signals: int,
-) -> BackendArray:
+) -> NDArray[Any]:
     """Return a unique, portable, one-dimensional xarray signal coordinate."""
     if signal_names is None:
         names: list[_SignalLabel] = [str(index) for index in range(n_signals)]
@@ -521,7 +521,7 @@ def _validated_signal_labels(
             "signal_names must be unique to label the source/target axes; "
             f"duplicates: {duplicates}."
         )
-    return signal_coordinate.data
+    return np.asarray(signal_coordinate.data)
 
 
 def _check_method_accepts_kwargs(
@@ -549,7 +549,7 @@ def _check_method_accepts_kwargs(
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
     method: str,
-    signal_labels: BackendArray,
+    signal_labels: NDArray[Any],
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
     **kwargs: Any,
@@ -1319,7 +1319,7 @@ def _format_and_reduce_measures(
     methods: list[str],
     *,
     return_dataarray: bool,
-    signal_labels: Sequence[_SignalLabel],
+    signal_labels: NDArray[Any],
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
     connectivity_kwargs: Mapping[str, Any],

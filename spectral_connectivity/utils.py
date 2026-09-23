@@ -3,7 +3,7 @@
 import os
 import sys
 import warnings
-from typing import Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,8 +14,13 @@ _FALSE_VALUES = frozenset({"false", "0", "no", "off", ""})
 
 # NumPy and CuPy intentionally share the same runtime API throughout the
 # package. ``numpy.typing.NDArray`` would incorrectly promise that a value is
-# always host-backed, so backend-facing interfaces use this explicit alias.
-BackendArray: TypeAlias = Any
+# always host-backed, so backend-facing interfaces use this explicit alias. The
+# type checker analyzes the NumPy code path (CuPy mirrors its API), so there
+# the alias is a NumPy array.
+if TYPE_CHECKING:
+    BackendArray: TypeAlias = NDArray[Any]
+else:
+    BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
 
 
@@ -32,7 +37,7 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
     )
 
 
-def to_numpy(array: Any) -> NDArray:
+def to_numpy(array: Any) -> NDArray[Any]:
     """Return an array on the host without implicit device conversion.
 
     CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. NumPy

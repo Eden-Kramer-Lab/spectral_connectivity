@@ -7,13 +7,16 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import warnings
 from logging import DEBUG, getLogger
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
 from spectral_connectivity.utils import is_gpu_enabled
 
-if is_gpu_enabled():
+# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
+# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
+if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, ifft
@@ -239,11 +242,15 @@ def _check_convergence(
     (10,)
     """
     batch_shape = current.shape[:-3]
-    error = xp.max(xp.abs(current - old).reshape(*batch_shape, -1), axis=-1)
+    error: NDArray[np.floating] = xp.max(
+        xp.abs(current - old).reshape(*batch_shape, -1), axis=-1
+    )
     # Normalize by the factor magnitude so the criterion is scale-invariant.
     # Floor the scale to avoid dividing by zero for an all-zero sub-spectrum
     # (there error is also zero, so the block is trivially converged).
-    scale = xp.max(xp.abs(current).reshape(*batch_shape, -1), axis=-1)
+    scale: NDArray[np.floating] = xp.max(
+        xp.abs(current).reshape(*batch_shape, -1), axis=-1
+    )
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return error / scale < tolerance
 
@@ -324,10 +331,12 @@ def minimum_phase_reconstruction_error(
         minimum_phase_factor, _conjugate_transpose(minimum_phase_factor)
     )
     reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
-    residual = xp.max(
+    residual: NDArray[np.floating] = xp.max(
         xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
     )
-    scale = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
+    scale: NDArray[np.floating] = xp.max(
+        xp.abs(reference).reshape(*batch_shape, -1), axis=-1
+    )
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return residual / scale
 
@@ -356,14 +365,16 @@ def _singular_matrix_mask(
         True for each matrix that is singular or non-finite.
     """
     n_signals = matrices.shape[-1]
-    is_finite = xp.isfinite(matrices).all(axis=(-2, -1))
+    is_finite: NDArray[np.bool_] = xp.isfinite(matrices).all(axis=(-2, -1))
     cleaned = xp.where(
         is_finite[..., xp.newaxis, xp.newaxis], matrices, identity_matrix
     )
-    singular_values = xp.linalg.svd(cleaned, compute_uv=False)
+    singular_values: NDArray[np.floating] = xp.linalg.svd(cleaned, compute_uv=False)
     largest = singular_values[..., 0]
     smallest = singular_values[..., -1]
-    tolerance = largest * n_signals * xp.finfo(singular_values.dtype).eps
+    tolerance: NDArray[np.floating] = (
+        largest * n_signals * xp.finfo(singular_values.dtype).eps
+    )
     return (~is_finite) | (smallest <= tolerance)
 
 

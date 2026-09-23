@@ -1,7 +1,7 @@
 """Transforms time domain signals to the frequency domain."""
 
 from logging import getLogger
-from typing import Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -17,6 +17,9 @@ from spectral_connectivity.utils import (
 )
 
 logger = getLogger(__name__)
+
+# Element type of a dtype-preserving array helper (real or complex input).
+_ScalarT = TypeVar("_ScalarT", bound=np.generic)
 
 # Physical Constants with Scientific Rationale
 #
@@ -459,7 +462,9 @@ def suggest_parameters(
     }
 
 
-if is_gpu_enabled():
+# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
+# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
+if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
@@ -1412,10 +1417,11 @@ FFT samples:          {self.n_fft_samples}
         )
         # Label each window by its center time, as documented (the mean of the
         # window's sample times equals the center for uniformly spaced samples).
-        window_center_time = _sliding_window(
+        window_center_time: NDArray[np.floating] = _sliding_window(
             original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
         ).mean(axis=-1)
-        return self._start_time + window_center_time
+        center_time: NDArray[np.floating] = self._start_time + window_center_time
+        return center_time
 
     @property
     def n_signals(self) -> int:
@@ -1506,7 +1512,7 @@ FFT samples:          {self.n_fft_samples}
         assert self._taper_eigenvalues is not None
         eigenvalues = self._taper_eigenvalues
         if self.taper_weighting == "eigen":
-            weights = xp.sqrt(eigenvalues)
+            weights: NDArray[np.floating] = xp.sqrt(eigenvalues)
             weights = weights / xp.sqrt(xp.mean(weights**2))
             return (
                 coefficients
@@ -2107,7 +2113,9 @@ class MorletWavelet:
         frequency_half_width = self.smoothing_frequency // 2
         if not frequency_half_width:
             return array[..., xp.newaxis]
-        frequency_mode = "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        frequency_mode: Literal["reflect", "edge"] = (
+            "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        )
         pad_width = [(0, 0)] * array.ndim
         pad_width[frequency_axis] = (frequency_half_width, frequency_half_width)
         padded = xp.pad(array, tuple(pad_width), mode=frequency_mode)
@@ -2428,12 +2436,12 @@ def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
 
 
 def _sliding_window(
-    data: NDArray[np.floating],
+    data: NDArray[_ScalarT],
     window_size: int,
     step_size: int = 1,
     axis: int = -1,
     is_copy: bool = True,
-) -> NDArray[np.floating]:
+) -> NDArray[_ScalarT]:
     """Calculate a sliding window over a signal.
 
     Parameters
@@ -2532,18 +2540,18 @@ def _multitaper_fft(
         shape (n_windows, n_trials, n_tapers n_fft_samples, n_signals)
 
     """
-    projected_time_series = (
+    projected_time_series: NDArray[np.floating] = (
         time_series[..., xp.newaxis] * tapers[xp.newaxis, xp.newaxis, ...]
     )
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
-    fft_kwargs = {}
+    fft_kwargs: dict[str, Any] = {}
     if workers is not None and not is_gpu_enabled():
         fft_kwargs["workers"] = workers
-    return (
-        fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
-        / sampling_frequency
+    coefficients: NDArray[np.complexfloating] = fft(
+        projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs
     )
+    return coefficients / sampling_frequency
 
 
 def _apply_adaptive_taper_weights(
@@ -2821,9 +2829,9 @@ def detrend(
         # negative indices (they reached the backend as a cryptic error).
         bp_values = xp.atleast_1d(xp.asarray(bp))
 
-        def _to_list(a: NDArray) -> list:
+        def _to_list(a: NDArray[Any]) -> list[Any]:
             # Works for both numpy and cupy arrays.
-            return to_numpy(a).tolist()
+            return list(to_numpy(a).tolist())
 
         out_of_range = bp_values[(bp_values < 0) | (bp_values >= N)]
         if out_of_range.size:
@@ -2836,6 +2844,10 @@ def detrend(
             )
     # Delegate the least-squares/mean removal to SciPy (CPU) or CuPy (GPU),
     # which implement the same computation. Their detrend signatures match.
+    # ``type`` was validated above; expand the one-letter aliases.
+    trend_type: Literal["linear", "constant"] = (
+        "linear" if type in ("linear", "l") else "constant"
+    )
     return _backend_detrend(
-        data, axis=axis, type=type, bp=bp, overwrite_data=overwrite_data
+        data, axis=axis, type=trend_type, bp=bp, overwrite_data=overwrite_data
     )

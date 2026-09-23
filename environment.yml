@@ -15,6 +15,7 @@ dependencies:
 - "pytest >= 8.0"
 - "pytest-cov >= 4.1"
 - "mypy >= 1.8"
+- scipy-stubs
 
 # Code formatting and linting (ruff handles both format and lint)
 - "ruff >= 0.8.0"

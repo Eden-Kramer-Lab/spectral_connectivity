@@ -2,15 +2,15 @@
 
 import inspect
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import cached_property, partial, wraps
 from itertools import combinations
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast
 
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import DTypeLike, NDArray
 from scipy.ndimage import label
 
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -45,7 +45,9 @@ logger = getLogger(__name__)
 # jackknife validation cannot drift apart.
 _NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
 
-if is_gpu_enabled():
+# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
+# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
+if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import ifft
@@ -193,9 +195,12 @@ DIRECTED_COHERENCE_DISCREPANCY_TOLERANCE = 0.1
 
 # Preserves a helper's input dtype (real vs complex) in its return annotation.
 _NumberT = TypeVar("_NumberT", bound=np.number)
+# Signature and return type of a decorated measure, preserved by its decorators.
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-def _asnumpy(connectivity_measure: Callable) -> Callable:
+def _asnumpy(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     """Transform cupy array to numpy array.
 
     If cupy is not installed, then return original.
@@ -213,17 +218,19 @@ def _asnumpy(connectivity_measure: Callable) -> Callable:
     """
 
     @wraps(connectivity_measure)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         measure = connectivity_measure(*args, **kwargs)
-        if measure is not None:
-            return to_numpy(measure)
-        else:
-            return None
+        if measure is None:
+            return measure
+        # The type checker analyzes the NumPy path, where this is the identity.
+        return cast(_R, to_numpy(measure))
 
     return wrapper
 
 
-def _ignore_nan_propagation_warnings(connectivity_measure: Callable) -> Callable:
+def _ignore_nan_propagation_warnings(
+    connectivity_measure: Callable[_P, _R],
+) -> Callable[_P, _R]:
     """Suppress NumPy invalid/divide warnings from expected NaN propagation.
 
     The directed measures (DTF, PDC and relatives) normalize the transfer
@@ -246,14 +253,19 @@ def _ignore_nan_propagation_warnings(connectivity_measure: Callable) -> Callable
     """
 
     @wraps(connectivity_measure)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         with np.errstate(invalid="ignore", divide="ignore"):
             return connectivity_measure(*args, **kwargs)
 
     return wrapper
 
 
-def _non_negative_frequencies(axis: int) -> Callable:
+def _non_negative_frequencies(
+    axis: int,
+) -> Callable[
+    [Callable[Concatenate["Connectivity", _P], _R]],
+    Callable[Concatenate["Connectivity", _P], _R],
+]:
     """Remove the negative frequencies.
 
     Parameters
@@ -268,18 +280,22 @@ def _non_negative_frequencies(axis: int) -> Callable:
 
     """
 
-    def decorator(connectivity_measure: Callable) -> Callable:
+    def decorator(
+        connectivity_measure: Callable[Concatenate["Connectivity", _P], _R],
+    ) -> Callable[Concatenate["Connectivity", _P], _R]:
         @wraps(connectivity_measure)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            measure = connectivity_measure(*args, **kwargs)
-            if measure is not None:
-                n_frequencies = measure.shape[axis]
-                n_nonnegative = args[0]._nonnegative_frequency_count(n_frequencies)
-                if n_nonnegative == n_frequencies:
-                    return measure
-                return xp.take(measure, indices=xp.arange(n_nonnegative), axis=axis)
-            else:
-                return None
+        def wrapper(
+            connectivity: "Connectivity", /, *args: _P.args, **kwargs: _P.kwargs
+        ) -> _R:
+            measure = connectivity_measure(connectivity, *args, **kwargs)
+            if measure is None:
+                return measure
+            array = cast(BackendArray, measure)
+            n_frequencies = array.shape[axis]
+            n_nonnegative = connectivity._nonnegative_frequency_count(n_frequencies)
+            if n_nonnegative == n_frequencies:
+                return measure
+            return cast(_R, xp.take(array, indices=xp.arange(n_nonnegative), axis=axis))
 
         return wrapper
 
@@ -395,13 +411,15 @@ class Connectivity:
     Peak coherence: 1.000
     """
 
+    _observation_weights: BackendArray | None
+
     def __init__(
         self,
         fourier_coefficients: NDArray[np.complexfloating],
         expectation_type: str = "trials_tapers",
         frequencies: NDArray[np.floating] | None = None,
         time: NDArray[np.floating] | None = None,
-        dtype: np.dtype = xp.complex128,
+        dtype: DTypeLike = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
         is_one_sided: bool = False,
@@ -476,11 +494,10 @@ class Connectivity:
                 if self._is_one_sided
                 else xp.fft.fftfreq(n_fft_samples)
             )
-        if time is None:
-            time = xp.arange(n_time_windows)
+        time_values = xp.arange(n_time_windows) if time is None else time
         self._frequencies = frequencies
         self._dtype = dtype
-        self.time = to_numpy(time)
+        self.time = to_numpy(time_values)
 
     @property
     def observation_weights(self) -> BackendArray | None:
@@ -892,8 +909,7 @@ class Connectivity:
         single frequency bin that indexing would raise a raw ``IndexError``
         instead of a clear message.
         """
-        frequencies = self.frequencies
-        n_frequencies = 0 if frequencies is None else len(frequencies)
+        n_frequencies = len(self.frequencies)
         if n_frequencies < 2:
             raise ValueError(
                 f"{measure} requires at least 2 frequency bins, but the data has "
@@ -922,7 +938,7 @@ class Connectivity:
 
     @property
     @_asnumpy
-    def frequencies(self) -> NDArray[np.floating] | None:
+    def frequencies(self) -> NDArray[np.floating]:
         """Return non-negative frequencies of the transform.
 
         Returns
@@ -931,20 +947,18 @@ class Connectivity:
             Non-negative frequency values.
 
         """
-        if self._frequencies is not None:
-            n_nonnegative = self._nonnegative_frequency_count(len(self._frequencies))
-            freqs = xp.take(self._frequencies, indices=xp.arange(n_nonnegative), axis=0)
+        n_nonnegative = self._nonnegative_frequency_count(len(self._frequencies))
+        freqs = xp.take(self._frequencies, indices=xp.arange(n_nonnegative), axis=0)
 
-            # fftfreq returns negative Nyquist for even N, fix the sign
-            if len(freqs) > 0 and freqs[-1] < 0:
-                freqs = freqs.copy()  # Don't modify the original
-                freqs[-1] = abs(freqs[-1])
-            return freqs
-        return None
+        # fftfreq returns negative Nyquist for even N, fix the sign
+        if len(freqs) > 0 and freqs[-1] < 0:
+            freqs = freqs.copy()  # Don't modify the original
+            freqs[-1] = abs(freqs[-1])
+        return freqs
 
     @property
     @_asnumpy
-    def all_frequencies(self) -> NDArray[np.floating] | None:
+    def all_frequencies(self) -> NDArray[np.floating]:
         """Return positive and negative frequencies of the transform.
 
         Returns
@@ -953,9 +967,7 @@ class Connectivity:
             All frequency values including negative frequencies.
 
         """
-        if self._frequencies is not None:
-            return self._frequencies
-        return None
+        return self._frequencies
 
     @cached_property
     def _power(self) -> NDArray[np.floating]:
@@ -1056,7 +1068,7 @@ class Connectivity:
             observations = observations * xp.sqrt(weights)[..., xp.newaxis]
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
-        cross_spectral_matrix = xp.matmul(
+        cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
             xp.swapaxes(observations, -1, -2),
             xp.conj(observations),
             dtype=self._dtype,
@@ -1084,7 +1096,7 @@ class Connectivity:
         return self._reduced_cross_spectral_matrix()
 
     def _subset_cross_spectral_matrix(
-        self, pairs: list | NDArray[np.integer]
+        self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
         """Compute compact observation-level spectra for channel pairs.
 
@@ -1148,7 +1160,8 @@ class Connectivity:
     ) -> BackendArray:
         """Average observation axes, applying optional spectral weights."""
         if self._observation_weights is None:
-            return EXPECTATION[self.expectation_type](values)
+            expected: BackendArray = xp.mean(values, axis=self._expectation_axes)
+            return expected
 
         if frequency_axis < 0:
             frequency_axis += values.ndim
@@ -1559,7 +1572,8 @@ class Connectivity:
         **Range**: [−π, π]. Phase angles in radians for complex coherency.
 
         """
-        return xp.angle(self._coherency())
+        phase: NDArray[np.floating] = xp.angle(self._coherency())
+        return phase
 
     @_asnumpy
     def coherence_magnitude(self) -> NDArray[np.floating]:
@@ -1588,7 +1602,8 @@ class Connectivity:
 
         """
         magnitude = _squared_magnitude(self._coherency())
-        return xp.clip(magnitude, 0, 1)
+        clipped: NDArray[np.floating] = xp.clip(magnitude, 0, 1)
+        return clipped
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -2534,7 +2549,9 @@ class Connectivity:
         # would let float32 rounding push the unit magnitudes -- and thus the
         # averaged PLV/PPC -- slightly past 1. copy=False avoids a copy when the
         # dtype already matches (the division below allocates a fresh array).
-        coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
+        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients.astype(
+            self._dtype, copy=False
+        )
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -2552,7 +2569,7 @@ class Connectivity:
         # involving it reduce to NaN, matching the previous per-observation path
         # where a zero-magnitude cross-spectrum entry became NaN before averaging.
         with np.errstate(invalid="ignore", divide="ignore"):
-            normalized = coefficients / magnitude
+            normalized: NDArray[np.complexfloating] = coefficients / magnitude
         normalized[zero_magnitude] = xp.nan
         return self._reduced_cross_spectral_matrix(normalized)
 
@@ -2796,7 +2813,10 @@ class Connectivity:
                dynamics. NeuroImage 62, 1415-1428.
         """
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
-        return xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0)
+        directed_pli: NDArray[np.floating] = xp.clip(
+            (1.0 + mean_sign.real) / 2.0, 0.0, 1.0
+        )
+        return directed_pli
 
     @_asnumpy
     @_non_negative_frequencies(-3)
@@ -3002,7 +3022,7 @@ class Connectivity:
 
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
-        self, pairs: list | NDArray[np.integer]
+        self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.floating]:
         """Return predictive power for a subset of signal pairs.
 
@@ -3300,11 +3320,12 @@ class Connectivity:
                 stacklevel=2,
             )
         noise_variance = _get_noise_variance(self._noise_covariance, axis=-1)
-        return (
+        directed_coherence: NDArray[np.floating] = (
             noise_variance
             * _squared_magnitude(self._transfer_function)
             / _total_inflow(self._transfer_function, noise_variance) ** 2
         )
+        return directed_coherence
 
     def _partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return device-native PDC for reuse by other device-native measures."""
@@ -3725,7 +3746,7 @@ class Connectivity:
         # Nolte et al. (2008): sum conj(C(f)) * C(f + df) over adjacent
         # (independent) frequency bins, then take the imaginary part. The
         # frequency axis is -3 (the two trailing axes are the signal pair).
-        adjacent_product = (
+        adjacent_product: NDArray[np.complexfloating] = (
             xp.conj(bandpassed_coherency[..., :-1, :, :])
             * bandpassed_coherency[..., 1:, :, :]
         ).sum(axis=-3)
@@ -3798,7 +3819,8 @@ def _divide_masking_zero_denominator(
     if xp.any(zero):
         warnings.warn(message, UserWarning, stacklevel=3)
     safe = xp.where(invalid, xp.asarray(1.0, dtype=denominator.dtype), denominator)
-    result = numerator / safe
+    # Dividing by a real array keeps the numerator's real/complex kind.
+    result = cast(NDArray[_NumberT], numerator / safe)
     result[invalid] = xp.nan
     return result
 
@@ -3972,8 +3994,8 @@ def _canonical_coherency_components(
     n_b = Cbb.shape[-1]
     identity_a = xp.broadcast_to(xp.eye(n_a), (*leading_shape, n_a, n_a))
     identity_b = xp.broadcast_to(xp.eye(n_b), (*leading_shape, n_b, n_b))
-    basis_a = xp.array(identity_a)
-    basis_b = xp.array(identity_b)
+    basis_a: NDArray[np.floating] = xp.array(identity_a)
+    basis_b: NDArray[np.floating] = xp.array(identity_b)
     scores = xp.full((*leading_shape, n_components), xp.nan, dtype=Cab.dtype)
     filters_a = xp.full((*leading_shape, n_a, n_components), xp.nan)
     filters_b = xp.full((*leading_shape, n_b, n_components), xp.nan)
@@ -3983,7 +4005,9 @@ def _canonical_coherency_components(
 
     for component in range(n_components):
         reduced_aa = basis_a.swapaxes(-1, -2) @ real_aa @ basis_a
-        reduced_ab = basis_a.swapaxes(-1, -2) @ Cab @ basis_b
+        reduced_ab: NDArray[np.complexfloating] = (
+            basis_a.swapaxes(-1, -2) @ Cab @ basis_b
+        )
         reduced_bb = basis_b.swapaxes(-1, -2) @ real_bb @ basis_b
         transform_aa, rank_a = _batched_inverse_square_root(
             reduced_aa, rank=rank, regularization=regularization
@@ -4045,10 +4069,18 @@ def _zero_unsupported_components(
     """
     supported = xp.arange(scores.shape[-1]) < effective_rank[..., xp.newaxis]
     supported_sides = supported[..., xp.newaxis, :]
+    filter_a, filter_b = filters
+    pattern_a, pattern_b = patterns
     return (
         xp.where(supported, scores, 0.0),
-        tuple(xp.where(supported_sides, side, 0.0) for side in filters),
-        tuple(xp.where(supported_sides, side, 0.0) for side in patterns),
+        (
+            xp.where(supported_sides, filter_a, 0.0),
+            xp.where(supported_sides, filter_b, 0.0),
+        ),
+        (
+            xp.where(supported_sides, pattern_a, 0.0),
+            xp.where(supported_sides, pattern_b, 0.0),
+        ),
         effective_rank,
     )
 
@@ -4129,7 +4161,10 @@ def _estimate_transfer_function(
     """
     inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
     H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
-    return xp.matmul(minimum_phase, _regularized_inverse(H_0))
+    transfer_function: NDArray[np.complexfloating] = xp.matmul(
+        minimum_phase, _regularized_inverse(H_0)
+    )
+    return transfer_function
 
 
 def _sanitized_nonnegative_granger(
@@ -4209,7 +4244,7 @@ def _squared_magnitude(x: NDArray[np.complexfloating]) -> NDArray[np.floating]:
 def _complex_inner_product(
     a: NDArray[np.complexfloating],
     b: NDArray[np.complexfloating],
-    dtype: np.dtype = xp.complex128,
+    dtype: DTypeLike = xp.complex128,
 ) -> NDArray[np.complexfloating]:
     """Measure orthogonality (similarity) of complex arrays.
 
@@ -4229,7 +4264,10 @@ def _complex_inner_product(
         Complex inner product.
 
     """
-    return xp.matmul(a, _conjugate_transpose(b), dtype=dtype)
+    product: NDArray[np.complexfloating] = xp.matmul(
+        a, _conjugate_transpose(b), dtype=dtype
+    )
+    return product
 
 
 def _remove_instantaneous_causality(
@@ -4481,7 +4519,8 @@ def _normalize_fourier_coefficients(
     U, _, V_transpose = xp.linalg.svd(
         _reshape(fourier_coefficients), full_matrices=False
     )
-    return xp.matmul(U, V_transpose)
+    phase_factor: NDArray[np.complexfloating] = xp.matmul(U, V_transpose)
+    return phase_factor
 
 
 def _estimate_canonical_coherence(
@@ -4616,7 +4655,8 @@ def _find_largest_significant_group(
     if not np.all(label_groups == 0):
         label_counts[0] = 0
         max_group = label_groups[np.argmax(label_counts)]
-        return labeled == max_group
+        in_largest: NDArray[np.bool_] = labeled == max_group
+        return in_largest
     else:
         return np.zeros(is_significant.shape, dtype=bool)
 
@@ -4718,10 +4758,10 @@ def _select_largest_independent_cluster(
         & (max_size > 0)
     )
     # Independent points are start_index, start_index + frequency_step, ...
-    independent = in_largest_cluster & (
+    independent: NDArray[np.bool_] = in_largest_cluster & (
         (frequency_index - start_index) % frequency_step == 0
     )
-    count = independent.sum(axis=-1, keepdims=True)
+    count: NDArray[np.integer] = independent.sum(axis=-1, keepdims=True)
     return independent & (count >= min_group_size)
 
 
