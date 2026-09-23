@@ -2433,6 +2433,22 @@ def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
     assert tuple(result.data_vars) == expected
 
 
+def test_fourier_connectivity_unlabeled_default_skips_two_sided_methods():
+    """Without a frequency coordinate two-sidedness cannot be verified, so the
+    default method set must leave out the measures that require it instead of
+    rejecting the caller's implicit request."""
+    rng = np.random.default_rng(324)
+    coefficients = rng.standard_normal((5, 8, 2)) + 1j * rng.standard_normal((5, 8, 2))
+    result = fourier_connectivity(coefficients, is_one_sided=False)
+
+    expected = tuple(
+        name
+        for name in DEFAULT_METHODS
+        if name != "pairwise_spectral_granger_prediction"
+    )
+    assert tuple(result.data_vars) == expected
+
+
 def test_fourier_connectivity_warns_when_sidedness_is_assumed():
     """Without a frequency coordinate or an explicit flag, the two-sided
     assumption silently truncates one-sided input, so it must be announced."""

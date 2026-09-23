@@ -91,7 +91,8 @@ directly with results from 2.x.
   are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
   provide multiple trials/tapers. `Welch` warns when its default segment length
   yields coarse frequency resolution. `fourier_connectivity` rejects directed
-  measures on unlabeled coefficients whose two-sidedness cannot be verified.
+  measures on unlabeled coefficients whose two-sidedness cannot be verified,
+  and omits them from its default method set in that case.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,

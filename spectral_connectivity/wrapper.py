@@ -2427,7 +2427,9 @@ def fourier_connectivity(
     method : str or list of str, optional
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
-        Dataset with one variable per measure.
+        Dataset with one variable per measure. With ``None``, measures that
+        require a two-sided spectrum are omitted when the input is one-sided
+        or has no frequency coordinate to verify its sidedness.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to the
         DataArray signal coordinate or ``"0"``, ``"1"``, ....
@@ -2561,11 +2563,13 @@ def fourier_connectivity(
 
     return_dataarray = isinstance(method, str)
     if method is None:
+        # Two-sided-only measures are rejected below when sidedness cannot be
+        # verified, so leave them out of the default set in that case too.
         methods = [
             name
             for name in DEFAULT_METHODS
             if not (
-                one_sided
+                (one_sided or frequencies is None)
                 and name in _MEASURE_SPECS
                 and _MEASURE_SPECS[name].requires_two_sided
             )
