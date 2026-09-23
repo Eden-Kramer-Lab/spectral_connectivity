@@ -188,9 +188,6 @@ ignore = [
 # mirror the notebooks' seeded legacy np.random draws (NPY002).
 "examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003", "NPY002"]
 "*.ipynb" = ["NPY002"]  # legacy np.random kept for pedagogical simplicity
-# The snapshot tests reproduce the notebooks' seeded legacy np.random data;
-# switching generators would change every snapshotted value.
-"tests/test_notebooks.py" = ["NPY002"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

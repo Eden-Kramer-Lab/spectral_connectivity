@@ -234,8 +234,10 @@ def _check_convergence(
     Examples
     --------
     >>> import numpy as np
-    >>> current = np.random.randn(10, 8, 5, 5) + 1j * np.random.randn(10, 8, 5, 5)
-    >>> old = current + 1e-10 * np.random.randn(10, 8, 5, 5)
+    >>> rng = np.random.default_rng(0)
+    >>> shape = (10, 8, 5, 5)
+    >>> current = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    >>> old = current + 1e-10 * rng.standard_normal(shape)
     >>> converged = _check_convergence(current, old, tolerance=1e-8)
     >>> converged.shape
     (10,)

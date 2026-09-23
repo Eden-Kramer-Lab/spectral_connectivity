@@ -124,11 +124,11 @@ def snapshot(snapshot):
 
 def test_power_spectrum_200hz(snapshot):
     """Power spectrum of 200 Hz signal."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time = np.linspace(0, 50, 75001, endpoint=True)
     signal = np.sin(2 * np.pi * time * 200)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -148,7 +148,7 @@ def test_power_spectrum_200hz(snapshot):
 
 def test_coherence_magnitude_phase_offset(snapshot):
     """Coherence with fixed phase offset between signals."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -161,7 +161,7 @@ def test_coherence_magnitude_phase_offset(snapshot):
     signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
     phase_offset = np.pi / 2
     signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -180,7 +180,7 @@ def test_coherence_magnitude_phase_offset(snapshot):
 
 def test_spectrogram_temporal_dynamics(snapshot):
     """Spectrogram showing 50 Hz turning on at t=25s."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     frequency_of_interest = [200, 50]
@@ -191,7 +191,7 @@ def test_spectrogram_temporal_dynamics(snapshot):
     signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
     signal[: n_time_samples // 2, 1] = 0  # 50 Hz only in second half
     signal = signal.sum(axis=1)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -213,7 +213,7 @@ def test_spectrogram_temporal_dynamics(snapshot):
 
 def test_coherogram_phase_change(snapshot):
     """Coherogram showing phase offset changing at t=1.5s."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -225,12 +225,12 @@ def test_coherogram_phase_change(snapshot):
     # Random phase before t=1.5s, fixed phase after
     signal = np.zeros((n_time_samples, n_trials, n_signals))
     signal[:, :, 0] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
-    phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, n_trials))
+    phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, n_trials))
     phase_offset[np.where(time > 1.5), :] = np.pi / 2
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -251,14 +251,14 @@ def test_coherogram_phase_change(snapshot):
 
 def test_power_spectrum_30hz(snapshot):
     """Power spectrum of 30 Hz signal."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     frequency_of_interest = 30
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
     signal = np.sin(2 * np.pi * time * frequency_of_interest)
-    noise = np.random.normal(0, 4, len(signal))
+    noise = rng.normal(0, 4, len(signal))
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -277,7 +277,7 @@ def test_power_spectrum_30hz(snapshot):
 
 def test_spectrogram_with_trials(snapshot):
     """Spectrogram with trial structure (time x trials)."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     frequency_of_interest = [200, 50]
@@ -292,7 +292,7 @@ def test_spectrogram_with_trials(snapshot):
 
     # Replicate across trials with noise
     signal = np.tile(signal[:, np.newaxis], (1, n_trials))
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="trials"),
@@ -314,7 +314,7 @@ def test_spectrogram_with_trials(snapshot):
 
 def test_spectrogram_decreased_frequency_resolution(snapshot):
     """Spectrogram with decreased frequency resolution."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     frequency_of_interest = [200, 50]
@@ -324,7 +324,7 @@ def test_spectrogram_decreased_frequency_resolution(snapshot):
     signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
     signal[: n_time_samples // 2, 1] = 0
     signal = signal.sum(axis=1)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -346,7 +346,7 @@ def test_spectrogram_decreased_frequency_resolution(snapshot):
 
 def test_coherence_no_trials(snapshot):
     """Coherence without trial structure."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -358,7 +358,7 @@ def test_coherence_no_trials(snapshot):
     signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
     phase_offset = np.pi / 2
     signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -377,7 +377,7 @@ def test_coherence_no_trials(snapshot):
 
 def test_coherence_with_trials(snapshot):
     """Coherence with trial structure, 200 Hz, pi/2 phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -392,7 +392,7 @@ def test_coherence_with_trials(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -411,7 +411,7 @@ def test_coherence_with_trials(snapshot):
 
 def test_imaginary_coherence(snapshot):
     """Imaginary coherence with phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -426,7 +426,7 @@ def test_imaginary_coherence(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -445,7 +445,7 @@ def test_imaginary_coherence(snapshot):
 
 def test_phase_locking_value(snapshot):
     """Phase locking value with phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -460,7 +460,7 @@ def test_phase_locking_value(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -479,7 +479,7 @@ def test_phase_locking_value(snapshot):
 
 def test_phase_lag_index(snapshot):
     """Phase lag index with phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -494,7 +494,7 @@ def test_phase_lag_index(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -513,7 +513,7 @@ def test_phase_lag_index(snapshot):
 
 def test_weighted_phase_lag_index(snapshot):
     """Weighted phase lag index with phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -528,7 +528,7 @@ def test_weighted_phase_lag_index(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -547,7 +547,7 @@ def test_weighted_phase_lag_index(snapshot):
 
 def test_debiased_squared_weighted_phase_lag_index(snapshot):
     """Debiased squared weighted phase lag index."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -562,7 +562,7 @@ def test_debiased_squared_weighted_phase_lag_index(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -581,7 +581,7 @@ def test_debiased_squared_weighted_phase_lag_index(snapshot):
 
 def test_pairwise_phase_consistency(snapshot):
     """Pairwise phase consistency with phase offset."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100
@@ -596,7 +596,7 @@ def test_pairwise_phase_consistency(snapshot):
     signal[:, :, 1] = np.sin(
         (2 * np.pi * time[:, np.newaxis] * frequency_of_interest) + phase_offset
     )
-    noise = np.random.normal(0, 2, signal.shape)
+    noise = rng.normal(0, 2, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -615,7 +615,7 @@ def test_pairwise_phase_consistency(snapshot):
 
 def test_group_delay_signal1_leads(snapshot):
     """Group delay: Signal #1 leads Signal #2."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -630,7 +630,7 @@ def test_group_delay_signal1_leads(snapshot):
     # Create time-shifted version
     time_shifted = time - time_lag
     signal[:, 1] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -649,7 +649,7 @@ def test_group_delay_signal1_leads(snapshot):
 
 def test_group_delay_signal2_leads(snapshot):
     """Group delay: Signal #2 leads Signal #1."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -664,7 +664,7 @@ def test_group_delay_signal2_leads(snapshot):
     time_shifted = time + time_lag
     signal[:, 0] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
     signal[:, 1] = np.sin(2 * np.pi * time * frequency_of_interest)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -683,7 +683,7 @@ def test_group_delay_signal2_leads(snapshot):
 
 def test_group_delay_signal2_leads_over_time(snapshot):
     """Group delay: Signal #2 leads Signal #1 over time (with trials)."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 2.400)
     n_trials = 100  # Need trials for sufficient observations with windowing
@@ -699,7 +699,7 @@ def test_group_delay_signal2_leads_over_time(snapshot):
     time_shifted = time + time_lag
     signal[:, :, 0] = np.sin(2 * np.pi * time_shifted[:, np.newaxis] * frequency_of_interest)
     signal[:, :, 1] = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise),
@@ -721,7 +721,7 @@ def test_group_delay_signal2_leads_over_time(snapshot):
 
 def test_phase_slope_index_signal1_leads(snapshot):
     """Phase slope index: Signal #1 leads Signal #2."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -735,7 +735,7 @@ def test_phase_slope_index_signal1_leads(snapshot):
 
     time_shifted = time - time_lag
     signal[:, 1] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -754,7 +754,7 @@ def test_phase_slope_index_signal1_leads(snapshot):
 
 def test_phase_slope_index_signal2_leads(snapshot):
     """Phase slope index: Signal #2 leads Signal #1."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -768,7 +768,7 @@ def test_phase_slope_index_signal2_leads(snapshot):
     time_shifted = time + time_lag
     signal[:, 0] = np.sin(2 * np.pi * time_shifted * frequency_of_interest)
     signal[:, 1] = np.sin(2 * np.pi * time * frequency_of_interest)
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -787,7 +787,7 @@ def test_phase_slope_index_signal2_leads(snapshot):
 
 def test_canonical_coherence(snapshot):
     """Canonical coherence with multiple signal groups."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -812,7 +812,7 @@ def test_canonical_coherence(snapshot):
             (2 * np.pi * time * frequency_of_interest) + phase_offset
         )
 
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -833,7 +833,7 @@ def test_canonical_coherence(snapshot):
 
 def test_canonical_coherence_high_noise(snapshot):
     """Canonical coherence with more signals and higher noise."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -856,7 +856,7 @@ def test_canonical_coherence_high_noise(snapshot):
             (2 * np.pi * time * frequency_of_interest) + phase_offset
         )
 
-    noise = np.random.normal(0, 8, signal.shape)  # Higher noise
+    noise = rng.normal(0, 8, signal.shape)  # Higher noise
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -877,7 +877,7 @@ def test_canonical_coherence_high_noise(snapshot):
 
 def test_global_coherence(snapshot):
     """Global coherence across multiple signals."""
-    np.random.seed(42)
+    rng = np.random.default_rng(42)
     sampling_frequency = 1500
     time_extent = (0, 50)
     n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -892,7 +892,7 @@ def test_global_coherence(snapshot):
     for i in range(n_signals):
         signal[:, i] = base_signal
 
-    noise = np.random.normal(0, 4, signal.shape)
+    noise = rng.normal(0, 4, signal.shape)
 
     multitaper = Multitaper(
         prepare_time_series(signal + noise, axis="signals"),
@@ -918,7 +918,6 @@ def test_global_coherence(snapshot):
 
 def test_baccala_example2(snapshot):
     """Baccala Example 2: Partial directed coherence (representative PDC example)."""
-    np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3
 
@@ -953,7 +952,6 @@ def test_baccala_example2(snapshot):
 
 def test_ding_example1(snapshot):
     """Ding Example 1: Direct DTF (representative dDTF example)."""
-    np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 2
 
@@ -987,7 +985,6 @@ def test_ding_example1(snapshot):
 
 def test_conditional_granger_three_signal_regression(snapshot):
     """Regression coverage for conditional Granger on a three-signal VAR."""
-    np.random.seed(42)
     sampling_frequency = 200
     n_time_samples, n_signals = 1000, 3
 

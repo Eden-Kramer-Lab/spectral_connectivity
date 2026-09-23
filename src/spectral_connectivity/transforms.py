@@ -673,7 +673,7 @@ class Multitaper:
     >>> import numpy as np
     >>> from spectral_connectivity.transforms import Multitaper, prepare_time_series
     >>> # EEG recording: 5 seconds at 1000 Hz, 64 channels
-    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_data = np.random.default_rng(0).standard_normal((5000, 64))  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis='signals')
     >>> mt = Multitaper(eeg_3d, sampling_frequency=1000, time_halfbandwidth_product=4)
     >>> print(f"FFT shape: {mt.fft().shape}")
@@ -686,7 +686,8 @@ class Multitaper:
     >>> # Generate test signal: 50Hz + noise
     >>> fs = 1000  # 1 kHz sampling
     >>> t = np.arange(0, 1, 1/fs)
-    >>> signal = np.sin(2*np.pi*50*t) + 0.1*np.random.randn(len(t))
+    >>> rng = np.random.default_rng(0)
+    >>> signal = np.sin(2*np.pi*50*t) + 0.1*rng.standard_normal(len(t))
     >>> # Manually reshape to 3D: (n_time, n_trials, n_signals)
     >>> data = signal[:, np.newaxis, np.newaxis]  # Shape: (1000, 1, 1)
     >>> mt = Multitaper(data, sampling_frequency=fs, time_halfbandwidth_product=4)
@@ -694,7 +695,7 @@ class Multitaper:
     Multiple trials (already 3D):
 
     >>> # Epoched data: 100 trials, 5 channels, 1 second each at 1000 Hz
-    >>> epoched_data = np.random.randn(1000, 100, 5)  # (n_time, n_trials, n_signals)
+    >>> epoched_data = np.random.default_rng(0).standard_normal((1000, 100, 5))  # (n_time, n_trials, n_signals)
     >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
     >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")
     Trials: 100, Signals: 5
@@ -1094,7 +1095,7 @@ class Multitaper:
         --------
         >>> import numpy as np
         >>> from spectral_connectivity.transforms import Multitaper
-        >>> data = np.random.randn(5000, 1, 64)  # 5s, 64 EEG channels
+        >>> data = np.random.default_rng(0).standard_normal((5000, 1, 64))  # 5s, 64 EEG channels
         >>> mt = Multitaper(
         ...     data,
         ...     sampling_frequency=1000,
@@ -2310,7 +2311,7 @@ def prepare_time_series(
 
     >>> import numpy as np
     >>> # Load continuous EEG: 5 seconds at 1000 Hz, 64 channels
-    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_data = np.random.default_rng(0).standard_normal((5000, 64))  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis="signals")
     >>> eeg_3d.shape
     (5000, 1, 64)
@@ -2318,7 +2319,7 @@ def prepare_time_series(
     Multiple trials of a single electrode:
 
     >>> # 20 trials of one LFP channel, 2 seconds each at 1000 Hz
-    >>> lfp_trials = np.random.randn(2000, 20)  # Shape: (n_time, n_trials)
+    >>> lfp_trials = np.random.default_rng(0).standard_normal((2000, 20))  # Shape: (n_time, n_trials)
     >>> lfp_3d = prepare_time_series(lfp_trials, axis="trials")
     >>> lfp_3d.shape
     (2000, 20, 1)
@@ -2326,7 +2327,7 @@ def prepare_time_series(
     Single time series (e.g., spike times converted to continuous):
 
     >>> # One neuron's firing rate over time
-    >>> firing_rate = np.random.randn(1000)
+    >>> firing_rate = np.random.default_rng(0).standard_normal(1000)
     >>> firing_rate_3d = prepare_time_series(firing_rate)
     >>> firing_rate_3d.shape
     (1000, 1, 1)
@@ -2334,7 +2335,7 @@ def prepare_time_series(
     Already properly formatted (pass-through):
 
     >>> # Epoched data from MNE or similar: 10 trials, 5 channels, 100 timepoints
-    >>> epoched_data = np.random.randn(100, 10, 5)
+    >>> epoched_data = np.random.default_rng(0).standard_normal((100, 10, 5))
     >>> result = prepare_time_series(epoched_data)
     >>> result.shape
     (100, 10, 5)

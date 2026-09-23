@@ -255,10 +255,8 @@ def test_initial_conditions_fallback_is_deterministic():
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # the logger.warning is not a UserWarning
-        # Different global legacy-RNG states must not change the fallback start.
-        np.random.seed(1)  # noqa: NPY002
+        # The fallback start draws no random numbers, so repeated calls agree.
         first = _get_initial_conditions(singular[np.newaxis])
-        np.random.seed(123456)  # noqa: NPY002
         second = _get_initial_conditions(singular[np.newaxis])
 
     np.testing.assert_array_equal(first, second)
