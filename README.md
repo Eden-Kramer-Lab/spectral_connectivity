@@ -135,9 +135,15 @@ A dask-backed DataArray is rejected; materialize it first with
 `DataArray.compute()` (or `.load()`) and pass the result.
 
 For directed measures, `result.sel(source="a", target="b")` means influence
-from `a` to `b`. The directed-transfer-function family is available by name as
-an opt-in method. The lower-level `Connectivity` methods retain their historical
-array convention: `result[..., i, j]` represents `j -> i`.
+from `a` to `b` (for phase measures, positive means `a` leads `b`). The
+directed-transfer-function family is available by name as an opt-in method.
+The lower-level `Connectivity` methods return plain arrays in one of two
+orders: for the Granger and directed-transfer-function families
+`result[..., i, j]` is `j -> i`, while for `directed_phase_lag_index`,
+`phase_slope_index`, `delay`, and `group_delay` a positive `result[..., i, j]`
+means `i` leads `j`. `list_measures()` reports each measure's
+`array_orientation`, value range, units, and interpretation; see
+[Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
 
 #### Choosing parameters
 

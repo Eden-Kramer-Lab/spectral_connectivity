@@ -114,7 +114,8 @@ directly with results from 2.x.
 - `MeasureInfo` records what each measure's values mean: `long_name`, `units`,
   `value_range`, `is_complex`, the result's `dims`, an `interpretation` that
   includes the sign convention, and `array_orientation`, the index order of a
-  directed measure in the lower-level `Connectivity` arrays.
+  directed measure in the lower-level `Connectivity` arrays. The measure table
+  in `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
@@ -205,6 +206,12 @@ directly with results from 2.x.
 
 ### Fixed
 
+- The documentation said every lower-level `Connectivity` result uses
+  `result[..., i, j]` for `j -> i`. That holds for the Granger and
+  directed-transfer-function families only; `directed_phase_lag_index`,
+  `phase_slope_index`, `delay`, and `group_delay` use `[..., i, j]` for `i`
+  relative to `j` (positive means `i` leads). The wrapper's `source`/`target`
+  labels were already correct.
 - xarray results: every result now writes with netCDF4 and h5netcdf as well
   as SciPy (boolean attributes are stored as 0/1); `frequency_band_reduce`'s
   integral covers the whole band (off-grid edges, one-bin bands, additive
