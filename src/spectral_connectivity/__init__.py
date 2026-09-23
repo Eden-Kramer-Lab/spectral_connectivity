@@ -13,6 +13,8 @@ come in two orders; ``MeasureInfo.array_orientation`` names each measure's.
 
 Guide for AI coding assistants:
 https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html
+Machine-readable index of the documentation (llms.txt):
+https://spectral-connectivity.readthedocs.io/en/latest/llms.txt
 
 Examples
 --------
