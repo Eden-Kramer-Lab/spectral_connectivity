@@ -100,4 +100,5 @@ def test_multitaper_rejects_fractional_n_tapers():
     from spectral_connectivity.transforms import Multitaper
 
     with pytest.raises(ValueError, match="n_tapers must be an integer"):
-        Multitaper(np.random.randn(100, 1, 2), sampling_frequency=100.0, n_tapers=2.9)
+        rng = np.random.default_rng(0)
+        Multitaper(rng.standard_normal((100, 1, 2)), sampling_frequency=100.0, n_tapers=2.9)

@@ -60,7 +60,8 @@ class TestEstimateFrequencyResolution:
 
     def test_consistency_with_multitaper(self):
         """Test that estimates match actual Multitaper.frequency_resolution."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -120,7 +121,8 @@ class TestEstimateNTapers:
 
     def test_consistency_with_multitaper(self):
         """Test that estimates match actual Multitaper.n_tapers."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -238,7 +240,8 @@ class TestSummarizeParameters:
 
     def test_method_exists(self):
         """Test that summarize_parameters method exists."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -248,7 +251,8 @@ class TestSummarizeParameters:
 
     def test_returns_string(self):
         """Test that method returns a string summary."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -261,7 +265,8 @@ class TestSummarizeParameters:
 
     def test_includes_key_parameters(self):
         """Test that summary includes all key parameters."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -281,7 +286,8 @@ class TestSummarizeParameters:
 
     def test_readable_format(self):
         """Test that summary is human-readable (not repr)."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,

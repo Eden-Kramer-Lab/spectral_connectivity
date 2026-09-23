@@ -18,7 +18,8 @@ class TestDetrendErrorMessages:
 
     def test_invalid_trend_type_error_message(self):
         """Test that invalid trend type error is helpful."""
-        data = np.random.randn(100)
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal(100)
 
         with pytest.raises(ValueError) as excinfo:
             detrend(data, type="invalid")
@@ -40,7 +41,8 @@ class TestDetrendErrorMessages:
 
     def test_breakpoint_validation_error_message(self):
         """Test that breakpoint validation error is helpful."""
-        data = np.random.randn(100)
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal(100)
 
         with pytest.raises(ValueError) as excinfo:
             detrend(data, type="linear", bp=[150])  # Breakpoint beyond data length
@@ -63,9 +65,10 @@ class TestExpectationTypeErrorMessages:
     def test_invalid_expectation_type_error_message(self):
         """Test that invalid expectation_type error is helpful."""
         # Create valid 5D fourier coefficients
-        fourier_coefficients = np.random.randn(10, 5, 3, 50, 2) + 1j * np.random.randn(
-            10, 5, 3, 50, 2
-        )
+        rng = np.random.default_rng(0)
+        fourier_coefficients = rng.standard_normal(
+            (10, 5, 3, 50, 2)
+        ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
         with pytest.raises(ValueError) as excinfo:
             Connectivity(fourier_coefficients, expectation_type="invalid_type")
@@ -84,9 +87,10 @@ class TestExpectationTypeErrorMessages:
     def test_expectation_type_suggests_correct_order(self):
         """Test that wrong order in expectation_type gets helpful suggestion."""
         # Create valid 5D fourier coefficients
-        fourier_coefficients = np.random.randn(10, 5, 3, 50, 2) + 1j * np.random.randn(
-            10, 5, 3, 50, 2
-        )
+        rng = np.random.default_rng(0)
+        fourier_coefficients = rng.standard_normal(
+            (10, 5, 3, 50, 2)
+        ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
         # Try common mistake: wrong order (e.g., "tapers_trials" instead of "trials_tapers")
         with pytest.raises(ValueError) as excinfo:
@@ -108,7 +112,8 @@ class TestMultitaperParameterErrorMessages:
 
     def test_negative_sampling_frequency_error_is_helpful(self):
         """Test that negative sampling frequency error guides the user."""
-        time_series = np.random.randn(100, 1, 2)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((100, 1, 2))
 
         with pytest.raises(ValueError) as excinfo:
             Multitaper(time_series, sampling_frequency=-500.0)
@@ -124,7 +129,8 @@ class TestMultitaperParameterErrorMessages:
 
     def test_invalid_time_halfbandwidth_error_is_helpful(self):
         """Test that invalid time_halfbandwidth_product error explains the parameter."""
-        time_series = np.random.randn(100, 1, 2)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((100, 1, 2))
 
         with pytest.raises(ValueError) as excinfo:
             Multitaper(
@@ -144,7 +150,8 @@ class TestMultitaperParameterErrorMessages:
 
     def test_window_duration_rounding_to_zero_is_rejected(self):
         """A positive duration that rounds to 0 samples must raise, not divide by 0."""
-        time_series = np.random.randn(1000, 1, 2)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 2))
         # 0.0004 s * 1000 Hz = 0.4 samples -> rounds to 0.
         mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=0.0004)
         with pytest.raises(ValueError) as excinfo:
@@ -155,7 +162,8 @@ class TestMultitaperParameterErrorMessages:
 
     def test_window_step_truncating_to_zero_is_rejected(self):
         """A positive step that truncates to 0 samples must raise, not divide by 0."""
-        time_series = np.random.randn(1000, 1, 2)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 2))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000.0,
@@ -169,7 +177,8 @@ class TestMultitaperParameterErrorMessages:
 
     def test_oversized_window_is_rejected(self):
         """A window longer than the signal must raise instead of returning empty."""
-        time_series = np.random.randn(1000, 1, 2)  # 1 s at 1000 Hz
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 2))  # 1 s at 1000 Hz
         mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=5.0)
         with pytest.raises(ValueError) as excinfo:
             mt.fft()
@@ -214,9 +223,10 @@ class TestErrorMessagePatterns:
         # This is a meta-test that checks error messages include actual values
 
         # Example 1: Wrong expectation_type should show what was provided
-        fourier_coefficients = np.random.randn(10, 5, 3, 50, 2) + 1j * np.random.randn(
-            10, 5, 3, 50, 2
-        )
+        rng = np.random.default_rng(0)
+        fourier_coefficients = rng.standard_normal(
+            (10, 5, 3, 50, 2)
+        ) + 1j * rng.standard_normal((10, 5, 3, 50, 2))
 
         with pytest.raises(ValueError) as excinfo:
             Connectivity(fourier_coefficients, expectation_type="wrong")
@@ -227,7 +237,8 @@ class TestErrorMessagePatterns:
     def test_error_messages_provide_solutions(self):
         """Verify error messages suggest how to fix the problem."""
         # Example: Invalid shape should suggest using Multitaper
-        fourier_coefficients = np.random.randn(100, 2)  # Wrong shape
+        rng = np.random.default_rng(0)
+        fourier_coefficients = rng.standard_normal((100, 2))  # Wrong shape
 
         with pytest.raises(ValueError) as excinfo:
             Connectivity(fourier_coefficients)
@@ -242,19 +253,22 @@ class TestExplicitSampleCountGuards:
     """Explicit n_time_samples_per_window/step must be validated like durations."""
 
     def test_explicit_zero_window_is_rejected(self):
-        ts = np.random.randn(1000, 1, 2)
+        rng = np.random.default_rng(0)
+        ts = rng.standard_normal((1000, 1, 2))
         mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=0)
         with pytest.raises(ValueError, match="at least 1 sample"):
             mt.fft()
 
     def test_explicit_oversized_window_is_rejected(self):
-        ts = np.random.randn(100, 1, 2)
+        rng = np.random.default_rng(0)
+        ts = rng.standard_normal((100, 1, 2))
         mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=500)
         with pytest.raises(ValueError, match="larger than the signal"):
             mt.fft()
 
     def test_explicit_zero_step_is_rejected(self):
-        ts = np.random.randn(1000, 1, 2)
+        rng = np.random.default_rng(0)
+        ts = rng.standard_normal((1000, 1, 2))
         mt = Multitaper(
             ts,
             sampling_frequency=1000.0,

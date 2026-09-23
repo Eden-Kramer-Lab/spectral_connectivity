@@ -167,7 +167,6 @@ ignore = [
     "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
     "N803",  # argument name should be lowercase (conflicts with scientific notation)
     "N806",  # variable in function should be lowercase (conflicts with scientific notation)
-    "NPY002", # numpy random legacy - requires significant test refactoring, can be done in future PR
     "RUF002", # docstring contains ambiguous unicode characters (mathematical symbols are intentional)
 ]
 
@@ -178,7 +177,12 @@ ignore = [
 # import after markdown/code cells (E402), bare expressions display values in a
 # cell (B018), and narrative comments contain unicode such as non-breaking
 # spaces (RUF003, mirroring the already-ignored RUF002 for docstrings).
-"examples/*.py" = ["E402", "B018", "RUF003"]
+# They also mirror the notebooks' seeded legacy np.random draws (NPY002).
+"examples/*.py" = ["E402", "B018", "RUF003", "NPY002"]
+"*.ipynb" = ["NPY002"]  # legacy np.random kept for pedagogical simplicity
+# The snapshot tests reproduce the notebooks' seeded legacy np.random data;
+# switching generators would change every snapshotted value.
+"tests/test_notebooks.py" = ["NPY002"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

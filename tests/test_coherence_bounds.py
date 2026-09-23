@@ -8,9 +8,11 @@ def test_coherence_magnitude_bounds():
     """Test that coherence magnitude is bounded by [0, 1]."""
     # Create test data with potential for numerical instability
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 10, 1, 5, 3)
+    rng = np.random.default_rng(0)
     fourier_coefficients = (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
+        + 1j
+        * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
     ).astype(np.complex128)
 
     # Add very small values that could cause numerical issues
@@ -34,9 +36,11 @@ def test_imaginary_coherence_bounds():
     """Test that imaginary coherence is bounded by [0, 1]."""
     # Create test data
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 5, 1, 3, 2)
+    rng = np.random.default_rng(0)
     fourier_coefficients = (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
+        + 1j
+        * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
     ).astype(np.complex128)
 
     # Add edge case with very small power

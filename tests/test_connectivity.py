@@ -1816,7 +1816,8 @@ def test_nyquist_frequency_sign_even_n():
     # Create test signal with even N
     sampling_frequency = 1500
     n_samples = 1000  # Even N
-    signal = np.random.randn(n_samples)
+    rng = np.random.default_rng(0)
+    signal = rng.standard_normal(n_samples)
 
     # Transform to get frequencies
     signal_3d = prepare_time_series(signal)
@@ -1845,7 +1846,8 @@ def test_nyquist_frequency_sign_odd_n():
 
     # Create test signal and force odd FFT length
     sampling_frequency = 1500
-    signal = np.random.randn(1023)  # Will result in odd n_fft_samples
+    rng = np.random.default_rng(0)
+    signal = rng.standard_normal(1023)  # Will result in odd n_fft_samples
 
     # Transform to get frequencies
     signal_3d = prepare_time_series(signal)

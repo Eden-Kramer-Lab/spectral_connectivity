@@ -8,9 +8,11 @@ def test_valid_expectation_types():
     """Test that all valid expectation types work correctly."""
     # Create test data
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
+    rng = np.random.default_rng(0)
     fourier_coefficients = (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
+        + 1j
+        * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
     ).astype(np.complex128)
 
     # All these should work without error
@@ -35,9 +37,11 @@ def test_invalid_expectation_type_raises_error():
     """Test that invalid expectation_type raises ValueError with helpful message."""
     # Create test data
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
+    rng = np.random.default_rng(0)
     fourier_coefficients = (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
+        + 1j
+        * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
     ).astype(np.complex128)
 
     invalid_type = "invalid_option"
@@ -57,9 +61,11 @@ def test_invalid_expectation_type_raises_error():
 def test_case_sensitive_expectation_type():
     """Test that expectation_type validation is case sensitive."""
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
+    rng = np.random.default_rng(0)
     fourier_coefficients = (
-        np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
+        + 1j
+        * rng.standard_normal((n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals))
     ).astype(np.complex128)
 
     # Should fail - case sensitivity

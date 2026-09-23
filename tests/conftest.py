@@ -27,6 +27,6 @@ def reset_global_random_state():
     Tests that use their own ``np.random.default_rng`` are unaffected; tests that
     still draw from the global generator become order-independent.
     """
-    np.random.seed(42)
+    np.random.seed(42)  # noqa: NPY002 -- the global generator is what is reset
     yield
-    np.random.seed(None)
+    np.random.seed(None)  # noqa: NPY002

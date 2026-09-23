@@ -241,7 +241,8 @@ def test_multitaper_n_signals(n_signals):
     n_trials, n_signals = 10, n_signals
     n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
     # time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+    rng = np.random.default_rng(0)
+    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
     expected_time = np.arange(start_time, end_time, time_window_duration)
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
@@ -271,7 +272,8 @@ def test_multitaper_connectivities_n_signals(n_signals):
     start_time, end_time = 0, 4.8
     n_trials, n_signals = 10, n_signals
     n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    time_series = np.random.random(size=(n_time_samples, n_trials, n_signals))
+    rng = np.random.default_rng(0)
+    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
     expected_time = np.arange(start_time, end_time, time_window_duration)
 
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
