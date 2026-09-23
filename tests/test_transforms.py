@@ -1332,3 +1332,15 @@ def test_nonuniform_weighting_rejects_custom_tapers():
             tapers=np.ones((64, 3)),
             taper_weighting="adaptive",
         )
+
+
+@pytest.mark.parametrize(
+    "tapers",
+    [np.ones((10, 3)), np.ones((100,)), np.ones((100, 3, 1))],
+    ids=["too-short", "1-D", "3-D"],
+)
+def test_custom_tapers_must_match_window_length(tapers):
+    """Custom tapers must be (n_time_samples_per_window, n_tapers); a mismatch
+    is rejected at construction instead of failing inside fft()."""
+    with pytest.raises(ValueError, match=r"tapers must have shape \(100, n_tapers\)"):
+        Multitaper(np.zeros((100, 10, 2)), tapers=tapers)

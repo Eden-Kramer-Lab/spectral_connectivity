@@ -1014,6 +1014,16 @@ class Multitaper:
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        if self._tapers is not None:
+            # Validate custom tapers now; a mismatch would otherwise surface as
+            # an opaque broadcasting error inside fft().
+            window = self.n_time_samples_per_window
+            if self._tapers.ndim != 2 or self._tapers.shape[0] != window:
+                msg = (
+                    f"tapers must have shape ({window}, n_tapers) -- one column per "
+                    f"taper, n_time_samples_per_window rows -- got {self._tapers.shape}."
+                )
+                raise ValueError(msg)
         object.__setattr__(self, "_initialized", True)
 
     @property
