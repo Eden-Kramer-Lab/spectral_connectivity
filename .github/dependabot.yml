@@ -1,10 +1,10 @@
 version: 2
 updates:
-  # Keep the SHA-pinned GitHub Actions current; one grouped PR per week.
+  # Keep the SHA-pinned GitHub Actions current; one grouped PR per month.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     # Let a release age a week before proposing it (supply-chain safety).
     cooldown:
       default-days: 7
