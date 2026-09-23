@@ -1200,7 +1200,13 @@ def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
     uniform = Connectivity.from_transform(
         MorletWavelet(data, 200, [10.0, 20.0, 30.0, 40.0], smoothing_time=0.5)
     )
-    getattr(uniform, measure)()
+    if measure == "phase_slope_index":
+        getattr(uniform, measure)()
+    else:
+        # The smoothing neighborhood's samples are correlated, which the
+        # coherence-significance null inside delay/group_delay reports.
+        with pytest.warns(UserWarning, match="assumes independent observations"):
+            getattr(uniform, measure)()
 
 
 @pytest.mark.parametrize("measure", ["delay", "group_delay"])

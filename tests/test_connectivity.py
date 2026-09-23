@@ -1902,6 +1902,11 @@ def test_jackknife_auto_transformation_matches_the_measure_range(measure, expect
         # theirs), so the Fisher scale reports those entries as saturated.
         with pytest.warns(UserWarning, match="saturated coherence"):
             result = connectivity.jackknife(measure)
+    elif measure == "coherence_phase":
+        # White noise has no resolvable phase, so the circular interval spans
+        # the whole circle and is reported as such.
+        with pytest.warns(UserWarning, match="covers the whole circle"):
+            result = connectivity.jackknife(measure)
     else:
         result = connectivity.jackknife(measure)
     assert result.transformation == expected
