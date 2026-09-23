@@ -123,11 +123,15 @@ def _netcdf_provenance_value(value: Any) -> Any:
 
     Non-finite floats are encoded as JSON too, so the ``arg_<key>`` view matches
     the ``measure_kwargs_json`` record rather than storing a bare ``NaN``/``inf``
-    that not every NetCDF engine round-trips cleanly.
+    that not every NetCDF engine round-trips cleanly. Booleans become 0/1
+    integers: netCDF4 and h5netcdf reject boolean attributes, and NetCDF3
+    silently turns them into int8.
     """
+    if isinstance(value, (bool, np.bool_)):
+        return int(value)
     if isinstance(value, (float, np.floating)) and not np.isfinite(value):
         return _canonical_json(value)
-    if isinstance(value, (str, int, float, np.integer, np.floating, np.bool_)):
+    if isinstance(value, (str, int, float, np.integer, np.floating)):
         return value
     return _canonical_json(value)
 
@@ -947,7 +951,8 @@ def _shared_provenance_attrs(
     # Namespace transform settings so they cannot collide with measure-level or
     # package-level provenance attributes.
     attrs: dict[str, Any] = {
-        transform_prefix + attr: value for attr, value in transform_metadata.items()
+        transform_prefix + attr: _netcdf_provenance_value(value)
+        for attr, value in transform_metadata.items()
     }
     attrs["package"] = "spectral_connectivity"
     attrs["package_version"] = _package_version()

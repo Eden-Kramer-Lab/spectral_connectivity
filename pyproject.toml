@@ -64,6 +64,10 @@ dev = [
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "scipy-stubs",
     "numpydoc>=1.6",
+    # NetCDF engines for the result round-trip tests (xarray's default writers).
+    "netCDF4",
+    "h5netcdf",
+    "h5py",
 ]
 # CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
 gpu = ["cupy-cuda12x>=13.0"]
@@ -80,6 +84,10 @@ dev = [
     "mypy>=1.11",
     "scipy-stubs",
     "numpydoc>=1.6",
+    # NetCDF engines for the result round-trip tests (xarray's default writers).
+    "netCDF4",
+    "h5netcdf",
+    "h5py",
 ]
 
 [project.urls]
@@ -105,7 +113,14 @@ addopts = [
 xfail_strict = true
 log_level = "INFO"
 # Every warning fails the test run unless the test asserts it (pytest.warns).
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Third-party, not this package: netCDF4's compiled extension triggers
+    # NumPy's benign binary-compatibility check on import, and xarray's netCDF4
+    # backend sets ndarray.shape in place, which NumPy 2.5 deprecates.
+    "ignore:numpy.ndarray size changed:RuntimeWarning",
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
