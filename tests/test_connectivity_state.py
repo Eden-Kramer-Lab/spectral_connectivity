@@ -7,7 +7,6 @@ from functools import cached_property
 
 import numpy as np
 import pytest
-from pytest import mark
 
 from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
@@ -16,9 +15,7 @@ from spectral_connectivity.connectivity import Connectivity
 def test_transfer_function_is_cached():
     """Expensive directed-connectivity intermediates are cached per instance."""
     rng = np.random.default_rng(1)
-    fourier = rng.standard_normal((1, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (1, 3, 2, 8, 2)
-    )
+    fourier = rng.standard_normal((1, 3, 2, 8, 2)) + 1j * rng.standard_normal((1, 3, 2, 8, 2))
     c = Connectivity(fourier_coefficients=fourier)
     assert c._minimum_phase_factor is c._minimum_phase_factor
     assert c._transfer_function is c._transfer_function
@@ -28,9 +25,9 @@ def test_transfer_function_is_cached():
 def test_changing_inputs_clears_cached_intermediates():
     """Reassigning fourier_coefficients / expectation_type must not serve stale cache."""
     rng = np.random.default_rng(2)
-    fourier = rng.standard_normal((1, 4, 2, 8, 2)) + 1j * rng.standard_normal(
-        (1, 4, 2, 8, 2)
-    )
+    # Enough tapers that each trial's spectrum is well conditioned for Wilson
+    # factorization under the per-trial "tapers" expectation.
+    fourier = rng.standard_normal((1, 4, 6, 8, 2)) + 1j * rng.standard_normal((1, 4, 6, 8, 2))
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
     transfer_default = c._transfer_function
 
@@ -138,7 +135,7 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy, not a view of the snapshot
     assert returned.flags.writeable is False
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read-only"):
         returned[...] = 0.0
     # Even re-enabling writeability (permitted on an owning copy) and mutating it
     # cannot reach the instance: the copy shares no buffer with the snapshot.
@@ -164,7 +161,8 @@ def test_fourier_coefficients_getter_returns_fresh_independent_copy():
     # Distinct objects, neither aliasing the backing snapshot.
     assert first is not second
     assert first is not c._fourier_coefficients
-    assert first.base is None and second.base is None
+    assert first.base is None
+    assert second.base is None
     np.testing.assert_array_equal(first, c._fourier_coefficients)
 
     # Re-enable and mutate one copy; the other copy, the snapshot, and the cache
@@ -222,11 +220,11 @@ def test_from_multitaper_adopts_without_copying():
     base = stored
     while base.base is not None:
         base = base.base
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="read-only"):
         base[(0,) * base.ndim] = 0.0
 
 
-@mark.parametrize(
+@pytest.mark.parametrize(
     "make",
     [
         lambda m: Connectivity.from_multitaper(m),  # adoption path (frozen view)
@@ -241,8 +239,8 @@ def test_getter_copy_defeats_base_reenable_attack(make):
     ``.base``, re-enable its ``writeable`` flag (NumPy allows this on an array
     that owns its data), then re-enable and mutate the view -- corrupting the
     snapshot behind the warmed caches. The getter therefore returns an
-    independent copy; walking to the root base and re-enabling it must not reach
-    ``c._fourier_coefficients``.
+    independent, owning copy (``base is None``, so there is no base to re-enable);
+    re-enabling and mutating that copy must not reach ``c._fourier_coefficients``.
     """
     rng = np.random.default_rng(23)
     m = Multitaper(
@@ -257,12 +255,8 @@ def test_getter_copy_defeats_base_reenable_attack(make):
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy: no reachable snapshot base
 
-    # Even performing the full attack on the returned copy's own root base leaves
-    # the instance untouched, because the copy shares no buffer with the snapshot.
-    root = returned
-    while root.base is not None:
-        root = root.base
-    root.flags.writeable = True
+    # Mutating the copy itself leaves the instance untouched, because the copy
+    # shares no buffer with the snapshot.
     returned.flags.writeable = True
     returned[...] = 0.0
 
@@ -314,16 +308,12 @@ def test_reassigning_different_geometry_resets_coordinates():
     could fail. The coordinates are now reset to the new geometry with a warning.
     """
     rng = np.random.default_rng(0)
-    fc8 = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (2, 3, 2, 8, 2)
-    )
+    fc8 = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal((2, 3, 2, 8, 2))
     conn = Connectivity(fourier_coefficients=fc8)
     assert conn.frequencies.size == 8 // 2 + 1
     assert conn.time.size == 2
 
-    fc10 = rng.standard_normal((3, 3, 2, 10, 2)) + 1j * rng.standard_normal(
-        (3, 3, 2, 10, 2)
-    )
+    fc10 = rng.standard_normal((3, 3, 2, 10, 2)) + 1j * rng.standard_normal((3, 3, 2, 10, 2))
     with pytest.warns(UserWarning, match="changed the FFT/time geometry"):
         conn.fourier_coefficients = fc10
     assert conn.frequencies.size == 10 // 2 + 1
@@ -335,9 +325,7 @@ def test_reassigning_different_geometry_resets_coordinates():
 def test_reassigning_same_geometry_keeps_coordinates_without_warning():
     """Same-geometry reassignment (the reuse pattern) must not warn or reset."""
     rng = np.random.default_rng(0)
-    fc = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (2, 3, 2, 8, 2)
-    )
+    fc = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal((2, 3, 2, 8, 2))
     conn = Connectivity(fourier_coefficients=fc)
     freqs_before = conn.frequencies.copy()
     with warnings.catch_warnings():
@@ -417,9 +405,7 @@ def test_from_multitaper_connectivity_is_picklable():
     conn = Connectivity.from_multitaper(m)
 
     restored = pickle.loads(pickle.dumps(conn))
-    np.testing.assert_allclose(
-        restored.coherence_magnitude(), conn.coherence_magnitude()
-    )
+    np.testing.assert_allclose(restored.coherence_magnitude(), conn.coherence_magnitude())
 
 
 class _SlottedConnectivity(Connectivity):
@@ -434,7 +420,7 @@ class _StringSlottedConnectivity(Connectivity):
     __slots__ = "extra_metadata"
 
 
-@mark.parametrize("subclass", [_SlottedConnectivity, _StringSlottedConnectivity])
+@pytest.mark.parametrize("subclass", [_SlottedConnectivity, _StringSlottedConnectivity])
 def test_pickle_and_copy_preserve_subclass_slots(subclass):
     """Python\'s default state handling preserves subclass slots."""
 
@@ -449,6 +435,4 @@ def test_pickle_and_copy_preserve_subclass_slots(subclass):
         copy.deepcopy(conn),
     ):
         assert clone.extra_metadata == {"subject": "s1"}
-        np.testing.assert_allclose(
-            clone.coherence_magnitude(), conn.coherence_magnitude()
-        )
+        np.testing.assert_allclose(clone.coherence_magnitude(), conn.coherence_magnitude())

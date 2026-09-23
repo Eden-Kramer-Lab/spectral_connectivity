@@ -35,12 +35,6 @@ def test_every_public_connectivity_measure_is_registered():
     assert public_methods - non_measure_methods == set(_MEASURE_SPECS)
 
 
-def test_each_measure_is_a_real_connectivity_method():
-    """A listed name can always be called on the Connectivity class."""
-    for measure in list_measures():
-        assert hasattr(Connectivity, measure.name)
-
-
 def test_returns_measureinfo_records_with_populated_fields():
     """Records expose name, category, description, and capability flags."""
     coherence = next(
@@ -51,9 +45,7 @@ def test_returns_measureinfo_records_with_populated_fields():
     assert coherence.is_default is True
     assert coherence.is_directed is False
     assert coherence.requires_two_sided is False
-    assert coherence.description == (
-        "Return the magnitude squared of the complex coherency."
-    )
+    assert coherence.description == ("Return the magnitude squared of the complex coherency.")
 
 
 def test_description_is_the_method_docstring_summary():
@@ -76,9 +68,7 @@ def test_directed_filter_selects_directed_measures():
     directed = list_measures(directed=True)
     assert directed  # non-empty
     assert all(measure.is_directed for measure in directed)
-    assert "pairwise_spectral_granger_prediction" in {
-        measure.name for measure in directed
-    }
+    assert "pairwise_spectral_granger_prediction" in {measure.name for measure in directed}
 
     undirected = list_measures(directed=False)
     assert all(not measure.is_directed for measure in undirected)
@@ -109,7 +99,7 @@ def test_category_filter_selects_matching_output_kind():
 
 def test_invalid_category_lists_valid_categories():
     """An unknown category raises and names the valid categories."""
-    with pytest.raises(ValueError) as excinfo:
+    with pytest.raises(ValueError, match="Unknown category 'not_a_category'") as excinfo:
         list_measures(category="not_a_category")
     message = str(excinfo.value)
     assert "not_a_category" in message

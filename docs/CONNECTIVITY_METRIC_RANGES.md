@@ -40,7 +40,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 | **Directed coherence** | [0, 1] (normalized) | DTF scaled by noise variance. |
 | **PDC (Partial Directed Coherence)** | [0, 1] (normalized) | Directional influence via AR coefficients. |
 | **gPDC (Generalized PDC)** | [0, 1] (normalized) | PDC scaled by noise variance. |
-| **dDTF (Direct DTF)** | [0, 1] (normalized) | DTF with partial coherence normalization. |
+| **dDTF (Direct DTF)** | [0, 1] (normalized) | Squared full-frequency DTF times squared partial coherence (Korzeniewska et al. 2003); keeps only direct influence. |
 | **Group delay** | (−∞, ∞) | Time delays; can be positive or negative. |
 | **PSI (Phase Slope Index)** | (−∞, ∞) | Signed; magnitude depends on phase slope. |
 
@@ -68,7 +68,7 @@ The following summarizes the theoretical value ranges for common connectivity me
 - **directed_coherence**: DTF scaled by noise variance
 - **partial_directed_coherence**: Normalized causal influence
 - **generalized_partial_directed_coherence**: PDC scaled by noise variance
-- **direct_directed_transfer_function**: DTF with partial coherence normalization
+- **direct_directed_transfer_function**: squared full-frequency DTF times squared partial coherence (direct influence only)
 - **global_coherence**: Fraction of total coherent power per component (eigenvalue of the cross-spectral matrix over the sum of all eigenvalues, Cimenser et al. 2011); scale-invariant
 
 ### Bounded Metrics [−1, 1]

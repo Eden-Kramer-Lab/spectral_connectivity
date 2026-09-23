@@ -10,9 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The package follows a modular design with three main components:
 
-1. **Transforms** (`spectral_connectivity/transforms.py`): Implements the `Multitaper` class for computing multitaper Fourier transforms
-2. **Connectivity** (`spectral_connectivity/connectivity.py`): The `Connectivity` class computes various connectivity measures from spectral estimates
-3. **Wrapper** (`spectral_connectivity/wrapper.py`): Provides `multitaper_connectivity()` function as a high-level interface
+1. **Transforms** (`src/spectral_connectivity/transforms.py`): Implements the `Multitaper` class for computing multitaper Fourier transforms
+2. **Connectivity** (`src/spectral_connectivity/connectivity.py`): The `Connectivity` class computes various connectivity measures from spectral estimates
+3. **Wrapper** (`src/spectral_connectivity/wrapper.py`): Provides `multitaper_connectivity()` function as a high-level interface
 
 ### Key Design Patterns
 
@@ -30,10 +30,16 @@ The package follows a modular design with three main components:
 
 ### Environment Setup
 ```bash
-# Create conda environment
+# uv (recommended): .venv from uv.lock with the package editable plus the dev tools
+uv sync
+uv run pytest            # prefix any command with `uv run` to use that environment
+uv lock                  # after changing dependencies in pyproject.toml
+uvx pre-commit install   # once; each commit then runs ruff, codespell, mypy and the file checks
+
+# Or conda
 conda env create -f environment.yml
 conda activate spectral_connectivity
-pip install -e .
+pip install -e .[dev]
 ```
 
 ### Testing
@@ -63,7 +69,7 @@ ruff check .
 ruff check --fix .
 
 # Type checking
-mypy spectral_connectivity/
+mypy src/
 ```
 
 ### Building and Release
@@ -99,7 +105,7 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
 ## File Structure
 
 ```
-spectral_connectivity/
+src/spectral_connectivity/
 ├── __init__.py              # Main API exports
 ├── connectivity.py          # Connectivity measures
 ├── transforms.py           # Multitaper transforms

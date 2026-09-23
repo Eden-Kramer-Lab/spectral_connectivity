@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]  # 1.27: PEP 639 license expressions
 build-backend = "hatchling.build"
 
 [project]
@@ -9,7 +9,8 @@ description = "Frequency domain functional and directed connectivity analysis to
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Eric Denovellis", email = "eric.denovellis@ucsf.edu" }]
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 keywords = [
     "python",
     "neuroscience",
@@ -25,13 +26,13 @@ keywords = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -52,6 +53,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `pip install -e .[dev]`. Keep `dev` identical to the `dev` dependency group
+# below, which `uv sync` installs by default.
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
@@ -59,10 +62,33 @@ dev = [
     "nitime",
     "ruff>=0.8.0",
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
+    "scipy-stubs",
     "numpydoc>=1.6",
+    # NetCDF engines for the result round-trip tests (xarray's default writers).
+    "netCDF4",
+    "h5netcdf",
+    "h5py",
 ]
 # CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
 gpu = ["cupy-cuda12x>=13.0"]
+
+[dependency-groups]
+# `uv sync` installs the package in editable mode plus this group. Keep
+# identical to the `dev` extra above.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "syrupy>=4.0",
+    "nitime",
+    "ruff>=0.8.0",
+    "mypy>=1.11",
+    "scipy-stubs",
+    "numpydoc>=1.6",
+    # NetCDF engines for the result round-trip tests (xarray's default writers).
+    "netCDF4",
+    "h5netcdf",
+    "h5py",
+]
 
 [project.urls]
 Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"
@@ -75,7 +101,26 @@ Changelog = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/maste
 
 
 [tool.pytest.ini_options]
-addopts = "-q"
+minversion = "8.0"
+addopts = [
+    "-ra",
+    "-q",
+    "--strict-config",
+    "--strict-markers",
+    "--cov=src/spectral_connectivity",
+    "--cov-report=term-missing",
+]
+xfail_strict = true
+log_level = "INFO"
+# Every warning fails the test run unless the test asserts it (pytest.warns).
+filterwarnings = [
+    "error",
+    # Third-party, not this package: netCDF4's compiled extension triggers
+    # NumPy's benign binary-compatibility check on import, and xarray's netCDF4
+    # backend sets ndarray.shape in place, which NumPy 2.5 deprecates.
+    "ignore:numpy.ndarray size changed:RuntimeWarning",
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
@@ -85,53 +130,77 @@ markers = [
     "gpu: requires a working CUDA device and CuPy installation",
 ]
 
+[tool.coverage.run]
+branch = true
+# by path: with the src layout, the module name resolves ambiguously between the
+# project root and src on sys.path, and coverage then reports the package unmeasured
+source = ["src/spectral_connectivity"]
+omit = ["*/tests/*", "*/_version.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
 # Tool configurations for linting/formatting
 [tool.ruff]
-target-version = "py310"
-line-length = 88
+line-length = 95
 extend-exclude = [
     ".venv",
     "docs",
     "build",
     "dist",
     "*.egg-info",
-    "spectral_connectivity/_version.py",
+    "src/spectral_connectivity/_version.py",
 ]
 
 [tool.ruff.lint]
-# Enable pycodestyle (E, W), Pyflakes (F), isort (I), numpy-specific (NPY),
-# pydocstyle (D), pyupgrade (UP), and more
 select = [
-    "E",     # pycodestyle errors
-    "W",     # pycodestyle warnings
-    "F",     # Pyflakes
-    "I",     # isort
-    "N",     # pep8-naming
-    "UP",    # pyupgrade
-    "B",     # flake8-bugbear
-    "C4",    # flake8-comprehensions
-    "NPY",   # numpy-specific rules
-    "RUF",   # Ruff-specific rules
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "NPY",  # numpy-specific rules
+    "PD",   # pandas-vet
+    "RUF",  # ruff-specific rules
+    "ARG",  # unused arguments
+    "EM",   # exception messages assigned before the raise
+    "EXE",  # shebangs
+    "FURB", # refurb modernizations
+    "G",    # logging format
+    "ICN",  # import conventions
+    "ISC",  # implicit string concatenation
+    "PERF", # performance anti-patterns
+    "PGH",  # pygrep hooks (blanket noqa, type: ignore without code)
+    "PIE",  # misc lints
+    "PT",   # pytest style
+    "PTH",  # pathlib over os.path
+    "RET",  # return statements
+    "SIM",  # simplifications
+    "T20",  # print statements
+    "YTT",  # sys.version misuse
 ]
 ignore = [
-    "E501",  # line too long (handled by the formatter)
-    "B008",  # do not perform function calls in argument defaults
-    "B905",  # zip without explicit strict parameter
-    "N802",  # function name should be lowercase (some API functions use uppercase for clarity, e.g., simulate_MVAR)
-    "N803",  # argument name should be lowercase (conflicts with scientific notation)
-    "N806",  # variable in function should be lowercase (conflicts with scientific notation)
-    "NPY002", # numpy random legacy - requires significant test refactoring, can be done in future PR
-    "RUF002", # docstring contains ambiguous unicode characters (mathematical symbols are intentional)
+    "E501",    # line too long (handled by ruff format)
+    "ISC001",  # conflicts with the formatter
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
-"tests/*.py" = ["D"]      # Don't require docstrings in tests
+"tests/*" = ["ARG"]  # pytest fixtures are used by name, not by value
 # examples/ are Jupytext notebook scripts, not modules: cells legitimately
 # import after markdown/code cells (E402), bare expressions display values in a
-# cell (B018), and narrative comments contain unicode such as non-breaking
-# spaces (RUF003, mirroring the already-ignored RUF002 for docstrings).
-"examples/*.py" = ["E402", "B018", "RUF003"]
+# cell (B018), print results (T201), zip demo arrays (B905), and narrative text
+# contains unicode such as non-breaking spaces (RUF002, RUF003).
+"examples/*" = ["E402", "B018", "T201", "B905", "RUF002", "RUF003"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
@@ -139,24 +208,23 @@ convention = "numpy"
 [tool.ruff.lint.isort]
 known-first-party = ["spectral_connectivity"]
 
+[tool.codespell]
+# Notebook outputs embed base64 images, which read as misspellings.
+skip = "uv.lock,*.ipynb,tests/__snapshots__"
+
 [tool.mypy]
+files = ["src/spectral_connectivity"]
+mypy_path = "src"
 # Target the Python version the quality/CI job runs on (3.12). NumPy's installed
 # stubs use PEP 695 `type` statements, which mypy only parses when the target is
 # >= 3.12; a 3.10 target makes mypy reject the stubs before checking the project.
 # Runtime compatibility with 3.10+ is verified by the test matrix.
 python_version = "3.12"
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unused_configs = true
-strict_optional = true
-disallow_untyped_defs = false  # Will be enabled per-module
-disallow_incomplete_defs = false
-check_untyped_defs = true
-disallow_untyped_decorators = false
-warn_return_any = false
+strict = true
 warn_unreachable = true
-show_error_codes = true
-no_implicit_optional = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+# xarray's IndexVariable constructor is unannotated.
+untyped_calls_exclude = ["xarray"]
 
 # Per-module options
 [[tool.mypy.overrides]]
@@ -164,30 +232,18 @@ module = [
     "nitime.*",
     "cupy.*",
     "cupyx.*",
-    "scipy.*",
     "xarray.*"
 ]
 ignore_missing_imports = true
-
-# Enable stricter type checking for fully-annotated modules
-[[tool.mypy.overrides]]
-module = [
-    "spectral_connectivity.simulate",
-    "spectral_connectivity.utils",
-    "spectral_connectivity.wrapper",
-    "spectral_connectivity.minimum_phase_decomposition",
-    "spectral_connectivity.statistics",
-    "spectral_connectivity._version",
-    "spectral_connectivity.transforms",
-    "spectral_connectivity.connectivity"
-]
-disallow_untyped_defs = true
 
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "spectral_connectivity/_version.py"
+version-file = "src/spectral_connectivity/_version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/examples", "README.md", "LICENSE", "CITATION.cff"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["spectral_connectivity"]
+packages = ["src/spectral_connectivity"]

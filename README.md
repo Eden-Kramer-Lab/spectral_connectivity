@@ -500,13 +500,22 @@ export PATH="$HOME/miniconda/bin:$PATH"
 hash -r
 ```
 
-1. Clone the repository to your local machine (`.../spectral_connectivity`) and install the anaconda environment for the repository. Type into bash:
+1. Clone the repository to your local machine (`.../spectral_connectivity`) and create the development environment. Type into bash:
 
 ```bash
+# uv: creates .venv from the committed uv.lock with the dev tools installed
+uv sync
+uv run pytest                     # any command runs in that environment
+uvx pre-commit install            # optional: run ruff, codespell and mypy on each commit
+
+# Or conda
 conda env create -f environment.yml
 conda activate spectral_connectivity
-pip install -e .
+pip install -e .[dev]
 ```
+
+`uv.lock` pins the development environment; `uv lock` refreshes it after a
+dependency change, and CI checks that it is current.
 
 ## Releases
 

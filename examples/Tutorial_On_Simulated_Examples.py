@@ -25,6 +25,8 @@ import numpy as np
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from spectral_connectivity.transforms import prepare_time_series
 
+rng = np.random.default_rng(0)  # seeded, so the tutorial output is reproducible
+
 # %% [markdown]
 # ### Power Spectrum
 # #### 200 Hz signal
@@ -37,7 +39,7 @@ time_extent = (0, 50)
 n_time_samples = ((time_extent[1] - time_extent[0]) * sampling_frequency) + 1
 time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 signal = np.sin(2 * np.pi * time * frequency_of_interest)
-noise = np.random.normal(0, 4, len(signal))
+noise = rng.normal(0, 4, len(signal))
 
 # Plot
 fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -69,7 +71,7 @@ time_extent = (0, 50)
 n_time_samples = ((time_extent[1] - time_extent[0]) * sampling_frequency) + 1
 time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 signal = np.sin(2 * np.pi * time * frequency_of_interest)
-noise = np.random.normal(0, 4, len(signal))
+noise = rng.normal(0, 4, len(signal))
 
 # Plot
 fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -106,7 +108,7 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
 signal[: n_time_samples // 2, 1] = 0
 signal = signal.sum(axis=1)
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 # Plot
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9))
@@ -166,7 +168,7 @@ mesh = axes[2, 0].pcolormesh(
     shading="auto",
 )
 axes[2, 0].set_ylim((0, 300))
-axes[2, 0].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 0].axvline(time[n_time_samples // 2], color="black")
 axes[2, 0].set_ylabel("Frequency")
 axes[2, 0].set_xlabel("Time")
 
@@ -189,7 +191,7 @@ mesh = axes[2, 1].pcolormesh(
     shading="auto",
 )
 axes[2, 1].set_ylim((0, 300))
-axes[2, 1].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 1].axvline(time[n_time_samples // 2], color="black")
 axes[2, 1].set_ylabel("Frequency")
 axes[2, 1].set_xlabel("Time")
 
@@ -220,7 +222,7 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
 signal[: n_time_samples // 2, 1] = 0
 signal = signal.sum(axis=1)[:, np.newaxis, np.newaxis]
-noise = np.random.normal(0, 2, size=(n_time_samples, n_trials, 1))
+noise = rng.normal(0, 2, size=(n_time_samples, n_trials, 1))
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9))
 axes[0, 0].plot(time, signal.squeeze())
@@ -275,7 +277,7 @@ mesh = axes[2, 0].pcolormesh(
     shading="auto",
 )
 axes[2, 0].set_ylim((0, 300))
-axes[2, 0].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 0].axvline(time[n_time_samples // 2], color="black")
 
 multitaper = Multitaper(
     prepare_time_series(signal + noise),
@@ -296,7 +298,7 @@ mesh = axes[2, 1].pcolormesh(
     shading="auto",
 )
 axes[2, 1].set_ylim((0, 300))
-axes[2, 1].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 1].axvline(time[n_time_samples // 2], color="black")
 
 plt.tight_layout()
 cb = fig.colorbar(
@@ -326,7 +328,7 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 signal = np.sin(2 * np.pi * time[:, np.newaxis] * frequency_of_interest)
 signal[: n_time_samples // 2, 1] = 0
 signal = signal.sum(axis=1)[:, np.newaxis, np.newaxis]
-noise = np.random.normal(0, 2, size=(n_time_samples, n_trials, 1))
+noise = rng.normal(0, 2, size=(n_time_samples, n_trials, 1))
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9))
 axes[0, 0].plot(time, signal.squeeze())
@@ -381,7 +383,7 @@ mesh = axes[2, 0].pcolormesh(
     shading="auto",
 )
 axes[2, 0].set_ylim((0, 300))
-axes[2, 0].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 0].axvline(time[n_time_samples // 2], color="black")
 
 multitaper = Multitaper(
     prepare_time_series(signal + noise),
@@ -402,7 +404,7 @@ mesh = axes[2, 1].pcolormesh(
     shading="auto",
 )
 axes[2, 1].set_ylim((0, 300))
-axes[2, 1].axvline(time[int(np.fix(n_time_samples / 2))], color="black")
+axes[2, 1].axvline(time[n_time_samples // 2], color="black")
 
 plt.tight_layout()
 cb = fig.colorbar(
@@ -434,7 +436,7 @@ signal = np.zeros((n_time_samples, n_signals))
 signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
 phase_offset = np.pi / 2
 signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 plt.figure(figsize=(15, 6))
 plt.subplot(2, 2, 1)
@@ -495,7 +497,7 @@ signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
 phase_offset = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 plt.figure(figsize=(15, 6))
 plt.subplot(2, 2, 1)
@@ -553,10 +555,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -680,10 +682,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -807,10 +809,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -934,10 +936,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -1061,10 +1063,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -1187,10 +1189,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -1316,10 +1318,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -1445,10 +1447,10 @@ time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=
 ]
 signal = np.zeros((n_time_samples, n_trials, n_signals))
 signal[:, :, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
-phase_offset = np.random.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
+phase_offset = rng.uniform(-np.pi, np.pi, size=(n_time_samples, 1))
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
-noise = np.random.normal(0, 1, signal.shape)
+noise = rng.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 9), constrained_layout=True)
 axes[0, 0].set_title("Signal", fontweight="bold")
@@ -1584,8 +1586,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -1695,8 +1697,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -1806,8 +1808,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -1886,8 +1888,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -1992,8 +1994,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -2095,8 +2097,8 @@ signal2 = (
 ) / 10
 signal2 = signal2[:, np.newaxis] * np.ones((len(time), n_trials))
 
-noise1 = np.random.normal(0, 0.2, size=(len(time), n_trials))
-noise2 = np.random.normal(0, 0.1, size=(len(time), n_trials))
+noise1 = rng.normal(0, 0.2, size=(len(time), n_trials))
+noise2 = rng.normal(0, 0.1, size=(len(time), n_trials))
 data1 = signal1 + noise1
 data2 = signal2 + noise2
 
@@ -2188,14 +2190,14 @@ signal[:, :, 0:2] = np.sin(2 * np.pi * time * frequency_of_interest)[
 
 other_signals = (n_signals + 1) // 2
 n_other_signals = n_signals - other_signals
-phase_offset = np.random.uniform(
+phase_offset = rng.uniform(
     -np.pi, np.pi, size=(n_time_samples, n_trials, n_other_signals)
 )
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, other_signals:] = np.sin(
     (2 * np.pi * time[:, np.newaxis, np.newaxis] * frequency_of_interest) + phase_offset
 )
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 
 multitaper = Multitaper(
@@ -2293,14 +2295,14 @@ signal[:, :, 0:2] = np.sin(2 * np.pi * time * frequency_of_interest)[
 
 other_signals = (n_signals + 1) // 2
 n_other_signals = n_signals - other_signals
-phase_offset = np.random.uniform(
+phase_offset = rng.uniform(
     -np.pi, np.pi, size=(n_time_samples, n_trials, n_other_signals)
 )
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, other_signals:] = np.sin(
     (2 * np.pi * time[:, np.newaxis, np.newaxis] * frequency_of_interest) + phase_offset
 )
-noise = np.random.normal(10, 7, signal.shape)
+noise = rng.normal(10, 7, signal.shape)
 
 
 multitaper = Multitaper(
@@ -2402,14 +2404,14 @@ signal[:, :, 0:2] = np.sin(2 * np.pi * time * frequency_of_interest)[
 
 other_signals = (n_signals + 1) // 2
 n_other_signals = n_signals - other_signals
-phase_offset = np.random.uniform(
+phase_offset = rng.uniform(
     -np.pi, np.pi, size=(n_time_samples, n_trials, n_other_signals)
 )
 phase_offset[np.where(time > 1.5), :] = np.pi / 2
 signal[:, :, other_signals:] = np.sin(
     (2 * np.pi * time[:, np.newaxis, np.newaxis] * frequency_of_interest) + phase_offset
 )
-noise = np.random.normal(10, 7, signal.shape)
+noise = rng.normal(10, 7, signal.shape)
 
 
 multitaper = Multitaper(

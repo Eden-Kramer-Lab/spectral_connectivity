@@ -1,7 +1,8 @@
 """Transforms time domain signals to the frequency domain."""
 
+import warnings
 from logging import getLogger
-from typing import Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -10,6 +11,7 @@ from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity.utils import (
     BackendArray,
+    gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
@@ -17,6 +19,9 @@ from spectral_connectivity.utils import (
 )
 
 logger = getLogger(__name__)
+
+# Element type of a dtype-preserving array helper (real or complex input).
+_ScalarT = TypeVar("_ScalarT", bound=np.generic)
 
 # Physical Constants with Scientific Rationale
 #
@@ -44,7 +49,7 @@ def _validate_sampling_frequency(sampling_frequency: float) -> None:
     same guidance as :class:`Multitaper` rather than a bare one-line message.
     """
     if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
-        raise ValueError(
+        msg = (
             f"sampling_frequency must be finite and positive, got "
             f"{sampling_frequency!r}.\n"
             "\n"
@@ -56,6 +61,7 @@ def _validate_sampling_frequency(sampling_frequency: float) -> None:
             "\n"
             "Check your data acquisition settings or metadata."
         )
+        raise ValueError(msg)
 
 
 def _resolve_sample_count(
@@ -73,9 +79,7 @@ def _resolve_sample_count(
     """
     if explicit is not None:
         samples = int(explicit)
-        if duration is not None and int(np.around(duration * sampling_frequency)) != (
-            samples
-        ):
+        if duration is not None and int(np.around(duration * sampling_frequency)) != (samples):
             raise ValueError(mismatch_message)
         return samples
     if duration is not None:
@@ -114,7 +118,7 @@ class MultitaperParameters(TypedDict):
 
 
 def estimate_frequency_resolution(
-    sampling_frequency: float,
+    sampling_frequency: float,  # noqa: ARG001 -- public API; resolution does not use it
     time_window_duration: float,
     time_halfbandwidth_product: float,
 ) -> float:
@@ -396,7 +400,7 @@ def suggest_parameters(
 
         # Check if this is achievable with the signal duration
         if time_window_duration > signal_duration:
-            raise ValueError(
+            msg = (
                 f"Cannot achieve desired frequency resolution of {desired_freq_resolution} Hz "
                 f"with signal duration of {signal_duration}s.\n"
                 "\n"
@@ -408,18 +412,18 @@ def suggest_parameters(
                 f"  - Coarser frequency resolution (at least "
                 f"{TAPER_MULTIPLIER * time_halfbandwidth_product / signal_duration:.2f} Hz)"
             )
+            raise ValueError(msg)
 
-        # If window would give us fewer than 3 time windows, increase NW slightly
-        # to reduce window duration (at the cost of coarser freq resolution)
+        # If the window would give fewer than 3 time windows, shorten it and lower
+        # NW so the target resolution (2 * NW / T) is kept, at the cost of fewer
+        # tapers (noisier estimates). Only the NW >= 1 floor below coarsens it.
         min_n_windows = 3
         max_window_for_min_windows = signal_duration / min_n_windows
         if time_window_duration > max_window_for_min_windows:
             # Adjust NW to give us at least min_n_windows
             time_window_duration = max_window_for_min_windows
             # Recalculate NW to achieve target resolution with this window
-            time_halfbandwidth_product = (
-                desired_freq_resolution * time_window_duration / 2.0
-            )
+            time_halfbandwidth_product = desired_freq_resolution * time_window_duration / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
 
@@ -436,7 +440,8 @@ def suggest_parameters(
 
     else:
         # This should never happen given the logic above, but for type safety
-        raise ValueError("Internal error: unexpected parameter combination")
+        msg = "Internal error: unexpected parameter combination"
+        raise ValueError(msg)
 
     # Calculate derived parameters
     n_tapers = estimate_n_tapers(time_halfbandwidth_product)
@@ -459,47 +464,44 @@ def suggest_parameters(
     }
 
 
-if is_gpu_enabled():
+# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
+# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
+if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
     except ImportError as exc:
-        raise RuntimeError(
-            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
-            "but CuPy is not installed. Please install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'"
-        ) from exc
+        raise RuntimeError(gpu_request_error_message()) from exc
     try:
         # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
         # imports cupy fine but fails here, which must not be reported as
         # "CuPy is not installed".
         from cupyx.scipy.signal import detrend as _backend_detrend
     except ImportError as exc:
-        raise RuntimeError(
+        msg = (
             f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
             f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
             f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
-        ) from exc
+        )
+        raise RuntimeError(msg) from exc
 
     # Log GPU device information
     try:
         device = xp.cuda.Device()
         # Try to get the actual GPU model name first
         try:
-            device_name = xp.cuda.runtime.getDeviceProperties(device.id)[
-                "name"
-            ].decode()
+            device_name = xp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
             device_name = device_name.strip("\x00")
         except Exception:
             # Fallback to compute capability
             compute_cap = device.compute_capability
             device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-        logger.info(f"Using GPU for spectral_connectivity on {device_name}")
+        logger.info("Using GPU for spectral_connectivity on %s", device_name)
     except Exception:
         logger.info("Using GPU for spectral_connectivity...")
 else:
     logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp
+    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.signal import detrend as _backend_detrend
 
@@ -669,7 +671,7 @@ class Multitaper:
     >>> import numpy as np
     >>> from spectral_connectivity.transforms import Multitaper, prepare_time_series
     >>> # EEG recording: 5 seconds at 1000 Hz, 64 channels
-    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_data = np.random.default_rng(0).standard_normal((5000, 64))  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis='signals')
     >>> mt = Multitaper(eeg_3d, sampling_frequency=1000, time_halfbandwidth_product=4)
     >>> print(f"FFT shape: {mt.fft().shape}")
@@ -682,7 +684,8 @@ class Multitaper:
     >>> # Generate test signal: 50Hz + noise
     >>> fs = 1000  # 1 kHz sampling
     >>> t = np.arange(0, 1, 1/fs)
-    >>> signal = np.sin(2*np.pi*50*t) + 0.1*np.random.randn(len(t))
+    >>> rng = np.random.default_rng(0)
+    >>> signal = np.sin(2*np.pi*50*t) + 0.1*rng.standard_normal(len(t))
     >>> # Manually reshape to 3D: (n_time, n_trials, n_signals)
     >>> data = signal[:, np.newaxis, np.newaxis]  # Shape: (1000, 1, 1)
     >>> mt = Multitaper(data, sampling_frequency=fs, time_halfbandwidth_product=4)
@@ -690,7 +693,7 @@ class Multitaper:
     Multiple trials (already 3D):
 
     >>> # Epoched data: 100 trials, 5 channels, 1 second each at 1000 Hz
-    >>> epoched_data = np.random.randn(1000, 100, 5)  # (n_time, n_trials, n_signals)
+    >>> epoched_data = np.random.default_rng(0).standard_normal((1000, 100, 5))  # (n_time, n_trials, n_signals)
     >>> mt = Multitaper(epoched_data, sampling_frequency=1000)
     >>> print(f"Trials: {mt.n_trials}, Signals: {mt.n_signals}")
     Trials: 100, Signals: 5
@@ -736,14 +739,12 @@ class Multitaper:
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Keep transform parameters immutable once construction has completed."""
-        if (
-            getattr(self, "_initialized", False)
-            and name in self._IMMUTABLE_PUBLIC_PARAMETERS
-        ):
-            raise AttributeError(
+        if getattr(self, "_initialized", False) and name in self._IMMUTABLE_PUBLIC_PARAMETERS:
+            msg = (
                 f"Multitaper.{name} is immutable after construction; create a new "
                 "Multitaper instance with the desired parameters."
             )
+            raise AttributeError(msg)
         object.__setattr__(self, name, value)
 
     def __init__(
@@ -776,40 +777,44 @@ class Multitaper:
         # deep inside fft(). bool is an int subclass, so reject it explicitly.
         if fft_workers is not None and (
             isinstance(fft_workers, bool)
-            or not isinstance(fft_workers, (int, np.integer))
+            or not isinstance(fft_workers, (int, np.integer))  # type: ignore[redundant-expr]  # user input
             or fft_workers == 0
         ):
-            raise ValueError(
+            msg = (
                 f"fft_workers must be None or a nonzero integer (the number of "
                 f"parallel FFT threads; -1 uses all cores), got {fft_workers!r}. "
                 f"It is forwarded to scipy.fft.fft(workers=...). Use None (the "
                 f"default) for SciPy's single-threaded FFT."
             )
+            raise ValueError(msg)
         self.fft_workers = fft_workers
         if taper_weighting not in {"uniform", "eigen", "adaptive"}:
-            raise ValueError(
+            msg = (
                 "taper_weighting must be 'uniform', 'eigen', or 'adaptive', got "
                 f"{taper_weighting!r}. Use 'uniform' for the historical equal "
                 "weighting, 'eigen' to weight tapers by their spectral "
                 "concentration, or 'adaptive' for Thomson's iterative weighting."
             )
+            raise ValueError(msg)
         if not is_positive_integer(adaptive_max_iterations):
-            raise ValueError(
+            msg = (
                 "adaptive_max_iterations must be a positive integer, got "
                 f"{adaptive_max_iterations!r}."
             )
+            raise ValueError(msg)
         if not np.isfinite(adaptive_tolerance) or adaptive_tolerance <= 0:
-            raise ValueError(
-                "adaptive_tolerance must be finite and positive, got "
-                f"{adaptive_tolerance!r}."
+            msg = (
+                f"adaptive_tolerance must be finite and positive, got {adaptive_tolerance!r}."
             )
+            raise ValueError(msg)
         if tapers is not None and taper_weighting != "uniform":
-            raise ValueError(
+            msg = (
                 "Eigenvalue/adaptive weighting requires internally generated "
                 "DPSS tapers; custom tapers do not provide concentration ratios. "
                 "Use taper_weighting='uniform' with custom tapers, or omit the "
                 "tapers argument to let Multitaper generate DPSS tapers."
             )
+            raise ValueError(msg)
         self.taper_weighting = taper_weighting
         self.adaptive_max_iterations = int(adaptive_max_iterations)
         self.adaptive_tolerance = float(adaptive_tolerance)
@@ -859,7 +864,7 @@ class Multitaper:
 
         # Validate time_halfbandwidth_product
         if time_halfbandwidth_product < 1:
-            raise ValueError(
+            msg = (
                 f"time_halfbandwidth_product must be at least 1, got {time_halfbandwidth_product}.\n"
                 "\n"
                 "The time-halfbandwidth product controls the spectral concentration and\n"
@@ -874,6 +879,7 @@ class Multitaper:
                 "\n"
                 "A value less than 1 is not physically meaningful."
             )
+            raise ValueError(msg)
 
         # Warn if time_halfbandwidth_product is unusually large
         if time_halfbandwidth_product > 10:
@@ -893,7 +899,7 @@ class Multitaper:
 
         # Validate time_window_duration
         if time_window_duration is not None and time_window_duration <= 0:
-            raise ValueError(
+            msg = (
                 f"time_window_duration must be positive, got {time_window_duration}.\n"
                 "\n"
                 "The time window duration is the length of each analysis window in seconds.\n"
@@ -905,10 +911,11 @@ class Multitaper:
                 "\n"
                 "Use None (default) to analyze the entire time series without windowing."
             )
+            raise ValueError(msg)
 
         # Validate time_window_step
         if time_window_step is not None and time_window_step <= 0:
-            raise ValueError(
+            msg = (
                 f"time_window_step must be positive, got {time_window_step}.\n"
                 "\n"
                 "The time window step is how far to advance the window for each computation (in seconds).\n"
@@ -922,6 +929,7 @@ class Multitaper:
                 "\n"
                 "Use None (default) to match time_window_duration (no overlap)."
             )
+            raise ValueError(msg)
 
         # Warn if time_window_step creates gaps between windows
         if (
@@ -998,13 +1006,22 @@ class Multitaper:
         self._taper_eigenvalues: BackendArray | None = None
         # Reject a fractional n_tapers at construction so the reported
         # n_tapers metadata cannot disagree with the (integer) taper count used.
-        if n_tapers is not None and (
-            not np.isfinite(n_tapers) or int(n_tapers) != n_tapers
-        ):
-            raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
+        if n_tapers is not None and (not np.isfinite(n_tapers) or int(n_tapers) != n_tapers):
+            msg = f"n_tapers must be an integer, got {n_tapers}."
+            raise ValueError(msg)
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        if self._tapers is not None:
+            # Validate custom tapers now; a mismatch would otherwise surface as
+            # an opaque broadcasting error inside fft().
+            window = self.n_time_samples_per_window
+            if self._tapers.ndim != 2 or self._tapers.shape[0] != window:
+                msg = (
+                    f"tapers must have shape ({window}, n_tapers) -- one column per "
+                    f"taper, n_time_samples_per_window rows -- got {self._tapers.shape}."
+                )
+                raise ValueError(msg)
         object.__setattr__(self, "_initialized", True)
 
     @property
@@ -1086,7 +1103,7 @@ class Multitaper:
         --------
         >>> import numpy as np
         >>> from spectral_connectivity.transforms import Multitaper
-        >>> data = np.random.randn(5000, 1, 64)  # 5s, 64 EEG channels
+        >>> data = np.random.default_rng(0).standard_normal((5000, 1, 64))  # 5s, 64 EEG channels
         >>> mt = Multitaper(
         ...     data,
         ...     sampling_frequency=1000,
@@ -1151,7 +1168,7 @@ class Multitaper:
             )
             overlap_desc = f"({overlap_percent:.0f}% overlap)"
 
-        summary = f"""Multitaper Spectral Analysis Configuration
+        return f"""Multitaper Spectral Analysis Configuration
 ===========================================
 
 Data Shape
@@ -1179,8 +1196,6 @@ Nyquist frequency:    {self.nyquist_frequency:.1f} Hz
 Frequency range:      0.0 - {self.nyquist_frequency:.1f} Hz
 FFT samples:          {self.n_fft_samples}
 """
-
-        return summary
 
     @property
     def tapers(self) -> NDArray[np.floating]:
@@ -1247,9 +1262,7 @@ FFT samples:          {self.n_fft_samples}
 
         """
         if self._time_window_step is None:
-            self._time_window_step = (
-                self.n_time_samples_per_step / self.sampling_frequency
-            )
+            self._time_window_step = self.n_time_samples_per_step / self.sampling_frequency
         return self._time_window_step
 
     @property
@@ -1284,10 +1297,7 @@ FFT samples:          {self.n_fft_samples}
             If neither n_time_samples_per_window nor time_window_duration is set.
 
         """
-        if (
-            self._n_time_samples_per_window is None
-            and self._time_window_duration is None
-        ):
+        if self._n_time_samples_per_window is None and self._time_window_duration is None:
             self._n_time_samples_per_window = self._time_series.shape[0]
         elif self._time_window_duration is not None:
             self._n_time_samples_per_window = int(
@@ -1301,7 +1311,7 @@ FFT samples:          {self.n_fft_samples}
         # empty transform.
         n_time_samples = self._time_series.shape[0]
         if self._n_time_samples_per_window < 1:
-            raise ValueError(
+            msg = (
                 f"n_time_samples_per_window resolved to "
                 f"{self._n_time_samples_per_window}, but each window needs at "
                 f"least 1 sample. If you set time_window_duration "
@@ -1310,14 +1320,16 @@ FFT samples:          {self.n_fft_samples}
                 f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
                 f"n_time_samples_per_window."
             )
+            raise ValueError(msg)
         if self._n_time_samples_per_window > n_time_samples:
-            raise ValueError(
+            msg = (
                 f"n_time_samples_per_window ({self._n_time_samples_per_window}) is "
                 f"larger than the signal length ({n_time_samples}); no window fits, "
                 f"which would yield an empty transform. Use a smaller window "
                 f"(time_window_duration <= "
                 f"{n_time_samples / self.sampling_frequency} s)."
             )
+            raise ValueError(msg)
         return self._n_time_samples_per_window
 
     @property
@@ -1335,7 +1347,7 @@ FFT samples:          {self.n_fft_samples}
         elif self._n_fft_samples < self.n_time_samples_per_window:
             # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
             # a too-small n_fft_samples silently discards most of each window.
-            raise ValueError(
+            msg = (
                 f"n_fft_samples ({self._n_fft_samples}) must be >= the number "
                 f"of time samples per window ({self.n_time_samples_per_window}).\n"
                 f"n_fft_samples is the FFT length (used for zero-padding), not "
@@ -1345,6 +1357,7 @@ FFT samples:          {self.n_fft_samples}
                 f"Either omit n_fft_samples (it defaults to a fast length >= the "
                 f"window length) or set it >= {self.n_time_samples_per_window}."
             )
+            raise ValueError(msg)
         return self._n_fft_samples
 
     @property
@@ -1386,7 +1399,7 @@ FFT samples:          {self.n_fft_samples}
         # explicit n_time_samples_per_step=0 (or a step truncating to 0) would
         # divide by zero when building the sliding windows.
         if self._n_samples_per_time_step < 1:
-            raise ValueError(
+            msg = (
                 f"n_time_samples_per_step resolved to "
                 f"{self._n_samples_per_time_step}, but each step must advance at "
                 f"least 1 sample. If you set time_window_step "
@@ -1395,6 +1408,7 @@ FFT samples:          {self.n_fft_samples}
                 f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
                 f"n_time_samples_per_step."
             )
+            raise ValueError(msg)
         return self._n_samples_per_time_step
 
     @property
@@ -1407,15 +1421,14 @@ FFT samples:          {self.n_fft_samples}
             Time values in seconds for center of each time window.
 
         """
-        original_time = (
-            xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
-        )
+        original_time = xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
         # Label each window by its center time, as documented (the mean of the
         # window's sample times equals the center for uniformly spaced samples).
-        window_center_time = _sliding_window(
+        window_center_time: NDArray[np.floating] = _sliding_window(
             original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
         ).mean(axis=-1)
-        return self._start_time + window_center_time
+        center_time: NDArray[np.floating] = self._start_time + window_center_time
+        return center_time
 
     @property
     def n_signals(self) -> int:
@@ -1453,11 +1466,7 @@ FFT samples:          {self.n_fft_samples}
             Frequency resolution in Hz.
 
         """
-        return (
-            TAPER_MULTIPLIER
-            * self.time_halfbandwidth_product
-            / self.time_window_duration
-        )
+        return TAPER_MULTIPLIER * self.time_halfbandwidth_product / self.time_window_duration
 
     @property
     def nyquist_frequency(self) -> float:
@@ -1506,12 +1515,9 @@ FFT samples:          {self.n_fft_samples}
         assert self._taper_eigenvalues is not None
         eigenvalues = self._taper_eigenvalues
         if self.taper_weighting == "eigen":
-            weights = xp.sqrt(eigenvalues)
+            weights: NDArray[np.floating] = xp.sqrt(eigenvalues)
             weights = weights / xp.sqrt(xp.mean(weights**2))
-            return (
-                coefficients
-                * weights[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
-            )
+            return coefficients * weights[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
 
         # Thomson's adaptive weights balance the taper periodogram against the
         # process-noise level, which must be on the *same* power-spectral-density
@@ -1521,9 +1527,7 @@ FFT samples:          {self.n_fft_samples}
         # time-domain variance (signal ** 2). Dividing by ``sampling_frequency``
         # puts the noise term on the PSD scale; without it the noise is inflated
         # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
-        noise_power_spectral_density = (
-            xp.var(time_series, axis=-1) / self.sampling_frequency
-        )
+        noise_power_spectral_density = xp.var(time_series, axis=-1) / self.sampling_frequency
         return _apply_adaptive_taper_weights(
             coefficients,
             eigenvalues,
@@ -1566,7 +1570,9 @@ class ShortTimeFourierTransform(Multitaper):
     start_time : float or ndarray, default=0
         Time of the first sample, in seconds.
     n_fft_samples : int, optional
-        FFT length; defaults to the window length.
+        FFT length. Defaults to ``scipy.fft.next_fast_len`` of the window
+        length, which may zero-pad (e.g. a 257-sample window gives 264 bins);
+        pass the window length explicitly for an unpadded frequency grid.
     n_time_samples_per_window : int, optional
         Window length in samples (alternative to ``time_window_duration``).
     n_time_samples_per_step : int, optional
@@ -1597,18 +1603,19 @@ class ShortTimeFourierTransform(Multitaper):
             ("time_window_step", time_window_step),
         ):
             if value is not None and (not np.isfinite(value) or value <= 0):
-                raise ValueError(f"{name} must be finite and positive.")
+                msg = f"{name} must be finite and positive."
+                raise ValueError(msg)
         for name, value in (
             ("n_time_samples_per_window", n_time_samples_per_window),
             ("n_time_samples_per_step", n_time_samples_per_step),
         ):
             if value is not None and not is_positive_integer(value):
-                raise ValueError(f"{name} must be a positive integer.")
+                msg = f"{name} must be a positive integer."
+                raise ValueError(msg)
         data_shape: tuple[int, ...] = tuple(getattr(time_series, "shape", ()))
         if len(data_shape) != 3:
-            raise ValueError(
-                "time_series must have shape (n_time_samples, n_trials, n_signals)."
-            )
+            msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
+            raise ValueError(msg)
         resolved_window = _resolve_sample_count(
             n_time_samples_per_window,
             time_window_duration,
@@ -1616,25 +1623,24 @@ class ShortTimeFourierTransform(Multitaper):
             "time_window_duration and n_time_samples_per_window resolve to "
             "different Hann window lengths.",
         )
-        window_samples = (
-            int(data_shape[0]) if resolved_window is None else resolved_window
-        )
+        window_samples = int(data_shape[0]) if resolved_window is None else resolved_window
         if window_samples < 2:
-            raise ValueError("A Hann transform window requires at least 2 samples.")
+            msg = "A Hann transform window requires at least 2 samples."
+            raise ValueError(msg)
 
         resolved_step = _resolve_sample_count(
             n_time_samples_per_step,
             time_window_step,
             sampling_frequency,
-            "time_window_step and n_time_samples_per_step resolve to different "
-            "step lengths.",
+            "time_window_step and n_time_samples_per_step resolve to different step lengths.",
         )
         step_samples = window_samples if resolved_step is None else resolved_step
 
         window = scipy_hann(window_samples, sym=False)
         norm = np.linalg.norm(window)
         if norm == 0:
-            raise ValueError("The requested Hann window has zero energy.")
+            msg = "The requested Hann window has zero energy."
+            raise ValueError(msg)
         window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
         super().__init__(
             time_series,
@@ -1699,7 +1705,9 @@ class Welch:
     start_time : float or ndarray, default=0
         Time of the first sample, in seconds.
     n_fft_samples : int, optional
-        FFT length; defaults to the segment length.
+        FFT length. Defaults to ``scipy.fft.next_fast_len`` of the segment
+        length, which may zero-pad (e.g. a 257-sample segment gives 264 bins);
+        pass the segment length explicitly for an unpadded frequency grid.
     fft_workers : int, optional
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
@@ -1723,20 +1731,19 @@ class Welch:
         if segment_duration is not None and (
             not np.isfinite(segment_duration) or segment_duration <= 0
         ):
-            raise ValueError("segment_duration must be finite and positive.")
+            msg = "segment_duration must be finite and positive."
+            raise ValueError(msg)
         if n_time_samples_per_segment is not None and not is_positive_integer(
             n_time_samples_per_segment, minimum=2
         ):
-            raise ValueError(
-                "n_time_samples_per_segment must be an integer of at least 2."
-            )
+            msg = "n_time_samples_per_segment must be an integer of at least 2."
+            raise ValueError(msg)
         n_time_samples = int(getattr(time_series, "shape", (0,))[0])
         segment_samples = _resolve_sample_count(
             n_time_samples_per_segment,
             segment_duration,
             sampling_frequency,
-            "segment_duration and n_time_samples_per_segment resolve to different "
-            "lengths.",
+            "segment_duration and n_time_samples_per_segment resolve to different lengths.",
         )
         if segment_samples is None:
             import warnings
@@ -1762,7 +1769,8 @@ class Welch:
                     stacklevel=2,
                 )
         if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
-            raise ValueError("segment_overlap must satisfy 0 <= overlap < 1.")
+            msg = "segment_overlap must satisfy 0 <= overlap < 1."
+            raise ValueError(msg)
         step_samples = max(1, int(np.around(segment_samples * (1 - segment_overlap))))
         self._stft = ShortTimeFourierTransform(
             time_series,
@@ -1781,25 +1789,51 @@ class Welch:
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
+        """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        Returns
+        -------
+        frequencies : array, shape (n_fft_samples,)
+        """
         return self._stft.frequencies
 
     @property
     def time(self) -> NDArray[np.floating]:
+        """Mean of the segment center times, in seconds.
+
+        Returns
+        -------
+        time : array, shape (1,)
+            Welch averages all segments into a single time bin.
+        """
         return xp.asarray(self._stft.time).mean(keepdims=True)
 
     @property
     def n_trials(self) -> int:
+        """Number of trials in the time series."""
         return self._stft.n_trials
 
     @property
     def n_signals(self) -> int:
+        """Number of signals in the time series."""
         return self._stft.n_signals
 
     @property
     def n_segments(self) -> int:
+        """Number of (overlapping) segments averaged by the estimate."""
         return len(self._stft.time)
 
     def fft(self) -> NDArray[np.complexfloating]:
+        """Compute the Hann-windowed Fourier coefficients of every segment.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape ``(1, n_trials, n_segments, n_fft_samples, n_signals)``.
+            Segments occupy the taper axis, so :class:`Connectivity`'s
+            trial/taper expectation averages over segments (and trials) into a
+            single time bin.
+        """
         coefficients = self._stft.fft()[:, :, 0, :, :]
         return xp.transpose(coefficients, (1, 0, 2, 3))[xp.newaxis, ...]
 
@@ -1901,9 +1935,8 @@ class MorletWavelet:
     ) -> None:
         data = xp.asarray(time_series)
         if data.ndim != 3:
-            raise ValueError(
-                "time_series must have shape (n_time_samples, n_trials, n_signals)."
-            )
+            msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
+            raise ValueError(msg)
         _validate_sampling_frequency(sampling_frequency)
         frequency_values = np.asarray(frequencies, dtype=float)
         if (
@@ -1914,43 +1947,47 @@ class MorletWavelet:
             or not np.all(np.diff(frequency_values) > 0)
             or np.any(frequency_values >= sampling_frequency / 2)
         ):
-            raise ValueError(
+            msg = (
                 "frequencies must be a non-empty, finite, strictly increasing "
                 "positive array below Nyquist."
             )
+            raise ValueError(msg)
         cycle_values = np.asarray(n_cycles, dtype=float)
         if cycle_values.ndim == 0:
             cycle_values = np.full(frequency_values.shape, float(cycle_values))
         if cycle_values.shape != frequency_values.shape or not np.all(
             np.isfinite(cycle_values) & (cycle_values > 0)
         ):
-            raise ValueError(
-                "n_cycles must be a positive scalar or have one value per frequency."
-            )
+            msg = "n_cycles must be a positive scalar or have one value per frequency."
+            raise ValueError(msg)
         if not is_positive_integer(decimation):
-            raise ValueError("decimation must be a positive integer.")
+            msg = "decimation must be a positive integer."
+            raise ValueError(msg)
         if smoothing_time is not None and (
             not np.isfinite(smoothing_time) or smoothing_time <= 0
         ):
-            raise ValueError("smoothing_time must be finite and positive.")
+            msg = "smoothing_time must be finite and positive."
+            raise ValueError(msg)
         if smoothing_step is not None and (
-            smoothing_time is None
-            or not np.isfinite(smoothing_step)
-            or smoothing_step <= 0
+            smoothing_time is None or not np.isfinite(smoothing_step) or smoothing_step <= 0
         ):
-            raise ValueError(
-                "smoothing_step requires smoothing_time and must be finite and positive."
-            )
+            msg = "smoothing_step requires smoothing_time and must be finite and positive."
+            raise ValueError(msg)
         if not is_positive_integer(smoothing_frequency) or smoothing_frequency % 2 == 0:
-            raise ValueError("smoothing_frequency must be a positive odd integer.")
+            msg = "smoothing_frequency must be a positive odd integer."
+            raise ValueError(msg)
         if smoothing_kernel not in {"boxcar", "hann"}:
-            raise ValueError("smoothing_kernel must be 'boxcar' or 'hann'.")
+            msg = "smoothing_kernel must be 'boxcar' or 'hann'."
+            raise ValueError(msg)
         if padding_mode not in {"constant", "reflect", "edge"}:
-            raise ValueError("padding_mode must be 'constant', 'reflect', or 'edge'.")
+            msg = "padding_mode must be 'constant', 'reflect', or 'edge'."
+            raise ValueError(msg)
         if padding_mode == "reflect" and data.shape[0] < 2:
-            raise ValueError("padding_mode='reflect' requires at least 2 time samples.")
+            msg = "padding_mode='reflect' requires at least 2 time samples."
+            raise ValueError(msg)
         if edge_mode not in {"keep", "nan", "trim"}:
-            raise ValueError("edge_mode must be 'keep', 'nan', or 'trim'.")
+            msg = "edge_mode must be 'keep', 'nan', or 'trim'."
+            raise ValueError(msg)
 
         self._time_series = _immutable_array_snapshot(data)
         self.sampling_frequency = float(sampling_frequency)
@@ -1969,10 +2006,7 @@ class MorletWavelet:
         half_widths = np.maximum(
             1,
             np.ceil(
-                5
-                * cycle_values
-                / (2 * np.pi * frequency_values)
-                * self.sampling_frequency
+                5 * cycle_values / (2 * np.pi * frequency_values) * self.sampling_frequency
             ).astype(int),
         )
         self._edge_half_width_samples = _immutable_array_snapshot(half_widths)
@@ -1983,10 +2017,11 @@ class MorletWavelet:
         if edge_mode == "trim":
             keep = np.all(validity, axis=1)
             if not np.any(keep):
-                raise ValueError(
+                msg = (
                     "edge_mode='trim' leaves no samples valid for every requested "
                     "frequency; use fewer cycles, a longer record, or edge_mode='nan'."
                 )
+                raise ValueError(msg)
             sample_indices = sample_indices[keep]
             validity = validity[keep]
         self._sample_indices = _immutable_array_snapshot(sample_indices)
@@ -2002,33 +2037,49 @@ class MorletWavelet:
             step_time = smoothing_time if smoothing_step is None else smoothing_step
             self._smoothing_step_samples = int(np.around(step_time * output_rate))
             if self._smoothing_samples < 1 or self._smoothing_step_samples < 1:
-                raise ValueError(
-                    "smoothing_time/smoothing_step resolve to less than one "
-                    "decimated sample."
+                msg = (
+                    "smoothing_time/smoothing_step resolve to less than one decimated sample."
                 )
+                raise ValueError(msg)
             if self._smoothing_samples > n_decimated:
-                raise ValueError(
-                    "smoothing_time is longer than the decimated wavelet record."
-                )
+                msg = "smoothing_time is longer than the decimated wavelet record."
+                raise ValueError(msg)
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
+        """Wavelet center frequencies in Hz.
+
+        Returns
+        -------
+        frequencies : array, shape (n_frequencies,)
+        """
         return _readonly_array_copy(self._frequencies)
 
     @property
     def n_cycles(self) -> NDArray[np.floating]:
+        """Number of wavelet cycles at each frequency, shape (n_frequencies,)."""
         return _readonly_array_copy(self._n_cycles)
 
     @property
     def n_trials(self) -> int:
+        """Number of trials in the time series."""
         return int(self._time_series.shape[1])
 
     @property
     def n_signals(self) -> int:
+        """Number of signals in the time series."""
         return int(self._time_series.shape[2])
 
     @property
     def time(self) -> NDArray[np.floating]:
+        """Center time of each output time bin, in seconds.
+
+        Returns
+        -------
+        time : array, shape (n_time,)
+            Decimated sample times, averaged over each smoothing window when
+            time smoothing is enabled.
+        """
         sample_times = self.start_time + self._sample_indices / self.sampling_frequency
         if self._smoothing_samples == 1 and self._smoothing_step_samples == 1:
             return sample_times
@@ -2042,13 +2093,9 @@ class MorletWavelet:
     @property
     def edge_half_width(self) -> NDArray[np.floating]:
         """Wavelet half-support at each frequency, in seconds."""
-        return _readonly_array_copy(
-            self._edge_half_width_samples / self.sampling_frequency
-        )
+        return _readonly_array_copy(self._edge_half_width_samples / self.sampling_frequency)
 
-    def _smooth_frequency_axis(
-        self, array: BackendArray, frequency_axis: int
-    ) -> BackendArray:
+    def _smooth_frequency_axis(self, array: BackendArray, frequency_axis: int) -> BackendArray:
         """Reflect-pad and window ``frequency_axis`` for adjacent-bin smoothing.
 
         Appends the smoothing-frequency window as a new trailing axis (or a
@@ -2060,7 +2107,9 @@ class MorletWavelet:
         frequency_half_width = self.smoothing_frequency // 2
         if not frequency_half_width:
             return array[..., xp.newaxis]
-        frequency_mode = "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        frequency_mode: Literal["reflect", "edge"] = (
+            "reflect" if array.shape[frequency_axis] > 1 else "edge"
+        )
         pad_width = [(0, 0)] * array.ndim
         pad_width[frequency_axis] = (frequency_half_width, frequency_half_width)
         padded = xp.pad(array, tuple(pad_width), mode=frequency_mode)
@@ -2101,18 +2150,28 @@ class MorletWavelet:
 
     def _smoothing_kernel_values(self) -> BackendArray:
         """Time-by-frequency smoothing weights, shape (n_time_window, n_freq_window)."""
-        time_weights = self._kernel_values(
-            self._smoothing_samples, self.smoothing_kernel
-        )
+        time_weights = self._kernel_values(self._smoothing_samples, self.smoothing_kernel)
         frequency_weights = self._kernel_values(
             self.smoothing_frequency, self.smoothing_kernel
         )
         return time_weights[:, xp.newaxis] * frequency_weights[xp.newaxis, :]
 
     @property
-    def observation_weights(self) -> NDArray[np.floating]:
-        """Weights consumed by :class:`Connectivity` for local expectations."""
-        kernel = self._smoothing_kernel_values().reshape(1, 1, -1, 1, 1)
+    def observation_weights(self) -> NDArray[np.floating] | None:
+        """Weights consumed by :class:`Connectivity` for local expectations.
+
+        Returns
+        -------
+        observation_weights : array or None
+            Shape ``(n_time, n_trials, n_smoothing_time * n_smoothing_frequency,
+            n_frequencies, 1)``. ``None`` when every observation has equal weight
+            (a uniform smoothing kernel without ``edge_mode="nan"`` masking), so
+            :class:`Connectivity` uses its plain, unweighted expectation.
+        """
+        kernel_values = self._smoothing_kernel_values()
+        if self.edge_mode != "nan" and bool(xp.all(kernel_values == kernel_values[0, 0])):
+            return None
+        kernel = kernel_values.reshape(1, 1, -1, 1, 1)
         shape = (
             len(self.time),
             self.n_trials,
@@ -2122,12 +2181,22 @@ class MorletWavelet:
         )
         weights = xp.broadcast_to(kernel, shape).copy()
         if self.edge_mode == "nan":
-            weights *= self._windowed_validity()[
-                :, xp.newaxis, xp.newaxis, :, xp.newaxis
-            ]
+            weights *= self._windowed_validity()[:, xp.newaxis, xp.newaxis, :, xp.newaxis]
         return _readonly_array_copy(weights)
 
     def fft(self) -> NDArray[np.complexfloating]:
+        """Compute one-sided Morlet coefficients grouped by smoothing neighborhood.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape ``(n_time, n_trials, n_smoothing_time * n_smoothing_frequency,
+            n_frequencies, n_signals)``. The neighboring time samples and
+            frequencies of each smoothing window occupy the taper axis, so
+            :class:`Connectivity`'s trial/taper expectation (weighted by
+            :attr:`observation_weights`) forms the local smoothed estimate.
+            ``|coefficient|**2`` is a one-sided power spectral density.
+        """
         # Pad once to the widest wavelet and transform the data once; each
         # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
         # Padding wider than a given wavelet needs does not change its 'valid'
@@ -2158,15 +2227,11 @@ class MorletWavelet:
         ):
             sigma = cycles / (2 * xp.pi * frequency)
             half_width = int(half_width)
-            wavelet_time = (
-                xp.arange(-half_width, half_width + 1) / self.sampling_frequency
-            )
+            wavelet_time = xp.arange(-half_width, half_width + 1) / self.sampling_frequency
             oscillation = xp.exp(2j * xp.pi * frequency * wavelet_time)
             gaussian = xp.exp(-(wavelet_time**2) / (2 * sigma**2))
             if self.zero_mean:
-                oscillation = oscillation - xp.exp(
-                    -0.5 * (2 * xp.pi * frequency * sigma) ** 2
-                )
+                oscillation = oscillation - xp.exp(-0.5 * (2 * xp.pi * frequency * sigma) ** 2)
             wavelet = oscillation * gaussian
             wavelet = wavelet / xp.sqrt(xp.sum(xp.abs(wavelet) ** 2))
             kernel = xp.conjugate(wavelet[::-1])
@@ -2254,7 +2319,7 @@ def prepare_time_series(
 
     >>> import numpy as np
     >>> # Load continuous EEG: 5 seconds at 1000 Hz, 64 channels
-    >>> eeg_data = np.random.randn(5000, 64)  # Shape: (n_time, n_channels)
+    >>> eeg_data = np.random.default_rng(0).standard_normal((5000, 64))  # Shape: (n_time, n_channels)
     >>> eeg_3d = prepare_time_series(eeg_data, axis="signals")
     >>> eeg_3d.shape
     (5000, 1, 64)
@@ -2262,7 +2327,7 @@ def prepare_time_series(
     Multiple trials of a single electrode:
 
     >>> # 20 trials of one LFP channel, 2 seconds each at 1000 Hz
-    >>> lfp_trials = np.random.randn(2000, 20)  # Shape: (n_time, n_trials)
+    >>> lfp_trials = np.random.default_rng(0).standard_normal((2000, 20))  # Shape: (n_time, n_trials)
     >>> lfp_3d = prepare_time_series(lfp_trials, axis="trials")
     >>> lfp_3d.shape
     (2000, 20, 1)
@@ -2270,7 +2335,7 @@ def prepare_time_series(
     Single time series (e.g., spike times converted to continuous):
 
     >>> # One neuron's firing rate over time
-    >>> firing_rate = np.random.randn(1000)
+    >>> firing_rate = np.random.default_rng(0).standard_normal(1000)
     >>> firing_rate_3d = prepare_time_series(firing_rate)
     >>> firing_rate_3d.shape
     (1000, 1, 1)
@@ -2278,7 +2343,7 @@ def prepare_time_series(
     Already properly formatted (pass-through):
 
     >>> # Epoched data from MNE or similar: 10 trials, 5 channels, 100 timepoints
-    >>> epoched_data = np.random.randn(100, 10, 5)
+    >>> epoched_data = np.random.default_rng(0).standard_normal((100, 10, 5))
     >>> result = prepare_time_series(epoched_data)
     >>> result.shape
     (100, 10, 5)
@@ -2287,8 +2352,8 @@ def prepare_time_series(
     -----
     **Common mistake:** Using 2D data without specifying the axis parameter.
     A 2D array (100, 5) could mean either:
-    - 100 time points × 5 signals (1 trial) → use axis="signals"
-    - 100 time points × 5 trials (1 signal) → use axis="trials"
+    - 100 time points x 5 signals (1 trial) → use axis="signals"
+    - 100 time points x 5 trials (1 signal) → use axis="trials"
 
     You must explicitly specify which interpretation is correct.
 
@@ -2303,10 +2368,10 @@ def prepare_time_series(
         # Single time series: (n_time,) → (n_time, 1, 1)
         return time_series_array[:, xp.newaxis, xp.newaxis]
 
-    elif ndim == 2:
+    if ndim == 2:
         # Ambiguous case - require explicit axis specification
         if axis is None:
-            raise ValueError(
+            msg = (
                 "For 2D input, you must specify the 'axis' parameter.\n"
                 f"Input shape: {time_series_array.shape}\n"
                 "\n"
@@ -2320,27 +2385,25 @@ def prepare_time_series(
                 "  >>> # 5 trials, 1 channel:\n"
                 "  >>> data_3d = prepare_time_series(data, axis='trials')"
             )
+            raise ValueError(msg)
 
         if axis == "signals":
             # (n_time, n_signals) → (n_time, 1, n_signals)
             return time_series_array[:, xp.newaxis, :]
-        elif axis == "trials":
+        if axis == "trials":
             # (n_time, n_trials) → (n_time, n_trials, 1)
             return time_series_array[:, :, xp.newaxis]
-        else:
-            raise ValueError(
-                f"axis must be either 'signals' or 'trials', got: {axis!r}"
-            )
+        msg = f"axis must be either 'signals' or 'trials', got: {axis!r}"
+        raise ValueError(msg)
 
-    elif ndim == 3:
+    if ndim == 3:
         # Already in correct format
         return time_series_array
 
-    else:
-        raise ValueError(
-            f"Expected 1D, 2D, or 3D array, got {ndim}D array with shape "
-            f"{time_series_array.shape}"
-        )
+    msg = (
+        f"Expected 1D, 2D, or 3D array, got {ndim}D array with shape {time_series_array.shape}"
+    )
+    raise ValueError(msg)
 
 
 def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -2348,19 +2411,18 @@ def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
     n_axes = len(time_series.shape)
     if n_axes == 1:  # add trials and signals axes
         return time_series[:, xp.newaxis, xp.newaxis]
-    elif n_axes == 2:  # add trials axis
+    if n_axes == 2:  # add trials axis
         return time_series[:, xp.newaxis, ...]
-    else:
-        return time_series
+    return time_series
 
 
 def _sliding_window(
-    data: NDArray[np.floating],
+    data: NDArray[_ScalarT],
     window_size: int,
     step_size: int = 1,
     axis: int = -1,
     is_copy: bool = True,
-) -> NDArray[np.floating]:
+) -> NDArray[_ScalarT]:
     """Calculate a sliding window over a signal.
 
     Parameters
@@ -2405,13 +2467,13 @@ def _sliding_window(
     # out-of-range axis onto a real one (e.g. axis=2 -> 0 on a 2-D array),
     # windowing the wrong dimension silently instead of raising.
     if not -data.ndim <= axis < data.ndim:
-        raise ValueError(
-            f"axis {axis} is out of bounds for an array of rank {data.ndim}."
-        )
+        msg = f"axis {axis} is out of bounds for an array of rank {data.ndim}."
+        raise ValueError(msg)
     # A non-positive step would pass a negative slice step below (reversing the
     # windows) or an empty step, neither of which is a forward slide.
     if step_size < 1:
-        raise ValueError(f"step_size must be a positive integer, got {step_size}.")
+        msg = f"step_size must be a positive integer, got {step_size}."
+        raise ValueError(msg)
     # ``sliding_window_view`` appends the length-``window_size`` window axis at
     # the end and validates bounds/shape, which NumPy recommends over the
     # lower-level ``as_strided`` used previously. It only produces unit-step
@@ -2459,18 +2521,18 @@ def _multitaper_fft(
         shape (n_windows, n_trials, n_tapers n_fft_samples, n_signals)
 
     """
-    projected_time_series = (
+    projected_time_series: NDArray[np.floating] = (
         time_series[..., xp.newaxis] * tapers[xp.newaxis, xp.newaxis, ...]
     )
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
-    fft_kwargs = {}
+    fft_kwargs: dict[str, Any] = {}
     if workers is not None and not is_gpu_enabled():
         fft_kwargs["workers"] = workers
-    return (
-        fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
-        / sampling_frequency
+    coefficients: NDArray[np.complexfloating] = fft(
+        projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs
     )
+    return coefficients / sampling_frequency
 
 
 def _apply_adaptive_taper_weights(
@@ -2534,7 +2596,11 @@ def _apply_adaptive_taper_weights(
             0.0,
         )
         scale = xp.maximum(xp.abs(spectrum), spectrum_floor)
-        if bool(xp.all(xp.abs(updated - spectrum) <= tolerance * scale)):
+        # A window/trial containing NaN has a NaN spectrum or PSD floor, so its
+        # scale is NaN and it can never meet the tolerance; don't let it block
+        # convergence of the finite bins.
+        settled = (xp.abs(updated - spectrum) <= tolerance * scale) | ~xp.isfinite(scale)
+        if bool(xp.all(settled)):
             spectrum = updated
             break
         spectrum = updated
@@ -2601,16 +2667,18 @@ def dpss_windows(
     # Reject a fractional n_tapers before coercion: silently truncating (e.g.
     # 2.9 -> 2) would disagree with the reported Multitaper.n_tapers metadata.
     if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers:
-        raise ValueError(f"n_tapers must be an integer, got {n_tapers}.")
+        msg = f"n_tapers must be an integer, got {n_tapers}."
+        raise ValueError(msg)
     n_tapers = int(n_tapers)
     if n_time_samples_per_window < 2:
-        raise ValueError(
+        msg = (
             f"n_time_samples_per_window must be >= 2 for a multitaper "
             f"decomposition, got {n_time_samples_per_window}. A single-sample "
             f"window carries no spectral information."
         )
+        raise ValueError(msg)
     if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
-        raise ValueError(
+        msg = (
             f"time_halfbandwidth_product (NW={time_halfbandwidth_product}) must "
             f"satisfy 0 < NW < n_time_samples_per_window / 2 "
             f"(= {n_time_samples_per_window / 2}). Otherwise the concentration "
@@ -2618,11 +2686,13 @@ def dpss_windows(
             f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
             f"longer window or a smaller time_halfbandwidth_product."
         )
+        raise ValueError(msg)
     if not 1 <= n_tapers <= n_time_samples_per_window:
-        raise ValueError(
+        msg = (
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
             f"(= {n_time_samples_per_window}), got {n_tapers}."
         )
+        raise ValueError(msg)
     if n_time_samples_per_window == 2 and n_tapers == 2:
         # scipy.signal.windows.dpss cannot disambiguate the sign of the second
         # (antisymmetric) taper for a two-sample window: its heuristic keeps the
@@ -2632,10 +2702,11 @@ def dpss_windows(
         # bare IndexError (both 1.10.x and current releases). A two-sample window
         # cannot support a second taper usefully anyway, so reject the pair with
         # an actionable message rather than surface SciPy's internal error.
-        raise ValueError(
+        msg = (
             "A two-sample window (n_time_samples_per_window=2) supports only a "
             "single DPSS taper; request n_tapers=1 or use a longer window."
         )
+        raise ValueError(msg)
 
     tapers, eigenvalues = scipy_dpss(
         n_time_samples_per_window,
@@ -2648,11 +2719,7 @@ def dpss_windows(
     tapers = xp.asarray(tapers)
     eigenvalues = xp.asarray(eigenvalues)
 
-    return (
-        _get_low_bias_tapers(tapers, eigenvalues)
-        if is_low_bias
-        else (tapers, eigenvalues)
-    )
+    return _get_low_bias_tapers(tapers, eigenvalues) if is_low_bias else (tapers, eigenvalues)
 
 
 def _get_low_bias_tapers(
@@ -2660,7 +2727,13 @@ def _get_low_bias_tapers(
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     is_low_bias = eigenvalues > MIN_EIGENVALUE_THRESHOLD
     if not xp.any(is_low_bias):
-        logger.warning("Could not properly use low_bias, keeping lowest-bias taper")
+        warnings.warn(
+            f"No taper has a spectral concentration above {MIN_EIGENVALUE_THRESHOLD} "
+            "(time_halfbandwidth_product is too small for low-bias tapers); keeping "
+            "only the lowest-bias taper, whose spectral leakage is high.",
+            UserWarning,
+            stacklevel=3,
+        )
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
@@ -2717,7 +2790,7 @@ def detrend(
     True
     """
     if type not in ["linear", "l", "constant", "c"]:
-        raise ValueError(
+        msg = (
             f"Invalid trend type '{type}' is not supported.\n"
             f"The detrend function only supports linear and constant detrending.\n"
             f"Valid options are:\n"
@@ -2725,6 +2798,7 @@ def detrend(
             f"  - 'constant' or 'c': Remove mean (DC offset)\n"
             f"Example: detrend(data, type='linear')"
         )
+        raise ValueError(msg)
     # Normalize the short aliases so the backend (which documents only the long
     # forms) is never handed 'l'/'c'.
     type = "linear" if type in ["linear", "l"] else "constant"
@@ -2742,21 +2816,26 @@ def detrend(
         # negative indices (they reached the backend as a cryptic error).
         bp_values = xp.atleast_1d(xp.asarray(bp))
 
-        def _to_list(a: NDArray) -> list:
+        def _to_list(a: NDArray[Any]) -> list[Any]:
             # Works for both numpy and cupy arrays.
-            return to_numpy(a).tolist()
+            return list(to_numpy(a).tolist())
 
         out_of_range = bp_values[(bp_values < 0) | (bp_values >= N)]
         if out_of_range.size:
-            raise ValueError(
+            msg = (
                 f"Breakpoint value(s) {_to_list(out_of_range)} are outside the "
                 f"valid range [0, {N}).\n"
                 f"Data has {N} samples along axis {axis}; breakpoints are indices "
                 f"into that axis and must satisfy 0 <= breakpoint < {N}.\n"
                 f"Check your breakpoints: {_to_list(bp_values)}"
             )
+            raise ValueError(msg)
     # Delegate the least-squares/mean removal to SciPy (CPU) or CuPy (GPU),
     # which implement the same computation. Their detrend signatures match.
+    # ``type`` was validated above; expand the one-letter aliases.
+    trend_type: Literal["linear", "constant"] = (
+        "linear" if type in ("linear", "l") else "constant"
+    )
     return _backend_detrend(
-        data, axis=axis, type=type, bp=bp, overwrite_data=overwrite_data
+        data, axis=axis, type=trend_type, bp=bp, overwrite_data=overwrite_data
     )

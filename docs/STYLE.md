@@ -78,7 +78,7 @@ pydocstyle --convention=numpy spectral_connectivity
 numpydoc validate spectral_connectivity.connectivity.Connectivity
 
 # Type checking
-mypy spectral_connectivity/{connectivity,transforms,simulate,wrapper}.py
+mypy src/spectral_connectivity/{connectivity,transforms,simulate,wrapper}.py
 ```
 
 ## Common Patterns

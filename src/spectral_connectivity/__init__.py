@@ -4,7 +4,6 @@ This package provides tools for computing frequency-domain functional and
 directed connectivity measures from time series data using multitaper methods.
 """
 
-# flake8: noqa
 from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
@@ -48,25 +47,25 @@ except ImportError:
 
 # Define the public API of the package
 __all__ = [
-    "Connectivity",
     "DEFAULT_METHODS",
+    "Connectivity",
     "JackknifeResult",
     "MeasureInfo",
     "MorletWavelet",
-    "MultivariateConnectivityResult",
     "Multitaper",
     "MultitaperParameters",
+    "MultivariateConnectivityResult",
     "ShortTimeFourierTransform",
     "Welch",
+    "estimate_frequency_resolution",
+    "estimate_n_tapers",
     "fourier_connectivity",
     "frequency_band_reduce",
+    "get_compute_backend",
     "jackknife_confidence_interval",
     "list_measures",
     "minimum_phase_reconstruction_error",
     "multitaper_connectivity",
     "prepare_time_series",
-    "estimate_frequency_resolution",
-    "estimate_n_tapers",
     "suggest_parameters",
-    "get_compute_backend",
 ]

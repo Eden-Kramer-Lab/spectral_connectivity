@@ -4,7 +4,6 @@ import warnings
 
 import numpy as np
 import pytest
-from pytest import mark
 
 from spectral_connectivity.statistics import (
     Benjamini_Hochberg_procedure,
@@ -23,9 +22,7 @@ from spectral_connectivity.statistics import (
 )
 
 
-@pytest.mark.parametrize(
-    "correction", [Benjamini_Hochberg_procedure, Bonferroni_correction]
-)
+@pytest.mark.parametrize("correction", [Benjamini_Hochberg_procedure, Bonferroni_correction])
 @pytest.mark.parametrize("bad_alpha", [0, 1, -0.1, np.nan, np.inf, True, "0.05"])
 def test_multiple_comparison_corrections_validate_alpha(correction, bad_alpha):
     with pytest.raises(ValueError, match="alpha must be a finite number"):
@@ -65,20 +62,38 @@ def test_get_normal_distribution_p_values():
     assert np.allclose(get_normal_distribution_p_values(zscore), 0.025)
 
 
-def test_fisher_z_transform():
-    coherency = 0.5 * np.exp(1j * np.pi / 2) * np.ones((2, 2))
-    n_obs1, n_obs2 = 6, 6
-    expected_difference_z = np.zeros((2, 2))
-    assert np.allclose(
-        coherence_fisher_z_transform(
-            coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2
-        ),
-        expected_difference_z,
+def test_fisher_z_transform_two_sample_matches_analytic():
+    """Two-sample statistic for unequal coherences and unequal sample sizes.
+
+    z = ((atanh|C1| - b1) - (atanh|C2| - b2)) / sqrt(b1 + b2), with the
+    documented bias b = 1 / (2 * n_obs - 2) (Bokil et al. 2007).
+    """
+    coherency1 = np.array([0.6 * np.exp(0.3j), 0.2 * np.exp(-2.0j)])
+    coherency2 = np.array([0.3 * np.exp(-1.0j), 0.7 * np.exp(1.5j)])
+    n_obs1, n_obs2 = 20, 50
+    bias1 = 1 / (2 * n_obs1 - 2)
+    bias2 = 1 / (2 * n_obs2 - 2)
+    expected = (
+        (np.arctanh(np.abs(coherency1)) - bias1) - (np.arctanh(np.abs(coherency2)) - bias2)
+    ) / np.sqrt(bias1 + bias2)
+
+    z = coherence_fisher_z_transform(coherency1, n_obs1, coherency2=coherency2, n_obs2=n_obs2)
+    np.testing.assert_allclose(z, expected, rtol=1e-12)
+    # Swapping the samples negates the statistic.
+    swapped = coherence_fisher_z_transform(
+        coherency2, n_obs2, coherency2=coherency1, n_obs2=n_obs1
+    )
+    np.testing.assert_allclose(swapped, -expected, rtol=1e-12)
+    # Identical samples give zero difference.
+    np.testing.assert_allclose(
+        coherence_fisher_z_transform(coherency1, n_obs1, coherency2=coherency1, n_obs2=n_obs1),
+        0.0,
+        atol=1e-12,
     )
 
 
-@mark.parametrize(
-    "p_values, expected_is_significant",
+@pytest.mark.parametrize(
+    ("p_values", "expected_is_significant"),
     [
         (np.ones((10, 2)), np.zeros((10, 2), dtype=bool)),
         (np.zeros((10, 2)), np.ones((10, 2), dtype=bool)),
@@ -88,9 +103,7 @@ def test_fisher_z_transform():
 )
 def test_Benjamini_Hochberg_procedure(p_values, expected_is_significant):
     alpha = 0.05
-    assert np.allclose(
-        Benjamini_Hochberg_procedure(p_values, alpha), expected_is_significant
-    )
+    assert np.allclose(Benjamini_Hochberg_procedure(p_values, alpha), expected_is_significant)
 
 
 def test_Benjamini_Hochberg_excludes_nan_from_family():
@@ -141,12 +154,23 @@ def test_Benjamini_Hochberg_warns_when_whole_family_undefined():
     assert empty.shape == (0,)
 
 
-def test_Benjamini_Hochberg_out_of_range_error_names_values():
-    """The out-of-range error reports how many values and their min/max."""
-    with pytest.raises(ValueError) as excinfo:
-        Benjamini_Hochberg_procedure(np.array([0.1, 1.5, -0.2, 0.3]), alpha=0.05)
+@pytest.mark.parametrize(
+    ("p_values", "n_outside"),
+    [([0.1, 1.5, -0.2, 0.3], 2), ([0.1, 1.5, 0.2], 1)],
+    ids=["above_and_below", "above_only"],
+)
+def test_Benjamini_Hochberg_out_of_range_error_names_values(p_values, n_outside):
+    """A finite p-value outside [0, 1] raises, named by this function's param.
+
+    The delegated SciPy error refers to its own parameter ``ps``; the message is
+    restated in terms of ``p_values``, reports how many values are out of range,
+    and keeps a domain hint so a caller who passed, e.g., coherence magnitudes is
+    pointed at the real fix.
+    """
+    with pytest.raises(ValueError, match=r"p_values must all be in \[0, 1\]") as excinfo:
+        Benjamini_Hochberg_procedure(np.array(p_values), alpha=0.05)
     message = str(excinfo.value)
-    assert "2 value(s) outside" in message
+    assert f"{n_outside} value(s) outside" in message
     assert "coherence_significance_pvalue" in message  # keeps the domain hint
 
 
@@ -164,19 +188,8 @@ def test_Benjamini_Hochberg_missing_scipy_raises_clear_error(monkeypatch):
         Benjamini_Hochberg_procedure(np.array([0.01, 0.2, 0.5]), alpha=0.05)
 
 
-def test_Benjamini_Hochberg_rejects_out_of_range_pvalues():
-    """A finite p-value outside [0, 1] must raise, named by this function's param.
-
-    The delegated SciPy error refers to its own parameter ``ps``; the message is
-    restated in terms of ``p_values`` with a domain hint so a caller who passed,
-    e.g., coherence magnitudes is pointed at the real fix.
-    """
-    with pytest.raises(ValueError, match="p_values must all be in"):
-        Benjamini_Hochberg_procedure(np.array([0.1, 1.5, 0.2]), alpha=0.05)
-
-
-@mark.parametrize(
-    "p_values, expected_is_significant",
+@pytest.mark.parametrize(
+    ("p_values", "expected_is_significant"),
     [
         (np.ones((10, 2)), np.zeros((10, 2), dtype=bool)),
         (np.zeros((10, 2)), np.ones((10, 2), dtype=bool)),
@@ -228,19 +241,13 @@ def test_coherence_significance_pvalue_is_well_calibrated():
     n_rep = 200_000
     for n_obs in (5, 20, 50):
         # Two independent complex-Gaussian signals -> true coherence is zero.
-        x = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal(
-            (n_rep, n_obs)
-        )
-        y = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal(
-            (n_rep, n_obs)
-        )
+        x = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal((n_rep, n_obs))
+        y = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal((n_rep, n_obs))
         cross = (x * np.conj(y)).mean(axis=1)
         coherency = cross / np.sqrt(
             (np.abs(x) ** 2).mean(axis=1) * (np.abs(y) ** 2).mean(axis=1)
         )
-        rejection_rate = np.mean(
-            coherence_significance_pvalue(coherency, n_obs) <= alpha
-        )
+        rejection_rate = np.mean(coherence_significance_pvalue(coherency, n_obs) <= alpha)
         assert np.isclose(rejection_rate, alpha, atol=0.01)
 
 
@@ -345,29 +352,55 @@ def test_power_fisher_z_transform_one_sample_is_finite():
 
 
 def test_power_fisher_z_transform_one_sample_matches_analytic():
-    """One-sample statistic is (log(spectrum1) - bias1) / sqrt(variance1)."""
-    spectrum1 = np.array([0.5, 2.0])
+    """One-sample statistic is (log(spectrum1) - bias1 - log(baseline)) / sqrt(var1).
+
+    bias = digamma(n) - log(n) and variance = trigamma(n) (log of a
+    chi2_{2n} / 2n variable). A baseline other than 1 is used so that
+    ``log(baseline)`` is not identically zero.
+    """
+    from scipy.special import polygamma, psi
+
+    spectrum1 = np.array([0.5, 2.0, 6.0])
+    baseline = 2.5
     n_obs = 30
-    expected = (np.log(spectrum1) - power_bias(n_obs)) / np.sqrt(power_variance(n_obs))
-    result = power_fisher_z_transform(spectrum1, n_obs1=n_obs, spectrum2=1.0)
-    assert np.allclose(result, expected)
+    bias = psi(n_obs) - np.log(n_obs)
+    variance = polygamma(1, n_obs)
+    expected = (np.log(spectrum1) - bias - np.log(baseline)) / np.sqrt(variance)
+    result = power_fisher_z_transform(spectrum1, n_obs1=n_obs, spectrum2=baseline)
+    np.testing.assert_allclose(result, expected, rtol=1e-12)
     # Power above the baseline gives a positive z-score, below gives negative.
-    assert result[1] > 0 > result[0]
+    assert result[2] > 0 > result[1]
+
+
+def test_power_fisher_z_transform_two_sample_matches_analytic():
+    """Two-sample statistic subtracts both biases and pools both variances.
+
+    z = ((log S1 - b1) - (log S2 - b2)) / sqrt(v1 + v2) with
+    b = digamma(n) - log(n) and v = trigamma(n) for each sample.
+    """
+    from scipy.special import polygamma, psi
+
+    spectrum1 = np.array([0.5, 2.0, 6.0])
+    spectrum2 = np.array([1.5, 1.0, 3.0])
+    n_obs1, n_obs2 = 30, 8
+    bias1, bias2 = psi(n_obs1) - np.log(n_obs1), psi(n_obs2) - np.log(n_obs2)
+    variance1, variance2 = polygamma(1, n_obs1), polygamma(1, n_obs2)
+    expected = ((np.log(spectrum1) - bias1) - (np.log(spectrum2) - bias2)) / np.sqrt(
+        variance1 + variance2
+    )
+    result = power_fisher_z_transform(spectrum1, n_obs1, spectrum2, n_obs2)
+    np.testing.assert_allclose(result, expected, rtol=1e-12)
 
 
 def test_power_fisher_z_transform_rejects_nonpositive_power():
     """Non-positive power would give silent -inf/nan; must raise instead."""
-    with pytest.raises(
-        ValueError, match="spectrum1 must be finite and strictly positive"
-    ):
+    with pytest.raises(ValueError, match="spectrum1 must be finite and strictly positive"):
         power_fisher_z_transform(np.array([1.0, 0.0]), n_obs1=30, spectrum2=1.0)
-    with pytest.raises(
-        ValueError, match="spectrum2 must be finite and strictly positive"
-    ):
+    with pytest.raises(ValueError, match="spectrum2 must be finite and strictly positive"):
         power_fisher_z_transform(np.array([1.0, 2.0]), n_obs1=30, spectrum2=0.0)
 
 
-@mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
+@pytest.mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
 def test_power_confidence_intervals_rejects_out_of_range_ci(bad_ci):
     """ci must be in [0.5, 1.0); out-of-range values raise instead of inverting."""
     with pytest.raises(ValueError, match="ci"):
@@ -417,9 +450,7 @@ def test_coherence_rate_adjustment_negative_power_is_masked():
 @pytest.mark.parametrize("bad_n_obs", [0, 1])
 def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
     """n_observations < 2 would give values outside [0, 1]; must raise."""
-    with pytest.raises(
-        ValueError, match="n_observations must be a finite integer >= 2"
-    ):
+    with pytest.raises(ValueError, match="n_observations must be a finite integer >= 2"):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
 
@@ -448,9 +479,7 @@ def test_power_fisher_z_transform_rejects_nonfinite_or_noninteger_counts(bad_n_o
 @pytest.mark.parametrize("bad_spectrum", [np.nan, np.inf])
 def test_power_fisher_z_transform_rejects_nonfinite_spectrum(bad_spectrum):
     with pytest.raises(ValueError, match="spectrum1 must be finite"):
-        power_fisher_z_transform(
-            np.array([1.0, bad_spectrum]), n_obs1=50, spectrum2=1.0
-        )
+        power_fisher_z_transform(np.array([1.0, bad_spectrum]), n_obs1=50, spectrum2=1.0)
 
 
 @pytest.mark.parametrize("bad_n_tapers", [0, -3, np.nan, np.inf, 2.5])
@@ -485,7 +514,17 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
         power_confidence_intervals(n_tapers=5, power=bad_power, ci=0.95)
 
 
+# Two-sided 95% standard-normal critical value, norm.ppf(0.975).
+_Z_975 = 1.959963984540054
+
+
 def test_jackknife_confidence_interval_matches_mean_example():
+    """Identity transform: estimate +/- z * jackknife SE.
+
+    Replicates [2.5, 2.0, 1.5] have mean 2 and jackknife variance
+    (n - 1) / n * sum((r - mean)**2) = 2/3 * 0.5 = 1/3, so the 95% interval is
+    2 -/+ 1.959964 * sqrt(1/3) = [0.8684, 3.1316].
+    """
     result = jackknife_confidence_interval(
         np.array(2.0), np.array([2.5, 2.0, 1.5]), confidence_level=0.95
     )
@@ -493,18 +532,37 @@ def test_jackknife_confidence_interval_matches_mean_example():
     assert result.estimate == pytest.approx(2.0)
     assert result.bias_corrected == pytest.approx(2.0)
     assert result.standard_error == pytest.approx(np.sqrt(1 / 3))
-    assert result.confidence_interval[0] < result.estimate
-    assert result.confidence_interval[1] > result.estimate
+    half_width = _Z_975 * np.sqrt(1 / 3)
+    np.testing.assert_allclose(
+        result.confidence_interval, (2.0 - half_width, 2.0 + half_width), rtol=1e-12
+    )
+    np.testing.assert_allclose(result.confidence_interval, (0.8684, 3.1316), atol=1e-4)
 
 
 def test_jackknife_log_and_circular_transforms_return_original_scale():
+    replicates = np.array([1.8, 2.0, 2.2])
     log_result = jackknife_confidence_interval(
         np.array(2.0),
-        np.array([1.8, 2.0, 2.2]),
+        replicates,
         transformation="log",
     )
     assert log_result.transformation == "log"
-    assert log_result.confidence_interval[0] > 0
+    # The interval is formed on log scale and exponentiated back, so it is
+    # asymmetric about the estimate (unlike the identity interval).
+    log_replicates = np.log(replicates)
+    n = replicates.size
+    log_standard_error = np.sqrt(
+        (n - 1) / n * np.sum((log_replicates - log_replicates.mean()) ** 2)
+    )
+    expected_interval = np.exp(np.log(2.0) + np.array([-1, 1]) * _Z_975 * log_standard_error)
+    np.testing.assert_allclose(log_result.confidence_interval, expected_interval, rtol=1e-12)
+    np.testing.assert_allclose(
+        log_result.bias_corrected,
+        np.exp(n * np.log(2.0) - (n - 1) * log_replicates.mean()),
+        rtol=1e-12,
+    )
+    # Delta-method standard error back on the original scale: estimate * log SE.
+    np.testing.assert_allclose(log_result.standard_error, 2.0 * log_standard_error, rtol=1e-12)
 
     phases = np.array([np.pi - 0.1, -np.pi + 0.1, np.pi - 0.05])
     circular = jackknife_confidence_interval(

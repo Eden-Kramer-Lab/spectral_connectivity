@@ -21,6 +21,7 @@ directly with results from 2.x.
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
 | `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
 | `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
@@ -39,7 +40,8 @@ directly with results from 2.x.
   multivariate interaction measure (MIM), conditional spectral Granger
   (the Chen, Bressler & Ding 2006 frequency decomposition, computed from one
   full-system and one reduced-system factorization per source), blockwise
-  spectral Granger, and time-reversed spectral Granger.
+  spectral Granger (one factorization per group pair), and time-reversed
+  spectral Granger.
 - Exact complex `canonical_coherency` (Vidaurre CaCoh) performs phase
   optimisation and component deflation and returns component scores, spatial
   filters, patterns, connections, and group membership. The new
@@ -91,7 +93,8 @@ directly with results from 2.x.
   are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
   provide multiple trials/tapers. `Welch` warns when its default segment length
   yields coarse frequency resolution. `fourier_connectivity` rejects directed
-  measures on unlabeled coefficients whose two-sidedness cannot be verified.
+  measures on unlabeled coefficients whose two-sidedness cannot be verified,
+  and omits them from its default method set in that case.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,
@@ -154,6 +157,13 @@ directly with results from 2.x.
 
 ### Changed
 
+- xarray results carry `long_name` and `units` on every variable (spectral
+  densities in `(<input units>)^2/Hz` when the input states its units),
+  `band_lower`/`band_upper` coordinates after band reduction, and an input
+  DataArray's per-signal coordinates as `source_<name>`/`target_<name>`.
+  `frequency_band_reduce` takes `circular=` and infers circular averaging
+  from `units="rad"`. Large array input attributes are summarized by shape.
+
 - `canonical_coherency` fixes the sign of each spatial filter by the dominant
   coefficient of its pattern, so the canonical phase is no longer ambiguous by
   pi; single-channel groups reproduce the conjugate pairwise coherency.
@@ -191,6 +201,17 @@ directly with results from 2.x.
 
 ### Fixed
 
+- xarray results: every result now writes with netCDF4 and h5netcdf as well
+  as SciPy (boolean attributes are stored as 0/1); `frequency_band_reduce`'s
+  integral covers the whole band (off-grid edges, one-bin bands, additive
+  adjacent bands) instead of only the span between its outer bins; default
+  `fourier_connectivity` coordinates are labeled as normalized frequency and
+  window index, and datetime time is rejected; a frequency-reduced measure's
+  band no longer leaks onto other Dataset variables, and crop, decimation and
+  band provenance is recorded on the variables it applies to.
+- `canonical_coherence` warns when a group pair has more signals than
+  trial x taper observations; its value is then forced to 1 for any data and
+  was previously returned silently.
 - Directed measures use at least complex128 working precision, so complex64
   inputs can satisfy the Wilson factorization's default tolerance.
 - Subset spectral Granger restores `NaN` on the global self-Granger diagonal.
