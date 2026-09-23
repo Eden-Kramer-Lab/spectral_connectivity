@@ -13,14 +13,14 @@
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
-- it is designed to handle multiple time series at once
-- it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
-- it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead.
-- it implements the non-parametric version of the spectral granger causality in Python.
-- it implements the canonical coherence, which can
-  efficiently summarize brain-area level coherences from multielectrode recordings.
-- easier user interface for the multitaper fourier transform
-- core transforms and connectivity calculations support GPU acceleration when
++ it is designed to handle multiple time series at once
++ it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
++ it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead.
++ it implements the non-parametric version of the spectral granger causality in Python.
++ it implements the canonical coherence, which can
+efficiently summarize brain-area level coherences from multielectrode recordings.
++ easier user interface for the multitaper fourier transform
++ core transforms and connectivity calculations support GPU acceleration when
   `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
   importing the package. Public results are returned as NumPy arrays.
 
@@ -28,9 +28,9 @@
 
 See the following notebooks for more information on how to use the package:
 
-- [Tutorial](examples/Intro_tutorial.ipynb)
-- [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
-- [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
++ [Tutorial](examples/Intro_tutorial.ipynb)
++ [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
++ [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
 ## Usage Example
 
@@ -192,11 +192,11 @@ Directed
 
 `spectral_connectivity` requires:
 
-- python
-- numpy
-- matplotlib
-- scipy
-- xarray
++ python
++ numpy
++ matplotlib
++ scipy
++ xarray
 
 See the repository's `pyproject.toml` for the authoritative dependency list.
 
@@ -235,15 +235,15 @@ pip install -e .
 
 ## Recent publications and pre-prints that used this software
 
-- Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
-- Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
-- Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
-  <https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
-- Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
-- Phencyclidine-induced psychosis causes hypersynchronization and
-  disruption of connectivity within prefrontal-hippocampal circuits
-  that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
-- The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
++ Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
++ Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
++ Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
+<https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
++ Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
++ Phencyclidine-induced psychosis causes hypersynchronization and
+disruption of connectivity within prefrontal-hippocampal circuits
+that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
++ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
 
 ```{toctree}
 :caption: Guides

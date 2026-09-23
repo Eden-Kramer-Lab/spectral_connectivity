@@ -29,7 +29,6 @@ The package follows a modular design with three main components:
 ## Development Commands
 
 ### Environment Setup
-
 ```bash
 # Create conda environment
 conda env create -f environment.yml
@@ -39,7 +38,6 @@ pre-commit install
 ```
 
 ### Testing
-
 ```bash
 # Run all tests with coverage
 pytest --cov=spectral_connectivity tests/ --cov-report=lcov:coverage.lcov -v
@@ -52,7 +50,6 @@ pytest tests/test_connectivity.py::TestConnectivity::test_coherence -v
 ```
 
 ### Code Quality
-
 ```bash
 # Format code
 ruff format .
@@ -71,7 +68,6 @@ mypy spectral_connectivity/
 ```
 
 ### Building and Release
-
 ```bash
 # Build package
 hatch build
@@ -83,11 +79,9 @@ rm -rf build/ dist/ *.egg-info/
 ## Important Configuration
 
 ### GPU Support
-
 Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU acceleration via CuPy.
 
 ### Dependencies
-
 - Core: numpy, scipy, xarray, matplotlib
 - Dev tools: pytest, ruff, mypy, numpydoc
 - Optional GPU: cupy-cuda12x

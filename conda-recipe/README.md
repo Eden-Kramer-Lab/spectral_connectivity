@@ -29,14 +29,12 @@ anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
 **Status: Not currently on conda-forge**
 
 This package could benefit from conda-forge submission for:
-
 - Automated builds across platforms
 - Community maintenance
 - Better discoverability
 - Integration with conda-forge ecosystem
 
 To submit to conda-forge:
-
 1. Fork https://github.com/conda-forge/staged-recipes
 2. Copy this `meta.yaml` to `recipes/spectral_connectivity/meta.yaml`
 3. Submit pull request to staged-recipes
@@ -44,7 +42,6 @@ To submit to conda-forge:
 5. Once merged, conda-forge creates automated feedstock
 
 **Benefits after conda-forge acceptance:**
-
 - Users can install with: `conda install -c conda-forge spectral_connectivity`
 - Automatic rebuilds for dependency updates
 - Multi-platform builds (Windows, macOS, Linux)

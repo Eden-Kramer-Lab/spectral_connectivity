@@ -17,7 +17,7 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
    Changes to backend-specific code must also pass the real-device smoke test on
    a CUDA machine: `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu
-pytest -m gpu`. Device-like mocks do not replace this release gate.
+   pytest -m gpu`. Device-like mocks do not replace this release gate.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Submit a pull request.
@@ -36,8 +36,8 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ### How to make a release
 
-Releases are **automated**: pushing a `v*` tag runs the _Test, Build, and
-Publish_ workflow (`.github/workflows/release.yml`), which tests, builds the
+Releases are **automated**: pushing a `v*` tag runs the *Test, Build, and
+Publish* workflow (`.github/workflows/release.yml`), which tests, builds the
 sdist and wheel, generates build-provenance attestations, and publishes to PyPI
 via PyPI **trusted publishing** (OIDC). No API token is stored in the
 repository, and the default workflow token is read-only; only the publish and
@@ -66,7 +66,7 @@ To cut a release:
 
 **One-time setup (required for the automated release to work):**
 
-- On PyPI, configure a _trusted publisher_ for this repository (PyPI project →
+- On PyPI, configure a *trusted publisher* for this repository (PyPI project →
   Settings → Publishing), authorizing the OIDC publish without a stored token.
   Set the workflow to `release.yml` and the **environment name to `pypi`** to
   match the workflow's `environment: pypi`; the publish is rejected if they

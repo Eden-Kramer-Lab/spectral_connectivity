@@ -22,14 +22,14 @@
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
-- it is designed to handle multiple time series at once
-- it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
-- it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead.
-- it implements the non-parametric version of the spectral granger causality in Python.
-- it implements the canonical coherence, which can
-  efficiently summarize brain-area level coherences from multielectrode recordings.
-- easier user interface for the multitaper fourier transform
-- core transforms and connectivity calculations support GPU acceleration when
++ it is designed to handle multiple time series at once
++ it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
++ it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead.
++ it implements the non-parametric version of the spectral granger causality in Python.
++ it implements the canonical coherence, which can
+efficiently summarize brain-area level coherences from multielectrode recordings.
++ easier user interface for the multitaper fourier transform
++ core transforms and connectivity calculations support GPU acceleration when
   `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
   importing the package. Public results are returned as NumPy arrays.
 
@@ -37,9 +37,9 @@
 
 See the following notebooks for more information on how to use the package:
 
-- [Tutorial](examples/Intro_tutorial.ipynb)
-- [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
-- [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
++ [Tutorial](examples/Intro_tutorial.ipynb)
++ [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
++ [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
 ### Usage Example
 
@@ -300,11 +300,11 @@ Directed
 
 `spectral_connectivity` requires:
 
-- python
-- numpy
-- matplotlib
-- scipy
-- xarray
++ python
++ numpy
++ matplotlib
++ scipy
++ xarray
 
 See [environment.yml](environment.yml) for the most current list of dependencies.
 
@@ -415,7 +415,6 @@ for key, value in backend.items():
 ```
 
 Output fields:
-
 - `backend`: Either "cpu" or "gpu"
 - `gpu_enabled`: Whether GPU was requested via environment variable
 - `gpu_available`: Whether CuPy is installed and importable
@@ -431,8 +430,7 @@ Solution: Install CuPy as shown above, ensuring the CUDA version matches your sy
 **Issue: GPU not being used even after setting environment variable**
 
 Possible causes:
-
-1. Environment variable set _after_ importing spectral_connectivity
+1. Environment variable set *after* importing spectral_connectivity
    - Solution: Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before any imports
    - In scripts: Move the `os.environ[...]` line to the very top, before all spectral_connectivity imports
    - In notebooks: Restart kernel (Kernel → Restart & Clear Output) and set variable in first cell
@@ -446,7 +444,6 @@ Possible causes:
 **Issue: Out of memory errors on GPU**
 
 Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
-
 ```python
 # Remove or unset the environment variable
 os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
@@ -472,7 +469,6 @@ print(f"Elapsed time: {elapsed:.2f}s")
 #### When to Use GPU Acceleration
 
 GPU acceleration is most beneficial for:
-
 - Large datasets (many signals, long recordings, or many trials)
 - High frequency resolution (small time windows, many tapers)
 - Computing multiple connectivity measures from the same data
@@ -523,7 +519,7 @@ This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based 
 ### Making a Release
 
 Releases are published **automatically by CI**: pushing a `v*` tag runs the
-_Test, Build, and Publish_ workflow, which tests, builds, attests, and publishes
+*Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
 to PyPI via trusted publishing (after approval in the protected `pypi`
 environment). Do **not** run `twine upload` by hand — that bypasses the tests,
 attestations, and approval gate. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
@@ -553,7 +549,6 @@ conda install -c edeno spectral_connectivity
 ```
 
 **Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
-
 - 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
 - Or volunteer to help maintain the conda-forge feedstock
 
@@ -561,10 +556,10 @@ conda install -c edeno spectral_connectivity
 
 We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
 
-- How to report bugs and request features
-- Development workflow and coding standards
-- Testing requirements
-- Code review process
++ How to report bugs and request features
++ Development workflow and coding standards
++ Testing requirements
++ Code review process
 
 For questions or discussions, please open an issue on GitHub.
 
@@ -580,12 +575,12 @@ For citation, please use the following:
 
 ### Recent publications and pre-prints that used this software
 
-- Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
-- Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
-- Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
-  <https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
-- Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
-- Phencyclidine-induced psychosis causes hypersynchronization and
-  disruption of connectivity within prefrontal-hippocampal circuits
-  that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
-- The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
++ Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
++ Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
++ Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
+<https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
++ Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
++ Phencyclidine-induced psychosis causes hypersynchronization and
+disruption of connectivity within prefrontal-hippocampal circuits
+that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
++ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>

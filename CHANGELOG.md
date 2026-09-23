@@ -12,23 +12,23 @@ directly with results from 2.x.
 
 ### Migration guide
 
-| Previous behavior                                                                                                               | New behavior / required action                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `global_coherence` returned raw squared singular values                                                                         | Returns the scale-invariant fraction of total coherent power in `[0, 1]`                                                                                                                                                                                        |
-| One-sided `power` omitted the negative-frequency contribution                                                                   | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged                                                                                                                                                                                      |
-| `phase_slope_index` combined every ordered frequency pair                                                                       | Uses adjacent frequency bins, following Nolte et al. (2008)                                                                                                                                                                                                     |
-| `delay` returned cycles                                                                                                         | Returns seconds; DC is `NaN`                                                                                                                                                                                                                                    |
-| Multitaper windows were labeled by their first sample                                                                           | Windows are labeled by their center time                                                                                                                                                                                                                        |
-| `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order                                             | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names                                                                                                   |
-| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper                                                                                                           |
-| `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1)                                     | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results                                                                                                                                                   |
-| `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4×                                                | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family)                                                                |
-| `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off                        | Corrected formulas — recompute power confidence intervals and log-power z-tests                                                                                                                                                                                 |
-| Spectral Granger measures returned `NaN` wherever the estimate was `<= 0`                                                       | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
-| `Connectivity(..., blocks=...)`                                                                                                 | Remove `blocks`; memory is bounded automatically                                                                                                                                                                                                                |
-| `dpss_windows(..., interp_from=..., interp_kind=...)`                                                                           | Remove both arguments; the exact SciPy solver is faster                                                                                                                                                                                                         |
-| `partial_directed_coherence(keep_cupy=...)`                                                                                     | Remove `keep_cupy`; public measures consistently return NumPy arrays                                                                                                                                                                                            |
-| SciPy 1.10 / CuPy 12 GPU extra                                                                                                  | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0`                                                                                                                                                                                               |
+| Previous behavior | New behavior / required action |
+| --- | --- |
+| `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
+| `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
+| `delay` returned cycles | Returns seconds; DC is `NaN` |
+| Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
+| `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
+| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
+| `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
+| `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
+| Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
+| `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
+| `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
+| `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
+| SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
 ### Added
 
@@ -85,8 +85,8 @@ directly with results from 2.x.
 - `Connectivity.jackknife` and `jackknife_confidence_interval` provide
   leave-one-trial/taper bias correction, standard errors, and confidence
   intervals with automatic variance-stabilizing transformations: log for power,
-  `atanh(sqrt(.))` for magnitude-squared coherence
-  (`transformation="fisher_squared"`), and circular for phase.
+  `atanh(sqrt(.))` for magnitude-squared coherence (`transformation=
+  "fisher_squared"`), and circular for phase.
 - Magnitude-normalized measures (coherency, phase-locking value, and everything
   derived from them) warn when computed from a single observation, where they
   are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
@@ -228,7 +228,7 @@ directly with results from 2.x.
   tutorial no longer uses the removed `blocks` argument.
 - The xarray wrapper now labels directed measures (e.g.
   `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
-  the influence _from_ `a` _to_ `b`; previously the `source`/`target` axes were
+  the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
   transposed, silently returning the reverse direction. Recompute any directed
   results obtained through `multitaper_connectivity`. The underlying
   `Connectivity` methods are unchanged (they keep the `output[i, j] = j -> i`
@@ -293,7 +293,6 @@ directly with results from 2.x.
   Silent misinterpretation produces scientifically incorrect results.
 
 **Migration Example**:
-
 ```python
 # Before (ambiguous)
 mt = Multitaper(eeg_data, sampling_frequency=1000)
@@ -325,7 +324,6 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 - Developers must update their tooling: `pip install ruff` (100x faster than previous tools)
 
 ### Added
-
 - `prepare_time_series()` helper function for safe dimension handling:
   - Converts 1D/2D arrays to required 3D format
   - Explicit `axis` parameter to clarify dimension meaning
@@ -379,7 +377,6 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
   - Consistency checks with actual `Multitaper` behavior
 
 ### Changed
-
 - **Complete type hint coverage** (`spectral_connectivity/transforms.py`, `spectral_connectivity/connectivity.py`):
   - Added type hints to ALL 28 previously untyped functions:
     - `transforms._make_tapers()`: Added parameter and return types
@@ -408,11 +405,9 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
   - Left open for future enhancement if needed
 
 ### Removed
-
 - All TODO comments from codebase (2 resolved)
 
 ### Changed
-
 - **Development tooling modernization**:
   - Migrated from `black` to `ruff format` for code formatting (100x faster)
   - Migrated from `flake8`/`pydocstyle` to `ruff check` for linting
@@ -428,7 +423,6 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 - Improved random number generation in tests for better isolation
 
 ### Fixed
-
 - **MyPy type annotation error** in `detrend()` function (`transforms.py:1867-1876`):
   - Fixed union type handling for `bp` parameter (now `int | list[int] | NDArray[np.integer]`)
   - Added support for list input in addition to int and ndarray
@@ -563,7 +557,6 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
   - All tests pass (11 passed, 1 skipped when CuPy unavailable)
 
 ### Changed
-
 - **BREAKING**: Minimum Python version raised from 3.9 to 3.10
 - Migrated from flake8 to ruff for linting (100x faster, replaces flake8, isort, pydocstyle)
 - Updated dependency pins: numpy>=1.24, scipy>=1.10, xarray>=2023.1, matplotlib>=3.7
@@ -576,7 +569,6 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 - Updated ReadTheDocs to use Python 3.10
 
 ### Fixed
-
 - Outdated release instructions in CONTRIBUTING.md (removed setup.py references)
 - Deprecation warning in `minimum_phase_decomposition.py`: Changed `xp.linalg.linalg.LinAlgError` to `xp.linalg.LinAlgError` for compatibility with NumPy 2.0+
 - **Critical bug in block-wise computation**: Fixed missing diagonal elements in cross-spectral matrix when using `blocks` parameter (changed `k=1` to `k=0` in `triu_indices`)
@@ -585,30 +577,25 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 ## [1.1.2] - 2023-10-17
 
 ### Added
-
 - Conda packaging support with conda-recipe directory
 - CLAUDE.md with development commands and architecture documentation
 - Pinned coverage reporter version in CI workflow to avoid bugs
 
 ### Changed
-
 - Updated module docstrings for clarity and context
 - Updated README with Contributing and License sections
 
 ### Fixed
-
 - Linting issues resolved
 
 ## [1.1.1] - 2023-09-15
 
 ### Changed
-
 - Switch build system from setuptools to Hatch
 - Add py.typed marker for type hint support
 - Update and reorganize dependencies in environment.yml
 
 ### Fixed
-
 - Resolve n_time_samples_per_window property logic error in transforms module
 - Resolve mypy Optional[int] vs int return type errors
 - Correct _fix_taper_sign return type annotation
@@ -616,48 +603,41 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 ## [1.1.0] - 2023-08-20
 
 ### Added
-
 - GPU request guard feature to safely handle CUDA availability
 - Complete audit of connectivity metric ranges documentation
 - ValueError raised when window size parameters are unset
 
 ### Changed
-
 - Updated GitHub Actions to latest versions
 - Improved type hints throughout codebase
 
 ## [1.0.4] - 2023-03-15
 
 ### Fixed
-
 - Bug fixes in connectivity calculations
 - Improved numerical stability
 
 ## [1.0.3] - 2023-02-10
 
 ### Changed
-
 - Performance improvements
 - Documentation updates
 
 ## [1.0.2] - 2023-01-20
 
 ### Fixed
-
 - Minor bug fixes
 - Test coverage improvements
 
 ## [1.0.1] - 2022-12-15
 
 ### Fixed
-
 - Package distribution fixes
 - Documentation corrections
 
 ## [1.0.0] - 2022-12-01
 
 ### Added
-
 - First stable release
 - Full implementation of 15+ connectivity measures
 - GPU acceleration support via CuPy
@@ -665,30 +645,25 @@ mt = Multitaper(eeg_3d, sampling_frequency=1000)
 - Complete documentation on ReadTheDocs
 
 ### Changed
-
 - API stabilized for 1.0 release
 - Performance optimizations
 
 ## [0.2.7] - 2022-06-15
 
 ### Added
-
 - Additional connectivity measures
 - Improved caching strategy
 
 ### Changed
-
 - API improvements and refinements
 
 ## [0.2.6] - 2022-03-10
 
 ### Added
-
 - Initial GPU support
 - More connectivity measures
 
 ### Changed
-
 - Refactored core architecture
 - Improved documentation
 

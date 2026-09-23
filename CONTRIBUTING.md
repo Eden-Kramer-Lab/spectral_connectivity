@@ -19,7 +19,7 @@ Code contributions are always welcome, from simple bug fixes to new features. To
    - Type check with [mypy](https://mypy.readthedocs.io/): `mypy spectral_connectivity/`
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
    For GPU-specific changes, also run `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv
-run --extra gpu pytest -m gpu` on a CUDA machine.
+   run --extra gpu pytest -m gpu` on a CUDA machine.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Update [CHANGELOG.md](CHANGELOG.md) with your changes under the "Unreleased" section.
@@ -47,7 +47,6 @@ This project uses an automated release workflow. To create a new release:
    - Commit the changelog update
 
 2. **Create and push a version tag** (annotated)
-
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z"
    git push origin vX.Y.Z
@@ -78,7 +77,6 @@ This project uses an automated release workflow. To create a new release:
    SHA-256 of the new PyPI sdist (from the release's "Download files" page, or
    `openssl dgst -sha256 spectral_connectivity-X.Y.Z.tar.gz`). Commit that
    change. Then build and upload:
-
    ```bash
    conda build conda-recipe/ --output-folder ./conda-builds
    anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
@@ -87,7 +85,6 @@ This project uses an automated release workflow. To create a new release:
 ### Version Numbering
 
 This project follows [Semantic Versioning](https://semver.org/):
-
 - **MAJOR** version for incompatible API changes
 - **MINOR** version for new functionality in a backwards compatible manner
 - **PATCH** version for backwards compatible bug fixes

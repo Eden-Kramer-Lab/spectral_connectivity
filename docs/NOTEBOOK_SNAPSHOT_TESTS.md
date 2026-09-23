@@ -3,19 +3,16 @@
 ## Overview
 
 Create snapshot tests for tutorial notebooks to verify:
-
 1. **Execution:** Notebooks run without errors (slow tests)
 2. **Numerical correctness:** Key outputs match expected values (fast tests)
 
 ## Scope
 
 **Notebooks to test:**
-
 - `examples/Tutorial_On_Simulated_Examples.ipynb`
 - `examples/Tutorial_Using_Paper_Examples.ipynb`
 
 **Excluded:**
-
 - `examples/Intro_tutorial.ipynb` (too basic/introductory)
 
 ## Architecture
@@ -23,7 +20,6 @@ Create snapshot tests for tutorial notebooks to verify:
 ### Test Types
 
 #### 1. Snapshot Tests (Fast* Always Run)
-
 - Hand-written test functions in `tests/test_notebooks.py`
 - Use `syrupy` fixture to snapshot numerical outputs
 - Test key scenarios inspired by notebook examples
@@ -33,7 +29,6 @@ Create snapshot tests for tutorial notebooks to verify:
 **Performance Note:** The full test suite (27 tests) takes ~2-3 minutes to run due to pytest/syrupy overhead with large NumPy arrays. Individual tests are fast (<1s each), but memory accumulation causes super-linear scaling when running all tests together. This is expected behavior and not a bug in the test code itself.
 
 #### 2. Execution Tests (Slow, Marked)
-
 - Verify notebooks execute without errors
 - Use `jupyter nbconvert --execute`
 - Marked with `@pytest.mark.slow`
@@ -67,7 +62,6 @@ examples/
 **File: `pyproject.toml`**
 
 Add to `[project.optional-dependencies]`:
-
 ```toml
 dev = [
     "syrupy>=4.0.0",
@@ -80,7 +74,6 @@ dev = [
 **File: `pyproject.toml`**
 
 Add to `[tool.pytest.ini_options]`:
-
 ```toml
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -384,7 +377,6 @@ pytest tests/test_notebooks.py::test_power_spectrum_200hz -vv
 ### Random Seed Management
 
 All tests use `np.random.seed(42)` for reproducibility. This ensures:
-
 - Snapshots are deterministic
 - Tests pass consistently
 - Noise doesn't cause false failures
@@ -401,14 +393,12 @@ All tests use `np.random.seed(42)` for reproducibility. This ensures:
 ## Trade-offs
 
 **Pros:**
-
 - Catches numerical regressions
 - Fast to run (snapshot tests)
 - Clear test failures
 - Version-controlled expected outputs
 
 **Cons:**
-
 - Snapshots must be updated when behavior changes
 - Need to distinguish bugs from intentional changes
 - Binary snapshots not human-readable (but syrupy shows diffs)
