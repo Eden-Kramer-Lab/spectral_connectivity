@@ -52,26 +52,34 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
-gpu = ["cupy-cuda12x>=13.0"]
-
-# Development-only dependencies (PEP 735): `pip install -e . --group dev`
-# (pip >= 25.1) or `uv sync`.
-[dependency-groups]
-test = [
+# `pip install -e .[dev]`. Keep `dev` identical to the `dev` dependency group
+# below, which `uv sync` installs by default.
+dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
     "syrupy>=4.0",
     "nitime",
-]
-lint = [
     "ruff>=0.8.0",
     "mypy>=1.11",  # PEP 695 `type` statement parsing (used by NumPy 2.x stubs)
     "scipy-stubs",
     "numpydoc>=1.6",
-    "pre-commit",
 ]
-dev = [{ include-group = "test" }, { include-group = "lint" }]
+# CuPy 13 added cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
+gpu = ["cupy-cuda12x>=13.0"]
+
+[dependency-groups]
+# `uv sync` installs the package in editable mode plus this group. Keep
+# identical to the `dev` extra above.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "syrupy>=4.0",
+    "nitime",
+    "ruff>=0.8.0",
+    "mypy>=1.11",
+    "scipy-stubs",
+    "numpydoc>=1.6",
+]
 
 [project.urls]
 Homepage = "https://github.com/Eden-Kramer-Lab/spectral_connectivity"

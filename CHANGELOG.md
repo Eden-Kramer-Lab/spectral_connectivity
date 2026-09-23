@@ -190,9 +190,6 @@ directly with results from 2.x.
 - `multitaper_connectivity(method=None)` uses the stable, exported
   `DEFAULT_METHODS` allowlist. Measures with incompatible result shapes point
   users to `Connectivity` directly.
-- Development dependencies moved from the `dev` extra to PEP 735 dependency
-  groups: install them with `pip install -e . --group dev` (pip >= 25.1) or
-  `uv sync` instead of `pip install -e .[dev]`.
 
 ### Fixed
 

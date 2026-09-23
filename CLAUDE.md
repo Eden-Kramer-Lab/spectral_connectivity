@@ -30,11 +30,16 @@ The package follows a modular design with three main components:
 
 ### Environment Setup
 ```bash
-# Create conda environment
+# uv (recommended): .venv from uv.lock with the package editable plus the dev tools
+uv sync
+uv run pytest            # prefix any command with `uv run` to use that environment
+uv lock                  # after changing dependencies in pyproject.toml
+uvx pre-commit install   # once; each commit then runs ruff, codespell, mypy and the file checks
+
+# Or conda
 conda env create -f environment.yml
 conda activate spectral_connectivity
-pip install -e . --group dev
-pre-commit install
+pip install -e .[dev]
 ```
 
 ### Testing
