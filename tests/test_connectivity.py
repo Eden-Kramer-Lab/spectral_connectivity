@@ -1066,6 +1066,32 @@ def test__bandpass():
     )
 
 
+def test__bandpass_band_edges_are_exclusive():
+    """Only frequencies strictly inside the band are kept: a bin exactly on
+    either edge is dropped. This pins the documented (exclusive) semantics."""
+    data = np.arange(0, 10).reshape((2, 5))
+    frequencies = np.arange(0, 5) * 2.0  # 0, 2, 4, 6, 8
+    filtered_data, filtered_frequencies = _bandpass(data, frequencies, [2.0, 6.0], axis=-1)
+    np.testing.assert_array_equal(filtered_frequencies, [4.0])
+    np.testing.assert_array_equal(filtered_data, [[2], [7]])
+
+
+@pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
+@pytest.mark.parametrize(
+    "band",
+    [[10.0], [10.0, 20.0, 30.0], [20.0, 10.0], [10.0, 10.0], [np.nan, 10.0], [0.0, np.inf]],
+)
+def test_frequencies_of_interest_must_be_two_finite_increasing_values(measure, band):
+    rng = np.random.default_rng(19)
+    shape = (1, 6, 2, 32, 2)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        frequencies=np.fft.fftfreq(32, d=1 / 100.0),
+    )
+    with pytest.raises(ValueError, match="frequencies_of_interest must be two finite"):
+        getattr(connectivity, measure)(frequencies_of_interest=band)
+
+
 @pytest.mark.parametrize(
     ("frequency_difference", "frequency_resolution", "expected_step"),
     [(2.0, 5.0, 3), (5.0, 2.0, 1), (2.0, 2.0, 1)],

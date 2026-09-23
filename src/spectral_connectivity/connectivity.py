@@ -4277,7 +4277,9 @@ class Connectivity:
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band of interest.
+            Frequency band ``(low, high)`` to fit over, in the units of
+            ``frequencies``. Both edges are exclusive: only bins strictly
+            inside the band are used. ``None`` uses every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
@@ -4435,7 +4437,9 @@ class Connectivity:
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band of interest.
+            Frequency band ``(low, high)`` to evaluate, in the units of
+            ``frequencies``. Both edges are exclusive: only bins strictly
+            inside the band are returned. ``None`` uses every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
@@ -4566,7 +4570,9 @@ class Connectivity:
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band of interest.
+            Frequency band ``(low, high)`` to sum over, in the units of
+            ``frequencies``. Both edges are exclusive: only bins strictly
+            inside the band contribute. ``None`` uses every frequency.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
 
@@ -5454,7 +5460,8 @@ def _bandpass(
     """Filter data matrix along axis for frequencies of interest.
 
     Filters the data matrix along an axis given a maximum and minimum
-    frequency of interest.
+    frequency of interest. Both band edges are exclusive: a frequency bin
+    lying exactly on an edge is dropped.
 
     Parameters
     ----------
@@ -5463,7 +5470,8 @@ def _bandpass(
     frequencies : array, shape (n_fft_samples,)
         Frequency values.
     frequencies_of_interest : array-like, shape (2,)
-        Min and max frequencies of interest.
+        Min and max frequencies of interest; two finite values with
+        ``low < high``.
     axis : int, default=-3
         Axis along which to filter.
 
@@ -5474,12 +5482,24 @@ def _bandpass(
     filtered_frequencies : array
         Corresponding filtered frequencies.
 
+    Raises
+    ------
+    ValueError
+        If ``frequencies_of_interest`` is not two finite values with
+        ``low < high``.
+
     """
     if frequencies_of_interest is None:
         return data, frequencies
-    frequency_index = (frequencies_of_interest[0] < frequencies) & (
-        frequencies < frequencies_of_interest[1]
-    )
+    band = np.asarray(frequencies_of_interest, dtype=float)
+    if band.shape != (2,) or not np.all(np.isfinite(band)) or not band[0] < band[1]:
+        msg = (
+            "frequencies_of_interest must be two finite values (low, high) with "
+            f"low < high, got {frequencies_of_interest!r}. Band edges are "
+            "exclusive: only frequencies strictly inside (low, high) are kept."
+        )
+        raise ValueError(msg)
+    frequency_index = (band[0] < frequencies) & (frequencies < band[1])
     return (
         xp.take(data, frequency_index.nonzero()[0], axis=axis),
         frequencies[frequency_index],
