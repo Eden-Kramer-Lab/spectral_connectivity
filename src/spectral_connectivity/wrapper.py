@@ -1339,6 +1339,30 @@ def connectivity_to_xarray(
     Ordinary pairwise measures return a DataArray; component-resolved or
     multi-quantity measures return a Dataset with explicit semantic axes.
 
+    Parameters
+    ----------
+    m : transform
+        A spectral transform (e.g. ``Multitaper``, ``MorletWavelet``, ``Welch``)
+        whose coefficients the measure is computed from.
+    method : str, default="coherence_magnitude"
+        Measure name from :func:`list_measures`.
+    signal_names : sequence, optional
+        Labels for the ``source``/``target`` coordinates; defaults to
+        ``"0"``, ``"1"``, ....
+    squeeze : bool, default=False
+        With exactly 2 signals, reduce a pairwise measure to the ordered pair
+        (first source, last target), keeping ``source`` and ``target`` as
+        scalar coordinates.
+    **kwargs
+        Keyword arguments for the measure (e.g. ``group_labels``).
+
+    Returns
+    -------
+    xarray.DataArray or xarray.Dataset
+        The labeled result with provenance in ``attrs``; see
+        :func:`multitaper_connectivity` for the dimensions and orientation
+        (``sel(source=a, target=b)`` is the influence ``a -> b``).
+
     Examples
     --------
     >>> import numpy as np
@@ -1348,7 +1372,7 @@ def connectivity_to_xarray(
     >>> connectivity_to_xarray(mt).dims
     ('time', 'frequency', 'source', 'target')
     """
-    _get_measure_spec(method)
+    _validate_method_names([method])
     metadata = m._provenance_metadata()
     connectivity = Connectivity.from_transform(m)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
@@ -2552,7 +2576,12 @@ def fourier_connectivity(
         Labels for the ``source``/``target`` coordinates; defaults to the
         DataArray signal coordinate or ``"0"``, ``"1"``, ....
     squeeze : bool, default=False
-        Drop length-one dimensions from a single-measure result.
+        Only honored when a single ``method`` (a string) is requested. If there
+        are exactly 2 signals, reduce a pairwise measure to the single ordered
+        pair (first source, last target), returning a ``(time, frequency)`` array
+        that keeps the selected ``source`` and ``target`` as scalar coordinates.
+        With more than 2 signals a warning is issued and the full matrix is
+        returned; for ``power`` squeeze is a no-op. Length-one ``time`` is kept.
     connectivity_kwargs : dict, optional
         Keyword arguments passed to every requested measure (for example
         ``group_labels`` for group measures). Measures that need different

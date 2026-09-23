@@ -2801,3 +2801,14 @@ def test_band_reduction_keeps_dataset_coordinates_not_on_any_variable():
     dataset = power.to_dataset().assign_coords(run=("run", ["a", "b", "c"]))
     reduced = frequency_band_reduce(dataset, {"low": (0.0, 2.0)})
     assert reduced.run.values.tolist() == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize("method", ["coherence", "jackknife"])
+def test_connectivity_to_xarray_validates_the_method_name(method):
+    """A typo or a non-measure helper must get the actionable error, not a raw
+    AttributeError/TypeError from deep inside the formatter."""
+    transform = Multitaper(
+        np.random.default_rng(47).standard_normal((512, 2, 2)), sampling_frequency=256
+    )
+    with pytest.raises(ValueError, match="is not a known connectivity measure"):
+        connectivity_to_xarray(transform, method=method)
