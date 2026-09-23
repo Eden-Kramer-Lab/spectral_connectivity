@@ -604,8 +604,9 @@ class Multitaper:
         Number of samples per time window. Computed from time_window_duration
         if not provided.
     n_time_samples_per_step : int, optional
-        Number of samples to advance between windows. Computed from
-        time_window_step if not provided.
+        Number of samples to advance between windows. Computed (to the nearest
+        sample) from time_window_step if not provided; when both are given the
+        sample count is used and ``time_window_step`` reports its duration.
     is_low_bias : bool, default=True
         If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
     fft_workers : int, optional
@@ -1012,6 +1013,10 @@ class Multitaper:
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        if n_time_samples_per_step is not None:
+            # An explicit sample count is the step actually taken; derive the
+            # reported duration from it so the two cannot disagree.
+            self._time_window_step = n_time_samples_per_step / sampling_frequency
         if self._tapers is not None:
             # Validate custom tapers now; a mismatch would otherwise surface as
             # an opaque broadcasting error inside fft().
@@ -1376,10 +1381,10 @@ FFT samples:          {self.n_fft_samples}
     def n_time_samples_per_step(self) -> int:
         """Return number of samples to step between windows.
 
-        If `time_window_step` is set, then calculate the
-        `n_time_samples_per_step` based on the time window duration. If
-        `time_window_step` and `n_time_samples_per_step` are both not set,
-        default the window step size to the same size as the window.
+        An explicit `n_time_samples_per_step` is used as given. Otherwise, if
+        `time_window_step` is set, the step is the nearest whole number of
+        samples in that duration. If neither is set, the step defaults to the
+        window length (non-overlapping windows).
 
         Returns
         -------
@@ -1387,13 +1392,16 @@ FFT samples:          {self.n_fft_samples}
             Number of samples to advance between windows.
 
         """
-        if self._n_samples_per_time_step is None and self._time_window_step is None:
-            self._n_samples_per_time_step = self.n_time_samples_per_window
-        elif self._time_window_step is not None:
-            self._n_samples_per_time_step = int(
-                self.time_window_step * self.sampling_frequency
-            )
-        # Otherwise n_time_samples_per_step was set explicitly.
+        if self._n_samples_per_time_step is None:
+            if self._time_window_step is None:
+                self._n_samples_per_time_step = self.n_time_samples_per_window
+            else:
+                # Round like n_time_samples_per_window does: ``step / fs * fs``
+                # can land just below ``step`` in floating point (e.g. 0.57 s at
+                # 100 Hz gives 56.99999...), and ``int()`` would truncate to 56.
+                self._n_samples_per_time_step = int(
+                    np.around(self._time_window_step * self.sampling_frequency)
+                )
         assert self._n_samples_per_time_step is not None
         # Validate the resolved step regardless of which input path set it: an
         # explicit n_time_samples_per_step=0 (or a step truncating to 0) would

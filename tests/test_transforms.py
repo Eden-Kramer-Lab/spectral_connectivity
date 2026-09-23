@@ -279,6 +279,97 @@ def test_n_samples_per_time_step(
     assert m.n_time_samples_per_step == expected_n_samples_per_time_step
 
 
+# (sampling_frequency, step) pairs where ``step / fs * fs`` falls just below
+# ``step`` in floating point, so ``int()`` truncates to ``step - 1``.
+_TRUNCATING_STEPS = [(100, 29), (100, 57), (100, 113), (30000, 59), (30000, 61), (30000, 118)]
+
+
+@pytest.mark.parametrize(("sampling_frequency", "step"), _TRUNCATING_STEPS)
+def test_step_duration_rounds_to_the_intended_sample_count(sampling_frequency, step):
+    """A step given in seconds resolves to the nearest sample count, not the
+    truncated one, for every (fs, step) pair where ``step / fs * fs < step``."""
+    assert int(step / sampling_frequency * sampling_frequency) != step  # the hazard
+    time_series = np.zeros((4 * step, 1, 1))
+    m = Multitaper(
+        time_series,
+        sampling_frequency=sampling_frequency,
+        time_window_duration=2 * step / sampling_frequency,
+        time_window_step=step / sampling_frequency,
+    )
+    assert m.n_time_samples_per_window == 2 * step
+    assert m.n_time_samples_per_step == step
+
+
+def test_explicit_step_sample_count_takes_precedence_over_duration():
+    """When both are given, the integer sample count is the step actually
+    taken, and the reported duration agrees with it."""
+    time_series = np.zeros((1000, 1, 1))
+    m = Multitaper(
+        time_series,
+        sampling_frequency=100,
+        time_window_duration=1.0,
+        time_window_step=0.29,
+        n_time_samples_per_step=29,
+    )
+    assert m.n_time_samples_per_step == 29
+    assert m.time_window_step == pytest.approx(0.29)
+    assert m.fft().shape[0] == (1000 - 100) // 29 + 1 == len(m.time)
+
+
+def test_multitaper_equal_duration_and_step_are_non_overlapping():
+    """Window and step given as the same duration must resolve to the same
+    sample count; truncating only the step silently created overlap."""
+    m = Multitaper(
+        np.zeros((1000, 1, 1)),
+        sampling_frequency=100,
+        time_window_duration=0.57,
+        time_window_step=0.57,
+    )
+    assert m.n_time_samples_per_window == 57
+    assert m.n_time_samples_per_step == 57
+    assert "(non-overlapping)" in m.summarize_parameters()
+    assert m.fft().shape[0] == 1000 // 57
+
+
+def test_stft_explicit_step_is_not_re_truncated():
+    """STFT forwards an explicit step both as a duration and a sample count;
+    the sample count must survive the round trip through the duration."""
+    transform = ShortTimeFourierTransform(
+        np.random.default_rng(0).standard_normal((1000, 1, 1)),
+        sampling_frequency=100,
+        n_time_samples_per_window=100,
+        n_time_samples_per_step=57,
+    )
+    assert transform.n_time_samples_per_step == 57
+    assert transform.time_window_step == pytest.approx(0.57)
+    n_windows = (1000 - 100) // 57 + 1
+    assert n_windows == 16
+    assert transform.fft().shape[0] == n_windows
+    assert len(transform.time) == n_windows
+    np.testing.assert_allclose(transform.time, (np.arange(n_windows) * 57 + 49.5) / 100)
+    assert transform._provenance_metadata()["n_time_samples_per_step"] == 57
+    assert f"Number of windows: {n_windows}" in transform.summarize_parameters()
+    assert "Window step:      0.570 s" in transform.summarize_parameters()
+
+
+def test_welch_step_is_consistent_between_metadata_and_inner_transform():
+    """Welch reports the rounded step; the inner STFT must step by that same
+    count so ``n_segments`` and provenance describe the segments averaged."""
+    transform = Welch(
+        np.random.default_rng(0).standard_normal((1000, 1, 2)),
+        sampling_frequency=100,
+        n_time_samples_per_segment=114,
+        segment_overlap=0.5,
+    )
+    n_segments = (1000 - 114) // 57 + 1
+    assert transform.n_time_samples_per_step == 57
+    assert transform._stft.n_time_samples_per_step == 57
+    assert transform.n_segments == n_segments
+    assert transform.fft().shape[2] == n_segments
+    assert transform._provenance_metadata()["n_time_samples_per_step"] == 57
+    assert transform._provenance_metadata()["n_segments"] == n_segments
+
+
 @pytest.mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
 def test_time(time_window_duration):
     sampling_frequency = 1500
