@@ -509,7 +509,8 @@ hash -r
 ```bash
 conda env create -f environment.yml
 conda activate spectral_connectivity
-pip install -e .
+pip install -e . --group dev
+pre-commit install
 ```
 
 ## Releases

@@ -34,7 +34,8 @@ The package follows a modular design with three main components:
 # Create conda environment
 conda env create -f environment.yml
 conda activate spectral_connectivity
-pip install -e .
+pip install -e . --group dev
+pre-commit install
 ```
 
 ### Testing
