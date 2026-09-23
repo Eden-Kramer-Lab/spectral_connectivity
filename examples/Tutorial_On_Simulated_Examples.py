@@ -1563,11 +1563,18 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 # %% [markdown]
 # ### Group Delay
 #
+# The noise-free signals in this section are differences of two equal-area Gaussian bumps, so they have exactly zero power at 0 Hz. Coherence is undefined where a signal has no power and `spectral_connectivity` warns about it; the warning is expected here, so the first cell silences it for the rest of the notebook.
 #
 # #### Signal \#1 leads Signal \#2
 
 # %% pycharm={"is_executing": true}
+import warnings
+
 import scipy
+
+# The noise-free signals have zero power at 0 Hz (see above), so coherence is
+# undefined there. Silence that expected warning for the rest of the notebook.
+warnings.filterwarnings("ignore", message=r"Some signals have \(near-\)zero power")
 
 sampling_frequency = 1000
 time_extent = (0, 1)
