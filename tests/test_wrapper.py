@@ -2638,3 +2638,62 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         group_delay.valid_time,
         transform.valid_time_frequency[:, [1, 2]].all(axis=1),
     )
+
+
+def test_fourier_connectivity_default_coordinates_are_labeled_as_such():
+    """Without coordinates, frequency is normalized (cycles/sample) and time is a
+    window index; the coordinate metadata must say so, not claim Hz and s."""
+    rng = np.random.default_rng(40)
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    result = fourier_connectivity(
+        coefficients, method="coherence_magnitude", is_one_sided=False
+    )
+    assert result.frequency.attrs == {
+        "long_name": "Normalized frequency",
+        "units": "cycles/sample",
+    }
+    assert result.time.attrs == {"long_name": "Window index"}
+
+
+def test_fourier_connectivity_provided_coordinates_keep_physical_units():
+    rng = np.random.default_rng(41)
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=np.fft.fftfreq(8, 1 / 100),
+        time=np.array([1.5]),  # 3-D input: (observations, frequencies, signals)
+        method="coherence_magnitude",
+    )
+    assert result.frequency.attrs == {"long_name": "Frequency", "units": "Hz"}
+    assert result.time.attrs == {"long_name": "Window center time", "units": "s"}
+
+
+@pytest.mark.parametrize(
+    "time",
+    [
+        np.array(["2020-01-01T00:00:00"], "M8[ns]"),
+        np.array([1], "m8[s]"),
+    ],
+    ids=["datetime", "timedelta"],
+)
+def test_fourier_connectivity_rejects_non_numeric_time(time):
+    """Time must be elapsed seconds, as for multitaper_connectivity; a datetime
+    coordinate labeled ``units="s"`` could not even be written to NetCDF."""
+    rng = np.random.default_rng(42)
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    with pytest.raises(TypeError, match="numeric elapsed seconds"):
+        fourier_connectivity(
+            coefficients,
+            frequencies=np.fft.fftfreq(8, 1 / 100),
+            time=time,
+            method="coherence_magnitude",
+        )
+
+
+def test_frequency_coordinate_attrs_do_not_depend_on_measure_order():
+    """delay built its frequency coordinate with only ``units``; merged first,
+    it dropped the long_name every other measure sets."""
+    time_series = np.random.default_rng(43).standard_normal((1000, 3, 2))
+    for methods in (["delay", "coherence_magnitude"], ["coherence_magnitude", "delay"]):
+        result = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
+        assert result.frequency.attrs == {"long_name": "Frequency", "units": "Hz"}, methods

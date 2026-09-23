@@ -550,6 +550,37 @@ def _check_method_accepts_kwargs(
         raise TypeError(msg)
 
 
+def _is_real_numeric_dtype(dtype: np.dtype[Any]) -> bool:
+    """Whether ``dtype`` holds real numbers (not complex, boolean, or time types)."""
+    return bool(
+        np.issubdtype(dtype, np.number)
+        and not np.issubdtype(dtype, np.complexfloating)
+        and not np.issubdtype(dtype, np.bool_)
+        and not np.issubdtype(dtype, np.datetime64)
+        and not np.issubdtype(dtype, np.timedelta64)
+    )
+
+
+def _coordinate_attrs(
+    shared_attrs: Mapping[str, Any],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """``(time_attrs, frequency_attrs)`` metadata for a result's coordinates.
+
+    ``fourier_connectivity`` records when it filled in a coordinate: the default
+    frequency grid is normalized (cycles/sample) and the default time is the
+    window index, so those must not be labeled Hz and seconds.
+    """
+    if shared_attrs.get("fourier_frequency_coordinate") == "normalized":
+        frequency_attrs = {"long_name": "Normalized frequency", "units": "cycles/sample"}
+    else:
+        frequency_attrs = {"long_name": "Frequency", "units": "Hz"}
+    if shared_attrs.get("fourier_time_coordinate") == "index":
+        time_attrs = {"long_name": "Window index"}
+    else:
+        time_attrs = {"long_name": "Window center time", "units": "s"}
+    return time_attrs, frequency_attrs
+
+
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
     method: str,
@@ -593,16 +624,13 @@ def _connectivity_result_to_xarray(
     for key, value in kwargs.items():
         _store_provenance_item(attrs, "arg_", key, value)
 
+    time_attrs, frequency_attrs = _coordinate_attrs(shared_attrs)
     base_coordinates: dict[str, Any] = {
-        "time": (
-            "time",
-            connectivity.time,
-            {"long_name": "Window center time", "units": "s"},
-        ),
+        "time": ("time", connectivity.time, time_attrs),
         "frequency": (
             "frequency",
             connectivity.frequencies,
-            {"long_name": "Frequency", "units": "Hz"},
+            frequency_attrs,
         ),
     }
     signal_coordinates = {
@@ -717,7 +745,7 @@ def _connectivity_result_to_xarray(
             raise ValueError(msg)
         coordinates = {
             "time": base_coordinates["time"],
-            "frequency": ("frequency", frequencies, {"units": "Hz"}),
+            "frequency": ("frequency", frequencies, frequency_attrs),
             "candidate": np.arange(
                 -int(kwargs.get("n_range", 3)), int(kwargs.get("n_range", 3)) + 1
             ),
@@ -1627,13 +1655,7 @@ def _time_axis_from_dataarray(
         raise ValueError(msg)
 
     values = np.asarray(coordinate.to_numpy())
-    if (
-        not np.issubdtype(values.dtype, np.number)
-        or np.issubdtype(values.dtype, np.complexfloating)
-        or np.issubdtype(values.dtype, np.bool_)
-        or np.issubdtype(values.dtype, np.datetime64)
-        or np.issubdtype(values.dtype, np.timedelta64)
-    ):
+    if not _is_real_numeric_dtype(values.dtype):
         msg = (
             f"The DataArray time coordinate {coordinate_name!r} must contain "
             "numeric elapsed seconds, or integer-like sample numbers for a "
@@ -2517,6 +2539,13 @@ def fourier_connectivity(
     )
     if getattr(getattr(coefficient_data, "dtype", None), "kind", None) != "c":
         msg = "fourier_coefficients must be complex-valued."
+        raise TypeError(msg)
+    if time is not None and not _is_real_numeric_dtype(np.asarray(time).dtype):
+        msg = (
+            "time must contain numeric elapsed seconds (window centers); "
+            f"got dtype {np.asarray(time).dtype!r}. Convert a datetime axis to "
+            "elapsed seconds, e.g. (t - t[0]) / np.timedelta64(1, 's')."
+        )
         raise TypeError(msg)
     inferred_one_sided = False
     if is_one_sided is not None and not isinstance(is_one_sided, (bool, np.bool_)):
