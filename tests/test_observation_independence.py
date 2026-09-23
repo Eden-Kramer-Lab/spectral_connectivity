@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity
+from spectral_connectivity import Connectivity, MorletWavelet, Welch
 
 
 class _StubTransform:
@@ -135,3 +135,39 @@ def test_jackknife_over_trials_is_allowed_with_correlated_tapers():
     )
     result = conn.jackknife("phase_lag_index")
     assert np.isfinite(result.standard_error).any()
+
+
+def _two_channel_series(rng, n_time=800, n_trials=3):
+    return rng.standard_normal((n_time, n_trials, 2))
+
+
+def test_morlet_smoothing_neighborhood_blocks_taper_jackknife_end_to_end():
+    # 20 Hz at 5 cycles has sigma_t ~ 0.04 s, so 0.5 s of smoothing is well above
+    # the four-sigma guidance and does not trigger the MorletWavelet warning.
+    morlet = MorletWavelet(
+        _two_channel_series(np.random.default_rng(7)),
+        sampling_frequency=200,
+        frequencies=[20.0, 40.0],
+        n_cycles=5,
+        smoothing_time=0.5,
+    )
+    assert morlet.observations_are_independent is False
+    conn = Connectivity.from_transform(morlet)
+    assert conn.observations_are_independent is False
+    with pytest.raises(ValueError, match="observations_are_independent"):
+        conn.jackknife("phase_lag_index")
+
+
+def test_welch_overlap_above_half_marks_observations_correlated_end_to_end():
+    series = _two_channel_series(np.random.default_rng(8), n_time=2000, n_trials=1)
+    independent = Welch(
+        series, sampling_frequency=200, n_time_samples_per_segment=200, segment_overlap=0.5
+    )
+    correlated = Welch(
+        series, sampling_frequency=200, n_time_samples_per_segment=200, segment_overlap=0.9
+    )
+    assert Connectivity.from_transform(independent).observations_are_independent is True
+    conn = Connectivity.from_transform(correlated)
+    assert conn.observations_are_independent is False
+    with pytest.warns(UserWarning, match="pairwise_phase_consistency .*correlated"):
+        conn.pairwise_phase_consistency()
