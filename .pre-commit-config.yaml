@@ -27,9 +27,9 @@ repos:
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
-        files: '^(spectral_connectivity|tests)/'
+        files: '^(src|tests)/'
       - id: ruff-format
-        files: '^(spectral_connectivity|tests)/'
+        files: '^(src|tests)/'
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.3
@@ -45,4 +45,4 @@ repos:
         entry: uv run --no-sync mypy
         language: system
         pass_filenames: false
-        files: '^(spectral_connectivity/.*\.py|pyproject\.toml)$'
+        files: '^(src/.*\.py|pyproject\.toml)$'

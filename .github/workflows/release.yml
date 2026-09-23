@@ -41,13 +41,13 @@ jobs:
       - name: Install dependencies
         run: pip install -e .[dev]
       - name: Run ruff formatting check
-        run: ruff format --check spectral_connectivity/ tests/
+        run: ruff format --check src/ tests/
       - name: Run ruff linting
-        run: ruff check spectral_connectivity/ tests/ --output-format=github
+        run: ruff check src/ tests/ --output-format=github
       - name: Run mypy type checking
-        run: mypy spectral_connectivity/
+        run: mypy src/
       - name: Run docstring examples (doctests)
-        run: pytest --doctest-modules spectral_connectivity/
+        run: pytest --doctest-modules src/spectral_connectivity/
       - name: Lint the workflow itself
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
         with:
@@ -84,7 +84,7 @@ jobs:
       - name: Install dependencies
         run: pip install -e .[dev]
       - name: Run tests with coverage
-        run: pytest --cov=spectral_connectivity --cov-report=xml --cov-report=term-missing tests/ --ignore=tests/test_notebooks.py
+        run: pytest --cov-report=xml tests/ --ignore=tests/test_notebooks.py
       - name: Run notebook snapshot tests
         # Snapshot (syrupy) comparisons use a tight rtol, so run them on a single
         # reference platform to avoid cross-platform float-precision flakiness.
