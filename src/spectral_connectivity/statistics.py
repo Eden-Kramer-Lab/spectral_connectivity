@@ -114,20 +114,22 @@ def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.float
     return np.clip(np.tanh(value), 0, 1) ** 2
 
 
-def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
-    """Warn that a saturated coherence yields a delta-method standard error of 0.
+def _warn_fisher_boundary(at_boundary: NDArray[np.bool_], boundary: str) -> None:
+    """Warn that estimates on a Fisher-transform boundary have a standard error of 0.
 
-    At ``|coherence| == 1`` the Fisher delta-method derivative is exactly zero,
-    so the back-transformed standard error is reported as ``0`` -- implying
-    perfect certainty rather than a degenerate boundary. Surface it so the zero
-    is not mistaken for a genuinely tight estimate.
+    At ``|coherence| == 1`` -- and, for ``atanh(sqrt(.))``, at a
+    magnitude-squared coherence of 0 -- the delta-method derivative is exactly
+    zero, so the back-transformed standard error is reported as ``0`` and the
+    interval degenerates, implying perfect certainty rather than a boundary.
+    Surface it so the zero is not mistaken for a genuinely tight estimate.
     """
     if bool(np.any(at_boundary)):
         warnings.warn(
             f"Fisher jackknife: {int(np.count_nonzero(at_boundary))} value(s) sit "
-            "at saturated coherence (|coherence| == 1), where the delta-method "
-            "standard error is exactly 0. This reflects a boundary, not perfect "
-            "certainty; interpret those standard errors with care.",
+            f"at {boundary}, where the transform's derivative vanishes, so the "
+            "delta-method standard error is exactly 0 and the interval degenerates "
+            "there. This reflects a boundary, not perfect certainty; interpret "
+            "those values with care.",
             UserWarning,
             stacklevel=3,
         )
@@ -239,7 +241,9 @@ def jackknife_confidence_interval(
         inverse = _exponential
         derivative = estimate_array
     elif transformation == "fisher":
-        _warn_fisher_boundary(np.abs(estimate_array) >= 1)
+        _warn_fisher_boundary(
+            np.abs(estimate_array) >= 1, "saturated coherence (|coherence| == 1)"
+        )
         epsilon = np.finfo(float).eps
         transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
         transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
@@ -250,8 +254,12 @@ def jackknife_confidence_interval(
         # [0, 1] (Enochson & Goodman 1965): atanh(sqrt(MSC)) = atanh(|coherence|).
         # Applying Fisher's atanh to the *unsquared* magnitude is the established
         # transform; atanh(MSC) is not. The delta-method derivative back to the
-        # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC).
-        _warn_fisher_boundary(estimate_array >= 1)
+        # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC),
+        # which vanishes at both ends of [0, 1].
+        _warn_fisher_boundary(estimate_array >= 1, "saturated coherence (|coherence| == 1)")
+        _warn_fisher_boundary(
+            estimate_array <= 0, "zero magnitude-squared coherence (estimate == 0)"
+        )
         epsilon = np.finfo(float).eps
         clipped_estimate = np.clip(estimate_array, 0, 1)
         transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))

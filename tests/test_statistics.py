@@ -742,6 +742,37 @@ def test_jackknife_fisher_warns_at_saturated_coherence():
         )
 
 
+def test_jackknife_fisher_squared_warns_at_zero_coherence():
+    """MSC exactly 0 is a degenerate boundary of atanh(sqrt(.)), like 1.
+
+    The delta-method derivative 2 * sqrt(MSC) * (1 - MSC) vanishes at 0, so
+    the standard error is reported as 0 and the lower bound is pinned at 0
+    whatever the replicates say. That must be surfaced, not returned silently.
+    """
+    with pytest.warns(UserWarning, match="zero magnitude-squared coherence") as record:
+        result = jackknife_confidence_interval(
+            np.array(0.0), np.array([0.0, 0.01, 0.02]), transformation="fisher_squared"
+        )
+    assert len(record) == 1
+    assert "derivative" in str(record[0].message)
+    assert result.standard_error == 0.0
+    assert result.confidence_interval[0] == 0.0
+    # All-zero replicates give the fully degenerate (0, 0) interval; still warned.
+    with pytest.warns(UserWarning, match="zero magnitude-squared coherence"):
+        degenerate = jackknife_confidence_interval(
+            np.array(0.0), np.zeros(3), transformation="fisher_squared"
+        )
+    assert degenerate.confidence_interval == (0.0, 0.0)
+    # Plain atanh has derivative 1 at 0: a magnitude coherence of 0 is interior
+    # to [-1, 1], not a boundary, so it must not warn and keeps a positive SE.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        plain = jackknife_confidence_interval(
+            np.array(0.0), np.array([-0.1, 0.0, 0.1]), transformation="fisher"
+        )
+    assert plain.standard_error > 0
+
+
 def test_jackknife_rejects_unknown_transformation():
     with pytest.raises(ValueError, match="transformation must be"):
         jackknife_confidence_interval(
