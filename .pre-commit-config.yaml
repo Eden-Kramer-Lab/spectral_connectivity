@@ -1,71 +1,48 @@
+# Run `uvx pre-commit install` once; then every commit runs these. `uvx
+# pre-commit run --all-files` runs them by hand. CI runs the same tools directly.
 ci:
-  autoupdate_commit_msg: "chore(deps): update pre-commit hooks"
-  autofix_commit_msg: "style: pre-commit fixes"
   autoupdate_schedule: monthly
-
-# Syrupy snapshots are compared byte-for-byte; never rewrite them.
-exclude: ^tests/__snapshots__/
+  autofix_commit_msg: "pre-commit: apply automatic fixes"
+  autoupdate_commit_msg: "pre-commit: update hook versions"
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        args: ["--maxkb=1024"]
       - id: check-case-conflict
       - id: check-merge-conflict
-      - id: check-symlinks
       - id: check-toml
       - id: check-yaml
-        exclude: ^conda-recipe/meta\.yaml$ # Jinja-templated conda recipe
-      - id: debug-statements
+        exclude: '^conda-recipe/meta\.yaml$' # Jinja-templated conda recipe
       - id: end-of-file-fixer
-        exclude: \.ipynb$
+        exclude: '^(uv\.lock|tests/__snapshots__/.*|.*\.ipynb)$'
       - id: mixed-line-ending
       - id: trailing-whitespace
-        exclude: \.ipynb$
+        exclude: '^(tests/__snapshots__/.*|.*\.ipynb)$'
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.8
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
+        files: '^(spectral_connectivity|tests)/'
       - id: ruff-format
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.1
-    hooks:
-      - id: mypy
-        files: ^spectral_connectivity/
-        additional_dependencies: [numpy, scipy-stubs, xarray]
+        files: '^(spectral_connectivity|tests)/'
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.3
     hooks:
       - id: codespell
         additional_dependencies: [tomli]
+        exclude: '^(uv\.lock|.*\.ipynb|tests/__snapshots__/.*)$'
 
-  - repo: https://github.com/pre-commit/pygrep-hooks
-    rev: v1.10.0
+  - repo: local
     hooks:
-      - id: rst-backticks
-      - id: rst-directive-colons
-      - id: rst-inline-touching-normal
-
-  - repo: https://github.com/rbubley/mirrors-prettier
-    rev: v3.9.8
-    hooks:
-      - id: prettier
-        types_or: [yaml, markdown, json]
-        exclude: ^conda-recipe/meta\.yaml$
-
-  - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.38.1
-    hooks:
-      - id: check-dependabot
-      - id: check-github-workflows
-      - id: check-readthedocs
-
-  - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.30.1
-    hooks:
-      - id: zizmor
+      - id: mypy
+        name: mypy (strict, in the uv environment)
+        entry: uv run --no-sync mypy
+        language: system
+        pass_filenames: false
+        files: '^(spectral_connectivity/.*\.py|pyproject\.toml)$'

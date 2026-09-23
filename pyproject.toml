@@ -154,9 +154,10 @@ known-first-party = ["spectral_connectivity"]
 
 [tool.codespell]
 # Notebook outputs embed base64 images, which read as misspellings.
-skip = "*.ipynb"
+skip = "uv.lock,*.ipynb,tests/__snapshots__"
 
 [tool.mypy]
+files = ["spectral_connectivity"]
 # Target the Python version the quality/CI job runs on (3.12). NumPy's installed
 # stubs use PEP 695 `type` statements, which mypy only parses when the target is
 # >= 3.12; a 3.10 target makes mypy reject the stubs before checking the project.
