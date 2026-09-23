@@ -559,12 +559,17 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
 
 
 # Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
-# Student t with n - 1 degrees of freedom for n = 3 and n = 5 leave-one-out
-# replicates, t.ppf(0.975, df).
+# Student t with n - 1 degrees of freedom for n = 3, 4, and 5 leave-one-out
+# replicates, t.ppf(0.975, df), to double precision (computed with mpmath).
 _Z_975 = 1.959963984540054
-_T_975_DF2 = 4.302652729749462
-_T_975_DF3 = 3.182446305284263
-_T_975_DF4 = 2.7764451051977934
+_T_975_DF2 = 4.302652729749464
+_T_975_DF3 = 3.1824463052837096
+_T_975_DF4 = 2.7764451051977944
+# SciPy's t.ppf differs from the exact quantile by up to ~1e-11 relative before
+# SciPy 1.16 (the version installed with Python 3.10). Bounds that scale with a
+# t quantile are compared at this tolerance, which still separates t from the
+# normal quantile by orders of magnitude.
+_T_QUANTILE_RTOL = 1e-9
 
 
 def test_jackknife_confidence_interval_matches_mean_example():
@@ -584,7 +589,9 @@ def test_jackknife_confidence_interval_matches_mean_example():
     assert result.standard_error == pytest.approx(np.sqrt(1 / 3))
     half_width = _T_975_DF2 * np.sqrt(1 / 3)
     np.testing.assert_allclose(
-        result.confidence_interval, (2.0 - half_width, 2.0 + half_width), rtol=1e-12
+        result.confidence_interval,
+        (2.0 - half_width, 2.0 + half_width),
+        rtol=_T_QUANTILE_RTOL,
     )
     np.testing.assert_allclose(result.confidence_interval, (-0.4841, 4.4841), atol=1e-4)
 
@@ -603,7 +610,7 @@ def test_jackknife_interval_uses_student_t_not_normal_critical_value():
 
     lower, upper = result.confidence_interval
     half_width = (upper - lower) / 2
-    np.testing.assert_allclose(half_width, _T_975_DF4 * standard_error, rtol=1e-12)
+    np.testing.assert_allclose(half_width, _T_975_DF4 * standard_error, rtol=_T_QUANTILE_RTOL)
     # The normal critical value would give a visibly narrower interval.
     assert half_width > 1.3 * _Z_975 * standard_error
 
@@ -647,7 +654,9 @@ def test_jackknife_log_and_circular_transforms_return_original_scale():
     expected_interval = np.exp(
         np.log(2.0) + np.array([-1, 1]) * _T_975_DF2 * log_standard_error
     )
-    np.testing.assert_allclose(log_result.confidence_interval, expected_interval, rtol=1e-12)
+    np.testing.assert_allclose(
+        log_result.confidence_interval, expected_interval, rtol=_T_QUANTILE_RTOL
+    )
     np.testing.assert_allclose(
         log_result.bias_corrected,
         np.exp(n * np.log(2.0) - (n - 1) * log_replicates.mean()),
@@ -688,7 +697,9 @@ def test_jackknife_circular_interval_wider_than_the_circle_warns():
     n = tight.size
     tight_half_width = _T_975_DF4 * np.sqrt((n - 1) / n * np.sum((tight - tight.mean()) ** 2))
     np.testing.assert_allclose(
-        (lower[1], upper[1]), (1.0 - tight_half_width, 1.0 + tight_half_width), rtol=1e-12
+        (lower[1], upper[1]),
+        (1.0 - tight_half_width, 1.0 + tight_half_width),
+        rtol=_T_QUANTILE_RTOL,
     )
     # A scalar estimate takes the same path.
     with pytest.warns(UserWarning, match="whole circle"):
@@ -718,8 +729,8 @@ def test_jackknife_circular_interval_crossing_pi_has_lower_above_upper():
 
     lower, upper = result.confidence_interval
     assert lower > upper
-    np.testing.assert_allclose(lower, estimate - half_width, rtol=1e-12)
-    np.testing.assert_allclose(upper, estimate + half_width - 2 * np.pi, rtol=1e-12)
+    np.testing.assert_allclose(lower, estimate - half_width, rtol=_T_QUANTILE_RTOL)
+    np.testing.assert_allclose(upper, estimate + half_width - 2 * np.pi, rtol=_T_QUANTILE_RTOL)
     # The estimate lies in the [lower, pi] arm of the wrapped interval.
     assert lower <= estimate <= np.pi
 
