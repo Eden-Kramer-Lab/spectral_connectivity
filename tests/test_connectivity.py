@@ -771,8 +771,8 @@ def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
     assert magnitude[0] == pytest.approx(0.80, abs=1e-6)
     # The phase is defined modulo pi; it must be lobe 1, not lobe 2.
     assert np.exp(2j * phase[0]) == pytest.approx(np.exp(2j * theta_1), abs=1e-6)
-    np.testing.assert_allclose(np.abs(left[0]), directions[0], atol=1e-6)
-    np.testing.assert_allclose(np.abs(right[0]), directions[0], atol=1e-6)
+    np.testing.assert_allclose(np.abs(left[0, :, 0]), directions[0], atol=1e-6)
+    np.testing.assert_allclose(np.abs(right[0, :, 0]), directions[0], atol=1e-6)
 
 
 def test_cacoh_phase_optimizer_refines_every_coarse_grid_lobe():
@@ -960,6 +960,26 @@ def test_cacoh_zero_cross_spectrum_does_not_warn():
         result = connectivity.canonical_coherency([0, 0, 1, 1], n_components=2)
 
     np.testing.assert_array_equal(result.scores, 0.0)
+
+
+def test_cacoh_components_stay_uncorrelated_for_zero_cross_spectrum():
+    """With an exactly zero between-group cross-spectrum every direction scores
+    0 and the SVD's singular vectors are arbitrary, so deflating by a projector
+    built from them can return the same filter for every component. The
+    components must still be distinct and uncorrelated within each group:
+    ``A Re(Caa) A^T = I`` for the stacked filters."""
+    coefficients = np.zeros((1, 6, 1, 1, 6), dtype=complex)
+    coefficients[0, :, 0, 0, :] = np.eye(6)
+    connectivity = Connectivity(coefficients, is_one_sided=True, frequencies=np.array([1.0]))
+    result = connectivity.canonical_coherency([0, 0, 0, 1, 1, 1], n_components=3)
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    filters = result.filters.squeeze()  # (component, side, signal)
+
+    np.testing.assert_array_equal(result.scores, 0.0)
+    for side, indices in enumerate((slice(0, 3), slice(3, 6))):
+        local = filters[:, side, indices]  # (component, group signal)
+        component_covariance = local @ csd[indices, indices].real @ local.T
+        np.testing.assert_allclose(component_covariance, np.eye(3), atol=1e-10)
 
 
 def test_component_methods_invariant_to_within_group_real_mixing():

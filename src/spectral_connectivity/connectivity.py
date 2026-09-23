@@ -5025,8 +5025,10 @@ def _optimize_canonical_coherency_phase(
     maximum, whose refinement then settles on only one of them. Fully
     vectorized over the leading (time/frequency) axes and backend-agnostic (no
     per-bin ``scipy.optimize`` loop). Returns the maximized magnitude, the
-    optimizing phase, and the top left/right singular vectors of
-    ``Re(exp(-i phi) W)`` at that phase.
+    optimizing phase, and the full orthogonal left/right singular-vector
+    matrices of ``Re(exp(-i phi) W)`` at that phase, shapes ``(..., n_a, n_a)``
+    and ``(..., n_b, n_b)``: column 0 holds the top pair, and the remaining
+    columns span its orthogonal complement.
     """
     leading_shape = whitened.shape[:-2]
     n_a, n_b = whitened.shape[-2:]
@@ -5077,12 +5079,12 @@ def _optimize_canonical_coherency_phase(
     best = xp.argmax(scores, axis=0)
     phase = xp.take_along_axis(phases, best[xp.newaxis], axis=0)[0]
     projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * flat)
-    left, singular_values, right_h = xp.linalg.svd(projected, full_matrices=False)
+    left, singular_values, right_h = xp.linalg.svd(projected)
     return (
         singular_values[:, 0].reshape(leading_shape),
         phase.reshape(leading_shape),
-        left[:, :, 0].reshape(*leading_shape, n_a),
-        right_h[:, 0, :].reshape(*leading_shape, n_b),
+        left.reshape(*leading_shape, n_a, n_a),
+        right_h.swapaxes(-1, -2).reshape(*leading_shape, n_b, n_b),
     )
 
 
@@ -5110,12 +5112,16 @@ def _canonical_coherency_components(
     Components are extracted by CCA-style deflation in whitened space. With
     ``W = Taa Cab Tbb`` (``Taa``/``Tbb`` the real within-group inverse square
     roots), component ``k`` maximizes the phase objective over
-    ``P_a W P_b``, where ``P = I - sum u u^T`` projects out the previous
-    components' whitened directions, and its filters are ``a_k = Taa u_k``.
-    Hence ``a_j^T Re(Caa) a_k = u_j^T u_k = 0`` for ``j != k`` (uncorrelated
-    component signals) and every component is invariant to invertible real
-    mixing within a group. Deflating the channel-space filters instead would
-    tie later components to the channel basis.
+    ``Q_a^T W Q_b``, where the columns of ``Q`` are an orthonormal basis of the
+    orthogonal complement of the previous components' whitened directions, and
+    its filters are ``a_k = Taa u_k`` with whitened direction ``u_k = Q_a x_k``
+    (``x_k`` the top singular vector). Hence ``a_j^T Re(Caa) a_k = u_j^T u_k =
+    0`` for ``j != k`` (uncorrelated component signals) and every component is
+    invariant to invertible real mixing within a group. Deflating the
+    channel-space filters instead would tie later components to the channel
+    basis. The next ``Q`` is ``Q`` times the remaining singular vectors, so it
+    stays orthonormal even where ``W`` vanishes and the singular vectors are
+    arbitrary (subtracting ``u u^T`` from a projector would not).
     """
     real_aa = xp.real(Caa)
     real_bb = xp.real(Cbb)
@@ -5129,12 +5135,10 @@ def _canonical_coherency_components(
         real_bb, rank=rank, regularization=regularization
     )
     whitened = transform_aa @ Cab @ transform_bb
-    projector_a: NDArray[np.floating] = xp.broadcast_to(
-        xp.eye(n_a), (*leading_shape, n_a, n_a)
-    )
-    projector_b: NDArray[np.floating] = xp.broadcast_to(
-        xp.eye(n_b), (*leading_shape, n_b, n_b)
-    )
+    # Orthonormal bases of the not-yet-extracted whitened directions, shapes
+    # (..., n_a, n_a - component) and (..., n_b, n_b - component).
+    basis_a: NDArray[np.floating] = xp.broadcast_to(xp.eye(n_a), (*leading_shape, n_a, n_a))
+    basis_b: NDArray[np.floating] = xp.broadcast_to(xp.eye(n_b), (*leading_shape, n_b, n_b))
     scores = xp.full((*leading_shape, n_components), xp.nan, dtype=Cab.dtype)
     filters_a = xp.full((*leading_shape, n_a, n_components), xp.nan)
     filters_b = xp.full((*leading_shape, n_b, n_components), xp.nan)
@@ -5142,10 +5146,10 @@ def _canonical_coherency_components(
     patterns_b = xp.full_like(filters_b, xp.nan)
 
     for component in range(n_components):
-        deflated = whitened if component == 0 else projector_a @ whitened @ projector_b
-        magnitude, phase, left, right = _optimize_canonical_coherency_phase(deflated)
-        filter_a = (transform_aa @ left[..., xp.newaxis])[..., 0]
-        filter_b = (transform_bb @ right[..., xp.newaxis])[..., 0]
+        restricted = basis_a.swapaxes(-1, -2) @ whitened @ basis_b
+        magnitude, phase, left, right = _optimize_canonical_coherency_phase(restricted)
+        filter_a = (transform_aa @ basis_a @ left[..., :, :1])[..., 0]
+        filter_b = (transform_bb @ basis_b @ right[..., :, :1])[..., 0]
         pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
         pattern_b = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
         # A spatial filter and its negative span the same direction, so the
@@ -5161,9 +5165,10 @@ def _canonical_coherency_components(
         patterns_a[..., component] = pattern_a * sign_a[..., xp.newaxis]
         patterns_b[..., component] = pattern_b * sign_b[..., xp.newaxis]
         if component + 1 < n_components:
-            # Project out the extracted whitened directions (sign-free: u u^T).
-            projector_a = projector_a - left[..., :, xp.newaxis] * left[..., xp.newaxis, :]
-            projector_b = projector_b - right[..., :, xp.newaxis] * right[..., xp.newaxis, :]
+            # The remaining singular vectors span the complement of the extracted
+            # direction within the current basis.
+            basis_a = basis_a @ left[..., :, 1:]
+            basis_b = basis_b @ right[..., :, 1:]
 
     # Deflation only removes the extracted directions, not the group's null
     # space, so a component beyond the joint within-group rank still optimizes a
