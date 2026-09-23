@@ -512,7 +512,9 @@ class Connectivity:
                 else xp.fft.fftfreq(n_fft_samples)
             )
         time_values = xp.arange(n_time_windows) if time is None else time
-        self._frequencies = frequencies
+        # Frequencies live on the backend (``frequencies`` indexes them with a
+        # device index array); time is a host coordinate (see ``time`` users).
+        self._frequencies = xp.asarray(frequencies)
         self._dtype = dtype
         self.time = to_numpy(time_values)
 
@@ -599,6 +601,11 @@ class Connectivity:
     def _set_fourier_coefficients(
         self, value: NDArray[np.complexfloating], *, adopt: bool
     ) -> None:
+        # Move a host array (or array-like) onto the active backend before the
+        # first device operation below (CuPy rejects NumPy operands). This is a
+        # no-op for an array already on the backend, so the adopt fast path
+        # stays copy-free.
+        value = xp.asarray(value)
         if value.ndim != 5:
             msg = (
                 f"fourier_coefficients must be 5-dimensional, got {value.ndim}D array.\n"
@@ -687,7 +694,7 @@ class Connectivity:
                     else xp.fft.fftfreq(n_fft_samples)
                 )
             if time_stale:
-                self.time = xp.arange(n_time_windows)
+                self.time = np.arange(n_time_windows)  # host coordinate, as in __init__
             if weights_stale:
                 self._observation_weights = None
 
@@ -2210,11 +2217,13 @@ class Connectivity:
             # implementation. A shared normalization by sum(weight) cancels
             # from the canonical correlation and is therefore unnecessary.
             fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+        # Group membership was resolved on the host by _validated_group_indices
+        # (one ascending index array per sorted label); index the device
+        # coefficients with device index arrays, as ``xp.isin`` over host labels
+        # fails on CuPy.
         normalized_fourier_coefficients = [
-            _normalize_fourier_coefficients(
-                fourier_coefficients[..., xp.isin(group_labels, label)]
-            )
-            for label in labels
+            _normalize_fourier_coefficients(fourier_coefficients[..., xp.asarray(indices)])
+            for indices in group_indices
         ]
 
         n_groups = len(labels)
@@ -3869,8 +3878,11 @@ class Connectivity:
         all_indices = np.arange(n_signals)
         for source in range(n_signals):
             reduced_indices = all_indices[all_indices != source]
+            # Index the device spectrum with a device index array; the host
+            # copy is what the conditional estimator's bookkeeping consumes.
+            device_indices = xp.asarray(reduced_indices)
             reduced_transfer, _ = _var_model_from_spectrum(
-                spectrum[..., reduced_indices[:, None], reduced_indices[None, :]],
+                spectrum[..., device_indices[:, xp.newaxis], device_indices[xp.newaxis, :]],
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
@@ -5608,9 +5620,11 @@ def _get_independent_frequencies(
     is_significant_independent : bool array
 
     """
+    # Host-only: the significance masks are NumPy arrays by the time they reach
+    # the delay-family helpers, and CuPy's isin rejects NumPy operands.
     index = is_significant.nonzero()[0]
     independent_index = index[0 : len(index) : frequency_step]
-    return xp.isin(np.arange(0, len(is_significant)), independent_index)
+    return np.isin(np.arange(0, len(is_significant)), independent_index)
 
 
 def _find_largest_independent_group(
