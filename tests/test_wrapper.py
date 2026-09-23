@@ -2216,6 +2216,97 @@ def test_directed_measures_are_oriented_source_to_target(method, unidirectional_
     assert np.nanmax(causal) > _CAUSAL_PEAK_FLOOR.get(method, 0.0)
 
 
+@pytest.fixture(scope="module")
+def lagged_triplet():
+    """x drives y at a 3-sample lag (6 ms at 500 Hz); z is independent noise.
+
+    Returns
+    -------
+    time_series : np.ndarray, shape (400, 6, 3)
+    """
+    rng = np.random.default_rng(0)
+    n_time, n_trials, lag = 400, 6, 3
+    x = rng.standard_normal((n_time + lag, n_trials))
+    y = 0.8 * x[:-lag] + 0.5 * rng.standard_normal((n_time, n_trials))
+    z = rng.standard_normal((n_time, n_trials))
+    return np.stack([x[lag:], y, z], axis=-1)
+
+
+_LAGGED_SAMPLING_FREQUENCY = 500
+_LAGGED_LAG_SAMPLES = 3
+_LAGGED_BAND = (5.0, 100.0)
+_LAGGED_KWARGS = {
+    "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
+    "blockwise_spectral_granger_prediction": {"group_labels": ["A", "B", "C"]},
+    "phase_slope_index": {"frequencies_of_interest": list(_LAGGED_BAND)},
+    "delay": {"frequencies_of_interest": list(_LAGGED_BAND)},
+    "group_delay": {"frequencies_of_interest": list(_LAGGED_BAND)},
+}
+
+
+def _directed_entry(values: xr.DataArray) -> float:
+    """Median of one directed entry: over the band when frequency-resolved, at
+    the zero-wrap candidate for ``delay``."""
+    if "frequency" in values.dims:
+        values = values.sel(frequency=slice(*_LAGGED_BAND))
+    if "candidate" in values.dims:
+        values = values.sel(candidate=0)
+    return float(np.nanmedian(values.values))
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        "conditional_spectral_granger_prediction",
+        "subset_pairwise_spectral_granger_prediction",
+        "time_reversed_spectral_granger_prediction",
+        "blockwise_spectral_granger_prediction",
+        "directed_phase_lag_index",
+        "phase_slope_index",
+        "delay",
+        "group_delay",
+    ],
+)
+def test_remaining_directed_measures_are_oriented_source_to_target(method, lagged_triplet):
+    """``sel(source="x", target="y")`` is the large / positive entry for the
+    directed measures the DTF-family test above omits. x drives y with a +6 ms
+    lag, so Granger-type scores, dPLI (> 0.5), PSI, and the delays (+0.006 s)
+    must all point x -> y. Time reversal flips the apparent direction, so the
+    time-reversed measure is given reversed data."""
+    time_series = lagged_triplet
+    if method == "time_reversed_spectral_granger_prediction":
+        time_series = time_series[::-1]
+    result = multitaper_connectivity(
+        time_series,
+        sampling_frequency=_LAGGED_SAMPLING_FREQUENCY,
+        time_halfbandwidth_product=3,
+        method=method,
+        signal_names=["x", "y", "z"],
+        connectivity_kwargs=_LAGGED_KWARGS.get(method, {}),
+    )
+    values = result[method] if isinstance(result, xr.Dataset) else result
+    if method == "blockwise_spectral_granger_prediction":
+        forward = _directed_entry(values.sel(source_group="A", target_group="B"))
+        backward = _directed_entry(values.sel(source_group="B", target_group="A"))
+    else:
+        forward = _directed_entry(values.sel(source="x", target="y"))
+        backward = _directed_entry(values.sel(source="y", target="x"))
+
+    assert forward > backward
+    expected_delay = _LAGGED_LAG_SAMPLES / _LAGGED_SAMPLING_FREQUENCY
+    if method == "directed_phase_lag_index":
+        assert forward > 0.5 > backward
+    elif method == "phase_slope_index":
+        assert forward > 0 > backward
+    elif method in {"delay", "group_delay"}:
+        assert forward == pytest.approx(expected_delay, abs=1e-3)
+        assert backward == pytest.approx(-expected_delay, abs=1e-3)
+    else:
+        # Granger-type: x -> y is about 1.1 on this system, y -> x about 0.01.
+        assert forward > 0.5
+        assert forward > 10 * backward
+
+
 def test_multitaper_connectivity_dataset_carries_shared_provenance():
     """A multi-measure Dataset exposes shared provenance at the top level.
 
