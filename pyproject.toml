@@ -75,7 +75,10 @@ Changelog = "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/maste
 
 
 [tool.pytest.ini_options]
-addopts = "-q"
+minversion = "8.0"
+addopts = ["-ra", "-q", "--strict-config", "--strict-markers"]
+xfail_strict = true
+log_level = "INFO"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
