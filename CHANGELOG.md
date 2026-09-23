@@ -242,8 +242,11 @@ directly with results from 2.x.
   innovations materially violate its diagonal-covariance assumption.
 - GPU boundaries for `group_delay`, `delay`, statistics, metadata, and public
   returns now use explicit device-to-host conversion.
-- `power` preserves float32 precision, and global coherence avoids overflow or
-  underflow for extreme input scales.
+- `power` returns float32 for complex64 Fourier coefficients passed directly to
+  `Connectivity` instead of promoting them to float64 (`Multitaper` uses float64
+  tapers, so its coefficients and power are double precision whatever the input
+  dtype), and global coherence avoids overflow or underflow for extreme input
+  scales.
 - Phase-locking and phase-lag measures handle dead channels without leaking
   runtime warnings; their documented finite-sample ranges are corrected.
 - Group delay and delay use the exact zero-coherence significance distribution.
