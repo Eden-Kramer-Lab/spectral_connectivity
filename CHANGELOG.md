@@ -362,7 +362,10 @@ directly with results from 2.x.
   cross-spectrum is rounding noise rather than exactly 0) gives 0 for both.
 - `fourier_connectivity(is_one_sided=False)` on unlabeled coefficients honors
   the declaration and runs the two-sided-only measures; only `is_one_sided=None`
-  warns and rejects them.
+  rejects them. Because one-sided (e.g. `rfft`) coefficients declared two-sided
+  give silently wrong Granger values, those measures warn when the declared
+  coefficients are not conjugate-symmetric (as the FFT of real-valued signals
+  is), which is also expected for complex-valued signals.
 - DataArray time coordinates are judged uniform relative to the sampling
   interval (one part in 1e6), so axes built with `np.cumsum` are accepted with
   or without `sampling_frequency`.

@@ -3181,7 +3181,9 @@ def fourier_connectivity(
         inferred: pass ``True`` for one-sided input (e.g. ``rfft`` output) or
         ``False`` for a full FFT-order spectrum. ``False`` is honored as a
         declaration, so measures that require a two-sided spectrum run on the
-        coefficients as given. Leaving it unset in that case assumes two-sided,
+        coefficients as given; they warn if the coefficients are not
+        conjugate-symmetric, as the FFT of real-valued signals is, because
+        mislabeled one-sided input makes those measures wrong. Leaving it unset in that case assumes two-sided,
         warns, and refuses those measures because the assumption cannot be
         checked. With a frequency coordinate it is inferred from
         ``frequencies``.
@@ -3369,6 +3371,32 @@ def fourier_connectivity(
                 "spectrum, or request only one-sided-compatible measures."
             )
             raise ValueError(msg)
+        if two_sided_methods and is_one_sided is not None:
+            # The declaration is trusted here, so check what it implies for real
+            # signals: bin k is the conjugate of bin -k (FFT order). Measured
+            # relative residuals: <= 4e-16 for FFTs of real noise in complex128
+            # and <= 2e-7 in complex64 (up to 65536 bins), versus 1.3-1.45 for
+            # rfft output declared two-sided and for complex-valued signals. A
+            # threshold of 1e-3 leaves over three orders of magnitude on each side.
+            positive_bins = coefficient_data[..., 1:, :]
+            mirrored_bins = coefficient_data[..., :0:-1, :].conj()
+            asymmetry = float((abs(positive_bins - mirrored_bins) ** 2).sum()) ** 0.5
+            scale = float((abs(positive_bins) ** 2).sum()) ** 0.5
+            if asymmetry > 1e-3 * scale:
+                warnings.warn(
+                    "The Fourier coefficients declared two-sided (is_one_sided="
+                    "False) are not conjugate-symmetric along the frequency axis "
+                    f"(relative residual {asymmetry / scale:.2g}), as the FFT of "
+                    "real-valued signals is. This happens when one-sided "
+                    "coefficients (e.g. rfft or wavelet output) are declared "
+                    f"two-sided, and then {sorted(set(two_sided_methods))}, which "
+                    "require a two-sided spectrum, are wrong; or when the signals "
+                    "are complex-valued. Pass is_one_sided=True for one-sided "
+                    "coefficients and request only one-sided-compatible measures, "
+                    "or pass the full two-sided FFT of real-valued signals.",
+                    UserWarning,
+                    stacklevel=2,
+                )
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     metadata = {
         "source": "external_fourier_coefficients",

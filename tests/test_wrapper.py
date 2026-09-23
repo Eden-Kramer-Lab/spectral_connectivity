@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
@@ -2780,6 +2781,45 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
     assert np.nanmax(driven) > np.nanmax(driver)
 
 
+def test_fourier_connectivity_warns_on_one_sided_input_declared_two_sided():
+    """rfft-like coefficients declared ``is_one_sided=False`` would silently give
+    wrong Granger values, so the missing conjugate symmetry is reported, both
+    for an explicit two-sided-only method and for the default method set."""
+    rng = np.random.default_rng(326)
+    time_series = rng.standard_normal((5, 256, 2))
+    time_series[:, 1:, 1] += 0.8 * time_series[:, :-1, 0]
+    one_sided = np.fft.rfft(time_series, axis=1)
+
+    with pytest.warns(UserWarning, match="not conjugate-symmetric"):
+        fourier_connectivity(
+            one_sided,
+            method="pairwise_spectral_granger_prediction",
+            is_one_sided=False,
+        )
+    with pytest.warns(UserWarning, match="not conjugate-symmetric"):
+        fourier_connectivity(one_sided, is_one_sided=False)
+    # Functional measures do not rely on the two-sided declaration's symmetry.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fourier_connectivity(one_sided, method="coherence_magnitude", is_one_sided=False)
+
+
+def test_fourier_connectivity_two_sided_check_tolerates_single_precision():
+    """A full FFT of real signals computed in complex64 is conjugate-symmetric
+    only to single-precision round-off, which must not trigger the warning."""
+    rng = np.random.default_rng(327)
+    time_series = rng.standard_normal((5, 256, 2)).astype(np.complex64)
+    coefficients = scipy.fft.fft(time_series, axis=1)
+    assert coefficients.dtype == np.complex64
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fourier_connectivity(
+            coefficients,
+            method="pairwise_spectral_granger_prediction",
+            is_one_sided=False,
+        )
+
+
 def test_fourier_connectivity_allows_unlabeled_undirected_measure():
     coefficients = np.random.default_rng(314).standard_normal(
         (4, 8, 2)
@@ -2835,7 +2875,8 @@ def test_fourier_connectivity_unlabeled_default_skips_two_sided_methods():
     that require it instead of rejecting the caller's implicit request. An
     explicit ``is_one_sided=False`` declaration restores them."""
     rng = np.random.default_rng(324)
-    coefficients = rng.standard_normal((5, 8, 2)) + 1j * rng.standard_normal((5, 8, 2))
+    # Full FFT of real signals, so the two-sided declaration below is truthful.
+    coefficients = np.fft.fft(rng.standard_normal((5, 8, 2)), axis=1)
     with pytest.warns(UserWarning, match="assuming a two-sided"):
         result = fourier_connectivity(coefficients)
 
