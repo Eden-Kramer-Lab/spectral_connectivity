@@ -624,10 +624,14 @@ def test_multicomponent_cacoh_deflates_previous_filters():
     ]
 
 
-def test_cacoh_zeros_components_beyond_group_rank():
+@pytest.mark.parametrize(
+    "method", ["canonical_coherency", "maximized_imaginary_coherency_components"]
+)
+def test_multivariate_components_zero_components_beyond_group_rank(method):
     """A rank-deficient group cannot support more components than its rank; the
     extra "phantom" components must come back with a zero score and an all-zero
-    filter, as the warning promises, not a spurious optimized value."""
+    filter/pattern, as the warning promises, not a spurious optimized value or
+    an arbitrary null-space singular vector."""
     rng = np.random.default_rng(4)
     coefficients = rng.standard_normal((1, 400, 1, 1, 5)) + 1j * rng.standard_normal(
         (1, 400, 1, 1, 5)
@@ -638,13 +642,15 @@ def test_cacoh_zeros_components_beyond_group_rank():
     )  # channels 0..5, channel 5 == channel 0
     connectivity = Connectivity(coefficients)
     with pytest.warns(UserWarning, match="phantom"):
-        result = connectivity.canonical_coherency([0, 1, 0, 1, 1, 0], n_components=3)
+        result = getattr(connectivity, method)([0, 1, 0, 1, 1, 0], n_components=3)
     # Group A ({0, 2, 5}) has a duplicated channel -> rank 2; the third component
     # is unsupported.
     phantom_score = np.abs(result.scores[..., 0, 2])
     phantom_filters = result.filters[..., 0, 2, :, :]
+    phantom_patterns = result.patterns[..., 0, 2, :, :]
     assert np.nanmax(phantom_score) < 1e-10
     assert np.nanmax(np.abs(phantom_filters)) < 1e-10
+    assert np.nanmax(np.abs(phantom_patterns)) < 1e-10
     # The two supported components are still non-degenerate.
     assert np.nanmax(np.abs(result.scores[..., 0, 0])) > 1e-3
 

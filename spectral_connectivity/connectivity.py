@@ -4008,16 +4008,38 @@ def _canonical_coherency_components(
     assert effective_rank is not None  # n_components >= 1, so the loop always runs
     # Deflation only removes the extracted *filters*, not the group's null
     # space, so a component beyond the joint within-group rank still optimizes a
-    # spurious direction. Force those phantom components to a zero score and an
-    # all-zero filter/pattern, matching the caller's warning.
-    supported = xp.arange(n_components) < effective_rank[..., xp.newaxis]
-    scores = xp.where(supported, scores, 0.0)
+    # spurious direction.
+    return _zero_unsupported_components(
+        scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
+    )
+
+
+def _zero_unsupported_components(
+    scores: NDArray[Any],
+    filters: tuple[NDArray[np.floating], NDArray[np.floating]],
+    patterns: tuple[NDArray[np.floating], NDArray[np.floating]],
+    effective_rank: NDArray[np.integer],
+) -> tuple[
+    NDArray[Any],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    tuple[NDArray[np.floating], NDArray[np.floating]],
+    NDArray[np.integer],
+]:
+    """Zero the phantom components beyond the joint within-group rank.
+
+    ``scores`` has shape ``(..., n_components)``; each filter/pattern has shape
+    ``(..., n_group_signals, n_components)``; ``effective_rank`` has the leading
+    shape ``(...)``. Components at index ``>= effective_rank`` get a zero score
+    and an all-zero filter/pattern, matching the caller's warning.
+    """
+    supported = xp.arange(scores.shape[-1]) < effective_rank[..., xp.newaxis]
     supported_sides = supported[..., xp.newaxis, :]
-    filters_a = xp.where(supported_sides, filters_a, 0.0)
-    filters_b = xp.where(supported_sides, filters_b, 0.0)
-    patterns_a = xp.where(supported_sides, patterns_a, 0.0)
-    patterns_b = xp.where(supported_sides, patterns_b, 0.0)
-    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
+    return (
+        xp.where(supported, scores, 0.0),
+        tuple(xp.where(supported_sides, side, 0.0) for side in filters),
+        tuple(xp.where(supported_sides, side, 0.0) for side in patterns),
+        effective_rank,
+    )
 
 
 def _mic_components(
@@ -4057,8 +4079,14 @@ def _mic_components(
     filters_b = transform_bb @ right
     patterns_a = real_aa @ filters_a
     patterns_b = real_bb @ filters_b
-    effective_rank = xp.minimum(rank_a, rank_b)
-    return scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
+    # Singular vectors past the joint within-group rank span the whitening
+    # transform's null space: their score is ~0 but the vectors are arbitrary.
+    return _zero_unsupported_components(
+        scores,
+        (filters_a, filters_b),
+        (patterns_a, patterns_b),
+        xp.minimum(rank_a, rank_b),
+    )
 
 
 def _estimate_transfer_function(
