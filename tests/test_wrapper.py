@@ -21,34 +21,65 @@ from spectral_connectivity.wrapper import (
     multitaper_connectivity,
 )
 
+# Shared window-grid case: 2.4 s at 500 Hz plus one sample, so most window
+# durations leave a trailing partial window that must be dropped.
+_GRID_SAMPLING_FREQUENCY = 500
+_GRID_N_SAMPLES = 1201
+_GRID_N_TRIALS = 3
 
-@pytest.mark.parametrize("time_window_duration", [0.1, 0.2, 2.4, 0.16])
-def test_multitaper_coherence_magnitude(time_window_duration):
-    rng = np.random.default_rng(42)
-    sampling_frequency = 1500
-    start_time, end_time = 0, 4.8
-    n_trials, n_signals = 10, 2
-    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
-    expected_time = np.arange(start_time, end_time, time_window_duration)
 
-    if not np.allclose(expected_time[-1] + time_window_duration, end_time):
-        expected_time = expected_time[:-1]
-    # Windows are labeled by their center time, not their start.
-    expected_time = expected_time + (round(time_window_duration * sampling_frequency) - 1) / (
-        2 * sampling_frequency
+def _expected_window_centers(
+    n_samples: int, sampling_frequency: float, window_duration: float
+) -> np.ndarray:
+    """Center times of the non-overlapping full windows, from first principles.
+
+    Returns
+    -------
+    centers : np.ndarray, shape (n_windows,)
+        ``(start + (n_window - 1) / 2) / fs`` for each window that fits entirely
+        in the record; a trailing partial window is not labeled.
+    """
+    n_window = round(window_duration * sampling_frequency)
+    n_windows = (n_samples - n_window) // n_window + 1
+    starts = np.arange(n_windows) * n_window
+    return (starts + (n_window - 1) / 2) / sampling_frequency
+
+
+def _grid_noise(n_signals: int, seed: int) -> np.ndarray:
+    """White noise shaped ``(_GRID_N_SAMPLES, _GRID_N_TRIALS, n_signals)``."""
+    return np.random.default_rng(seed).standard_normal(
+        (_GRID_N_SAMPLES, _GRID_N_TRIALS, n_signals)
     )
+
+
+@pytest.mark.parametrize("time_window_duration", [0.1, 0.14, 0.16, 2.4])
+def test_coherence_magnitude_is_bounded_on_window_center_time_grid(time_window_duration):
+    """Windows are labeled by center time and coherence stays in [0, 1].
+
+    Signal 1 is signal 0 plus 5% noise (coherence near 1) and signal 2 is
+    independent, so a scaled or mis-normalized estimate leaves the unit range.
+    """
+    noise = _grid_noise(3, seed=42)
+    time_series = noise.copy()
+    time_series[..., 1] = noise[..., 0] + 0.05 * noise[..., 1]
 
     m = multitaper_connectivity(
         time_series,
         method="coherence_magnitude",
-        sampling_frequency=sampling_frequency,
+        sampling_frequency=_GRID_SAMPLING_FREQUENCY,
         time_window_duration=time_window_duration,
     )
 
-    assert np.allclose(m.time.values, expected_time)
-    assert not (m.values == 0).all()
-    assert not (np.isnan(m.values)).all()
+    np.testing.assert_allclose(
+        m.time.values,
+        _expected_window_centers(
+            _GRID_N_SAMPLES, _GRID_SAMPLING_FREQUENCY, time_window_duration
+        ),
+    )
+    off_diagonal = m.values[..., ~np.eye(3, dtype=bool)]
+    assert np.all((off_diagonal >= 0) & (off_diagonal <= 1 + 1e-12))
+    # Squared coherence of x with x + 0.05 * noise is ~400/401 at every bin.
+    assert np.all(m.sel(source="0", target="1").values > 0.9)
 
 
 @pytest.mark.parametrize(
@@ -228,85 +259,65 @@ def test_fourier_connectivity_exposes_global_dataset():
     assert result.sizes["frequency"] == 9
 
 
-@pytest.mark.parametrize("n_signals", range(2, 5))
-def test_multitaper_n_signals(n_signals):
-    """
-    Test dataarray interface
-    """
-    np.random.default_rng(42)
-    time_window_duration = 0.1
-    sampling_frequency = 1500
-    start_time, end_time = 0, 4.8
-    n_trials, n_signals = 10, n_signals
-    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    # time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    rng = np.random.default_rng(0)
-    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
-    expected_time = np.arange(start_time, end_time, time_window_duration)
-
-    if not np.allclose(expected_time[-1] + time_window_duration, end_time):
-        expected_time = expected_time[:-1]
-    # Windows are labeled by their center time, not their start.
-    expected_time = expected_time + (round(time_window_duration * sampling_frequency) - 1) / (
-        2 * sampling_frequency
+@pytest.mark.parametrize("method", [*DEFAULT_METHODS, "coherency"])
+def test_single_method_result_is_on_window_center_time_grid(method):
+    """Every default measure (plus complex coherency) labels the same time grid."""
+    n_signals, time_window_duration = 3, 0.1
+    m = multitaper_connectivity(
+        _grid_noise(n_signals, seed=0),
+        method=method,
+        sampling_frequency=_GRID_SAMPLING_FREQUENCY,
+        time_window_duration=time_window_duration,
     )
 
-    for method in (*DEFAULT_METHODS, "coherency"):
-        m = multitaper_connectivity(
-            time_series,
-            method=method,
-            sampling_frequency=sampling_frequency,
-            time_window_duration=time_window_duration,
-        )
-        assert np.allclose(m.time.values, expected_time)
-        assert not (m.values == 0).all()
-        assert not (np.isnan(m.values)).all()
+    np.testing.assert_allclose(
+        m.time.values,
+        _expected_window_centers(
+            _GRID_N_SAMPLES, _GRID_SAMPLING_FREQUENCY, time_window_duration
+        ),
+    )
+    assert m.sizes["source"] == n_signals
+    assert m.sizes.get("target", n_signals) == n_signals
+    assert not (m.values == 0).all()
+    assert not np.isnan(m.values).all()
 
 
-@pytest.mark.parametrize("n_signals", range(2, 5))
-def test_multitaper_connectivities_n_signals(n_signals):
-    np.random.default_rng(42)
+@pytest.mark.parametrize("n_signals", [2, 3, 4])
+def test_default_dataset_variables_share_window_center_time_grid(n_signals):
+    """The merged default Dataset (and a one-item method list) keeps the grid."""
+    time_series = _grid_noise(n_signals, seed=0)
     time_window_duration = 0.1
-    sampling_frequency = 1500
-    start_time, end_time = 0, 4.8
-    n_trials, n_signals = 10, n_signals
-    n_time_samples = int((end_time - start_time) * sampling_frequency) + 1
-    rng = np.random.default_rng(0)
-    time_series = rng.random(size=(n_time_samples, n_trials, n_signals))
-    expected_time = np.arange(start_time, end_time, time_window_duration)
-
-    if not np.allclose(expected_time[-1] + time_window_duration, end_time):
-        expected_time = expected_time[:-1]
-    # Windows are labeled by their center time, not their start.
-    expected_time = expected_time + (round(time_window_duration * sampling_frequency) - 1) / (
-        2 * sampling_frequency
+    expected_time = _expected_window_centers(
+        _GRID_N_SAMPLES, _GRID_SAMPLING_FREQUENCY, time_window_duration
     )
 
     cons = multitaper_connectivity(
         time_series,
-        sampling_frequency=sampling_frequency,
+        sampling_frequency=_GRID_SAMPLING_FREQUENCY,
         time_window_duration=time_window_duration,
     )
+    assert tuple(cons.data_vars) == DEFAULT_METHODS
     for mea in cons.data_vars:
-        assert np.allclose(cons[mea].time.values, expected_time)
+        np.testing.assert_allclose(cons[mea].time.values, expected_time)
+        assert cons[mea].sizes["source"] == n_signals
         assert not (cons[mea].values == 0).all()
-        assert not (np.isnan(cons[mea].values)).all()
+        assert not np.isnan(cons[mea].values).all()
 
+    # A one-item method list still returns a Dataset.
     cons = multitaper_connectivity(
         time_series,
         method=["coherence_magnitude"],
-        sampling_frequency=sampling_frequency,
+        sampling_frequency=_GRID_SAMPLING_FREQUENCY,
         time_window_duration=time_window_duration,
     )
-    mea = "coherence_magnitude"
-    assert np.allclose(cons[mea].time.values, expected_time)
-    assert not (cons[mea].values == 0).all()
-    assert not (np.isnan(cons[mea].values)).all()
+    assert isinstance(cons, xr.Dataset)
+    assert tuple(cons.data_vars) == ("coherence_magnitude",)
+    np.testing.assert_allclose(cons["coherence_magnitude"].time.values, expected_time)
 
 
-def test_frequencies():
+def test_default_dataset_frequency_grid_is_nonnegative_fft_bins():
     rng = np.random.default_rng(42)
-    n_time_samples, n_trials, n_signals = 64, 10, 2
+    n_time_samples, n_trials, n_signals = 64, 3, 2
     time_series = rng.random((n_time_samples, n_trials, n_signals))
     # n_fft_samples must be >= the window length (here the full 64 samples),
     # otherwise the FFT would silently truncate the signal.
@@ -387,35 +398,52 @@ def test_accepts_documented_2d_input():
     np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
 
 
+# Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
+# are deliberately unsorted, so per-signal power exposes a data/label
+# mispairing, a channel reversal, or a label sort (a symmetric two-signal
+# measure such as coherence_magnitude cannot).
+_UNSORTED_LABELS = ["right", "left"]
+_CHANNEL_SCALE = np.array([5.0, 1.0])
+
+
+def _assert_power_follows_labels(result: xr.DataArray) -> None:
+    """The loud channel's power is reported under its own label, in input order."""
+    assert result.source.values.tolist() == _UNSORTED_LABELS
+    loud = float(result.sel(source="right").mean())
+    quiet = float(result.sel(source="left").mean())
+    assert loud > 10 * quiet
+
+
 @pytest.mark.parametrize("with_trial_dimension", [False, True])
 def test_dataarray_input_preserves_signal_labels(with_trial_dimension):
     """A DataArray's final dimension labels carry through to the result."""
     rng = np.random.default_rng(4)
     if with_trial_dimension:
-        data = rng.standard_normal((256, 3, 2))
+        data = rng.standard_normal((256, 3, 2)) * _CHANNEL_SCALE
         dims = ("sample", "trial", "channel")
     else:
-        data = rng.standard_normal((256, 2))
+        data = rng.standard_normal((256, 2)) * _CHANNEL_SCALE
         dims = ("sample", "channel")
     labeled = xr.DataArray(
         data,
         dims=dims,
-        coords={"channel": ["left", "right"]},
+        coords={"channel": _UNSORTED_LABELS},
     )
 
     actual = multitaper_connectivity(
         labeled,
         sampling_frequency=256,
-        method="coherence_magnitude",
+        method="power",
     )
     expected = multitaper_connectivity(
         data,
         sampling_frequency=256,
-        method="coherence_magnitude",
-        signal_names=["left", "right"],
+        method="power",
+        signal_names=_UNSORTED_LABELS,
     )
 
     xr.testing.assert_identical(actual, expected)
+    _assert_power_follows_labels(actual)
 
 
 def test_explicit_signal_names_override_dataarray_coordinate():
@@ -513,46 +541,44 @@ def test_dataarray_datetime_signal_coordinate_is_preserved():
 
 def test_dataarray_named_dimensions_are_transposed_automatically():
     """Dimension names, rather than input position, determine semantic axes."""
-    raw = np.random.default_rng(10).standard_normal((256, 2))
+    raw = np.random.default_rng(10).standard_normal((256, 2)) * _CHANNEL_SCALE
     data = xr.DataArray(
         raw.T,
         dims=("channel", "time"),
-        coords={"channel": ["left", "right"]},
+        coords={"channel": _UNSORTED_LABELS},
     )
 
-    actual = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
-    )
+    actual = multitaper_connectivity(data, sampling_frequency=256, method="power")
     expected = multitaper_connectivity(
         raw,
         sampling_frequency=256,
-        method="coherence_magnitude",
-        signal_names=["left", "right"],
+        method="power",
+        signal_names=_UNSORTED_LABELS,
     )
 
     xr.testing.assert_identical(actual, expected)
+    _assert_power_follows_labels(actual)
 
 
 def test_dataarray_swapped_time_and_trial_dims_are_transposed_automatically():
     """Named trial/time axes are normalized before entering numerical code."""
-    raw = np.random.default_rng(11).standard_normal((256, 4, 2))
+    raw = np.random.default_rng(11).standard_normal((256, 4, 2)) * _CHANNEL_SCALE
     data = xr.DataArray(
         raw.transpose(1, 0, 2),
         dims=("trial", "time", "channel"),
-        coords={"channel": ["left", "right"]},
+        coords={"channel": _UNSORTED_LABELS},
     )
 
-    actual = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
-    )
+    actual = multitaper_connectivity(data, sampling_frequency=256, method="power")
     expected = multitaper_connectivity(
         raw,
         sampling_frequency=256,
-        method="coherence_magnitude",
-        signal_names=["left", "right"],
+        method="power",
+        signal_names=_UNSORTED_LABELS,
     )
 
     xr.testing.assert_identical(actual, expected)
+    _assert_power_follows_labels(actual)
 
 
 def test_dataarray_unrecognized_dimensions_require_explicit_roles():
@@ -587,26 +613,25 @@ def test_dataarray_unrecognized_dimensions_require_explicit_roles():
 
 def test_dataarray_single_unrecognized_dimension_warns_before_assuming_role():
     """The by-elimination role assignment is not silent (it could average data)."""
-    raw = np.random.default_rng(40).standard_normal((256, 4, 2))
+    raw = np.random.default_rng(40).standard_normal((256, 4, 2)) * _CHANNEL_SCALE
     data = xr.DataArray(
         raw,
         dims=("time", "drug_dose", "channel"),
-        coords={"channel": ["left", "right"]},
+        coords={"channel": _UNSORTED_LABELS},
     )
     with pytest.warns(UserWarning, match=r"Assuming.*'drug_dose'.*trial axis"):
-        result = multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
-        )
+        result = multitaper_connectivity(data, sampling_frequency=256, method="power")
     # Naming the role silences the warning and gives the same result.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         explicit = multitaper_connectivity(
             data,
             sampling_frequency=256,
-            method="coherence_magnitude",
+            method="power",
             trial_dim="drug_dose",
         )
     xr.testing.assert_identical(result, explicit)
+    _assert_power_follows_labels(result)
 
 
 def test_dataarray_explicit_role_conflicting_with_recognized_name_is_rejected():
@@ -980,15 +1005,44 @@ def test_dataarray_role_absent_at_dimensionality_is_rejected_with_reshape_hint()
         multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
 
 
+class _DaskProtocolArray:
+    """Minimal NEP-18 duck array exposing the dask collection protocol.
+
+    xarray keeps it as the DataArray's backing array (as it does a real dask
+    array), and like dask it is indexable and converts implicitly through
+    ``__array__``, so a missing guard would compute silently instead of
+    raising. dask itself is not a test dependency.
+    """
+
+    def __init__(self, values: np.ndarray) -> None:
+        self._values = values
+        self.shape = values.shape
+        self.dtype = values.dtype
+        self.ndim = values.ndim
+
+    def __dask_graph__(self) -> dict:
+        return {}
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        return self._values
+
+    def __getitem__(self, key) -> np.ndarray:
+        return self._values[key]
+
+    def __array_function__(self, func, types, args, kwargs):
+        return NotImplemented
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        return NotImplemented
+
+
 def test_dataarray_dask_backing_is_rejected():
     """A dask-backed DataArray raises with a materialization hint."""
-    dask_array = pytest.importorskip("dask.array")
     data = xr.DataArray(
-        dask_array.from_array(
-            np.random.default_rng(12).standard_normal((256, 2)), chunks=(128, 2)
-        ),
+        _DaskProtocolArray(np.random.default_rng(12).standard_normal((256, 2))),
         dims=("sample", "channel"),
     )
+    assert isinstance(data.data, _DaskProtocolArray)  # premise: backing kept lazy
     with pytest.raises(TypeError, match="dask-backed"):
         multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
 
@@ -1129,10 +1183,13 @@ class TestProvenanceSerialization:
         assert json.loads(_netcdf_provenance_value(float("nan"))) == {"nonfinite_float": "nan"}
 
 
-def test_structured_and_nonfinite_kwargs_survive_netcdf(tmp_path, monkeypatch):
-    """Unusual measure kwargs serialize and round-trip through NetCDF."""
-    rng = np.random.default_rng(13)
-    m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
+@pytest.fixture
+def stub_measure(monkeypatch):
+    """Register a zero-valued pairwise extension measure that accepts any kwargs.
+
+    None of the registered measures accept arbitrary keyword arguments, so this
+    stub (named ``stub_measure``) exercises kwarg provenance recording.
+    """
 
     def stub_measure(connectivity, **kwargs):
         return np.zeros(
@@ -1145,10 +1202,17 @@ def test_structured_and_nonfinite_kwargs_survive_netcdf(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
+    return "stub_measure"
+
+
+def test_structured_and_nonfinite_kwargs_survive_netcdf(tmp_path, stub_measure):
+    """Unusual measure kwargs serialize and round-trip through NetCDF."""
+    rng = np.random.default_rng(13)
+    m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
 
     da = connectivity_to_xarray(
         m,
-        method="stub_measure",
+        method=stub_measure,
         nested={"b": 1, "a": 2},
         weights=np.array([1.0, 2.0]),
         cutoff=float("inf"),
@@ -1293,8 +1357,6 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
 
     # Forwarded through the wrapper's **kwargs (which reach Multitaper).
     recorded = []
-    primer = Multitaper(time_series, sampling_frequency=500)
-    _ = primer.tapers  # warm the DPSS fft path unrelated to the transform
     with patch.object(transforms, "fft", spying_fft(recorded)):
         multitaper_connectivity(
             time_series,
@@ -1412,7 +1474,7 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
         )
 
 
-def test_multi_method_shares_single_fft():
+def test_multi_method_shares_single_fft(monkeypatch):
     """A multi-method call computes the FFT once, not once per measure.
 
     ``multitaper_connectivity`` builds one shared ``Connectivity`` and reuses it
@@ -1433,11 +1495,8 @@ def test_multi_method_shares_single_fft():
         calls["n"] += 1
         return original_fft(self)
 
-    Multitaper.fft = counting_fft
-    try:
-        multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
-    finally:
-        Multitaper.fft = original_fft
+    monkeypatch.setattr(Multitaper, "fft", counting_fft)
+    multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
 
     assert calls["n"] == 1, f"FFT computed {calls['n']} times for {len(methods)} methods"
 
@@ -1475,8 +1534,9 @@ def test_shared_connectivity_matches_per_method_construction():
 def test_default_result_is_netcdf_serializable(tmp_path):
     """The documented default (method=None) result must save to NetCDF.
 
-    Method discovery excludes complex-valued coherency so the default remains
-    portable across all supported xarray versions and NetCDF engines.
+    The explicit DEFAULT_METHODS allowlist omits complex-valued coherency so
+    the default remains portable across all supported xarray versions and
+    NetCDF engines.
     """
     rng = np.random.default_rng(0)
     ds = multitaper_connectivity(rng.standard_normal((512, 5, 2)), sampling_frequency=500)
@@ -1492,8 +1552,7 @@ def test_default_method_set_is_explicit_and_ordered():
 
     The exact tuple (including order) is locked: xarray preserves insertion
     order, so the default Dataset's variable/iteration/serialization order is
-    part of the public contract. The order is the alphabetical order the
-    previous inspect-based discovery produced, so existing users see no change.
+    part of the public contract. The allowlist is kept in alphabetical order.
     """
     from spectral_connectivity.wrapper import DEFAULT_METHODS
 
@@ -1588,8 +1647,9 @@ def test_from_transform_subclass_overriding_init_keeps_transform_contract():
 
     sub = PassThrough.from_transform(mw)
     base = Connectivity.from_transform(mw)
-    assert sub._is_one_sided is True
-    assert sub._observation_weights is not None
+    assert sub.is_one_sided is True
+    assert sub.observation_weights is not None
+    np.testing.assert_array_equal(sub.observation_weights, base.observation_weights)
     np.testing.assert_array_equal(sub.frequencies, base.frequencies)
     np.testing.assert_allclose(sub.power(), base.power())
     np.testing.assert_allclose(
@@ -1611,23 +1671,37 @@ def test_result_carries_descriptive_coordinate_metadata():
 
 def test_result_carries_provenance_metadata():
     """Each measure records package/version/backend/expectation_type/measure."""
-    from spectral_connectivity.wrapper import _package_version
+    from importlib.metadata import version
 
     rng = np.random.default_rng(1)
     da = connectivity_to_xarray(
-        Multitaper(rng.standard_normal((512, 5, 3)), sampling_frequency=500),
+        Multitaper(
+            rng.standard_normal((512, 5, 3)),
+            sampling_frequency=500,
+            time_halfbandwidth_product=2,
+        ),
         method="coherence_magnitude",
     )
     assert da.attrs["measure"] == "coherence_magnitude"
+    assert da.attrs["measure_kwargs_json"] == "{}"
     assert da.attrs["package"] == "spectral_connectivity"
-    assert da.attrs["package_version"] == _package_version()
+    assert da.attrs["package_version"] == version("spectral_connectivity")
     assert da.attrs["backend"] in ("CPU", "GPU")
     assert da.attrs["expectation_type"] == "trials_tapers"
-    # The multitaper parameters are still recorded under the mt_ prefix.
-    assert any(key.startswith("mt_") for key in da.attrs)
+    # The multitaper parameters are recorded under the mt_ prefix. Expected
+    # values follow from the inputs: the default window spans all 512 samples
+    # (T = 1.024 s), 2NW - 1 = 3 tapers, and resolution 2NW / T = 3.90625 Hz.
+    assert da.attrs["mt_sampling_frequency"] == 500
+    assert da.attrs["mt_nyquist_frequency"] == 250
+    assert da.attrs["mt_n_trials"] == 5
+    assert da.attrs["mt_n_signals"] == 3
+    assert da.attrs["mt_n_time_samples_per_window"] == 512
+    assert da.attrs["mt_time_halfbandwidth_product"] == 2
+    assert da.attrs["mt_n_tapers"] == 3
+    assert da.attrs["mt_frequency_resolution"] == pytest.approx(3.90625)
 
 
-def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
+def test_provenance_records_measure_kwargs(tmp_path, stub_measure):
     """Measure keyword arguments are recorded as ``arg_<key>``.
 
     Scalar kwargs remain convenient individual attributes, while structured
@@ -1639,21 +1713,9 @@ def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
     rng = np.random.default_rng(3)
     m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
 
-    def stub_measure(connectivity, **kwargs):
-        return np.zeros(
-            (
-                len(connectivity.time),
-                len(connectivity.frequencies),
-                connectivity.n_signals,
-                connectivity.n_signals,
-            )
-        )
-
-    monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
-
     da = connectivity_to_xarray(
         m,
-        method="stub_measure",
+        method=stub_measure,
         threshold=0.5,
         window=[1, 2, 3],
     )
@@ -1670,25 +1732,13 @@ def test_provenance_records_measure_kwargs(tmp_path, monkeypatch):
     da.to_netcdf(tmp_path / "args.nc")
 
 
-def test_provenance_arg_key_collision_raises_instead_of_overwriting(monkeypatch):
+def test_provenance_arg_key_collision_raises_instead_of_overwriting(stub_measure):
     """A structured ``x`` and a scalar ``x_json`` cannot silently share a key."""
     rng = np.random.default_rng(3)
     m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
 
-    def stub_measure(connectivity, **kwargs):
-        return np.zeros(
-            (
-                len(connectivity.time),
-                len(connectivity.frequencies),
-                connectivity.n_signals,
-                connectivity.n_signals,
-            )
-        )
-
-    monkeypatch.setattr(Connectivity, "stub_measure", stub_measure, raising=False)
-
     with pytest.raises(ValueError, match="assigned twice"):
-        connectivity_to_xarray(m, method="stub_measure", x=[1, 2, 3], x_json=5)
+        connectivity_to_xarray(m, method=stub_measure, x=[1, 2, 3], x_json=5)
 
 
 def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
@@ -1710,19 +1760,17 @@ def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
 
 
 def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
-    """A pairwise extension containing 'directed' is not rejected by its name."""
+    """A pairwise extension containing 'directed' is neither rejected nor
+    transposed (treated as a directed measure) because of its name."""
     rng = np.random.default_rng(8)
     m = Multitaper(rng.standard_normal((128, 3, 2)), sampling_frequency=128)
+    # Non-symmetric native matrix: entry [i, j] = 10 * i + j.
+    native = np.array([[0.0, 1.0], [10.0, 11.0]])
 
     def undirected_similarity(connectivity):
-        return np.zeros(
-            (
-                len(connectivity.time),
-                len(connectivity.frequencies),
-                connectivity.n_signals,
-                connectivity.n_signals,
-            )
-        )
+        return np.broadcast_to(
+            native, (len(connectivity.time), len(connectivity.frequencies), 2, 2)
+        ).copy()
 
     monkeypatch.setattr(
         Connectivity, "undirected_similarity", undirected_similarity, raising=False
@@ -1730,6 +1778,9 @@ def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
 
     data_array = connectivity_to_xarray(m, method="undirected_similarity")
     assert data_array.dims == ("time", "frequency", "source", "target")
+    # An unregistered extension keeps its native [source, target] orientation.
+    np.testing.assert_array_equal(data_array.sel(source="0", target="1"), 1.0)
+    np.testing.assert_array_equal(data_array.sel(source="1", target="0"), 10.0)
 
 
 def test_multitaper_connectivity_merges_nonstandard_dataset_in_batch():
@@ -1748,15 +1799,30 @@ def test_frequency_bands_on_mixed_dataset_leaves_frequency_free_variables():
     # A batch mixing a frequency-carrying measure with one that has no frequency
     # axis (group_delay): band reduction applies to the former and passes the
     # latter through unchanged, rather than erroring on the frequency-free var.
+    time_series = np.random.default_rng(452).standard_normal((512, 4, 3))
+    methods = ["coherence_magnitude", "group_delay"]
+    bands = {"alpha": (8, 12), "beta": (13, 30)}
     result = multitaper_connectivity(
-        np.random.default_rng(452).standard_normal((512, 4, 3)),
+        time_series,
         sampling_frequency=200,
-        method=["coherence_magnitude", "group_delay"],
-        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
+        method=methods,
+        frequency_bands=bands,
     )
+    unreduced = multitaper_connectivity(time_series, sampling_frequency=200, method=methods)
+
     assert result["coherence_magnitude"].dims == ("time", "band", "source", "target")
     assert result["group_delay"].dims == ("time", "source", "target")
     assert result.band.values.tolist() == ["alpha", "beta"]
+    for name, (lower, upper) in bands.items():
+        expected = (
+            unreduced["coherence_magnitude"]
+            .sel(frequency=slice(lower, upper))
+            .mean("frequency")
+        )
+        xr.testing.assert_allclose(
+            result["coherence_magnitude"].sel(band=name, drop=True), expected
+        )
+    xr.testing.assert_identical(result["group_delay"], unreduced["group_delay"])
 
 
 def test_multitaper_connectivity_merges_rich_multivariate_datasets():
@@ -1869,41 +1935,6 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
     assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
-
-
-def test_multitaper_connectivity_directed_source_target_orientation():
-    """Directed measures must label sel(source=driver, target=receiver) correctly.
-
-    Build a unidirectional VAR (signal 0 drives signal 1) as multi-trial time
-    series and confirm the Granger DataArray reads the strong influence at
-    source=0 -> target=1 and near-zero at source=1 -> target=0. Without the
-    directed transpose in the wrapper these two are swapped.
-    """
-    rng = np.random.default_rng(0)
-    n_time, n_trials = 2000, 8
-    time_series = np.zeros((n_time, n_trials, 2))
-    for trial in range(n_trials):
-        x = np.zeros(n_time)
-        y = np.zeros(n_time)
-        e_x = rng.standard_normal(n_time)
-        e_y = rng.standard_normal(n_time)
-        for t in range(1, n_time):
-            x[t] = 0.5 * x[t - 1] + e_x[t]
-            y[t] = 0.5 * y[t - 1] + 0.6 * x[t - 1] + e_y[t]  # 0 -> 1
-        time_series[:, trial, 0] = x
-        time_series[:, trial, 1] = y
-
-    da = multitaper_connectivity(
-        time_series,
-        sampling_frequency=200,
-        time_halfbandwidth_product=3,
-        method="pairwise_spectral_granger_prediction",
-        signal_names=["x", "y"],
-    )
-    causal = da.sel(source="x", target="y").values  # x drives y
-    anti_causal = da.sel(source="y", target="x").values
-    assert np.nanmax(causal) > np.nanmax(anti_causal)
-    assert np.nanmax(causal) > 0.05
 
 
 def test_multitaper_connectivity_rejects_empty_method_list():
@@ -2051,23 +2082,13 @@ def test_multitaper_connectivity_squeeze_ignored_for_multi_measure_dataset():
     assert ds["coherence_magnitude"].sizes["source"] == 2
 
 
-_DTF_FAMILY = [
-    "directed_transfer_function",
-    "directed_coherence",
-    "partial_directed_coherence",
-    "generalized_partial_directed_coherence",
-    "direct_directed_transfer_function",
-]
+@pytest.fixture(scope="module")
+def unidirectional_var():
+    """Multi-trial VAR(1) in which signal 0 (x) drives signal 1 (y) only.
 
-
-@pytest.mark.parametrize("method", _DTF_FAMILY)
-def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
-    """The DTF family is opt-in through the wrapper and oriented source -> target.
-
-    For a unidirectional VAR (signal 0 drives 1), the causal entry is
-    sel(source=0, target=1); it must dominate the anti-causal sel(source=1,
-    target=0). This also confirms the wrapper's directed transpose is applied to
-    these newly exposed measures.
+    Returns
+    -------
+    time_series : np.ndarray, shape (2000, 8, 2)
     """
     rng = np.random.default_rng(0)
     n_time, n_trials = 2000, 8
@@ -2082,9 +2103,32 @@ def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
             y[t] = 0.5 * y[t - 1] + 0.6 * x[t - 1] + e_y[t]  # 0 -> 1
         time_series[:, trial, 0] = x
         time_series[:, trial, 1] = y
+    return time_series
 
+
+_DIRECTED_PAIRWISE_METHODS = [
+    "pairwise_spectral_granger_prediction",
+    "directed_transfer_function",
+    "directed_coherence",
+    "partial_directed_coherence",
+    "generalized_partial_directed_coherence",
+    "direct_directed_transfer_function",
+]
+# Minimum causal peak for measures whose scale makes a floor meaningful on this
+# VAR (the dDTF peak is only ~0.05, so it is held to the ordering check alone).
+_CAUSAL_PEAK_FLOOR = {"pairwise_spectral_granger_prediction": 0.05}
+
+
+@pytest.mark.parametrize("method", _DIRECTED_PAIRWISE_METHODS)
+def test_directed_measures_are_oriented_source_to_target(method, unidirectional_var):
+    """Directed measures label sel(source=driver, target=receiver) correctly.
+
+    For a unidirectional VAR (signal 0 drives 1), the causal entry is
+    sel(source=0, target=1); it must dominate the anti-causal sel(source=1,
+    target=0). Without the wrapper's directed transpose these two are swapped.
+    """
     da = multitaper_connectivity(
-        time_series,
+        unidirectional_var,
         sampling_frequency=200,
         time_halfbandwidth_product=3,
         method=method,
@@ -2094,6 +2138,7 @@ def test_multitaper_connectivity_exposes_dtf_family_with_source_target(method):
     causal = da.sel(source="x", target="y").values  # x drives y
     anti_causal = da.sel(source="y", target="x").values
     assert np.nanmax(causal) > np.nanmax(anti_causal)
+    assert np.nanmax(causal) > _CAUSAL_PEAK_FLOOR.get(method, 0.0)
 
 
 def test_multitaper_connectivity_dataset_carries_shared_provenance():
@@ -2174,19 +2219,34 @@ def test_fourier_connectivity_infers_and_transposes_labeled_dimensions():
 
 
 def test_multitaper_frequency_crop_decimation_and_band_mean():
-    """Frequency operations are coordinate-based and preserve axis order."""
-    result = multitaper_connectivity(
-        np.random.default_rng(303).standard_normal((256, 3)),
-        sampling_frequency=128,
-        method="coherence_magnitude",
-        frequency_range=(8, 32),
-        frequency_decimation=2,
-        frequency_bands={"alpha": (8, 12), "beta": (13, 30)},
-    )
+    """Frequency operations are coordinate-based and preserve axis order.
+
+    Each band value is the plain mean of the unreduced result over the band's
+    inclusive bins. After cropping to [8, 32] Hz and decimating the 0.5 Hz grid
+    by 2 the bins are the integers 8..32, so every band endpoint below lands
+    exactly on a bin and pins inclusivity at both ends.
+    """
+    time_series = np.random.default_rng(303).standard_normal((256, 3))
+    frequency_kwargs = {
+        "sampling_frequency": 128,
+        "method": "coherence_magnitude",
+        "frequency_range": (8, 32),
+        "frequency_decimation": 2,
+    }
+    bands = {"alpha": (8, 12), "beta": (13, 30)}
+    result = multitaper_connectivity(time_series, frequency_bands=bands, **frequency_kwargs)
+    unreduced = multitaper_connectivity(time_series, **frequency_kwargs)
 
     assert result.dims == ("time", "band", "source", "target")
     assert result.band.values.tolist() == ["alpha", "beta"]
     assert result.attrs["frequency_reduction"] == "mean"
+    # Premise: both alpha endpoints are bins, so an exclusive bound drops one.
+    np.testing.assert_array_equal(
+        unreduced.frequency.sel(frequency=slice(8, 12)), [8.0, 9.0, 10.0, 11.0, 12.0]
+    )
+    for name, (lower, upper) in bands.items():
+        expected = unreduced.sel(frequency=slice(lower, upper)).mean("frequency")
+        xr.testing.assert_allclose(result.sel(band=name, drop=True), expected)
 
 
 def test_frequency_band_reduce_uses_circular_phase_mean():
@@ -2315,21 +2375,21 @@ def test_frequency_band_integral_is_restricted_to_spectral_densities():
 
 
 def test_multitaper_frequency_crop_and_decimation_select_correct_bins():
-    """Cropping and decimation select the expected frequency-coordinate values."""
+    """Cropping happens before decimation and selects exact coordinate values.
+
+    The full grid is multiples of 128/256 = 0.5 Hz. Cropping to [8.5, 32] and
+    then keeping every other bin starts at 8.5 Hz: 8.5, 9.5, ..., 31.5.
+    Decimating first would instead keep the integer bins 9..32.
+    """
     result = multitaper_connectivity(
         np.random.default_rng(313).standard_normal((256, 2)),
         sampling_frequency=128,
         method="coherence_magnitude",
-        frequency_range=(8, 32),
+        frequency_range=(8.5, 32),
         frequency_decimation=2,
     )
 
-    # Full grid bins are multiples of 128/256 = 0.5 Hz; cropping keeps [8, 32]
-    # and decimation by 2 keeps every other surviving bin.
-    full_frequencies = np.fft.rfftfreq(256, d=1 / 128)
-    in_band = full_frequencies[(full_frequencies >= 8) & (full_frequencies <= 32)]
-    expected = in_band[::2]
-    np.testing.assert_allclose(result.frequency.values, expected)
+    np.testing.assert_array_equal(result.frequency.values, np.arange(8.5, 32.0, 1.0))
 
 
 def test_frequency_band_integral_equals_analytic_area():
@@ -2365,7 +2425,17 @@ def test_fourier_connectivity_allows_unlabeled_undirected_measure():
     result = fourier_connectivity(
         coefficients, method="coherence_magnitude", is_one_sided=False
     )
-    assert "frequency" in result.dims
+
+    # Eight two-sided bins keep DC through Nyquist on a normalized grid.
+    assert result.sizes == {"time": 1, "frequency": 5, "source": 2, "target": 2}
+    np.testing.assert_allclose(result.frequency, np.abs(np.fft.fftfreq(8)[:5]))
+    # Magnitude-squared coherence over the 4 observations, from first principles.
+    x, y = coefficients[:, :5, 0], coefficients[:, :5, 1]
+    expected = np.abs(np.mean(x * y.conj(), axis=0)) ** 2 / (
+        np.mean(np.abs(x) ** 2, axis=0) * np.mean(np.abs(y) ** 2, axis=0)
+    )
+    np.testing.assert_allclose(result.sel(source="0", target="1").values[0], expected)
+    np.testing.assert_allclose(result.sel(source="1", target="0").values[0], expected)
 
 
 def test_fourier_connectivity_accepts_one_sided_functional_input():
@@ -2474,7 +2544,11 @@ def test_fourier_connectivity_explicit_one_sided_without_frequencies():
         is_one_sided=True,
     )
 
-    assert np.all(result.frequency >= 0)
+    # All 9 one-sided bins are kept (an rfft of 16 samples), labeled in
+    # normalized cycles per sample from 0 to Nyquist (0.5).
+    assert result.sizes["frequency"] == 9
+    np.testing.assert_allclose(result.frequency, np.arange(9) / 16)
+    assert result.attrs["fourier_frequency_coordinate"] == "normalized"
     assert result.attrs["fourier_is_one_sided"]
 
 
