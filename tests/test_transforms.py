@@ -1,4 +1,5 @@
 import warnings
+from contextlib import nullcontext
 
 import numpy as np
 import pytest
@@ -326,7 +327,10 @@ def test_tapers():
 )
 def test__get_low_bias_tapers(eigenvalues, expected_kept):
     tapers = np.arange(3 * 100, dtype=float).reshape((3, 100))  # distinct rows
-    filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(tapers, eigenvalues)
+    falls_back = not np.any(eigenvalues > 0.9)
+    # The fallback keeps a poorly concentrated taper, so it must be announced.
+    with pytest.warns(UserWarning, match="lowest-bias taper") if falls_back else nullcontext():
+        filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(tapers, eigenvalues)
     np.testing.assert_array_equal(filtered_tapers, tapers[expected_kept])
     np.testing.assert_array_equal(filtered_eigenvalues, eigenvalues[expected_kept])
 

@@ -1,5 +1,6 @@
 """Transforms time domain signals to the frequency domain."""
 
+import warnings
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 
@@ -2726,7 +2727,13 @@ def _get_low_bias_tapers(
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     is_low_bias = eigenvalues > MIN_EIGENVALUE_THRESHOLD
     if not xp.any(is_low_bias):
-        logger.warning("Could not properly use low_bias, keeping lowest-bias taper")
+        warnings.warn(
+            f"No taper has a spectral concentration above {MIN_EIGENVALUE_THRESHOLD} "
+            "(time_halfbandwidth_product is too small for low-bias tapers); keeping "
+            "only the lowest-bias taper, whose spectral leakage is high.",
+            UserWarning,
+            stacklevel=3,
+        )
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
 
