@@ -238,7 +238,8 @@ directly with results from 2.x.
   1991) instead of the normal quantile; intervals are wider at small `n`
   (Monte Carlo coverage 0.95 instead of 0.88 at five observations). `"auto"`
   also selects `fisher_squared` for `partial_coherence` and `fisher` for
-  `phase_locking_value` and `imaginary_coherence`. Circular bounds are wrapped
+  `phase_locking_value` and `imaginary_coherence`, whose lower bounds and
+  bias-corrected estimates are clamped at 0. Circular bounds are wrapped
   to `(-pi, pi]` (lower above upper means the interval crosses `+/-pi`); an
   interval whose half-width reaches `pi` is reported as `(-pi, pi)` with a
   warning, and `fisher_squared` warns at an estimate of exactly 0.

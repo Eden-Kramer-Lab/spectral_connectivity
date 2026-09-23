@@ -3,7 +3,7 @@
 import inspect
 import warnings
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property, partial, wraps
 from itertools import combinations
 from logging import getLogger
@@ -45,6 +45,9 @@ logger = getLogger(__name__)
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
 _NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
+# Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
+# jackknife interval is clamped at 0 on the way back.
+_NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
 
 # Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
 # branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
@@ -1382,7 +1385,9 @@ class Connectivity:
             - ``"fisher"`` (``atanh(.)``) for the magnitudes in ``[0, 1]``:
               ``phase_locking_value`` and ``imaginary_coherence``
               (``phase_locking_value``'s diagonal is identically 1, so the
-              Fisher scale reports those entries as saturated);
+              Fisher scale reports those entries as saturated). For these two
+              measures the Fisher lower bound and bias-corrected estimate are
+              clamped at 0, since a magnitude cannot be negative;
             - ``"circular"`` for ``coherence_phase``;
             - ``"identity"`` for every other measure.
         **method_kwargs
@@ -1553,7 +1558,7 @@ class Connectivity:
                 # These return magnitude-*squared* coherence, whose
                 # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
                 resolved_transformation = "fisher_squared"
-            elif method in {"phase_locking_value", "imaginary_coherence"}:
+            elif method in _NONNEGATIVE_MAGNITUDE_MEASURES:
                 # Unsquared magnitudes in [0, 1]: Fisher's atanh applies directly.
                 resolved_transformation = "fisher"
             elif method == "coherence_phase":
@@ -1562,12 +1567,23 @@ class Connectivity:
                 resolved_transformation = "identity"
         else:
             resolved_transformation = transformation
-        return jackknife_confidence_interval(
+        result = jackknife_confidence_interval(
             full_estimate,
             np.stack(replicates, axis=0),
             confidence_level=confidence_level,
             transformation=resolved_transformation,
         )
+        if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
+            # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude
+            # cannot be negative: clamp at 0, as fisher_squared's back-transform
+            # does for magnitude-squared coherence.
+            lower, upper = result.confidence_interval
+            result = replace(
+                result,
+                bias_corrected=np.maximum(result.bias_corrected, 0.0),
+                confidence_interval=(np.maximum(lower, 0.0), upper),
+            )
+        return result
 
     @_asnumpy
     def power(self) -> NDArray[np.floating]:

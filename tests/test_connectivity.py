@@ -2951,6 +2951,52 @@ def test_phase_lag_family_is_zero_for_in_phase_signals(scale):
     )
 
 
+@pytest.fixture(scope="module")
+def weakly_coupled_connectivity():
+    """Two weakly coupled signals, 10 trials: most bins have a small magnitude,
+    where an unclamped Fisher interval's lower bound falls below 0."""
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(19)
+    source = rng.standard_normal((1000, 10))
+    time_series = np.stack([source, 0.3 * source + rng.standard_normal((1000, 10))], -1)
+    return Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=1)
+    )
+
+
+@pytest.mark.parametrize("method", ["phase_locking_value", "imaginary_coherence"])
+def test_jackknife_of_a_nonnegative_magnitude_stays_in_its_range(
+    weakly_coupled_connectivity, method
+):
+    """PLV and imaginary coherence are magnitudes in [0, 1]. Their Fisher
+    interval is formed on atanh, whose back-transform tanh reaches below 0, so
+    it must be clamped like fisher_squared's.
+
+    Regression: 94% of imaginary-coherence lower bounds and 31% of its
+    bias-corrected estimates were negative (down to -0.7) on this data.
+    """
+    with warnings.catch_warnings():
+        # PLV's diagonal is identically 1, a Fisher boundary; irrelevant here.
+        warnings.filterwarnings("ignore", message="Fisher jackknife", category=UserWarning)
+        result = weakly_coupled_connectivity.jackknife(method)
+    lower, upper = result.confidence_interval
+    assert result.transformation == "fisher"
+    assert np.nanmin(lower) >= 0.0
+    assert np.nanmin(result.bias_corrected) >= 0.0
+    assert np.nanmax(upper) <= 1.0
+
+
+def test_jackknife_fisher_stays_signed_for_a_signed_measure(weakly_coupled_connectivity):
+    """An explicit Fisher interval on a signed measure in [-1, 1] must keep its
+    negative bounds; only the non-negative magnitudes are clamped at 0."""
+    result = weakly_coupled_connectivity.jackknife(
+        "imaginary_coherency", transformation="fisher"
+    )
+    lower, _ = result.confidence_interval
+    assert np.nanmin(lower[..., 0, 1]) < 0.0
+
+
 def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""
