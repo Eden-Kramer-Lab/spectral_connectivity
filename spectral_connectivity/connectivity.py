@@ -273,11 +273,11 @@ def _non_negative_frequencies(axis: int) -> Callable:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             measure = connectivity_measure(*args, **kwargs)
             if measure is not None:
-                if args and getattr(args[0], "_is_one_sided", False):
-                    return measure
                 n_frequencies = measure.shape[axis]
-                non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
-                return xp.take(measure, indices=non_neg_index, axis=axis)
+                n_nonnegative = args[0]._nonnegative_frequency_count(n_frequencies)
+                if n_nonnegative == n_frequencies:
+                    return measure
+                return xp.take(measure, indices=xp.arange(n_nonnegative), axis=axis)
             else:
                 return None
 
@@ -912,7 +912,12 @@ class Connectivity:
             )
 
     def _nonnegative_frequency_count(self, n_frequencies: int) -> int:
-        """Number of bins exposed by functional one-sided results."""
+        """Number of non-negative-frequency bins among ``n_frequencies``.
+
+        Every bin for one-sided input; ``n_frequencies // 2 + 1`` (DC through
+        Nyquist) for a two-sided spectrum in standard FFT order. The single
+        source of truth for trimming results to non-negative frequencies.
+        """
         return n_frequencies if self._is_one_sided else n_frequencies // 2 + 1
 
     @property
@@ -927,12 +932,8 @@ class Connectivity:
 
         """
         if self._frequencies is not None:
-            if self._is_one_sided:
-                return self._frequencies
-            # Extract non-negative frequencies (first N//2 + 1 for even N, (N+1)//2 for odd N)
-            n_frequencies = len(self._frequencies)
-            non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
-            freqs = xp.take(self._frequencies, indices=non_neg_index, axis=0)
+            n_nonnegative = self._nonnegative_frequency_count(len(self._frequencies))
+            freqs = xp.take(self._frequencies, indices=xp.arange(n_nonnegative), axis=0)
 
             # fftfreq returns negative Nyquist for even N, fix the sign
             if len(freqs) > 0 and freqs[-1] < 0:
@@ -1446,7 +1447,7 @@ class Connectivity:
             # cannot corrupt measures that reuse the cache.
             return power.copy()
         n_fft_samples = power.shape[-2]
-        one_sided = power[..., : n_fft_samples // 2 + 1, :]
+        one_sided = power[..., : self._nonnegative_frequency_count(n_fft_samples), :]
 
         # Double the interior positive-frequency bins so the one-sided PSD
         # integrates to the same total power as the two-sided spectrum. DC (bin
@@ -1490,7 +1491,9 @@ class Connectivity:
             # cannot corrupt measures that reuse the cache.
             return cross_spectral_density.copy()
         n_fft_samples = cross_spectral_density.shape[-3]
-        one_sided = cross_spectral_density[..., : n_fft_samples // 2 + 1, :, :]
+        one_sided = cross_spectral_density[
+            ..., : self._nonnegative_frequency_count(n_fft_samples), :, :
+        ]
         scale = xp.full((one_sided.shape[-3],), 2.0, dtype=one_sided.real.dtype)
         scale[0] = 1.0
         if n_fft_samples % 2 == 0:
@@ -3118,7 +3121,7 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
         spectrum = self._expectation_cross_spectral_matrix()
-        n_nonnegative = spectrum.shape[-3] // 2 + 1
+        n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
         n_signals = self.n_signals
         output_shape = (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals)
         result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
@@ -3187,7 +3190,7 @@ class Connectivity:
         labels, indices, _ = self._validated_group_indices(group_labels)
 
         spectrum = self._expectation_cross_spectral_matrix()
-        n_nonnegative = spectrum.shape[-3] // 2 + 1
+        n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
         output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
         result = xp.full(output_shape, xp.nan, dtype=spectrum.real.dtype)
         # One factorization per unordered group pair supplies both directions.
