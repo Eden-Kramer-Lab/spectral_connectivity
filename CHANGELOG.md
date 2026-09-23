@@ -412,8 +412,16 @@ directly with results from 2.x.
   `canonical_coherence` run on the GPU.
 - `conditional_` and `blockwise_spectral_granger_prediction` returned float32
   under `dtype=complex64`; they now return float64 like the other Granger
-  variants. A Granger factorization that raises `LinAlgError` warns with the
-  affected signal pairs instead of silently returning `NaN`.
+  variants. Every spectral Granger measure (pairwise, time-reversed, subset,
+  conditional, blockwise) warns once, naming the `source -> target` pairs
+  (0-based signal indices, or group labels) that are `NaN` at every frequency
+  because their factorization was singular or did not converge or the target
+  has no power, as with a duplicated or dead channel. The factorization's
+  pair-less "did not converge" warning is no longer repeated for these
+  measures' own factorizations (conditional Granger's full model, cached and
+  shared with DTF and PDC, keeps it), and the advice names
+  `minimum_phase_max_iterations` instead of a regularization parameter no
+  Granger method has.
 - `coherence_fisher_z_transform` accepts scalar coherency, and
   `power_confidence_intervals` documents that `n_tapers` is the number of
   averaged observations (tapers x trials), not the taper count.

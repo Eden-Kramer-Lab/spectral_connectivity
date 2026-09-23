@@ -3795,13 +3795,15 @@ class Connectivity:
         n_signals = csm.shape[-1]
         pairs = combinations(range(n_signals), 2)
         total_power = self._power
-        return _estimate_spectral_granger_prediction(
+        result = _estimate_spectral_granger_prediction(
             total_power,
             csm,
             pairs,
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
+        _warn_nan_granger_pairs(result, "pairwise_spectral_granger_prediction")
+        return result
 
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
@@ -3847,7 +3849,7 @@ class Connectivity:
         pair_csm = self._expectation(
             self._subset_cross_spectral_matrix(pairs), frequency_axis=4
         )
-        return _estimate_subset_spectral_granger_prediction(
+        result = _estimate_subset_spectral_granger_prediction(
             self._power,
             pair_csm,
             pairs,
@@ -3855,6 +3857,12 @@ class Connectivity:
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
+        requested = np.zeros((self.n_signals, self.n_signals), dtype=bool)
+        requested[pairs[:, 0], pairs[:, 1]] = requested[pairs[:, 1], pairs[:, 0]] = True
+        _warn_nan_granger_pairs(
+            result, "subset_pairwise_spectral_granger_prediction", requested=requested
+        )
+        return result
 
     @_asnumpy
     def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
@@ -3908,14 +3916,15 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("time_reversed_spectral_granger_prediction")
         csm = xp.swapaxes(self._expectation_cross_spectral_matrix(), -1, -2)
-        return _estimate_spectral_granger_prediction(
+        result = _estimate_spectral_granger_prediction(
             self._power,
             csm,
             combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-            measure="time_reversed_spectral_granger_prediction",
         )
+        _warn_nan_granger_pairs(result, "time_reversed_spectral_granger_prediction")
+        return result
 
     @_asnumpy
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
@@ -4010,6 +4019,7 @@ class Connectivity:
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
+            _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
             return result
 
         # The full model is the instance's cached factorization (the same CSM,
@@ -4040,6 +4050,7 @@ class Connectivity:
                         target,
                     )
                 )
+        _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
         return result
 
     def blockwise_spectral_granger_prediction(
@@ -4103,6 +4114,12 @@ class Connectivity:
                     minimum_phase_max_iterations=self._minimum_phase_max_iterations,
                 )
             )
+        _warn_nan_granger_pairs(
+            result,
+            "blockwise_spectral_granger_prediction",
+            names=to_numpy(labels),
+            stacklevel=3,
+        )
         return to_numpy(result), to_numpy(labels)
 
     @_ignore_nan_propagation_warnings
@@ -6174,8 +6191,6 @@ def _estimate_spectral_granger_prediction(
     pairs: Iterable[tuple[int, int]] | NDArray[np.integer],
     minimum_phase_tolerance: float = 1e-8,
     minimum_phase_max_iterations: int = 500,
-    *,
-    measure: str = "pairwise_spectral_granger_prediction",
 ) -> NDArray[np.floating]:
     """
     Estimate spectral granger causality.
@@ -6189,9 +6204,6 @@ def _estimate_spectral_granger_prediction(
     pairs : list of tuples
         The pairs of signals to estimate the spectral granger
         causality for.
-    measure : str
-        Name of the calling measure, used in the warning issued when a pair's
-        factorization raises ``LinAlgError`` and its values are set to NaN.
 
     Returns
     -------
@@ -6207,7 +6219,6 @@ def _estimate_spectral_granger_prediction(
     new_shape[-3] = non_neg_index.size
     predictive_power = xp.full(new_shape, xp.nan)
 
-    failed_pairs: list[tuple[int, ...]] = []
     for pair in pairs:
         pair_indices = xp.array(pair)[:, xp.newaxis]
         try:
@@ -6215,6 +6226,7 @@ def _estimate_spectral_granger_prediction(
                 csm[..., pair_indices, pair_indices.T],
                 tolerance=minimum_phase_tolerance,
                 max_iterations=minimum_phase_max_iterations,
+                _warn_on_failure=False,
             )
             transfer_function = _estimate_transfer_function(minimum_phase_factor)[
                 ..., non_neg_index, :, :
@@ -6228,26 +6240,81 @@ def _estimate_spectral_granger_prediction(
                 transfer_function,
             )
         except np.linalg.LinAlgError:
+            # The calling measure names the NaN pairs (_warn_nan_granger_pairs).
             predictive_power[..., pair_indices, pair_indices.T] = xp.nan
-            failed_pairs.append(tuple(int(index) for index in pair))
-    if failed_pairs:
-        # Silently returning NaN would leave the user guessing which pairs
-        # failed and why; name them once rather than once per pair.
-        warnings.warn(
-            f"{measure}: the minimum-phase factorization raised LinAlgError "
-            f"(a singular matrix inversion) for signal pair(s) {failed_pairs}, so "
-            "their values are returned as NaN. This usually indicates a singular "
-            "cross-spectral matrix for that pair (collinear, duplicated, or dead "
-            "channels); check those channels or increase the regularization.",
-            UserWarning,
-            stacklevel=3,
-        )
 
     n_signals = csm.shape[-1]
     diagonal_ind = xp.diag_indices(n_signals)
     predictive_power[..., diagonal_ind[0], diagonal_ind[1]] = xp.nan
 
     return predictive_power
+
+
+def _warn_nan_granger_pairs(
+    result: NDArray[np.floating],
+    measure: str,
+    *,
+    requested: NDArray[np.bool_] | None = None,
+    names: NDArray[Any] | None = None,
+    stacklevel: int = 4,
+) -> None:
+    """Warn once, naming the source -> target pairs whose Granger values failed.
+
+    A pair whose factorization is singular or does not converge, or whose
+    target has no power, is NaN at every frequency of the affected time
+    window; the factorization marks it NaN without raising. Name those pairs
+    so the user can find the offending channels. Isolated NaN bins (a
+    degenerate bin of an otherwise valid factorization) are not reported here.
+
+    Parameters
+    ----------
+    result : array, shape (..., n_frequencies, n_units, n_units)
+        Granger result, ``[..., target, source]``; the diagonal is ignored.
+    measure : str
+        Name of the public measure, used in the message.
+    requested : bool array, shape (n_units, n_units), optional
+        Entries the caller computed; unrequested entries are NaN by design.
+    names : array, shape (n_units,), optional
+        Group labels; signals are named by their 0-based index otherwise.
+    stacklevel : int, default=4
+        Points the warning at the user's call through the measure and its
+        ``_asnumpy`` wrapper; 3 for an undecorated measure.
+    """
+    n_units = result.shape[-1]
+    # NaN at every frequency in at least one time window.
+    failed = xp.all(xp.isnan(result), axis=-3).reshape(-1, n_units, n_units)
+    is_failed = to_numpy(xp.any(failed, axis=0)) & ~np.eye(n_units, dtype=bool)
+    if requested is not None:
+        is_failed &= requested
+    if not is_failed.any():
+        return
+    targets, sources = np.nonzero(is_failed)
+    if names is None:
+        listing = ", ".join(
+            f"{source} -> {target}"
+            for source, target in sorted(zip(sources, targets, strict=True))
+        )
+        unit = "signal"
+        indexing = "0-based signal indices, "
+    else:
+        listing = ", ".join(
+            f"{names[source].item()!r} -> {names[target].item()!r}"
+            for source, target in sorted(zip(sources, targets, strict=True))
+        )
+        unit = "group"
+        indexing = ""
+    warnings.warn(
+        f"{measure}: NaN at every frequency for {len(targets)} source -> target "
+        f"{unit} pair(s): {listing} ({indexing}in at least one time window). The "
+        "spectral factorization for those pairs was singular or did not "
+        "converge, or the target has no power; this usually means duplicated, "
+        "linearly dependent, or dead (zero-power) channels, so check those "
+        "channels. If they are valid but highly correlated, a larger "
+        "minimum_phase_max_iterations (a Connectivity argument) may let the "
+        "factorization converge.",
+        UserWarning,
+        stacklevel=stacklevel,
+    )
 
 
 def _var_model_from_spectrum(
@@ -6273,6 +6340,7 @@ def _var_model_from_spectrum(
         csm,
         tolerance=minimum_phase_tolerance,
         max_iterations=minimum_phase_max_iterations,
+        _warn_on_failure=False,
     )
     n_nonnegative = csm.shape[-3] // 2 + 1
     transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
@@ -6357,7 +6425,9 @@ def _estimate_conditional_spectral_granger_prediction(
     )
 
     positive = (total > 0) & (intrinsic > 0)
-    if not bool(xp.all(positive)):
+    # NaN spectra come from a failed factorization, which the calling measure
+    # reports by pair; warn here only about finite, non-positive spectra.
+    if bool(xp.any(~positive & xp.isfinite(total) & xp.isfinite(intrinsic))):
         warnings.warn(
             "Conditional spectral Granger: the total or intrinsic innovation "
             "spectrum of the target was not positive at some time-frequency "
@@ -6493,7 +6563,10 @@ def _block_spectral_granger_from_model(
     ) / 2.0
     _, total_logdet = xp.linalg.slogdet(hermitian_total_target_spectrum)
     _, intrinsic_logdet = xp.linalg.slogdet(intrinsic)
-    value = _sanitized_nonnegative_granger(xp.real(total_logdet - intrinsic_logdet))
+    # A target block with no power has both log-determinants at -inf; their
+    # difference is NaN, which the calling measure reports by pair.
+    with np.errstate(invalid="ignore"):
+        value = _sanitized_nonnegative_granger(xp.real(total_logdet - intrinsic_logdet))
     # ``intrinsic`` is a difference of spectral blocks and is only guaranteed
     # positive-definite in exact arithmetic; near-degenerate conditioning can
     # make it (or the total spectrum) indefinite/singular, in which case the
@@ -6501,16 +6574,18 @@ def _block_spectral_granger_from_model(
     # directly via the smallest eigenvalue of these Hermitian matrices -- a
     # determinant-sign test would miss an even number of negative eigenvalues.
     # Return NaN (and warn) rather than a plausible but wrong finite influence.
+    # A value that is already NaN (a failed factorization, or a target with no
+    # power) is reported by pair by the calling measure, so it is not counted.
     smallest_total_eigenvalue = xp.linalg.eigvalsh(hermitian_total_target_spectrum)[..., 0]
     smallest_intrinsic_eigenvalue = xp.linalg.eigvalsh(intrinsic)[..., 0]
     positive_definite = (smallest_total_eigenvalue > 0) & (smallest_intrinsic_eigenvalue > 0)
-    if not bool(xp.all(positive_definite)):
+    if bool(xp.any(~positive_definite & ~xp.isnan(value))):
         warnings.warn(
             "Block spectral Granger: the intrinsic or total target spectrum was "
             "not positive-definite at some time-frequency bins (typically from "
             "near-singular conditioning after removing the source block). Those "
-            "bins are returned as NaN. Consider increasing regularization or "
-            "minimum_phase_max_iterations, or checking for collinear channels.",
+            "bins are returned as NaN. Consider increasing "
+            "minimum_phase_max_iterations or checking for collinear channels.",
             UserWarning,
             stacklevel=3,
         )
@@ -6545,6 +6620,7 @@ def _estimate_subset_spectral_granger_prediction(
         pair_csm,
         tolerance=minimum_phase_tolerance,
         max_iterations=minimum_phase_max_iterations,
+        _warn_on_failure=False,
     )
     transfer_function = _estimate_transfer_function(minimum_phase_factor)[
         ..., non_neg_index, :, :

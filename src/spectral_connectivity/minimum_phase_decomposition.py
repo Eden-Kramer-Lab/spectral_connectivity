@@ -463,6 +463,8 @@ def minimum_phase_decomposition(
     cross_spectral_matrix: NDArray[np.complexfloating],
     tolerance: float = 1e-8,
     max_iterations: int = 500,
+    *,
+    _warn_on_failure: bool = True,
 ) -> NDArray[np.complexfloating]:
     """Compute minimum phase decomposition using Wilson algorithm.
 
@@ -534,6 +536,8 @@ def minimum_phase_decomposition(
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage, 41(2), 354-362.
     """
+    # _warn_on_failure=False is private to the spectral Granger measures, which
+    # report the NaN signal pairs themselves instead of this pair-less warning.
     if not np.isfinite(tolerance) or tolerance <= 0:
         msg = f"tolerance must be a finite positive number, got {tolerance}."
         raise ValueError(msg)
@@ -622,6 +626,8 @@ def minimum_phase_decomposition(
         xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
         minimum_phase_factor,
     )
+    if not _warn_on_failure:
+        return minimum_phase_factor
     reason = (
         "a sub-spectrum became singular (rank-deficient / duplicated channels)"
         if singular_factor

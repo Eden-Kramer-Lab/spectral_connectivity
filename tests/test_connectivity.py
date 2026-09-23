@@ -2035,12 +2035,112 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
     monkeypatch.setattr(
         connectivity_module, "_estimate_transfer_function", failing_transfer_function
     )
-    with pytest.warns(
-        UserWarning, match=rf"{measure}.*\(0, 1\).*\(0, 2\).*\(1, 2\)"
-    ) as record:
+    with pytest.warns(UserWarning, match="source -> target") as record:
         result = getattr(connectivity, measure)()
     assert np.isnan(result).all()
-    assert sum("LinAlgError" in str(w.message) for w in record) == 1
+    assert len(record) == 1
+    assert measure in str(record[0].message)
+    assert "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1" in str(record[0].message)
+
+
+def _granger_connectivity(defect=None):
+    """Three noise signals; optionally signal 2 duplicates signal 0 or is dead."""
+    from spectral_connectivity import Multitaper
+
+    signals = np.random.default_rng(0).standard_normal((512, 10, 3))
+    if defect == "duplicated":
+        signals[..., 2] = signals[..., 0]
+    elif defect == "dead":
+        signals[..., 2] = 0.0
+    return Connectivity.from_multitaper(
+        Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
+    )
+
+
+_GRANGER_MEASURES = {
+    "pairwise_spectral_granger_prediction": lambda c: c.pairwise_spectral_granger_prediction(),
+    "time_reversed_spectral_granger_prediction": (
+        lambda c: c.time_reversed_spectral_granger_prediction()
+    ),
+    "subset_pairwise_spectral_granger_prediction": (
+        lambda c: c.subset_pairwise_spectral_granger_prediction([(0, 2), (0, 1)])
+    ),
+    "conditional_spectral_granger_prediction": (
+        lambda c: c.conditional_spectral_granger_prediction()
+    ),
+    "blockwise_spectral_granger_prediction": (
+        lambda c: c.blockwise_spectral_granger_prediction(["a", "b", "c"])[0]
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("measure", "defect", "named_pairs"),
+    [
+        # A duplicated channel makes the (0, 2) factorization singular.
+        ("pairwise_spectral_granger_prediction", "duplicated", "0 -> 2, 2 -> 0"),
+        ("time_reversed_spectral_granger_prediction", "duplicated", "0 -> 2, 2 -> 0"),
+        ("subset_pairwise_spectral_granger_prediction", "duplicated", "0 -> 2, 2 -> 0"),
+        # Conditioning on every signal makes every pair's full model singular.
+        (
+            "conditional_spectral_granger_prediction",
+            "duplicated",
+            "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1",
+        ),
+        ("blockwise_spectral_granger_prediction", "duplicated", "'a' -> 'c', 'c' -> 'a'"),
+        # A dead channel has no power to explain, so influences on it are NaN.
+        ("pairwise_spectral_granger_prediction", "dead", "0 -> 2, 1 -> 2"),
+        ("time_reversed_spectral_granger_prediction", "dead", "0 -> 2, 1 -> 2"),
+        ("subset_pairwise_spectral_granger_prediction", "dead", "0 -> 2"),
+        ("blockwise_spectral_granger_prediction", "dead", "'a' -> 'c', 'b' -> 'c'"),
+    ],
+)
+def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
+    """A real duplicated or dead channel must produce one warning that names
+    the NaN pairs as source -> target, with advice that exists.
+
+    Regression: the pair-naming warning fired only when a test monkeypatched a
+    LinAlgError; for these inputs the Wilson factorization swallowed the
+    failure and warned "did not converge for 1 of 1 sub-spectrum" (or nothing,
+    for a dead channel) without naming the pair, and the advice mentioned a
+    regularization parameter no Granger method has.
+    """
+    connectivity = _granger_connectivity(defect)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        result = _GRANGER_MEASURES[measure](connectivity)
+
+    messages = [str(warning.message) for warning in record]
+    named = [message for message in messages if "source -> target" in message]
+    assert len(named) == 1, messages
+    assert measure in named[0]
+    assert f": {named_pairs} (" in named[0]
+    assert "minimum_phase_max_iterations" in named[0]
+    assert "regularization" not in named[0]
+    # The generic, pair-less non-convergence warning is not repeated for the
+    # measure's own factorizations, and no other warning reports the same NaN
+    # bins. Only conditional Granger's full model is the factorization cached
+    # and shared with DTF, PDC and the other directed measures; its warning is
+    # kept because it is the only one those measures get.
+    n_generic = sum("Wilson minimum-phase" in message for message in messages)
+    shares_full_model = measure == "conditional_spectral_granger_prediction"
+    assert n_generic == int(shares_full_model), messages
+    assert not any("not positive" in message for message in messages), messages
+    assert not any("not positive-definite" in message for message in messages), messages
+    assert not any(issubclass(warning.category, RuntimeWarning) for warning in record)
+    assert np.isnan(result).any()
+
+
+@pytest.mark.parametrize("measure", list(_GRANGER_MEASURES))
+def test_granger_is_silent_on_well_conditioned_signals(measure):
+    connectivity = _granger_connectivity()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = _GRANGER_MEASURES[measure](connectivity)
+    off_diagonal = ~np.eye(result.shape[-1], dtype=bool)
+    if measure == "subset_pairwise_spectral_granger_prediction":
+        off_diagonal[1, 2] = off_diagonal[2, 1] = False  # pair (1, 2) not requested
+    assert np.isfinite(result[..., off_diagonal]).all()
 
 
 def test_conditional_granger_factorizes_each_channel_set_once():
