@@ -1,4 +1,5 @@
 import warnings
+from contextlib import nullcontext
 from unittest.mock import PropertyMock, patch
 
 import numpy as np
@@ -404,7 +405,8 @@ def test_scalar_mic_mim_mask_only_participating_groups():
         (1, 40, 2, 6, 3)
     )
     coefficients[..., 2] = np.nan  # group 2 is entirely invalid
-    connectivity = Connectivity(coefficients)
+    with pytest.warns(UserWarning, match="NaN or Inf"):
+        connectivity = Connectivity(coefficients)
     labels = np.array([0, 1, 2])
 
     for measure in (
@@ -1326,7 +1328,7 @@ def test_directed_coherence_warns_on_material_cross_power():
 
 def test_single_signal_connectivity_raises_but_power_works():
     """Connectivity on a single signal raises; power() still works."""
-    c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 4, 1), dtype=complex))
+    c = Connectivity(fourier_coefficients=np.ones((1, 2, 1, 4, 1), dtype=complex))
     for method in (c.coherence_magnitude, c.phase_locking_value, c.global_coherence):
         with pytest.raises(ValueError, match="at least 2 signals"):
             method()
@@ -1822,7 +1824,7 @@ def test_nyquist_bin_even_n():
     """Test that Nyquist bin is included for even N FFT lengths."""
     # Create signal with even FFT length (N=1024)
     rng = np.random.default_rng(42)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 1, 1, 1024, 2
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 2, 1, 1024, 2
 
     # Create random fourier coefficients with full frequency spectrum
     fourier_coefficients = rng.random(
@@ -1845,7 +1847,7 @@ def test_nyquist_bin_odd_n():
     """Test that frequency indexing works correctly for odd N FFT lengths."""
     # Create signal with odd FFT length (N=1023)
     rng = np.random.default_rng(42)
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 1, 1, 1023, 2
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = 1, 2, 1, 1023, 2
 
     # Create random fourier coefficients with full frequency spectrum
     fourier_coefficients = rng.random(
@@ -2236,9 +2238,10 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
     # explicit outer-product mean would.
     nan_coefficients = fourier_coefficients.copy()
     nan_coefficients[0, 0, 0, 0, 1] = np.nan
-    conn = Connectivity(
-        fourier_coefficients=nan_coefficients, expectation_type="trials_tapers"
-    )
+    with pytest.warns(UserWarning, match="NaN or Inf"):
+        conn = Connectivity(
+            fourier_coefficients=nan_coefficients, expectation_type="trials_tapers"
+        )
     reduced = conn._expectation_cross_spectral_matrix()
     reference = conn._expectation(conn._cross_spectral_matrix)
     np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
@@ -2333,8 +2336,16 @@ def test_phase_locking_value_matches_per_observation_reference(
 
     ref_complex = _reference_normalized_cross_spectrum(conn)
     ref_plv = np.abs(ref_complex)
-    plv = conn.phase_locking_value()
-    raw = np.asarray(conn._phase_locking_value())
+
+    def expect_dead_channel_warning():
+        # The dead channel makes the z / |z| normalization undefined.
+        if dead:
+            return pytest.warns(UserWarning, match="zero magnitude")
+        return nullcontext()
+
+    with expect_dead_channel_warning():
+        plv = conn.phase_locking_value()
+        raw = np.asarray(conn._phase_locking_value())
 
     # NaN placement identical, values equal off the NaNs.
     np.testing.assert_array_equal(np.isnan(plv), np.isnan(ref_plv))
@@ -2355,7 +2366,8 @@ def test_phase_locking_value_matches_per_observation_reference(
     if n >= 2:
         plv_sum = ref_complex * n
         ref_ppc = ((plv_sum * plv_sum.conjugate() - n) / (n**2 - n)).real
-        ppc = conn.pairwise_phase_consistency()
+        with expect_dead_channel_warning():
+            ppc = conn.pairwise_phase_consistency()
         np.testing.assert_array_equal(np.isnan(ppc), np.isnan(ref_ppc))
         fppc = ~np.isnan(ref_ppc)
         np.testing.assert_allclose(ppc[fppc], ref_ppc[fppc], **tol)
@@ -2766,12 +2778,14 @@ def test_global_coherence_batched_chunking_matches_single_chunk():
     fc = fc.copy()
     fc[0, :, :, 7, :] = 0.0  # zero-power bin (-> NaN), placed to straddle chunks
 
-    gc_single, vec_single = Connectivity(fc).global_coherence(max_rank=2)
+    with pytest.warns(UserWarning, match="zero total power"):
+        gc_single, vec_single = Connectivity(fc).global_coherence(max_rank=2)
     # Budget chosen so `chunk` is only a few bins, forcing multiple iterations and
     # a partial final chunk (20 frequency bins do not divide evenly).
-    gc_multi, vec_multi = Connectivity(fc).global_coherence(
-        max_rank=2, max_workspace_elements=6 * 6 * 3
-    )
+    with pytest.warns(UserWarning, match="zero total power"):
+        gc_multi, vec_multi = Connectivity(fc).global_coherence(
+            max_rank=2, max_workspace_elements=6 * 6 * 3
+        )
 
     np.testing.assert_array_equal(np.isnan(gc_single), np.isnan(gc_multi))
     np.testing.assert_allclose(gc_single, gc_multi, equal_nan=True)

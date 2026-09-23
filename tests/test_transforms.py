@@ -1030,7 +1030,9 @@ def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
         edge_mode="nan",
     )
     connectivity = Connectivity.from_transform(transform)
-    scores, _ = connectivity.global_coherence()
+    # Edge bins masked by edge_mode="nan" carry zero weight, hence zero power.
+    with pytest.warns(UserWarning, match="zero total power"):
+        scores, _ = connectivity.global_coherence()
     canonical, _ = connectivity.canonical_coherence(np.array([0, 0, 1, 1]))
 
     invalid = ~transform.valid_time_frequency
@@ -1180,7 +1182,8 @@ def test_adaptive_weighting_isolates_nan_windows():
     assert clean.shape[0] == 2  # two windows
     corrupted = data.copy()
     corrupted[3000, 0, 0] = np.nan  # a single NaN inside the second window only
-    contaminated = adaptive(corrupted)
+    with pytest.warns(UserWarning, match="NaN or infinite"):
+        contaminated = adaptive(corrupted)
 
     # The first window's data is untouched, so its coefficients must be unchanged.
     np.testing.assert_allclose(contaminated[0], clean[0], rtol=1e-9, atol=1e-12)
@@ -1191,13 +1194,14 @@ def test_adaptive_weighting_converges_despite_nan_window():
     must not block convergence (and trigger a spurious warning) for the rest."""
     data = np.random.default_rng(918).standard_normal((4096, 5, 1))
     data[3000, 0, 0] = np.nan
-    multitaper = Multitaper(
-        data,
-        sampling_frequency=256,
-        time_halfbandwidth_product=3,
-        taper_weighting="adaptive",
-        time_window_duration=8.0,
-    )
+    with pytest.warns(UserWarning, match="NaN or infinite"):
+        multitaper = Multitaper(
+            data,
+            sampling_frequency=256,
+            time_halfbandwidth_product=3,
+            taper_weighting="adaptive",
+            time_window_duration=8.0,
+        )
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*did not converge")
         multitaper.fft()

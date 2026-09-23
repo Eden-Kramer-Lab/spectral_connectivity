@@ -761,9 +761,10 @@ class TestGroupDelay:
             ) + 1j * self.rng.standard_normal(n_fft)
         fourier[..., 5, :] = 0.0  # a zero-power frequency -> NaN coherency, masked
 
-        _delay, slope, r_value = Connectivity(
-            fourier_coefficients=fourier
-        ).group_delay()
+        with pytest.warns(UserWarning, match="zero power"):
+            _delay, slope, r_value = Connectivity(
+                fourier_coefficients=fourier
+            ).group_delay()
 
         # The coherent pair (0, 1) keeps a finite fit despite the masked bin.
         assert np.isfinite(slope[..., 0, 1]).all()

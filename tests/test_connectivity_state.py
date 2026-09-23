@@ -28,8 +28,10 @@ def test_transfer_function_is_cached():
 def test_changing_inputs_clears_cached_intermediates():
     """Reassigning fourier_coefficients / expectation_type must not serve stale cache."""
     rng = np.random.default_rng(2)
-    fourier = rng.standard_normal((1, 4, 2, 8, 2)) + 1j * rng.standard_normal(
-        (1, 4, 2, 8, 2)
+    # Enough tapers that each trial's spectrum is well conditioned for Wilson
+    # factorization under the per-trial "tapers" expectation.
+    fourier = rng.standard_normal((1, 4, 6, 8, 2)) + 1j * rng.standard_normal(
+        (1, 4, 6, 8, 2)
     )
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
     transfer_default = c._transfer_function

@@ -198,7 +198,8 @@ def test_get_initial_conditions_isolates_non_positive_definite_units():
     ).copy()
 
     solo = _get_initial_conditions(healthy[np.newaxis])
-    batched = _get_initial_conditions(np.stack([healthy, rank_one]))
+    with pytest.warns(UserWarning, match="Cholesky failed"):
+        batched = _get_initial_conditions(np.stack([healthy, rank_one]))
     # The healthy unit's deterministic Cholesky start is identical whether or not
     # the singular unit shares the batch.
     np.testing.assert_allclose(batched[0], solo[0])

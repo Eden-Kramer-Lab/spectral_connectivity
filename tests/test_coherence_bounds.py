@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from spectral_connectivity import Connectivity
 
@@ -59,19 +60,21 @@ def test_imaginary_coherence_bounds():
 
 def test_coherence_with_zero_power():
     """Test coherence behavior with zero power signals."""
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
+    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 1, 1, 2)
     fourier_coefficients = np.zeros(
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
     )
 
     # One signal has zero power, the other has non-zero power
-    fourier_coefficients[0, 0, 0, 0, 1] = 1.0
+    fourier_coefficients[0, :, 0, 0, 1] = 1.0
 
     conn = Connectivity(fourier_coefficients=fourier_coefficients)
 
     # Should not raise errors and should handle division by near-zero gracefully
-    coherence_mag = conn.coherence_magnitude()
-    imag_coherence = conn.imaginary_coherence()
+    with pytest.warns(UserWarning, match="zero power"):
+        coherence_mag = conn.coherence_magnitude()
+    with pytest.warns(UserWarning, match="zero power"):
+        imag_coherence = conn.imaginary_coherence()
 
     # Values should be finite (not inf or -inf)
     assert np.all(np.isfinite(coherence_mag[~np.isnan(coherence_mag)]))

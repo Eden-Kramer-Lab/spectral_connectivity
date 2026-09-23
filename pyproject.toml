@@ -79,6 +79,8 @@ minversion = "8.0"
 addopts = ["-ra", "-q", "--strict-config", "--strict-markers"]
 xfail_strict = true
 log_level = "INFO"
+# Every warning fails the test run unless the test asserts it (pytest.warns).
+filterwarnings = ["error"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

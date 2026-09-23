@@ -2391,6 +2391,7 @@ def test_fourier_connectivity_rejects_unlabeled_directed_measure():
         fourier_connectivity(
             coefficients,
             method="pairwise_spectral_granger_prediction",
+            is_one_sided=False,
         )
 
 
@@ -2398,7 +2399,9 @@ def test_fourier_connectivity_allows_unlabeled_undirected_measure():
     coefficients = np.random.default_rng(314).standard_normal(
         (4, 8, 2)
     ) + 1j * np.random.default_rng(315).standard_normal((4, 8, 2))
-    result = fourier_connectivity(coefficients, method="coherence_magnitude")
+    result = fourier_connectivity(
+        coefficients, method="coherence_magnitude", is_one_sided=False
+    )
     assert "frequency" in result.dims
 
 
