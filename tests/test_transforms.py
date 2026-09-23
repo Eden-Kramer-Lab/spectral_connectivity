@@ -559,18 +559,49 @@ def test__multitaper_fft():
         tapers, time_series, n_fft_samples, sampling_frequency
     )
     assert fourier_coefficients.shape == (n_windows, n_trials, n_fft_samples, n_tapers)
+    # All-ones data under all-ones tapers is a constant, so every window, trial
+    # and taper has a single DC coefficient n_time_samples / sampling_frequency.
+    expected = np.zeros(n_fft_samples)
+    expected[0] = n_time_samples / sampling_frequency
+    np.testing.assert_allclose(
+        fourier_coefficients,
+        np.broadcast_to(
+            expected[np.newaxis, np.newaxis, :, np.newaxis], fourier_coefficients.shape
+        ),
+        atol=1e-12,
+    )
 
 
 def test_fft():
     n_time_samples, n_trials, n_signals, n_windows = 100, 10, 2, 1
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(time_series=time_series)
-    assert m.fft().shape == (
+    coefficients = m.fft()
+    assert coefficients.shape == (
         n_windows,
         n_trials,
         m.tapers.shape[1],
         m.n_fft_samples,
         n_signals,
+    )
+    np.testing.assert_array_equal(coefficients, 0)
+
+    # An all-ones input is pure DC, which the default constant detrend removes...
+    ones = np.ones((n_time_samples, n_trials, n_signals))
+    np.testing.assert_allclose(Multitaper(ones).fft(), 0, atol=1e-12)
+    # ...and without detrending each taper's coefficients are the taper's own
+    # transform over 1 / sampling_frequency, identical for every trial and signal.
+    sampling_frequency = 1000
+    m = Multitaper(ones, sampling_frequency=sampling_frequency, detrend_type=None)
+    expected = np.fft.fft(m.tapers, n=m.n_fft_samples, axis=0).T / sampling_frequency
+    coefficients = m.fft()
+    np.testing.assert_allclose(
+        coefficients,
+        np.broadcast_to(
+            expected[np.newaxis, np.newaxis, :, :, np.newaxis], coefficients.shape
+        ),
+        rtol=1e-10,
+        atol=1e-12,
     )
 
 
@@ -987,6 +1018,34 @@ def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
     expected = 2 * variance / fs
     np.testing.assert_allclose(np.nanmean(multitaper_power), expected, rtol=0.05)
     np.testing.assert_allclose(np.nanmean(morlet_power), expected, rtol=0.05)
+
+
+def test_morlet_power_of_a_sinusoid_matches_its_amplitude():
+    """Amplitude oracle: with a unit-energy wavelet scaled to a one-sided PSD, a
+    sinusoid of amplitude A has peak power A^2 sqrt(pi) sigma_t at f0 (where
+    sigma_t = n_cycles / (2 pi f0)) and its power integrates over frequency to
+    the sinusoid's variance A^2 / 2 -- the same physical scale as the
+    multitaper estimate."""
+    from scipy.integrate import trapezoid
+
+    fs, amplitude, f0, n_cycles = 1000.0, 2.0, 40.0, 7.0
+    time = np.arange(4000) / fs
+    data = (amplitude * np.cos(2 * np.pi * f0 * time))[:, np.newaxis, np.newaxis]
+    frequencies = np.arange(20.0, 60.25, 0.5)
+    power = Connectivity.from_transform(
+        MorletWavelet(data, fs, frequencies, n_cycles=n_cycles, edge_mode="trim")
+    ).power()[..., 0]  # (n_time, n_frequencies)
+    mean_power = power.mean(axis=0)
+
+    sigma_t = n_cycles / (2 * np.pi * f0)
+    assert abs(frequencies[np.argmax(mean_power)] - f0) <= 0.5
+    np.testing.assert_allclose(
+        mean_power.max(), amplitude**2 * np.sqrt(np.pi) * sigma_t, rtol=0.02
+    )
+    np.testing.assert_allclose(trapezoid(mean_power, frequencies), amplitude**2 / 2, rtol=0.02)
+    # A stationary sinusoid has constant power over time.
+    at_f0 = power[:, np.argmin(np.abs(frequencies - f0))]
+    assert at_f0.std() / at_f0.mean() < 1e-5
 
 
 def test_morlet_warns_when_smoothing_window_is_shorter_than_four_wavelet_sigmas():
@@ -1643,7 +1702,8 @@ def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
         )
     n_time = wavelet.fft().shape[0]
     assert n_time == 400
-    assert wavelet.time.shape == (n_time,)
+    # Each one-sample window is its own sample time, stepped by 5 samples.
+    np.testing.assert_allclose(wavelet.time, np.arange(0, 2000, 5) / 1000.0)
     assert wavelet.observation_weights.shape[0] == n_time
     assert wavelet.valid_time_frequency.shape[0] == n_time
     Connectivity.from_transform(wavelet)
