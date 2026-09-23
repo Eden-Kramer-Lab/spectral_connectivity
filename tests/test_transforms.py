@@ -39,18 +39,18 @@ def test__add_axes():
     n_time_samples, n_signals = (2, 3)
     test_data = np.ones((n_time_samples, n_signals))
     expected_shape = (n_time_samples, 1, n_signals)
-    assert np.allclose(_add_axes(test_data).shape, expected_shape)
+    assert _add_axes(test_data).shape == expected_shape
 
     # Add two dimensions if no trials and signals
     test_data = np.ones((n_time_samples,))
     expected_shape = (n_time_samples, 1, 1)
-    assert np.allclose(_add_axes(test_data).shape, expected_shape)
+    assert _add_axes(test_data).shape == expected_shape
 
     # if there is a trial dimension, do nothing
     n_trials = 10
     test_data = np.ones((n_time_samples, n_trials, n_signals))
     expected_shape = (n_time_samples, n_trials, n_signals)
-    assert np.allclose(_add_axes(test_data).shape, expected_shape)
+    assert _add_axes(test_data).shape == expected_shape
 
 
 @pytest.mark.parametrize(
@@ -248,7 +248,8 @@ def test_n_trials():
 def test_frequency_resolution(
     time_halfbandwidth_product, time_window_duration, expected_frequency_resolution
 ):
-    n_time_samples, n_trials, n_signals = 100, 10, 2
+    # 1000 samples at the default 1000 Hz, so even the 1 s window fits the signal.
+    n_time_samples, n_trials, n_signals = 1000, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(
         time_series=time_series,
@@ -304,24 +305,30 @@ def test_tapers():
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(time_series, is_low_bias=False)
-    assert np.allclose(m.tapers.shape, (n_time_samples, m.n_tapers))
+    assert m.tapers.shape == (n_time_samples, m.n_tapers)
 
-    m = Multitaper(time_series, tapers=np.zeros((10, 3)))
-    assert np.allclose(m.tapers.shape, (10, 3))
+    # Custom tapers span the whole (100-sample) window and are used as given.
+    custom_tapers = np.random.default_rng(303).standard_normal((n_time_samples, 3))
+    m = Multitaper(time_series, tapers=custom_tapers)
+    np.testing.assert_array_equal(m.tapers, custom_tapers)
+    assert m.fft().shape == (1, n_trials, 3, m.n_fft_samples, n_signals)
 
 
 @pytest.mark.parametrize(
-    ("eigenvalues", "expected_n_tapers"),
+    ("eigenvalues", "expected_kept"),
     [
-        (np.array([0.95, 0.95, 0.95]), 3),
-        (np.array([0.95, 0.8, 0.95]), 2),
-        (np.array([0.8, 0.8, 0.8]), 1),
+        (np.array([0.95, 0.95, 0.95]), [0, 1, 2]),
+        # The low-bias mask, not a prefix: the middle taper is dropped.
+        (np.array([0.95, 0.8, 0.95]), [0, 2]),
+        # No taper passes the threshold: keep only the most concentrated one.
+        (np.array([0.5, 0.85, 0.7]), [1]),
     ],
 )
-def test__get_low_bias_tapers(eigenvalues, expected_n_tapers):
-    tapers = np.zeros((3, 100))
+def test__get_low_bias_tapers(eigenvalues, expected_kept):
+    tapers = np.arange(3 * 100, dtype=float).reshape((3, 100))  # distinct rows
     filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(tapers, eigenvalues)
-    assert filtered_tapers.shape[0] == filtered_eigenvalues.shape[0] == expected_n_tapers
+    np.testing.assert_array_equal(filtered_tapers, tapers[expected_kept])
+    np.testing.assert_array_equal(filtered_eigenvalues, eigenvalues[expected_kept])
 
 
 @pytest.mark.parametrize(
@@ -349,18 +356,19 @@ def test__multitaper_fft():
     fourier_coefficients = _multitaper_fft(
         tapers, time_series, n_fft_samples, sampling_frequency
     )
-    assert np.allclose(
-        fourier_coefficients.shape, (n_windows, n_trials, n_fft_samples, n_tapers)
-    )
+    assert fourier_coefficients.shape == (n_windows, n_trials, n_fft_samples, n_tapers)
 
 
 def test_fft():
     n_time_samples, n_trials, n_signals, n_windows = 100, 10, 2, 1
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(time_series=time_series)
-    assert np.allclose(
-        m.fft().shape,
-        (n_windows, n_trials, m.tapers.shape[1], m.n_fft_samples, n_signals),
+    assert m.fft().shape == (
+        n_windows,
+        n_trials,
+        m.tapers.shape[1],
+        m.n_fft_samples,
+        n_signals,
     )
 
 
@@ -483,7 +491,7 @@ def test_multitaper_dimension_consistency():
     assert fft_result.shape[4] == n_signals  # signals dimension
 
 
-# Task 1.3: Parameter Validation Tests
+# Parameter validation
 
 
 def test_multitaper_rejects_negative_sampling_freq():
@@ -650,10 +658,13 @@ def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
 
 
 def test_short_time_fourier_transform_hann_shape_and_peak():
+    from scipy.signal import stft
+
     sampling_frequency = 128
     time = np.arange(256) / sampling_frequency
     signal = np.sin(2 * np.pi * 16 * time)
-    data = np.stack((signal, signal), axis=-1)[:, np.newaxis, :]
+    noise = np.random.default_rng(400).standard_normal((256, 2))
+    data = (signal[:, np.newaxis] + 0.5 * noise)[:, np.newaxis, :]
     transform = ShortTimeFourierTransform(
         data,
         sampling_frequency=sampling_frequency,
@@ -667,8 +678,30 @@ def test_short_time_fourier_transform_hann_shape_and_peak():
     assert transform.frequencies[np.argmax(positive_power)] == pytest.approx(16)
     assert transform.frequency_resolution == pytest.approx(1.5)
 
+    # Per-window one-sided PSD must equal SciPy's periodic-Hann STFT with PSD
+    # scaling (|Z|**2 is the two-sided density; interior bins are doubled).
+    _, _, scipy_coefficients = stft(
+        data[:, 0, :],
+        fs=sampling_frequency,
+        window="hann",
+        nperseg=128,
+        noverlap=64,
+        detrend="constant",
+        return_onesided=True,
+        boundary=None,
+        padded=False,
+        scaling="psd",
+        axis=0,
+    )  # (n_frequencies, n_signals, n_windows)
+    expected_power = np.abs(scipy_coefficients) ** 2
+    expected_power[1:-1] *= 2
+    power = Connectivity.from_transform(transform).power()  # (n_windows, n_freq, n_signals)
+    np.testing.assert_allclose(power, np.moveaxis(expected_power, -1, 0), rtol=1e-10)
+
 
 def test_welch_packs_segments_on_observation_axis():
+    from scipy.signal import welch
+
     data = np.random.default_rng(401).standard_normal((256, 3, 2))
     transform = Welch(
         data,
@@ -680,6 +713,25 @@ def test_welch_packs_segments_on_observation_axis():
     assert transform.n_segments == 7
     assert transform.fft().shape == (1, 3, 7, 64, 2)
     assert transform.time.shape == (1,)
+
+    # Averaging segments and trials must reproduce SciPy's periodic-Hann Welch
+    # PSD (constant detrend, density scaling, one-sided), averaged over trials.
+    expected_frequencies, expected_power = welch(
+        data,
+        fs=128,
+        window="hann",
+        nperseg=64,
+        noverlap=32,
+        detrend="constant",
+        scaling="density",
+        return_onesided=True,
+        axis=0,
+    )  # (n_frequencies, n_trials, n_signals)
+    connectivity = Connectivity.from_transform(transform)
+    np.testing.assert_allclose(connectivity.frequencies, expected_frequencies)
+    np.testing.assert_allclose(
+        connectivity.power()[0], expected_power.mean(axis=1), rtol=1e-10
+    )
 
 
 def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
@@ -1053,6 +1105,8 @@ def test_morlet_rejects_invalid_edge_and_smoothing_controls(kwargs, message):
 
 
 def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
+    from scipy.signal.windows import dpss as scipy_dpss
+
     data = np.random.default_rng(402).standard_normal((256, 4, 2))
     default = Multitaper(data, sampling_frequency=128, time_halfbandwidth_product=3)
     uniform = Multitaper(
@@ -1080,6 +1134,24 @@ def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
     assert np.all(np.isfinite(eigen.fft()))
     assert np.all(np.isfinite(adaptive.fft()))
     assert not np.allclose(adaptive.fft(), uniform.fft())
+
+    # Eigen weighting scales each taper's coefficients by sqrt(eigenvalue),
+    # normalized to unit mean-square weight. Keep all 2 * NW tapers so the last
+    # one is poorly concentrated (eigenvalue ~0.71) and the weights differ.
+    all_tapers = {
+        "sampling_frequency": 128,
+        "time_halfbandwidth_product": 3,
+        "n_tapers": 6,
+        "is_low_bias": False,
+    }
+    _, eigenvalues = scipy_dpss(256, 3, 6, return_ratios=True)
+    assert eigenvalues.min() < 0.75
+    weights = np.sqrt(eigenvalues) / np.sqrt(np.mean(eigenvalues))
+    uniform_all = Multitaper(data, taper_weighting="uniform", **all_tapers).fft()
+    eigen_all = Multitaper(data, taper_weighting="eigen", **all_tapers).fft()
+    np.testing.assert_allclose(
+        eigen_all, uniform_all * weights[np.newaxis, np.newaxis, :, np.newaxis, np.newaxis]
+    )
 
 
 def test_adaptive_weighting_matches_eigen_for_white_noise():
