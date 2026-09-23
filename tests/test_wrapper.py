@@ -2539,15 +2539,51 @@ def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged()
     assert float(mean.sel(band="all")) == pytest.approx(float(density.mean()))
 
 
-def test_fourier_connectivity_rejects_unlabeled_directed_measure():
-    """Directed measures need a frequency coordinate to verify two-sidedness."""
+def test_fourier_connectivity_rejects_undeclared_unlabeled_directed_measure():
+    """Without a frequency coordinate or an explicit ``is_one_sided``, two-sidedness
+    cannot be verified, so Wilson-factorized measures are refused and the assumed
+    sidedness is announced; a declared one-sided spectrum is refused outright."""
     coefficients = np.ones((3, 8, 2), dtype=np.complex128)
-    with pytest.raises(ValueError, match="two-sided spectrum"):
+    with (
+        pytest.warns(UserWarning, match="assuming a two-sided"),
+        pytest.raises(ValueError, match="cannot be verified"),
+    ):
+        fourier_connectivity(coefficients, method="pairwise_spectral_granger_prediction")
+    with pytest.raises(ValueError, match="is_one_sided=True"):
         fourier_connectivity(
             coefficients,
             method="pairwise_spectral_granger_prediction",
+            is_one_sided=True,
+        )
+
+
+def test_fourier_connectivity_honors_explicit_two_sided_declaration():
+    """``is_one_sided=False`` on unlabeled coefficients declares a full FFT-order
+    spectrum, so Wilson-factorized measures run without the assumed-sidedness
+    warning and match ``Connectivity.from_multitaper`` on the same transform."""
+    rng = np.random.default_rng(325)
+    time_series = rng.standard_normal((256, 4, 2))
+    time_series[1:, :, 1] += 0.8 * time_series[:-1, :, 0]
+    multitaper = Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = fourier_connectivity(
+            multitaper.fft(),
+            method="pairwise_spectral_granger_prediction",
             is_one_sided=False,
         )
+    expected = Connectivity.from_multitaper(multitaper).pairwise_spectral_granger_prediction()
+
+    assert result.dims == ("time", "frequency", "source", "target")
+    assert not result.attrs["fourier_is_one_sided"]
+    assert not result.attrs["fourier_one_sided_inferred"]
+    # The core's [..., i, j] is the influence j -> i; the wrapper labels source -> target.
+    np.testing.assert_allclose(
+        result.values, np.swapaxes(np.asarray(expected), -1, -2), equal_nan=True
+    )
+    driven = result.sel(source="0", target="1").values
+    driver = result.sel(source="1", target="0").values
+    assert np.nanmax(driven) > np.nanmax(driver)
 
 
 def test_fourier_connectivity_allows_unlabeled_undirected_measure():
@@ -2600,17 +2636,22 @@ def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
 
 
 def test_fourier_connectivity_unlabeled_default_skips_two_sided_methods():
-    """Without a frequency coordinate two-sidedness cannot be verified, so the
-    default method set must leave out the measures that require it instead of
-    rejecting the caller's implicit request."""
+    """Without a frequency coordinate or a sidedness declaration two-sidedness
+    cannot be verified, so the default method set must leave out the measures
+    that require it instead of rejecting the caller's implicit request. An
+    explicit ``is_one_sided=False`` declaration restores them."""
     rng = np.random.default_rng(324)
     coefficients = rng.standard_normal((5, 8, 2)) + 1j * rng.standard_normal((5, 8, 2))
-    result = fourier_connectivity(coefficients, is_one_sided=False)
+    with pytest.warns(UserWarning, match="assuming a two-sided"):
+        result = fourier_connectivity(coefficients)
 
     expected = tuple(
         name for name in DEFAULT_METHODS if name != "pairwise_spectral_granger_prediction"
     )
     assert tuple(result.data_vars) == expected
+
+    declared = fourier_connectivity(coefficients, is_one_sided=False)
+    assert tuple(declared.data_vars) == DEFAULT_METHODS
 
 
 def test_fourier_connectivity_warns_when_sidedness_is_assumed():

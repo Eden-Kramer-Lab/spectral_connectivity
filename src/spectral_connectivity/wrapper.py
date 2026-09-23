@@ -3081,8 +3081,9 @@ def fourier_connectivity(
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
         Dataset with one variable per measure. With ``None``, measures that
-        require a two-sided spectrum are omitted when the input is one-sided
-        or has no frequency coordinate to verify its sidedness.
+        require a two-sided spectrum are omitted when the input is one-sided,
+        or when it has no frequency coordinate and ``is_one_sided`` was not
+        passed to declare its sidedness.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to the
         DataArray signal coordinate or ``"0"``, ``"1"``, ....
@@ -3101,9 +3102,12 @@ def fourier_connectivity(
         Declare whether the coefficients cover only non-negative frequencies.
         When no frequency coordinate is available the sidedness cannot be
         inferred: pass ``True`` for one-sided input (e.g. ``rfft`` output) or
-        ``False`` for a full FFT-order spectrum. Leaving it unset in that case
-        assumes two-sided and warns. With a frequency coordinate it is inferred
-        from ``frequencies``.
+        ``False`` for a full FFT-order spectrum. ``False`` is honored as a
+        declaration, so measures that require a two-sided spectrum run on the
+        coefficients as given. Leaving it unset in that case assumes two-sided,
+        warns, and refuses those measures because the assumption cannot be
+        checked. With a frequency coordinate it is inferred from
+        ``frequencies``.
     frequency_range : (float, float), optional
         Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
         or band reduction.
@@ -3235,13 +3239,13 @@ def fourier_connectivity(
 
     return_dataarray = isinstance(method, str)
     if method is None:
-        # Two-sided-only measures are rejected below when sidedness cannot be
-        # verified, so leave them out of the default set in that case too.
+        # Two-sided-only measures are rejected below when sidedness is neither
+        # verifiable nor declared, so leave them out of the default set then too.
         methods = [
             name
             for name in DEFAULT_METHODS
             if not (
-                (one_sided or frequencies is None)
+                (one_sided or (frequencies is None and is_one_sided is None))
                 and name in _MEASURE_SPECS
                 and _MEASURE_SPECS[name].requires_two_sided
             )
@@ -3255,12 +3259,13 @@ def fourier_connectivity(
         raise ValueError(msg)
     _validate_method_names(methods)
     if frequencies is None:
-        # Without a frequency coordinate, orientation and two-sidedness cannot be
-        # verified, so the default ``is_one_sided=False`` lets a one-sided input
-        # (e.g. rfft/wavelet coefficients) reach Wilson factorization and produce
-        # a silently wrong Wilson-factorized result. Reject methods that declare
-        # the full-spectrum requirement; other directional measures such as dPLI
-        # and PSI remain valid on one-sided coefficients.
+        # Without a frequency coordinate two-sidedness cannot be verified, so an
+        # *assumed* two-sided spectrum (is_one_sided=None) must not let one-sided
+        # input (e.g. rfft/wavelet coefficients) reach Wilson factorization and
+        # produce a silently wrong result. Reject methods that declare the
+        # full-spectrum requirement unless the caller declared the spectrum
+        # two-sided with is_one_sided=False; other directional measures such as
+        # dPLI and PSI remain valid on one-sided coefficients.
         two_sided_methods = [
             name
             for name in methods
@@ -3277,13 +3282,14 @@ def fourier_connectivity(
                 "measures, or supply full two-sided coefficients."
             )
             raise ValueError(msg)
-        if two_sided_methods:
+        if two_sided_methods and is_one_sided is None:
             msg = (
                 f"Measures {sorted(set(two_sided_methods))} require a full "
                 "two-sided spectrum in standard FFT order, which cannot be verified "
                 "without a frequency coordinate. Pass `frequencies` (the FFT "
                 "frequency vector, including negative bins) so two-sidedness can be "
-                "checked, or request only one-sided-compatible measures."
+                "checked, pass is_one_sided=False to declare a full FFT-order "
+                "spectrum, or request only one-sided-compatible measures."
             )
             raise ValueError(msg)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
