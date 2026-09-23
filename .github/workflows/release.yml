@@ -1,6 +1,7 @@
 name: Test, Build, and Publish
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -18,6 +19,12 @@ defaults:
 # attestation jobs elevate only the scopes they need.
 permissions:
   contents: read
+
+# A newer push to the same branch or PR supersedes a running workflow; tags
+# each get their own group, so a release run is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
