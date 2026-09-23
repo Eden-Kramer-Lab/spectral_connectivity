@@ -1500,6 +1500,30 @@ FFT samples:          {self.n_fft_samples}
         """
         return self.sampling_frequency / 2
 
+    @property
+    def observations_are_independent(self) -> bool:
+        """Whether the trial/taper observations may be counted as independent.
+
+        DPSS tapers are orthogonal, so for a process that is smooth across the
+        taper bandwidth the eigencoefficients of one window are approximately
+        uncorrelated (Thomson 1982; Percival & Walden 1993, ch. 7), and trials
+        are independent realizations. :class:`Connectivity` reads this flag to
+        decide whether ``n_observations`` (trials x tapers) counts effectively
+        independent samples: the jackknife, the debiased measures (pairwise
+        phase consistency, debiased squared PLI/WPLI) and the zero-coherence
+        significance test (``Beta(1, n_observations - 1)`` null) all assume it
+        does. Always ``True`` for this transform. The flag describes the
+        observations within one window; overlapping windows
+        (``time_window_step`` < ``time_window_duration``) are correlated along
+        the time axis, which only matters for expectations that also average
+        over time.
+
+        Returns
+        -------
+        bool
+        """
+        return True
+
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the fast Fourier transform using the multitaper method.
 
@@ -1843,6 +1867,30 @@ class Welch:
         """Number of (overlapping) segments averaged by the estimate."""
         return len(self._stft.time)
 
+    @property
+    def observations_are_independent(self) -> bool:
+        """Whether the segments may be counted as independent observations.
+
+        Welch's estimate averages the periodograms of overlapping Hann-windowed
+        segments. For a Hann window the correlation between the periodograms
+        of segments overlapping by 50% is small, so up to that overlap the
+        average has close to the degrees of freedom of independent segments
+        (Welch 1967; Percival & Walden 1993, sec. 6.17). Beyond 50% the
+        additional segments are strongly correlated with their neighbors and
+        add little independent information, so ``n_observations`` (trials x
+        segments) overstates the effective sample size. :class:`Connectivity`
+        reads this flag before the jackknife, the debiased measures (pairwise
+        phase consistency, debiased squared PLI/WPLI) and the zero-coherence
+        significance test, whose finite-sample corrections assume independent
+        observations.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``segment_overlap <= 0.5``.
+        """
+        return self.segment_overlap <= 0.5
+
     def fft(self) -> NDArray[np.complexfloating]:
         """Compute the Hann-windowed Fourier coefficients of every segment.
 
@@ -2117,6 +2165,32 @@ class MorletWavelet:
     def edge_half_width(self) -> NDArray[np.floating]:
         """Wavelet half-support at each frequency, in seconds."""
         return _readonly_array_copy(self._edge_half_width_samples / self.sampling_frequency)
+
+    @property
+    def observations_are_independent(self) -> bool:
+        """Whether the observation axis holds independent samples.
+
+        Without smoothing the observation axis holds one coefficient per trial,
+        and trials are independent realizations. With ``smoothing_time`` or
+        ``smoothing_frequency`` the axis also holds neighboring coefficients of
+        the same trial, which are strongly autocorrelated: the wavelet's
+        Gaussian envelope (temporal standard deviation ``n_cycles / (2 pi f)``)
+        correlates coefficients closer than a few standard deviations, and
+        adjacent frequency bins overlap in bandwidth. ``n_observations`` then
+        overstates the effective sample size, and normalized measures of
+        independent signals are biased toward 1. :class:`Connectivity` reads
+        this flag before the jackknife, the debiased measures (pairwise phase
+        consistency, debiased squared PLI/WPLI) and the zero-coherence
+        significance test, whose finite-sample corrections assume independent
+        observations.
+
+        Returns
+        -------
+        bool
+            ``True`` only when the smoothing neighborhood is a single sample
+            (no smoothing, or a one-sample window that merely decimates).
+        """
+        return self._smoothing_samples * self.smoothing_frequency == 1
 
     def _smooth_frequency_axis(self, array: BackendArray, frequency_axis: int) -> BackendArray:
         """Reflect-pad and window ``frequency_axis`` for adjacent-bin smoothing.

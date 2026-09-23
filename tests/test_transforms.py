@@ -35,6 +35,62 @@ def test_transform_is_one_sided_flags():
     assert Multitaper(time_series=time_series).is_one_sided is False
 
 
+def test_dpss_and_stft_observations_are_independent():
+    """Orthogonal DPSS tapers and one Hann taper per window give observations
+    Connectivity may count as independent (jackknife, debiased measures,
+    coherence significance)."""
+    data = np.zeros((256, 2, 2))
+    assert Multitaper(data, sampling_frequency=64).observations_are_independent is True
+    stft = ShortTimeFourierTransform(data, sampling_frequency=64, n_time_samples_per_window=32)
+    assert stft.observations_are_independent is True
+
+
+@pytest.mark.parametrize(
+    ("segment_overlap", "expected"),
+    [(0.0, True), (0.25, True), (0.5, True), (0.75, False), (0.9, False)],
+)
+def test_welch_observations_are_independent_up_to_half_overlap(segment_overlap, expected):
+    """Hann segments overlapping by at most 50% are treated as approximately
+    independent (Welch 1967; Percival & Walden 1993, sec. 6.17); beyond that
+    the extra segments are strongly correlated."""
+    transform = Welch(
+        np.zeros((256, 1, 2)),
+        sampling_frequency=64,
+        n_time_samples_per_segment=32,
+        segment_overlap=segment_overlap,
+    )
+    assert transform.observations_are_independent is expected
+
+
+def test_morlet_observations_are_independent_only_for_one_sample_neighborhoods():
+    """Neighboring wavelet coefficients inside a smoothing window are strongly
+    autocorrelated, so only a one-sample neighborhood (no smoothing, or a
+    one-sample window that merely decimates) yields independent observations."""
+    data = np.zeros((512, 2, 2))
+    frequencies = [8.0, 16.0, 32.0]
+    assert (
+        MorletWavelet(data, 128, frequencies, n_cycles=3).observations_are_independent is True
+    )
+    # 64-fold decimation gives a 2 Hz output rate, so a 0.5 s window is one sample.
+    one_sample = MorletWavelet(
+        data,
+        128,
+        frequencies,
+        n_cycles=3,
+        decimation=64,
+        smoothing_time=0.5,
+        smoothing_step=1.0,
+    )
+    assert one_sample._smoothing_samples * one_sample.smoothing_frequency == 1
+    assert one_sample.observations_are_independent is True
+    time_smoothed = MorletWavelet(data, 128, frequencies, n_cycles=3, smoothing_time=0.5)
+    assert time_smoothed.observations_are_independent is False
+    frequency_smoothed = MorletWavelet(
+        data, 128, frequencies, n_cycles=3, smoothing_frequency=3
+    )
+    assert frequency_smoothed.observations_are_independent is False
+
+
 def test__add_axes():
     # Add dimension if no trials
     n_time_samples, n_signals = (2, 3)
