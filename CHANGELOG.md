@@ -184,10 +184,12 @@ directly with results from 2.x.
   consistency of independent white noise averaged over 90%-overlapping STFT
   windows or unsmoothed Morlet samples was biased to about +0.006 to +0.008
   without a warning.
-- `MorletWavelet` warns when `smoothing_time` is shorter than four wavelet
-  standard deviations (`4 * n_cycles / (2 pi f)` at the widest wavelet), where
-  the smoothed samples are so correlated that normalized measures are forced
-  toward 1 even for independent signals; the docstring states the remedy.
+- `MorletWavelet` warns when a single-trial `smoothing_time` is shorter than
+  four wavelet standard deviations (`4 * n_cycles / (2 pi f)` at the widest
+  wavelet), where the smoothed samples are so correlated that normalized
+  measures are forced toward 1 even for independent signals; the docstring
+  states the remedy. With multiple trials the expectation also averages
+  independent realizations, so no warning is emitted.
 - Regression coverage: an emulated CuPy-like backend that rejects host/device
   mixing, Parseval oracles for one-sided `power` and for band integration, a
   nitime oracle for adaptive multitaper power, invariance of CaCoh components to

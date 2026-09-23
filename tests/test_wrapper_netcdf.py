@@ -83,15 +83,13 @@ def composite_results(time_series):
     rng = np.random.default_rng(1)
     two_sided = np.fft.fft(rng.standard_normal((20, 64, 3)), axis=1)
     one_sided = np.fft.rfft(rng.standard_normal((20, 64, 3)), axis=1)
-    # 0.2 s is under 4 sigma_t at 4 Hz; the short window keeps the fixture small.
-    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
-        morlet_transform = MorletWavelet(
-            rng.standard_normal((500, 3, 3)),
-            250,
-            frequencies=[4, 8, 16],
-            smoothing_time=0.2,
-            edge_mode="nan",
-        )
+    morlet_transform = MorletWavelet(
+        rng.standard_normal((500, 3, 3)),
+        250,
+        frequencies=[4, 8, 16],
+        smoothing_time=0.2,
+        edge_mode="nan",
+    )
     morlet = connectivity_to_xarray(morlet_transform, "coherence_magnitude")
     return {
         "default_dataset": multitaper_connectivity(time_series, sampling_frequency=500),

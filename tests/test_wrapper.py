@@ -1813,14 +1813,13 @@ def test_from_transform_subclass_overriding_init_keeps_transform_contract():
     sidedness and observation weights, not silently fall back to two-sided,
     unweighted defaults."""
     rng = np.random.default_rng(4)
-    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
-        mw = MorletWavelet(
-            rng.standard_normal((1000, 2, 2)),
-            sampling_frequency=500,
-            frequencies=[10.0, 20.0, 30.0, 40.0, 50.0],
-            smoothing_time=0.1,
-            smoothing_kernel="hann",
-        )
+    mw = MorletWavelet(
+        rng.standard_normal((1000, 2, 2)),
+        sampling_frequency=500,
+        frequencies=[10.0, 20.0, 30.0, 40.0, 50.0],
+        smoothing_time=0.1,
+        smoothing_kernel="hann",
+    )
 
     class PassThrough(Connectivity):
         def __init__(self, *args, **kwargs):
@@ -2598,14 +2597,13 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
 def test_frequency_band_reduce_after_time_selection():
     """Band reduction must work on a single selected time point; the band
     validity coordinate cannot assume a surviving 'time' dimension."""
-    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
-        transform = MorletWavelet(
-            np.random.default_rng(325).standard_normal((1500, 2, 3)),
-            250,
-            np.arange(5.0, 45.0, 5.0),
-            smoothing_time=0.3,
-            edge_mode="nan",
-        )
+    transform = MorletWavelet(
+        np.random.default_rng(325).standard_normal((1500, 2, 3)),
+        250,
+        np.arange(5.0, 45.0, 5.0),
+        smoothing_time=0.3,
+        edge_mode="nan",
+    )
     result = connectivity_to_xarray(transform, method="coherence_magnitude")
     reduced = frequency_band_reduce(result.isel(time=10), {"a": (5, 15), "b": (20, 40)})
     assert "time" not in reduced.dims
@@ -3086,14 +3084,13 @@ def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
 
 def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
     data = np.random.default_rng(318).standard_normal((128, 2, 2))
-    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
-        transform = MorletWavelet(
-            data,
-            64,
-            np.array([4.0, 8.0, 16.0]),
-            smoothing_time=0.25,
-            edge_mode="nan",
-        )
+    transform = MorletWavelet(
+        data,
+        64,
+        np.array([4.0, 8.0, 16.0]),
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
     result = connectivity_to_xarray(transform, method="power")
 
     np.testing.assert_array_equal(result.isnull().all("source"), ~result.valid_time_frequency)
@@ -3104,14 +3101,13 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     # Adjacent-bin measures require a uniform grid; the band below still
     # selects the two interior bins.
     frequencies = np.array([4.0, 8.0, 12.0, 16.0])
-    with pytest.warns(UserWarning, match="shorter than 4 wavelet standard deviations"):
-        transform = MorletWavelet(
-            data,
-            64,
-            frequencies,
-            smoothing_time=0.25,
-            edge_mode="nan",
-        )
+    transform = MorletWavelet(
+        data,
+        64,
+        frequencies,
+        smoothing_time=0.25,
+        edge_mode="nan",
+    )
 
     phase_slope = connectivity_to_xarray(transform, method="phase_slope_index")
     assert phase_slope.dims == ("time", "source", "target")
