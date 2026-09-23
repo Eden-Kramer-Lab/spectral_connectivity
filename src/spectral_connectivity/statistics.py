@@ -885,7 +885,13 @@ def power_confidence_intervals(
     Parameters
     ----------
     n_tapers : int
-        Number of tapers used in multitaper estimation.
+        Number of independent observations averaged into each power estimate:
+        tapers times trials (``Connectivity.n_observations``), not the taper
+        count alone unless a single trial was averaged. It sets the chi-squared
+        degrees of freedom ``2 * n_tapers``, as in :func:`power_bias` and
+        :func:`power_variance`. Passing only the taper count for a multi-trial
+        average makes the interval far too wide (about 100% coverage instead of
+        95% for 5 tapers x 5 trials).
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
     ci : float, default=0.95
@@ -901,10 +907,14 @@ def power_confidence_intervals(
     Examples
     --------
     >>> import numpy as np
-    >>> # Single power estimate with 5 tapers
+    >>> # Single power estimate from 5 observations (5 tapers x 1 trial)
     >>> lower, upper = power_confidence_intervals(n_tapers=5, power=1.0, ci=0.95)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.488, 3.080]
+    >>> # Averaging 5 tapers x 5 trials gives 25 observations, a much tighter interval
+    >>> lower, upper = power_confidence_intervals(n_tapers=25, power=1.0, ci=0.95)
+    >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
+    95% CI: [0.700, 1.545]
     >>> # Multiple power estimates
     >>> power_vals = np.array([0.5, 1.0, 2.0, 5.0])
     >>> lower, upper = power_confidence_intervals(5, power_vals, 0.95)
@@ -918,8 +928,9 @@ def power_confidence_intervals(
     """
     if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers or n_tapers < 1:
         msg = (
-            f"n_tapers must be a finite positive integer, got {n_tapers}. It sets "
-            f"the chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
+            f"n_tapers must be a finite positive integer, got {n_tapers}. It is the "
+            f"number of averaged observations (tapers x trials) and sets the "
+            f"chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
             f"non-finite, or fractional value gives NaN or meaningless intervals."
         )
         raise ValueError(msg)

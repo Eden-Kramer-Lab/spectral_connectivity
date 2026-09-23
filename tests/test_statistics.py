@@ -366,6 +366,27 @@ def test_power_confidence_intervals_coverage():
     assert np.isclose(coverage, 0.95, atol=0.01)
 
 
+def test_power_confidence_intervals_count_every_averaged_observation():
+    """Degrees of freedom are 2 * (tapers x trials), not 2 * tapers alone.
+
+    ``n_tapers`` keeps its historical name but must be the number of
+    independent observations averaged into the estimate: 5 tapers x 5 trials
+    is 25 observations and a chi-square with 50 degrees of freedom. Following
+    a "number of tapers" reading with a multi-trial average gives ~100%
+    coverage instead of 95%, so the parameter doc must say so.
+    """
+    import scipy.stats
+
+    n_observations = 25
+    lower, upper = power_confidence_intervals(n_observations, power=2.0, ci=0.95)
+    dof = 2 * n_observations
+    assert lower == pytest.approx(dof / scipy.stats.chi2.ppf(0.975, dof) * 2.0)
+    assert upper == pytest.approx(dof / scipy.stats.chi2.ppf(0.025, dof) * 2.0)
+    doc = power_confidence_intervals.__doc__ or ""
+    assert "trials" in doc
+    assert "n_observations" in doc
+
+
 def test_power_fisher_z_transform_one_sample_is_finite():
     """One-sample power test against a positive baseline must be finite."""
     z = power_fisher_z_transform(np.array([0.5, 1.0, 2.0]), n_obs1=50, spectrum2=1.0)
