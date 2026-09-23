@@ -16,9 +16,7 @@ from spectral_connectivity.connectivity import Connectivity
 def test_transfer_function_is_cached():
     """Expensive directed-connectivity intermediates are cached per instance."""
     rng = np.random.default_rng(1)
-    fourier = rng.standard_normal((1, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (1, 3, 2, 8, 2)
-    )
+    fourier = rng.standard_normal((1, 3, 2, 8, 2)) + 1j * rng.standard_normal((1, 3, 2, 8, 2))
     c = Connectivity(fourier_coefficients=fourier)
     assert c._minimum_phase_factor is c._minimum_phase_factor
     assert c._transfer_function is c._transfer_function
@@ -30,9 +28,7 @@ def test_changing_inputs_clears_cached_intermediates():
     rng = np.random.default_rng(2)
     # Enough tapers that each trial's spectrum is well conditioned for Wilson
     # factorization under the per-trial "tapers" expectation.
-    fourier = rng.standard_normal((1, 4, 6, 8, 2)) + 1j * rng.standard_normal(
-        (1, 4, 6, 8, 2)
-    )
+    fourier = rng.standard_normal((1, 4, 6, 8, 2)) + 1j * rng.standard_normal((1, 4, 6, 8, 2))
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
     transfer_default = c._transfer_function
 
@@ -316,16 +312,12 @@ def test_reassigning_different_geometry_resets_coordinates():
     could fail. The coordinates are now reset to the new geometry with a warning.
     """
     rng = np.random.default_rng(0)
-    fc8 = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (2, 3, 2, 8, 2)
-    )
+    fc8 = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal((2, 3, 2, 8, 2))
     conn = Connectivity(fourier_coefficients=fc8)
     assert conn.frequencies.size == 8 // 2 + 1
     assert conn.time.size == 2
 
-    fc10 = rng.standard_normal((3, 3, 2, 10, 2)) + 1j * rng.standard_normal(
-        (3, 3, 2, 10, 2)
-    )
+    fc10 = rng.standard_normal((3, 3, 2, 10, 2)) + 1j * rng.standard_normal((3, 3, 2, 10, 2))
     with pytest.warns(UserWarning, match="changed the FFT/time geometry"):
         conn.fourier_coefficients = fc10
     assert conn.frequencies.size == 10 // 2 + 1
@@ -337,9 +329,7 @@ def test_reassigning_different_geometry_resets_coordinates():
 def test_reassigning_same_geometry_keeps_coordinates_without_warning():
     """Same-geometry reassignment (the reuse pattern) must not warn or reset."""
     rng = np.random.default_rng(0)
-    fc = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal(
-        (2, 3, 2, 8, 2)
-    )
+    fc = rng.standard_normal((2, 3, 2, 8, 2)) + 1j * rng.standard_normal((2, 3, 2, 8, 2))
     conn = Connectivity(fourier_coefficients=fc)
     freqs_before = conn.frequencies.copy()
     with warnings.catch_warnings():
@@ -419,9 +409,7 @@ def test_from_multitaper_connectivity_is_picklable():
     conn = Connectivity.from_multitaper(m)
 
     restored = pickle.loads(pickle.dumps(conn))
-    np.testing.assert_allclose(
-        restored.coherence_magnitude(), conn.coherence_magnitude()
-    )
+    np.testing.assert_allclose(restored.coherence_magnitude(), conn.coherence_magnitude())
 
 
 class _SlottedConnectivity(Connectivity):
@@ -451,6 +439,4 @@ def test_pickle_and_copy_preserve_subclass_slots(subclass):
         copy.deepcopy(conn),
     ):
         assert clone.extra_metadata == {"subject": "s1"}
-        np.testing.assert_allclose(
-            clone.coherence_magnitude(), conn.coherence_magnitude()
-        )
+        np.testing.assert_allclose(clone.coherence_magnitude(), conn.coherence_magnitude())

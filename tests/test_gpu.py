@@ -23,9 +23,7 @@ class TestGetComputeBackend:
 
             assert result["backend"] == "cpu"
             assert result["gpu_enabled"] is False
-            assert (
-                result["gpu_available"] is not None
-            )  # Should report if CuPy is available
+            assert result["gpu_available"] is not None  # Should report if CuPy is available
             assert "device_name" in result
             assert "message" in result
             assert isinstance(result["message"], str)
@@ -76,8 +74,7 @@ class TestGetComputeBackend:
                 assert result["gpu_available"] is False
                 assert "message" in result
                 assert (
-                    "cupy" in result["message"].lower()
-                    or "gpu" in result["message"].lower()
+                    "cupy" in result["message"].lower() or "gpu" in result["message"].lower()
                 )
 
     def test_return_value_structure(self):
@@ -158,22 +155,16 @@ class TestGPUModeConsistency:
             if result["backend"] == "cpu":
                 # CPU backend should indicate numpy
                 assert (
-                    "cpu" in result["message"].lower()
-                    or "numpy" in result["message"].lower()
+                    "cpu" in result["message"].lower() or "numpy" in result["message"].lower()
                 )
                 # Device name should indicate CPU
-                assert (
-                    "cpu" in result["device_name"].lower()
-                    or result["device_name"] == "CPU"
-                )
+                assert "cpu" in result["device_name"].lower() or result["device_name"] == "CPU"
 
 
 class TestIsGpuEnabled:
     """Test is_gpu_enabled() environment-variable parsing."""
 
-    @pytest.mark.parametrize(
-        "value", ["true", "True", "TRUE", "1", "yes", "on", " true "]
-    )
+    @pytest.mark.parametrize("value", ["true", "True", "TRUE", "1", "yes", "on", " true "])
     def test_recognized_true_values(self, value):
         from spectral_connectivity.utils import is_gpu_enabled
 

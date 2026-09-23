@@ -68,9 +68,7 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        converged = minimum_phase_decomposition(
-            cross_spectral_matrix, max_iterations=500
-        )
+        converged = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
     assert not np.isnan(converged).any()
 
 
@@ -154,9 +152,7 @@ def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
 
     rng = np.random.default_rng(0)
     coeffs = rng.standard_normal((1, 8, 2, 2)) + 1j * rng.standard_normal((1, 8, 2, 2))
-    cross_spectral_matrix = np.matmul(
-        coeffs, coeffs.conj().swapaxes(-1, -2)
-    ) + 2 * np.eye(2)
+    cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2)) + 2 * np.eye(2)
 
     import warnings
 
@@ -186,9 +182,9 @@ def test_get_initial_conditions_isolates_non_positive_definite_units():
     """
     rng = np.random.default_rng(5)
     n_freq, n_signals = 16, 2
-    coeffs = rng.standard_normal(
+    coeffs = rng.standard_normal((n_freq, n_signals, n_signals)) + 1j * rng.standard_normal(
         (n_freq, n_signals, n_signals)
-    ) + 1j * rng.standard_normal((n_freq, n_signals, n_signals))
+    )
     healthy = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2)) + 2 * np.eye(n_signals)
     # Real rank-one spectrum, constant across frequency: its zero-lag matrix is
     # exactly singular, so the batched Cholesky raises.
@@ -224,9 +220,7 @@ def test_get_initial_conditions_keeps_valid_ill_conditioned_units(dtype, small):
     """
     import warnings
 
-    ill_conditioned = np.broadcast_to(
-        np.diag([1.0, small]).astype(dtype), (4, 2, 2)
-    ).copy()
+    ill_conditioned = np.broadcast_to(np.diag([1.0, small]).astype(dtype), (4, 2, 2)).copy()
     # Sanity: this unit really is Cholesky-factorable standalone.
     np.linalg.cholesky(ill_conditioned[0])
     singular = np.broadcast_to(np.diag([1.0, 0.0]).astype(dtype), (4, 2, 2)).copy()
@@ -347,8 +341,7 @@ def test__conjugate_transpose():
 def test__get_initial_conditions():
     n_time_samples, n_fft_samples, n_signals = 3, 11, 2
     cross_spectral_matrix = (
-        np.ones((n_time_samples, n_fft_samples, n_signals, n_signals), dtype=complex)
-        * 4
+        np.ones((n_time_samples, n_fft_samples, n_signals, n_signals), dtype=complex) * 4
     )
     cross_spectral_matrix[..., 1, 0] = 0
     minimum_phase_factor = _get_initial_conditions(cross_spectral_matrix)
@@ -366,9 +359,7 @@ def test__get_causal_signal_removes_roots_outside_unit_circle():
     linear_predictor = np.zeros((1, n_fft_samples, n_signals, n_signals), dtype=complex)
     linear_predictor[0, :, 0, 0] = transfer_function
 
-    expected_causal_signal = np.ones(
-        (1, n_fft_samples, n_signals, n_signals), dtype=complex
-    )
+    expected_causal_signal = np.ones((1, n_fft_samples, n_signals, n_signals), dtype=complex)
 
     causal_signal = _get_causal_signal(linear_predictor)
 
@@ -386,9 +377,7 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     linear_coef = ifft(expected_transfer_function)
     linear_coef[0] *= 0.5
 
-    expected_causal_signal = np.zeros(
-        (1, n_fft_samples, n_signals, n_signals), dtype=complex
-    )
+    expected_causal_signal = np.zeros((1, n_fft_samples, n_signals, n_signals), dtype=complex)
     expected_causal_signal[0, :, 0, 0] = fft(linear_coef)
 
     causal_signal = _get_causal_signal(linear_predictor)
@@ -414,9 +403,7 @@ def test_minimum_phase_decomposition():
         _conjugate_transpose(expected_minimum_phase_factor),
     )
     minimum_phase_factor = minimum_phase_decomposition(expected_cross_spectral_matrix)
-    cross_spectral_matrix = minimum_phase_factor * _conjugate_transpose(
-        minimum_phase_factor
-    )
+    cross_spectral_matrix = minimum_phase_factor * _conjugate_transpose(minimum_phase_factor)
 
     assert np.allclose(minimum_phase_factor, expected_minimum_phase_factor)
     assert np.allclose(cross_spectral_matrix, expected_cross_spectral_matrix)

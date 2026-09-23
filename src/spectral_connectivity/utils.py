@@ -207,9 +207,7 @@ def get_compute_backend() -> dict[str, Any]:
                 except Exception:
                     # Fallback to compute capability if name not available
                     compute_cap = device.compute_capability
-                    device_name = (
-                        f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-                    )
+                    device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
             except Exception:
                 device_name = "GPU"
         except Exception:

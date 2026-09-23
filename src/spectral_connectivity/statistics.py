@@ -131,9 +131,7 @@ def jackknife_confidence_interval(
         The standard error is converted back with the local delta method.
     """
     if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
-        raise ValueError(
-            "confidence_level must be finite and strictly between 0 and 1."
-        )
+        raise ValueError("confidence_level must be finite and strictly between 0 and 1.")
     valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
     if transformation not in valid_transformations:
         raise ValueError(
@@ -148,9 +146,7 @@ def jackknife_confidence_interval(
         replicates.ndim != estimate_array.ndim + 1
         or replicates.shape[1:] != estimate_array.shape
     ):
-        raise ValueError(
-            "leave_one_out must have shape (n_observations, *estimate.shape)."
-        )
+        raise ValueError("leave_one_out must have shape (n_observations, *estimate.shape).")
     n_observations = replicates.shape[0]
     if n_observations < 2:
         raise ValueError("Jackknife inference requires at least 2 observations.")
@@ -174,23 +170,15 @@ def jackknife_confidence_interval(
                 stacklevel=2,
             )
         with np.errstate(divide="ignore", invalid="ignore"):
-            transformed_estimate = np.where(
-                estimate_array > 0, np.log(estimate_array), np.nan
-            )
-            transformed_replicates = np.where(
-                replicates > 0, np.log(replicates), np.nan
-            )
+            transformed_estimate = np.where(estimate_array > 0, np.log(estimate_array), np.nan)
+            transformed_replicates = np.where(replicates > 0, np.log(replicates), np.nan)
         inverse = _exponential
         derivative = estimate_array
     elif transformation == "fisher":
         _warn_fisher_boundary(np.abs(estimate_array) >= 1)
         epsilon = np.finfo(float).eps
-        transformed_estimate = np.arctanh(
-            np.clip(estimate_array, -1 + epsilon, 1 - epsilon)
-        )
-        transformed_replicates = np.arctanh(
-            np.clip(replicates, -1 + epsilon, 1 - epsilon)
-        )
+        transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
+        transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
         inverse = _hyperbolic_tangent
         derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
     elif transformation == "fisher_squared":
@@ -202,9 +190,7 @@ def jackknife_confidence_interval(
         _warn_fisher_boundary(estimate_array >= 1)
         epsilon = np.finfo(float).eps
         clipped_estimate = np.clip(estimate_array, 0, 1)
-        transformed_estimate = np.arctanh(
-            np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon)
-        )
+        transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))
         transformed_replicates = np.arctanh(
             np.clip(np.sqrt(np.clip(replicates, 0, 1)), 0, 1 - epsilon)
         )
@@ -874,9 +860,7 @@ def power_confidence_intervals(
     degrees_of_freedom = 2 * n_tapers
     alpha = 1 - ci
     lower_bound = (
-        degrees_of_freedom
-        / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom)
-        * power
+        degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
     )
     upper_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(alpha / 2, degrees_of_freedom) * power
@@ -1004,8 +988,7 @@ def power_fisher_z_transform(
         raise ValueError(f"n_obs1 must be a finite integer >= 1, got {n_obs1}.")
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or n_obs2 < 0:
         raise ValueError(
-            f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), "
-            f"got {n_obs2}."
+            f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), got {n_obs2}."
         )
     # The test operates on log(power); non-finite or non-positive inputs would
     # produce silent -inf/nan z-scores. Fail loudly instead.

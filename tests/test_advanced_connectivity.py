@@ -123,9 +123,7 @@ class TestCanonicalCoherence:
         assert np.all(np.isnan(canonical_coh[..., 1, 1]))
 
         # Check symmetry: canonical_coh[..., i, j] == canonical_coh[..., j, i]
-        assert np.allclose(
-            canonical_coh[..., 0, 1], canonical_coh[..., 1, 0], equal_nan=True
-        )
+        assert np.allclose(canonical_coh[..., 0, 1], canonical_coh[..., 1, 0], equal_nan=True)
 
     def test_canonical_coherence_with_different_group_sizes(self):
         """Test canonical coherence with unequal group sizes."""
@@ -289,9 +287,7 @@ class TestGlobalCoherence:
         for _i in range(n_signals):
             # Each signal = common component + independent noise
             weight = 0.7  # Strong common component
-            signal = weight * common_signal + (1 - weight) * self.rng.standard_normal(
-                n_time
-            )
+            signal = weight * common_signal + (1 - weight) * self.rng.standard_normal(n_time)
             signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal(
                 (n_trials, n_time)
             )
@@ -396,9 +392,7 @@ class TestGlobalCoherence:
             time_halfbandwidth_product=2,
         )
         gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
-        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(
-            max_rank=1
-        )
+        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(max_rank=1)
         np.testing.assert_allclose(gc, gc_scaled, rtol=1e-6)
 
     def test_global_coherence_dense_branch_bounded_and_scale_invariant(self):
@@ -744,27 +738,19 @@ class TestGroupDelay:
         n_time, n_trials, n_tapers, n_fft, n_signals = 1, 20, 1, 16, 3
         delay = 0.3
         bins = np.arange(n_fft)
-        fourier = np.zeros(
-            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
-        )
+        fourier = np.zeros((n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex)
         for trial in range(n_trials):
-            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
-                n_fft
-            )
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(n_fft)
             fourier[0, trial, 0, :, 0] = base
             # Signal 1 is signal 0 with a linear phase ramp (a broadband delay).
-            fourier[0, trial, 0, :, 1] = base * np.exp(
-                -1j * 2 * np.pi * bins * delay / n_fft
-            )
+            fourier[0, trial, 0, :, 1] = base * np.exp(-1j * 2 * np.pi * bins * delay / n_fft)
             fourier[0, trial, 0, :, 2] = self.rng.standard_normal(
                 n_fft
             ) + 1j * self.rng.standard_normal(n_fft)
         fourier[..., 5, :] = 0.0  # a zero-power frequency -> NaN coherency, masked
 
         with pytest.warns(UserWarning, match="zero power"):
-            _delay, slope, r_value = Connectivity(
-                fourier_coefficients=fourier
-            ).group_delay()
+            _delay, slope, r_value = Connectivity(fourier_coefficients=fourier).group_delay()
 
         # The coherent pair (0, 1) keeps a finite fit despite the masked bin.
         assert np.isfinite(slope[..., 0, 1]).all()
@@ -790,13 +776,9 @@ class TestGroupDelay:
         band = frequencies[: n_fft // 2 + 1]
         assert len(band) * (band @ band) - band.sum() ** 2 == 0.0
 
-        fourier = np.zeros(
-            (n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex
-        )
+        fourier = np.zeros((n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex)
         for trial in range(n_trials):
-            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(
-                n_fft
-            )
+            base = self.rng.standard_normal(n_fft) + 1j * self.rng.standard_normal(n_fft)
             fourier[0, trial, 0, :, 0] = base
             # coherency(0, 1) phase == angle(f0 * conj(f1)) == slope * (f - f0).
             fourier[0, trial, 0, :, 1] = base * np.exp(
@@ -833,9 +815,7 @@ class TestGroupDelay:
         signals = []
         for shift in range(n_signals):
             signal = np.roll(base, shift) + 0.2 * self.rng.standard_normal(n_time)
-            trials = signal[:, np.newaxis] + 0.1 * self.rng.standard_normal(
-                (n_time, n_trials)
-            )
+            trials = signal[:, np.newaxis] + 0.1 * self.rng.standard_normal((n_time, n_trials))
             signals.append(trials)
         time_series = np.stack(signals, axis=-1)  # (n_time, n_trials, n_signals)
 
@@ -864,18 +844,14 @@ class TestGroupDelay:
         significant = _find_significant_frequencies(
             bandpassed, conn.n_observations, step, significance_threshold=0.05
         )
-        phase = np.ma.masked_array(
-            np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant
-        )
+        phase = np.ma.masked_array(np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant)
 
         reference_slope = np.full(slope.shape, np.nan)
         reference_r = np.ones(r_value.shape)
         it = np.ndindex(phase.shape[:-2])
         for lead in it:
             for pair_index, (i, j) in enumerate(pairs):
-                fit = linregress(
-                    band_frequencies, y=phase[(*lead, slice(None), pair_index)]
-                )
+                fit = linregress(band_frequencies, y=phase[(*lead, slice(None), pair_index)])
                 reference_slope[(*lead, i, j)] = fit[0]
                 reference_slope[(*lead, j, i)] = -fit[0]
                 reference_r[(*lead, i, j)] = fit[2]
@@ -885,9 +861,7 @@ class TestGroupDelay:
         np.testing.assert_allclose(
             slope, reference_slope, rtol=1e-9, atol=1e-11, equal_nan=True
         )
-        np.testing.assert_allclose(
-            r_value, reference_r, rtol=1e-9, atol=1e-11, equal_nan=True
-        )
+        np.testing.assert_allclose(r_value, reference_r, rtol=1e-9, atol=1e-11, equal_nan=True)
 
     def test_group_delay_antisymmetry(self):
         """Test that group delay shows antisymmetry: delay[i,j] = -delay[j,i]."""
@@ -958,9 +932,9 @@ class TestAdvancedConnectivityIntegration:
             # Different mixing of two frequency components
             weight1 = (i % 3) / 3.0
             weight2 = 1 - weight1
-            signal = weight1 * np.sin(
-                2 * np.pi * freq1 * time + i * 0.2
-            ) + weight2 * np.sin(2 * np.pi * freq2 * time + i * 0.3)
+            signal = weight1 * np.sin(2 * np.pi * freq1 * time + i * 0.2) + weight2 * np.sin(
+                2 * np.pi * freq2 * time + i * 0.3
+            )
             signal_trials = signal[np.newaxis, :] + 0.1 * self.rng.standard_normal(
                 (n_trials, n_time)
             )
@@ -1124,9 +1098,7 @@ class TestDelay:
         """One trial/taper (n_estimates=1) must not crash svds at default rank."""
         rng = np.random.default_rng(0)
         # (n_time, n_trials, n_tapers, n_fft, n_signals) with n_trials*n_tapers = 1
-        fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal(
-            (1, 1, 1, 4, 3)
-        )
+        fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal((1, 1, 1, 4, 3))
         gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
         assert gc.shape == (1, 4, 1)
         assert np.all(np.isfinite(gc))
@@ -1135,13 +1107,9 @@ class TestDelay:
         """Requesting more components than exist clamps (no duplicate broadcast)."""
         rng = np.random.default_rng(2)
         # n_signals=3, n_estimates = n_trials * n_tapers = 8 -> at most 3 components
-        fc = rng.standard_normal((1, 4, 2, 4, 3)) + 1j * rng.standard_normal(
-            (1, 4, 2, 4, 3)
-        )
+        fc = rng.standard_normal((1, 4, 2, 4, 3)) + 1j * rng.standard_normal((1, 4, 2, 4, 3))
         with pytest.warns(UserWarning, match="clamping"):
-            gc, vectors = Connectivity(fourier_coefficients=fc).global_coherence(
-                max_rank=5
-            )
+            gc, vectors = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=5)
         assert gc.shape[-1] == 3  # min(n_signals, n_estimates)
         assert vectors.shape[-1] == 3
         # Components are distinct, not one value broadcast into several.
@@ -1150,13 +1118,9 @@ class TestDelay:
     def test_global_coherence_is_stable_at_extreme_magnitudes(self):
         """Extreme coefficient magnitudes must not underflow/overflow to NaN."""
         rng = np.random.default_rng(0)
-        fc = rng.standard_normal((1, 8, 1, 4, 4)) + 1j * rng.standard_normal(
-            (1, 8, 1, 4, 4)
-        )
+        fc = rng.standard_normal((1, 8, 1, 4, 4)) + 1j * rng.standard_normal((1, 8, 1, 4, 4))
         base, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
         for scale in (1e-200, 1e200):
-            gc, _ = Connectivity(fourier_coefficients=fc * scale).global_coherence(
-                max_rank=1
-            )
+            gc, _ = Connectivity(fourier_coefficients=fc * scale).global_coherence(max_rank=1)
             assert np.all(np.isfinite(gc))
             np.testing.assert_allclose(gc, base, rtol=1e-6)

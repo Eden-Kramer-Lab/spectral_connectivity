@@ -134,7 +134,7 @@ exclude_lines = [
 
 # Tool configurations for linting/formatting
 [tool.ruff]
-line-length = 88
+line-length = 95
 extend-exclude = [
     ".venv",
     "docs",

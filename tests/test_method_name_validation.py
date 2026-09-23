@@ -28,9 +28,7 @@ def test_extension_measure_is_not_rejected_by_validation(time_series, monkeypatc
             )
         )
 
-    monkeypatch.setattr(
-        Connectivity, "custom_similarity", custom_similarity, raising=False
-    )
+    monkeypatch.setattr(Connectivity, "custom_similarity", custom_similarity, raising=False)
     result = multitaper_connectivity(
         time_series, sampling_frequency=200, method="custom_similarity"
     )

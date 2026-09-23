@@ -10,8 +10,7 @@ def test_valid_expectation_types():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
     fourier_coefficients = (
         np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j
-        * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
     ).astype(np.complex128)
 
     # All these should work without error
@@ -38,16 +37,13 @@ def test_invalid_expectation_type_raises_error():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
     fourier_coefficients = (
         np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j
-        * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
     ).astype(np.complex128)
 
     invalid_type = "invalid_option"
 
     with pytest.raises(ValueError) as exc_info:
-        Connectivity(
-            fourier_coefficients=fourier_coefficients, expectation_type=invalid_type
-        )
+        Connectivity(fourier_coefficients=fourier_coefficients, expectation_type=invalid_type)
 
     error_msg = str(exc_info.value)
 
@@ -63,8 +59,7 @@ def test_case_sensitive_expectation_type():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 2, 3, 5, 2)
     fourier_coefficients = (
         np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j
-        * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
     ).astype(np.complex128)
 
     # Should fail - case sensitivity

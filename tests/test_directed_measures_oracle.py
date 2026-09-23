@@ -227,9 +227,7 @@ def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
     assert np.nanmax(np.abs(non_causal)) < 1e-6
 
 
-def _state_space_conditional_granger(
-    coefficients, noise_covariance, n_fft, target, source
-):
+def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, target, source):
     """Conditional spectral Granger ``source -> target | others`` via state space.
 
     Independent oracle following Barnett & Seth (2015): the VAR is written in
@@ -267,9 +265,7 @@ def _state_space_conditional_granger(
     for k, omega in enumerate(omegas):
         z = np.exp(1j * omega)
         H = np.eye(n_signals) + C @ np.linalg.solve(z * identity - A, K)
-        B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(
-            z * identity - (A - K_r @ C_r), K_r
-        )
+        B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(z * identity - (A - K_r @ C_r), K_r)
         H_r = B_r[target_r] @ H[np.ix_(reduced, others)] @ L
         values[k] = np.log(V_r[target_r, target_r]) - np.log(
             V_r[target_r, target_r] - np.real(H_r @ H_r.conj())

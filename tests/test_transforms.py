@@ -88,9 +88,7 @@ def test__add_axes():
 )
 def test__sliding_window(test_array, window_size, step_size, axis, expected_array):
     assert np.allclose(
-        _sliding_window(
-            test_array, window_size=window_size, step_size=step_size, axis=axis
-        ),
+        _sliding_window(test_array, window_size=window_size, step_size=step_size, axis=axis),
         expected_array,
     )
 
@@ -117,9 +115,7 @@ def test__sliding_window_rejects_non_positive_step(step_size):
         _sliding_window(np.arange(6), window_size=2, step_size=step_size)
 
 
-@mark.parametrize(
-    "time_halfbandwidth_product, expected_n_tapers", [(3, 5), (1, 1), (1.75, 2)]
-)
+@mark.parametrize("time_halfbandwidth_product, expected_n_tapers", [(3, 5), (1, 1), (1.75, 2)])
 def test_n_tapers(time_halfbandwidth_product, expected_n_tapers):
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
@@ -133,9 +129,7 @@ def test_n_tapers(time_halfbandwidth_product, expected_n_tapers):
     "sampling_frequency, time_window_duration, expected_duration",
     [(1000, None, 0.1), (2000, None, 0.05), (1000, 0.1, 0.1)],
 )
-def test_time_window_duration(
-    sampling_frequency, time_window_duration, expected_duration
-):
+def test_time_window_duration(sampling_frequency, time_window_duration, expected_duration):
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(
@@ -293,9 +287,9 @@ def test_time(time_window_duration):
     if not np.allclose(expected_time[-1] + time_window_duration, end_time):
         expected_time = expected_time[:-1]
     # Windows are labeled by their center time, not their start.
-    expected_time = expected_time + (
-        round(time_window_duration * sampling_frequency) - 1
-    ) / (2 * sampling_frequency)
+    expected_time = expected_time + (round(time_window_duration * sampling_frequency) - 1) / (
+        2 * sampling_frequency
+    )
     m = Multitaper(
         sampling_frequency=sampling_frequency,
         time_series=time_series,
@@ -326,9 +320,7 @@ def test_tapers():
 def test__get_low_bias_tapers(eigenvalues, expected_n_tapers):
     tapers = np.zeros((3, 100))
     filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(tapers, eigenvalues)
-    assert (
-        filtered_tapers.shape[0] == filtered_eigenvalues.shape[0] == expected_n_tapers
-    )
+    assert filtered_tapers.shape[0] == filtered_eigenvalues.shape[0] == expected_n_tapers
 
 
 @mark.parametrize(
@@ -468,9 +460,7 @@ def test_prepare_time_series_requires_axis_for_2d():
     from spectral_connectivity.transforms import prepare_time_series
 
     time_series_2d = rng.standard_normal((100, 5))
-    with pytest.raises(
-        ValueError, match=r"For 2D input.*must specify.*axis.*parameter"
-    ):
+    with pytest.raises(ValueError, match=r"For 2D input.*must specify.*axis.*parameter"):
         prepare_time_series(time_series_2d)
 
 
@@ -513,21 +503,15 @@ def test_multitaper_rejects_invalid_time_halfbandwidth():
     time_series = rng.standard_normal((100, 1, 1))
 
     # Test negative value
-    with pytest.raises(
-        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
-    ):
+    with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
         Multitaper(time_series=time_series, time_halfbandwidth_product=-1)
 
     # Test zero
-    with pytest.raises(
-        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
-    ):
+    with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
         Multitaper(time_series=time_series, time_halfbandwidth_product=0)
 
     # Test value less than 1
-    with pytest.raises(
-        ValueError, match=r"time_halfbandwidth_product.*must be at least 1"
-    ):
+    with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
         Multitaper(time_series=time_series, time_halfbandwidth_product=0.5)
 
 
@@ -544,9 +528,7 @@ def test_multitaper_rejects_negative_time_window_duration():
         )
 
     with pytest.raises(ValueError, match=r"time_window_duration.*must be positive"):
-        Multitaper(
-            time_series=time_series, sampling_frequency=1000, time_window_duration=0
-        )
+        Multitaper(time_series=time_series, sampling_frequency=1000, time_window_duration=0)
 
 
 def test_multitaper_rejects_negative_time_window_step():
@@ -555,9 +537,7 @@ def test_multitaper_rejects_negative_time_window_step():
     time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.raises(ValueError, match=r"time_window_step.*must be positive"):
-        Multitaper(
-            time_series=time_series, sampling_frequency=1000, time_window_step=-0.1
-        )
+        Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=-0.1)
 
     with pytest.raises(ValueError, match=r"time_window_step.*must be positive"):
         Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=0)
@@ -734,9 +714,7 @@ def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
     """Both transforms report the one-sided PSD (2 * variance / fs) of white
     noise, so wavelet and multitaper power are on the same scale."""
     fs, variance = 500.0, 4.0
-    data = np.sqrt(variance) * np.random.default_rng(926).standard_normal(
-        (10000, 20, 1)
-    )
+    data = np.sqrt(variance) * np.random.default_rng(926).standard_normal((10000, 20, 1))
     multitaper_power = Connectivity.from_multitaper(
         Multitaper(data, fs, time_halfbandwidth_product=4, time_window_duration=2.0)
     ).power()
@@ -785,9 +763,7 @@ def test_morlet_padding_modes_match_padded_convolution(padding_mode):
 
     rng = np.random.default_rng(920)
     data = rng.standard_normal((96, 2, 2))
-    transform = MorletWavelet(
-        data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode
-    )
+    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode)
 
     sigma = 4 / (2 * np.pi * 8)
     half_width = int(np.ceil(5 * sigma * 64))
@@ -837,14 +813,10 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
         edge_mode="trim",
     )
 
-    np.testing.assert_array_equal(
-        kept.valid_time_frequency, masked.valid_time_frequency
-    )
+    np.testing.assert_array_equal(kept.valid_time_frequency, masked.valid_time_frequency)
     assert not np.all(masked.valid_time_frequency)
     masked_power = Connectivity.from_transform(masked).power()
-    np.testing.assert_array_equal(
-        np.isnan(masked_power[..., 0]), ~masked.valid_time_frequency
-    )
+    np.testing.assert_array_equal(np.isnan(masked_power[..., 0]), ~masked.valid_time_frequency)
     assert np.all(np.isfinite(Connectivity.from_transform(kept).power()))
     assert np.all(trimmed.valid_time_frequency)
     assert trimmed.time[0] >= trimmed.edge_half_width.max()
@@ -959,9 +931,7 @@ def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
     outer = raw_coefficients[..., :, np.newaxis] * np.conjugate(
         raw_coefficients[..., np.newaxis, :]
     )
-    weighted = (
-        np.sum(weights[None, None, :, None, None] * outer, axis=2) / weights.sum()
-    )
+    weighted = np.sum(weights[None, None, :, None, None] * outer, axis=2) / weights.sum()
     expected = weighted.mean(axis=1)  # unweighted mean over trials
 
     actual = Connectivity.from_transform(smoothed).cross_spectral_density()[:, 2]
@@ -1157,9 +1127,7 @@ def test_adaptive_weighting_is_invariant_to_input_scale():
     # epsilon floor on the PSD-valued denominator would discard these low-power
     # estimates.
     for scale in (1000.0, 1e-7):
-        scaled = transform(data * scale, "adaptive") / transform(
-            data * scale, "uniform"
-        )
+        scaled = transform(data * scale, "adaptive") / transform(data * scale, "uniform")
         np.testing.assert_allclose(weights, scaled, rtol=1e-9, atol=1e-9)
 
 

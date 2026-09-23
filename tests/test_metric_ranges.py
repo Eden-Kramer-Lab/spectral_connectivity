@@ -42,9 +42,7 @@ def simple_synthetic_data():
         ) + 0.1 * rng.standard_normal(n_time_samples)
 
         # Signal 2: mostly independent + noise
-        signals[:, trial, 2] = 0.1 * base_signal + 0.9 * rng.standard_normal(
-            n_time_samples
-        )
+        signals[:, trial, 2] = 0.1 * base_signal + 0.9 * rng.standard_normal(n_time_samples)
 
     return signals, sampling_frequency
 

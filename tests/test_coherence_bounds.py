@@ -10,8 +10,7 @@ def test_coherence_magnitude_bounds():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 10, 1, 5, 3)
     fourier_coefficients = (
         np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j
-        * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
     ).astype(np.complex128)
 
     # Add very small values that could cause numerical issues
@@ -37,8 +36,7 @@ def test_imaginary_coherence_bounds():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 5, 1, 3, 2)
     fourier_coefficients = (
         np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
-        + 1j
-        * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
+        + 1j * np.random.randn(n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals)
     ).astype(np.complex128)
 
     # Add edge case with very small power

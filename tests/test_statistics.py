@@ -23,9 +23,7 @@ from spectral_connectivity.statistics import (
 )
 
 
-@pytest.mark.parametrize(
-    "correction", [Benjamini_Hochberg_procedure, Bonferroni_correction]
-)
+@pytest.mark.parametrize("correction", [Benjamini_Hochberg_procedure, Bonferroni_correction])
 @pytest.mark.parametrize("bad_alpha", [0, 1, -0.1, np.nan, np.inf, True, "0.05"])
 def test_multiple_comparison_corrections_validate_alpha(correction, bad_alpha):
     with pytest.raises(ValueError, match="alpha must be a finite number"):
@@ -70,9 +68,7 @@ def test_fisher_z_transform():
     n_obs1, n_obs2 = 6, 6
     expected_difference_z = np.zeros((2, 2))
     assert np.allclose(
-        coherence_fisher_z_transform(
-            coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2
-        ),
+        coherence_fisher_z_transform(coherency, n_obs1, coherency2=coherency, n_obs2=n_obs2),
         expected_difference_z,
     )
 
@@ -88,9 +84,7 @@ def test_fisher_z_transform():
 )
 def test_Benjamini_Hochberg_procedure(p_values, expected_is_significant):
     alpha = 0.05
-    assert np.allclose(
-        Benjamini_Hochberg_procedure(p_values, alpha), expected_is_significant
-    )
+    assert np.allclose(Benjamini_Hochberg_procedure(p_values, alpha), expected_is_significant)
 
 
 def test_Benjamini_Hochberg_excludes_nan_from_family():
@@ -228,19 +222,13 @@ def test_coherence_significance_pvalue_is_well_calibrated():
     n_rep = 200_000
     for n_obs in (5, 20, 50):
         # Two independent complex-Gaussian signals -> true coherence is zero.
-        x = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal(
-            (n_rep, n_obs)
-        )
-        y = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal(
-            (n_rep, n_obs)
-        )
+        x = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal((n_rep, n_obs))
+        y = rng.standard_normal((n_rep, n_obs)) + 1j * rng.standard_normal((n_rep, n_obs))
         cross = (x * np.conj(y)).mean(axis=1)
         coherency = cross / np.sqrt(
             (np.abs(x) ** 2).mean(axis=1) * (np.abs(y) ** 2).mean(axis=1)
         )
-        rejection_rate = np.mean(
-            coherence_significance_pvalue(coherency, n_obs) <= alpha
-        )
+        rejection_rate = np.mean(coherence_significance_pvalue(coherency, n_obs) <= alpha)
         assert np.isclose(rejection_rate, alpha, atol=0.01)
 
 
@@ -357,13 +345,9 @@ def test_power_fisher_z_transform_one_sample_matches_analytic():
 
 def test_power_fisher_z_transform_rejects_nonpositive_power():
     """Non-positive power would give silent -inf/nan; must raise instead."""
-    with pytest.raises(
-        ValueError, match="spectrum1 must be finite and strictly positive"
-    ):
+    with pytest.raises(ValueError, match="spectrum1 must be finite and strictly positive"):
         power_fisher_z_transform(np.array([1.0, 0.0]), n_obs1=30, spectrum2=1.0)
-    with pytest.raises(
-        ValueError, match="spectrum2 must be finite and strictly positive"
-    ):
+    with pytest.raises(ValueError, match="spectrum2 must be finite and strictly positive"):
         power_fisher_z_transform(np.array([1.0, 2.0]), n_obs1=30, spectrum2=0.0)
 
 
@@ -417,9 +401,7 @@ def test_coherence_rate_adjustment_negative_power_is_masked():
 @pytest.mark.parametrize("bad_n_obs", [0, 1])
 def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
     """n_observations < 2 would give values outside [0, 1]; must raise."""
-    with pytest.raises(
-        ValueError, match="n_observations must be a finite integer >= 2"
-    ):
+    with pytest.raises(ValueError, match="n_observations must be a finite integer >= 2"):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
 
@@ -448,9 +430,7 @@ def test_power_fisher_z_transform_rejects_nonfinite_or_noninteger_counts(bad_n_o
 @pytest.mark.parametrize("bad_spectrum", [np.nan, np.inf])
 def test_power_fisher_z_transform_rejects_nonfinite_spectrum(bad_spectrum):
     with pytest.raises(ValueError, match="spectrum1 must be finite"):
-        power_fisher_z_transform(
-            np.array([1.0, bad_spectrum]), n_obs1=50, spectrum2=1.0
-        )
+        power_fisher_z_transform(np.array([1.0, bad_spectrum]), n_obs1=50, spectrum2=1.0)
 
 
 @pytest.mark.parametrize("bad_n_tapers", [0, -3, np.nan, np.inf, 2.5])

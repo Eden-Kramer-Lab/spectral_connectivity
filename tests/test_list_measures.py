@@ -51,9 +51,7 @@ def test_returns_measureinfo_records_with_populated_fields():
     assert coherence.is_default is True
     assert coherence.is_directed is False
     assert coherence.requires_two_sided is False
-    assert coherence.description == (
-        "Return the magnitude squared of the complex coherency."
-    )
+    assert coherence.description == ("Return the magnitude squared of the complex coherency.")
 
 
 def test_description_is_the_method_docstring_summary():
@@ -76,9 +74,7 @@ def test_directed_filter_selects_directed_measures():
     directed = list_measures(directed=True)
     assert directed  # non-empty
     assert all(measure.is_directed for measure in directed)
-    assert "pairwise_spectral_granger_prediction" in {
-        measure.name for measure in directed
-    }
+    assert "pairwise_spectral_granger_prediction" in {measure.name for measure in directed}
 
     undirected = list_measures(directed=False)
     assert all(not measure.is_directed for measure in undirected)

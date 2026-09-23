@@ -146,9 +146,7 @@ class TestMultitaperParameterErrorMessages:
         """A positive duration that rounds to 0 samples must raise, not divide by 0."""
         time_series = np.random.randn(1000, 1, 2)
         # 0.0004 s * 1000 Hz = 0.4 samples -> rounds to 0.
-        mt = Multitaper(
-            time_series, sampling_frequency=1000.0, time_window_duration=0.0004
-        )
+        mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=0.0004)
         with pytest.raises(ValueError) as excinfo:
             mt.fft()
         error_msg = str(excinfo.value)
@@ -172,9 +170,7 @@ class TestMultitaperParameterErrorMessages:
     def test_oversized_window_is_rejected(self):
         """A window longer than the signal must raise instead of returning empty."""
         time_series = np.random.randn(1000, 1, 2)  # 1 s at 1000 Hz
-        mt = Multitaper(
-            time_series, sampling_frequency=1000.0, time_window_duration=5.0
-        )
+        mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=5.0)
         with pytest.raises(ValueError) as excinfo:
             mt.fft()
         error_msg = str(excinfo.value)

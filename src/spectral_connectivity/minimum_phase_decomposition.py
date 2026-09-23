@@ -189,9 +189,7 @@ def _get_causal_signal(
     # index arrays match the array backend (mixing a NumPy index array with a
     # CuPy array is a GPU-only footgun).
     lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
-    linear_predictor_coefficients[
-        ..., 0, lower_triangular_ind[0], lower_triangular_ind[1]
-    ] = 0
+    linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
     linear_predictor_coefficients[..., (n_fft_samples + 1) // 2 :, :, :] = 0
@@ -248,9 +246,7 @@ def _check_convergence(
     # Normalize by the factor magnitude so the criterion is scale-invariant.
     # Floor the scale to avoid dividing by zero for an all-zero sub-spectrum
     # (there error is also zero, so the block is trivially converged).
-    scale: NDArray[np.floating] = xp.max(
-        xp.abs(current).reshape(*batch_shape, -1), axis=-1
-    )
+    scale: NDArray[np.floating] = xp.max(xp.abs(current).reshape(*batch_shape, -1), axis=-1)
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return error / scale < tolerance
 
@@ -327,16 +323,12 @@ def minimum_phase_reconstruction_error(
             cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
         )
     batch_shape = cross_spectral_matrix.shape[:-3]
-    reconstructed = xp.matmul(
-        minimum_phase_factor, _conjugate_transpose(minimum_phase_factor)
-    )
+    reconstructed = xp.matmul(minimum_phase_factor, _conjugate_transpose(minimum_phase_factor))
     reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
     residual: NDArray[np.floating] = xp.max(
         xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
     )
-    scale: NDArray[np.floating] = xp.max(
-        xp.abs(reference).reshape(*batch_shape, -1), axis=-1
-    )
+    scale: NDArray[np.floating] = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return residual / scale
 
@@ -366,15 +358,11 @@ def _singular_matrix_mask(
     """
     n_signals = matrices.shape[-1]
     is_finite: NDArray[np.bool_] = xp.isfinite(matrices).all(axis=(-2, -1))
-    cleaned = xp.where(
-        is_finite[..., xp.newaxis, xp.newaxis], matrices, identity_matrix
-    )
+    cleaned = xp.where(is_finite[..., xp.newaxis, xp.newaxis], matrices, identity_matrix)
     singular_values: NDArray[np.floating] = xp.linalg.svd(cleaned, compute_uv=False)
     largest = singular_values[..., 0]
     smallest = singular_values[..., -1]
-    tolerance: NDArray[np.floating] = (
-        largest * n_signals * xp.finfo(singular_values.dtype).eps
-    )
+    tolerance: NDArray[np.floating] = largest * n_signals * xp.finfo(singular_values.dtype).eps
     return (~is_finite) | (smallest <= tolerance)
 
 
@@ -539,16 +527,12 @@ def minimum_phase_decomposition(
            causality. NeuroImage, 41(2), 354-362.
     """
     if not np.isfinite(tolerance) or tolerance <= 0:
-        raise ValueError(
-            f"tolerance must be a finite positive number, got {tolerance}."
-        )
+        raise ValueError(f"tolerance must be a finite positive number, got {tolerance}.")
     if (
         not isinstance(max_iterations, (int, np.integer))  # type: ignore[redundant-expr]  # user input
         or max_iterations < 1
     ):
-        raise ValueError(
-            f"max_iterations must be a positive integer, got {max_iterations}."
-        )
+        raise ValueError(f"max_iterations must be a positive integer, got {max_iterations}.")
     n_signals = cross_spectral_matrix.shape[-1]
     # Wilson's default relative tolerance (1e-8) is below float32 epsilon. A
     # complex64 iteration therefore stalls at its rounding floor and otherwise
@@ -556,9 +540,7 @@ def minimum_phase_decomposition(
     # takes precedence over retaining the input storage dtype: perform the
     # factorization at complex128 or better, matching the historical behavior.
     working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
-    working_cross_spectral_matrix = cross_spectral_matrix.astype(
-        working_dtype, copy=False
-    )
+    working_cross_spectral_matrix = cross_spectral_matrix.astype(working_dtype, copy=False)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
@@ -576,8 +558,7 @@ def minimum_phase_decomposition(
         # every iteration; guard it so it only runs when debug logging is on.
         if logger.isEnabledFor(DEBUG):
             logger.debug(
-                f"iteration: {iteration}, "
-                f"{int(is_converged.sum())} of {n_units} converged"
+                f"iteration: {iteration}, {int(is_converged.sum())} of {n_units} converged"
             )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         # A rank-deficient sub-spectrum makes the batched solve inside
@@ -595,9 +576,7 @@ def minimum_phase_decomposition(
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
         # over the frequency and signal axes).
         frozen = is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
-        minimum_phase_factor = xp.where(
-            frozen, old_minimum_phase_factor, minimum_phase_factor
-        )
+        minimum_phase_factor = xp.where(frozen, old_minimum_phase_factor, minimum_phase_factor)
         is_converged = _check_convergence(
             minimum_phase_factor, old_minimum_phase_factor, tolerance
         )
