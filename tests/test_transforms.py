@@ -393,6 +393,48 @@ def test_time(time_window_duration):
     assert np.allclose(m.time, expected_time)
 
 
+def test_start_time_offsets_window_centers_and_accepts_numpy_scalars():
+    """``start_time`` is the time of the first sample; NumPy scalars and 0-d
+    arrays (e.g. ``time[0]`` of a float32 time axis) are scalars too."""
+    expected = 2.5 + (np.arange(2) * 50 + 24.5) / 100
+    for start_time in (2.5, np.float32(2.5), np.array(2.5)):
+        m = Multitaper(
+            np.zeros((100, 3, 1)),
+            sampling_frequency=100,
+            time_window_duration=0.5,
+            start_time=start_time,
+        )
+        assert m.time.shape == (2,)
+        np.testing.assert_allclose(m.time, expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "make_transform",
+    [
+        lambda data, start_time: Multitaper(
+            data, sampling_frequency=100, time_window_duration=0.5, start_time=start_time
+        ),
+        lambda data, start_time: ShortTimeFourierTransform(
+            data, sampling_frequency=100, time_window_duration=0.5, start_time=start_time
+        ),
+        lambda data, start_time: Welch(
+            data, sampling_frequency=100, segment_duration=0.5, start_time=start_time
+        ),
+    ],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch"],
+)
+@pytest.mark.parametrize(
+    "start_time",
+    [np.array([1.0, 2.0, 3.0]), [0.0, 1.0], float("nan"), float("inf")],
+    ids=["per-trial-array", "list", "nan", "inf"],
+)
+def test_start_time_must_be_a_finite_scalar(make_transform, start_time):
+    """``time`` is one-dimensional, so a per-trial start time cannot be
+    represented; reject it at construction instead of failing in ``time``."""
+    with pytest.raises(ValueError, match="start_time must be a finite scalar"):
+        make_transform(np.zeros((100, 3, 1)), start_time)
+
+
 def test_tapers():
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))

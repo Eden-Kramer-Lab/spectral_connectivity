@@ -594,8 +594,9 @@ class Multitaper:
     tapers : NDArray[floating], shape (n_time_samples_per_window, n_tapers), optional
         Pre-computed tapering windows. If None, DPSS tapers are computed
         automatically.
-    start_time : float or NDArray[floating], default=0
-        Start time in seconds of the time series data.
+    start_time : float, default=0
+        Time in seconds of the first sample. Must be a scalar: ``time`` is
+        one-dimensional, so per-trial start times are not supported.
     n_fft_samples : int, optional
         Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
         to be fast for the FFT algorithm. The value is determined by
@@ -758,7 +759,7 @@ class Multitaper:
         time_window_step: float | None = None,
         n_tapers: int | None = None,
         tapers: NDArray[np.floating] | None = None,
-        start_time: float | NDArray[np.floating] = 0,
+        start_time: float = 0,
         n_fft_samples: int | None = None,
         n_time_samples_per_window: int | None = None,
         n_time_samples_per_step: int | None = None,
@@ -1001,6 +1002,17 @@ class Multitaper:
         self._time_window_duration = time_window_duration
         self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
+        # ``time`` adds start_time to a 1-D array of window centers, so a
+        # per-trial array would either broadcast-fail or silently produce a 2-D
+        # time axis; reject anything but a finite scalar here.
+        if np.ndim(start_time) != 0 or not np.isfinite(to_numpy(start_time)):
+            msg = (
+                f"start_time must be a finite scalar (the time in seconds of the "
+                f"first sample), got {start_time!r}. Multitaper.time is "
+                "one-dimensional, so a per-trial start time is not supported; "
+                "align trials before stacking them or analyze them separately."
+            )
+            raise ValueError(msg)
         self._start_time = _immutable_array_snapshot(start_time)
         self._n_fft_samples = n_fft_samples
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
@@ -1575,8 +1587,8 @@ class ShortTimeFourierTransform(Multitaper):
     time_window_step : float, optional
         Step between successive windows in seconds (defaults to the window
         duration, i.e. no overlap).
-    start_time : float or ndarray, default=0
-        Time of the first sample, in seconds.
+    start_time : float, default=0
+        Time of the first sample, in seconds (scalar only).
     n_fft_samples : int, optional
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the window
         length, which may zero-pad (e.g. a 257-sample window gives 264 bins);
@@ -1599,7 +1611,7 @@ class ShortTimeFourierTransform(Multitaper):
         detrend_type: str | None = "constant",
         time_window_duration: float | None = None,
         time_window_step: float | None = None,
-        start_time: float | NDArray[np.floating] = 0,
+        start_time: float = 0,
         n_fft_samples: int | None = None,
         n_time_samples_per_window: int | None = None,
         n_time_samples_per_step: int | None = None,
@@ -1710,8 +1722,8 @@ class Welch:
         Segment length in samples (alternative to ``segment_duration``).
     detrend_type : {"constant", "linear"} or None, default="constant"
         Detrending applied to each segment before the FFT.
-    start_time : float or ndarray, default=0
-        Time of the first sample, in seconds.
+    start_time : float, default=0
+        Time of the first sample, in seconds (scalar only).
     n_fft_samples : int, optional
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the segment
         length, which may zero-pad (e.g. a 257-sample segment gives 264 bins);
@@ -1731,7 +1743,7 @@ class Welch:
         segment_overlap: float = 0.5,
         n_time_samples_per_segment: int | None = None,
         detrend_type: str | None = "constant",
-        start_time: float | NDArray[np.floating] = 0,
+        start_time: float = 0,
         n_fft_samples: int | None = None,
         fft_workers: int | None = None,
     ) -> None:
