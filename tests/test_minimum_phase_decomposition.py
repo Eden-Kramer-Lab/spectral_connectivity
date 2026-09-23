@@ -52,24 +52,37 @@ def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():
 
 
 def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
-    """Unconverged time points return NaN with a warning, not a silent factor."""
+    """Only the unconverged sub-spectra are NaN (entirely), with a counted warning.
+
+    Window 0 is a white, uncorrelated spectrum ``diag([2, 0.5])``: its Cholesky
+    start is already the exact factor ``diag(sqrt(2), sqrt(0.5))``, so it
+    converges in one iteration. Windows 1 and 2 are generic spectra that need
+    many iterations. With ``max_iterations=1`` the documented contract is that
+    the converged window is returned intact, every entry of each unconverged
+    window is NaN, and the warning reports the failed count.
+    """
     rng = np.random.default_rng(0)
     n_times, n_freqs, n_signals = 3, 16, 2
     coeffs = rng.standard_normal((n_times, n_freqs, n_signals, n_signals))
     cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2))
+    cross_spectral_matrix[0] = np.diag([2.0, 0.5])
 
-    # One iteration is not enough to converge, forcing the non-convergence path.
-    with pytest.warns(UserWarning, match="did not converge"):
+    with pytest.warns(UserWarning, match="did not converge for 2 of 3"):
         factor = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=1)
-    assert np.isnan(factor).any()
+    np.testing.assert_allclose(
+        factor[0], np.broadcast_to(np.diag([np.sqrt(2.0), np.sqrt(0.5)]), factor[0].shape)
+    )
+    assert np.isnan(factor[1:]).all()
 
-    # With enough iterations the same input converges cleanly (no warning, no NaN).
+    # With enough iterations the same input converges cleanly (no warning, no
+    # NaN), and window 0's factor is unchanged by the longer run.
     import warnings
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         converged = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
     assert not np.isnan(converged).any()
+    np.testing.assert_array_equal(converged[0], factor[0])
 
 
 def test_solve_isolating_singular_isolates_bad_units():
@@ -218,16 +231,13 @@ def test_get_initial_conditions_keeps_valid_ill_conditioned_units(dtype, small):
     truly singular ``diag([1, 0])``. Detection is now per-unit Cholesky, so every
     successfully-factorable unit -- at any dtype -- keeps its exact start.
     """
-    import warnings
-
     ill_conditioned = np.broadcast_to(np.diag([1.0, small]).astype(dtype), (4, 2, 2)).copy()
     # Sanity: this unit really is Cholesky-factorable standalone.
     np.linalg.cholesky(ill_conditioned[0])
     singular = np.broadcast_to(np.diag([1.0, 0.0]).astype(dtype), (4, 2, 2)).copy()
 
     solo = _get_initial_conditions(ill_conditioned[np.newaxis])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # the logger.warning is not a UserWarning
+    with pytest.warns(UserWarning, match="Cholesky failed"):
         batched = _get_initial_conditions(np.stack([ill_conditioned, singular]))
     np.testing.assert_allclose(batched[0], solo[0])
     assert np.isfinite(batched[0]).all()
@@ -244,8 +254,6 @@ def test_initial_conditions_fallback_is_deterministic():
     positive-definite start, so the result is identical regardless of global
     state, and the failed unit's start is the Cholesky of ``n_signals * I``.
     """
-    import warnings
-
     n_freq, n_signals = 16, 2
     # A truly singular (rank-one, frequency-constant) unit forces the fallback.
     v = np.array([[1.0], [0.5]])
@@ -253,10 +261,10 @@ def test_initial_conditions_fallback_is_deterministic():
         (v @ v.T).astype(complex), (n_freq, n_signals, n_signals)
     ).copy()
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # the logger.warning is not a UserWarning
-        # The fallback start draws no random numbers, so repeated calls agree.
+    # The fallback start draws no random numbers, so repeated calls agree.
+    with pytest.warns(UserWarning, match="Cholesky failed"):
         first = _get_initial_conditions(singular[np.newaxis])
+    with pytest.warns(UserWarning, match="Cholesky failed"):
         second = _get_initial_conditions(singular[np.newaxis])
 
     np.testing.assert_array_equal(first, second)
@@ -338,17 +346,41 @@ def test__conjugate_transpose():
 
 
 def test__get_initial_conditions():
+    """The start is the upper-triangular Cholesky factor of the zero-lag matrix.
+
+    Each window's spectrum is ``S(f) = S0 + B e^{-iw} + B^T e^{iw}`` (Hermitian),
+    whose inverse-FFT zero lag is exactly the positive-definite ``S0`` with
+    non-zero off-diagonals. The returned factor is ``R = cholesky(S0).T``: upper
+    triangular with a positive diagonal and ``R^T R = S0``.
+    """
     n_time_samples, n_fft_samples, n_signals = 3, 11, 2
+    omega = 2 * np.pi * np.arange(n_fft_samples) / n_fft_samples
+    lagged = np.array([[0.3, -0.7], [0.2, 0.4]])
+    zero_lag = np.stack(
+        [np.array([[4.0, 1.2], [1.2, 3.0]]) + time * np.eye(n_signals) for time in range(3)]
+    )  # (n_time_samples, n_signals, n_signals), symmetric positive definite
     cross_spectral_matrix = (
-        np.ones((n_time_samples, n_fft_samples, n_signals, n_signals), dtype=complex) * 4
+        zero_lag[:, np.newaxis]
+        + lagged * np.exp(-1j * omega)[:, np.newaxis, np.newaxis]
+        + lagged.T * np.exp(1j * omega)[:, np.newaxis, np.newaxis]
     )
-    cross_spectral_matrix[..., 1, 0] = 0
+    np.testing.assert_allclose(
+        cross_spectral_matrix, _conjugate_transpose(cross_spectral_matrix)
+    )
+
     minimum_phase_factor = _get_initial_conditions(cross_spectral_matrix)
-    expected_cross_spectral_matrix = np.zeros(
-        (n_time_samples, 1, n_signals, n_signals), dtype=complex
+
+    assert minimum_phase_factor.shape == (n_time_samples, 1, n_signals, n_signals)
+    expected = np.linalg.cholesky(zero_lag).swapaxes(-1, -2)[:, np.newaxis]
+    np.testing.assert_allclose(minimum_phase_factor, expected, rtol=1e-12)
+    # Upper triangular with a positive diagonal, and R^T R reproduces S0.
+    np.testing.assert_array_equal(minimum_phase_factor[..., 1, 0], 0.0)
+    assert np.all(np.diagonal(minimum_phase_factor, axis1=-2, axis2=-1) > 0)
+    np.testing.assert_allclose(
+        minimum_phase_factor.swapaxes(-1, -2) @ minimum_phase_factor,
+        zero_lag[:, np.newaxis],
+        rtol=1e-12,
     )
-    expected_cross_spectral_matrix[..., :, :] = np.eye(n_signals) * 2
-    assert np.allclose(minimum_phase_factor, expected_cross_spectral_matrix)
 
 
 def test__get_causal_signal_removes_roots_outside_unit_circle():
@@ -402,10 +434,43 @@ def test_minimum_phase_decomposition():
         _conjugate_transpose(expected_minimum_phase_factor),
     )
     minimum_phase_factor = minimum_phase_decomposition(expected_cross_spectral_matrix)
-    cross_spectral_matrix = minimum_phase_factor * _conjugate_transpose(minimum_phase_factor)
+    cross_spectral_matrix = np.matmul(
+        minimum_phase_factor, _conjugate_transpose(minimum_phase_factor)
+    )
 
     assert np.allclose(minimum_phase_factor, expected_minimum_phase_factor)
     assert np.allclose(cross_spectral_matrix, expected_cross_spectral_matrix)
+
+
+def test_minimum_phase_decomposition_recovers_matrix_factor():
+    """A 2x2 minimum-phase MA(1) factor is recovered, not just its product.
+
+    ``G(z) = G0 + G1 z^-1`` with ``G0`` upper triangular with a positive diagonal
+    (the normalization Wilson's algorithm converges to) and ``det G(z)`` zero-free
+    outside the unit circle, so ``G`` is the unique minimum-phase factor of
+    ``S = G G^H``. A transposed or elementwise (non-matmul) factor would fail.
+    """
+    n_fft = 64
+    g0 = np.array([[1.5, 0.4], [0.0, 0.8]])
+    g1 = np.array([[0.3, -0.2], [0.5, 0.1]])
+    # det(G0 + G1 w) has its roots at |w| ~ 3.04 > 1 (w = z^-1): minimum phase.
+    determinant_coefficients = [
+        np.linalg.det(g1),
+        g0[0, 0] * g1[1, 1] + g1[0, 0] * g0[1, 1] - g0[0, 1] * g1[1, 0] - g1[0, 1] * g0[1, 0],
+        np.linalg.det(g0),
+    ]
+    assert np.all(np.abs(np.roots(determinant_coefficients)) > 1)
+
+    omega = 2 * np.pi * np.arange(n_fft) / n_fft
+    expected_factor = (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
+    cross_spectral_matrix = np.matmul(expected_factor, _conjugate_transpose(expected_factor))
+
+    factor = minimum_phase_decomposition(cross_spectral_matrix)
+
+    np.testing.assert_allclose(factor, expected_factor, atol=1e-6)
+    np.testing.assert_allclose(
+        np.matmul(factor, _conjugate_transpose(factor)), cross_spectral_matrix, atol=1e-6
+    )
 
 
 @pytest.mark.parametrize("bad_tolerance", [0.0, -1e-8, np.inf, np.nan])

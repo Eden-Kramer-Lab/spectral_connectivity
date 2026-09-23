@@ -22,7 +22,10 @@ influence ``j -> i``. A **unidirectional, lower-triangular** VAR (signal 0 drive
 signal 1, never the reverse) has an exactly lower-triangular ``A(f)`` and
 ``H(f)``, so the non-causal ``[0, 1]`` entry is analytically zero for every
 directed measure -- a strong oracle for direction (a flipped implementation
-would put the energy in the wrong triangle).
+would put the energy in the wrong triangle). A 3-node chain ``0 -> 1 -> 2`` with
+unequal innovation variances additionally separates the normalizations: its
+indirect path is visible to DTF but not PDC, and the unequal variances make the
+noise-weighted DC and gPDC differ from DTF and PDC.
 """
 
 import warnings
@@ -116,54 +119,112 @@ def test_non_causal_direction_is_zero(var_oracle, measure):
         warnings.simplefilter("ignore")
         result = np.asarray(getattr(c, measure)())[0]  # (n_fft, n, n)
 
-    non_causal = np.abs(result[..., 0, 1])
+    non_causal = result[..., 0, 1]
     causal = result[..., 1, 0]
-    assert np.nanmax(non_causal) < 1e-8, (measure, np.nanmax(non_causal))
-    assert np.nanmax(causal) > 0.05, (measure, np.nanmax(causal))
+    # Both directions are defined at every frequency: NaN is not "zero".
+    assert np.isfinite(non_causal).all(), measure
+    assert np.isfinite(causal).all(), measure
+    assert np.max(np.abs(non_causal)) < 1e-8, (measure, np.max(np.abs(non_causal)))
+    assert np.max(causal) > 0.05, (measure, np.max(causal))
 
 
-def test_pdc_matches_analytic_closed_form(var_oracle):
-    """Package PDC equals the closed-form PDC of the known VAR.
+# A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with unequal, uncorrelated
+# innovation variances. The indirect path makes DTF[2, 0] > 0 while PDC[2, 0] == 0,
+# and the unequal variances make DC differ from DTF and gPDC differ from PDC, so
+# each measure's normalization (row vs column, noise weighting) is identifiable.
+_CHAIN_NOISE = np.diag([1.0, 2.0, 0.5])
+_CHAIN_N_FFT = 256
 
-    PDC_{ij}(f) = |A_{ij}(f)| / sqrt(sum_k |A_{kj}(f)|^2); the package returns the
-    squared value over non-negative frequencies.
+
+def _analytic_directed_measures(A, H, noise_covariance):
+    """Closed-form directed measures of a VAR on the non-negative FFT grid.
+
+    ``[..., i, j]`` is the influence ``j -> i``. ``A`` and ``H`` are on the full
+    FFT grid; ``noise_covariance`` must be diagonal (variances ``sigma``).
+    Returns squared DTF, PDC, DC, and gPDC, and the (unsquared) dDTF.
     """
-    c = var_oracle["connectivity"]
-    A, n_fft = var_oracle["A"], var_oracle["n_fft"]
-    n_non_negative = n_fft // 2 + 1
+    n_non_negative = A.shape[0] // 2 + 1
+    A, H = A[:n_non_negative], H[:n_non_negative]
+    sigma = np.diag(noise_covariance)
+    H2, A2 = np.abs(H) ** 2, np.abs(A) ** 2
+    # DTF / DC normalize each target row by its total inflow over sources.
+    dtf = H2 / H2.sum(axis=-1, keepdims=True)
+    dc = sigma * H2 / (sigma * H2).sum(axis=-1, keepdims=True)
+    # PDC / gPDC normalize each source column by its total outflow over targets.
+    pdc = A2 / A2.sum(axis=-2, keepdims=True)
+    weighted = A2 / sigma[:, np.newaxis]
+    gpdc = weighted / weighted.sum(axis=-2, keepdims=True)
+    # dDTF: full-frequency DTF (inflow summed over sources and frequencies)
+    # times the PDC magnitude.
+    full_frequency_dtf = np.abs(H) / np.sqrt(H2.sum(axis=(-1, -3), keepdims=True))
+    ddtf = full_frequency_dtf * np.sqrt(pdc)
+    return {
+        "directed_transfer_function": dtf,
+        "partial_directed_coherence": pdc,
+        "directed_coherence": dc,
+        "generalized_partial_directed_coherence": gpdc,
+        "direct_directed_transfer_function": ddtf,
+    }
 
+
+@pytest.fixture(scope="module")
+def chain_oracle():
+    """Analytic chain-VAR measures and a Connectivity fed its exact spectrum."""
+    A, H, S = _analytic_var(_CHAIN_COEFFICIENTS, _CHAIN_NOISE, _CHAIN_N_FFT)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
+    return {
+        "H": H,
+        "measures": _analytic_directed_measures(A, H, _CHAIN_NOISE),
+        "connectivity": connectivity,
+    }
+
+
+def test_chain_oracle_distinguishes_the_measures(chain_oracle):
+    """Sanity: the chain system separates every pair of normalizations."""
+    measures = chain_oracle["measures"]
+    dtf, pdc = measures["directed_transfer_function"], measures["partial_directed_coherence"]
+    dc = measures["directed_coherence"]
+    gpdc = measures["generalized_partial_directed_coherence"]
+    # Indirect path 0 -> 1 -> 2: DTF sees it, PDC (direct only) does not.
+    assert dtf[:, 2, 0].max() > 0.3
+    np.testing.assert_array_equal(pdc[:, 2, 0], 0.0)
+    # Unequal noise variances make the noise-weighted measures differ.
+    assert np.abs(dc - dtf).max() > 0.1
+    assert np.abs(gpdc - pdc).max() > 0.1
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+    ],
+)
+def test_directed_measure_matches_analytic_closed_form(chain_oracle, measure):
+    """Every entry (diagonal included) equals the closed form of the known VAR."""
+    connectivity = chain_oracle["connectivity"]
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        pdc = np.asarray(c.partial_directed_coherence())[0]
-
-    analytic_pdc_10 = (
-        np.abs(A[:, 1, 0]) / np.sqrt(np.abs(A[:, 0, 0]) ** 2 + np.abs(A[:, 1, 0]) ** 2)
-    )[:n_non_negative]
-    np.testing.assert_allclose(np.sqrt(pdc[:, 1, 0]), analytic_pdc_10, atol=1e-5)
+        warnings.simplefilter("error")
+        result = np.asarray(getattr(connectivity, measure)())[0]
+    np.testing.assert_allclose(result, chain_oracle["measures"][measure], rtol=0, atol=1e-9)
 
 
-def test_dtf_matches_analytic_closed_form(var_oracle):
-    """Package DTF equals the closed-form DTF of the known VAR.
-
-    DTF_{ij}(f) = |H_{ij}(f)| / sqrt(sum_k |H_{ik}(f)|^2); the package returns the
-    squared value over non-negative frequencies. The causal-direction peak must
-    also fall at the analytic transfer-function peak.
-    """
-    c = var_oracle["connectivity"]
-    H, n_fft = var_oracle["H"], var_oracle["n_fft"]
-    n_non_negative = n_fft // 2 + 1
-
+def test_dtf_peak_matches_analytic_transfer_function_peak(chain_oracle):
+    """The indirect 0 -> 2 DTF peaks where the analytic |H[2, 0]| peaks."""
+    connectivity = chain_oracle["connectivity"]
+    H = chain_oracle["H"]
+    n_non_negative = H.shape[0] // 2 + 1
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        dtf = np.asarray(c.directed_transfer_function())[0]
-
-    analytic_dtf_10 = (
-        np.abs(H[:, 1, 0]) / np.sqrt(np.abs(H[:, 1, 0]) ** 2 + np.abs(H[:, 1, 1]) ** 2)
-    )[:n_non_negative]
-    np.testing.assert_allclose(np.sqrt(dtf[:, 1, 0]), analytic_dtf_10, atol=1e-5)
-
-    analytic_peak = np.argmax(np.abs(H[:n_non_negative, 1, 0]) ** 2)
-    assert np.argmax(dtf[:, 1, 0]) == analytic_peak
+        warnings.simplefilter("error")
+        dtf = np.asarray(connectivity.directed_transfer_function())[0]
+    assert np.argmax(dtf[:, 2, 0]) == np.argmax(np.abs(H[:n_non_negative, 2, 0]))
 
 
 def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
@@ -221,9 +282,33 @@ def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
         granger = connectivity.pairwise_spectral_granger_prediction()[0]
 
     non_causal = granger[..., 0, 1]
-    # No NaN masquerading as "no result"; the absent direction is a finite ~0.
-    assert not np.isnan(non_causal).all()
-    assert np.nanmax(np.abs(non_causal)) < 1e-6
+    # No NaN masquerading as "no result"; the absent direction is a finite ~0
+    # at every frequency.
+    assert np.isfinite(non_causal).all()
+    assert np.max(np.abs(non_causal)) < 1e-6
+
+
+def test_pairwise_granger_matches_geweke_closed_form(var_oracle):
+    """Pairwise Granger equals Geweke's formula for uncorrelated innovations.
+
+    With a diagonal innovation covariance, Geweke's causality ``0 -> 1`` is
+    ``log(S_11(f) / (Sigma_11 |H_11(f)|^2))`` and ``1 -> 0`` is
+    ``log(S_00(f) / (Sigma_00 |H_00(f)|^2))`` (analytically zero here, since
+    ``H_01 == 0``).
+    """
+    connectivity = var_oracle["connectivity"]
+    H, S = var_oracle["H"], var_oracle["S"]
+    n_non_negative = var_oracle["n_fft"] // 2 + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        granger = connectivity.pairwise_spectral_granger_prediction()[0]
+
+    for target, source in [(1, 0), (0, 1)]:
+        geweke = np.log(
+            S[:n_non_negative, target, target].real
+            / (_NOISE[target, target] * np.abs(H[:n_non_negative, target, target]) ** 2)
+        )
+        np.testing.assert_allclose(granger[:, target, source], geweke, rtol=0, atol=1e-5)
 
 
 def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, target, source):
@@ -356,7 +441,7 @@ def test_conditional_granger_removes_mediated_influence():
     assert np.isfinite(conditional[..., off_diagonal]).all()
     assert (conditional[..., off_diagonal] >= 0).all()
     # Conditioning on signal 1 removes it: 0 -> 2 | 1 collapses toward zero.
-    assert conditional[..., 2, 0].max() < 1e-3
+    assert conditional[..., 2, 0].max() < 1e-8
     # The genuine direct link 1 -> 2 | 0 survives conditioning.
     assert conditional[..., 2, 1].max() > 0.05
 
