@@ -193,6 +193,9 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `canonical_coherence` warns when a group pair has more signals than
+  trial x taper observations; its value is then forced to 1 for any data and
+  was previously returned silently.
 - Directed measures use at least complex128 working precision, so complex64
   inputs can satisfy the Wilson factorization's default tolerance.
 - Subset spectral Granger restores `NaN` on the global self-Granger diagonal.

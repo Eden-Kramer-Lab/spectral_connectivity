@@ -1807,6 +1807,10 @@ class Connectivity:
         **Range**: [0, 1]. Maximal coherence values are bounded like
         coherence magnitude.
 
+        Trials x tapers are the observations. A group pair with more signals
+        than observations has intersecting observation subspaces, which forces
+        its value to 1 for any data; this case warns.
+
         References
         ----------
         .. [1] Stephen, E.P. (2015). Characterizing dynamically evolving
@@ -1820,7 +1824,27 @@ class Connectivity:
             filters and patterns.
 
         """
-        labels, _, _ = self._validated_group_indices(group_labels)
+        labels, group_indices, _ = self._validated_group_indices(group_labels)
+        # The estimate treats trials x tapers as observations. When a group pair
+        # has more signals than observations, the two groups' observation
+        # subspaces must intersect and the value is forced to 1 for any data.
+        n_observations = (
+            self._fourier_coefficients.shape[1] * self._fourier_coefficients.shape[2]
+        )
+        degenerate_pairs = [
+            (labels[first], labels[second])
+            for first, second in combinations(range(len(labels)), 2)
+            if len(group_indices[first]) + len(group_indices[second]) > n_observations
+        ]
+        if degenerate_pairs:
+            warnings.warn(
+                f"canonical_coherence uses {n_observations} observations (trials x "
+                f"tapers), fewer than the signals in group pair(s) {degenerate_pairs}; "
+                "their canonical coherence is forced to 1 regardless of the data. "
+                "Provide more trials or tapers, or use smaller groups.",
+                UserWarning,
+                stacklevel=2,
+            )
         n_frequencies = self._fourier_coefficients.shape[-2]
         non_negative_frequencies = xp.arange(
             0, self._nonnegative_frequency_count(n_frequencies)

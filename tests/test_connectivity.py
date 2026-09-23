@@ -3046,3 +3046,25 @@ def test_multiple_observations_normalized_measure_does_not_warn(measure):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         getattr(connectivity, measure)()
+
+
+def test_canonical_coherence_warns_when_groups_outnumber_observations():
+    """With fewer trial x taper observations than the two groups' signals, the
+    groups' observation subspaces must intersect, forcing canonical coherence
+    to 1 for any data; that must be announced, not returned silently."""
+    rng = np.random.default_rng(12)
+    shape = (1, 3, 3, 8, 10)  # 9 observations for 5 + 5 signals
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    labels = np.array([0] * 5 + [1] * 5)
+    with pytest.warns(UserWarning, match="9 observations"):
+        values, _ = Connectivity(coefficients).canonical_coherence(labels)
+    # Independent noise, yet the value is forced to 1: the reason for the warning.
+    np.testing.assert_allclose(values[..., 0, 1], 1.0)
+
+
+def test_canonical_coherence_does_not_warn_with_enough_observations():
+    rng = np.random.default_rng(13)
+    shape = (1, 4, 3, 8, 10)  # 12 observations for 5 + 5 signals
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    values, _ = Connectivity(coefficients).canonical_coherence(np.array([0] * 5 + [1] * 5))
+    assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
