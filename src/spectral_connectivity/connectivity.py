@@ -343,12 +343,21 @@ class Connectivity:
         frequency, 1)``. They are applied to every expectation and shared
         across signals. Transform constructors supply these automatically when
         smoothing uses a non-uniform kernel or masks invalid edge estimates.
+    observations_are_independent : bool, default=True
+        Whether the trial/taper observations are statistically independent.
+        Transform constructors set this ``False`` when the observation axis
+        holds correlated estimates (a ``MorletWavelet`` smoothing neighborhood,
+        or ``Welch`` segments overlapping by more than half). Measures whose
+        finite-sample corrections or null distributions count observations
+        warn in that case, and ``jackknife`` refuses to leave out tapers.
 
     Attributes
     ----------
     n_observations : int
         Number of trial/taper observations reduced by the expectation. This is
-        the raw count, not a weighted effective sample size.
+        the raw count, not a weighted effective sample size, and it is not
+        reduced for correlated observations (see
+        ``observations_are_independent``).
 
     See Also
     --------
@@ -436,6 +445,7 @@ class Connectivity:
         minimum_phase_max_iterations: int = 500,
         is_one_sided: bool = False,
         observation_weights: NDArray[np.floating] | None = None,
+        observations_are_independent: bool = True,
         *,
         _adopt_fourier_coefficients: bool = False,
     ) -> None:
@@ -459,6 +469,7 @@ class Connectivity:
         self._minimum_phase_tolerance = minimum_phase_tolerance
         self._minimum_phase_max_iterations = minimum_phase_max_iterations
         self._is_one_sided = bool(is_one_sided)
+        self._observations_are_independent = bool(observations_are_independent)
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -760,17 +771,20 @@ class Connectivity:
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
-        # The transform contract (sidedness, observation weights) is part of the
-        # public constructor and must always reach the instance: a subclass that
-        # cannot accept it fails loudly here rather than silently computing on a
-        # one-sided or weighted spectrum as if it were two-sided and unweighted.
-        # The keywords are passed only when non-default so a subclass mirroring
-        # the older signature keeps working with a plain two-sided transform.
+        # The transform contract (sidedness, observation weights, observation
+        # independence) is part of the public constructor and must always reach
+        # the instance: a subclass that cannot accept it fails loudly here rather
+        # than silently computing on a one-sided, weighted, or correlated
+        # spectrum as if it were two-sided, unweighted, and independent. The
+        # keywords are passed only when non-default so a subclass mirroring the
+        # older signature keeps working with a plain two-sided transform.
         if bool(getattr(multitaper_instance, "is_one_sided", False)):
             init_kwargs["is_one_sided"] = True
         weights = getattr(multitaper_instance, "observation_weights", None)
         if weights is not None:
             init_kwargs["observation_weights"] = weights
+        if not bool(getattr(multitaper_instance, "observations_are_independent", True)):
+            init_kwargs["observations_are_independent"] = False
         # fft() returns a freshly built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
         # pass the private keyword when the subclass has not overridden __init__:
@@ -1230,6 +1244,20 @@ class Connectivity:
         """Whether the input contains only non-negative frequencies."""
         return self._is_one_sided
 
+    @property
+    def observations_are_independent(self) -> bool:
+        """Whether the trial/taper observations are statistically independent.
+
+        ``False`` when the transform collected correlated estimates on the
+        observation axis (a smoothing neighborhood of a
+        :class:`~spectral_connectivity.transforms.MorletWavelet`, or
+        :class:`~spectral_connectivity.transforms.Welch` segments overlapping by
+        more than half). ``n_observations`` then overstates the effective sample
+        size, so the measures that rely on it warn and ``jackknife`` refuses to
+        treat tapers as leave-one-out units.
+        """
+        return self._observations_are_independent
+
     @_asnumpy
     def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:
         """Return the relative reconstruction error of the Wilson factorization.
@@ -1407,6 +1435,7 @@ class Connectivity:
                 minimum_phase_max_iterations=self._minimum_phase_max_iterations,
                 is_one_sided=self._is_one_sided,
                 observation_weights=subset_weights,
+                observations_are_independent=self._observations_are_independent,
                 _adopt_fourier_coefficients=True,
             )
             replicate = getattr(replicate_connectivity, method)(**method_kwargs)
