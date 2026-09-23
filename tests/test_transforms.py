@@ -1449,6 +1449,31 @@ def test_morlet_rejects_non_positive_sampling_frequency():
         MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=-1, frequencies=[4, 8])
 
 
+def test_morlet_accepts_device_arrays_for_frequencies_and_n_cycles():
+    """CuPy arrays reject implicit ``np.asarray`` conversion; the frequency and
+    cycle parameters must be brought to the host explicitly."""
+
+    class DeviceLike:
+        def __init__(self, values):
+            self._values = np.asarray(values, dtype=float)
+
+        def __array__(self, dtype=None, copy=None):
+            msg = "Implicit conversion to a NumPy array is not allowed."
+            raise TypeError(msg)
+
+        def get(self):
+            return self._values.copy()
+
+    transform = MorletWavelet(
+        np.ones((64, 1, 2)),
+        sampling_frequency=100,
+        frequencies=DeviceLike([4.0, 8.0]),
+        n_cycles=DeviceLike([3.0, 5.0]),
+    )
+    np.testing.assert_array_equal(transform.frequencies, [4.0, 8.0])
+    np.testing.assert_array_equal(transform.n_cycles, [3.0, 5.0])
+
+
 def test_morlet_rejects_frequencies_at_or_above_nyquist():
     with pytest.raises(ValueError, match="below Nyquist"):
         MorletWavelet(np.ones((64, 1, 2)), sampling_frequency=100, frequencies=[10, 60])

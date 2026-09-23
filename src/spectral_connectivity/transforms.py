@@ -1958,7 +1958,10 @@ class MorletWavelet:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
             raise ValueError(msg)
         _validate_sampling_frequency(sampling_frequency)
-        frequency_values = np.asarray(frequencies, dtype=float)
+        # Parameter arrays are validated on the host; ``to_numpy`` brings a CuPy
+        # array over explicitly (CuPy rejects implicit ``np.asarray``) and is a
+        # no-op for NumPy input.
+        frequency_values = np.asarray(to_numpy(frequencies), dtype=float)
         if (
             frequency_values.ndim != 1
             or frequency_values.size == 0
@@ -1972,7 +1975,7 @@ class MorletWavelet:
                 "positive array below Nyquist."
             )
             raise ValueError(msg)
-        cycle_values = np.asarray(n_cycles, dtype=float)
+        cycle_values = np.asarray(to_numpy(n_cycles), dtype=float)
         if cycle_values.ndim == 0:
             cycle_values = np.full(frequency_values.shape, float(cycle_values))
         if cycle_values.shape != frequency_values.shape or not np.all(
