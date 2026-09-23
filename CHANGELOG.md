@@ -165,6 +165,25 @@ directly with results from 2.x.
 - Independent analytic-oracle, failure-mode, backend-boundary, serialization,
   minimum-dependency, artifact, doctest, and notebook checks cover the corrected
   behavior.
+- `observations_are_independent` on every transform and on `Connectivity`
+  (forwarded by `from_transform`): `Multitaper` and `ShortTimeFourierTransform`
+  report `True`, `Welch` reports `True` only up to 50% segment overlap, and
+  `MorletWavelet` reports `False` whenever a smoothing neighborhood is collected
+  on the observation axis. The finite-sample bias corrections (debiased
+  PLI/wPLI, PPC), the zero-coherence null used by `delay`/`group_delay`, and
+  `Connectivity.jackknife` consume it: the former warn once per call, and
+  `jackknife` refuses leave-one-taper-out replicates on correlated observations
+  (leave-one-trial-out remains allowed). Previously a Morlet transform with
+  smoothing produced 95% intervals that covered about 30%.
+- `MorletWavelet` warns when `smoothing_time` is shorter than four wavelet
+  standard deviations (`4 * n_cycles / (2 pi f)` at the widest wavelet), where
+  the smoothed samples are so correlated that normalized measures are forced
+  toward 1 even for independent signals; the docstring states the remedy.
+- Regression coverage: an emulated CuPy-like backend that rejects host/device
+  mixing, Parseval oracles for one-sided `power` and for band integration, a
+  nitime oracle for adaptive multitaper power, invariance of CaCoh components to
+  within-group mixing, and wrapper-level orientation checks for every directed
+  measure.
 
 ### Changed
 
@@ -209,6 +228,42 @@ directly with results from 2.x.
 - `multitaper_connectivity(method=None)` uses the stable, exported
   `DEFAULT_METHODS` allowlist. Measures with incompatible result shapes point
   users to `Connectivity` directly.
+- Multi-component `canonical_coherency` deflates in whitened space, so
+  components beyond the first are uncorrelated within each group and invariant
+  to invertible within-group mixing; single-component results are unchanged.
+  The phase search refines every candidate lobe of the objective, so two
+  near-equal lobes no longer yield a wrong canonical phase.
+- `Connectivity.jackknife` and `jackknife_confidence_interval` use a Student t
+  critical value with `n_observations - 1` degrees of freedom (Thomson & Chave
+  1991) instead of the normal quantile; intervals are wider at small `n`
+  (Monte Carlo coverage 0.95 instead of 0.88 at five observations). `"auto"`
+  also selects `fisher_squared` for `partial_coherence` and `fisher` for
+  `phase_locking_value` and `imaginary_coherence`. Circular bounds are wrapped
+  to `(-pi, pi]` (lower above upper means the interval crosses `+/-pi`); an
+  interval whose half-width reaches `pi` is reported as `(-pi, pi)` with a
+  warning, and `fisher_squared` warns at an estimate of exactly 0.
+- `partial_coherence` warns when there are fewer observations than signals
+  (the rank-deficient estimate is forced to 1 or dominated by the null space),
+  and the single-observation degeneracy warning now also covers
+  `phase_lag_index`, `weighted_phase_lag_index`, `directed_phase_lag_index`,
+  and `partial_coherence`.
+- `multitaper_connectivity` rejects a leftover `frequency`/`freq`/`band`
+  dimension instead of assigning it to the signal role by elimination.
+- `start_time` must be a finite scalar for `Multitaper`,
+  `ShortTimeFourierTransform`, and `Welch`; a per-trial array raises a clear
+  error instead of a broadcast failure.
+- `frequencies_of_interest` for `phase_slope_index`, `delay`, and `group_delay`
+  is validated (two finite values, lower < upper) and its band edges are
+  documented as exclusive.
+- The `taper_weighting="adaptive"` documentation states that the Thomson
+  weights are applied per signal, so coherence between signals with different
+  spectra is shrunk by the cosine similarity of their weight vectors and cannot
+  reach 1; a joint pairwise normalization is not implemented.
+- Tooling: the CI quality job installs from `uv.lock` and pre-commit pins the
+  same ruff version; `examples/` is excluded from ruff; the sdist ships the docs
+  files the test suite reads; `CLAUDE.md` and `CONTRIBUTING.md` state Python
+  3.10-3.14 and the `uv` commands CI actually runs. The stale
+  `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 
 ### Fixed
 
@@ -284,6 +339,40 @@ directly with results from 2.x.
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
   simulations.
+- `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
+  bins of a one-sided spectrum; integrating `power` over every bin now equals
+  `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
+  data is no longer short by half the DC cell.
+- A window step given in seconds is rounded to the nearest sample instead of
+  truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
+  `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
+  and `Welch` no longer step one sample short of their reported step.
+- `weighted_phase_lag_index` collapsed toward 0 for small-amplitude inputs
+  because of an absolute epsilon guard, and `debiased_squared_phase_lag_index`
+  returned `-1/(n-1)` instead of 0 where the imaginary cross-spectrum is exactly
+  zero (including the diagonal); the phase-lag family is now invariant to the
+  signal's amplitude scale.
+- `fourier_connectivity(is_one_sided=False)` on unlabeled coefficients honors
+  the declaration and runs the two-sided-only measures; only `is_one_sided=None`
+  warns and rejects them.
+- DataArray time coordinates are judged uniform relative to the sampling
+  interval (one part in 1e6), so axes built with `np.cumsum` are accepted with
+  or without `sampling_frequency`.
+- CuPy backend: `Connectivity` moves host coefficients and frequencies to the
+  device, `canonical_coherence` indexes with device group indices, `time` stays
+  a host array after coefficient reassignment, and `MorletWavelet` accepts
+  device arrays for `frequencies` and `n_cycles`, so `fourier_connectivity` and
+  `canonical_coherence` run on the GPU.
+- `conditional_` and `blockwise_spectral_granger_prediction` returned float32
+  under `dtype=complex64`; they now return float64 like the other Granger
+  variants. A Granger factorization that raises `LinAlgError` warns with the
+  affected signal pairs instead of silently returning `NaN`.
+- `coherence_fisher_z_transform` accepts scalar coherency, and
+  `power_confidence_intervals` documents that `n_tapers` is the number of
+  averaged observations (tapers x trials), not the taper count.
+- The simulated-examples tutorial no longer stores a local absolute path in a
+  warning output, and `help(spectral_connectivity)` links both the AI-assistant
+  guide and `llms.txt`.
 
 ### Performance
 
