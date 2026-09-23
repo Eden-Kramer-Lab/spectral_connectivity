@@ -88,6 +88,9 @@ html_theme_options = {
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 
+# Copied to the root of the built site, so llms.txt is served next to index.html.
+html_extra_path = ["_extra"]
+
 # Output file base name for HTML help builder.
 htmlhelp_basename = "spectral_connectivitydoc"
 

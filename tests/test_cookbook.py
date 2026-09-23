@@ -1,22 +1,27 @@
-"""Execute every recipe in docs/cookbook.md as a doctest.
+"""Execute every recipe in the doctested documentation pages.
 
-Keeps the copy-pasteable cookbook honest against the current API.
+Keeps the copy-pasteable cookbook and assistant guide honest against the
+current API.
 """
 
 import doctest
 from pathlib import Path
 
-COOKBOOK = Path(__file__).resolve().parent.parent / "docs" / "cookbook.md"
+import pytest
+
+DOCS = Path(__file__).resolve().parent.parent / "docs"
 
 
-def test_cookbook_recipes_run():
-    """All fenced code blocks in the cookbook execute with expected output."""
-    assert COOKBOOK.exists(), f"cookbook not found at {COOKBOOK}"
+@pytest.mark.parametrize("page", ["cookbook.md", "llm_guide.md"])
+def test_cookbook_recipes_run(page):
+    """All fenced code blocks on the page execute with expected output."""
+    document = DOCS / page
+    assert document.exists(), f"{page} not found at {document}"
     failures, attempted = doctest.testfile(
-        str(COOKBOOK),
+        str(document),
         module_relative=False,
         optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE,
         verbose=False,
     )
-    assert attempted > 0, "no doctest examples were found in the cookbook"
+    assert attempted > 0, f"no doctest examples were found in {page}"
     assert failures == 0

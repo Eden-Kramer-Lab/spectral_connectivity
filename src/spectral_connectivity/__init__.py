@@ -2,6 +2,28 @@
 
 This package provides tools for computing frequency-domain functional and
 directed connectivity measures from time series data using multitaper methods.
+
+Start with :func:`multitaper_connectivity`, which takes a time series shaped
+``(n_time_samples, n_trials, n_signals)`` and returns a labeled xarray result,
+and :func:`list_measures`, which lists every valid ``method`` with its units,
+value range, and interpretation. In the wrapper's results,
+``result.sel(source="a", target="b")`` is the influence of ``a`` on ``b``. The
+lower-level :class:`Connectivity` methods return plain arrays whose signal axes
+come in two orders; ``MeasureInfo.array_orientation`` names each measure's.
+
+Guide for AI coding assistants:
+https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html
+
+Examples
+--------
+>>> import numpy as np
+>>> from spectral_connectivity import multitaper_connectivity
+>>> time_series = np.random.default_rng(0).standard_normal((1000, 5, 2))
+>>> coherence = multitaper_connectivity(
+...     time_series, sampling_frequency=500, method="coherence_magnitude"
+... )
+>>> coherence.dims
+('time', 'frequency', 'source', 'target')
 """
 
 from spectral_connectivity.connectivity import (

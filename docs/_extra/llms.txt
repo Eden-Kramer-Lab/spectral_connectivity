@@ -1,0 +1,25 @@
+# spectral_connectivity
+
+> Multitaper spectral estimates and frequency-domain connectivity measures
+> (coherence, phase locking, spectral Granger causality, directed transfer
+> functions, ...) for multichannel electrophysiology time series, with labeled
+> xarray results.
+
+Use `multitaper_connectivity(time_series, sampling_frequency=..., method=...)`
+with `time_series` shaped `(n_time_samples, n_trials, n_signals)`. Call
+`list_measures()` for every valid `method` and what its values mean. In the
+wrapper's results, `result.sel(source="a", target="b")` is the influence of `a`
+on `b`; the lower-level `Connectivity` arrays use two different index orders.
+
+## Docs
+
+- [Guide for AI coding assistants](https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html): the workflow, direction conventions, parameter choice, and pitfalls
+- [Cookbook](https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html): short recipes for common tasks
+- [Connectivity Metric Ranges](https://spectral-connectivity.readthedocs.io/en/latest/CONNECTIVITY_METRIC_RANGES.html): range, units, orientation, and interpretation of every measure
+- [API reference](https://spectral-connectivity.readthedocs.io/en/latest/api.html): every public function and class
+
+## Optional
+
+- [Introductory tutorial](https://spectral-connectivity.readthedocs.io/en/latest/examples/Intro_tutorial.html)
+- [Tutorial on simulated examples](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_On_Simulated_Examples.html)
+- [Source code](https://github.com/Eden-Kramer-Lab/spectral_connectivity)

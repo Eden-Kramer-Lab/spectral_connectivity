@@ -118,6 +118,10 @@ directly with results from 2.x.
   in `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
 - Every `Connectivity` measure's docstring has a runnable example, and every
   directed measure states its array orientation.
+- A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
+  workflow, direction conventions, parameter choice, and common pitfalls; the
+  documentation site serves an `llms.txt` index, and the package docstring
+  (`help(spectral_connectivity)`) points to both.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each
