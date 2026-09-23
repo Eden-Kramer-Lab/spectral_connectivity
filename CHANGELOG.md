@@ -157,6 +157,13 @@ directly with results from 2.x.
 
 ### Changed
 
+- xarray results carry `long_name` and `units` on every variable (spectral
+  densities in `(<input units>)^2/Hz` when the input states its units),
+  `band_lower`/`band_upper` coordinates after band reduction, and an input
+  DataArray's per-signal coordinates as `source_<name>`/`target_<name>`.
+  `frequency_band_reduce` takes `circular=` and infers circular averaging
+  from `units="rad"`. Large array input attributes are summarized by shape.
+
 - `canonical_coherency` fixes the sign of each spatial filter by the dominant
   coefficient of its pattern, so the canonical phase is no longer ambiguous by
   pi; single-channel groups reproduce the conjugate pairwise coherency.
@@ -194,6 +201,14 @@ directly with results from 2.x.
 
 ### Fixed
 
+- xarray results: every result now writes with netCDF4 and h5netcdf as well
+  as SciPy (boolean attributes are stored as 0/1); `frequency_band_reduce`'s
+  integral covers the whole band (off-grid edges, one-bin bands, additive
+  adjacent bands) instead of only the span between its outer bins; default
+  `fourier_connectivity` coordinates are labeled as normalized frequency and
+  window index, and datetime time is rejected; a frequency-reduced measure's
+  band no longer leaks onto other Dataset variables, and crop, decimation and
+  band provenance is recorded on the variables it applies to.
 - `canonical_coherence` warns when a group pair has more signals than
   trial x taper observations; its value is then forced to 1 for any data and
   was previously returned silently.
