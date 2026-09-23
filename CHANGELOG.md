@@ -173,7 +173,11 @@ directly with results from 2.x.
   PLI/wPLI, PPC), the zero-coherence null used by `delay`/`group_delay`, and
   `Connectivity.jackknife` consume it: the former warn once per call, and
   `jackknife` refuses leave-one-taper-out replicates on correlated observations
-  (leave-one-trial-out remains allowed). Previously a Morlet transform with
+  and names the transforms whose observations are independent (`Welch` with
+  `segment_overlap <= 0.5`, `Multitaper`, `MorletWavelet` without
+  `smoothing_time` on at least 3 trials). Leave-one-trial-out
+  (`expectation_type="trials"`) remains allowed but keeps the correlated axis
+  unaveraged, so it measures something else. Previously a Morlet transform with
   smoothing produced 95% intervals that covered about 30%. A companion
   `time_bins_are_independent` flag (also forwarded by `from_transform`) covers
   expectations that average over time: `Multitaper` and

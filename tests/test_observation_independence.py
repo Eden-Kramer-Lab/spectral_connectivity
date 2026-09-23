@@ -250,6 +250,38 @@ def test_morlet_smoothing_neighborhood_blocks_taper_jackknife_end_to_end():
         conn.jackknife("phase_lag_index")
 
 
+def test_jackknife_refusal_names_remedies_that_keep_the_averaged_measure():
+    """The refusal must point to transforms whose observations are independent,
+    so the interval is for the same trial/segment-averaged measure.
+
+    Regression: it advised expectation_type='trials', which keeps the
+    smoothing/segment axis instead of averaging it (a smoothed Morlet
+    coherence of shape (n_time, n_frequencies, 2, 2) became
+    (n_time, n_smoothing_samples, n_frequencies, 2, 2)).
+    """
+    series = _two_channel_series(np.random.default_rng(9), n_time=800, n_trials=3)
+    smoothed = Connectivity.from_transform(
+        MorletWavelet(series, 200, frequencies=[20.0, 40.0], n_cycles=5, smoothing_time=0.5)
+    )
+    with pytest.raises(ValueError, match="observations_are_independent") as error:
+        smoothed.jackknife("coherence_magnitude")
+    message = str(error.value)
+    assert "segment_overlap <= 0.5" in message
+    assert "Multitaper" in message
+    assert "without smoothing_time" in message
+    assert "expectation_type='trials' keeps" in message
+
+    # Each named remedy is accepted and keeps the averaged measure's shape.
+    remedies = [
+        Welch(series, 200, n_time_samples_per_segment=200, segment_overlap=0.5),
+        MorletWavelet(series, 200, frequencies=[20.0, 40.0], n_cycles=5),
+    ]
+    for transform in remedies:
+        conn = Connectivity.from_transform(transform)
+        result = conn.jackknife("coherence_magnitude")
+        assert result.estimate.shape == conn.coherence_magnitude().shape
+
+
 def test_welch_overlap_above_half_marks_observations_correlated_end_to_end():
     series = _two_channel_series(np.random.default_rng(8), n_time=2000, n_trials=1)
     independent = Welch(

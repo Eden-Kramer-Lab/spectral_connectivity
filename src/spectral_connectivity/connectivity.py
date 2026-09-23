@@ -1458,8 +1458,13 @@ class Connectivity:
             ``"trials_tapers"``) but ``observations_are_independent`` is
             ``False``: correlated observations (a MorletWavelet smoothing
             neighborhood, overlapping Welch segments) are not valid
-            leave-one-out units. Jackknife over trials
-            (``expectation_type="trials"``) or use a Multitaper transform.
+            leave-one-out units. Recompute the transform with independent
+            observations instead: ``Welch`` with ``segment_overlap <= 0.5``, a
+            ``Multitaper`` transform, or ``MorletWavelet`` without
+            ``smoothing_time`` on at least 3 trials.
+            (``expectation_type="trials"`` is accepted but keeps the correlated
+            axis as an output dimension instead of averaging it, a different
+            measure.)
 
         Notes
         -----
@@ -1518,9 +1523,14 @@ class Connectivity:
                 "observations are correlated (observations_are_independent is "
                 "False: a MorletWavelet smoothing neighborhood, or Welch segments "
                 "overlapping by more than half), so leave-one-out intervals over "
-                "them are invalid. Use expectation_type='trials' to jackknife "
-                "over independent trials, or a Multitaper transform whose tapers "
-                "are independent."
+                "them are invalid. For an interval on the same averaged measure, "
+                "recompute the transform with independent observations: Welch "
+                "with segment_overlap <= 0.5, a Multitaper transform, or "
+                "MorletWavelet without smoothing_time on at least 3 trials (the "
+                "trials are then the observations, and there is no time "
+                "smoothing). expectation_type='trials' keeps the correlated axis "
+                "as an output dimension instead of averaging it, so it measures "
+                "something else."
             )
             raise ValueError(msg)
         method_attribute = inspect.getattr_static(type(self), method, None)
