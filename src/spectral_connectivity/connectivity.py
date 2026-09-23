@@ -1364,7 +1364,8 @@ class Connectivity:
             e.g. ``"coherence_magnitude"``. Complex-valued and tuple-valued
             measures are not supported.
         confidence_level : float, default=0.95
-            Two-sided coverage of the normal-approximation interval, in (0, 1).
+            Two-sided coverage of the interval, in (0, 1). The critical value
+            is Student t with ``n_observations - 1`` degrees of freedom.
         transformation : {"auto", "identity", "log", "fisher",
                           "fisher_squared", "circular"}
             Scale on which the interval is formed. ``"auto"`` resolves to:
