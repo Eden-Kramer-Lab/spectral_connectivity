@@ -77,6 +77,15 @@ def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
     return array
 
 
+def gpu_request_error_message() -> str:
+    """Error text for a GPU request (see ``GPU_ENV_VAR``) without CuPy installed."""
+    return (
+        f"GPU support was explicitly requested via "
+        f"{GPU_ENV_VAR}={os.environ.get(GPU_ENV_VAR, '')!r}, but CuPy is not installed. "
+        "Please install CuPy with: 'pip install cupy' or 'conda install cupy'"
+    )
+
+
 def is_gpu_enabled() -> bool:
     """Return whether GPU acceleration was requested via the environment.
 

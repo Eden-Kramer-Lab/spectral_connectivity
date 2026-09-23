@@ -10,6 +10,7 @@ from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity.utils import (
     BackendArray,
+    gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
@@ -468,12 +469,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
         import cupy as xp
         from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
     except ImportError as exc:
-        msg = (
-            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
-            "but CuPy is not installed. Please install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'"
-        )
-        raise RuntimeError(msg) from exc
+        raise RuntimeError(gpu_request_error_message()) from exc
     try:
         # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
         # imports cupy fine but fails here, which must not be reported as

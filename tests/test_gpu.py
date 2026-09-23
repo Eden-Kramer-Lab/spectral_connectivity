@@ -160,14 +160,16 @@ class TestCpuSessionBackend:
             assert get_compute_backend()["backend"] == "cpu"
 
 
-def test_gpu_request_without_cupy_fails_import():
+@pytest.mark.parametrize("value", ["true", "1"])
+def test_gpu_request_without_cupy_fails_import(value):
     """Requesting the GPU without CuPy makes the package import fail loudly.
 
     Runs in a fresh interpreter because the backend is chosen at import time;
-    CuPy is blocked before ``spectral_connectivity`` is imported.
+    CuPy is blocked before ``spectral_connectivity`` is imported. The message
+    echoes the value that requested the GPU.
     """
     code = "import sys\nsys.modules['cupy'] = None\nimport spectral_connectivity\n"
-    environment = {**os.environ, GPU_ENV_VAR: "true"}
+    environment = {**os.environ, GPU_ENV_VAR: value}
     result = subprocess.run(
         [sys.executable, "-c", code],
         env=environment,
@@ -179,6 +181,7 @@ def test_gpu_request_without_cupy_fails_import():
 
     assert result.returncode != 0
     assert "RuntimeError: GPU support was explicitly requested" in result.stderr
+    assert f"{GPU_ENV_VAR}={value!r}" in result.stderr
     assert "CuPy is not installed" in result.stderr
     assert "pip install cupy" in result.stderr
 

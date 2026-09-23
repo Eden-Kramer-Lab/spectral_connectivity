@@ -28,6 +28,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
+    gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
     mark_readonly_chain_if_supported,
@@ -68,12 +69,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
         except Exception:
             logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
-        msg = (
-            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
-            "but CuPy is not installed. Please install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'"
-        )
-        raise RuntimeError(msg) from exc
+        raise RuntimeError(gpu_request_error_message()) from exc
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
