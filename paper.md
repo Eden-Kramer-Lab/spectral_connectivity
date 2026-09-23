@@ -1,5 +1,5 @@
 ---
-title: 'Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU'
+title: "Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU"
 tags:
   - Python
   - Neuroscience
@@ -21,20 +21,20 @@ authors:
     orcid: 0000-0003-1978-9622
     affiliation: 6, 7
 affiliations:
- - name: Howard Hughes Medical Institute - University of California, San Francisco, San Francisco, California, United States of America
-   index: 1
- - name: Departments of Physiology and Psychiatry, University of California, San Francisco, San Francisco, California, United States of America
-   index: 2
- - name: Kavli Institute for Fundamental Neuroscience, University of California, San Francisco, San Francisco, California, United States of America
-   index: 3
- - name: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland, United States of America
-   index: 4
- - name: Division of Systems Engineering, Boston University, Boston, Massachusetts, United States of America
-   index: 5
- - name: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts, United States of America
-   index: 6
- - name: Center for Systems Neuroscience, Boston University, Boston, Massachusetts, United States of America
-   index: 7
+  - name: Howard Hughes Medical Institute - University of California, San Francisco, San Francisco, California, United States of America
+    index: 1
+  - name: Departments of Physiology and Psychiatry, University of California, San Francisco, San Francisco, California, United States of America
+    index: 2
+  - name: Kavli Institute for Fundamental Neuroscience, University of California, San Francisco, San Francisco, California, United States of America
+    index: 3
+  - name: National Institute of Neurological Disorders and Stroke, Bethesda, Maryland, United States of America
+    index: 4
+  - name: Division of Systems Engineering, Boston University, Boston, Massachusetts, United States of America
+    index: 5
+  - name: Department of Mathematics and Statistics, Boston University, Boston, Massachusetts, United States of America
+    index: 6
+  - name: Center for Systems Neuroscience, Boston University, Boston, Massachusetts, United States of America
+    index: 7
 date: 10 September 2022
 bibliography: paper.bib
 ---

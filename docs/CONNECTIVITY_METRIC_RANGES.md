@@ -9,40 +9,40 @@ lower-level `Connectivity` methods retain their historical array convention:
 
 The following summarizes the theoretical value ranges for common connectivity metrics.
 
-| Metric | Range | Notes |
-|---|---|---|
-| **Power** | [0, ∞) | Power spectral density; always non-negative. |
-| **Cross-spectral density** | Complex, unbounded magnitude | Hermitian spectral matrix; diagonal equals power. |
-| **Coherency (complex)** | \|C_{xy}(f)\| ∈ [0, 1]; phase ∈ [−π, π] | Values lie in the unit disk of the complex plane. |
-| **Coherence phase** | [−π, π] | Phase angles of complex coherency. |
-| **Coherence magnitude** | [0, 1] | 0: none; 1: perfect linear dependence at frequency f. |
-| **Imaginary coherence** | [0, 1] (magnitude) | Raw imaginary part ranges [−1, 1]; magnitude version. |
-| **Imaginary coherency** | [−1, 1] | Signed imaginary component; antisymmetric across pairs. |
-| **Partial coherence** | [0, 1] | Magnitude-squared association conditional on all other signals. |
-| **Canonical coherence (legacy)** | [0, 1] | Historical magnitude-squared canonical-correlation estimator. |
-| **CaCoh / canonical coherency** | Complex unit disk | Exact phase-optimised Vidaurre CaCoh; magnitude is in [0, 1], phase uses MNE's `exp(-1j * phi)` convention. |
-| **MIC (maximized imaginary coherency)** | [0, 1] | Whitened phase-lagged singular components; the rich result includes scores, filters, and patterns. |
-| **MIM (multivariate interaction measure)** | [0, min(group ranks)] | Sum of squared phase-lagged interaction components. |
-| **Global coherence** | [0, 1] | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
-| **PLV (Phase‑Locking Value)** | [0, 1] | 0: random phases; 1: constant phase diff. |
-| **ciPLV (corrected imaginary PLV)** | [0, 1] | Suppresses zero-/pi-lag phase locking. |
-| **PLI (Phase‑Lag Index)** | [−1, 1] | Signed version; unsigned in [0, 1]. |
-| **dPLI (directed PLI)** | [0, 1] | >0.5: row phase-leads column; <0.5: row phase-lags column. |
-| **wPLI (Weighted PLI)** | [−1, 1] | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value. |
-| **dwPLI (Debiased PLI²)** | [−1/(N−1), 1] | Unbiased squared PLI estimate; finite-sample values can be negative. |
-| **dwPLI² (Debiased squared wPLI)** | [−1, 1] | Unbiased weighted PLI² estimate; finite-sample values can be negative. |
-| **PPC (Pairwise Phase Consistency)** | [−1/(N−1), 1] | Unbiased phase consistency; finite-sample values can be negative. |
-| **Spectral Granger causality** | [0, ∞) | Non‑negative; no finite upper bound. |
-| **Conditional spectral Granger** | [0, ∞) | Pairwise influence conditioned on all other observed signals. |
-| **Blockwise spectral Granger** | [0, ∞) | Directed influence between multichannel groups. |
-| **Time-reversed spectral Granger** | [0, ∞) | Pairwise Granger after reversing temporal orientation. |
-| **DTF (Directed Transfer Function)** | [0, 1] (normalized) | Proportion of inflow via transfer function. |
-| **Directed coherence** | [0, 1] (normalized) | DTF scaled by noise variance. |
-| **PDC (Partial Directed Coherence)** | [0, 1] (normalized) | Directional influence via AR coefficients. |
-| **gPDC (Generalized PDC)** | [0, 1] (normalized) | PDC scaled by noise variance. |
-| **dDTF (Direct DTF)** | [0, 1] (normalized) | DTF with partial coherence normalization. |
-| **Group delay** | (−∞, ∞) | Time delays; can be positive or negative. |
-| **PSI (Phase Slope Index)** | (−∞, ∞) | Signed; magnitude depends on phase slope. |
+| Metric                                     | Range                                   | Notes                                                                                                                    |
+| ------------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Power**                                  | [0, ∞)                                  | Power spectral density; always non-negative.                                                                             |
+| **Cross-spectral density**                 | Complex, unbounded magnitude            | Hermitian spectral matrix; diagonal equals power.                                                                        |
+| **Coherency (complex)**                    | \|C_{xy}(f)\| ∈ [0, 1]; phase ∈ [−π, π] | Values lie in the unit disk of the complex plane.                                                                        |
+| **Coherence phase**                        | [−π, π]                                 | Phase angles of complex coherency.                                                                                       |
+| **Coherence magnitude**                    | [0, 1]                                  | 0: none; 1: perfect linear dependence at frequency f.                                                                    |
+| **Imaginary coherence**                    | [0, 1] (magnitude)                      | Raw imaginary part ranges [−1, 1]; magnitude version.                                                                    |
+| **Imaginary coherency**                    | [−1, 1]                                 | Signed imaginary component; antisymmetric across pairs.                                                                  |
+| **Partial coherence**                      | [0, 1]                                  | Magnitude-squared association conditional on all other signals.                                                          |
+| **Canonical coherence (legacy)**           | [0, 1]                                  | Historical magnitude-squared canonical-correlation estimator.                                                            |
+| **CaCoh / canonical coherency**            | Complex unit disk                       | Exact phase-optimised Vidaurre CaCoh; magnitude is in [0, 1], phase uses MNE's `exp(-1j * phi)` convention.              |
+| **MIC (maximized imaginary coherency)**    | [0, 1]                                  | Whitened phase-lagged singular components; the rich result includes scores, filters, and patterns.                       |
+| **MIM (multivariate interaction measure)** | [0, min(group ranks)]                   | Sum of squared phase-lagged interaction components.                                                                      |
+| **Global coherence**                       | [0, 1]                                  | Fraction of total coherent power per component (eigenvalue / sum of eigenvalues, Cimenser et al. 2011); scale-invariant. |
+| **PLV (Phase‑Locking Value)**              | [0, 1]                                  | 0: random phases; 1: constant phase diff.                                                                                |
+| **ciPLV (corrected imaginary PLV)**        | [0, 1]                                  | Suppresses zero-/pi-lag phase locking.                                                                                   |
+| **PLI (Phase‑Lag Index)**                  | [−1, 1]                                 | Signed version; unsigned in [0, 1].                                                                                      |
+| **dPLI (directed PLI)**                    | [0, 1]                                  | >0.5: row phase-leads column; <0.5: row phase-lags column.                                                               |
+| **wPLI (Weighted PLI)**                    | [−1, 1]                                 | Signed version (like PLI); weights by \|Im(Sxy)\|. Unsigned in [0, 1] via absolute value.                                |
+| **dwPLI (Debiased PLI²)**                  | [−1/(N−1), 1]                           | Unbiased squared PLI estimate; finite-sample values can be negative.                                                     |
+| **dwPLI² (Debiased squared wPLI)**         | [−1, 1]                                 | Unbiased weighted PLI² estimate; finite-sample values can be negative.                                                   |
+| **PPC (Pairwise Phase Consistency)**       | [−1/(N−1), 1]                           | Unbiased phase consistency; finite-sample values can be negative.                                                        |
+| **Spectral Granger causality**             | [0, ∞)                                  | Non‑negative; no finite upper bound.                                                                                     |
+| **Conditional spectral Granger**           | [0, ∞)                                  | Pairwise influence conditioned on all other observed signals.                                                            |
+| **Blockwise spectral Granger**             | [0, ∞)                                  | Directed influence between multichannel groups.                                                                          |
+| **Time-reversed spectral Granger**         | [0, ∞)                                  | Pairwise Granger after reversing temporal orientation.                                                                   |
+| **DTF (Directed Transfer Function)**       | [0, 1] (normalized)                     | Proportion of inflow via transfer function.                                                                              |
+| **Directed coherence**                     | [0, 1] (normalized)                     | DTF scaled by noise variance.                                                                                            |
+| **PDC (Partial Directed Coherence)**       | [0, 1] (normalized)                     | Directional influence via AR coefficients.                                                                               |
+| **gPDC (Generalized PDC)**                 | [0, 1] (normalized)                     | PDC scaled by noise variance.                                                                                            |
+| **dDTF (Direct DTF)**                      | [0, 1] (normalized)                     | DTF with partial coherence normalization.                                                                                |
+| **Group delay**                            | (−∞, ∞)                                 | Time delays; can be positive or negative.                                                                                |
+| **PSI (Phase Slope Index)**                | (−∞, ∞)                                 | Signed; magnitude depends on phase slope.                                                                                |
 
 ## Notes
 

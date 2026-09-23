@@ -74,22 +74,27 @@ Structure your review as:
 
 ```markdown
 ## Critical UX Issues
+
 - [ ] [Specific issue with clear impact on users and example scenario]
 - [ ] [Another critical issue]
 
 ## Confusion Points
+
 - [ ] [What will confuse users, why it's confusing, and who it affects]
 - [ ] [Another potential confusion]
 
 ## Suggested Improvements
+
 - [ ] [Specific change with before/after examples and benefit]
 - [ ] [Another improvement]
 
 ## Good UX Patterns Found
+
 - [What works well, why it's effective, and how it helps users]
 - [Another positive pattern]
 
 ## Overall Assessment
+
 [USER_READY | NEEDS_POLISH | CONFUSING]
 
 **Rationale**: [Brief explanation of rating with key factors]
