@@ -38,7 +38,7 @@ You MUST systematically evaluate code against these criteria in this exact order
 3. **Code Quality Gates**:
    - Code must pass `ruff check src/ tests/` with zero issues
    - Code must pass `ruff check --fix src/ tests/` (auto-fixable issues)
-   - Code must pass `black src/ tests/` formatting
+   - Code must pass `ruff format --check src/ tests/` formatting
    - All existing tests must pass with `pytest`
    - Verify compatibility with Python 3.10+ (project requirement)
 
