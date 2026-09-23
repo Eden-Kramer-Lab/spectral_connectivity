@@ -1,8 +1,18 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
-import pytest
+import warnings
 
-from spectral_connectivity import Connectivity, list_measures
+import numpy as np
+import pytest
+import xarray as xr
+
+from spectral_connectivity import (
+    Connectivity,
+    Multitaper,
+    list_measures,
+    multitaper_connectivity,
+)
+from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     _MEASURE_SPECS,
     DEFAULT_METHODS,
@@ -104,3 +114,148 @@ def test_invalid_category_lists_valid_categories():
     message = str(excinfo.value)
     assert "not_a_category" in message
     assert "pairwise" in message
+
+
+_GROUPS = ["a", "a", "b", "b"]
+_MEASURE_KWARGS = {
+    "canonical_coherence": {"group_labels": _GROUPS},
+    "canonical_coherency": {"group_labels": _GROUPS},
+    "maximized_imaginary_coherency": {"group_labels": _GROUPS},
+    "maximized_imaginary_coherency_components": {"group_labels": _GROUPS},
+    "multivariate_interaction_measure": {"group_labels": _GROUPS},
+    "blockwise_spectral_granger_prediction": {"group_labels": _GROUPS},
+    "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
+}
+
+
+@pytest.fixture(scope="module")
+def coupled_results():
+    """Every measure computed on a coupled VAR(1) system, keyed by name.
+
+    Coupled data (rather than white noise) gives every measure finite values,
+    including the delay measures, which are NaN where coherence is not
+    significant.
+    """
+    coefficients = np.zeros((1, 4, 4))
+    coefficients[0] = [
+        [0.8, 0.0, 0.0, 0.0],
+        [0.5, 0.3, 0.0, 0.0],
+        [0.0, 0.4, 0.5, 0.0],
+        [0.0, 0.0, 0.3, 0.2],
+    ]
+    time_series = simulate_MVAR(coefficients, n_time_samples=1024, n_trials=4, random_state=1)
+    results = {}
+    with warnings.catch_warnings():
+        # Some measures warn about degenerate bins; irrelevant to the metadata.
+        warnings.simplefilter("ignore", UserWarning)
+        for measure in list_measures():
+            results[measure.name] = multitaper_connectivity(
+                time_series,
+                sampling_frequency=500,
+                time_window_duration=0.5,
+                method=measure.name,
+                connectivity_kwargs=_MEASURE_KWARGS.get(measure.name, {}),
+            )
+    return results
+
+
+def _main_variable(result, name):
+    """The measure's own variable; rich results carry filters etc. alongside."""
+    return result[name] if isinstance(result, xr.Dataset) else result
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_metadata_describes_the_computed_output(coupled_results, measure):
+    """dims, dtype, value range, and labels match what the wrapper returns."""
+    variable = _main_variable(coupled_results[measure.name], measure.name)
+
+    assert variable.dims == measure.dims
+    assert np.iscomplexobj(variable) == measure.is_complex
+    values = np.abs(variable.values) if measure.is_complex else variable.values
+    finite = values[np.isfinite(values)]
+    assert finite.size > 0
+    lower, upper = measure.value_range
+    assert finite.min() >= lower - 1e-12
+    assert finite.max() <= upper + 1e-12
+    assert variable.attrs["long_name"] == measure.long_name
+    assert measure.interpretation
+
+
+def test_units_name_the_input_dependence_of_spectral_densities():
+    """Densities scale with the input, so their units are given relative to it."""
+    units = {measure.name: measure.units for measure in list_measures()}
+    assert units["power"] == "(input units)^2/Hz"
+    assert units["cross_spectral_density"] == "(input units)^2/Hz"
+    assert units["coherence_magnitude"] == "1"
+    assert units["group_delay"] == "s"
+
+
+@pytest.fixture(scope="module")
+def zero_drives_one():
+    """Three signals: 0 drives 1 at a lag; 2 is independent."""
+    coefficients = np.zeros((2, 3, 3))
+    coefficients[0] = [[0.9, 0.0, 0.0], [0.6, 0.2, 0.0], [0.0, 0.0, 0.3]]
+    coefficients[1] = [[-0.6, 0.0, 0.0], [0.3, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    return simulate_MVAR(coefficients, n_time_samples=1000, n_trials=40, random_state=0)
+
+
+_BAND = [5.0, 60.0]
+_ORIENTATION_KWARGS = {
+    "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1, 2])},
+    "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
+    "delay": {"frequencies_of_interest": _BAND},
+    "group_delay": {"frequencies_of_interest": _BAND},
+    "phase_slope_index": {"frequencies_of_interest": _BAND},
+}
+
+
+def _entries(values):
+    """``(values[..., 0, 1], values[..., 1, 0])`` summarized by their medians."""
+    return np.nanmedian(values[..., 0, 1]), np.nanmedian(values[..., 1, 0])
+
+
+def _low_level_entries(connectivity, name):
+    """Band summaries of a directed measure's native ``[0, 1]`` and ``[1, 0]``."""
+    result = getattr(connectivity, name)(**_ORIENTATION_KWARGS.get(name, {}))
+    if name == "blockwise_spectral_granger_prediction":
+        result = result[0]
+    elif name == "group_delay":
+        return _entries(result[0])
+    elif name == "phase_slope_index":
+        return _entries(result)
+    elif name == "delay":
+        # (..., frequency, candidate, n, n): the zero-wrap candidate over the band.
+        return _entries(result[..., result.shape[-3] // 2, :, :])
+    frequencies = connectivity.frequencies
+    in_band = (frequencies >= _BAND[0]) & (frequencies <= _BAND[1])
+    return _entries(np.asarray(result)[..., in_band, :, :])
+
+
+@pytest.mark.parametrize(
+    "measure", list_measures(directed=True), ids=lambda measure: measure.name
+)
+def test_array_orientation_matches_the_computed_direction(zero_drives_one, measure):
+    """Signal 0 drives signal 1, so the 0 -> 1 entry must dominate the 1 -> 0
+    entry at the position ``array_orientation`` names. Time reversal flips the
+    apparent direction, so the time-reversed measure is given reversed data."""
+    time_series = zero_drives_one
+    if measure.name == "time_reversed_spectral_granger_prediction":
+        time_series = time_series[::-1]
+    connectivity = Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        entry_01, entry_10 = _low_level_entries(connectivity, measure.name)
+
+    if measure.array_orientation == "target_source":
+        zero_to_one, one_to_zero = entry_10, entry_01
+    else:
+        assert measure.array_orientation == "source_target"
+        zero_to_one, one_to_zero = entry_01, entry_10
+    assert zero_to_one > one_to_zero
+
+
+def test_only_directed_measures_have_an_array_orientation():
+    for measure in list_measures():
+        assert (measure.array_orientation is not None) == measure.is_directed

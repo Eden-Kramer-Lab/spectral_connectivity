@@ -2913,9 +2913,9 @@ def test_every_measure_has_a_long_name_and_units(method, units):
 
 
 def test_measure_labels_cover_every_measure():
-    from spectral_connectivity.wrapper import _MEASURE_LABELS, _MEASURE_SPECS
+    from spectral_connectivity.wrapper import _MEASURE_DESCRIPTIONS, _MEASURE_SPECS
 
-    assert set(_MEASURE_LABELS) == set(_MEASURE_SPECS)
+    assert set(_MEASURE_DESCRIPTIONS) == set(_MEASURE_SPECS)
 
 
 def test_large_array_input_attrs_are_summarized():

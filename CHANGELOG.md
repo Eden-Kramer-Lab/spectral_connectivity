@@ -111,6 +111,10 @@ directly with results from 2.x.
 - A doctested `docs/cookbook.md` collects short, copy-pasteable recipes for the
   most common tasks (functional and directed connectivity, reading the labeled
   output, frequency bands, and bringing your own Fourier coefficients).
+- `MeasureInfo` records what each measure's values mean: `long_name`, `units`,
+  `value_range`, `is_complex`, the result's `dims`, an `interpretation` that
+  includes the sign convention, and `array_orientation`, the index order of a
+  directed measure in the lower-level `Connectivity` arrays.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
   provenance (package, version, backend, expectation type, and the `mt_*`
   multitaper parameters) as top-level `Dataset.attrs`, not only on each

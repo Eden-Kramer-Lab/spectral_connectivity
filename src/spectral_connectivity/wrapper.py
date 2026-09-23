@@ -301,6 +301,20 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 )
 
 
+# Dimensions of each category's main variable before any band reduction or
+# squeezing.
+_CATEGORY_DIMS: dict[str, tuple[str, ...]] = {
+    "pairwise": ("time", "frequency", "source", "target"),
+    "power": ("time", "frequency", "source"),
+    "group_pairwise": ("time", "frequency", "source_group", "target_group"),
+    "multivariate_components": ("time", "frequency", "connection", "component"),
+    "delay": ("time", "frequency", "candidate", "source", "target"),
+    "global": ("time", "frequency", "component"),
+    "group_delay": ("time", "source", "target"),
+    "phase_slope": ("time", "source", "target"),
+}
+
+
 @dataclass(frozen=True)
 class MeasureInfo:
     """A single connectivity measure the high-level wrapper can compute.
@@ -325,6 +339,30 @@ class MeasureInfo:
     requires_two_sided : bool
         Whether the measure requires a full two-sided spectrum, including
         negative-frequency bins.
+    long_name : str
+        Human-readable name, also the ``long_name`` attribute of the result.
+    units : str
+        Units of the values: ``"1"`` for a dimensionless score, ``"rad"``,
+        ``"s"``, or ``"(input units)^2/Hz"`` for a spectral density.
+    value_range : tuple of float
+        ``(lower, upper)`` bounds of the values, or of their magnitude when
+        ``is_complex``; ``inf`` marks an unbounded side.
+    is_complex : bool
+        Whether the values are complex.
+    dims : tuple of str
+        Dimensions of the measure's variable in the wrapper's result, before
+        band reduction or squeezing. Rich results (``canonical_coherency``,
+        ``global_coherence``, ...) are Datasets whose variable named ``name``
+        has these dimensions.
+    array_orientation : {"target_source", "source_target"} or None
+        Index order of a directed measure's signal axes in the arrays returned
+        by the lower-level ``Connectivity`` method. ``"target_source"`` means
+        ``result[..., i, j]`` is the influence ``j -> i``; ``"source_target"``
+        means it describes ``i`` relative to ``j`` (e.g. ``i`` leads ``j``).
+        ``None`` for non-directed measures. The wrapper's results are always
+        labeled: ``result.sel(source=a, target=b)`` is ``a -> b``.
+    interpretation : str
+        How to read the values, including the sign convention where one exists.
     """
 
     name: str
@@ -333,6 +371,13 @@ class MeasureInfo:
     is_default: bool
     is_directed: bool
     requires_two_sided: bool
+    long_name: str
+    units: str
+    value_range: tuple[float, float]
+    is_complex: bool
+    dims: tuple[str, ...]
+    array_orientation: Literal["target_source", "source_target"] | None
+    interpretation: str
 
 
 def _measure_description(name: str) -> str:
@@ -356,7 +401,8 @@ def list_measures(
     This is the discovery entry point: it enumerates every valid ``method``
     name for :func:`multitaper_connectivity` and :func:`fourier_connectivity`,
     together with each measure's output category, a one-line description, and
-    whether it is in the default set and/or directional.
+    whether it is in the default set and/or directional, and what its values
+    mean: units, range, result dimensions, and how to read the direction.
 
     Parameters
     ----------
@@ -401,6 +447,10 @@ def list_measures(
             continue
         if directed is not None and spec.is_directed != directed:
             continue
+        meaning = _MEASURE_DESCRIPTIONS[name]
+        orientation: Literal["target_source", "source_target"] | None = None
+        if spec.is_directed:
+            orientation = "target_source" if spec.transpose_output else "source_target"
         measures.append(
             MeasureInfo(
                 name=name,
@@ -409,6 +459,13 @@ def list_measures(
                 is_default=spec.is_default,
                 is_directed=spec.is_directed,
                 requires_two_sided=spec.requires_two_sided,
+                long_name=meaning.long_name,
+                units=meaning.units or "(input units)^2/Hz",
+                value_range=meaning.value_range,
+                is_complex=meaning.is_complex,
+                dims=_CATEGORY_DIMS[spec.output_kind],
+                array_orientation=orientation,
+                interpretation=meaning.interpretation,
             )
         )
     return measures
@@ -575,57 +632,279 @@ def _frequency_band_attrs(
     return {"frequency_band_lower": float(band[0]), "frequency_band_upper": float(band[1])}
 
 
-# long_name and units per measure. Units follow UDUNITS spelling; "1" marks a
-# dimensionless score. None marks a spectral density, whose units derive from
-# the input's units (see _measure_label_attrs).
-_MEASURE_LABELS: dict[str, tuple[str, str | None]] = {
-    "coherence_magnitude": ("Magnitude-squared coherence", "1"),
-    "coherence_phase": ("Coherency phase", "rad"),
-    "coherency": ("Coherency", "1"),
-    "imaginary_coherence": ("Imaginary coherence (magnitude)", "1"),
-    "imaginary_coherency": ("Imaginary part of coherency", "1"),
-    "partial_coherence": ("Partial coherence", "1"),
-    "phase_locking_value": ("Phase-locking value", "1"),
-    "corrected_imaginary_phase_locking_value": (
+_INFINITY = float("inf")
+_PI = float(np.pi)
+
+
+@dataclass(frozen=True)
+class _MeasureDescription:
+    """What a measure's values mean: labels, range, and interpretation.
+
+    ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
+    score and ``None`` a spectral density, whose units derive from the input's
+    (see :func:`_measure_label_attrs`). ``value_range`` bounds the returned
+    values, or their magnitude when ``is_complex``.
+    """
+
+    long_name: str
+    units: str | None
+    value_range: tuple[float, float]
+    interpretation: str
+    is_complex: bool = False
+
+
+_LEADS = "Positive (source=a, target=b) means a leads b."
+_DEBIASED = "Negative values are finite-sample noise around zero, not negative coupling."
+_MEASURE_DESCRIPTIONS: dict[str, _MeasureDescription] = {
+    "coherence_magnitude": _MeasureDescription(
+        "Magnitude-squared coherence",
+        "1",
+        (0.0, 1.0),
+        "Linear coupling at each frequency: 0 is none, 1 is a perfectly consistent "
+        "amplitude and phase relationship. Biased upward when trials x tapers is small.",
+    ),
+    "coherence_phase": _MeasureDescription(
+        "Coherency phase",
+        "rad",
+        (-_PI, _PI),
+        f"Mean phase difference in radians. {_LEADS}",
+    ),
+    "coherency": _MeasureDescription(
+        "Coherency",
+        "1",
+        (0.0, 1.0),
+        "Complex coherency: its squared magnitude is coherence_magnitude and its "
+        "angle is coherence_phase.",
+        is_complex=True,
+    ),
+    "imaginary_coherence": _MeasureDescription(
+        "Imaginary coherence (magnitude)",
+        "1",
+        (0.0, 1.0),
+        "Magnitude of the imaginary part of coherency; blind to zero-lag coupling "
+        "such as volume conduction.",
+    ),
+    "imaginary_coherency": _MeasureDescription(
+        "Imaginary part of coherency",
+        "1",
+        (-1.0, 1.0),
+        f"Signed imaginary part of coherency; blind to zero-lag coupling. {_LEADS}",
+    ),
+    "partial_coherence": _MeasureDescription(
+        "Partial coherence",
+        "1",
+        (0.0, 1.0),
+        "Magnitude-squared coherence after removing the linear influence of every "
+        "other signal; near 0 for pairs coupled only through other signals.",
+    ),
+    "phase_locking_value": _MeasureDescription(
+        "Phase-locking value",
+        "1",
+        (0.0, 1.0),
+        "Consistency of the phase difference across trials and tapers, ignoring "
+        "amplitude: 0 is random, 1 is constant. Biased upward with few observations.",
+    ),
+    "corrected_imaginary_phase_locking_value": _MeasureDescription(
         "Corrected imaginary phase-locking value",
         "1",
+        (0.0, 1.0),
+        "Phase locking with zero- and pi-lag contributions removed; insensitive to "
+        "volume conduction.",
     ),
-    "pairwise_phase_consistency": ("Pairwise phase consistency", "1"),
-    "phase_lag_index": ("Phase lag index", "1"),
-    "debiased_squared_phase_lag_index": ("Debiased squared phase lag index", "1"),
-    "weighted_phase_lag_index": ("Weighted phase lag index", "1"),
-    "debiased_squared_weighted_phase_lag_index": (
+    "pairwise_phase_consistency": _MeasureDescription(
+        "Pairwise phase consistency",
+        "1",
+        (-1.0, 1.0),
+        "Bias-free estimate of the squared phase-locking value. "
+        f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
+    ),
+    "phase_lag_index": _MeasureDescription(
+        "Phase lag index",
+        "1",
+        (-1.0, 1.0),
+        "Signed asymmetry of the phase-difference distribution; blind to zero-lag "
+        f"coupling. Take the absolute value for the unsigned index. {_LEADS}",
+    ),
+    "debiased_squared_phase_lag_index": _MeasureDescription(
+        "Debiased squared phase lag index",
+        "1",
+        (-1.0, 1.0),
+        "Bias-corrected squared phase lag index. "
+        f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
+    ),
+    "weighted_phase_lag_index": _MeasureDescription(
+        "Weighted phase lag index",
+        "1",
+        (-1.0, 1.0),
+        "Phase lag index weighted by the magnitude of the imaginary cross-spectrum; "
+        f"less sensitive to noise than the unweighted index. {_LEADS}",
+    ),
+    "debiased_squared_weighted_phase_lag_index": _MeasureDescription(
         "Debiased squared weighted phase lag index",
         "1",
+        (-1.0, 1.0),
+        f"Bias-corrected squared weighted phase lag index. {_DEBIASED}",
     ),
-    "directed_phase_lag_index": ("Directed phase lag index", "1"),
-    "power": ("Power spectral density", None),
-    "cross_spectral_density": ("Cross-spectral density", None),
-    "pairwise_spectral_granger_prediction": ("Spectral Granger prediction", "1"),
-    "subset_pairwise_spectral_granger_prediction": ("Spectral Granger prediction", "1"),
-    "conditional_spectral_granger_prediction": (
+    "directed_phase_lag_index": _MeasureDescription(
+        "Directed phase lag index",
+        "1",
+        (0.0, 1.0),
+        "Above 0.5, the source phase-leads the target; below 0.5 it lags; 0.5 is "
+        "no preferred direction.",
+    ),
+    "power": _MeasureDescription(
+        "Power spectral density",
+        None,
+        (0.0, _INFINITY),
+        "One-sided power spectral density of each signal.",
+    ),
+    "cross_spectral_density": _MeasureDescription(
+        "Cross-spectral density",
+        None,
+        (0.0, _INFINITY),
+        "Complex, Hermitian cross-spectrum; unnormalized, so it scales with signal "
+        "power. Use coherency for a normalized version.",
+        is_complex=True,
+    ),
+    "pairwise_spectral_granger_prediction": _MeasureDescription(
+        "Spectral Granger prediction",
+        "1",
+        (0.0, _INFINITY),
+        "Nonparametric spectral Granger causality from source to target: 0 is no "
+        "directed influence; larger values mean more of the target's power is "
+        "predicted by the source's past. Not conditioned on other signals.",
+    ),
+    "subset_pairwise_spectral_granger_prediction": _MeasureDescription(
+        "Spectral Granger prediction",
+        "1",
+        (0.0, _INFINITY),
+        "pairwise_spectral_granger_prediction for only the requested pairs; other "
+        "entries are NaN.",
+    ),
+    "conditional_spectral_granger_prediction": _MeasureDescription(
         "Conditional spectral Granger prediction",
         "1",
+        (0.0, _INFINITY),
+        "Spectral Granger causality from source to target conditioned on every "
+        "other signal, removing influence relayed through observed signals.",
     ),
-    "time_reversed_spectral_granger_prediction": (
+    "time_reversed_spectral_granger_prediction": _MeasureDescription(
         "Time-reversed spectral Granger prediction",
         "1",
+        (0.0, _INFINITY),
+        "Pairwise spectral Granger causality of the time-reversed data. Genuine "
+        "directed influence reverses under time reversal; directionality that does "
+        "not reverse suggests instantaneous mixing.",
     ),
-    "blockwise_spectral_granger_prediction": ("Blockwise spectral Granger prediction", "1"),
-    "directed_transfer_function": ("Directed transfer function", "1"),
-    "directed_coherence": ("Directed coherence", "1"),
-    "partial_directed_coherence": ("Partial directed coherence", "1"),
-    "generalized_partial_directed_coherence": ("Generalized partial directed coherence", "1"),
-    "direct_directed_transfer_function": ("Direct directed transfer function", "1"),
-    "canonical_coherence": ("Canonical coherence", "1"),
-    "canonical_coherency": ("Canonical coherency", "1"),
-    "maximized_imaginary_coherency": ("Maximized imaginary coherency", "1"),
-    "maximized_imaginary_coherency_components": ("Maximized imaginary coherency", "1"),
-    "multivariate_interaction_measure": ("Multivariate interaction measure", "1"),
-    "global_coherence": ("Global coherence", "1"),
-    "delay": ("Delay", "s"),
-    "group_delay": ("Group delay", "s"),
-    "phase_slope_index": ("Phase slope index", "1"),
+    "blockwise_spectral_granger_prediction": _MeasureDescription(
+        "Blockwise spectral Granger prediction",
+        "1",
+        (0.0, _INFINITY),
+        "Spectral Granger causality between groups of signals set by group_labels, "
+        "from source_group to target_group.",
+    ),
+    "directed_transfer_function": _MeasureDescription(
+        "Directed transfer function",
+        "1",
+        (0.0, 1.0),
+        "Fraction of the target's inflow at each frequency that comes from the "
+        "source, including indirect paths; sums to 1 over sources.",
+    ),
+    "directed_coherence": _MeasureDescription(
+        "Directed coherence",
+        "1",
+        (0.0, 1.0),
+        "Noise-weighted directed transfer function: the fraction of the target's "
+        "power attributable to the source; sums to 1 over sources. Assumes "
+        "uncorrelated innovations.",
+    ),
+    "partial_directed_coherence": _MeasureDescription(
+        "Partial directed coherence",
+        "1",
+        (0.0, 1.0),
+        "Direct influence from source to target, normalized by the source's total "
+        "outflow; sums to 1 over targets.",
+    ),
+    "generalized_partial_directed_coherence": _MeasureDescription(
+        "Generalized partial directed coherence",
+        "1",
+        (0.0, 1.0),
+        "Partial directed coherence with each signal scaled by its innovation "
+        "variance, making it insensitive to differences in signal scale.",
+    ),
+    "direct_directed_transfer_function": _MeasureDescription(
+        "Direct directed transfer function",
+        "1",
+        (0.0, 1.0),
+        "Direct (not relayed) influence from source to target. Normalized over all "
+        "frequencies, so values are small: compare pairs, not against 1.",
+    ),
+    "canonical_coherence": _MeasureDescription(
+        "Canonical coherence",
+        "1",
+        (0.0, 1.0),
+        "Largest coherence between linear combinations of two groups of signals "
+        "(historical estimator; see canonical_coherency).",
+    ),
+    "canonical_coherency": _MeasureDescription(
+        "Canonical coherency",
+        "1",
+        (0.0, 1.0),
+        "Complex canonical coherency per component between two groups, with the "
+        "spatial filters and patterns that produce it.",
+        is_complex=True,
+    ),
+    "maximized_imaginary_coherency": _MeasureDescription(
+        "Maximized imaginary coherency",
+        "1",
+        (0.0, 1.0),
+        "Largest imaginary coherency between linear combinations of two groups; "
+        "blind to zero-lag coupling.",
+    ),
+    "maximized_imaginary_coherency_components": _MeasureDescription(
+        "Maximized imaginary coherency",
+        "1",
+        (0.0, 1.0),
+        "maximized_imaginary_coherency resolved into components, with the spatial "
+        "filters and patterns that produce them.",
+    ),
+    "multivariate_interaction_measure": _MeasureDescription(
+        "Multivariate interaction measure",
+        "1",
+        (0.0, _INFINITY),
+        "Total phase-lagged interaction between two groups (the sum of squared "
+        "imaginary-coherency components); at most the smaller group's rank.",
+    ),
+    "global_coherence": _MeasureDescription(
+        "Global coherence",
+        "1",
+        (0.0, 1.0),
+        "Fraction of the total cross-spectral power in each component; a large "
+        "leading component indicates one dominant coherent network.",
+    ),
+    "delay": _MeasureDescription(
+        "Delay",
+        "s",
+        (-_INFINITY, _INFINITY),
+        "Candidate delays in seconds, one per 2*pi phase ambiguity; the true delay is "
+        "the candidate that is constant across frequency. Frequencies without "
+        f"significant coherence are NaN. {_LEADS}",
+    ),
+    "group_delay": _MeasureDescription(
+        "Group delay",
+        "s",
+        (-_INFINITY, _INFINITY),
+        "Delay in seconds from the slope of phase against frequency over the band; "
+        f"check group_delay_r_value for the quality of the fit. {_LEADS}",
+    ),
+    "phase_slope_index": _MeasureDescription(
+        "Phase slope index",
+        "1",
+        (-_INFINITY, _INFINITY),
+        "Coherence-weighted slope of phase against frequency over the band. "
+        "Unnormalized, so judge it "
+        f"against a null distribution rather than a fixed threshold. {_LEADS}",
+    ),
 }
 
 
@@ -635,7 +914,10 @@ def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str
     Spectral densities are in (input units)^2/Hz when the input's units are
     known; otherwise they get no ``units`` rather than an invented one.
     """
-    long_name, units = _MEASURE_LABELS.get(method, (method, ""))
+    description = _MEASURE_DESCRIPTIONS.get(method)
+    long_name, units = (
+        (description.long_name, description.units) if description else (method, "")
+    )
     if units is None:
         units = f"({signal_units})^2/Hz" if signal_units else ""
     return {"long_name": long_name, **({"units": units} if units else {})}
