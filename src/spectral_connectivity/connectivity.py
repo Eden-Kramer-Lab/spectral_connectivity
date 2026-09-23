@@ -1473,6 +1473,33 @@ class Connectivity:
         reuse the full-sample Thomson weights (the adaptive weights are not
         recomputed for each reduced taper set), so the interval is an
         approximation in that case.
+
+        The interval describes the size of a measure; it is not a test that
+        the measure differs from 0. Monte Carlo coverage of the default
+        (``"auto"``) 95% intervals, with independent complex-Gaussian
+        observations and 5 to 100 observations per dataset:
+
+        - ``coherence_magnitude`` (``fisher_squared``): 94-95% when the true
+          ``|coherency|`` is 0.3-0.8, but at zero true coherence the interval
+          excludes 0 in 11-15% of datasets, and more observations do not help
+          (the estimated magnitude's spread shrinks with ``n`` at the same
+          rate as its mean). "The interval excludes 0" is therefore not
+          evidence of nonzero coherence. Test that with the exact
+          zero-coherence null instead:
+          :func:`spectral_connectivity.statistics.coherence_significance_pvalue`
+          applied to ``coherency()`` and ``n_observations`` (valid for
+          independent, equally weighted observations), corrected across
+          frequencies and pairs with
+          :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`.
+          For measures without an analytic null, use a permutation or
+          surrogate test.
+        - ``phase_locking_value`` (``fisher``): at zero true PLV the interval
+          excludes 0 in 5% of datasets at 5 observations but 14% at 100; at a
+          high true PLV it under-covers (85-95% at a true PLV of 0.82, 76-90%
+          at 0.93).
+        - ``coherence_phase`` (``circular``): under-covers when coherence is
+          weak (77-88% at a true ``|coherency|`` of 0.1, 84-93% at 0.2,
+          87-94% at 0.3, against 92-95% at 0.6).
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (

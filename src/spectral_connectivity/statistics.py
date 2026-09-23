@@ -114,25 +114,21 @@ def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.float
     return np.clip(np.tanh(value), 0, 1) ** 2
 
 
-_SATURATED_COHERENCE = "saturated coherence (|coherence| == 1 to machine precision)"
+def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
+    """Warn that saturated estimates have a Fisher standard error of 0.
 
-
-def _warn_fisher_boundary(at_boundary: NDArray[np.bool_], boundary: str) -> None:
-    """Warn that estimates on a Fisher-transform boundary have a standard error of 0.
-
-    At ``|coherence| == 1`` -- and, for ``atanh(sqrt(.))``, at a
-    magnitude-squared coherence of 0 -- the delta-method derivative is exactly
-    zero, so the back-transformed standard error is reported as ``0`` and the
-    interval degenerates, implying perfect certainty rather than a boundary.
-    Surface it so the zero is not mistaken for a genuinely tight estimate.
+    At ``|coherence| == 1`` the delta-method derivative is exactly zero, so the
+    back-transformed standard error is reported as ``0`` and the interval
+    degenerates, implying perfect certainty rather than a boundary. Surface it
+    so the zero is not mistaken for a genuinely tight estimate.
     """
     if bool(np.any(at_boundary)):
         warnings.warn(
             f"Fisher jackknife: {int(np.count_nonzero(at_boundary))} value(s) sit "
-            f"at {boundary}, where the transform's derivative vanishes, so the "
-            "delta-method standard error is exactly 0 and the interval degenerates "
-            "there. This reflects a boundary, not perfect certainty; interpret "
-            "those values with care.",
+            "at saturated coherence (|coherence| == 1 to machine precision), where "
+            "the transform's derivative vanishes, so the delta-method standard "
+            "error is exactly 0 and the interval degenerates there. This reflects "
+            "a boundary, not perfect certainty; interpret those values with care.",
             UserWarning,
             stacklevel=3,
         )
@@ -186,6 +182,21 @@ def jackknife_confidence_interval(
     ``pi``; when the half-width is at least ``pi`` the interval covers the
     whole circle, the phase is not resolved, and the bounds are reported as
     ``(-pi, pi)`` with a ``UserWarning``.
+
+    The interval describes the size of a measure; it is not a test that the
+    measure differs from 0. In Monte Carlo simulation with independent
+    complex-Gaussian observations and 95% nominal intervals, ``fisher_squared``
+    covers the true magnitude-squared coherence 94-95% of the time when the
+    true ``|coherence|`` is 0.3-0.8, but when the true coherence is 0 it
+    excludes 0 in 11-15% of datasets at 5 to 100 observations, and more
+    observations do not help. (An estimate of exactly 0, which requires an
+    exactly cancelling cross-spectrum, gets a standard error of 0, since the
+    delta-method derivative vanishes there.) To test for nonzero coherence use
+    the exact zero-coherence null, :func:`coherence_significance_pvalue`.
+    ``"circular"`` intervals under-cover when the phase is poorly determined
+    (77-88% coverage at a true ``|coherence|`` of 0.1). See
+    :meth:`spectral_connectivity.connectivity.Connectivity.jackknife` for the
+    per-measure figures.
 
     References
     ----------
@@ -252,8 +263,7 @@ def jackknife_confidence_interval(
         # Count every value the atanh clip below pins: a saturated estimate often
         # lands a few ulp below 1 rather than exactly on it.
         _warn_fisher_boundary(
-            (np.abs(estimate_array) >= 1 - epsilon) & ~np.asarray(_saturated_by_construction),
-            _SATURATED_COHERENCE,
+            (np.abs(estimate_array) >= 1 - epsilon) & ~np.asarray(_saturated_by_construction)
         )
         transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
         transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
@@ -270,11 +280,7 @@ def jackknife_confidence_interval(
         clipped_estimate = np.clip(estimate_array, 0, 1)
         _warn_fisher_boundary(
             (np.sqrt(clipped_estimate) >= 1 - epsilon)
-            & ~np.asarray(_saturated_by_construction),
-            _SATURATED_COHERENCE,
-        )
-        _warn_fisher_boundary(
-            estimate_array <= 0, "zero magnitude-squared coherence (estimate == 0)"
+            & ~np.asarray(_saturated_by_construction)
         )
         transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))
         transformed_replicates = np.arctanh(
