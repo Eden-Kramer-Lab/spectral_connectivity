@@ -89,9 +89,10 @@ jobs:
         # Snapshot (syrupy) comparisons use a tight rtol, so run them on a single
         # reference platform to avoid cross-platform float-precision flakiness.
         # The two notebook-execution checks are covered by the "Test notebooks"
-        # step below and are deselected here.
+        # step below and are deselected here. --no-cov keeps this run from
+        # overwriting the full suite's .coverage, which the Codecov upload reads.
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
-        run: pytest tests/test_notebooks.py -k "not executes"
+        run: pytest tests/test_notebooks.py -k "not executes" --no-cov
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
