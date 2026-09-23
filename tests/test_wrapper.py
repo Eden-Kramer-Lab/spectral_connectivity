@@ -2812,3 +2812,25 @@ def test_connectivity_to_xarray_validates_the_method_name(method):
     )
     with pytest.raises(ValueError, match="is not a known connectivity measure"):
         connectivity_to_xarray(transform, method=method)
+
+
+def test_band_reduction_records_band_edges_as_coordinates():
+    """Band edges are coordinates on the band axis (selectable and plottable),
+    carrying the frequency coordinate's units, not only a JSON attribute."""
+    power = xr.DataArray(
+        np.ones((2, 11)),
+        dims=("time", "frequency"),
+        coords={
+            "time": [0.0, 1.0],
+            "frequency": ("frequency", np.arange(11.0), {"long_name": "Frequency", "units": "Hz"}),
+        },
+        name="power",
+        attrs={"measure": "power"},
+    )
+    reduced = frequency_band_reduce(power, {"theta": (4.0, 8.0), "alpha": (8.0, 10.0)})
+    assert reduced.band.values.tolist() == ["theta", "alpha"]
+    np.testing.assert_array_equal(reduced.band_lower, [4.0, 8.0])
+    np.testing.assert_array_equal(reduced.band_upper, [8.0, 10.0])
+    assert reduced.band_lower.dims == ("band",)
+    assert reduced.band_lower.attrs["units"] == "Hz"
+    assert reduced.where(reduced.band_lower >= 8.0, drop=True).band.values.tolist() == ["alpha"]

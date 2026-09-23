@@ -1197,11 +1197,20 @@ def frequency_band_reduce(
             if "valid_time_frequency" in selected.coords:
                 band_validity.append(selected.coords["valid_time_frequency"].all("frequency"))
 
-        band_coordinate = xr.IndexVariable("band", band_names)
-        reduced = xr.concat(reduced_bands, dim=band_coordinate)
+        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band_names)
+        edge_attrs = {
+            key: value
+            for key, value in data.coords["frequency"].attrs.items()
+            if key == "units"
+        }
+        reduced = reduced.assign_coords(
+            band_lower=("band", [low for _, (low, _) in band_masks_and_bounds], edge_attrs),
+            band_upper=("band", [high for _, (_, high) in band_masks_and_bounds], edge_attrs),
+        )
         if band_validity:
             reduced = reduced.assign_coords(
-                valid_time_band=xr.concat(band_validity, dim=band_coordinate)
+                valid_time_band=xr.concat(band_validity, dim="band")
+                .assign_coords(band=band_names)
                 # Any surviving non-frequency axes (typically "time", but none
                 # if the caller already selected a single time point) come
                 # first; "band" is placed last without naming "time" explicitly.
