@@ -1658,7 +1658,6 @@ class Connectivity:
         return imaginary
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def partial_coherence(
         self,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
@@ -1694,6 +1693,13 @@ class Connectivity:
         regularization = _validated_regularization(regularization)
 
         cross_spectral_density = self._expectation_cross_spectral_matrix()
+        # Drop negative frequencies before the per-bin inversion, not after.
+        cross_spectral_density = cross_spectral_density[
+            ...,
+            : self._nonnegative_frequency_count(cross_spectral_density.shape[-3]),
+            :,
+            :,
+        ]
         matrix_rms = xp.sqrt(
             xp.mean(
                 xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
