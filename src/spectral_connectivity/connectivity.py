@@ -2305,9 +2305,10 @@ class Connectivity:
         -----
         **Range**: score magnitudes lie in ``[0, 1]``. The whitening,
         singular-value decomposition, and phase optimization (a coarse grid
-        bracket followed by a batched Newton refinement) are vectorized over the
-        time/frequency axes on the active ``xp`` backend, so this runs on the GPU
-        when GPU support is enabled.
+        whose highest local maxima are each refined by a batched Newton
+        iteration, keeping the best so near-equal lobes are resolved) are
+        vectorized over the time/frequency axes on the active ``xp`` backend, so
+        this runs on the GPU when GPU support is enabled.
 
         **Phase convention**: a spatial filter and its negative span the same
         direction, so the canonical phase is intrinsically defined only modulo
@@ -4835,6 +4836,7 @@ def _optimize_canonical_coherency_phase(
     whitened: NDArray[np.complexfloating],
     *,
     n_grid: int = 37,
+    n_candidates: int = 3,
     n_refine: int = 12,
 ) -> tuple[
     NDArray[np.floating],
@@ -4845,13 +4847,17 @@ def _optimize_canonical_coherency_phase(
     """Vidaurre's phase objective, optimized per bin over batched leading axes.
 
     ``whitened`` is the whitened between-group cross-spectrum ``W = Taa Cab
-    Tbb`` with shape ``(..., n_a, n_b)``. A coarse grid brackets the
-    (pi-periodic) maximum of ``sigma_max(Re(exp(-i phi) W))``, then a batched
-    Newton refinement on the finite-difference derivatives converges each bin
-    to the optimum. Fully vectorized over the leading (time/frequency) axes and
-    backend-agnostic (no per-bin ``scipy.optimize`` loop). Returns the
-    maximized magnitude, the optimizing phase, and the top left/right singular
-    vectors of ``Re(exp(-i phi) W)`` at that phase.
+    Tbb`` with shape ``(..., n_a, n_b)``. The objective
+    ``sigma_max(Re(exp(-i phi) W))`` is pi-periodic and can have several lobes
+    of nearly equal height, so refining from the single best coarse-grid point
+    can settle on the wrong lobe. Instead, a coarse grid over ``[0, pi)``
+    locates the local maxima, the ``n_candidates`` highest are each refined by
+    a batched Newton iteration on finite-difference derivatives, and the best
+    refined candidate is kept -- never below the coarse-grid optimum, which
+    stays in the candidate set. Fully vectorized over the leading
+    (time/frequency) axes and backend-agnostic (no per-bin ``scipy.optimize``
+    loop). Returns the maximized magnitude, the optimizing phase, and the top
+    left/right singular vectors of ``Re(exp(-i phi) W)`` at that phase.
     """
     leading_shape = whitened.shape[:-2]
 
@@ -4860,9 +4866,18 @@ def _optimize_canonical_coherency_phase(
         return xp.linalg.svd(projected, compute_uv=False)[..., 0]
 
     grid_values = [k * float(np.pi) / n_grid for k in range(n_grid)]
+    # One SVD batch per grid point keeps the transient at a single bin-batch.
     grid_scores = xp.stack([objective(xp.full(leading_shape, phase)) for phase in grid_values])
     grid = xp.asarray(grid_values)
-    phase = grid[xp.argmax(grid_scores, axis=0)]
+    coarse_best = grid[xp.argmax(grid_scores, axis=0)]
+    # Local maxima of the pi-periodic grid (its ends are neighbours); bins with
+    # fewer than n_candidates maxima pad with -inf entries whose refinement is
+    # harmless because the coarse optimum is always a candidate below.
+    is_local_maximum = (grid_scores >= xp.roll(grid_scores, 1, axis=0)) & (
+        grid_scores >= xp.roll(grid_scores, -1, axis=0)
+    )
+    ranked = xp.argsort(xp.where(is_local_maximum, grid_scores, -xp.inf), axis=0)
+    phase = grid[ranked[-n_candidates:]]  # (n_candidates, *leading_shape)
     step = 1e-5
     for _ in range(n_refine):
         forward = objective(phase + step)
@@ -4874,6 +4889,9 @@ def _optimize_canonical_coherency_phase(
             first_derivative, second_derivative, xp.abs(second_derivative) > 1e-12, 0.0
         )
         phase = phase - xp.clip(newton_step, -0.1, 0.1)
+    candidates = xp.concatenate([phase, coarse_best[xp.newaxis]], axis=0)
+    best = xp.argmax(objective(candidates), axis=0)
+    phase = xp.take_along_axis(candidates, best[xp.newaxis], axis=0)[0]
     projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * whitened)
     left, singular_values, right_h = xp.linalg.svd(projected, full_matrices=False)
     return (

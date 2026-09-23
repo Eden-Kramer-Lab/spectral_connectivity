@@ -16,6 +16,7 @@ from spectral_connectivity.connectivity import (
     _get_independent_frequencies,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
+    _optimize_canonical_coherency_phase,
     _remove_instantaneous_causality,
     _reshape,
     _sanitized_nonnegative_granger,
@@ -735,6 +736,55 @@ def test_single_component_cacoh_matches_reference_values():
     np.testing.assert_allclose(
         truncated.scores[0, :, 0, 0], expected_rank2, rtol=1e-7, atol=1e-9
     )
+
+
+def _cacoh_phase_objective(whitened, phase):
+    """sigma_max(Re(exp(-i phase) W)) for one whitened cross-spectrum."""
+    return np.linalg.svd(np.real(np.exp(-1j * phase) * whitened), compute_uv=False)[0]
+
+
+def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
+    """The phase objective can have two lobes of nearly equal height. Refining
+    Newton from the single best coarse-grid point picks whichever lobe happens
+    to sit closer to a grid point; the optimizer must refine every candidate
+    lobe and keep the true maximum."""
+    n_grid = 37
+    grid = np.arange(n_grid) * np.pi / n_grid
+    # Lobe 1 (the true maximum, 0.80) mid-way between two coarse grid points;
+    # lobe 2 (0.7995) exactly on a grid point, so the coarse grid ranks it first.
+    theta_1 = grid[10] + np.pi / (2 * n_grid)
+    theta_2 = grid[27]
+    directions = np.eye(3)
+    whitened = 0.80 * np.exp(1j * theta_1) * np.outer(directions[0], directions[0]) + (
+        0.7995 * np.exp(1j * theta_2) * np.outer(directions[1], directions[1])
+    )
+    coarse_scores = [_cacoh_phase_objective(whitened, phase) for phase in grid]
+    assert np.argmax(coarse_scores) == 27  # premise: the coarse grid prefers lobe 2
+
+    magnitude, phase, left, right = _optimize_canonical_coherency_phase(whitened[np.newaxis])
+
+    dense_best = max(
+        _cacoh_phase_objective(whitened, phase) for phase in np.linspace(0, np.pi, 20001)
+    )
+    assert magnitude[0] >= max(coarse_scores) - 1e-12
+    assert magnitude[0] == pytest.approx(dense_best, abs=1e-6)
+    assert magnitude[0] == pytest.approx(0.80, abs=1e-6)
+    # The phase is defined modulo pi; it must be lobe 1, not lobe 2.
+    assert np.exp(2j * phase[0]) == pytest.approx(np.exp(2j * theta_1), abs=1e-6)
+    np.testing.assert_allclose(np.abs(left[0]), directions[0], atol=1e-6)
+    np.testing.assert_allclose(np.abs(right[0]), directions[0], atol=1e-6)
+
+
+def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
+    rng = np.random.default_rng(21)
+    whitened = rng.standard_normal((40, 3, 4)) + 1j * rng.standard_normal((40, 3, 4))
+    n_grid = 37
+    grid = np.arange(n_grid) * np.pi / n_grid
+    coarse_best = np.array(
+        [max(_cacoh_phase_objective(matrix, phase) for phase in grid) for matrix in whitened]
+    )
+    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened)
+    assert np.all(magnitude >= coarse_best - 1e-12)
 
 
 @pytest.mark.parametrize(
