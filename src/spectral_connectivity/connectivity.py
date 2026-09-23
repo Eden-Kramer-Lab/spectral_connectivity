@@ -928,27 +928,38 @@ class Connectivity:
             stacklevel=3,
         )
 
-    def _warn_single_observation_degenerate(self, measure: str) -> None:
-        """Warn that a magnitude-normalized measure is degenerate for one observation.
+    def _warn_single_observation_degenerate(
+        self,
+        measure: str,
+        consequence: str = (
+            "every magnitude-normalized value is mathematically forced to 1 "
+            "(apparent perfect connectivity)"
+        ),
+    ) -> None:
+        """Warn that a normalized measure is degenerate for one observation.
 
-        Coherency, the phase-locking value, and every measure derived from them
-        normalize each cross-spectral entry by its magnitude. With a single
-        observation (one trial times one taper/window -- e.g. a single-trial
+        Coherency, the phase-locking value, and every measure derived from
+        them normalize each cross-spectral entry by its magnitude; the
+        phase-lag family averages the sign of one imaginary cross-spectrum per
+        observation; partial coherence inverts a rank-one cross-spectral
+        matrix. With a single observation (one trial times one taper/window --
+        e.g. a single-trial
         :class:`~spectral_connectivity.transforms.MorletWavelet` transform
-        without ``smoothing_time``) that normalization forces every magnitude to
-        exactly one, so the measure reports perfect connectivity between
-        unrelated signals and carries no information. This is a silent-failure
-        trap rather than an error, so it warns instead of raising.
+        without ``smoothing_time``) the result is fixed by that normalization
+        rather than by the data (``consequence`` states how for ``measure``),
+        so the measure reports perfect connectivity or a perfectly consistent
+        lag between unrelated signals and carries no information. This is a
+        silent-failure trap rather than an error, so it warns instead of
+        raising.
         """
         if self.n_observations < 2:
             warnings.warn(
                 f"{measure} is computed from a single observation "
-                "(n_observations == n_trials * n_tapers == 1), so every "
-                "magnitude-normalized value is mathematically forced to 1 "
-                "(apparent perfect connectivity) regardless of the data and "
-                "carries no information. Provide multiple trials/tapers, or set "
-                "smoothing_time on MorletWavelet to collect neighboring "
-                "coefficients on the observation axis.",
+                f"(n_observations == n_trials * n_tapers == 1), so {consequence} "
+                "regardless of the data, and the result carries no information. "
+                "Provide multiple trials/tapers, or set smoothing_time on "
+                "MorletWavelet to collect neighboring coefficients on the "
+                "observation axis.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -1959,6 +1970,12 @@ class Connectivity:
         Regularization stabilizes inversion but also changes the estimand, so
         analyses should report a non-default value.
 
+        The averaged trials x tapers are the observations. With fewer
+        observations than signals the cross-spectral matrix is rank-deficient
+        and its (regularized) inverse is dominated by the null space; with
+        exactly one null direction every partial coherence is forced to 1 for
+        any data. This case warns.
+
         Examples
         --------
         >>> import numpy as np
@@ -1981,6 +1998,29 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         regularization = _validated_regularization(regularization)
+        self._warn_single_observation_degenerate(
+            "partial_coherence",
+            "the cross-spectral matrix has rank one and its inverse is fixed by "
+            "the null space: the estimate is 1 for every pair of two signals and "
+            "otherwise unrelated to the data",
+        )
+        n_observations = self.n_observations
+        # The inverse of a rank-deficient cross-spectral matrix is dominated by
+        # its null space: with one null direction the normalized off-diagonal
+        # precision has unit magnitude for every pair, and with more it is still
+        # unrelated to the data. (A single observation already warned above.)
+        if 2 <= n_observations < self.n_signals:
+            warnings.warn(
+                f"partial_coherence uses {n_observations} observations (the "
+                f"averaged trials x tapers), fewer than the {self.n_signals} "
+                "signals, so the cross-spectral matrix is rank-deficient and its "
+                "inverse is dominated by the null space: the estimate is forced "
+                "to 1 for every pair (one missing observation) or is otherwise "
+                "unrelated to the data. Provide more trials or tapers than "
+                "signals, or analyze fewer signals.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         cross_spectral_density = self._expectation_cross_spectral_matrix()
         # Drop negative frequencies before the per-bin inversion, not after.
@@ -3225,6 +3265,11 @@ class Connectivity:
         True
         """
 
+        self._warn_single_observation_degenerate(
+            "phase_lag_index",
+            "every value is the sign of one imaginary cross-spectrum, forced to "
+            "+/-1 (a perfectly consistent lag)",
+        )
         # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
         # array is disconnected from the cached moment.
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
@@ -3278,6 +3323,11 @@ class Connectivity:
         >>> bool(dpli[0, 20, 0, 1] > 0.5 > dpli[0, 20, 1, 0])
         True
         """
+        self._warn_single_observation_degenerate(
+            "directed_phase_lag_index",
+            "every value is set by the sign of one imaginary cross-spectrum, "
+            "forced to 0 or 1 (a perfectly consistent lag)",
+        )
         (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
         directed_pli: NDArray[np.floating] = xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0)
         return directed_pli
@@ -3334,6 +3384,11 @@ class Connectivity:
         True
         """
 
+        self._warn_single_observation_degenerate(
+            "weighted_phase_lag_index",
+            "every value is one imaginary cross-spectrum divided by its own "
+            "magnitude, forced to +/-1 (a perfectly consistent lag)",
+        )
         mean_imaginary, mean_absolute = self._imaginary_cross_spectrum_moments(
             "imaginary", "absolute"
         )
@@ -3349,6 +3404,7 @@ class Connectivity:
         return mean_imaginary / weights
 
     @_asnumpy
+    @_non_negative_frequencies(axis=-3)
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
 
@@ -3367,6 +3423,9 @@ class Connectivity:
         **Range**: [-1 / (n_observations - 1), 1]. The unbiased finite-sample
         estimate can be negative when the observed phase consistency is below
         its null bias; negative values do not represent negative coupling.
+        Pairs whose imaginary cross-spectrum is exactly zero for every
+        observation (in-phase signals, and the diagonal) have no phase lag to
+        estimate and are returned as 0 rather than the lower bound.
 
         References
         ----------
@@ -3410,7 +3469,6 @@ class Connectivity:
 
         The square of the weighted phase lag index corrected for the
         positive bias induced by using the magnitude of the complex
-    @_non_negative_frequencies(axis=-3)
         cross-spectrum.
 
         Returns
@@ -3429,9 +3487,6 @@ class Connectivity:
         References
         ----------
         .. [1] Vinck, M., Oostenveld, R., van Wingerden, M., Battaglia, F.,
-        Pairs whose imaginary cross-spectrum is exactly zero for every
-        observation (in-phase signals, and the diagonal) have no phase lag to
-        estimate and are returned as 0 rather than the lower bound.
                and Pennartz, C.M.A. (2011). An improved index of
                phase-synchronization for electrophysiological data in the
                presence of volume-conduction, noise and sample-size bias.

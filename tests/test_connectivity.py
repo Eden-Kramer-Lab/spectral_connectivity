@@ -3095,24 +3095,45 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
         connectivity.jackknife("coherency")
 
 
-@pytest.mark.parametrize("measure", ["coherence_magnitude", "phase_locking_value"])
+# Measures whose result is fixed by the normalization rather than the data from
+# a single observation, with the set of values they are forced to. Partial
+# coherence inverts a rank-one cross-spectrum: forced to 1 only for two signals
+# (see test_partial_coherence_warns_when_signals_outnumber_observations), and
+# null-space garbage for the three used here, so no saturation is asserted.
+SINGLE_OBSERVATION_DEGENERATE_MEASURES = {
+    "coherence_magnitude": [1.0],
+    "phase_locking_value": [1.0],
+    "partial_coherence": None,
+    "phase_lag_index": [-1.0, 1.0],
+    "weighted_phase_lag_index": [-1.0, 1.0],
+    "directed_phase_lag_index": [0.0, 1.0],
+}
+
+
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_DEGENERATE_MEASURES))
 def test_single_observation_normalized_measure_warns(measure):
-    # A single observation (1 trial x 1 taper) forces every magnitude-normalized
-    # value to 1 (apparent perfect connectivity); this must warn rather than
-    # silently return a misleading result.
+    # A single observation (1 trial x 1 taper) forces every normalized value to
+    # an extreme (apparent perfect connectivity or a perfectly consistent lag);
+    # this must warn rather than silently return a misleading result.
     rng = np.random.default_rng(707)
     coefficients = rng.standard_normal((1, 1, 1, 16, 3)) + 1j * rng.standard_normal(
         (1, 1, 1, 16, 3)
     )
     connectivity = Connectivity(coefficients)
-    with pytest.warns(UserWarning, match="single observation"):
+    # coherence_magnitude reports through the shared coherency, hence no name match.
+    with pytest.warns(UserWarning, match="is computed from a single observation"):
         result = getattr(connectivity, measure)()
-    # And the degenerate result is indeed saturated at 1.
-    off_diagonal = result[..., 0, 1]
-    np.testing.assert_allclose(np.abs(off_diagonal), 1.0, atol=1e-6)
+    # And the degenerate result is indeed saturated at its extreme value(s).
+    forced_values = SINGLE_OBSERVATION_DEGENERATE_MEASURES[measure]
+    if forced_values is not None:
+        off_diagonal = result[..., 0, 1]
+        distance_to_extreme = np.min(
+            np.abs(off_diagonal[..., np.newaxis] - np.asarray(forced_values)), axis=-1
+        )
+        np.testing.assert_allclose(distance_to_extreme, 0.0, atol=1e-6)
 
 
-@pytest.mark.parametrize("measure", ["coherence_magnitude", "phase_locking_value"])
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_DEGENERATE_MEASURES))
 def test_multiple_observations_normalized_measure_does_not_warn(measure):
     rng = np.random.default_rng(708)
     coefficients = rng.standard_normal((1, 4, 3, 16, 3)) + 1j * rng.standard_normal(
@@ -3143,4 +3164,29 @@ def test_canonical_coherence_does_not_warn_with_enough_observations():
     shape = (1, 4, 3, 8, 10)  # 12 observations for 5 + 5 signals
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     values, _ = Connectivity(coefficients).canonical_coherence(np.array([0] * 5 + [1] * 5))
+    assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
+
+
+def test_partial_coherence_warns_when_signals_outnumber_observations():
+    """With fewer trial x taper observations than signals the cross-spectral
+    matrix is rank-deficient; its regularized inverse is then dominated by the
+    null space, and with exactly one null direction every partial coherence is
+    forced to 1 for any data. That must be announced, not returned silently."""
+    rng = np.random.default_rng(14)
+    shape = (1, 1, 5, 8, 6)  # 5 observations for 6 white-noise channels
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    with pytest.warns(UserWarning, match="partial_coherence uses 5 observations"):
+        values = Connectivity(coefficients).partial_coherence()
+    # Independent noise, yet every pair is forced to 1: the reason for the warning.
+    off_diagonal = values[..., ~np.eye(6, dtype=bool)]
+    np.testing.assert_allclose(off_diagonal, 1.0)
+
+
+def test_partial_coherence_does_not_warn_with_enough_observations():
+    rng = np.random.default_rng(15)
+    shape = (1, 2, 3, 8, 6)  # 6 observations for 6 channels: full rank
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        values = Connectivity(coefficients).partial_coherence()
     assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
