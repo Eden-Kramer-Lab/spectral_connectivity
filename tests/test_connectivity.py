@@ -2944,7 +2944,8 @@ def test_connectivity_jackknife_recomputes_leave_one_out_measure():
         _fisher_squared_coherence, observations
     )
     standard_error = 2 * np.sqrt(coherence) * (1 - coherence) * transformed_standard_error
-    critical_value = scipy.stats.norm.ppf(0.975)
+    # Student t on n_observations - 1 degrees of freedom, not the normal quantile.
+    critical_value = scipy.stats.t.ppf(0.975, df=result.n_observations - 1)
 
     np.testing.assert_allclose(result.estimate[0, :, 0, 1], coherence, rtol=1e-10)
     assert np.all(result.standard_error[0, :, 0, 1] > 0)

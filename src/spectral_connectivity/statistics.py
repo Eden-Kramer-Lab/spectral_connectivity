@@ -22,7 +22,7 @@ from spectral_connectivity.utils import to_numpy
 
 @dataclass(frozen=True)
 class JackknifeResult:
-    """Leave-one-observation-out estimate and normal-approximation interval.
+    """Leave-one-observation-out estimate and Student-t jackknife interval.
 
     Every array attribute has the shape of the underlying measure, e.g.
     ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a pairwise
@@ -38,9 +38,12 @@ class JackknifeResult:
         Standard error on the original scale (delta method through the
         transformation).
     confidence_interval : tuple of (lower, upper) arrays
-        Confidence bounds on the original scale.
+        Confidence bounds on the original scale, formed on the transformed
+        scale as ``estimate -/+ t * standard_error`` with the Student t
+        critical value on ``n_observations - 1`` degrees of freedom.
     n_observations : int
-        Number of leave-one-out replicates.
+        Number of leave-one-out replicates; the interval's critical value has
+        ``n_observations - 1`` degrees of freedom.
     transformation : str
         Variance-stabilizing transformation used for the interval.
     """
@@ -116,7 +119,11 @@ def jackknife_confidence_interval(
         Replicates with one observation omitted each, stacked on the first
         axis; the remaining axes must match ``estimate``.
     confidence_level : float, default=0.95
-        Two-sided coverage of the normal-approximation interval, in (0, 1).
+        Two-sided coverage of the interval, in (0, 1). The critical value is
+        the Student t quantile with ``n_observations - 1`` degrees of freedom,
+        the standard choice for a jackknife variance estimated from
+        ``n_observations`` replicates [1]_ [2]_; a normal quantile under-covers
+        when there are few replicates (about 0.88 instead of 0.95 at five).
     transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
         Scale on which the interval is formed. Log is appropriate for positive
         spectra, Fisher's ``atanh`` for magnitude coherence in ``[-1, 1]``,
@@ -129,6 +136,14 @@ def jackknife_confidence_interval(
         Estimate, bias-corrected estimate, standard error, and confidence
         bounds, all on the original scale and with the shape of ``estimate``.
         The standard error is converted back with the local delta method.
+
+    References
+    ----------
+    .. [1] Thomson, D. J., & Chave, A. D. (1991). Jackknifed error estimates
+           for spectra, coherences, and transfer functions. In Advances in
+           Spectrum Analysis and Array Processing.
+    .. [2] Efron, B., & Tibshirani, R. J. (1993). An Introduction to the
+           Bootstrap. Chapman & Hall.
     """
     if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
         msg = "confidence_level must be finite and strictly between 0 and 1."
@@ -219,7 +234,9 @@ def jackknife_confidence_interval(
         / n_observations
         * np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
     )
-    critical_value = scipy.stats.norm.ppf(0.5 + confidence_level / 2)
+    # Student t on n - 1 degrees of freedom: the jackknife variance is estimated
+    # from n replicates, and the normal quantile under-covers at small n.
+    critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=n_observations - 1)
     lower = inverse(transformed_estimate - critical_value * transformed_standard_error)
     upper = inverse(transformed_estimate + critical_value * transformed_standard_error)
     return JackknifeResult(

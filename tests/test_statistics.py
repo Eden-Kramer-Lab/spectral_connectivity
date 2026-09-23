@@ -516,16 +516,21 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
         power_confidence_intervals(n_tapers=5, power=bad_power, ci=0.95)
 
 
-# Two-sided 95% standard-normal critical value, norm.ppf(0.975).
+# Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
+# Student t with n - 1 degrees of freedom for n = 3 and n = 5 leave-one-out
+# replicates, t.ppf(0.975, df).
 _Z_975 = 1.959963984540054
+_T_975_DF2 = 4.302652729749462
+_T_975_DF4 = 2.7764451051977934
 
 
 def test_jackknife_confidence_interval_matches_mean_example():
-    """Identity transform: estimate +/- z * jackknife SE.
+    """Identity transform: estimate +/- t_{n-1} * jackknife SE.
 
     Replicates [2.5, 2.0, 1.5] have mean 2 and jackknife variance
-    (n - 1) / n * sum((r - mean)**2) = 2/3 * 0.5 = 1/3, so the 95% interval is
-    2 -/+ 1.959964 * sqrt(1/3) = [0.8684, 3.1316].
+    (n - 1) / n * sum((r - mean)**2) = 2/3 * 0.5 = 1/3, so with the Student t
+    critical value on 2 degrees of freedom the 95% interval is
+    2 -/+ 4.302653 * sqrt(1/3) = [-0.4841, 4.4841].
     """
     result = jackknife_confidence_interval(
         np.array(2.0), np.array([2.5, 2.0, 1.5]), confidence_level=0.95
@@ -534,11 +539,51 @@ def test_jackknife_confidence_interval_matches_mean_example():
     assert result.estimate == pytest.approx(2.0)
     assert result.bias_corrected == pytest.approx(2.0)
     assert result.standard_error == pytest.approx(np.sqrt(1 / 3))
-    half_width = _Z_975 * np.sqrt(1 / 3)
+    half_width = _T_975_DF2 * np.sqrt(1 / 3)
     np.testing.assert_allclose(
         result.confidence_interval, (2.0 - half_width, 2.0 + half_width), rtol=1e-12
     )
-    np.testing.assert_allclose(result.confidence_interval, (0.8684, 3.1316), atol=1e-4)
+    np.testing.assert_allclose(result.confidence_interval, (-0.4841, 4.4841), atol=1e-4)
+
+
+def test_jackknife_interval_uses_student_t_not_normal_critical_value():
+    """The half-width is t_{n-1} * SE, which is wider than z * SE at small n.
+
+    With n leave-one-out replicates the jackknife variance has n - 1 degrees
+    of freedom (Thomson & Chave 1991; Efron & Tibshirani 1993); the normal
+    quantile under-covers (about 0.88 instead of 0.95 at n = 5).
+    """
+    replicates = np.array([1.0, 1.4, 0.7, 1.2, 0.9])
+    n = replicates.size
+    standard_error = np.sqrt((n - 1) / n * np.sum((replicates - replicates.mean()) ** 2))
+    result = jackknife_confidence_interval(np.array(1.05), replicates, confidence_level=0.95)
+
+    lower, upper = result.confidence_interval
+    half_width = (upper - lower) / 2
+    np.testing.assert_allclose(half_width, _T_975_DF4 * standard_error, rtol=1e-12)
+    # The normal critical value would give a visibly narrower interval.
+    assert half_width > 1.3 * _Z_975 * standard_error
+
+
+@pytest.mark.slow
+def test_jackknife_interval_coverage_for_gaussian_mean():
+    """A nominal 95% jackknife interval for a plain mean covers ~95% of the time.
+
+    For the sample mean the jackknife SE equals s / sqrt(n) exactly, so with a
+    Student t critical value the coverage is exactly nominal; the normal
+    quantile would give ~0.91 at n = 8.
+    """
+    rng = np.random.default_rng(7)
+    n_repetitions, n = 1000, 8
+    samples = rng.standard_normal((n_repetitions, n))
+    estimate = samples.mean(axis=1)
+    # Leave-one-out means, stacked on the first axis: shape (n, n_repetitions).
+    leave_one_out = (samples.sum(axis=1)[None, :] - samples.T) / (n - 1)
+    result = jackknife_confidence_interval(estimate, leave_one_out, confidence_level=0.95)
+
+    lower, upper = result.confidence_interval
+    coverage = np.mean((lower <= 0.0) & (upper >= 0.0))
+    assert 0.92 <= coverage <= 0.98
 
 
 def test_jackknife_log_and_circular_transforms_return_original_scale():
@@ -556,7 +601,9 @@ def test_jackknife_log_and_circular_transforms_return_original_scale():
     log_standard_error = np.sqrt(
         (n - 1) / n * np.sum((log_replicates - log_replicates.mean()) ** 2)
     )
-    expected_interval = np.exp(np.log(2.0) + np.array([-1, 1]) * _Z_975 * log_standard_error)
+    expected_interval = np.exp(
+        np.log(2.0) + np.array([-1, 1]) * _T_975_DF2 * log_standard_error
+    )
     np.testing.assert_allclose(log_result.confidence_interval, expected_interval, rtol=1e-12)
     np.testing.assert_allclose(
         log_result.bias_corrected,
