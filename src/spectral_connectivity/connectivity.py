@@ -2273,8 +2273,12 @@ class Connectivity:
 
         Unlike the historical :meth:`canonical_coherence`, this method returns
         component-resolved scores, spatial filters, and Haufe-style patterns.
-        Additional components are fitted after projection onto the null spaces
-        of the previously selected filters.
+        Additional components are extracted by CCA-style deflation in the
+        whitened space: each is sought in the orthogonal complement of the
+        previous components' whitened directions, so successive component
+        signals are uncorrelated within each group (``a_j^T Re(Caa) a_k = 0``
+        for ``j != k``) and every component is invariant to invertible real
+        mixing of a group's channels.
 
         Parameters
         ----------
@@ -4827,21 +4831,8 @@ def _dominant_sign(vectors: NDArray[np.floating]) -> NDArray[np.floating]:
     return xp.where(dominant < 0, -1.0, 1.0)
 
 
-def _batched_orthogonal_complement(
-    filters: NDArray[np.floating],
-) -> NDArray[np.floating]:
-    """Per-bin orthonormal basis for the complement of the filter columns.
-
-    ``filters`` has shape ``(..., n, k)``; returns ``(..., n, n - k)``.
-    """
-    left = xp.linalg.svd(filters, full_matrices=True)[0]
-    return left[..., :, filters.shape[-1] :]
-
-
 def _optimize_canonical_coherency_phase(
-    Cab: NDArray[np.complexfloating],
-    Taa: NDArray[np.floating],
-    Tbb: NDArray[np.floating],
+    whitened: NDArray[np.complexfloating],
     *,
     n_grid: int = 37,
     n_refine: int = 12,
@@ -4853,18 +4844,20 @@ def _optimize_canonical_coherency_phase(
 ]:
     """Vidaurre's phase objective, optimized per bin over batched leading axes.
 
-    A coarse grid brackets the (pi-periodic) single-lobe maximum, then a batched
-    Newton refinement on the finite-difference derivatives converges each bin to
-    the optimum. Fully vectorized over the leading (time/frequency) axes and
-    backend-agnostic (no per-bin ``scipy.optimize`` loop). Returns the maximized
-    magnitude, the optimizing phase, and the top left/right singular vectors of
-    the whitened real projection at that phase.
+    ``whitened`` is the whitened between-group cross-spectrum ``W = Taa Cab
+    Tbb`` with shape ``(..., n_a, n_b)``. A coarse grid brackets the
+    (pi-periodic) maximum of ``sigma_max(Re(exp(-i phi) W))``, then a batched
+    Newton refinement on the finite-difference derivatives converges each bin
+    to the optimum. Fully vectorized over the leading (time/frequency) axes and
+    backend-agnostic (no per-bin ``scipy.optimize`` loop). Returns the
+    maximized magnitude, the optimizing phase, and the top left/right singular
+    vectors of ``Re(exp(-i phi) W)`` at that phase.
     """
-    leading_shape = Cab.shape[:-2]
+    leading_shape = whitened.shape[:-2]
 
     def objective(phase: NDArray[np.floating]) -> NDArray[np.floating]:
-        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
-        return xp.linalg.svd(Taa @ projected @ Tbb, compute_uv=False)[..., 0]
+        projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * whitened)
+        return xp.linalg.svd(projected, compute_uv=False)[..., 0]
 
     grid_values = [k * float(np.pi) / n_grid for k in range(n_grid)]
     grid_scores = xp.stack([objective(xp.full(leading_shape, phase)) for phase in grid_values])
@@ -4881,8 +4874,8 @@ def _optimize_canonical_coherency_phase(
             first_derivative, second_derivative, xp.abs(second_derivative) > 1e-12, 0.0
         )
         phase = phase - xp.clip(newton_step, -0.1, 0.1)
-    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * Cab)
-    left, singular_values, right_h = xp.linalg.svd(Taa @ projected @ Tbb, full_matrices=False)
+    projected = xp.real(xp.exp(-1j * phase)[..., xp.newaxis, xp.newaxis] * whitened)
+    left, singular_values, right_h = xp.linalg.svd(projected, full_matrices=False)
     return (
         singular_values[..., 0],
         phase,
@@ -4911,40 +4904,46 @@ def _canonical_coherency_components(
     arbitrary leading (time/frequency) axes. Returns per-component scores,
     filters, patterns (all with a trailing ``component`` axis) plus the per-bin
     effective within-group rank.
+
+    Components are extracted by CCA-style deflation in whitened space. With
+    ``W = Taa Cab Tbb`` (``Taa``/``Tbb`` the real within-group inverse square
+    roots), component ``k`` maximizes the phase objective over
+    ``P_a W P_b``, where ``P = I - sum u u^T`` projects out the previous
+    components' whitened directions, and its filters are ``a_k = Taa u_k``.
+    Hence ``a_j^T Re(Caa) a_k = u_j^T u_k = 0`` for ``j != k`` (uncorrelated
+    component signals) and every component is invariant to invertible real
+    mixing within a group. Deflating the channel-space filters instead would
+    tie later components to the channel basis.
     """
     real_aa = xp.real(Caa)
     real_bb = xp.real(Cbb)
     leading_shape = Caa.shape[:-2]
     n_a = Caa.shape[-1]
     n_b = Cbb.shape[-1]
-    identity_a = xp.broadcast_to(xp.eye(n_a), (*leading_shape, n_a, n_a))
-    identity_b = xp.broadcast_to(xp.eye(n_b), (*leading_shape, n_b, n_b))
-    basis_a: NDArray[np.floating] = xp.array(identity_a)
-    basis_b: NDArray[np.floating] = xp.array(identity_b)
+    transform_aa, rank_a = _batched_inverse_square_root(
+        real_aa, rank=rank, regularization=regularization
+    )
+    transform_bb, rank_b = _batched_inverse_square_root(
+        real_bb, rank=rank, regularization=regularization
+    )
+    whitened = transform_aa @ Cab @ transform_bb
+    projector_a: NDArray[np.floating] = xp.broadcast_to(
+        xp.eye(n_a), (*leading_shape, n_a, n_a)
+    )
+    projector_b: NDArray[np.floating] = xp.broadcast_to(
+        xp.eye(n_b), (*leading_shape, n_b, n_b)
+    )
     scores = xp.full((*leading_shape, n_components), xp.nan, dtype=Cab.dtype)
     filters_a = xp.full((*leading_shape, n_a, n_components), xp.nan)
     filters_b = xp.full((*leading_shape, n_b, n_components), xp.nan)
     patterns_a = xp.full_like(filters_a, xp.nan)
     patterns_b = xp.full_like(filters_b, xp.nan)
-    effective_rank = None
 
     for component in range(n_components):
-        reduced_aa = basis_a.swapaxes(-1, -2) @ real_aa @ basis_a
-        reduced_ab: NDArray[np.complexfloating] = basis_a.swapaxes(-1, -2) @ Cab @ basis_b
-        reduced_bb = basis_b.swapaxes(-1, -2) @ real_bb @ basis_b
-        transform_aa, rank_a = _batched_inverse_square_root(
-            reduced_aa, rank=rank, regularization=regularization
-        )
-        transform_bb, rank_b = _batched_inverse_square_root(
-            reduced_bb, rank=rank, regularization=regularization
-        )
-        if effective_rank is None:
-            effective_rank = xp.minimum(rank_a, rank_b)
-        magnitude, phase, left, right = _optimize_canonical_coherency_phase(
-            reduced_ab, transform_aa, transform_bb
-        )
-        filter_a = (basis_a @ (transform_aa @ left[..., xp.newaxis]))[..., 0]
-        filter_b = (basis_b @ (transform_bb @ right[..., xp.newaxis]))[..., 0]
+        deflated = whitened if component == 0 else projector_a @ whitened @ projector_b
+        magnitude, phase, left, right = _optimize_canonical_coherency_phase(deflated)
+        filter_a = (transform_aa @ left[..., xp.newaxis])[..., 0]
+        filter_b = (transform_bb @ right[..., xp.newaxis])[..., 0]
         pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
         pattern_b = (real_bb @ filter_b[..., xp.newaxis])[..., 0]
         # A spatial filter and its negative span the same direction, so the
@@ -4960,15 +4959,15 @@ def _canonical_coherency_components(
         patterns_a[..., component] = pattern_a * sign_a[..., xp.newaxis]
         patterns_b[..., component] = pattern_b * sign_b[..., xp.newaxis]
         if component + 1 < n_components:
-            basis_a = _batched_orthogonal_complement(filters_a[..., : component + 1])
-            basis_b = _batched_orthogonal_complement(filters_b[..., : component + 1])
+            # Project out the extracted whitened directions (sign-free: u u^T).
+            projector_a = projector_a - left[..., :, xp.newaxis] * left[..., xp.newaxis, :]
+            projector_b = projector_b - right[..., :, xp.newaxis] * right[..., xp.newaxis, :]
 
-    assert effective_rank is not None  # n_components >= 1, so the loop always runs
-    # Deflation only removes the extracted *filters*, not the group's null
+    # Deflation only removes the extracted directions, not the group's null
     # space, so a component beyond the joint within-group rank still optimizes a
-    # spurious direction.
+    # spurious (zero) direction.
     return _zero_unsupported_components(
-        scores, (filters_a, filters_b), (patterns_a, patterns_b), effective_rank
+        scores, (filters_a, filters_b), (patterns_a, patterns_b), xp.minimum(rank_a, rank_b)
     )
 
 

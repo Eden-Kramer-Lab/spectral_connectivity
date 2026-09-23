@@ -642,23 +642,99 @@ def test_multivariate_components_warn_on_rank_deficient_group():
         )
 
 
-def test_multicomponent_cacoh_deflates_previous_filters():
+def test_multicomponent_cacoh_components_are_uncorrelated_within_each_group():
+    """Successive components are deflated in whitened space (CCA-style), so
+    the component signals ``a_k^T x`` are mutually uncorrelated with unit
+    variance within each group: ``A Re(Caa) A^T = I`` for the stacked filters.
+    Channel-space orthogonality (``A A^T`` diagonal) is *not* the invariant --
+    it depends on the channel basis."""
     rng = np.random.default_rng(926)
     coefficients = rng.standard_normal((1, 300, 1, 1, 6)) + 1j * rng.standard_normal(
         (1, 300, 1, 1, 6)
     )
-    result = Connectivity(coefficients).canonical_coherency([0, 0, 0, 1, 1, 1], n_components=3)
-    filters = result.filters.squeeze()
+    connectivity = Connectivity(coefficients)
+    result = connectivity.canonical_coherency([0, 0, 0, 1, 1, 1], n_components=3)
+    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    filters = result.filters.squeeze()  # (component, side, signal)
 
     for side, indices in enumerate((slice(0, 3), slice(3, 6))):
-        local = filters[:, side, indices]
-        np.testing.assert_allclose(
-            local @ local.T, np.diag(np.diag(local @ local.T)), atol=1e-8
-        )
+        local = filters[:, side, indices]  # (component, group signal)
+        component_covariance = local @ csd[indices, indices].real @ local.T
+        np.testing.assert_allclose(component_covariance, np.eye(3), atol=1e-8)
     assert result.group_membership.tolist() == [
         [True, True, True, False, False, False],
         [False, False, False, True, True, True],
     ]
+
+
+def test_multicomponent_cacoh_is_invariant_to_within_group_mixing():
+    """CaCoh whitens each group, so an invertible real mixing of one group's
+    channels must not change any component's coherence: the deflation has to
+    happen in whitened space, not on the channel-space filters (which made
+    component 2 depend on the channel basis)."""
+    rng = np.random.default_rng(5)
+    n_observations = 400
+    observations = rng.standard_normal((n_observations, 6)) + 1j * rng.standard_normal(
+        (n_observations, 6)
+    )
+    observations = observations @ (
+        rng.standard_normal((6, 6)) + 1j * rng.standard_normal((6, 6))
+    )
+    mixing = np.eye(6)
+    mixing[0, 0] = 10.0  # rescale one channel of group 0 ...
+    mixing[1, 2] = 0.7  # ... and mix two others
+    labels = [0, 0, 0, 1, 1, 1]
+
+    def cacoh(data):
+        coefficients = data[np.newaxis, :, np.newaxis, np.newaxis, :]
+        return Connectivity(coefficients).canonical_coherency(
+            labels, n_components=3, regularization=0.0
+        )
+
+    base = cacoh(observations)
+    mixed = cacoh(observations @ mixing.T)
+    magnitudes = np.abs(base.scores[0, 0, 0])
+    assert np.all(np.diff(magnitudes) <= 1e-10)  # deflated maxima are nested
+    assert magnitudes[-1] > 0.05  # three genuine components, no phantom
+    np.testing.assert_allclose(np.abs(mixed.scores[0, 0, 0]), magnitudes, atol=1e-8)
+    # The sign convention (dominant pattern coefficient) is not mixing-invariant,
+    # so the phase is invariant modulo pi.
+    np.testing.assert_allclose(
+        np.exp(2j * np.angle(mixed.scores)), np.exp(2j * np.angle(base.scores)), atol=1e-7
+    )
+
+
+def test_single_component_cacoh_matches_reference_values():
+    """``n_components=1`` is untouched by the multi-component deflation
+    rewrite: these values were recorded from the previous implementation."""
+    rng = np.random.default_rng(926)
+    shape = (1, 300, 1, 4, 6)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    mixing = rng.standard_normal((6, 6)) + 1j * rng.standard_normal((6, 6))
+    connectivity = Connectivity(coefficients @ mixing.T)
+    labels = [0, 0, 0, 1, 1, 1]
+
+    result = connectivity.canonical_coherency(labels, n_components=1, regularization=0.0)
+    expected = np.array(
+        [
+            -0.3155533259549125 + 0.53533243028994j,
+            -0.45746410150711864 + 0.48380284370675963j,
+            -0.4677036349374889 + 0.4739229712029209j,
+        ]
+    )
+    np.testing.assert_allclose(result.scores[0, :, 0, 0], expected, rtol=1e-7, atol=1e-9)
+
+    truncated = connectivity.canonical_coherency(labels, n_components=1, rank=2)
+    expected_rank2 = np.array(
+        [
+            -0.2513435224216316 + 0.5014039550925226j,
+            -0.24636457719656235 + 0.4589689712533661j,
+            -0.23909146778158655 + 0.48089648128444523j,
+        ]
+    )
+    np.testing.assert_allclose(
+        truncated.scores[0, :, 0, 0], expected_rank2, rtol=1e-7, atol=1e-9
+    )
 
 
 @pytest.mark.parametrize(
