@@ -997,6 +997,46 @@ def test_dataarray_nonuniform_time_coordinate_cannot_infer_sampling_frequency():
         multitaper_connectivity(data, method="coherence_magnitude")
 
 
+def test_dataarray_accumulated_time_coordinate_is_accepted_as_uniform():
+    """A time axis built by accumulating the sampling interval (a common
+    acquisition pattern) carries float round-off of order 1e-10 s over 200 s,
+    far below any real irregularity. It must infer the rate and agree with the
+    same rate given explicitly."""
+    n_samples = 200_000
+    times = np.cumsum(np.full(n_samples, 0.001))
+    data = xr.DataArray(
+        np.random.default_rng(35).standard_normal((n_samples, 2)),
+        dims=("time", "channel"),
+        coords={"time": times},
+    )
+    inferred = multitaper_connectivity(data, method="power", time_window_duration=1.0)
+    explicit = multitaper_connectivity(
+        data, sampling_frequency=1000, method="power", time_window_duration=1.0
+    )
+    assert inferred.attrs["mt_sampling_frequency"] == pytest.approx(1000.0, rel=1e-6)
+    xr.testing.assert_allclose(inferred, explicit)
+
+
+def test_dataarray_time_coordinate_with_a_dropped_sample_is_rejected():
+    """One missing sample shifts every later time by a full interval, which the
+    round-off tolerance must still catch, with and without an explicit rate."""
+    raw = np.random.default_rng(36).standard_normal((1000, 2))
+    times = np.delete(np.arange(1001) / 1000.0, 500)
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": times})
+    with pytest.raises(ValueError, match="not uniformly spaced"):
+        multitaper_connectivity(data, method="power")
+    with pytest.raises(ValueError, match="spacing does not match"):
+        multitaper_connectivity(data, sampling_frequency=1000, method="power")
+
+
+def test_dataarray_millisecond_time_coordinate_mismatches_explicit_rate():
+    """A coordinate in milliseconds is 1000x off a 1 kHz rate in seconds."""
+    raw = np.random.default_rng(37).standard_normal((1000, 2))
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": np.arange(1000.0)})
+    with pytest.raises(ValueError, match="spacing does not match"):
+        multitaper_connectivity(data, sampling_frequency=1000, method="power")
+
+
 def test_dataarray_role_absent_at_dimensionality_is_rejected_with_reshape_hint():
     """A role with no slot at this ndim (trial in 2-D) points at the shape, not transpose."""
     data = xr.DataArray(

@@ -2032,6 +2032,13 @@ _SYNONYM_TO_ROLE: dict[str, str] = {
 # rate at 100 parts per million of the observed time span.
 _MAX_INFERRED_RATE_RELATIVE_RESOLUTION = 1e-4
 
+# A time coordinate counts as uniformly spaced when every sample lies within
+# this fraction of one sampling interval of the regular grid. Accumulating the
+# interval (``np.cumsum``) leaves round-off of order 1e-7 intervals after 1e5
+# samples, whereas a dropped sample is off by a whole interval and a unit
+# mismatch (ms vs s) by a factor of 1000, so 1e-6 separates the two cleanly.
+_TIME_COORDINATE_RELATIVE_TOLERANCE = 1e-6
+
 
 def _dimension_role(dimension: Hashable) -> str | None:
     """Return the recognized semantic role of an xarray dimension name."""
@@ -2325,7 +2332,7 @@ def _time_axis_from_dataarray(
         else 0.0
     )
     coordinate_tolerance = max(
-        expected_interval * 1e-9,
+        expected_interval * _TIME_COORDINATE_RELATIVE_TOLERANCE,
         coordinate_resolution,
         np.spacing(coordinate_scale) * 8,
     )
