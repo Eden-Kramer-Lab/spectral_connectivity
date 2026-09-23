@@ -1433,11 +1433,9 @@ class Connectivity:
               magnitude-squared measures in ``[0, 1]``: ``coherence_magnitude``
               and ``partial_coherence``;
             - ``"fisher"`` (``atanh(.)``) for the magnitudes in ``[0, 1]``:
-              ``phase_locking_value`` and ``imaginary_coherence``
-              (``phase_locking_value``'s diagonal is identically 1, so the
-              Fisher scale reports those entries as saturated). For these two
-              measures the Fisher lower bound and bias-corrected estimate are
-              clamped at 0, since a magnitude cannot be negative;
+              ``phase_locking_value`` and ``imaginary_coherence``. For these
+              two measures the Fisher lower bound and bias-corrected estimate
+              are clamped at 0, since a magnitude cannot be negative;
             - ``"circular"`` for ``coherence_phase``;
             - ``"identity"`` for every other measure.
         **method_kwargs
@@ -1622,6 +1620,12 @@ class Connectivity:
             np.stack(replicates, axis=0),
             confidence_level=confidence_level,
             transformation=resolved_transformation,
+            # PLV's diagonal is 1 by definition, not a saturated estimate.
+            _saturated_by_construction=(
+                np.eye(self.n_signals, dtype=bool)
+                if method == "phase_locking_value"
+                else False
+            ),
         )
         if resolved_transformation == "fisher" and method in _NONNEGATIVE_MAGNITUDE_MEASURES:
             # tanh maps the atanh-scale interval onto [-1, 1], but a magnitude

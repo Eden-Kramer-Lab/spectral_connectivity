@@ -1895,12 +1895,7 @@ def test_jackknife_auto_transformation_matches_the_measure_range(measure, expect
     rng = np.random.default_rng(11)
     shape = (1, 6, 2, 8, 3)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-    if measure == "phase_locking_value":
-        # PLV's diagonal is identically 1 (the coherency-derived measures NaN
-        # theirs), so the Fisher scale reports those entries as saturated.
-        with pytest.warns(UserWarning, match="saturated coherence"):
-            result = connectivity.jackknife(measure)
-    elif measure == "coherence_phase":
+    if measure == "coherence_phase":
         # White noise has no resolvable phase, so the circular interval spans
         # the whole circle and is reported as such.
         with pytest.warns(UserWarning, match="covers the whole circle"):
@@ -1908,6 +1903,49 @@ def test_jackknife_auto_transformation_matches_the_measure_range(measure, expect
     else:
         result = connectivity.jackknife(measure)
     assert result.transformation == expected
+
+
+@pytest.mark.parametrize(
+    ("method", "transformation"),
+    [("phase_locking_value", "fisher"), ("coherence_magnitude", "fisher_squared")],
+)
+def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation):
+    """A duplicated channel saturates the off-diagonal pair, which the Fisher
+    warning must count; PLV's diagonal is 1 by definition (the coherency-derived
+    measures NaN theirs) and must not be counted.
+
+    Regression: every PLV jackknife warned, counting the diagonal (142 entries
+    here instead of 66), and off-diagonal values a few ulp below 1 -- pinned by
+    the atanh clip all the same -- were not counted (48 instead of 66 for
+    coherence_magnitude).
+    """
+    from spectral_connectivity import Multitaper
+
+    rng = np.random.default_rng(12)
+    signal = rng.standard_normal((64, 5))
+    time_series = np.stack([signal, rng.standard_normal((64, 5)), signal], axis=-1)
+    connectivity = Connectivity.from_multitaper(
+        Multitaper(time_series, sampling_frequency=64, time_halfbandwidth_product=1)
+    )
+    estimate = getattr(connectivity, method)()
+    n_frequencies = estimate.shape[-3]
+    # The warning's criterion: pinned by the atanh clip (on the magnitude scale
+    # for fisher_squared). Whether a duplicated pair lands exactly there at a
+    # given bin depends on the NumPy version's rounding, so count it here.
+    magnitude = np.sqrt(estimate) if transformation == "fisher_squared" else np.abs(estimate)
+    pinned = magnitude >= 1 - np.finfo(float).eps
+    off_diagonal = ~np.eye(3, dtype=bool)
+    expected = int(np.count_nonzero(pinned[..., off_diagonal]))
+    # Only the duplicated pair saturates, at nearly every frequency.
+    assert np.count_nonzero(pinned[..., [0, 1], [1, 2]]) == 0
+    assert expected > n_frequencies
+
+    with pytest.warns(UserWarning, match="saturated coherence") as record:
+        result = connectivity.jackknife(method)
+
+    assert result.transformation == transformation
+    assert len(record) == 1
+    assert f"Fisher jackknife: {expected} value(s)" in str(record[0].message)
 
 
 @pytest.mark.parametrize(
@@ -2973,10 +3011,7 @@ def test_jackknife_of_a_nonnegative_magnitude_stays_in_its_range(
     Regression: 94% of imaginary-coherence lower bounds and 31% of its
     bias-corrected estimates were negative (down to -0.7) on this data.
     """
-    with warnings.catch_warnings():
-        # PLV's diagonal is identically 1, a Fisher boundary; irrelevant here.
-        warnings.filterwarnings("ignore", message="Fisher jackknife", category=UserWarning)
-        result = weakly_coupled_connectivity.jackknife(method)
+    result = weakly_coupled_connectivity.jackknife(method)
     lower, upper = result.confidence_interval
     assert result.transformation == "fisher"
     assert np.nanmin(lower) >= 0.0

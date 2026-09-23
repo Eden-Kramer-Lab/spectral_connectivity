@@ -253,7 +253,10 @@ directly with results from 2.x.
   bias-corrected estimates are clamped at 0. Circular bounds are wrapped
   to `(-pi, pi]` (lower above upper means the interval crosses `+/-pi`); an
   interval whose half-width reaches `pi` is reported as `(-pi, pi)` with a
-  warning, and `fisher_squared` warns at an estimate of exactly 0.
+  warning, and `fisher_squared` warns at an estimate of exactly 0. The Fisher
+  saturation warning counts every estimate the transform pins at 1 (to machine
+  precision, not only exact 1s) and ignores `phase_locking_value`'s diagonal,
+  which is 1 by definition, so it no longer fires on every PLV jackknife.
 - `partial_coherence` warns when there are fewer observations than signals
   (the rank-deficient estimate is forced to 1 or dominated by the null space),
   and the single-observation degeneracy warning now also covers

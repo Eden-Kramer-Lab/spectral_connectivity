@@ -114,6 +114,9 @@ def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.float
     return np.clip(np.tanh(value), 0, 1) ** 2
 
 
+_SATURATED_COHERENCE = "saturated coherence (|coherence| == 1 to machine precision)"
+
+
 def _warn_fisher_boundary(at_boundary: NDArray[np.bool_], boundary: str) -> None:
     """Warn that estimates on a Fisher-transform boundary have a standard error of 0.
 
@@ -143,6 +146,7 @@ def jackknife_confidence_interval(
     transformation: Literal[
         "identity", "log", "fisher", "fisher_squared", "circular"
     ] = "identity",
+    _saturated_by_construction: NDArray[np.bool_] | bool = False,
 ) -> JackknifeResult:
     """Summarize leave-one-out replicates with a jackknife confidence interval.
 
@@ -217,6 +221,9 @@ def jackknife_confidence_interval(
         msg = "Jackknife inference requires at least 2 observations."
         raise ValueError(msg)
 
+    # _saturated_by_construction is private to Connectivity.jackknife: it marks
+    # entries that sit at |coherence| == 1 by definition (phase_locking_value's
+    # diagonal), which the saturation warning must not count.
     if transformation == "identity":
         transformed_estimate = estimate_array
         transformed_replicates = replicates
@@ -241,10 +248,13 @@ def jackknife_confidence_interval(
         inverse = _exponential
         derivative = estimate_array
     elif transformation == "fisher":
-        _warn_fisher_boundary(
-            np.abs(estimate_array) >= 1, "saturated coherence (|coherence| == 1)"
-        )
         epsilon = np.finfo(float).eps
+        # Count every value the atanh clip below pins: a saturated estimate often
+        # lands a few ulp below 1 rather than exactly on it.
+        _warn_fisher_boundary(
+            (np.abs(estimate_array) >= 1 - epsilon) & ~np.asarray(_saturated_by_construction),
+            _SATURATED_COHERENCE,
+        )
         transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
         transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
         inverse = _hyperbolic_tangent
@@ -256,12 +266,16 @@ def jackknife_confidence_interval(
         # transform; atanh(MSC) is not. The delta-method derivative back to the
         # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC),
         # which vanishes at both ends of [0, 1].
-        _warn_fisher_boundary(estimate_array >= 1, "saturated coherence (|coherence| == 1)")
+        epsilon = np.finfo(float).eps
+        clipped_estimate = np.clip(estimate_array, 0, 1)
+        _warn_fisher_boundary(
+            (np.sqrt(clipped_estimate) >= 1 - epsilon)
+            & ~np.asarray(_saturated_by_construction),
+            _SATURATED_COHERENCE,
+        )
         _warn_fisher_boundary(
             estimate_array <= 0, "zero magnitude-squared coherence (estimate == 0)"
         )
-        epsilon = np.finfo(float).eps
-        clipped_estimate = np.clip(estimate_array, 0, 1)
         transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))
         transformed_replicates = np.arctanh(
             np.clip(np.sqrt(np.clip(replicates, 0, 1)), 0, 1 - epsilon)

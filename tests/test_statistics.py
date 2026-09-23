@@ -795,6 +795,23 @@ def test_jackknife_fisher_warns_at_saturated_coherence():
         )
 
 
+@pytest.mark.parametrize(
+    ("transformation", "saturated"),
+    [("fisher", np.nextafter(1.0, 0.0)), ("fisher_squared", np.nextafter(1.0, 0.0) ** 2)],
+)
+def test_jackknife_fisher_counts_values_an_ulp_below_one_as_saturated(
+    transformation, saturated
+):
+    """A saturated estimate often lands a few ulp below 1; the atanh clip pins
+    it all the same, so the warning must count it, not only exact 1s."""
+    with pytest.warns(UserWarning, match=r"1 value\(s\) sit at saturated coherence"):
+        jackknife_confidence_interval(
+            np.array([saturated, 0.5]),
+            np.array([[saturated, 0.4], [saturated, 0.5], [saturated, 0.6]]),
+            transformation=transformation,
+        )
+
+
 def test_jackknife_fisher_squared_warns_at_zero_coherence():
     """MSC exactly 0 is a degenerate boundary of atanh(sqrt(.)), like 1.
 
