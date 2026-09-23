@@ -129,8 +129,8 @@ _MEASURE_KWARGS = {
 
 
 @pytest.fixture(scope="module")
-def coupled_results():
-    """Every measure computed on a coupled VAR(1) system, keyed by name.
+def coupled_time_series():
+    """A coupled VAR(1) chain 0 -> 1 -> 2 -> 3, shape (1024, 4 trials, 4).
 
     Coupled data (rather than white noise) gives every measure finite values,
     including the delay measures, which are NaN where coherence is not
@@ -143,7 +143,11 @@ def coupled_results():
         [0.0, 0.4, 0.5, 0.0],
         [0.0, 0.0, 0.3, 0.2],
     ]
-    time_series = simulate_MVAR(coefficients, n_time_samples=1024, n_trials=4, random_state=1)
+    return simulate_MVAR(coefficients, n_time_samples=1024, n_trials=4, random_state=1)
+
+
+def _every_measure(time_series):
+    """Every measure computed on ``time_series`` by the wrapper, keyed by name."""
     results = {}
     with warnings.catch_warnings():
         # Some measures warn about degenerate bins; irrelevant to the metadata.
@@ -159,17 +163,51 @@ def coupled_results():
     return results
 
 
+@pytest.fixture(scope="module")
+def coupled_results(coupled_time_series):
+    return _every_measure(coupled_time_series)
+
+
+@pytest.fixture(scope="module")
+def coupled_results_doubled(coupled_time_series):
+    """The same measures with the input amplitude doubled, to check ``units``."""
+    return _every_measure(2.0 * coupled_time_series)
+
+
 def _main_variable(result, name):
     """The measure's own variable; rich results carry filters etc. alongside."""
     return result[name] if isinstance(result, xr.Dataset) else result
 
 
-@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
-def test_metadata_describes_the_computed_output(coupled_results, measure):
-    """dims, dtype, value range, and labels match what the wrapper returns."""
-    variable = _main_variable(coupled_results[measure.name], measure.name)
+# The output contract each category promises: whether the wrapper returns a
+# bare DataArray or a Dataset with companion variables, and the dimensions of
+# the measure's own variable.
+_CATEGORY_STRUCTURE = {
+    "pairwise": (xr.DataArray, ("time", "frequency", "source", "target")),
+    "power": (xr.DataArray, ("time", "frequency", "source")),
+    "group_pairwise": (xr.DataArray, ("time", "frequency", "source_group", "target_group")),
+    "multivariate_components": (xr.Dataset, ("time", "frequency", "connection", "component")),
+    "delay": (xr.DataArray, ("time", "frequency", "candidate", "source", "target")),
+    "global": (xr.Dataset, ("time", "frequency", "component")),
+    "group_delay": (xr.Dataset, ("time", "source", "target")),
+    "phase_slope": (xr.DataArray, ("time", "source", "target")),
+}
 
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_metadata_describes_the_computed_output(
+    coupled_results, coupled_results_doubled, measure
+):
+    """category, dims, dtype, value range, units, labels, and default membership
+    match what the wrapper returns."""
+    result = coupled_results[measure.name]
+    variable = _main_variable(result, measure.name)
+
+    result_type, category_dims = _CATEGORY_STRUCTURE[measure.category]
+    assert isinstance(result, result_type)
+    assert variable.dims == category_dims
     assert variable.dims == measure.dims
+    assert measure.is_default == (measure.name in DEFAULT_METHODS)
     assert np.iscomplexobj(variable) == measure.is_complex
     values = np.abs(variable.values) if measure.is_complex else variable.values
     finite = values[np.isfinite(values)]
@@ -179,6 +217,44 @@ def test_metadata_describes_the_computed_output(coupled_results, measure):
     assert finite.max() <= upper + 1e-12
     assert variable.attrs["long_name"] == measure.long_name
     assert measure.interpretation
+
+    # Units name the input dependence: a density scales with the squared
+    # amplitude, while a dimensionless score, an angle, or a time does not.
+    assert measure.units in {"(input units)^2/Hz", "1", "rad", "s"}
+    doubled = _main_variable(coupled_results_doubled[measure.name], measure.name)
+    factor = 4.0 if measure.units == "(input units)^2/Hz" else 1.0
+    np.testing.assert_allclose(doubled.values, factor * variable.values, rtol=1e-6, atol=0)
+
+
+@pytest.fixture(scope="module")
+def one_sided_connectivity(coupled_time_series):
+    """The coupled system's non-negative-frequency coefficients, declared one-sided."""
+    multitaper = Multitaper(
+        coupled_time_series, sampling_frequency=500, time_window_duration=0.5
+    )
+    two_sided = Connectivity.from_multitaper(multitaper)
+    n_nonnegative = two_sided.frequencies.size
+    return Connectivity(
+        multitaper.fft()[..., :n_nonnegative, :],
+        frequencies=two_sided.frequencies,
+        expectation_type="trials_tapers",
+        is_one_sided=True,
+    )
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, measure):
+    """``requires_two_sided`` flags exactly the measures the core refuses on a
+    one-sided spectrum; every other measure runs on it."""
+    compute = getattr(one_sided_connectivity, measure.name)
+    kwargs = _MEASURE_KWARGS.get(measure.name, {})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        if measure.requires_two_sided:
+            with pytest.raises(ValueError, match="two-sided"):
+                compute(**kwargs)
+        else:
+            compute(**kwargs)
 
 
 def test_units_name_the_input_dependence_of_spectral_densities():
