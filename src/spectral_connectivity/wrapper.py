@@ -1026,6 +1026,31 @@ def _inclusive_frequency_mask(
     return mask, (lower, upper)
 
 
+def _band_integration_weights(
+    frequencies: NDArray[np.floating], low: float, high: float
+) -> NDArray[np.floating]:
+    """Width of each bin's frequency cell that lies inside ``[low, high]``.
+
+    Bin ``k`` owns the cell between the midpoints to its neighbours (the outer
+    cells extend half a spacing, and never below 0 Hz on a non-negative grid),
+    so ``sum(weights * density)`` integrates a piecewise-constant density
+    exactly: any band edges, one-bin bands, and bands that tile additively.
+    """
+    midpoints = (frequencies[1:] + frequencies[:-1]) / 2
+    lower = np.concatenate(
+        ([frequencies[0] - (frequencies[1] - frequencies[0]) / 2], midpoints)
+    )
+    upper = np.concatenate(
+        (midpoints, [frequencies[-1] + (frequencies[-1] - frequencies[-2]) / 2])
+    )
+    if frequencies[0] >= 0:
+        lower = np.maximum(lower, 0.0)
+    weights: NDArray[np.floating] = np.clip(
+        np.minimum(upper, high) - np.maximum(lower, low), 0.0, None
+    )
+    return weights
+
+
 def frequency_band_reduce(
     result: xr.DataArray | xr.Dataset,
     bands: Mapping[str, tuple[float, float]],
@@ -1038,9 +1063,13 @@ def frequency_band_reduce(
     the bins in each inclusive band. Phase is treated specially: a
     ``coherence_phase`` result uses a circular mean, while complex-valued
     measures use their ordinary complex (vector) mean. ``reduction="integral"``
-    computes a trapezoidal integral and is intentionally restricted to spectral
-    densities (``power`` and ``cross_spectral_density``), where it represents
-    band power/covariance rather than a frequency-averaged score.
+    integrates a spectral density over ``[low, high]`` and is intentionally
+    restricted to ``power`` and ``cross_spectral_density``, where it represents
+    band power/covariance rather than a frequency-averaged score. Each bin
+    stands for the frequency cell between the midpoints to its neighbours, and
+    contributes its density times the part of that cell inside the band, so
+    band edges need not fall on bins, a one-bin band is not zero, and adjacent
+    bands add up to their union.
 
     Parameters
     ----------
@@ -1103,10 +1132,13 @@ def frequency_band_reduce(
         msg = "band names must be unique, non-empty strings."
         raise ValueError(msg)
 
-    band_masks: list[NDArray[np.bool_]] = [
-        _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)[0]
+    band_masks_and_bounds = [
+        _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)
         for name, bounds in bands.items()
     ]
+    if reduction == "integral" and frequencies.size < 2:
+        msg = "reduction='integral' needs at least two frequency bins to know their widths."
+        raise ValueError(msg)
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", "" if data.name is None else data.name))
@@ -1123,13 +1155,20 @@ def frequency_band_reduce(
 
         reduced_bands: list[xr.DataArray] = []
         band_validity: list[xr.DataArray] = []
-        for mask in band_masks:
-            selected = data.isel(frequency=np.flatnonzero(mask))
+        for mask, (low, high) in band_masks_and_bounds:
+            if reduction == "integral":
+                weights = _band_integration_weights(frequencies, low, high)
+                # Bins inside the band count for validity even with zero weight
+                # (a zero-width band), so an invalid bin is never read as zero.
+                used = np.flatnonzero((weights > 0) | mask)
+                selected = data.isel(frequency=used)
+            else:
+                selected = data.isel(frequency=np.flatnonzero(mask))
             # A NaN bin (an edge-invalid or undefined estimate) makes the band
             # value undefined for every reduction; skipping it silently would
             # average a different set of bins per time point.
             if reduction == "integral":
-                reduced = selected.integrate("frequency")
+                reduced = xr.dot(selected, xr.DataArray(weights[used], dims="frequency"))
             elif measure == "coherence_phase":
                 # Circular mean prevents phases near -pi and +pi from
                 # spuriously cancelling toward zero.
@@ -1141,9 +1180,8 @@ def frequency_band_reduce(
                 )
             else:
                 reduced = selected.mean("frequency", skipna=False, keep_attrs=True)
-            # A trapezoidal integral over one point is zero even when that point
-            # is NaN. Apply the shared validity rule after every reduction so a
-            # one-bin invalid band cannot masquerade as zero spectral power.
+            # Apply the shared validity rule after every reduction so an invalid
+            # bin can never be hidden inside a band value.
             reduced = reduced.where(selected.notnull().all("frequency"))
             reduced_bands.append(reduced)
             if "valid_time_frequency" in selected.coords:

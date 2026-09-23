@@ -2403,8 +2403,61 @@ def test_frequency_band_integral_equals_analytic_area():
         attrs={"measure": "power"},
     )
     reduced = frequency_band_reduce(flat_power, {"band": (1.0, 5.0)}, reduction="integral")
-    # Trapezoidal integral of the constant 2.0 over [1, 5] Hz is 2 * (5 - 1) = 8.
+    # The integral of the constant 2.0 over [1, 5] Hz is 2 * (5 - 1) = 8.
     assert float(reduced.sel(band="band")) == pytest.approx(8.0)
+
+
+@pytest.fixture
+def flat_density_on_2hz_grid():
+    """A constant density 2.0 on the bins 0, 2, ..., 50 Hz."""
+    frequencies = np.arange(0.0, 51.0, 2.0)
+    return xr.DataArray(
+        np.full_like(frequencies, 2.0),
+        dims=("frequency",),
+        coords={"frequency": frequencies},
+        name="power",
+        attrs={"measure": "power"},
+    )
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [(1.0, 4.0), (8.0, 13.0), (5.5, 6.5), (10.0, 30.0)],
+    ids=["delta-off-grid", "alpha-off-grid", "one-bin", "on-grid"],
+)
+def test_frequency_band_integral_is_exact_for_any_band_edges(flat_density_on_2hz_grid, bounds):
+    """Each bin owns the cell between the midpoints to its neighbours, so a flat
+    density integrates to density * bandwidth whatever the band edges (the
+    trapezoid over the bins inside the band gave 45% less for 1-4 Hz and 0 for a
+    one-bin band)."""
+    low, high = bounds
+    reduced = frequency_band_reduce(
+        flat_density_on_2hz_grid, {"band": bounds}, reduction="integral"
+    )
+    assert float(reduced.sel(band="band")) == pytest.approx(2.0 * (high - low))
+
+
+def test_frequency_band_integrals_of_adjacent_bands_add_up(flat_density_on_2hz_grid):
+    rng = np.random.default_rng(44)
+    density = flat_density_on_2hz_grid.copy(data=rng.uniform(0.5, 3.0, 26))
+    reduced = frequency_band_reduce(
+        density,
+        {"low": (10.0, 17.3), "high": (17.3, 30.0), "both": (10.0, 30.0)},
+        reduction="integral",
+    )
+    assert float(reduced.sel(band="low") + reduced.sel(band="high")) == pytest.approx(
+        float(reduced.sel(band="both"))
+    )
+
+
+def test_frequency_band_integral_of_power_recovers_the_variance():
+    """Parseval: integrating one-sided power over [0, Nyquist] gives the variance."""
+    time_series = 3.0 * np.random.default_rng(45).standard_normal((20000, 1, 1))
+    power = multitaper_connectivity(
+        time_series, sampling_frequency=500, method="power", time_window_duration=1.0
+    ).mean("time")
+    reduced = frequency_band_reduce(power, {"all": (0.0, 250.0)}, reduction="integral")
+    assert float(reduced.sel(band="all").squeeze()) == pytest.approx(9.0, rel=0.03)
 
 
 def test_fourier_connectivity_rejects_unlabeled_directed_measure():
