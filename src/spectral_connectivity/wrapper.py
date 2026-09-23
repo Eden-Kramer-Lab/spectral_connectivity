@@ -1951,10 +1951,12 @@ def _format_and_reduce_measures(
                 )
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
                 # A measure whose result shape does not fit the xarray layout can
-                # be skipped in a batch. In-package structural incompatibility is
-                # surfaced as UnsupportedMeasureError before the measure runs; a
-                # genuine NotImplementedError is not caught, so a broken measure
-                # fails loudly instead of silently vanishing from the Dataset.
+                # be skipped in a batch. _connectivity_result_to_xarray raises
+                # UnsupportedMeasureError from its shape check after the measure
+                # has run (an unregistered extension returning a non-pairwise
+                # shape); a genuine NotImplementedError is not caught, so a broken
+                # measure fails loudly instead of silently vanishing from the
+                # Dataset.
                 if len(methods) == 1:
                     raise
                 logger.warning("Skipping %s: %s", this_method, error)
