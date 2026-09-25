@@ -1573,7 +1573,9 @@ def frequency_band_reduce(
     xarray.DataArray or xarray.Dataset
         Same type as ``result`` with the ``frequency`` dimension replaced by a
         ``band`` dimension holding the band names, and the band definitions
-        recorded in ``attrs["frequency_bands_json"]``.
+        recorded in ``attrs["frequency_bands_json"]``. An integral is in the
+        density's ``units`` without the ``/Hz`` (e.g. ``(uV)^2/Hz`` becomes
+        ``(uV)^2``) and is labeled ``"Band power"`` or ``"Band cross-power"``.
 
     Notes
     -----
@@ -1603,6 +1605,13 @@ def frequency_band_reduce(
         circular=circular,
         nyquist_frequency=_nyquist_frequency(result),
     )
+
+
+# ``long_name`` of a spectral density integrated over a band.
+_BAND_INTEGRAL_LONG_NAMES = {
+    "power": "Band power",
+    "cross_spectral_density": "Band cross-power",
+}
 
 
 def _reduce_frequency_bands(
@@ -1733,6 +1742,13 @@ def _reduce_frequency_bands(
         )
         reduced = reduced.transpose(*desired_dims)
         reduced.attrs = dict(data.attrs)
+        if reduction == "integral":
+            # Integrating a density over frequency removes its per-Hz unit; a
+            # unit that does not end in /Hz cannot be converted, so it is dropped.
+            reduced.attrs["long_name"] = _BAND_INTEGRAL_LONG_NAMES[measure]
+            units = reduced.attrs.pop("units", None)
+            if isinstance(units, str) and units.endswith("/Hz"):
+                reduced.attrs["units"] = units.removesuffix("/Hz")
         reduced.attrs["frequency_bands_json"] = _canonical_json(bands)
         reduced.attrs["frequency_reduction"] = reduction
         return reduced
@@ -2803,7 +2819,7 @@ def multitaper_connectivity(
     Every variable has ``long_name`` and ``units`` attrs (``"1"`` for
     dimensionless scores, ``"rad"`` for phase, ``"s"`` for delay; spectral
     densities are ``"(<units>)^2/Hz"`` when an input DataArray states its
-    ``units``). Non-index coordinates on an input DataArray's signal dimension
+    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index coordinates on an input DataArray's signal dimension
     (e.g. ``region``) are carried as ``source_<name>``/``target_<name>``.
 
     Real-valued results write with any NetCDF engine (booleans are stored as

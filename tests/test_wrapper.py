@@ -3408,6 +3408,36 @@ def test_spectral_densities_carry_units_derived_from_the_input(labeled_channels)
     assert unitless_input.attrs["long_name"] == "Power spectral density"
 
 
+def test_band_integral_of_a_density_drops_the_per_hz_unit(labeled_channels):
+    """Integrating a density over frequency gives band power in (units)^2, not a
+    density in (units)^2/Hz; a band mean is still a density."""
+    kwargs = {
+        "sampling_frequency": 500,
+        "method": ["power", "cross_spectral_density"],
+        "frequency_bands": {"theta": (4.0, 8.0)},
+    }
+    integral = multitaper_connectivity(
+        labeled_channels, frequency_reduction="integral", **kwargs
+    )
+    assert integral.power.attrs["units"] == "(uV)^2"
+    assert integral.power.attrs["long_name"] == "Band power"
+    assert integral.cross_spectral_density.attrs["units"] == "(uV)^2"
+    assert integral.cross_spectral_density.attrs["long_name"] == "Band cross-power"
+
+    mean = multitaper_connectivity(labeled_channels, frequency_reduction="mean", **kwargs)
+    assert mean.power.attrs["units"] == "(uV)^2/Hz"
+    assert mean.power.attrs["long_name"] == "Power spectral density"
+
+    unlabeled_units = frequency_band_reduce(
+        multitaper_connectivity(
+            labeled_channels, sampling_frequency=500, method="power"
+        ).assign_attrs(units="uV**2 Hz**-1"),
+        {"theta": (4.0, 8.0)},
+        reduction="integral",
+    )
+    assert "units" not in unlabeled_units.attrs  # an unparsed density unit is not kept
+
+
 @pytest.mark.parametrize(
     ("method", "units"),
     [

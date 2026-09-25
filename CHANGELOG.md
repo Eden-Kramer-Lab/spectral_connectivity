@@ -378,7 +378,9 @@ directly with results from 2.x.
   FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
-  a 4-8 Hz band cropped at 8 Hz).
+  a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`
+  or `"Band cross-power"` in `(units)^2` rather than keeping the density's
+  `"Power spectral density"` label and `(units)^2/Hz`.
 - A window step given in seconds is rounded to the nearest sample instead of
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
