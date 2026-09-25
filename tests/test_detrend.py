@@ -4,8 +4,7 @@
 delegates the least-squares/mean removal to ``scipy.signal.detrend`` (CPU) or
 ``cupyx.scipy.signal.detrend`` (GPU) after validating ``type``/``bp`` and
 normalizing the short ``'l'``/``'c'`` aliases. These tests pin the actual
-numerical behavior on CPU (equivalence tests in ``test_transforms.py`` are
-skipped without nitime, and previously only error messages were covered).
+numerical behavior on CPU against independent least-squares/mean references.
 """
 
 import numpy as np
@@ -30,7 +29,7 @@ def test_constant_detrend_removes_mean():
     np.testing.assert_allclose(result, x - x.mean(), atol=1e-12)
 
 
-@pytest.mark.parametrize("alias,full", [("l", "linear"), ("c", "constant")])
+@pytest.mark.parametrize(("alias", "full"), [("l", "linear"), ("c", "constant")])
 def test_short_type_aliases_match_full_names(alias, full):
     """The ``'l'``/``'c'`` aliases map to linear/constant, not silently to one.
 
@@ -61,16 +60,43 @@ def test_linear_detrend_with_breakpoints():
     np.testing.assert_allclose(segmented, 0.0, atol=1e-8)
 
 
-def test_detrend_along_explicit_axis():
-    """Detrending along a chosen axis removes each row's trend independently."""
+def _polyfit_linear_residual(row: np.ndarray) -> np.ndarray:
+    """Residual of an ordinary least-squares line fit to ``row``, shape ``(n,)``."""
+    t = np.arange(row.size, dtype=float)
+    return row - np.polyval(np.polyfit(t, row, 1), t)
+
+
+@pytest.mark.parametrize("axis", [-1, 1])
+def test_detrend_along_explicit_axis(axis):
+    """Detrending along the last axis removes each row's own trend independently.
+
+    Each row has a different intercept and slope, so detrending along the wrong
+    axis (or with one shared fit) cannot reproduce the per-row reference.
+    """
     rng = np.random.default_rng(2)
-    trend = 2.0 * np.arange(50)
-    data = trend[None, :] + rng.standard_normal((3, 50))
-    result = detrend(data, axis=-1, type="linear")
-    assert result.shape == data.shape
-    # No residual linear trend in the averaged detrended rows.
-    slope = np.polyfit(np.arange(50), result.mean(axis=0), 1)[0]
-    assert abs(slope) < 1e-9
+    t = np.arange(50, dtype=float)
+    slopes = np.array([-3.0, 0.5, 7.0])
+    intercepts = np.array([10.0, -2.0, 0.0])
+    data = intercepts[:, None] + slopes[:, None] * t + rng.standard_normal((3, 50))
+
+    result = detrend(data, axis=axis, type="linear")
+
+    expected = np.stack([_polyfit_linear_residual(row) for row in data])
+    np.testing.assert_allclose(result, expected, atol=1e-10)
+    per_row_slopes = np.polyfit(t, result.T, 1)[0]
+    np.testing.assert_allclose(per_row_slopes, 0.0, atol=1e-10)
+
+
+def test_detrend_along_axis_zero_detrends_columns():
+    """``axis=0`` fits each column, matching the row-wise result on the transpose."""
+    rng = np.random.default_rng(5)
+    t = np.arange(40, dtype=float)
+    data = np.array([1.0, -4.0])[None, :] * t[:, None] + rng.standard_normal((40, 2))
+
+    result = detrend(data, axis=0, type="linear")
+
+    expected = np.stack([_polyfit_linear_residual(column) for column in data.T], axis=1)
+    np.testing.assert_allclose(result, expected, atol=1e-10)
 
 
 @pytest.mark.parametrize("bad_bp", [[100], [150], [50, 100]])

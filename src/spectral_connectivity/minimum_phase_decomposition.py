@@ -7,24 +7,23 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import warnings
 from logging import DEBUG, getLogger
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import is_gpu_enabled
+from spectral_connectivity.utils import gpu_request_error_message, is_gpu_enabled
 
-if is_gpu_enabled():
+# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
+# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
+if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
         from cupyx.scipy.fft import fft, ifft
     except ImportError as exc:
-        raise RuntimeError(
-            "GPU support was explicitly requested via SPECTRAL_CONNECTIVITY_ENABLE_GPU='true', "
-            "but CuPy is not installed. Please install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'"
-        ) from exc
+        raise RuntimeError(gpu_request_error_message()) from exc
 else:
-    import numpy as xp
+    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import fft, ifft
 
 
@@ -123,7 +122,7 @@ def _get_initial_conditions(
         for index in range(flat_zero_lag.shape[0]):
             try:
                 xp.linalg.cholesky(flat_zero_lag[index])
-            except xp.linalg.LinAlgError:
+            except xp.linalg.LinAlgError:  # noqa: PERF203 -- per-unit on purpose (see above)
                 not_positive_definite[index] = True
         # Deterministic well-conditioned PD start for the failed units. The
         # previous code averaged N_RAND=1000 random Wishart draws
@@ -186,9 +185,7 @@ def _get_causal_signal(
     # index arrays match the array backend (mixing a NumPy index array with a
     # CuPy array is a GPU-only footgun).
     lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
-    linear_predictor_coefficients[
-        ..., 0, lower_triangular_ind[0], lower_triangular_ind[1]
-    ] = 0
+    linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
     linear_predictor_coefficients[..., (n_fft_samples + 1) // 2 :, :, :] = 0
@@ -232,18 +229,22 @@ def _check_convergence(
     Examples
     --------
     >>> import numpy as np
-    >>> current = np.random.randn(10, 8, 5, 5) + 1j * np.random.randn(10, 8, 5, 5)
-    >>> old = current + 1e-10 * np.random.randn(10, 8, 5, 5)
+    >>> rng = np.random.default_rng(0)
+    >>> shape = (10, 8, 5, 5)
+    >>> current = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    >>> old = current + 1e-10 * rng.standard_normal(shape)
     >>> converged = _check_convergence(current, old, tolerance=1e-8)
     >>> converged.shape
     (10,)
     """
     batch_shape = current.shape[:-3]
-    error = xp.max(xp.abs(current - old).reshape(*batch_shape, -1), axis=-1)
+    error: NDArray[np.floating] = xp.max(
+        xp.abs(current - old).reshape(*batch_shape, -1), axis=-1
+    )
     # Normalize by the factor magnitude so the criterion is scale-invariant.
     # Floor the scale to avoid dividing by zero for an all-zero sub-spectrum
     # (there error is also zero, so the block is trivially converged).
-    scale = xp.max(xp.abs(current).reshape(*batch_shape, -1), axis=-1)
+    scale: NDArray[np.floating] = xp.max(xp.abs(current).reshape(*batch_shape, -1), axis=-1)
     scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
     return error / scale < tolerance
 
@@ -267,6 +268,77 @@ def _all_finite_units(
         True where every element of that sub-spectrum is finite.
     """
     return xp.isfinite(factor).reshape(*batch_shape, -1).all(axis=-1)
+
+
+def minimum_phase_reconstruction_error(
+    cross_spectral_matrix: NDArray[np.complexfloating],
+    minimum_phase_factor: NDArray[np.complexfloating] | None = None,
+    *,
+    tolerance: float = 1e-8,
+    max_iterations: int = 500,
+) -> NDArray[np.floating]:
+    """Relative reconstruction error of a Wilson factorization, per sub-spectrum.
+
+    The Wilson iteration's convergence test only measures the change between
+    successive iterates; a stable iterate does not guarantee ``G Gᴴ ≈ S``. When
+    the cross-spectrum is under-resolved in frequency (its autocovariance has not
+    decayed within the window, so the periodic factorization aliases), the
+    iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
+    biasing every directed-connectivity measure built on it (spectral Granger,
+    DTF, PDC). This is an opt-in diagnostic: it returns
+    ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum -- the entrywise
+    maximum absolute residual over every frequency and matrix entry, relative
+    to the entrywise maximum magnitude of ``S`` -- so callers can check
+    factorization quality explicitly.
+
+    ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
+    FFT order, as required by the factorization itself. This module-level
+    function cannot verify that from the array alone (a one-sided spectrum has
+    the same shape); the :meth:`Connectivity.minimum_phase_reconstruction_error
+    <spectral_connectivity.Connectivity.minimum_phase_reconstruction_error>`
+    method enforces it from the transform's declared sidedness.
+
+    A relative error near machine precision indicates a faithful factorization;
+    values of a few percent are typical for finite-resolution estimated spectra;
+    tens of percent or more indicate the spectrum is too coarsely resolved to
+    trust the directed measures -- use a longer FFT (larger ``n_fft_samples`` /
+    ``n_time_samples_per_window``). The error is deliberately *not* raised as a
+    warning during factorization: it does not cleanly separate an under-resolved
+    spectrum from a merely short or noisy one, so an always-on threshold would
+    either cry wolf on ordinary short-window analyses or miss real problems.
+
+    Parameters
+    ----------
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
+        The two-sided cross-spectral matrix (standard FFT order, positive and
+        negative frequencies) that was (or will be) factored.
+    minimum_phase_factor : NDArray[complexfloating], optional
+        A precomputed factor from :func:`minimum_phase_decomposition`. If omitted,
+        the factorization is computed here with ``tolerance`` / ``max_iterations``.
+    tolerance, max_iterations
+        Passed to :func:`minimum_phase_decomposition` when it must be computed.
+
+    Returns
+    -------
+    relative_error : NDArray[floating], shape (...,)
+        Entrywise max-abs relative reconstruction error per sub-spectrum (the
+        leading batch dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN``
+        where the factor is non-finite (the factorization did not converge).
+    """
+    if minimum_phase_factor is None:
+        minimum_phase_factor = minimum_phase_decomposition(
+            cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
+        )
+    batch_shape = cross_spectral_matrix.shape[:-3]
+    reconstructed = xp.matmul(minimum_phase_factor, _conjugate_transpose(minimum_phase_factor))
+    reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
+    residual: NDArray[np.floating] = xp.max(
+        xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
+    )
+    scale: NDArray[np.floating] = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
+    scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
+    return residual / scale
 
 
 def _singular_matrix_mask(
@@ -293,14 +365,12 @@ def _singular_matrix_mask(
         True for each matrix that is singular or non-finite.
     """
     n_signals = matrices.shape[-1]
-    is_finite = xp.isfinite(matrices).all(axis=(-2, -1))
-    cleaned = xp.where(
-        is_finite[..., xp.newaxis, xp.newaxis], matrices, identity_matrix
-    )
-    singular_values = xp.linalg.svd(cleaned, compute_uv=False)
+    is_finite: NDArray[np.bool_] = xp.isfinite(matrices).all(axis=(-2, -1))
+    cleaned = xp.where(is_finite[..., xp.newaxis, xp.newaxis], matrices, identity_matrix)
+    singular_values: NDArray[np.floating] = xp.linalg.svd(cleaned, compute_uv=False)
     largest = singular_values[..., 0]
     smallest = singular_values[..., -1]
-    tolerance = largest * n_signals * xp.finfo(singular_values.dtype).eps
+    tolerance: NDArray[np.floating] = largest * n_signals * xp.finfo(singular_values.dtype).eps
     return (~is_finite) | (smallest <= tolerance)
 
 
@@ -393,6 +463,8 @@ def minimum_phase_decomposition(
     cross_spectral_matrix: NDArray[np.complexfloating],
     tolerance: float = 1e-8,
     max_iterations: int = 500,
+    *,
+    _warn_on_failure: bool = True,
 ) -> NDArray[np.complexfloating]:
     """Compute minimum phase decomposition using Wilson algorithm.
 
@@ -446,6 +518,16 @@ def minimum_phase_decomposition(
     may not converge for all time points; warnings are issued when the
     maximum iteration count is reached.
 
+    Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
+    factorization assumes the cross-spectrum is resolved finely enough in
+    frequency that the corresponding autocovariance decays within the analysis
+    window; an under-resolved (aliased) spectrum can satisfy the successive-
+    iterate convergence test yet reconstruct ``S`` poorly, silently biasing the
+    directed-connectivity measures built on it. Use
+    :func:`minimum_phase_reconstruction_error` to check factorization quality
+    explicitly, and a longer FFT (larger ``n_fft_samples`` /
+    ``n_time_samples_per_window``) if the error is large.
+
     References
     ----------
     .. [1] Wilson, G. T. (1972). The factorization of matricial spectral
@@ -454,14 +536,17 @@ def minimum_phase_decomposition(
            information flow in brain networks with nonparametric Granger
            causality. NeuroImage, 41(2), 354-362.
     """
+    # _warn_on_failure=False is private to the spectral Granger measures, which
+    # report the NaN signal pairs themselves instead of this pair-less warning.
     if not np.isfinite(tolerance) or tolerance <= 0:
-        raise ValueError(
-            f"tolerance must be a finite positive number, got {tolerance}."
-        )
-    if not isinstance(max_iterations, (int, np.integer)) or max_iterations < 1:
-        raise ValueError(
-            f"max_iterations must be a positive integer, got {max_iterations}."
-        )
+        msg = f"tolerance must be a finite positive number, got {tolerance}."
+        raise ValueError(msg)
+    if (
+        not isinstance(max_iterations, (int, np.integer))  # type: ignore[redundant-expr]  # user input
+        or max_iterations < 1
+    ):
+        msg = f"max_iterations must be a positive integer, got {max_iterations}."
+        raise ValueError(msg)
     n_signals = cross_spectral_matrix.shape[-1]
     # Wilson's default relative tolerance (1e-8) is below float32 epsilon. A
     # complex64 iteration therefore stalls at its rounding floor and otherwise
@@ -469,9 +554,7 @@ def minimum_phase_decomposition(
     # takes precedence over retaining the input storage dtype: perform the
     # factorization at complex128 or better, matching the historical behavior.
     working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
-    working_cross_spectral_matrix = cross_spectral_matrix.astype(
-        working_dtype, copy=False
-    )
+    working_cross_spectral_matrix = cross_spectral_matrix.astype(working_dtype, copy=False)
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
@@ -489,8 +572,10 @@ def minimum_phase_decomposition(
         # every iteration; guard it so it only runs when debug logging is on.
         if logger.isEnabledFor(DEBUG):
             logger.debug(
-                f"iteration: {iteration}, "
-                f"{int(is_converged.sum())} of {n_units} converged"
+                "iteration: %d, %d of %d converged",
+                iteration,
+                int(is_converged.sum()),
+                n_units,
             )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         # A rank-deficient sub-spectrum makes the batched solve inside
@@ -508,9 +593,7 @@ def minimum_phase_decomposition(
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
         # over the frequency and signal axes).
         frozen = is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
-        minimum_phase_factor = xp.where(
-            frozen, old_minimum_phase_factor, minimum_phase_factor
-        )
+        minimum_phase_factor = xp.where(frozen, old_minimum_phase_factor, minimum_phase_factor)
         is_converged = _check_convergence(
             minimum_phase_factor, old_minimum_phase_factor, tolerance
         )
@@ -543,6 +626,8 @@ def minimum_phase_decomposition(
         xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
         minimum_phase_factor,
     )
+    if not _warn_on_failure:
+        return minimum_phase_factor
     reason = (
         "a sub-spectrum became singular (rank-deficient / duplicated channels)"
         if singular_factor

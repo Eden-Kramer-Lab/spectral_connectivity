@@ -1,9 +1,10 @@
 """Utility functions for spectral_connectivity package."""
 
+import contextlib
 import os
 import sys
 import warnings
-from typing import Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,19 +15,41 @@ _FALSE_VALUES = frozenset({"false", "0", "no", "off", ""})
 
 # NumPy and CuPy intentionally share the same runtime API throughout the
 # package. ``numpy.typing.NDArray`` would incorrectly promise that a value is
-# always host-backed, so backend-facing interfaces use this explicit alias.
-BackendArray: TypeAlias = Any
+# always host-backed, so backend-facing interfaces use this explicit alias. The
+# type checker analyzes the NumPy code path (CuPy mirrors its API), so there
+# the alias is a NumPy array.
+if TYPE_CHECKING:
+    BackendArray: TypeAlias = NDArray[Any]
+else:
+    BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
 
 
-def to_numpy(array: Any) -> NDArray:
+def is_positive_integer(value: Any, minimum: int = 1) -> bool:
+    """Whether ``value`` is an integer (not a bool) of at least ``minimum``.
+
+    ``bool`` is an ``int`` subclass, so it is rejected explicitly; NumPy
+    integer scalars are accepted.
+    """
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, np.integer))
+        and bool(value >= minimum)
+    )
+
+
+def to_numpy(array: Any) -> NDArray[Any]:
     """Return an array on the host without implicit device conversion.
 
-    CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. NumPy
-    arrays and ordinary array-likes pass directly through ``np.asarray``.
+    CuPy arrays expose ``get()`` and deliberately reject ``np.asarray``. They
+    are recognized by also exposing the CUDA array interface, since host
+    array-likes such as a pandas Series have an unrelated ``get`` method.
+    NumPy arrays and ordinary array-likes pass directly through ``np.asarray``.
     """
     get = getattr(array, "get", None)
-    return np.asarray(get() if callable(get) else array)
+    if callable(get) and hasattr(type(array), "__cuda_array_interface__"):
+        return np.asarray(get())
+    return np.asarray(array)
 
 
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
@@ -38,10 +61,8 @@ def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
     already-detached copy for ownership there, not on the flag.
     """
     backend_array: Any = array
-    try:
+    with contextlib.suppress(AttributeError, ValueError):
         backend_array.flags.writeable = False
-    except (AttributeError, ValueError):
-        pass
     return array
 
 
@@ -58,6 +79,29 @@ def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
         mark_readonly_if_supported(current)
         current = getattr(current, "base", None)
     return array
+
+
+def gpu_request_error_message() -> str:
+    """Error text for a GPU request (see ``GPU_ENV_VAR``) without CuPy installed."""
+    return (
+        f"GPU support was explicitly requested via "
+        f"{GPU_ENV_VAR}={os.environ.get(GPU_ENV_VAR, '')!r}, but CuPy is not installed. "
+        "Please install CuPy with: 'pip install cupy' or 'conda install cupy'"
+    )
+
+
+def cupy_device_name(cp: Any) -> str:
+    """Name of CuPy's current device, or its compute capability if unnamed.
+
+    Raises whatever ``cp.cuda.Device()`` raises when no device is usable.
+    """
+    device = cp.cuda.Device()
+    try:
+        name: str = cp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
+        return name.strip("\x00")
+    except Exception:
+        major, minor = device.compute_capability
+        return f"GPU (Compute Capability {major}.{minor})"
 
 
 def is_gpu_enabled() -> bool:
@@ -176,22 +220,8 @@ def get_compute_backend() -> dict[str, Any]:
         try:
             import cupy as cp
 
-            # Try to get device info - prefer actual GPU name over compute capability
             try:
-                device = cp.cuda.Device()
-                # Try to get the actual GPU model name first
-                try:
-                    device_name = cp.cuda.runtime.getDeviceProperties(device.id)[
-                        "name"
-                    ].decode()
-                    # Clean up the name if it has null bytes
-                    device_name = device_name.strip("\x00")
-                except Exception:
-                    # Fallback to compute capability if name not available
-                    compute_cap = device.compute_capability
-                    device_name = (
-                        f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-                    )
+                device_name = cupy_device_name(cp)
             except Exception:
                 device_name = "GPU"
         except Exception:

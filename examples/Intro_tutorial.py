@@ -35,6 +35,7 @@
 # %%
 import numpy as np
 
+rng = np.random.default_rng(0)  # seeded, so the tutorial output is reproducible
 frequency_of_interest = 200
 sampling_frequency = 1000
 time_extent = (0, 60)
@@ -52,7 +53,7 @@ signal[:, 0] = np.sin(2 * np.pi * time * frequency_of_interest)
 phase_offset = np.pi / 2
 signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
 
-noise = np.random.normal(0, 4, signal.shape)
+noise = rng.normal(0, 4, signal.shape)
 
 # %% [markdown]
 # We can plot these two signals with and without the noise added:
@@ -159,7 +160,7 @@ multitaper.frequency_resolution
 multitaper.nyquist_frequency
 
 # %% [markdown]
-# Note that we haven't run the tranformation yet. To do this we can use the method `fft` to get the Fourier coefficients.
+# Note that we haven't run the transformation yet. To do this we can use the method `fft` to get the Fourier coefficients.
 #
 # This will have shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
 

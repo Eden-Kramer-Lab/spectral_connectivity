@@ -1,5 +1,7 @@
 """Tests for parameter helper functions."""
 
+import re
+
 import numpy as np
 import pytest
 
@@ -60,7 +62,8 @@ class TestEstimateFrequencyResolution:
 
     def test_consistency_with_multitaper(self):
         """Test that estimates match actual Multitaper.frequency_resolution."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -120,7 +123,8 @@ class TestEstimateNTapers:
 
     def test_consistency_with_multitaper(self):
         """Test that estimates match actual Multitaper.n_tapers."""
-        time_series = np.random.randn(1000, 1, 1)
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))
         mt = Multitaper(
             time_series,
             sampling_frequency=1000,
@@ -161,9 +165,13 @@ class TestSuggestParameters:
             signal_duration=2.0,
             desired_freq_resolution=target_res,
         )
-        # Should suggest parameters that achieve approximately this resolution
-        assert "frequency_resolution" in params
-        assert np.isclose(params["frequency_resolution"], target_res, rtol=0.2)
+        # The reported resolution is the target, and it is the resolution the
+        # suggested NW and window actually give: delta_f = 2 * NW / T.
+        assert np.isclose(params["frequency_resolution"], target_res)
+        assert np.isclose(
+            2 * params["time_halfbandwidth_product"] / params["time_window_duration"],
+            target_res,
+        )
 
     def test_target_n_tapers(self):
         """Test suggesting parameters for target number of tapers."""
@@ -178,14 +186,22 @@ class TestSuggestParameters:
         assert params["n_tapers"] == target_tapers
 
     def test_conflicting_targets_raises_warning(self):
-        """Test that specifying both targets raises a warning."""
+        """Specifying both targets warns, and the resolution target wins."""
         with pytest.warns(UserWarning, match="Both.*were specified"):
-            suggest_parameters(
+            params = suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=2.0,
                 desired_freq_resolution=5.0,
                 desired_n_tapers=7,
             )
+        resolution_only = suggest_parameters(
+            sampling_frequency=1000,
+            signal_duration=2.0,
+            desired_freq_resolution=5.0,
+        )
+        assert params == resolution_only
+        assert np.isclose(params["frequency_resolution"], 5.0)
+        assert params["n_tapers"] != 7
 
     def test_invalid_target_resolution_raises_error(self):
         """Test that impossible frequency resolution raises error."""
@@ -218,7 +234,10 @@ class TestSuggestParameters:
             signal_duration=60.0,
             desired_freq_resolution=1.0,
         )
-        assert params["frequency_resolution"] <= 1.5  # Should be close to 1 Hz
+        assert np.isclose(params["frequency_resolution"], 1.0)
+        assert np.isclose(
+            2 * params["time_halfbandwidth_product"] / params["time_window_duration"], 1.0
+        )
         assert params["n_tapers"] >= 3  # Should have reasonable averaging
 
     def test_lfp_typical_params(self):
@@ -229,70 +248,75 @@ class TestSuggestParameters:
             signal_duration=10.0,
             desired_freq_resolution=2.0,
         )
-        assert params["frequency_resolution"] <= 3.0  # Should be close to 2 Hz
+        assert np.isclose(params["frequency_resolution"], 2.0)
+        assert np.isclose(
+            2 * params["time_halfbandwidth_product"] / params["time_window_duration"], 2.0
+        )
         assert params["n_tapers"] >= 5  # LFP often uses more tapers
 
 
 class TestSummarizeParameters:
     """Test the summarize_parameters method of Multitaper."""
 
-    def test_method_exists(self):
-        """Test that summarize_parameters method exists."""
-        time_series = np.random.randn(1000, 1, 1)
-        mt = Multitaper(
+    @staticmethod
+    def _summary(time_halfbandwidth_product, time_window_duration):
+        rng = np.random.default_rng(0)
+        time_series = rng.standard_normal((1000, 1, 1))  # 1 s at 1000 Hz
+        return Multitaper(
             time_series,
             sampling_frequency=1000,
-            time_halfbandwidth_product=3,
-        )
-        assert hasattr(mt, "summarize_parameters")
+            time_halfbandwidth_product=time_halfbandwidth_product,
+            time_window_duration=time_window_duration,
+        ).summarize_parameters()
 
     def test_returns_string(self):
         """Test that method returns a string summary."""
-        time_series = np.random.randn(1000, 1, 1)
-        mt = Multitaper(
-            time_series,
-            sampling_frequency=1000,
-            time_halfbandwidth_product=3,
-            time_window_duration=0.5,
-        )
-        summary = mt.summarize_parameters()
+        summary = self._summary(3, 0.5)
         assert isinstance(summary, str)
         assert len(summary) > 0
 
-    def test_includes_key_parameters(self):
-        """Test that summary includes all key parameters."""
-        time_series = np.random.randn(1000, 1, 1)
-        mt = Multitaper(
-            time_series,
-            sampling_frequency=1000,
-            time_halfbandwidth_product=4,
-            time_window_duration=0.5,
-        )
-        summary = mt.summarize_parameters()
-
-        # Should mention key parameters
-        assert "sampling_frequency" in summary.lower() or "1000" in summary
-        assert (
-            "time-halfbandwidth product" in summary.lower()
-            or str(mt.time_halfbandwidth_product) in summary
-        )
-        assert "tapers" in summary.lower() or str(mt.n_tapers) in summary
-        assert (
-            "frequency resolution" in summary.lower() or "resolution" in summary.lower()
-        )
+    @pytest.mark.parametrize(
+        ("nw", "duration", "expected_lines"),
+        [
+            # K = 2 * NW - 1; delta_f = 2 * NW / T; windows = 1 s / T
+            (
+                4,
+                0.5,
+                [
+                    r"Sampling frequency:\s+1000 Hz",
+                    r"Time-halfbandwidth product:\s+4",
+                    r"Number of tapers:\s+7",
+                    r"Window duration:\s+0\.500 s \(500 samples\)",
+                    r"Number of windows:\s+2",
+                    r"Frequency resolution:\s+16\.0 Hz",
+                    r"Nyquist frequency:\s+500\.0 Hz",
+                ],
+            ),
+            (
+                3,
+                1.0,
+                [
+                    r"Sampling frequency:\s+1000 Hz",
+                    r"Time-halfbandwidth product:\s+3",
+                    r"Number of tapers:\s+5",
+                    r"Window duration:\s+1\.000 s \(1000 samples\)",
+                    r"Number of windows:\s+1",
+                    r"Frequency resolution:\s+6\.0 Hz",
+                    r"Nyquist frequency:\s+500\.0 Hz",
+                ],
+            ),
+        ],
+    )
+    def test_reports_parameter_values(self, nw, duration, expected_lines):
+        """Each key parameter is rendered on its own line with the right value."""
+        summary_lines = self._summary(nw, duration).splitlines()
+        for pattern in expected_lines:
+            assert any(re.fullmatch(pattern, line.strip()) for line in summary_lines), (
+                f"no summary line matches {pattern!r}"
+            )
 
     def test_readable_format(self):
         """Test that summary is human-readable (not repr)."""
-        time_series = np.random.randn(1000, 1, 1)
-        mt = Multitaper(
-            time_series,
-            sampling_frequency=1000,
-            time_halfbandwidth_product=3,
-            time_window_duration=1.0,
-        )
-        summary = mt.summarize_parameters()
-
-        # Should be readable, not just Python repr
-        assert "Multitaper" in summary or "Parameters" in summary or "Config" in summary
-        # Should have newlines for readability
+        summary = self._summary(3, 1.0)
+        assert summary.startswith("Multitaper Spectral Analysis Configuration\n")
         assert "\n" in summary

@@ -9,7 +9,8 @@ connectivity analysis.
 
 import warnings
 from collections.abc import Callable
-from typing import Literal
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import numpy as np
 import scipy.special
@@ -17,6 +18,310 @@ import scipy.stats
 from numpy.typing import NDArray
 
 from spectral_connectivity.utils import to_numpy
+
+
+@dataclass(frozen=True)
+class JackknifeResult:
+    """Leave-one-observation-out estimate and Student-t jackknife interval.
+
+    Every array attribute has the shape of the underlying measure, e.g.
+    ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)`` for a pairwise
+    connectivity measure.
+
+    Attributes
+    ----------
+    estimate : array
+        The full-sample estimate on the original scale.
+    bias_corrected : array
+        Jackknife bias-corrected estimate on the original scale.
+    standard_error : array
+        Standard error on the original scale (delta method through the
+        transformation).
+    confidence_interval : tuple of (lower, upper) arrays
+        Confidence bounds on the original scale, formed on the transformed
+        scale as ``estimate -/+ t * standard_error`` with the Student t
+        critical value on ``n_observations - 1`` degrees of freedom. For the
+        ``"circular"`` transformation the bounds are wrapped to ``(-pi, pi]``:
+        ``lower > upper`` means the interval crosses ``+/-pi`` and is
+        ``[lower, pi] U (-pi, upper]``, and a bin whose half-width reaches
+        ``pi`` (the whole circle, phase unresolved) is reported as
+        ``(-pi, pi)``.
+    n_observations : int
+        Number of leave-one-out replicates; the interval's critical value has
+        ``n_observations - 1`` degrees of freedom.
+    transformation : str
+        Variance-stabilizing transformation used for the interval.
+    """
+
+    estimate: NDArray[np.floating]
+    bias_corrected: NDArray[np.floating]
+    standard_error: NDArray[np.floating]
+    confidence_interval: tuple[NDArray[np.floating], NDArray[np.floating]]
+    n_observations: int
+    transformation: str
+
+
+def _identity(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return value
+
+
+def _wrap_phase(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.angle(np.exp(1j * value))
+
+
+def _pin_whole_circle_interval(
+    half_width: NDArray[np.floating],
+    lower: NDArray[np.floating],
+    upper: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    """Report a circular interval with half-width >= pi as the whole circle.
+
+    The circular standard error is a linear standard error of the unwrapped
+    replicates and is unbounded, but wrapping bounds that are more than 2*pi
+    apart makes a whole-circle interval look narrow (a half-width of 11 rad
+    wraps to about (-1.65, 1.65)). Pin such bins to ``(-pi, pi)`` and warn that
+    the phase is not resolved there.
+    """
+    whole_circle = half_width >= np.pi
+    if bool(np.any(whole_circle)):
+        warnings.warn(
+            f"Jackknife circular interval: {int(np.count_nonzero(whole_circle))} "
+            "value(s) have a half-width of at least pi rad, so the interval covers "
+            "the whole circle and the phase is not resolved there. Those bounds are "
+            "reported as (-pi, pi).",
+            UserWarning,
+            stacklevel=3,
+        )
+        lower = np.where(whole_circle, -np.pi, lower)
+        upper = np.where(whole_circle, np.pi, upper)
+    return lower, upper
+
+
+def _exponential(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.exp(value)
+
+
+def _hyperbolic_tangent(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    return np.tanh(value)
+
+
+def _hyperbolic_tangent_squared(value: NDArray[np.floating]) -> NDArray[np.floating]:
+    # Back-transform for magnitude-squared coherence: recover |coherence| =
+    # tanh(.), clamp it to the physical [0, 1] range (a lower confidence bound in
+    # atanh space can map to a negative magnitude), then square. Clamping before
+    # squaring keeps the mapping monotonic, so squaring cannot fold a negative
+    # magnitude back above the estimate.
+    return np.clip(np.tanh(value), 0, 1) ** 2
+
+
+def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
+    """Warn that saturated estimates have a Fisher standard error of 0.
+
+    At ``|coherence| == 1`` the delta-method derivative is exactly zero, so the
+    back-transformed standard error is reported as ``0`` and the interval
+    degenerates, implying perfect certainty rather than a boundary. Surface it
+    so the zero is not mistaken for a genuinely tight estimate.
+    """
+    if bool(np.any(at_boundary)):
+        warnings.warn(
+            f"Fisher jackknife: {int(np.count_nonzero(at_boundary))} value(s) sit "
+            "at saturated coherence (|coherence| == 1 to machine precision), where "
+            "the transform's derivative vanishes, so the delta-method standard "
+            "error is exactly 0 and the interval degenerates there. This reflects "
+            "a boundary, not perfect certainty; interpret those values with care.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def jackknife_confidence_interval(
+    estimate: NDArray[np.floating],
+    leave_one_out: NDArray[np.floating],
+    *,
+    confidence_level: float = 0.95,
+    transformation: Literal[
+        "identity", "log", "fisher", "fisher_squared", "circular"
+    ] = "identity",
+    _saturated_by_construction: NDArray[np.bool_] | bool = False,
+) -> JackknifeResult:
+    """Summarize leave-one-out replicates with a jackknife confidence interval.
+
+    Parameters
+    ----------
+    estimate : array, shape (...)
+        Full-sample estimate of a real-valued measure.
+    leave_one_out : array, shape (n_observations, ...)
+        Replicates with one observation omitted each, stacked on the first
+        axis; the remaining axes must match ``estimate``.
+    confidence_level : float, default=0.95
+        Two-sided coverage of the interval, in (0, 1). The critical value is
+        the Student t quantile with ``n_observations - 1`` degrees of freedom,
+        the standard choice for a jackknife variance estimated from
+        ``n_observations`` replicates [1]_ [2]_; a normal quantile under-covers
+        when there are few replicates (about 0.88 instead of 0.95 at five).
+    transformation : {"identity", "log", "fisher", "fisher_squared", "circular"}
+        Scale on which the interval is formed. Log is appropriate for positive
+        spectra, Fisher's ``atanh`` for magnitude coherence in ``[-1, 1]``,
+        ``fisher_squared`` (``atanh(sqrt(.))``) for magnitude-squared coherence
+        in ``[0, 1]``, and circular for angles in radians.
+
+    Returns
+    -------
+    JackknifeResult
+        Estimate, bias-corrected estimate, standard error, and confidence
+        bounds, all on the original scale and with the shape of ``estimate``.
+        The standard error is converted back with the local delta method.
+
+    Notes
+    -----
+    For ``"circular"`` the replicates are unwrapped onto the branch nearest the
+    estimate, the interval is formed on that linear scale, and the bounds are
+    wrapped back to ``(-pi, pi]``. A bound that wraps past ``+/-pi`` leaves
+    ``lower > upper``; the interval is then ``[lower, pi] U (-pi, upper]``.
+    The circular standard error itself is not wrapped, so it can exceed
+    ``pi``; when the half-width is at least ``pi`` the interval covers the
+    whole circle, the phase is not resolved, and the bounds are reported as
+    ``(-pi, pi)`` with a ``UserWarning``.
+
+    The interval describes the size of a measure; it is not a test that the
+    measure differs from 0. In Monte Carlo simulation with independent
+    complex-Gaussian observations and 95% nominal intervals, ``fisher_squared``
+    covers the true magnitude-squared coherence 94-95% of the time when the
+    true ``|coherence|`` is 0.3-0.8, but when the true coherence is 0 it
+    excludes 0 in 11-15% of datasets at 5 to 100 observations, and more
+    observations do not help. (An estimate of exactly 0, which requires an
+    exactly cancelling cross-spectrum, gets a standard error of 0, since the
+    delta-method derivative vanishes there.) To test for nonzero coherence use
+    the exact zero-coherence null, :func:`coherence_significance_pvalue`.
+    ``"circular"`` intervals under-cover when the phase is poorly determined
+    (77-88% coverage at a true ``|coherence|`` of 0.1). See
+    :meth:`spectral_connectivity.connectivity.Connectivity.jackknife` for the
+    per-measure figures.
+
+    References
+    ----------
+    .. [1] Thomson, D. J., & Chave, A. D. (1991). Jackknifed error estimates
+           for spectra, coherences, and transfer functions. In Advances in
+           Spectrum Analysis and Array Processing.
+    .. [2] Efron, B., & Tibshirani, R. J. (1993). An Introduction to the
+           Bootstrap. Chapman & Hall.
+    """
+    if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
+        msg = "confidence_level must be finite and strictly between 0 and 1."
+        raise ValueError(msg)
+    valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
+    if transformation not in valid_transformations:
+        msg = (
+            "transformation must be 'identity', 'log', 'fisher', "
+            f"'fisher_squared', or 'circular'; got {transformation!r}."
+        )
+        raise ValueError(msg)
+    estimate_array = np.asarray(estimate)
+    replicates = np.asarray(leave_one_out)
+    if np.iscomplexobj(estimate_array) or np.iscomplexobj(replicates):
+        msg = "Jackknife intervals require a real-valued measure."
+        raise TypeError(msg)
+    if (
+        replicates.ndim != estimate_array.ndim + 1
+        or replicates.shape[1:] != estimate_array.shape
+    ):
+        msg = "leave_one_out must have shape (n_observations, *estimate.shape)."
+        raise ValueError(msg)
+    n_observations = replicates.shape[0]
+    if n_observations < 2:
+        msg = "Jackknife inference requires at least 2 observations."
+        raise ValueError(msg)
+
+    # _saturated_by_construction is private to Connectivity.jackknife: it marks
+    # entries that sit at |coherence| == 1 by definition (phase_locking_value's
+    # diagonal), which the saturation warning must not count.
+    if transformation == "identity":
+        transformed_estimate = estimate_array
+        transformed_replicates = replicates
+        inverse = _identity
+        derivative = np.ones_like(estimate_array)
+    elif transformation == "log":
+        n_nonpositive = int(
+            np.count_nonzero(estimate_array <= 0) + np.count_nonzero(replicates <= 0)
+        )
+        if n_nonpositive:
+            warnings.warn(
+                f"Jackknife log transform: {n_nonpositive} non-positive value(s) "
+                "map to NaN and propagate to the affected bins' confidence bounds "
+                "(a single non-positive replicate makes its whole bin NaN). This "
+                "usually indicates a spectral null or a non-power measure.",
+                UserWarning,
+                stacklevel=2,
+            )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            transformed_estimate = np.where(estimate_array > 0, np.log(estimate_array), np.nan)
+            transformed_replicates = np.where(replicates > 0, np.log(replicates), np.nan)
+        inverse = _exponential
+        derivative = estimate_array
+    elif transformation == "fisher":
+        epsilon = np.finfo(float).eps
+        # Count every value the atanh clip below pins: a saturated estimate often
+        # lands a few ulp below 1 rather than exactly on it.
+        _warn_fisher_boundary(
+            (np.abs(estimate_array) >= 1 - epsilon) & ~np.asarray(_saturated_by_construction)
+        )
+        transformed_estimate = np.arctanh(np.clip(estimate_array, -1 + epsilon, 1 - epsilon))
+        transformed_replicates = np.arctanh(np.clip(replicates, -1 + epsilon, 1 - epsilon))
+        inverse = _hyperbolic_tangent
+        derivative = 1 - np.clip(estimate_array, -1, 1) ** 2
+    elif transformation == "fisher_squared":
+        # Variance-stabilizing transform for magnitude-squared coherence in
+        # [0, 1] (Enochson & Goodman 1965): atanh(sqrt(MSC)) = atanh(|coherence|).
+        # Applying Fisher's atanh to the *unsquared* magnitude is the established
+        # transform; atanh(MSC) is not. The delta-method derivative back to the
+        # MSC scale is d(MSC)/d(atanh(sqrt(MSC))) = 2 * sqrt(MSC) * (1 - MSC),
+        # which vanishes at both ends of [0, 1].
+        epsilon = np.finfo(float).eps
+        clipped_estimate = np.clip(estimate_array, 0, 1)
+        _warn_fisher_boundary(
+            (np.sqrt(clipped_estimate) >= 1 - epsilon)
+            & ~np.asarray(_saturated_by_construction)
+        )
+        transformed_estimate = np.arctanh(np.clip(np.sqrt(clipped_estimate), 0, 1 - epsilon))
+        transformed_replicates = np.arctanh(
+            np.clip(np.sqrt(np.clip(replicates, 0, 1)), 0, 1 - epsilon)
+        )
+        inverse = _hyperbolic_tangent_squared
+        derivative = 2 * np.sqrt(clipped_estimate) * (1 - clipped_estimate)
+    else:
+        # Unwrap every replicate onto the branch nearest the full estimate.
+        transformed_estimate = estimate_array
+        transformed_replicates = estimate_array + np.angle(
+            np.exp(1j * (replicates - estimate_array))
+        )
+        inverse = _wrap_phase
+        derivative = np.ones_like(estimate_array)
+
+    replicate_mean = np.mean(transformed_replicates, axis=0)
+    bias_corrected_transformed = (
+        n_observations * transformed_estimate - (n_observations - 1) * replicate_mean
+    )
+    transformed_standard_error = np.sqrt(
+        (n_observations - 1)
+        / n_observations
+        * np.sum((transformed_replicates - replicate_mean) ** 2, axis=0)
+    )
+    # Student t on n - 1 degrees of freedom: the jackknife variance is estimated
+    # from n replicates, and the normal quantile under-covers at small n.
+    critical_value = scipy.stats.t.ppf(0.5 + confidence_level / 2, df=n_observations - 1)
+    half_width = critical_value * transformed_standard_error
+    lower = inverse(transformed_estimate - half_width)
+    upper = inverse(transformed_estimate + half_width)
+    if transformation == "circular":
+        lower, upper = _pin_whole_circle_interval(half_width, lower, upper)
+    return JackknifeResult(
+        estimate=estimate_array,
+        bias_corrected=inverse(bias_corrected_transformed),
+        standard_error=np.abs(derivative) * transformed_standard_error,
+        confidence_interval=(lower, upper),
+        n_observations=n_observations,
+        transformation=transformation,
+    )
 
 
 def _require_scipy_false_discovery_control() -> None:
@@ -31,26 +336,26 @@ def _require_scipy_false_discovery_control() -> None:
     states the requirement, the installed version, and the fix.
     """
     if not hasattr(scipy.stats, "false_discovery_control"):
-        raise RuntimeError(
+        msg = (
             f"scipy.stats.false_discovery_control is unavailable: "
             f"spectral_connectivity requires scipy>=1.11 for the "
             f"Benjamini-Hochberg procedure, but scipy {scipy.__version__} is "
             f"installed. Upgrade with `pip install -U 'scipy>=1.11'` (or the "
             f"conda/mamba equivalent)."
         )
+        raise RuntimeError(msg)
 
 
 def _validate_alpha(alpha: float) -> None:
     """Validate a significance level shared by correction procedures."""
     if (
         isinstance(alpha, (bool, np.bool_))
-        or not isinstance(alpha, (int, float, np.integer, np.floating))
+        or not isinstance(alpha, (int, float, np.integer, np.floating))  # type: ignore[redundant-expr]  # user input
         or not np.isfinite(alpha)
         or not 0 < alpha < 1
     ):
-        raise ValueError(
-            f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
-        )
+        msg = f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
+        raise ValueError(msg)
 
 
 def _warn_all_p_values_nonfinite(procedure_name: str) -> None:
@@ -135,14 +440,15 @@ def Benjamini_Hochberg_procedure(
                 # A ValueError not caused by out-of-range p-values: don't
                 # misattribute it -- surface the original error unchanged.
                 raise
-            raise ValueError(
+            msg = (
                 "p_values must all be in [0, 1]; "
                 f"got {out_of_range.size} value(s) outside that range "
                 f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g}). "
                 "If these came from a connectivity measure, pass p-values (e.g. "
                 "from coherence_significance_pvalue), not coherence magnitudes or "
                 "correlations."
-            ) from exc
+            )
+            raise ValueError(msg) from exc
         is_significant[valid] = adjusted <= alpha
     elif p_values.size > 0:
         _warn_all_p_values_nonfinite("Benjamini_Hochberg_procedure")
@@ -185,11 +491,12 @@ def Bonferroni_correction(
     finite_values = p_values[valid]
     out_of_range = finite_values[(finite_values < 0) | (finite_values > 1)]
     if out_of_range.size:
-        raise ValueError(
+        msg = (
             "p_values must all be in [0, 1]; "
             f"got {out_of_range.size} value(s) outside that range "
             f"(min={out_of_range.min():.3g}, max={out_of_range.max():.3g})."
         )
+        raise ValueError(msg)
     if finite_values.size:
         # Undefined (NaN/inf) tests are excluded from the family, matching the BH
         # implementation above, and remain False in the returned mask.
@@ -199,7 +506,7 @@ def Bonferroni_correction(
     return is_significant
 
 
-MULTIPLE_COMPARISONS: dict[str, Callable] = {
+MULTIPLE_COMPARISONS: dict[str, Callable[..., NDArray[np.bool_]]] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,
 }
@@ -252,16 +559,15 @@ def adjust_for_multiple_comparisons(
         correction = MULTIPLE_COMPARISONS[method]
     except KeyError as exc:
         choices = ", ".join(sorted(MULTIPLE_COMPARISONS))
-        raise ValueError(
-            f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
-        ) from exc
+        msg = f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
+        raise ValueError(msg) from exc
     return correction(p_values, alpha=alpha)
 
 
 def coherence_fisher_z_transform(
-    coherency1: NDArray[np.complexfloating],
+    coherency1: NDArray[np.complexfloating] | complex,
     n_obs1: int,
-    coherency2: NDArray[np.complexfloating] | float = 0,
+    coherency2: NDArray[np.complexfloating] | complex = 0,
     n_obs2: int = 0,
 ) -> NDArray[np.floating]:
     """Transform coherence magnitude to approximately normal distribution.
@@ -272,8 +578,9 @@ def coherence_fisher_z_transform(
 
     Parameters
     ----------
-    coherency1 : NDArray[complexfloating], shape (...,)
-        Complex coherency values between signals.
+    coherency1 : NDArray[complexfloating] or complex, shape (...,)
+        Complex coherency values between signals. A scalar is accepted and
+        gives a scalar (0-d) result.
     n_obs1 : int
         Number of observations for coherency1 (n_tapers * n_trials).
     coherency2 : NDArray[complexfloating] or float, default=0
@@ -314,17 +621,20 @@ def coherence_fisher_z_transform(
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
     # and non-finite/fractional counts give NaN with a runtime warning.
     if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 2:
-        raise ValueError(f"n_obs1 must be a finite integer >= 2, got {n_obs1}.")
+        msg = f"n_obs1 must be a finite integer >= 2, got {n_obs1}."
+        raise ValueError(msg)
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
-        raise ValueError(
+        msg = (
             f"n_obs2 must be a finite integer equal to 0 (one-sample test) or "
             f">= 2, got {n_obs2}."
         )
-    coherence_magnitude1 = np.abs(coherency1)
-    coherence_magnitude1[coherence_magnitude1 >= 1] = 1 - np.finfo(float).eps
-
-    coherence_magnitude2 = np.array(np.abs(coherency2))
-    coherence_magnitude2[coherence_magnitude2 >= 1] = 1 - np.finfo(float).eps
+        raise ValueError(msg)
+    # Clip saturated magnitudes below 1 so arctanh stays finite. np.minimum
+    # accepts Python and 0-d scalars (whose np.abs is a NumPy scalar that does
+    # not support item assignment) and preserves the input's shape.
+    largest_magnitude = 1 - np.finfo(float).eps
+    coherence_magnitude1 = np.minimum(np.abs(np.asarray(coherency1)), largest_magnitude)
+    coherence_magnitude2 = np.minimum(np.abs(np.asarray(coherency2)), largest_magnitude)
 
     bias1 = coherence_bias(n_obs1)
     # When there is no second sample (n_obs2 == 0) the comparison is against a
@@ -333,9 +643,10 @@ def coherence_fisher_z_transform(
     # would instead make ``sqrt(bias1 + bias2)`` negative and return NaN.
     bias2 = coherence_bias(n_obs2) if n_obs2 else 0.0
 
-    z1 = np.arctanh(coherence_magnitude1) - bias1
-    z2 = np.arctanh(coherence_magnitude2) - bias2
-    return (z1 - z2) / np.sqrt(bias1 + bias2)
+    z1: NDArray[np.floating] = np.arctanh(coherence_magnitude1) - bias1
+    z2: NDArray[np.floating] = np.arctanh(coherence_magnitude2) - bias2
+    scale: float = np.sqrt(bias1 + bias2)
+    return (z1 - z2) / scale
 
 
 def get_normal_distribution_p_values(
@@ -379,7 +690,11 @@ def get_normal_distribution_p_values(
     # Use the survival function (sf = 1 - cdf) rather than ``1 - cdf`` so that
     # far-tail p-values keep full precision: ``1 - norm.cdf(8.3)`` underflows to
     # exactly 0, while ``norm.sf(8.3)`` returns ~5.2e-17.
-    return scipy.stats.norm.sf(to_numpy(data), loc=mean, scale=std_deviation)
+    # scipy-stubs types distribution methods as returning Any.
+    return cast(
+        NDArray[np.floating],
+        scipy.stats.norm.sf(to_numpy(data), loc=mean, scale=std_deviation),
+    )
 
 
 def coherence_significance_pvalue(
@@ -425,14 +740,17 @@ def coherence_significance_pvalue(
         or int(n_observations) != n_observations
         or n_observations < 2
     ):
-        raise ValueError(
+        msg = (
             f"n_observations must be a finite integer >= 2 for the "
             f"zero-coherence null distribution (Beta(1, n_observations - 1)), "
             f"got {n_observations}. With fewer observations the coherence "
             f"estimate is degenerate; a non-finite or non-integer count gives a "
             f"NaN or degenerate p-value."
         )
-    magnitude_squared_coherence = np.clip(np.abs(coherency) ** 2, 0.0, 1.0)
+        raise ValueError(msg)
+    magnitude_squared_coherence: NDArray[np.floating] = np.clip(
+        np.abs(coherency) ** 2, 0.0, 1.0
+    )
     return (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
 
 
@@ -469,7 +787,7 @@ def coherence_bias(n_observations: int) -> float:
            (2007). Comparing
            spectra and coherences for groups of unequal size.
            Journal of Neuroscience Methods 159,
-           337–345. 10.1016/j.jneumeth.2006.07.011.
+           337-345. 10.1016/j.jneumeth.2006.07.011.
     """
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)
@@ -530,15 +848,17 @@ def coherence_rate_adjustment(
            statistics. Journal of Neuroscience Methods 240, 141-153.
     """
     if not np.isfinite(firing_rate_condition1) or firing_rate_condition1 <= 0:
-        raise ValueError(
+        msg = (
             f"firing_rate_condition1 must be a finite positive number, got "
             f"{firing_rate_condition1}."
         )
+        raise ValueError(msg)
     if not np.isfinite(firing_rate_condition2) or firing_rate_condition2 <= 0:
-        raise ValueError(
+        msg = (
             f"firing_rate_condition2 must be a finite positive number, got "
             f"{firing_rate_condition2}."
         )
+        raise ValueError(msg)
     # alpha in [1]
     firing_rate_ratio = firing_rate_condition2 / firing_rate_condition1
     adjusted_firing_rate = (
@@ -576,7 +896,7 @@ def power_confidence_intervals(
     n_tapers: int,
     power: NDArray[np.floating] | float = 1,
     ci: float = 0.95,
-) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
     Uses chi-squared distribution to compute confidence bounds for power
@@ -585,7 +905,13 @@ def power_confidence_intervals(
     Parameters
     ----------
     n_tapers : int
-        Number of tapers used in multitaper estimation.
+        Number of independent observations averaged into each power estimate:
+        tapers times trials (``Connectivity.n_observations``), not the taper
+        count alone unless a single trial was averaged. It sets the chi-squared
+        degrees of freedom ``2 * n_tapers``, as in :func:`power_bias` and
+        :func:`power_variance`. Passing only the taper count for a multi-trial
+        average makes the interval far too wide (about 100% coverage instead of
+        95% for 5 tapers x 5 trials).
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
     ci : float, default=0.95
@@ -601,10 +927,14 @@ def power_confidence_intervals(
     Examples
     --------
     >>> import numpy as np
-    >>> # Single power estimate with 5 tapers
+    >>> # Single power estimate from 5 observations (5 tapers x 1 trial)
     >>> lower, upper = power_confidence_intervals(n_tapers=5, power=1.0, ci=0.95)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.488, 3.080]
+    >>> # Averaging 5 tapers x 5 trials gives 25 observations, a much tighter interval
+    >>> lower, upper = power_confidence_intervals(n_tapers=25, power=1.0, ci=0.95)
+    >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
+    95% CI: [0.700, 1.545]
     >>> # Multiple power estimates
     >>> power_vals = np.array([0.5, 1.0, 2.0, 5.0])
     >>> lower, upper = power_confidence_intervals(5, power_vals, 0.95)
@@ -617,26 +947,30 @@ def power_confidence_intervals(
            data analysis: a guide for the practicing neuroscientist (MIT Press).
     """
     if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers or n_tapers < 1:
-        raise ValueError(
-            f"n_tapers must be a finite positive integer, got {n_tapers}. It sets "
-            f"the chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
+        msg = (
+            f"n_tapers must be a finite positive integer, got {n_tapers}. It is the "
+            f"number of averaged observations (tapers x trials) and sets the "
+            f"chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
             f"non-finite, or fractional value gives NaN or meaningless intervals."
         )
+        raise ValueError(msg)
     if not 0.5 <= ci < 1.0:
-        raise ValueError(
+        msg = (
             f"Confidence level `ci` must be in the range [0.5, 1.0), got {ci}. "
             "`ci` is the total probability mass inside the interval (e.g. 0.95 "
             "for a 95% confidence interval)."
         )
+        raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds
     # negative and reversed (e.g. power=-1 -> ~(-0.488, -3.080)), and a
     # non-finite value gives NaN/Inf bounds. Reject both explicitly.
     power_values = np.asarray(power, dtype=float)
     if not np.all(np.isfinite(power_values)) or np.any(power_values < 0):
-        raise ValueError(
+        msg = (
             "power must be finite and non-negative (it is a power spectral "
             "density); got a non-finite or negative value."
         )
+        raise ValueError(msg)
     # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
     # evenly between the two tails, so the chi-squared quantiles are taken at
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
@@ -645,9 +979,7 @@ def power_confidence_intervals(
     degrees_of_freedom = 2 * n_tapers
     alpha = 1 - ci
     lower_bound = (
-        degrees_of_freedom
-        / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom)
-        * power
+        degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
     )
     upper_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(alpha / 2, degrees_of_freedom) * power
@@ -681,7 +1013,7 @@ def power_bias(n_observations: int) -> float:
     >>> print(f"Bias with 1000 obs: {power_bias(1000):.6f}")
     Bias with 1000 obs: -0.000500
     """
-    return scipy.special.psi(n_observations) - np.log(n_observations)
+    return float(scipy.special.psi(n_observations) - np.log(n_observations))
 
 
 def power_variance(n_observations: int) -> float:
@@ -715,7 +1047,7 @@ def power_variance(n_observations: int) -> float:
     variance of ``log(S_hat)`` is the trigamma function evaluated at the
     chi-squared shape parameter ``nu / 2 = n_observations``.
     """
-    return scipy.special.polygamma(1, n_observations)
+    return float(scipy.special.polygamma(1, n_observations))
 
 
 def power_fisher_z_transform(
@@ -772,27 +1104,28 @@ def power_fisher_z_transform(
     # digamma/trigamma at n_obs, which have poles at 0; non-finite or fractional
     # counts would silently produce NaN z-scores.
     if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 1:
-        raise ValueError(f"n_obs1 must be a finite integer >= 1, got {n_obs1}.")
+        msg = f"n_obs1 must be a finite integer >= 1, got {n_obs1}."
+        raise ValueError(msg)
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or n_obs2 < 0:
-        raise ValueError(
-            f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), "
-            f"got {n_obs2}."
-        )
+        msg = f"n_obs2 must be a finite integer >= 0 (0 for a one-sample test), got {n_obs2}."
+        raise ValueError(msg)
     # The test operates on log(power); non-finite or non-positive inputs would
     # produce silent -inf/nan z-scores. Fail loudly instead.
     spectrum1_values = np.asarray(spectrum1, dtype=float)
     if not np.all(np.isfinite(spectrum1_values)) or np.any(spectrum1_values <= 0):
-        raise ValueError(
+        msg = (
             "spectrum1 must be finite and strictly positive (the test uses "
             "log(power)); got a non-finite or <= 0 value."
         )
+        raise ValueError(msg)
     spectrum2_values = np.asarray(spectrum2, dtype=float)
     if not np.all(np.isfinite(spectrum2_values)) or np.any(spectrum2_values <= 0):
-        raise ValueError(
+        msg = (
             "spectrum2 must be finite and strictly positive (the test uses "
             "log(power)); got a non-finite or <= 0 value. For a one-sample test, "
             "pass a positive baseline power as spectrum2 (default 1.0)."
         )
+        raise ValueError(msg)
 
     bias1 = power_bias(n_obs1)
     variance1 = power_variance(n_obs1)
@@ -808,7 +1141,8 @@ def power_fisher_z_transform(
         variance2 = 0.0
 
     # Bias correction
-    z1 = np.log(spectrum1) - bias1
-    z2 = np.log(spectrum2) - bias2
+    z1: NDArray[np.floating] = np.log(spectrum1) - bias1
+    z2: NDArray[np.floating] = np.log(spectrum2) - bias2
 
-    return (z1 - z2) / np.sqrt(variance1 + variance2)
+    scale: float = np.sqrt(variance1 + variance2)
+    return (z1 - z2) / scale

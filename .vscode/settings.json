@@ -1,14 +1,10 @@
 {
     "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
             "source.organizeImports": "explicit"
         },
         "python.analysis.autoImportCompletions": true
-    },
-    "isort.args": [
-        "--profile",
-        "black"
-    ],
+    }
 }

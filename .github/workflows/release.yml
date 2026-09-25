@@ -1,6 +1,7 @@
 name: Test, Build, and Publish
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -19,6 +20,12 @@ defaults:
 permissions:
   contents: read
 
+# A newer push to the same branch or PR supersedes a running workflow; tags
+# each get their own group, so a release run is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     name: Code Quality
@@ -26,20 +33,40 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -e .[dev]
+      - name: Install the locked dev environment
+        # Install from uv.lock so this job checks with exactly the ruff and mypy
+        # versions that `uv run` and pre-commit use locally. A floating
+        # `pip install ruff>=0.8` would lint with whichever release is newest
+        # that day and fail on rules or formatting the pinned version accepts.
+        run: uv sync --frozen
       - name: Run ruff formatting check
-        run: ruff format --check spectral_connectivity/ tests/
+        run: uv run ruff format --check src/ tests/
       - name: Run ruff linting
-        run: ruff check spectral_connectivity/ tests/ --output-format=github
+        run: uv run ruff check src/ tests/ --output-format=github
       - name: Run mypy type checking
-        run: mypy spectral_connectivity/
+        run: uv run mypy src/
       - name: Run docstring examples (doctests)
-        run: pytest --doctest-modules spectral_connectivity/
+        run: uv run pytest --doctest-modules src/spectral_connectivity/
+      - name: Lint the workflow itself
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
+        with:
+          persona: regular
+
+  lockfile:
+    name: uv.lock is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: Check the lockfile against pyproject.toml
+        run: uv lock --check
 
   test:
     name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -48,10 +75,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
@@ -60,14 +88,15 @@ jobs:
       - name: Install dependencies
         run: pip install -e .[dev]
       - name: Run tests with coverage
-        run: pytest --cov=spectral_connectivity --cov-report=xml --cov-report=term-missing tests/ --ignore=tests/test_notebooks.py
+        run: pytest --cov-report=xml tests/ --ignore=tests/test_notebooks.py
       - name: Run notebook snapshot tests
         # Snapshot (syrupy) comparisons use a tight rtol, so run them on a single
         # reference platform to avoid cross-platform float-precision flakiness.
         # The two notebook-execution checks are covered by the "Test notebooks"
-        # step below and are deselected here.
+        # step below and are deselected here. --no-cov keeps this run from
+        # overwriting the full suite's .coverage, which the Codecov upload reads.
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
-        run: pytest tests/test_notebooks.py -k "not executes"
+        run: pytest tests/test_notebooks.py -k "not executes" --no-cov
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac  # v5.5.5
@@ -93,6 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
@@ -126,15 +156,20 @@ jobs:
           assert not mismatched, f"floors were upgraded: {mismatched}"
           PY
       - name: Run tests against minimum dependencies
+        # pyproject.toml turns every warning into an error, but the pinned floors
+        # are old releases that emit their own deprecation warnings, which are
+        # not this package's to fix. Warnings are therefore disabled for this job
+        # only; the main matrix keeps warnings-as-errors.
         run: pytest tests/ --ignore=tests/test_notebooks.py -p no:warnings
 
   build:
     name: Build distribution
     runs-on: ubuntu-latest
-    needs: [quality, test, test-min-deps]
+    needs: [quality, lockfile, test, test-min-deps]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0  # Needed for hatch-vcs to determine version from git tags
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
@@ -257,26 +292,27 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Extract version from tag
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
       - name: Extract release notes from CHANGELOG
         id: extract_notes
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
         run: |
           # Extract section between this version and next version marker
-          sed -n '/## \[${{ steps.get_version.outputs.VERSION }}\]/,/## \[/p' CHANGELOG.md | sed '$d' > release_notes.md
+          sed -n "/## \[${VERSION}\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.md
           # If extraction failed, use a default message
           if [ ! -s release_notes.md ]; then
-            echo "Release v${{ steps.get_version.outputs.VERSION }}" > release_notes.md
+            echo "Release v${VERSION}" > release_notes.md
             echo "" >> release_notes.md
             echo "See [CHANGELOG.md](CHANGELOG.md) for details." >> release_notes.md
           fi
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        with:
-          body_path: release_notes.md
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file release_notes.md

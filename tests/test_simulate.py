@@ -33,13 +33,9 @@ def test_simulate_MVAR_different_seeds():
     """Test that different seeds produce different results."""
     coefficients = np.array([[[0.5, 0.1], [0.2, 0.3]]])
 
-    result1 = simulate_MVAR(
-        coefficients=coefficients, n_time_samples=50, random_state=42
-    )
+    result1 = simulate_MVAR(coefficients=coefficients, n_time_samples=50, random_state=42)
 
-    result2 = simulate_MVAR(
-        coefficients=coefficients, n_time_samples=50, random_state=123
-    )
+    result2 = simulate_MVAR(coefficients=coefficients, n_time_samples=50, random_state=123)
 
     # Should be different
     assert not np.allclose(result1, result2)
@@ -50,9 +46,7 @@ def test_simulate_MVAR_generator_instance():
     coefficients = np.array([[[0.4, 0.0], [0.0, 0.4]]])
 
     rng = np.random.default_rng(42)
-    result = simulate_MVAR(
-        coefficients=coefficients, n_time_samples=10, random_state=rng
-    )
+    result = simulate_MVAR(coefficients=coefficients, n_time_samples=10, random_state=rng)
 
     # Should run without error and produce expected shape
     assert result.shape == (10, 1, 2)
@@ -88,9 +82,7 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
     )
     # Same noise draw, explicit per-trial A @ x_prev recursion.
     rng = np.random.default_rng(0)
-    reference = rng.multivariate_normal(
-        np.zeros(2), noise_covariance, size=(n_time, n_trials)
-    )
+    reference = rng.multivariate_normal(np.zeros(2), noise_covariance, size=(n_time, n_trials))
     for t in range(1, n_time):
         for trial in range(n_trials):
             reference[t, trial] += coefficients[0] @ reference[t - 1, trial]

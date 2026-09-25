@@ -1,0 +1,11 @@
+# Pull-request coverage gates. Fixed floors rather than "no drop from the base
+# branch": GPU-only (CuPy) branches cannot run on CI, so coverage measured there
+# understates the tested code, and a floor still blocks a material regression.
+coverage:
+  status:
+    project:
+      default:
+        target: 85%
+    patch:
+      default:
+        target: 80%
