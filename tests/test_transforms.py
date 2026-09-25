@@ -1964,7 +1964,7 @@ def test_custom_tapers_must_match_window_length(tapers):
 @pytest.mark.skipif(
     transforms_module.xp is not np, reason="tracemalloc sees host allocations only"
 )
-def test_morlet_fft_peak_memory_stays_near_output_size():
+def test_morlet_fft_peak_memory_stays_near_twice_output_size():
     """Coefficients are filled in place rather than stacked from a list.
 
     Stacking per-frequency results holds the coefficients twice, and the
@@ -1975,10 +1975,17 @@ def test_morlet_fft_peak_memory_stays_near_output_size():
     morlet = MorletWavelet(
         time_series, sampling_frequency=1000, frequencies=np.linspace(4, 100, 40)
     )
-    tracemalloc.start()
+    # Tracing may already be on (PYTHONTRACEMALLOC, -X tracemalloc); measure
+    # from a baseline and leave it running in that case.
+    was_tracing = tracemalloc.is_tracing()
+    if not was_tracing:
+        tracemalloc.start()
     try:
+        tracemalloc.reset_peak()
+        baseline, _ = tracemalloc.get_traced_memory()
         coefficients = morlet.fft()
         _, peak = tracemalloc.get_traced_memory()
     finally:
-        tracemalloc.stop()
-    assert peak < 2.5 * coefficients.nbytes
+        if not was_tracing:
+            tracemalloc.stop()
+    assert peak - baseline < 2.5 * coefficients.nbytes
