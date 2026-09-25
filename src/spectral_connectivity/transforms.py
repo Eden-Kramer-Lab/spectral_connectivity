@@ -2429,7 +2429,6 @@ class MorletWavelet:
         # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
         # Padding wider than a given wavelet needs does not change its 'valid'
         # output: the extra samples never enter that wavelet's support.
-        n_time_samples = self._time_series.shape[0]
         max_half_width = int(xp.max(self._edge_half_width_samples))
         padded = xp.pad(
             self._time_series,
@@ -2446,12 +2445,20 @@ class MorletWavelet:
         # factor 2). This is FieldTrip's convention; MNE omits both factors.
         scale = xp.sqrt(2.0 / self.sampling_frequency)
 
-        coefficients: list[BackendArray] = []
-        for frequency, cycles, half_width in zip(
-            self._frequencies,
-            self._n_cycles,
-            self._edge_half_width_samples,
-            strict=True,
+        # Fill one preallocated array rather than stacking per-frequency results,
+        # which would hold the per-frequency list and the stacked array at once.
+        n_trials, n_signals = data_spectrum.shape[1:]
+        transformed = xp.empty(
+            (len(self._sample_indices), n_trials, len(self._frequencies), n_signals),
+            dtype=data_spectrum.dtype,
+        )
+        for frequency_index, (frequency, cycles, half_width) in enumerate(
+            zip(
+                self._frequencies,
+                self._n_cycles,
+                self._edge_half_width_samples,
+                strict=True,
+            )
         ):
             sigma = cycles / (2 * xp.pi * frequency)
             half_width = int(half_width)
@@ -2468,10 +2475,10 @@ class MorletWavelet:
             # The 'valid' output centred on original sample i sits at
             # full-convolution index i + max_half_width + half_width.
             start = max_half_width + half_width
-            coefficient = convolved[start : start + n_time_samples] * scale
-            coefficients.append(coefficient[self._sample_indices])
+            transformed[:, :, frequency_index] = (
+                convolved[start + self._sample_indices] * scale
+            )
 
-        transformed = xp.stack(coefficients, axis=2)
         windows = _sliding_window(
             transformed,
             self._smoothing_samples,
