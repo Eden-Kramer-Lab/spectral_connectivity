@@ -602,3 +602,37 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     )
     mirrored = half_spectrum_factor[:, (-np.arange(n_fft)) % n_fft]
     np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())
+
+
+def _real_signal_spectrum(n_fft=16):
+    return _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(0)))
+
+
+def test_is_conjugate_symmetric_accepts_mirrored_nan():
+    """NaN mirrored at the conjugate frequency keeps the fast path; unpaired NaN does not."""
+    spectrum = _real_signal_spectrum()
+    spectrum[1] = np.nan  # a dead window
+    assert _is_conjugate_symmetric(spectrum)
+
+    spectrum = _real_signal_spectrum()
+    spectrum[0, 1, 0, 0] = np.nan
+    assert not _is_conjugate_symmetric(spectrum)
+
+
+def test_nan_window_leaves_the_other_windows_unchanged():
+    """A NaN window is NaN, and the healthy window matches its own factorization."""
+    spectrum = _real_signal_spectrum()
+    spectrum[1] = np.nan
+
+    # The NaN window also fails the Cholesky start, which warns separately.
+    with (
+        pytest.warns(UserWarning, match="did not converge for 1 of 2"),
+        pytest.warns(UserWarning, match="Cholesky failed"),
+    ):
+        factor = minimum_phase_decomposition(spectrum)
+
+    assert factor.shape == spectrum.shape
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(
+        factor[:1], minimum_phase_decomposition(spectrum[:1]), rtol=1e-12
+    )

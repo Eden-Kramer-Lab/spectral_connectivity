@@ -51,7 +51,10 @@ def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) 
 
     This holds for the cross-spectrum of any real-valued signals computed from an
     FFT of real input. The comparison is exact, so a spectrum that is symmetric
-    only up to rounding takes the general two-sided path.
+    only up to rounding takes the general two-sided path. NaN counts as
+    symmetric when it is mirrored at the conjugate frequency, so a batch with a
+    NaN window (e.g. a dead channel) keeps the fast path; that window's factor is
+    NaN on either path.
 
     Parameters
     ----------
@@ -63,12 +66,14 @@ def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) 
     -------
     bool
     """
+    zero_frequency = cross_spectral_matrix[..., 0, :, :]
     positive = cross_spectral_matrix[..., 1:, :, :]
     negative = cross_spectral_matrix[..., :0:-1, :, :]
+    mirrored_nan = xp.isnan(positive) & xp.isnan(negative)
     return bool(
-        xp.all(cross_spectral_matrix[..., 0, :, :].imag == 0)
-        and xp.all(positive.real == negative.real)
-        and xp.all(positive.imag == -negative.imag)
+        xp.all((zero_frequency.imag == 0) | xp.isnan(zero_frequency))
+        and xp.all((positive.real == negative.real) | mirrored_nan)
+        and xp.all((positive.imag == -negative.imag) | mirrored_nan)
     )
 
 
