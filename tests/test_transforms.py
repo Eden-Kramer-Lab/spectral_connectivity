@@ -1281,26 +1281,32 @@ def test_morlet_default_zero_padding_matches_same_convolution():
 def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     from scipy.signal import fftconvolve
 
+    # Several frequencies, so each wavelet has its own half-width and output slot.
     rng = np.random.default_rng(920)
-    data = rng.standard_normal((96, 2, 2))
-    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode)
+    data = rng.standard_normal((96, 3, 2))
+    frequencies = np.array([6.0, 8.0, 16.0])
+    transform = MorletWavelet(data, 64, frequencies, n_cycles=4, padding_mode=padding_mode)
+    coefficients = transform.fft()
 
-    sigma = 4 / (2 * np.pi * 8)
-    half_width = int(np.ceil(5 * sigma * 64))
-    wavelet_time = np.arange(-half_width, half_width + 1) / 64
-    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
-    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
-    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
-    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
-    padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
-    expected = fftconvolve(
-        padded,
-        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
-        mode="valid",
-        axes=0,
-    ) * np.sqrt(2 / 64)
+    for frequency_index, frequency in enumerate(frequencies):
+        sigma = 4 / (2 * np.pi * frequency)
+        half_width = int(np.ceil(5 * sigma * 64))
+        wavelet_time = np.arange(-half_width, half_width + 1) / 64
+        oscillation = np.exp(2j * np.pi * frequency * wavelet_time)
+        oscillation -= np.exp(-0.5 * (2 * np.pi * frequency * sigma) ** 2)
+        wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+        wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+        padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
+        expected = fftconvolve(
+            padded,
+            np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
+            mode="valid",
+            axes=0,
+        ) * np.sqrt(2 / 64)
 
-    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected, atol=1e-12)
+        np.testing.assert_allclose(
+            coefficients[:, :, 0, frequency_index], expected, atol=1e-12
+        )
 
 
 def test_morlet_edge_mask_nan_and_trim_contracts():
