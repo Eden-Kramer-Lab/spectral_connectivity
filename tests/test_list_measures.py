@@ -35,7 +35,7 @@ def test_every_public_connectivity_measure_is_registered():
     """
     import inspect
 
-    non_measure_methods = {"jackknife", "minimum_phase_reconstruction_error"}
+    non_measure_methods = {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
     public_methods = {
         name
         for name in dir(Connectivity)

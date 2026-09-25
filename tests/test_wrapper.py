@@ -1632,7 +1632,8 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
         "jackknife",
         "minimum_phase_reconstruction_error",
         "from_transform",
-        "_clear_cached_intermediates",
+        "clear_cache",
+        "_expectation_cross_spectral_matrix",
     ],
 )
 def test_non_measure_callables_are_rejected_as_unknown_measures(name):

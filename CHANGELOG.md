@@ -51,6 +51,10 @@ directly with results from 2.x.
   available unchanged. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
+- `Connectivity.clear_cache()` releases the intermediates cached for reuse
+  across measures (cross-spectral matrix, power, minimum-phase factors,
+  phase-lag moments) so memory-constrained runs can keep an instance without
+  holding them.
 - `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
   relative reconstruction error of the Wilson factorization per sub-spectrum, so
   callers can check whether a cross-spectrum is resolved finely enough in

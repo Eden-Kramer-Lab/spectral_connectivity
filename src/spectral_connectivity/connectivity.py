@@ -45,7 +45,9 @@ logger = getLogger(__name__)
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
+_NON_MEASURE_METHODS = frozenset(
+    {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
+)
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -556,7 +558,7 @@ class Connectivity:
     def observation_weights(self, value: NDArray[np.floating] | None) -> None:
         if value is None:
             self._observation_weights = None
-            self._clear_cached_intermediates()
+            self.clear_cache()
             return
         weights = xp.asarray(value)
         expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
@@ -574,14 +576,34 @@ class Connectivity:
         self._observation_weights = mark_readonly_if_supported(
             weights.astype(real_dtype, copy=True)
         )
-        self._clear_cached_intermediates()
+        self.clear_cache()
 
-    def _clear_cached_intermediates(self) -> None:
-        """Drop cached properties that depend on the spectral inputs.
+    def clear_cache(self) -> None:
+        """Free the intermediates cached for reuse across measures.
 
-        Discovering descriptors avoids a second, hand-maintained registry that
-        could omit a newly added cache. Subclass caches are cleared as well.
+        Measures computed on one instance share intermediates such as the
+        expected cross-spectral matrix and the minimum-phase factorization,
+        which can each take ``n_frequencies * n_signals**2`` values per time
+        window. Call this after the last measure that needs them to release the
+        memory while keeping the instance; later measures recompute them and
+        return identical results. Replacing ``fourier_coefficients``,
+        ``expectation_type``, or ``observation_weights`` clears the cache
+        automatically.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> rng = np.random.default_rng(0)
+        >>> fourier_coefficients = rng.standard_normal((1, 5, 3, 16, 4)) + 0j
+        >>> connectivity = Connectivity(fourier_coefficients)
+        >>> coherence = connectivity.coherence_magnitude()
+        >>> connectivity.clear_cache()
+        >>> bool(np.array_equal(connectivity.coherence_magnitude(), coherence, equal_nan=True))
+        True
         """
+        # Discovering descriptors avoids a second, hand-maintained registry that
+        # could omit a newly added cache. Subclass caches are cleared as well.
         for klass in type(self).__mro__:
             for name, descriptor in vars(klass).items():
                 if isinstance(descriptor, cached_property):
@@ -678,7 +700,7 @@ class Connectivity:
             owned = mark_readonly_if_supported(value.copy(order="K"))
         value = owned
         self._fourier_coefficients = value
-        self._clear_cached_intermediates()
+        self.clear_cache()
         # On reassignment (not initial construction), a change in the number of
         # FFT bins or time windows invalidates the stored frequency/time
         # coordinates. Reset them to geometry-matching defaults so
@@ -757,7 +779,7 @@ class Connectivity:
             raise ValueError(error_msg)
 
         self._expectation_type = value
-        self._clear_cached_intermediates()
+        self.clear_cache()
 
     @classmethod
     def from_multitaper(

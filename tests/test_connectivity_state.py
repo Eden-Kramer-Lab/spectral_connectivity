@@ -117,6 +117,27 @@ def test_coherence_measures_retain_only_power_and_cross_spectrum():
     assert _cached_names(c) == {"_power", "_cached_reduced_cross_spectral_matrix"}
 
 
+def test_clear_cache_frees_intermediates_and_preserves_results():
+    """clear_cache() drops every cached intermediate; results are unchanged."""
+    rng = np.random.default_rng(7)
+    shape = (1, 4, 6, 8, 3)
+    fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+    measures = [
+        "coherence_magnitude",
+        "weighted_phase_lag_index",
+        "pairwise_spectral_granger_prediction",
+    ]
+    before = {measure: getattr(c, measure)() for measure in measures}
+    assert _cached_names(c)
+
+    c.clear_cache()
+
+    assert _cached_names(c) == set()
+    for measure in measures:
+        np.testing.assert_array_equal(getattr(c, measure)(), before[measure])
+
+
 def test_subclass_cached_property_is_invalidated_automatically():
     """New dependent caches need no entry in a parallel name registry."""
 
