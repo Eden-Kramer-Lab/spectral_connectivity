@@ -11,25 +11,10 @@ from logging import DEBUG, getLogger
 import numpy as np
 from numpy.typing import NDArray
 
+from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity._backend import fft, ifft, xp
 
 logger = getLogger(__name__)
-
-
-def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-    """Compute conjugate transpose of the last two dimensions.
-
-    Parameters
-    ----------
-    x : NDArray[complexfloating], shape (..., M, N)
-        Input array.
-
-    Returns
-    -------
-    x_H : NDArray[complexfloating], shape (..., N, M)
-        Conjugate transpose of last two dimensions.
-    """
-    return x.swapaxes(-1, -2).conjugate()
 
 
 def _get_initial_conditions(

@@ -7,11 +7,11 @@ import pytest
 import scipy.stats
 from scipy.ndimage import label
 
+from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
     _complex_inner_product,
-    _conjugate_transpose,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
     _optimize_canonical_coherency_phase,
@@ -2141,21 +2141,15 @@ class _UfuncWhereRejectingNamespace:
         return strict_ufunc
 
 
-def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
+def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
     use it. Emulate that restriction by swapping every module's ``xp`` namespace
     for one whose ufuncs raise on ``where=``, then exercise every path that
     divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
-    from spectral_connectivity import (
-        MorletWavelet,
-        Multitaper,
-        minimum_phase_decomposition,
-        transforms,
-    )
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import MorletWavelet, Multitaper
 
     strict_namespace = _UfuncWhereRejectingNamespace()
-    for module in (connectivity_module, transforms, minimum_phase_decomposition):
+    for module in backend_modules:
         assert module.xp is np  # the CPU backend this emulation replaces
         monkeypatch.setattr(module, "xp", strict_namespace)
     with pytest.raises(TypeError, match="where"):

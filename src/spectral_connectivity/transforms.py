@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
+from spectral_connectivity._array_utils import _divide_where
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity._backend import fft, fftfreq, ifft, next_fast_len, xp
 from spectral_connectivity.utils import (
@@ -461,22 +462,6 @@ def suggest_parameters(
         "n_time_windows": n_time_windows,
         "nyquist_frequency": nyquist_frequency,
     }
-
-
-def _divide_where(
-    numerator: BackendArray,
-    denominator: BackendArray,
-    condition: BackendArray,
-    fill: float,
-) -> BackendArray:
-    """Elementwise ``numerator / denominator`` where ``condition``, else ``fill``.
-
-    Backend-neutral replacement for ``xp.divide(..., where=...)``: CuPy ufuncs
-    do not accept the public ``where`` keyword, and the substituted unit
-    denominator also avoids NumPy divide warnings.
-    """
-    quotient = numerator / xp.where(condition, denominator, 1)
-    return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
 
 
 def _finite_scalar_start_time(start_time: Any) -> float:

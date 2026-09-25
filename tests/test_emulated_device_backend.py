@@ -25,8 +25,7 @@ import types
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, minimum_phase_decomposition, transforms
-from spectral_connectivity import connectivity as connectivity_module
+from spectral_connectivity import Connectivity
 
 _CONVERSION_MESSAGE = (
     "Implicit conversion to a NumPy array is not allowed. "
@@ -243,10 +242,10 @@ class _DeviceNamespace:
 
 
 @pytest.fixture
-def xp(monkeypatch):
+def xp(monkeypatch, backend_modules):
     """Swap every package module's ``xp`` for the device emulation."""
     namespace = _DeviceNamespace(np, "cupy")
-    for module in (connectivity_module, transforms, minimum_phase_decomposition):
+    for module in backend_modules:
         if module.xp is not np:
             pytest.skip("the emulation replaces the NumPy backend only")
         monkeypatch.setattr(module, "xp", namespace)
@@ -320,3 +319,14 @@ def test_reassigned_coefficients_keep_the_time_coordinate_on_the_host(xp):
         connectivity.fourier_coefficients = xp.asarray(_coefficients(rng, (2, 4, 3, 8, 3)))
     np.testing.assert_array_equal(np.asarray(connectivity.time), [0, 1])
     assert connectivity.frequencies.shape == (5,)
+
+
+def test_backend_modules_include_every_array_module(backend_modules):
+    """Discovery finds the modules that compute with ``xp``."""
+    names = {module.__name__ for module in backend_modules}
+    assert {
+        "spectral_connectivity._array_utils",
+        "spectral_connectivity.connectivity",
+        "spectral_connectivity.minimum_phase_decomposition",
+        "spectral_connectivity.transforms",
+    } <= names

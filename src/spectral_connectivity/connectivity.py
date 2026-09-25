@@ -12,11 +12,9 @@ from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar,
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
 
+from spectral_connectivity._array_utils import _conjugate_transpose, _divide_where
 from spectral_connectivity._backend import ifft, svds, xp
-from spectral_connectivity.minimum_phase_decomposition import (
-    _conjugate_transpose,
-    minimum_phase_decomposition,
-)
+from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
 )
@@ -26,7 +24,6 @@ from spectral_connectivity.statistics import (
     coherence_significance_pvalue,
     jackknife_confidence_interval,
 )
-from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
     is_positive_integer,

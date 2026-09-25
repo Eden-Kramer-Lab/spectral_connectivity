@@ -3,9 +3,9 @@ import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.minimum_phase_decomposition import (
     _check_convergence,
-    _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
     _singular_matrix_mask,
