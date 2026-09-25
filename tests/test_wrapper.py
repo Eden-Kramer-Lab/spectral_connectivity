@@ -8,6 +8,7 @@ import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
+from spectral_connectivity._measure_registry import _MeasureSpec
 from spectral_connectivity._provenance import (
     _canonical_json,
     _json_compatible,
@@ -16,7 +17,6 @@ from spectral_connectivity._provenance import (
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
-    _MeasureSpec,
     _reject_unmaterialized_backing,
     _time_axis_from_dataarray,
     connectivity_to_xarray,
