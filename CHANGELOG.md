@@ -51,6 +51,10 @@ directly with results from 2.x.
   available unchanged. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
+- `Connectivity.clear_cache()` releases the intermediates cached for reuse
+  across measures (cross-spectral matrix, power, phase-lag moments, and the
+  minimum-phase factorization with the Granger quantities derived from it) so
+  memory-constrained runs can keep an instance without holding them.
 - `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
   relative reconstruction error of the Wilson factorization per sub-spectrum, so
   callers can check whether a cross-spectrum is resolved finely enough in
@@ -464,6 +468,13 @@ directly with results from 2.x.
 - `Connectivity.from_multitaper` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
+- `MorletWavelet.fft` fills one preallocated coefficient array instead of
+  stacking per-frequency results, removing one full copy of the coefficients
+  from peak memory (about 3.1x to 2.1x the output size without decimation or
+  overlapping smoothing).
+- Coherence and phase-lag-index measures no longer retain the pairwise power
+  normalizer `sqrt(P_i P_j)`; it is recomputed from the cached power on each
+  call, cutting their retained cache by a third.
 
 ## [2.0.1] - 2026-05-12
 

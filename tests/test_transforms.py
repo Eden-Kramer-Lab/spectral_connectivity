@@ -1,3 +1,4 @@
+import tracemalloc
 import warnings
 from contextlib import nullcontext
 
@@ -5,6 +6,7 @@ import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
+from spectral_connectivity import transforms as transforms_module
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
     MorletWavelet,
@@ -1251,6 +1253,27 @@ def test_morlet_short_smoothing_window_does_not_warn_with_multiple_trials():
             )
 
 
+def _reference_morlet_kernel(frequency, n_cycles, sampling_frequency):
+    """Independent Morlet convolution kernel, scaled as ``MorletWavelet.fft``.
+
+    Returns
+    -------
+    half_width : int
+        Samples on each side of the wavelet center.
+    kernel : np.ndarray, shape (2 * half_width + 1, 1, 1)
+        Time-reversed conjugate wavelet for ``fftconvolve`` along axis 0.
+    """
+    sigma = n_cycles / (2 * np.pi * frequency)
+    half_width = int(np.ceil(5 * sigma * sampling_frequency))
+    wavelet_time = np.arange(-half_width, half_width + 1) / sampling_frequency
+    oscillation = np.exp(2j * np.pi * frequency * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * frequency * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    kernel = np.conjugate(wavelet[::-1]) * np.sqrt(2 / sampling_frequency)
+    return half_width, kernel[:, np.newaxis, np.newaxis]
+
+
 def test_morlet_default_zero_padding_matches_same_convolution():
     from scipy.signal import fftconvolve
 
@@ -1258,19 +1281,8 @@ def test_morlet_default_zero_padding_matches_same_convolution():
     data = rng.standard_normal((96, 2, 2))
     transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4)
 
-    sigma = 4 / (2 * np.pi * 8)
-    half_width = int(np.ceil(5 * sigma * 64))
-    wavelet_time = np.arange(-half_width, half_width + 1) / 64
-    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
-    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
-    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
-    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
-    expected = fftconvolve(
-        data,
-        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
-        mode="same",
-        axes=0,
-    ) * np.sqrt(2 / 64)
+    _, kernel = _reference_morlet_kernel(8.0, n_cycles=4, sampling_frequency=64)
+    expected = fftconvolve(data, kernel, mode="same", axes=0)
 
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
 
@@ -1279,26 +1291,23 @@ def test_morlet_default_zero_padding_matches_same_convolution():
 def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     from scipy.signal import fftconvolve
 
+    # Several frequencies, so each wavelet has its own half-width and output slot.
     rng = np.random.default_rng(920)
-    data = rng.standard_normal((96, 2, 2))
-    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4, padding_mode=padding_mode)
+    data = rng.standard_normal((96, 3, 2))
+    frequencies = np.array([6.0, 8.0, 16.0])
+    transform = MorletWavelet(data, 64, frequencies, n_cycles=4, padding_mode=padding_mode)
+    coefficients = transform.fft()
 
-    sigma = 4 / (2 * np.pi * 8)
-    half_width = int(np.ceil(5 * sigma * 64))
-    wavelet_time = np.arange(-half_width, half_width + 1) / 64
-    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
-    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
-    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
-    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
-    padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
-    expected = fftconvolve(
-        padded,
-        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
-        mode="valid",
-        axes=0,
-    ) * np.sqrt(2 / 64)
+    for frequency_index, frequency in enumerate(frequencies):
+        half_width, kernel = _reference_morlet_kernel(
+            frequency, n_cycles=4, sampling_frequency=64
+        )
+        padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
+        expected = fftconvolve(padded, kernel, mode="valid", axes=0)
 
-    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected, atol=1e-12)
+        np.testing.assert_allclose(
+            coefficients[:, :, 0, frequency_index], expected, atol=1e-12
+        )
 
 
 def test_morlet_edge_mask_nan_and_trim_contracts():
@@ -1951,3 +1960,32 @@ def test_custom_tapers_must_match_window_length(tapers):
     is rejected at construction instead of failing inside fft()."""
     with pytest.raises(ValueError, match=r"tapers must have shape \(100, n_tapers\)"):
         Multitaper(np.zeros((100, 10, 2)), tapers=tapers)
+
+
+@pytest.mark.skipif(
+    transforms_module.xp is not np, reason="tracemalloc sees host allocations only"
+)
+def test_morlet_fft_peak_memory_stays_near_twice_output_size():
+    """Coefficients are filled in place rather than stacked from a list.
+
+    Stacking per-frequency results holds the coefficients twice, and the
+    windowing copy adds a third; filling one array keeps the peak near twice
+    the output.
+    """
+    time_series = np.random.default_rng(0).standard_normal((10_000, 1, 8))
+    morlet = MorletWavelet(
+        time_series, sampling_frequency=1000, frequencies=np.linspace(4, 100, 40)
+    )
+    # Tracing may already be on (PYTHONTRACEMALLOC, -X tracemalloc); measure
+    # from a baseline and leave it running in that case.
+    was_tracing = tracemalloc.is_tracing()
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        baseline, _ = tracemalloc.get_traced_memory()
+        coefficients = morlet.fft()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not was_tracing:
+            tracemalloc.stop()
+    assert peak - baseline < 2.5 * coefficients.nbytes
