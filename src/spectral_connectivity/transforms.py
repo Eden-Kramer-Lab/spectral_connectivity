@@ -11,6 +11,7 @@ from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity.utils import (
     BackendArray,
+    cupy_device_name,
     gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
@@ -485,18 +486,8 @@ if not TYPE_CHECKING and is_gpu_enabled():
         )
         raise RuntimeError(msg) from exc
 
-    # Log GPU device information
     try:
-        device = xp.cuda.Device()
-        # Try to get the actual GPU model name first
-        try:
-            device_name = xp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
-            device_name = device_name.strip("\x00")
-        except Exception:
-            # Fallback to compute capability
-            compute_cap = device.compute_capability
-            device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-        logger.info("Using GPU for spectral_connectivity on %s", device_name)
+        logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
     except Exception:
         logger.info("Using GPU for spectral_connectivity...")
 else:

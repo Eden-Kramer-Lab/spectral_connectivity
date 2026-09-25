@@ -90,6 +90,20 @@ def gpu_request_error_message() -> str:
     )
 
 
+def cupy_device_name(cp: Any) -> str:
+    """Name of CuPy's current device, or its compute capability if unnamed.
+
+    Raises whatever ``cp.cuda.Device()`` raises when no device is usable.
+    """
+    device = cp.cuda.Device()
+    try:
+        name: str = cp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
+        return name.strip("\x00")
+    except Exception:
+        major, minor = device.compute_capability
+        return f"GPU (Compute Capability {major}.{minor})"
+
+
 def is_gpu_enabled() -> bool:
     """Return whether GPU acceleration was requested via the environment.
 
@@ -206,20 +220,8 @@ def get_compute_backend() -> dict[str, Any]:
         try:
             import cupy as cp
 
-            # Try to get device info - prefer actual GPU name over compute capability
             try:
-                device = cp.cuda.Device()
-                # Try to get the actual GPU model name first
-                try:
-                    device_name = cp.cuda.runtime.getDeviceProperties(device.id)[
-                        "name"
-                    ].decode()
-                    # Clean up the name if it has null bytes
-                    device_name = device_name.strip("\x00")
-                except Exception:
-                    # Fallback to compute capability if name not available
-                    compute_cap = device.compute_capability
-                    device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
+                device_name = cupy_device_name(cp)
             except Exception:
                 device_name = "GPU"
         except Exception:

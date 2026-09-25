@@ -28,6 +28,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
+    cupy_device_name,
     gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
@@ -57,18 +58,8 @@ if not TYPE_CHECKING and is_gpu_enabled():
         from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
 
-        # Log GPU device information
         try:
-            device = xp.cuda.Device()
-            # Try to get the actual GPU model name first
-            try:
-                device_name = xp.cuda.runtime.getDeviceProperties(device.id)["name"].decode()
-                device_name = device_name.strip("\x00")
-            except Exception:
-                # Fallback to compute capability
-                compute_cap = device.compute_capability
-                device_name = f"GPU (Compute Capability {compute_cap[0]}.{compute_cap[1]})"
-            logger.info("Using GPU for spectral_connectivity on %s", device_name)
+            logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
         except Exception:
             logger.info("Using GPU for spectral_connectivity...")
     except ImportError as exc:
