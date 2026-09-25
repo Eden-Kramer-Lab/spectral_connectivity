@@ -3411,7 +3411,8 @@ class Connectivity:
         Notes
         -----
         **Range**: [-1, 1] (signed version). For unsigned version (as in [1]),
-        take absolute value to get range [0, 1].
+        take absolute value to get range [0, 1]. In-phase or anti-phase pairs,
+        whose imaginary cross-spectrum is zero up to rounding, are 0.
 
         References
         ----------
@@ -3444,10 +3445,14 @@ class Connectivity:
             "every value is the sign of one imaginary cross-spectrum, forced to "
             "+/-1 (a perfectly consistent lag)",
         )
-        # E[sign(Im)] of the cross-spectrum (real-valued); copy so the returned
-        # array is disconnected from the cached moment.
-        (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
-        return mean_sign.real.copy()
+        # E[sign(Im)] of the cross-spectrum (real-valued). Pairs with no phase
+        # lag (in-phase signals) have Im at rounding level, whose sign is noise,
+        # so they are 0. xp.where returns a fresh array, not the cached moment.
+        mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
+        pli: NDArray[np.floating] = xp.where(
+            self._has_no_phase_lag(mean_absolute), 0.0, mean_sign.real
+        )
+        return pli
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -3456,8 +3461,8 @@ class Connectivity:
 
         Values above 0.5 indicate that one signal consistently phase-leads the
         other; values below 0.5 indicate that it phase-lags.  A value of 0.5
-        represents no preferred phase-lag direction, including an exactly zero
-        imaginary cross-spectrum.
+        represents no preferred phase-lag direction, including in-phase or
+        anti-phase pairs, whose imaginary cross-spectrum is zero up to rounding.
 
         Returns
         -------
@@ -3502,8 +3507,14 @@ class Connectivity:
             "every value is set by the sign of one imaginary cross-spectrum, "
             "forced to 0 or 1 (a perfectly consistent lag)",
         )
-        (mean_sign,) = self._imaginary_cross_spectrum_moments("sign")
-        directed_pli: NDArray[np.floating] = xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0)
+        # Pairs with no phase lag (in-phase signals) have Im at rounding level,
+        # whose sign is noise, so they are neutral (0.5).
+        mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
+        directed_pli: NDArray[np.floating] = xp.where(
+            self._has_no_phase_lag(mean_absolute),
+            0.5,
+            xp.clip((1.0 + mean_sign.real) / 2.0, 0.0, 1.0),
+        )
         return directed_pli
 
     @_asnumpy

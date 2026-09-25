@@ -1744,7 +1744,8 @@ def test_phase_lag_index_moments_are_computed_lazily():
 
     pli_only = Connectivity(fc)
     pli_only.phase_lag_index()
-    assert set(pli_only.__dict__["_imaginary_moment_cache"]) == {"sign"}
+    # "absolute" is the zero-lag test's scale.
+    assert set(pli_only.__dict__["_imaginary_moment_cache"]) == {"sign", "absolute"}
 
     wpli_only = Connectivity(fc)
     wpli_only.weighted_phase_lag_index()
@@ -3160,10 +3161,11 @@ def test_phase_lag_family_is_zero_for_in_phase_signals(scale):
     """A channel paired with a scaled copy of itself (zero-lag coupling, e.g.
     volume conduction) has no phase lag. Its per-observation imaginary
     cross-spectrum is rounding noise, not exactly 0, so an exact-zero guard
-    reports wPLI as a ratio of rounding errors (|wPLI| up to 0.6).
+    reports wPLI as a ratio of rounding errors (|wPLI| up to 0.6), and the sign
+    of that noise gives PLI and dPLI a false lead/lag direction.
 
     Regression: the zero-lag test compared E[|Im S_xy|] with exactly 0 instead
-    of with the signals' own power.
+    of with the signals' own power, and PLI and dPLI had no zero-lag test.
     """
     from spectral_connectivity import Multitaper
 
@@ -3172,6 +3174,8 @@ def test_phase_lag_family_is_zero_for_in_phase_signals(scale):
     connectivity = Connectivity.from_transform(
         Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
     )
+    np.testing.assert_array_equal(connectivity.phase_lag_index()[..., 0, 1], 0.0)
+    np.testing.assert_array_equal(connectivity.directed_phase_lag_index()[..., 0, 1], 0.5)
     np.testing.assert_array_equal(connectivity.weighted_phase_lag_index()[..., 0, 1], 0.0)
     np.testing.assert_array_equal(
         connectivity.debiased_squared_phase_lag_index()[..., 0, 1], 0.0

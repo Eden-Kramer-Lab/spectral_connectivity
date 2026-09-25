@@ -394,7 +394,9 @@ directly with results from 2.x.
   diagonal); the phase-lag family is now invariant to the signal's amplitude
   scale. "No phase lag" is judged relative to the pair's power, so a channel
   paired with a scaled copy of itself (zero-lag coupling, whose imaginary
-  cross-spectrum is rounding noise rather than exactly 0) gives 0 for both.
+  cross-spectrum is rounding noise rather than exactly 0) gives 0 for both,
+  and 0 for `phase_lag_index` and 0.5 for `directed_phase_lag_index` rather than
+  a direction read from the sign of that noise.
 - `fourier_connectivity(is_one_sided=False)` on unlabeled coefficients honors
   the declaration and runs the two-sided-only measures; only `is_one_sided=None`
   rejects them. Because one-sided (e.g. `rfft`) coefficients declared two-sided
