@@ -33,6 +33,11 @@ class UnsupportedMeasureError(ValueError):
     """
 
 
+# Raised by and documented with the public wrapper API; keep that its home for
+# tracebacks, pickling, and the API reference.
+UnsupportedMeasureError.__module__ = "spectral_connectivity.wrapper"
+
+
 def _check_method_accepts_kwargs(
     method: str, measure: Callable[..., Any], kwargs: Mapping[str, Any]
 ) -> None:

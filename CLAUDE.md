@@ -120,6 +120,11 @@ src/spectral_connectivity/
 ├── connectivity.py          # Connectivity measures
 ├── transforms.py           # Multitaper transforms
 ├── wrapper.py              # High-level interface
+├── _measure_registry.py    # One record per wrapper measure (contract + labels); list_measures data
+├── _input_handling.py      # Wrapper input validation and xarray DataArray unwrapping
+├── _frequency_bands.py     # Frequency selection and band reduction
+├── _result_formatting.py   # Per-measure xarray result formatting
+├── _provenance.py          # Result provenance attributes and serialization
 ├── minimum_phase_decomposition.py
 ├── statistics.py           # Statistical utilities
 ├── simulate.py             # Data simulation utilities
