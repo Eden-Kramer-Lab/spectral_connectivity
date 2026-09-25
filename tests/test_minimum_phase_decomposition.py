@@ -3,12 +3,14 @@ import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity.minimum_phase_decomposition import (
     _check_convergence,
     _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
     _inverse_isolating_singular,
+    _is_conjugate_symmetric,
     _singular_matrix_mask,
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
@@ -493,3 +495,57 @@ def test_minimum_phase_decomposition_promotes_complex64_working_precision():
     csm = factor @ factor.swapaxes(-1, -2).conj()
     result = minimum_phase_decomposition(csm)
     assert result.dtype == np.complex128
+
+
+def _cross_spectrum_of(signals):
+    """Trial-averaged cross-spectrum of ``signals`` shaped (window, trial, time, signal)."""
+    coefficients = fft(signals, axis=-2)
+    n_trials = signals.shape[1]
+    return np.einsum("wtfi,wtfj->wfij", coefficients, coefficients.conj()) / n_trials
+
+
+def _lagged_signals(n_fft, rng, dtype=float):
+    """Three signals where signal 1 follows signal 0 by one sample."""
+    shape = (2, 40, n_fft, 3)
+    signals = rng.standard_normal(shape)
+    if dtype is complex:
+        signals = signals + 1j * rng.standard_normal(shape)
+    signals[..., 1:, 1] += 0.8 * signals[..., :-1, 0]
+    return signals
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_is_conjugate_symmetric_detects_real_valued_signals(n_fft):
+    """Real signals give S(-f) == conj(S(f)) exactly; complex signals do not."""
+    rng = np.random.default_rng(0)
+    real_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng))
+    complex_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng, dtype=complex))
+
+    assert _is_conjugate_symmetric(real_spectrum)
+    assert not _is_conjugate_symmetric(complex_spectrum)
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, n_fft):
+    """Iterating on the non-negative frequencies reproduces the full iteration.
+
+    For real-valued signals every Wilson iterate satisfies G(-f) == conj(G(f)),
+    so the factorization may run on the non-negative half of the spectrum and
+    mirror the rest. Forcing the full two-sided iteration must give the same
+    factor up to rounding.
+    """
+    spectrum = _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(1)))
+
+    half_spectrum_factor = minimum_phase_decomposition(spectrum)
+    monkeypatch.setattr(mpd_module, "_is_conjugate_symmetric", lambda _: False)
+    full_spectrum_factor = minimum_phase_decomposition(spectrum)
+
+    assert half_spectrum_factor.shape == full_spectrum_factor.shape
+    np.testing.assert_allclose(
+        half_spectrum_factor,
+        full_spectrum_factor,
+        rtol=0,
+        atol=1e-10 * np.abs(full_spectrum_factor).max(),
+    )
+    mirrored = half_spectrum_factor[:, (-np.arange(n_fft)) % n_fft]
+    np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())

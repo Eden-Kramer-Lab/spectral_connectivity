@@ -464,6 +464,13 @@ directly with results from 2.x.
 - `Connectivity.from_multitaper` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
+- The Wilson minimum-phase factorization behind the spectral Granger, DTF,
+  and PDC families is about 2-2.5x faster: it inverts the factor once per
+  iteration instead of solving twice, and for real-valued signals iterates on
+  the non-negative frequencies with real FFTs. Pairwise spectral Granger for 32
+  signals drops from 7.9 to 3.8 s and conditional spectral Granger for 24
+  signals from 32 to 20 s; results agree with the previous implementation to
+  within 2e-15.
 
 ## [2.0.1] - 2026-05-12
 
