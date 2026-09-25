@@ -663,7 +663,8 @@ def minimum_phase_decomposition(
                 int(is_converged.sum()),
                 n_units,
             )
-        old_minimum_phase_factor = minimum_phase_factor.copy()
+        # Every update below builds a new array, so the previous iterate needs no copy.
+        old_minimum_phase_factor = minimum_phase_factor
         # A rank-deficient sub-spectrum makes the batched solve inside
         # _get_linear_predictor singular; _inverse_isolating_singular resolves only
         # that unit to NaN (matching the GPU path) instead of aborting the batch.
