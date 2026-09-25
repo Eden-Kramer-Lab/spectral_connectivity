@@ -2429,7 +2429,6 @@ class MorletWavelet:
         # frequency then costs one kernel FFT, a multiply, and an inverse FFT.
         # Padding wider than a given wavelet needs does not change its 'valid'
         # output: the extra samples never enter that wavelet's support.
-        n_time_samples = self._time_series.shape[0]
         max_half_width = int(xp.max(self._edge_half_width_samples))
         padded = xp.pad(
             self._time_series,
@@ -2476,8 +2475,9 @@ class MorletWavelet:
             # The 'valid' output centred on original sample i sits at
             # full-convolution index i + max_half_width + half_width.
             start = max_half_width + half_width
-            coefficient = convolved[start : start + n_time_samples] * scale
-            transformed[:, :, frequency_index] = coefficient[self._sample_indices]
+            transformed[:, :, frequency_index] = (
+                convolved[start + self._sample_indices] * scale
+            )
 
         windows = _sliding_window(
             transformed,
