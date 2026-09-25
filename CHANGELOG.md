@@ -203,6 +203,11 @@ directly with results from 2.x.
 
 ### Changed
 
+- The array backend is selected once, in `spectral_connectivity._backend`,
+  instead of separately in each module. An unrecognized
+  `SPECTRAL_CONNECTIVITY_ENABLE_GPU` value now warns once at import rather than
+  once per module, and the "Using CPU/GPU" message is logged once by the
+  `spectral_connectivity._backend` logger.
 - xarray results carry `long_name` and `units` on every variable (spectral
   densities in `(<input units>)^2/Hz` when the input states its units),
   `band_lower`/`band_upper` coordinates after band reduction, and an input

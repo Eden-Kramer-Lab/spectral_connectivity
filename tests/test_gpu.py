@@ -1,10 +1,10 @@
 """Tests for GPU backend detection and configuration.
 
 The compute backend is fixed when ``spectral_connectivity`` is first imported
-(``transforms.xp`` is numpy or cupy), so patching the environment afterwards only
+(``_backend.xp`` is numpy or cupy), so patching the environment afterwards only
 changes what :func:`get_compute_backend` reports as *requested*
 (``gpu_enabled``), never the imported ``backend``. Assertions about the imported
-backend therefore depend on the session's actual ``transforms.xp``.
+backend therefore depend on the session's actual ``_backend.xp``.
 """
 
 import importlib.machinery
@@ -18,22 +18,21 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from spectral_connectivity import get_compute_backend
-from spectral_connectivity import transforms as _transforms
+from spectral_connectivity import _backend, get_compute_backend
 from spectral_connectivity.utils import GPU_ENV_VAR, is_gpu_enabled
 
-_SESSION_IS_CPU = _transforms.xp.__name__ == "numpy"
+_SESSION_IS_CPU = _backend.xp.__name__ == "numpy"
 cpu_session_only = pytest.mark.skipif(
     not _SESSION_IS_CPU, reason="backend assertions assume a NumPy-backed import"
 )
 
 
 @pytest.fixture
-def cpu_transforms():
+def cpu_backend():
     """Report a NumPy-backed import regardless of the session's real backend."""
-    fake_transforms = types.ModuleType("spectral_connectivity.transforms")
-    fake_transforms.xp = np
-    with patch.dict(sys.modules, {"spectral_connectivity.transforms": fake_transforms}):
+    fake_backend = types.ModuleType("spectral_connectivity._backend")
+    fake_backend.xp = np
+    with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
         yield
 
 
@@ -99,7 +98,7 @@ class TestGetComputeBackend:
         with patch.dict(os.environ, {GPU_ENV_VAR: value}):
             assert get_compute_backend()["gpu_enabled"] is is_gpu_enabled()
 
-    def test_requested_but_cupy_missing_message(self, cpu_transforms, cupy_not_installed):
+    def test_requested_but_cupy_missing_message(self, cpu_backend, cupy_not_installed):
         """GPU requested without CuPy: say so and how to install it."""
         with patch.dict(os.environ, {GPU_ENV_VAR: "true"}):
             result = get_compute_backend()
@@ -113,7 +112,7 @@ class TestGetComputeBackend:
         assert "pip install cupy" in result["message"]
 
     def test_cupy_installed_but_not_requested_message(
-        self, monkeypatch, cpu_transforms, cupy_installed_not_imported
+        self, monkeypatch, cpu_backend, cupy_installed_not_imported
     ):
         """CuPy importable but not requested: explain how to turn the GPU on."""
         monkeypatch.delenv(GPU_ENV_VAR, raising=False)
@@ -125,7 +124,7 @@ class TestGetComputeBackend:
         assert "CuPy is installed and GPU acceleration is available" in result["message"]
         assert f"{GPU_ENV_VAR}='true'" in result["message"]
 
-    def test_cpu_only_message(self, monkeypatch, cpu_transforms, cupy_not_installed):
+    def test_cpu_only_message(self, monkeypatch, cpu_backend, cupy_not_installed):
         """Neither requested nor installed: CPU device and setup instructions."""
         monkeypatch.delenv(GPU_ENV_VAR, raising=False)
         result = get_compute_backend()
@@ -214,14 +213,14 @@ class TestIsGpuEnabled:
 class TestBackendDetection:
     """Test that get_compute_backend reports 'gpu' when xp is the cupy module."""
 
-    def test_reports_gpu_when_transforms_xp_is_cupy(self):
+    def test_reports_gpu_when_backend_xp_is_cupy(self):
         fake_cupy = types.ModuleType("cupy")  # __name__ == "cupy"
-        fake_transforms = types.ModuleType("spectral_connectivity.transforms")
-        fake_transforms.xp = fake_cupy
+        fake_backend = types.ModuleType("spectral_connectivity._backend")
+        fake_backend.xp = fake_cupy
 
-        with patch.dict(sys.modules, {"spectral_connectivity.transforms": fake_transforms}):
+        with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
             result = get_compute_backend()
             assert result["backend"] == "gpu"
 
-    def test_reports_cpu_when_transforms_xp_is_numpy(self, cpu_transforms):
+    def test_reports_cpu_when_backend_xp_is_numpy(self, cpu_backend):
         assert get_compute_backend()["backend"] == "cpu"

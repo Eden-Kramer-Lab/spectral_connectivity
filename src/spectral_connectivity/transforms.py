@@ -2,17 +2,17 @@
 
 import warnings
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
+from typing import Any, Literal, TypedDict, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
+from spectral_connectivity._backend import detrend as _backend_detrend
+from spectral_connectivity._backend import fft, fftfreq, ifft, next_fast_len, xp
 from spectral_connectivity.utils import (
     BackendArray,
-    cupy_device_name,
-    gpu_request_error_message,
     is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
@@ -461,38 +461,6 @@ def suggest_parameters(
         "n_time_windows": n_time_windows,
         "nyquist_frequency": nyquist_frequency,
     }
-
-
-# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
-# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
-if not TYPE_CHECKING and is_gpu_enabled():
-    try:
-        import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-    except ImportError as exc:
-        raise RuntimeError(gpu_request_error_message()) from exc
-    try:
-        # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
-        # imports cupy fine but fails here, which must not be reported as
-        # "CuPy is not installed".
-        from cupyx.scipy.signal import detrend as _backend_detrend
-    except ImportError as exc:
-        msg = (
-            f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
-            f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
-            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
-        )
-        raise RuntimeError(msg) from exc
-
-    try:
-        logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
-    except Exception:
-        logger.info("Using GPU for spectral_connectivity...")
-else:
-    logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
-    from scipy.signal import detrend as _backend_detrend
 
 
 def _divide_where(

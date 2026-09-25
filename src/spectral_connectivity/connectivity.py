@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar,
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
 
+from spectral_connectivity._backend import ifft, svds, xp
 from spectral_connectivity.minimum_phase_decomposition import (
     _conjugate_transpose,
     minimum_phase_decomposition,
@@ -28,9 +29,6 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.transforms import _divide_where
 from spectral_connectivity.utils import (
     BackendArray,
-    cupy_device_name,
-    gpu_request_error_message,
-    is_gpu_enabled,
     is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
@@ -49,26 +47,6 @@ _NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_err
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
-
-# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
-# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
-if not TYPE_CHECKING and is_gpu_enabled():
-    try:
-        import cupy as xp
-        from cupyx.scipy.fft import ifft
-        from cupyx.scipy.sparse.linalg import svds
-
-        try:
-            logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
-        except Exception:
-            logger.info("Using GPU for spectral_connectivity...")
-    except ImportError as exc:
-        raise RuntimeError(gpu_request_error_message()) from exc
-else:
-    logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import ifft
-    from scipy.sparse.linalg import svds
 
 EXPECTATION_AXES = {
     "time": (0,),
