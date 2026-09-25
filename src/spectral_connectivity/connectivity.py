@@ -13,6 +13,7 @@ import numpy as np
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity.minimum_phase_decomposition import (
+    _conjugate_transpose,
     minimum_phase_decomposition,
 )
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -1081,6 +1082,11 @@ class Connectivity:
             self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
 
+    @cached_property
+    def _pairwise_power_scale(self) -> NDArray[np.floating]:
+        """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals)."""
+        return xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
+
     @property
     def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
         """Return the complex-valued linear association between fourier coefficients.
@@ -1847,10 +1853,9 @@ class Connectivity:
         host transfer; the public ``coherency`` converts the result to NumPy.
         """
         self._warn_single_observation_degenerate("coherency")
-        norm = xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
         complex_coherency = _divide_masking_zero_denominator(
             self._expectation_cross_spectral_matrix(),
-            norm,
+            self._pairwise_power_scale,
             "Some signals have (near-)zero power, so coherency is undefined "
             "for those pairs and is returned as NaN. This usually indicates "
             "a flat/dead channel or all-zero input.",
@@ -1999,13 +2004,10 @@ class Connectivity:
         >>> bool(imaginary_coherence[0, 20, 0, 1] > 0.2)
         True
         """
-        denominator = xp.sqrt(
-            self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :]
-        )
         imaginary_coh = xp.abs(
             _divide_masking_zero_denominator(
                 self._expectation_cross_spectral_matrix().imag,
-                denominator,
+                self._pairwise_power_scale,
                 "Some signals have (near-)zero power, so imaginary coherence is "
                 "undefined for those pairs and is returned as NaN. This usually "
                 "indicates a flat/dead channel or all-zero input.",
@@ -3134,14 +3136,14 @@ class Connectivity:
                 UserWarning,
                 stacklevel=2,
             )
-        # z / |z| is undefined where |z| == 0; divide under a scoped errstate and
-        # set those coefficients to NaN explicitly (rather than leaking a
-        # RuntimeWarning). A NaN coefficient at any observation makes every pair
-        # involving it reduce to NaN, matching the previous per-observation path
-        # where a zero-magnitude cross-spectrum entry became NaN before averaging.
-        with np.errstate(invalid="ignore", divide="ignore"):
-            normalized: NDArray[np.complexfloating] = coefficients / magnitude
-        normalized[zero_magnitude] = xp.nan
+        # z / |z| is undefined where |z| == 0; those coefficients are NaN
+        # (rather than leaking a RuntimeWarning). A NaN coefficient at any
+        # observation makes every pair involving it reduce to NaN, matching the
+        # previous per-observation path where a zero-magnitude cross-spectrum
+        # entry became NaN before averaging.
+        normalized: NDArray[np.complexfloating] = _divide_where(
+            coefficients, magnitude, ~zero_magnitude, xp.nan
+        )
         return self._reduced_cross_spectral_matrix(normalized)
 
     @_asnumpy
@@ -3242,9 +3244,8 @@ class Connectivity:
         # numerator (perfect zero- or pi-lag locking). Define that limit as 0.
         # A NaN PLV (zero-power channel) must stay NaN rather than fall into
         # that zero limit, matching every other phase-locking measure.
-        result = xp.zeros_like(numerator)
         nonzero = denominator > xp.finfo(denominator.dtype).tiny
-        result[nonzero] = numerator[nonzero] / denominator[nonzero]
+        result = _divide_where(numerator, denominator, nonzero, 0.0)
         result[xp.isnan(complex_plv)] = xp.nan
         return xp.clip(result, 0.0, 1.0)
 
@@ -3271,10 +3272,8 @@ class Connectivity:
         -------
         no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
         """
-        power = self._power
-        scale = xp.sqrt(power[..., :, xp.newaxis] * power[..., xp.newaxis, :])
         tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
-        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * scale
+        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * self._pairwise_power_scale
         return no_lag
 
     def _imaginary_cross_spectrum_moments(
@@ -3569,12 +3568,9 @@ class Connectivity:
         )
         # Pairs with no phase lag (in-phase signals, the zeroed diagonal) have
         # E[Im] and E[|Im|] both at rounding level, so their ratio is noise; the
-        # 0/0 is defined as 0, matching phase_lag_index's sign(0) == 0. Copy
-        # before the in-place guard so the cached moment is not mutated.
+        # 0/0 is defined as 0, matching phase_lag_index's sign(0) == 0.
         no_lag = self._has_no_phase_lag(mean_absolute)
-        weights = mean_absolute.copy()
-        weights[no_lag] = 1
-        return xp.where(no_lag, 0.0, mean_imaginary / weights)
+        return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
     @_asnumpy
     @_non_negative_frequencies(axis=-3)
@@ -3696,14 +3692,15 @@ class Connectivity:
         squared_imaginary_csm_sum = mean_squared * n_observations
         imaginary_csm_magnitude_sum = mean_absolute * n_observations
         weights = imaginary_csm_magnitude_sum**2 - squared_imaginary_csm_sum
-        weights[weights == 0] = xp.nan
         # Pairs with no phase lag (in-phase signals, the zeroed diagonal) make
         # the ratio one of rounding errors or 0/0; there is no lag to estimate,
         # so 0, matching debiased_squared_phase_lag_index.
         debiased: NDArray[np.floating] = xp.where(
             self._has_no_phase_lag(mean_absolute),
             0.0,
-            (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights,
+            _divide_where(
+                imaginary_csm_sum**2 - squared_imaginary_csm_sum, weights, weights != 0, xp.nan
+            ),
         )
         return debiased
 
@@ -4929,11 +4926,8 @@ def _divide_masking_zero_denominator(
     invalid = zero | ~xp.isfinite(denominator)
     if xp.any(zero):
         warnings.warn(message, UserWarning, stacklevel=3)
-    safe = xp.where(invalid, xp.asarray(1.0, dtype=denominator.dtype), denominator)
     # Dividing by a real array keeps the numerator's real/complex kind.
-    result = cast(NDArray[_NumberT], numerator / safe)
-    result[invalid] = xp.nan
-    return result
+    return cast(NDArray[_NumberT], _divide_where(numerator, denominator, ~invalid, xp.nan))
 
 
 def _regularized_inverse(
@@ -5726,7 +5720,7 @@ def _bandpass(
             "exclusive: only frequencies strictly inside (low, high) are kept."
         )
         raise ValueError(msg)
-    frequency_index = (band[0] < frequencies) & (frequencies < band[1])
+    frequency_index = _frequencies_in_band(frequencies, band)
     if not bool(frequency_index.any()):
         msg = (
             f"frequencies_of_interest {frequencies_of_interest!r} contains no "
@@ -5739,6 +5733,18 @@ def _bandpass(
         xp.take(data, frequency_index.nonzero()[0], axis=axis),
         frequencies[frequency_index],
     )
+
+
+def _frequencies_in_band(
+    frequencies: NDArray[np.floating], band: NDArray[np.floating] | Sequence[float]
+) -> NDArray[np.bool_]:
+    """Boolean mask of ``frequencies`` strictly inside ``(low, high)``.
+
+    The single definition of the exclusive band edges used by :func:`_bandpass`
+    and by the wrapper's coordinates for band-restricted results.
+    """
+    in_band: NDArray[np.bool_] = (band[0] < frequencies) & (frequencies < band[1])
+    return in_band
 
 
 def _get_independent_frequency_step(
@@ -5918,11 +5924,6 @@ def _find_significant_frequencies(
     return _largest_independent_group_along_frequency(
         is_significant, frequency_step, min_group_size
     )
-
-
-def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-    """Conjugate transpose of the last two dimensions of array x."""
-    return x.swapaxes(-1, -2).conjugate()
 
 
 def _global_coherence_components(
@@ -6151,38 +6152,30 @@ def _estimate_spectral_granger_prediction(
     predictive_power : ndarray, shape (..., n_frequencies, n_signals, n_signals)
         The spectral granger causality of the signals.
     """
-    n_frequencies = total_power.shape[-2]
-    non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
-    total_power = xp.take(total_power, indices=non_neg_index, axis=-2)
+    n_nonnegative = total_power.shape[-2] // 2 + 1
+    total_power = total_power[..., :n_nonnegative, :]
 
-    n_frequencies = csm.shape[-3]
     new_shape = list(csm.shape)
-    new_shape[-3] = non_neg_index.size
+    new_shape[-3] = n_nonnegative
     predictive_power = xp.full(new_shape, xp.nan)
 
     for pair in pairs:
         pair_indices = xp.array(pair)[:, xp.newaxis]
         try:
-            minimum_phase_factor = minimum_phase_decomposition(
+            transfer_function, noise_covariance = _var_model_from_spectrum(
                 csm[..., pair_indices, pair_indices.T],
-                tolerance=minimum_phase_tolerance,
-                max_iterations=minimum_phase_max_iterations,
-                _warn_on_failure=False,
-            )
-            transfer_function = _estimate_transfer_function(minimum_phase_factor)[
-                ..., non_neg_index, :, :
-            ]
-            rotated_covariance = _remove_instantaneous_causality(
-                _estimate_noise_covariance(minimum_phase_factor)
+                minimum_phase_tolerance=minimum_phase_tolerance,
+                minimum_phase_max_iterations=minimum_phase_max_iterations,
             )
             predictive_power[..., pair_indices, pair_indices.T] = _estimate_predictive_power(
                 total_power[..., pair_indices[:, 0]],
-                rotated_covariance,
+                _remove_instantaneous_causality(noise_covariance),
                 transfer_function,
             )
         except np.linalg.LinAlgError:
-            # The calling measure names the NaN pairs (_warn_nan_granger_pairs).
-            predictive_power[..., pair_indices, pair_indices.T] = xp.nan
+            # Left NaN; the calling measure names the NaN pairs
+            # (_warn_nan_granger_pairs).
+            continue
 
     n_signals = csm.shape[-1]
     diagonal_ind = xp.diag_indices(n_signals)
@@ -6538,30 +6531,21 @@ def _estimate_subset_spectral_granger_prediction(
     with uninitialized entries merely to consume its requested 2-by-2 slices.
     """
     pair_indices = xp.asarray(pairs, dtype=int)
-    n_frequencies = total_power.shape[-2]
-    non_neg_index = xp.arange(0, n_frequencies // 2 + 1)
-    one_sided_power = xp.take(total_power, indices=non_neg_index, axis=-2)
+    one_sided_power = total_power[..., : total_power.shape[-2] // 2 + 1, :]
 
     # Gather the two powers for every pair, then move pair before frequency to
     # match pair_csm's (..., pair, frequency, 2) batch layout.
     pair_power = one_sided_power[..., pair_indices]
     pair_power = xp.moveaxis(pair_power, -2, -3)
 
-    minimum_phase_factor = minimum_phase_decomposition(
+    transfer_function, noise_covariance = _var_model_from_spectrum(
         pair_csm,
-        tolerance=minimum_phase_tolerance,
-        max_iterations=minimum_phase_max_iterations,
-        _warn_on_failure=False,
-    )
-    transfer_function = _estimate_transfer_function(minimum_phase_factor)[
-        ..., non_neg_index, :, :
-    ]
-    rotated_covariance = _remove_instantaneous_causality(
-        _estimate_noise_covariance(minimum_phase_factor)
+        minimum_phase_tolerance=minimum_phase_tolerance,
+        minimum_phase_max_iterations=minimum_phase_max_iterations,
     )
     pair_predictive_power = _estimate_predictive_power(
         pair_power,
-        rotated_covariance,
+        _remove_instantaneous_causality(noise_covariance),
         transfer_function,
     )
 

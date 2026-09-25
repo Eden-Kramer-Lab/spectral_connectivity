@@ -1333,7 +1333,7 @@ FFT samples:          {self.n_fft_samples}
 
         """
         if self._n_tapers is None:
-            return int(xp.floor(TAPER_MULTIPLIER * self.time_halfbandwidth_product - 1))
+            return estimate_n_tapers(self.time_halfbandwidth_product)
         return self._n_tapers
 
     @property
@@ -1525,7 +1525,9 @@ FFT samples:          {self.n_fft_samples}
             Frequency resolution in Hz.
 
         """
-        return TAPER_MULTIPLIER * self.time_halfbandwidth_product / self.time_window_duration
+        return estimate_frequency_resolution(
+            self.sampling_frequency, self.time_window_duration, self.time_halfbandwidth_product
+        )
 
     @property
     def nyquist_frequency(self) -> float:

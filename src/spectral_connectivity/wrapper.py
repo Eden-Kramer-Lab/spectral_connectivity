@@ -17,6 +17,7 @@ from spectral_connectivity.connectivity import (
     _NON_MEASURE_METHODS,
     Connectivity,
     MultivariateConnectivityResult,
+    _frequencies_in_band,
 )
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
@@ -1126,9 +1127,7 @@ def _connectivity_result_to_xarray(
         frequencies = np.asarray(connectivity.frequencies)
         frequency_band = kwargs.get("frequencies_of_interest")
         if frequency_band is not None:
-            frequencies = frequencies[
-                (frequency_band[0] < frequencies) & (frequencies < frequency_band[1])
-            ]
+            frequencies = frequencies[_frequencies_in_band(frequencies, frequency_band)]
         delay_expected_shape = (
             len(connectivity.time),
             len(frequencies),
@@ -1961,9 +1960,7 @@ def connectivity_to_xarray(
             if frequency_band is None:
                 frequency_index = np.ones(frequencies.shape, dtype=bool)
             else:
-                frequency_index = (frequency_band[0] < frequencies) & (
-                    frequencies < frequency_band[1]
-                )
+                frequency_index = _frequencies_in_band(frequencies, frequency_band)
             valid_time = validity[:, frequency_index].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     return result
