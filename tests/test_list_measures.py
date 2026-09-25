@@ -12,9 +12,9 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
+from spectral_connectivity._measure_registry import _MEASURE_SPECS
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
-    _MEASURE_SPECS,
     DEFAULT_METHODS,
     MeasureInfo,
 )

@@ -8,15 +8,19 @@ import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
+from spectral_connectivity._input_handling import (
+    _reject_unmaterialized_backing,
+    _time_axis_from_dataarray,
+)
+from spectral_connectivity._measure_registry import _MeasureSpec
+from spectral_connectivity._provenance import (
+    _canonical_json,
+    _json_compatible,
+    _netcdf_provenance_value,
+)
 from spectral_connectivity.connectivity import _NON_MEASURE_METHODS, Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
-    _canonical_json,
-    _json_compatible,
-    _MeasureSpec,
-    _netcdf_provenance_value,
-    _reject_unmaterialized_backing,
-    _time_axis_from_dataarray,
     connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
@@ -786,10 +790,11 @@ def test_dataarray_non_scalar_start_time_is_rejected():
 
 def test_measure_spec_rejects_inconsistent_field_combinations():
     """Illegal capability combinations are unrepresentable, not merely unused."""
+    labels = ("Label", "1", (0.0, 1.0), "Interpretation.")
     with pytest.raises(ValueError, match="transpose_output requires pairwise"):
-        _MeasureSpec("power", is_directed=True, transpose_output=True)
+        _MeasureSpec("power", *labels, is_directed=True, transpose_output=True)
     with pytest.raises(ValueError, match="requires a directional measure"):
-        _MeasureSpec("pairwise", transpose_output=True)
+        _MeasureSpec("pairwise", *labels, transpose_output=True)
 
 
 def test_dataarray_numeric_time_coordinate_sets_output_time():
@@ -3452,12 +3457,6 @@ def test_every_measure_has_a_long_name_and_units(method, units):
     )
     assert result.attrs["units"] == units
     assert result.attrs["long_name"]
-
-
-def test_measure_labels_cover_every_measure():
-    from spectral_connectivity.wrapper import _MEASURE_DESCRIPTIONS, _MEASURE_SPECS
-
-    assert set(_MEASURE_DESCRIPTIONS) == set(_MEASURE_SPECS)
 
 
 def test_large_array_input_attrs_are_summarized():
