@@ -467,6 +467,9 @@ directly with results from 2.x.
 - `MorletWavelet.fft` fills one preallocated coefficient array instead of
   stacking per-frequency results, lowering peak memory from about 3.1x to 2.1x
   the output size.
+- Coherence measures no longer retain the pairwise power normalizer
+  `sqrt(P_i P_j)`; it is recomputed from the cached power, cutting their retained
+  cache by a third.
 
 ## [2.0.1] - 2026-05-12
 

@@ -1135,9 +1135,13 @@ class Connectivity:
             self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
 
-    @cached_property
+    @property
     def _pairwise_power_scale(self) -> NDArray[np.floating]:
-        """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals)."""
+        """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals).
+
+        Recomputed on each access: it is as large as the real part of the cached
+        cross-spectral matrix but costs only one outer product of ``_power``.
+        """
         return xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
 
     @property

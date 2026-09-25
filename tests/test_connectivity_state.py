@@ -88,6 +88,35 @@ def test_power_and_cross_spectrum_caches_invalidate():
     assert c._power.shape != power_trials_tapers.shape
 
 
+def _cached_names(connectivity):
+    """Names of cached_property values currently held by ``connectivity``."""
+    return {
+        name
+        for klass in type(connectivity).__mro__
+        for name, descriptor in vars(klass).items()
+        if isinstance(descriptor, cached_property) and name in connectivity.__dict__
+    }
+
+
+def test_coherence_measures_retain_only_power_and_cross_spectrum():
+    """Cheap derived quantities are recomputed rather than held.
+
+    The pairwise power normalizer ``sqrt(P_i P_j)`` is as large as the real part
+    of the cross-spectral matrix but costs one outer product to rebuild, so
+    holding it would add a third to the retained memory for no measurable speed.
+    """
+    rng = np.random.default_rng(6)
+    shape = (1, 4, 3, 8, 3)
+    fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+
+    c.coherence_magnitude()
+    c.coherence_phase()
+    c.imaginary_coherence()
+
+    assert _cached_names(c) == {"_power", "_cached_reduced_cross_spectral_matrix"}
+
+
 def test_subclass_cached_property_is_invalidated_automatically():
     """New dependent caches need no entry in a parallel name registry."""
 
