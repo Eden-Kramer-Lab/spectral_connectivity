@@ -8,8 +8,8 @@ from spectral_connectivity.minimum_phase_decomposition import (
     _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
+    _inverse_isolating_singular,
     _singular_matrix_mask,
-    _solve_isolating_singular,
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
 )
@@ -85,30 +85,28 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
     np.testing.assert_array_equal(converged[0], factor[0])
 
 
-def test_solve_isolating_singular_isolates_bad_units():
-    """A singular matrix in the batch must not abort the solve for the rest.
+def test_inverse_isolating_singular_isolates_bad_units():
+    """A singular matrix in the batch must not abort the inversion for the rest.
 
-    Regression: the batched ``xp.linalg.solve`` inside the Wilson iteration
+    Regression: the batched ``xp.linalg`` call inside the Wilson iteration
     raises ``LinAlgError`` if *any* sub-matrix is exactly singular, which
     previously NaN-poisoned the entire batch (and diverged from the GPU path,
-    where CuPy returns NaN instead of raising). ``_solve_isolating_singular``
-    resolves only the singular unit to NaN and solves the others normally.
+    where CuPy returns NaN instead of raising). ``_inverse_isolating_singular``
+    resolves only the singular unit to NaN and inverts the others normally.
     """
     identity = np.eye(2)
     good = np.array([[2.0, 0.0], [0.0, 3.0]])
     singular = np.array([[1.0, 2.0], [2.0, 4.0]])  # rank 1
-    rhs = np.eye(2)
-    coefficient = np.stack([good, singular, good])
-    right_hand_side = np.stack([rhs, rhs, rhs])
+    matrices = np.stack([good, singular, good])
 
-    # The plain batched solve raises on the singular unit.
+    # The plain batched inverse raises on the singular unit.
     with pytest.raises(np.linalg.LinAlgError):
-        np.linalg.solve(coefficient, right_hand_side)
+        np.linalg.inv(matrices)
 
-    solved = _solve_isolating_singular(coefficient, right_hand_side, identity)
-    assert np.allclose(solved[0], np.linalg.inv(good))
-    assert np.isnan(solved[1]).all()
-    assert np.allclose(solved[2], np.linalg.inv(good))
+    inverse = _inverse_isolating_singular(matrices, identity)
+    assert np.allclose(inverse[0], np.linalg.inv(good))
+    assert np.isnan(inverse[1]).all()
+    assert np.allclose(inverse[2], np.linalg.inv(good))
 
 
 def test_singular_matrix_mask_flags_singular_and_nonfinite():

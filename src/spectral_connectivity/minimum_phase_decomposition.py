@@ -374,44 +374,40 @@ def _singular_matrix_mask(
     return (~is_finite) | (smallest <= tolerance)
 
 
-def _solve_isolating_singular(
-    coefficient_matrix: NDArray[np.complexfloating],
-    right_hand_side: NDArray[np.complexfloating],
+def _inverse_isolating_singular(
+    matrices: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
-    """Batched solve that isolates singular sub-matrices as NaN.
+    """Batched inverse that isolates singular sub-matrices as NaN.
 
-    NumPy's ``linalg.solve`` raises ``LinAlgError`` if *any* matrix in the
+    NumPy's ``linalg.inv`` raises ``LinAlgError`` if *any* matrix in the
     batched stack is exactly singular, which would otherwise abort the whole
     Wilson iteration for every sub-spectrum sharing the batch. CuPy instead
-    returns NaN/Inf for the offending matrices and solves the rest. This helper
+    returns NaN/Inf for the offending matrices and inverts the rest. This helper
     gives the NumPy path the same behavior: singular (or already non-finite)
-    sub-matrices resolve to NaN while the remaining ones are solved normally, so
-    a single rank-deficient window (e.g. duplicated channels) does not poison
+    sub-matrices resolve to NaN while the remaining ones are inverted normally,
+    so a single rank-deficient window (e.g. duplicated channels) does not poison
     the entire batch and the CPU and GPU results agree.
 
     Parameters
     ----------
-    coefficient_matrix : NDArray[complexfloating], shape (..., n_signals, n_signals)
-        Batched left-hand-side matrices ``A`` in ``A x = B``.
-    right_hand_side : NDArray[complexfloating], shape (..., n_signals, n_signals)
-        Batched right-hand sides ``B``.
+    matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched matrices to invert.
     identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
-        Identity used to stand in for singular matrices during the solve.
+        Identity used to stand in for singular matrices during the inversion.
 
     Returns
     -------
-    NDArray[complexfloating], same shape as ``right_hand_side``
-        Solution ``x``, with NaN for singular/non-finite ``A``.
+    NDArray[complexfloating], same shape as ``matrices``
+        Inverses, with NaN for singular/non-finite matrices.
     """
     try:
-        return xp.linalg.solve(coefficient_matrix, right_hand_side)
+        return xp.linalg.inv(matrices)
     except xp.linalg.LinAlgError:
-        singular = _singular_matrix_mask(coefficient_matrix, identity_matrix)
+        singular = _singular_matrix_mask(matrices, identity_matrix)
         broadcast = singular[..., xp.newaxis, xp.newaxis]
-        safe_matrix = xp.where(broadcast, identity_matrix, coefficient_matrix)
-        solved = xp.linalg.solve(safe_matrix, right_hand_side)
-        return xp.where(broadcast, xp.nan, solved)
+        safe_matrices = xp.where(broadcast, identity_matrix, matrices)
+        return xp.where(broadcast, xp.nan, xp.linalg.inv(safe_matrices))
 
 
 def _get_linear_predictor(
@@ -422,8 +418,8 @@ def _get_linear_predictor(
     """Compute linear predictor for Wilson algorithm update step.
 
     Calculates how much to adjust the current minimum phase factor guess
-    by solving: G^{-1} S G^{-H} + I, where G is the current guess, S is
-    the cross-spectral matrix, and H denotes conjugate transpose.
+    as G^{-1} S G^{-H} + I, where G is the current guess, S is the
+    cross-spectral matrix, and H denotes conjugate transpose.
 
     Parameters
     ----------
@@ -433,7 +429,7 @@ def _get_linear_predictor(
     cross_spectral_matrix : NDArray[complexfloating],
         shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Target cross-spectral matrix to be factored.
-    I : NDArray[complexfloating], shape (n_signals, n_signals)
+    identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity matrix.
 
     Returns
@@ -447,14 +443,13 @@ def _get_linear_predictor(
     This implements the core update step of the Wilson algorithm:
     computing the "covariance sandwich estimator" that measures the
     discrepancy between the current factorization and target matrix.
+    Inverting G once and applying it on both sides costs one factorization
+    per matrix, where two ``solve`` calls would factor G twice.
     """
-    covariance_sandwich_estimator = _solve_isolating_singular(
-        minimum_phase_factor, cross_spectral_matrix, identity_matrix
-    )
-    covariance_sandwich_estimator = _solve_isolating_singular(
-        minimum_phase_factor,
-        _conjugate_transpose(covariance_sandwich_estimator),
-        identity_matrix,
+    inverse_factor = _inverse_isolating_singular(minimum_phase_factor, identity_matrix)
+    covariance_sandwich_estimator: NDArray[np.complexfloating] = xp.matmul(
+        xp.matmul(inverse_factor, cross_spectral_matrix),
+        _conjugate_transpose(inverse_factor),
     )
     return covariance_sandwich_estimator + identity_matrix
 
@@ -579,7 +574,7 @@ def minimum_phase_decomposition(
             )
         old_minimum_phase_factor = minimum_phase_factor.copy()
         # A rank-deficient sub-spectrum makes the batched solve inside
-        # _get_linear_predictor singular; _solve_isolating_singular resolves only
+        # _get_linear_predictor singular; _inverse_isolating_singular resolves only
         # that unit to NaN (matching the GPU path) instead of aborting the batch.
         linear_predictor = _get_linear_predictor(
             minimum_phase_factor,
