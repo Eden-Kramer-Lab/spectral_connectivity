@@ -442,45 +442,91 @@ def _singular_matrix_mask(
     return (~is_finite) | (smallest <= tolerance)
 
 
-def _inverse_isolating_singular(
+def _solve_isolating_singular(
+    coefficient_matrix: NDArray[np.complexfloating],
+    right_hand_side: NDArray[np.complexfloating],
+    identity_matrix: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """Batched solve that isolates singular sub-matrices as NaN.
+
+    NumPy's ``linalg.solve`` raises ``LinAlgError`` if *any* matrix in the
+    batched stack is exactly singular, which would otherwise abort the whole
+    Wilson iteration for every sub-spectrum sharing the batch. CuPy instead
+    returns NaN/Inf for the offending matrices and solves the rest. This helper
+    gives the NumPy path the same behavior: singular (or already non-finite)
+    sub-matrices resolve to NaN while the remaining ones are solved normally, so
+    a single rank-deficient window (e.g. duplicated channels) does not poison
+    the entire batch, and exactly singular sub-matrices resolve to NaN on both
+    backends.
+
+    Parameters
+    ----------
+    coefficient_matrix : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched left-hand-side matrices ``A`` in ``A x = B``.
+    right_hand_side : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched right-hand sides ``B``.
+    identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
+        Identity used to stand in for singular matrices during the solve.
+
+    Returns
+    -------
+    NDArray[complexfloating], same shape as ``right_hand_side``
+        Solution ``x``, with NaN for singular/non-finite ``A``.
+    """
+    try:
+        return xp.linalg.solve(coefficient_matrix, right_hand_side)
+    except xp.linalg.LinAlgError:
+        singular = _singular_matrix_mask(coefficient_matrix, identity_matrix)
+        broadcast = singular[..., xp.newaxis, xp.newaxis]
+        safe_matrix = xp.where(broadcast, identity_matrix, coefficient_matrix)
+        solved = xp.linalg.solve(safe_matrix, right_hand_side)
+        return xp.where(broadcast, xp.nan, solved)
+
+
+def _hermitian_square_root(
     matrices: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
-    """Batched inverse that isolates singular sub-matrices as NaN.
+    """Batched square root ``L`` with ``L Lᴴ = S`` of Hermitian PSD matrices.
 
-    NumPy's ``linalg.inv`` raises ``LinAlgError`` if *any* matrix in the
-    batched stack is exactly singular, which would otherwise abort the whole
-    Wilson iteration for every sub-spectrum sharing the batch. CuPy instead
-    returns NaN/Inf for the offending matrices and inverts the rest. This helper
-    gives the NumPy path the same behavior: singular (or already non-finite)
-    sub-matrices resolve to NaN while the remaining ones are inverted normally,
-    so a single rank-deficient window (e.g. duplicated channels) does not poison
-    the entire batch and the CPU and GPU results agree.
+    Built from the eigendecomposition ``S = V Λ Vᴴ`` as ``L = V Λ^(1/2)``, which
+    exists for every positive semidefinite ``S``, including singular ones
+    (duplicated channels), where a Cholesky factorization fails. Eigenvalues
+    that are negative only by rounding (within ``n_signals * eps`` of the
+    largest magnitude) are clipped to zero. A matrix with a larger negative
+    eigenvalue is not positive semidefinite, and a non-finite matrix has no
+    eigendecomposition; both resolve to NaN so the Wilson iteration marks that
+    sub-spectrum as failed instead of silently factoring a different matrix.
 
     Parameters
     ----------
     matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
-        Batched matrices to invert.
+        Batched Hermitian matrices ``S``. Only the lower triangle is read.
     identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
-        Identity used to stand in for singular matrices during the inversion.
+        Identity used to stand in for non-finite matrices during the
+        eigendecomposition.
 
     Returns
     -------
     NDArray[complexfloating], same shape as ``matrices``
-        Inverses, with NaN for singular/non-finite matrices.
+        Square roots ``L``, with NaN for non-finite or indefinite ``S``.
     """
-    try:
-        return xp.linalg.inv(matrices)
-    except xp.linalg.LinAlgError:
-        singular = _singular_matrix_mask(matrices, identity_matrix)
-        broadcast = singular[..., xp.newaxis, xp.newaxis]
-        safe_matrices = xp.where(broadcast, identity_matrix, matrices)
-        return xp.where(broadcast, xp.nan, xp.linalg.inv(safe_matrices))
+    n_signals = matrices.shape[-1]
+    is_finite = xp.isfinite(matrices).all(axis=(-2, -1), keepdims=True)
+    eigenvalues, eigenvectors = xp.linalg.eigh(xp.where(is_finite, matrices, identity_matrix))
+    rounding = (
+        n_signals
+        * xp.finfo(eigenvalues.dtype).eps
+        * xp.max(xp.abs(eigenvalues), axis=-1, keepdims=True)
+    )
+    is_valid = is_finite & (eigenvalues >= -rounding).all(axis=-1)[..., xp.newaxis, xp.newaxis]
+    square_root = eigenvectors * xp.sqrt(xp.maximum(eigenvalues, 0))[..., xp.newaxis, :]
+    return xp.where(is_valid, square_root, xp.nan)
 
 
 def _get_linear_predictor(
     minimum_phase_factor: NDArray[np.complexfloating],
-    cross_spectral_matrix: NDArray[np.complexfloating],
+    cross_spectral_square_root: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
     """Compute linear predictor for Wilson algorithm update step.
@@ -492,18 +538,19 @@ def _get_linear_predictor(
     Parameters
     ----------
     minimum_phase_factor : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Current minimum phase square root estimate.
-    cross_spectral_matrix : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Target cross-spectral matrix to be factored.
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Current minimum phase square root estimate G.
+    cross_spectral_square_root : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Square root ``L`` of the target cross-spectral matrix, ``S = L Lᴴ``
+        (see :func:`_hermitian_square_root`).
     identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity matrix.
 
     Returns
     -------
     linear_predictor : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
         Adjustment matrix for updating minimum phase factor estimate.
 
     Notes
@@ -511,13 +558,17 @@ def _get_linear_predictor(
     This implements the core update step of the Wilson algorithm:
     computing the "covariance sandwich estimator" that measures the
     discrepancy between the current factorization and target matrix.
-    Inverting G once and applying it on both sides costs one factorization
-    per matrix, where two ``solve`` calls would factor G twice.
+    It is formed as ``X Xᴴ`` with ``X = G⁻¹ L``: one solve per matrix, and the
+    result is Hermitian positive semidefinite by construction. Applying ``G⁻¹``
+    to ``S`` on both sides (two solves, or an explicit inverse) leaves rounding
+    asymmetry in the update, which for near-collinear channels keeps the
+    iteration from reaching the convergence tolerance.
     """
-    inverse_factor = _inverse_isolating_singular(minimum_phase_factor, identity_matrix)
+    whitened_square_root = _solve_isolating_singular(
+        minimum_phase_factor, cross_spectral_square_root, identity_matrix
+    )
     covariance_sandwich_estimator: NDArray[np.complexfloating] = xp.matmul(
-        xp.matmul(inverse_factor, cross_spectral_matrix),
-        _conjugate_transpose(inverse_factor),
+        whitened_square_root, _conjugate_transpose(whitened_square_root)
     )
     return covariance_sandwich_estimator + identity_matrix
 
@@ -587,6 +638,13 @@ def minimum_phase_decomposition(
     (e.g. of complex-valued signals) take the general two-sided iteration, which
     costs about twice as much.
 
+    Each update uses a square root ``L`` of ``S`` (``S = L Lᴴ``), computed once,
+    so the update is Hermitian positive semidefinite by construction. This lets
+    sub-spectra with near-collinear channels converge where the update formed
+    from ``S`` directly stalls at rounding level above the tolerance. An
+    indefinite or non-finite ``S`` has no such square root and is returned as
+    NaN with the non-convergence warning.
+
     Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
     factorization assumes the cross-spectrum is resolved finely enough in
     frequency that the corresponding autocovariance decays within the analysis
@@ -642,6 +700,10 @@ def minimum_phase_decomposition(
         return _to_two_sided(factor, half_spectrum_length)
 
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
+    # S is fixed across iterations, so factor it once as S = L Lᴴ.
+    cross_spectral_square_root = _hermitian_square_root(
+        working_cross_spectral_matrix, identity_matrix
+    )
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
     # converge does not mask the others sharing its time point.
@@ -666,11 +728,11 @@ def minimum_phase_decomposition(
         # Every update below builds a new array, so the previous iterate needs no copy.
         old_minimum_phase_factor = minimum_phase_factor
         # A rank-deficient sub-spectrum makes the batched solve inside
-        # _get_linear_predictor singular; _inverse_isolating_singular resolves only
+        # _get_linear_predictor singular; _solve_isolating_singular resolves only
         # that unit to NaN (matching the GPU path) instead of aborting the batch.
         linear_predictor = _get_linear_predictor(
             minimum_phase_factor,
-            working_cross_spectral_matrix,
+            cross_spectral_square_root,
             identity_matrix,
         )
         minimum_phase_factor = xp.matmul(

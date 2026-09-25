@@ -326,6 +326,12 @@ directly with results from 2.x.
   `n_signals * I` fallback; healthy units retain their Cholesky starts.
 - Wilson convergence is relative and scale-invariant, and non-converged units
   return `NaN` with a targeted warning.
+- The Wilson iteration builds each update from a square root of the
+  cross-spectrum, so it is Hermitian positive semidefinite by construction.
+  Sub-spectra with near-collinear channels (condition numbers around 1e10 and
+  above) now converge instead of stalling at rounding level above the tolerance
+  and returning `NaN`; their directed measures differ from 2.x there. An
+  indefinite cross-spectrum returns `NaN` with the non-convergence warning.
 - Directed-measure regularization is scale-invariant, directed coherence uses
   the correct source-axis noise variance, and it warns when correlated
   innovations materially violate its diagonal-covariance assumption.
@@ -476,12 +482,14 @@ directly with results from 2.x.
   normalizer `sqrt(P_i P_j)`; it is recomputed from the cached power on each
   call, cutting their retained cache by a third.
 - The Wilson minimum-phase factorization behind the spectral Granger, DTF,
-  and PDC families is about 2-2.5x faster: it inverts the factor once per
-  iteration instead of solving twice, and for real-valued signals iterates on
-  the non-negative frequencies with real FFTs. Pairwise spectral Granger for 32
-  signals drops from 7.9 to 3.8 s and conditional spectral Granger for 24
-  signals from 32 to 20 s; results agree with the previous implementation to
-  within 2e-15.
+  and PDC families is 1.8-2.9x faster in benchmarks: it factors the
+  cross-spectrum once and solves once per iteration instead of twice, and for
+  real-valued signals iterates on the non-negative frequencies with real FFTs.
+  End to end, pairwise spectral Granger for 32 signals drops from 4.3 to 2.0 s,
+  conditional spectral Granger for 24 signals from 16.6 to 9.0 s, and DTF for
+  100 windows of 8 signals from 0.68 to 0.37 s. For well-conditioned spectra,
+  results agree with the previous implementation to rounding (relative
+  differences of about 1e-14 or less).
 
 ## [2.0.1] - 2026-05-12
 

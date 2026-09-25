@@ -9,9 +9,10 @@ from spectral_connectivity.minimum_phase_decomposition import (
     _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
-    _inverse_isolating_singular,
+    _hermitian_square_root,
     _is_conjugate_symmetric,
     _singular_matrix_mask,
+    _solve_isolating_singular,
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
 )
@@ -87,28 +88,80 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
     np.testing.assert_array_equal(converged[0], factor[0])
 
 
-def test_inverse_isolating_singular_isolates_bad_units():
-    """A singular matrix in the batch must not abort the inversion for the rest.
+def test_solve_isolating_singular_isolates_bad_units():
+    """A singular matrix in the batch must not abort the solve for the rest.
 
-    Regression: the batched ``xp.linalg`` call inside the Wilson iteration
+    Regression: the batched ``xp.linalg.solve`` inside the Wilson iteration
     raises ``LinAlgError`` if *any* sub-matrix is exactly singular, which
     previously NaN-poisoned the entire batch (and diverged from the GPU path,
-    where CuPy returns NaN instead of raising). ``_inverse_isolating_singular``
-    resolves only the singular unit to NaN and inverts the others normally.
+    where CuPy returns NaN instead of raising). ``_solve_isolating_singular``
+    resolves only the singular unit to NaN and solves the others normally.
     """
     identity = np.eye(2)
     good = np.array([[2.0, 0.0], [0.0, 3.0]])
     singular = np.array([[1.0, 2.0], [2.0, 4.0]])  # rank 1
-    matrices = np.stack([good, singular, good])
+    rhs = np.eye(2)
+    coefficient = np.stack([good, singular, good])
+    right_hand_side = np.stack([rhs, rhs, rhs])
 
-    # The plain batched inverse raises on the singular unit.
+    # The plain batched solve raises on the singular unit.
     with pytest.raises(np.linalg.LinAlgError):
-        np.linalg.inv(matrices)
+        np.linalg.solve(coefficient, right_hand_side)
 
-    inverse = _inverse_isolating_singular(matrices, identity)
-    assert np.allclose(inverse[0], np.linalg.inv(good))
-    assert np.isnan(inverse[1]).all()
-    assert np.allclose(inverse[2], np.linalg.inv(good))
+    solved = _solve_isolating_singular(coefficient, right_hand_side, identity)
+    assert np.allclose(solved[0], np.linalg.inv(good))
+    assert np.isnan(solved[1]).all()
+    assert np.allclose(solved[2], np.linalg.inv(good))
+
+
+def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
+    """``L Lᴴ = S`` for positive semidefinite S, including singular S.
+
+    Singular S (a duplicated channel) has no Cholesky factor but does have this
+    square root. Non-finite and indefinite matrices resolve to NaN without
+    affecting the rest of the batch.
+    """
+    identity = np.eye(2, dtype=complex)
+    positive_definite = np.array([[2.0, 0.5 - 0.3j], [0.5 + 0.3j, 1.0]])
+    singular = np.array([[1.0, 1j], [-1j, 1.0]])  # rank 1
+    non_finite = np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=complex)
+    indefinite = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
+    matrices = np.stack([positive_definite, singular, non_finite, indefinite])
+
+    square_root = _hermitian_square_root(matrices, identity)
+
+    np.testing.assert_allclose(
+        square_root[:2] @ _conjugate_transpose(square_root[:2]), matrices[:2], atol=1e-14
+    )
+    assert np.isnan(square_root[2:]).all()
+
+
+def test_near_collinear_channels_converge():
+    """Near-duplicate channels converge instead of stalling above the tolerance.
+
+    Regression: forming the update ``G⁻¹ S G⁻ᴴ`` from S directly (two solves or
+    an explicit inverse) leaves rounding asymmetry that, for a cross-spectrum
+    with condition number around 1e10, keeps the relative change between
+    iterates just above the 1e-8 tolerance. Every window then came back NaN with
+    a non-convergence warning. Building the update from a square root of S
+    converges, and the factor reconstructs S as well as it does for
+    well-conditioned channels.
+    """
+    signals = _lagged_signals(64, np.random.default_rng(0))
+    near_duplicate = signals.copy()
+    near_duplicate[..., 2] = signals[..., 0] + 3e-5 * signals[..., 2]
+    spectrum = _cross_spectrum_of(near_duplicate)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor = minimum_phase_decomposition(spectrum)
+
+    reference_error = minimum_phase_reconstruction_error(_cross_spectrum_of(signals))
+    np.testing.assert_array_less(
+        minimum_phase_reconstruction_error(spectrum, factor), 2 * reference_error
+    )
 
 
 def test_singular_matrix_mask_flags_singular_and_nonfinite():
