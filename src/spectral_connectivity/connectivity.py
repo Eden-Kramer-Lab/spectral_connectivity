@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar,
 
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
-from scipy.ndimage import label
 
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
@@ -5775,96 +5774,6 @@ def _get_independent_frequency_step(
     return int(xp.ceil(frequency_resolution / frequency_difference))
 
 
-def _find_largest_significant_group(
-    is_significant: NDArray[np.bool_],
-) -> NDArray[np.bool_]:
-    """Find the largest cluster of significant values over frequencies.
-
-    If frequency value is significant and its neighbor in the next frequency
-    is also a significant value, then they are part of the same cluster.
-
-    If there are two clusters of the same size, the first one encountered
-    is the significant cluster. All other significant values are set to
-    false.
-
-    Parameters
-    ----------
-    is_significant : bool array
-
-    Returns
-    -------
-    is_significant_largest : bool array
-
-    """
-    labeled, _ = label(is_significant)
-    label_groups, label_counts = np.unique(labeled, return_counts=True)
-
-    if not np.all(label_groups == 0):
-        label_counts[0] = 0
-        max_group = label_groups[np.argmax(label_counts)]
-        in_largest: NDArray[np.bool_] = labeled == max_group
-        return in_largest
-    return np.zeros(is_significant.shape, dtype=bool)
-
-
-def _get_independent_frequencies(
-    is_significant: NDArray[np.bool_], frequency_step: int
-) -> NDArray[np.bool_]:
-    """Set non-distinguishable points to false based on frequency step.
-
-    Given a `frequency_step` that determines the distance to the next
-    significant point, sets non-distinguishable points to false.
-
-    Parameters
-    ----------
-    is_significant : bool array
-
-    Returns
-    -------
-    is_significant_independent : bool array
-
-    """
-    # Host-only: the significance masks are NumPy arrays by the time they reach
-    # the delay-family helpers, and CuPy's isin rejects NumPy operands.
-    index = is_significant.nonzero()[0]
-    independent_index = index[0 : len(index) : frequency_step]
-    return np.isin(np.arange(0, len(is_significant)), independent_index)
-
-
-def _find_largest_independent_group(
-    is_significant: NDArray[np.bool_], frequency_step: int, min_group_size: int = 3
-) -> NDArray[np.bool_]:
-    """Find the largest significant cluster and return independent points.
-
-    Find the largest significant cluster of frequency points and
-    return the independent frequency points of that cluster.
-
-    .. note::
-        Retained as the scalar reference implementation for the vectorized
-        ``_select_largest_independent_cluster`` used in production; it is not
-        called on the hot path, but pins that vectorization's behavior in
-        ``test_largest_independent_group_vectorized_matches_reference``.
-
-    Parameters
-    ----------
-    is_significant : bool array
-    frequency_step : int
-        The number of points between each independent frequency step
-    min_group_size : int
-        The minimum number of points for a group to be considered
-
-    Returns
-    -------
-    is_significant : bool array
-
-    """
-    is_significant = _find_largest_significant_group(is_significant)
-    is_significant = _get_independent_frequencies(is_significant, frequency_step)
-    if sum(is_significant) < min_group_size:
-        is_significant[:] = False
-    return is_significant
-
-
 # Element cap (rows * n_frequencies) for one chunk of the significant-frequency
 # selector. The per-slice int32 run-length temporaries dominate its memory, so
 # processing the flattened signal-pair slices in chunks keeps peak usage bounded
@@ -5914,16 +5823,14 @@ def _select_largest_independent_cluster(
 def _largest_independent_group_along_frequency(
     is_significant: NDArray[np.bool_], frequency_step: int, min_group_size: int
 ) -> NDArray[np.bool_]:
-    """Vectorized ``_find_largest_independent_group`` over the frequency axis (-2).
+    """Largest independent significant-frequency group along axis -2.
 
     For every slice along axis -2, keep the largest contiguous cluster of
     significant frequencies (the first cluster on ties), subsample it every
     ``frequency_step`` points, and drop the slice to all-False if fewer than
-    ``min_group_size`` independent points remain. Equivalent to applying
-    ``_find_largest_independent_group`` per slice, but computed for all slices at
-    once instead of via ``np.apply_along_axis`` (one Python call per slice). The
-    slices are processed in bounded chunks so peak memory stays independent of
-    their number.
+    ``min_group_size`` independent points remain. Computed for all slices at
+    once instead of one Python call per slice; the slices are processed in
+    bounded chunks so peak memory stays independent of their number.
 
     Parameters
     ----------

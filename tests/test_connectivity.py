@@ -5,15 +5,13 @@ from unittest.mock import PropertyMock, patch
 import numpy as np
 import pytest
 import scipy.stats
+from scipy.ndimage import label
 
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
     _complex_inner_product,
     _conjugate_transpose,
-    _find_largest_independent_group,
-    _find_largest_significant_group,
-    _get_independent_frequencies,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
     _optimize_canonical_coherency_phase,
@@ -24,6 +22,93 @@ from spectral_connectivity.connectivity import (
     _total_inflow,
     _total_outflow,
 )
+
+# Scalar reference implementations pinning the vectorized significant-frequency
+# selection used by group_delay and delay.
+
+
+def _find_largest_significant_group(
+    is_significant: np.ndarray,
+) -> np.ndarray:
+    """Find the largest cluster of significant values over frequencies.
+
+    If frequency value is significant and its neighbor in the next frequency
+    is also a significant value, then they are part of the same cluster.
+
+    If there are two clusters of the same size, the first one encountered
+    is the significant cluster. All other significant values are set to
+    false.
+
+    Parameters
+    ----------
+    is_significant : bool array
+
+    Returns
+    -------
+    is_significant_largest : bool array
+
+    """
+    labeled, _ = label(is_significant)
+    label_groups, label_counts = np.unique(labeled, return_counts=True)
+
+    if not np.all(label_groups == 0):
+        label_counts[0] = 0
+        max_group = label_groups[np.argmax(label_counts)]
+        return labeled == max_group
+    return np.zeros(is_significant.shape, dtype=bool)
+
+
+def _get_independent_frequencies(
+    is_significant: np.ndarray, frequency_step: int
+) -> np.ndarray:
+    """Set non-distinguishable points to false based on frequency step.
+
+    Given a `frequency_step` that determines the distance to the next
+    significant point, sets non-distinguishable points to false.
+
+    Parameters
+    ----------
+    is_significant : bool array
+
+    Returns
+    -------
+    is_significant_independent : bool array
+
+    """
+    index = is_significant.nonzero()[0]
+    independent_index = index[0 : len(index) : frequency_step]
+    return np.isin(np.arange(0, len(is_significant)), independent_index)
+
+
+def _find_largest_independent_group(
+    is_significant: np.ndarray, frequency_step: int, min_group_size: int = 3
+) -> np.ndarray:
+    """Find the largest significant cluster and return independent points.
+
+    Find the largest significant cluster of frequency points and
+    return the independent frequency points of that cluster.
+
+    Scalar reference for the vectorized production helper
+    ``_largest_independent_group_along_frequency``.
+
+    Parameters
+    ----------
+    is_significant : bool array
+    frequency_step : int
+        The number of points between each independent frequency step
+    min_group_size : int
+        The minimum number of points for a group to be considered
+
+    Returns
+    -------
+    is_significant : bool array
+
+    """
+    is_significant = _find_largest_significant_group(is_significant)
+    is_significant = _get_independent_frequencies(is_significant, frequency_step)
+    if sum(is_significant) < min_group_size:
+        is_significant[:] = False
+    return is_significant
 
 
 @pytest.mark.parametrize("axis", [(0), (1), (2), (3)])

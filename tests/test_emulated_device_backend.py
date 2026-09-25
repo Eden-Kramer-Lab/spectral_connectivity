@@ -27,7 +27,6 @@ import pytest
 
 from spectral_connectivity import Connectivity, minimum_phase_decomposition, transforms
 from spectral_connectivity import connectivity as connectivity_module
-from spectral_connectivity.connectivity import _get_independent_frequencies
 
 _CONVERSION_MESSAGE = (
     "Implicit conversion to a NumPy array is not allowed. "
@@ -321,12 +320,3 @@ def test_reassigned_coefficients_keep_the_time_coordinate_on_the_host(xp):
         connectivity.fourier_coefficients = xp.asarray(_coefficients(rng, (2, 4, 3, 8, 3)))
     np.testing.assert_array_equal(np.asarray(connectivity.time), [0, 1])
     assert connectivity.frequencies.shape == (5,)
-
-
-def test_independent_frequency_selection_is_host_only(xp):
-    """The delay-family significance masks are NumPy arrays by the time they
-    reach this helper, so it must not route them through the device ``isin``."""
-    is_significant = np.array([0, 1, 1, 1, 1, 0, 1], dtype=bool)
-    result = _get_independent_frequencies(is_significant, 2)
-    assert isinstance(result, np.ndarray)
-    np.testing.assert_array_equal(result, [0, 1, 0, 1, 0, 0, 1])
