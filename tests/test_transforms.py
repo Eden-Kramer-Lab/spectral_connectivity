@@ -1253,6 +1253,27 @@ def test_morlet_short_smoothing_window_does_not_warn_with_multiple_trials():
             )
 
 
+def _reference_morlet_kernel(frequency, n_cycles, sampling_frequency):
+    """Independent Morlet convolution kernel, scaled as ``MorletWavelet.fft``.
+
+    Returns
+    -------
+    half_width : int
+        Samples on each side of the wavelet center.
+    kernel : np.ndarray, shape (2 * half_width + 1, 1, 1)
+        Time-reversed conjugate wavelet for ``fftconvolve`` along axis 0.
+    """
+    sigma = n_cycles / (2 * np.pi * frequency)
+    half_width = int(np.ceil(5 * sigma * sampling_frequency))
+    wavelet_time = np.arange(-half_width, half_width + 1) / sampling_frequency
+    oscillation = np.exp(2j * np.pi * frequency * wavelet_time)
+    oscillation -= np.exp(-0.5 * (2 * np.pi * frequency * sigma) ** 2)
+    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
+    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+    kernel = np.conjugate(wavelet[::-1]) * np.sqrt(2 / sampling_frequency)
+    return half_width, kernel[:, np.newaxis, np.newaxis]
+
+
 def test_morlet_default_zero_padding_matches_same_convolution():
     from scipy.signal import fftconvolve
 
@@ -1260,19 +1281,8 @@ def test_morlet_default_zero_padding_matches_same_convolution():
     data = rng.standard_normal((96, 2, 2))
     transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4)
 
-    sigma = 4 / (2 * np.pi * 8)
-    half_width = int(np.ceil(5 * sigma * 64))
-    wavelet_time = np.arange(-half_width, half_width + 1) / 64
-    oscillation = np.exp(2j * np.pi * 8 * wavelet_time)
-    oscillation -= np.exp(-0.5 * (2 * np.pi * 8 * sigma) ** 2)
-    wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
-    wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
-    expected = fftconvolve(
-        data,
-        np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
-        mode="same",
-        axes=0,
-    ) * np.sqrt(2 / 64)
+    _, kernel = _reference_morlet_kernel(8.0, n_cycles=4, sampling_frequency=64)
+    expected = fftconvolve(data, kernel, mode="same", axes=0)
 
     np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
 
@@ -1289,20 +1299,11 @@ def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     coefficients = transform.fft()
 
     for frequency_index, frequency in enumerate(frequencies):
-        sigma = 4 / (2 * np.pi * frequency)
-        half_width = int(np.ceil(5 * sigma * 64))
-        wavelet_time = np.arange(-half_width, half_width + 1) / 64
-        oscillation = np.exp(2j * np.pi * frequency * wavelet_time)
-        oscillation -= np.exp(-0.5 * (2 * np.pi * frequency * sigma) ** 2)
-        wavelet = oscillation * np.exp(-(wavelet_time**2) / (2 * sigma**2))
-        wavelet /= np.sqrt(np.sum(np.abs(wavelet) ** 2))
+        half_width, kernel = _reference_morlet_kernel(
+            frequency, n_cycles=4, sampling_frequency=64
+        )
         padded = np.pad(data, ((half_width, half_width), (0, 0), (0, 0)), mode=padding_mode)
-        expected = fftconvolve(
-            padded,
-            np.conjugate(wavelet[::-1])[:, np.newaxis, np.newaxis],
-            mode="valid",
-            axes=0,
-        ) * np.sqrt(2 / 64)
+        expected = fftconvolve(padded, kernel, mode="valid", axes=0)
 
         np.testing.assert_allclose(
             coefficients[:, :, 0, frequency_index], expected, atol=1e-12
