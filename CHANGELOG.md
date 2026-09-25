@@ -464,6 +464,9 @@ directly with results from 2.x.
 - `Connectivity.from_multitaper` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
+- `MorletWavelet.fft` fills one preallocated coefficient array instead of
+  stacking per-frequency results, lowering peak memory from about 3.1x to 2.1x
+  the output size.
 
 ## [2.0.1] - 2026-05-12
 

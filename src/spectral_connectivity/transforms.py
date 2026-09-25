@@ -2446,12 +2446,20 @@ class MorletWavelet:
         # factor 2). This is FieldTrip's convention; MNE omits both factors.
         scale = xp.sqrt(2.0 / self.sampling_frequency)
 
-        coefficients: list[BackendArray] = []
-        for frequency, cycles, half_width in zip(
-            self._frequencies,
-            self._n_cycles,
-            self._edge_half_width_samples,
-            strict=True,
+        # Fill one preallocated array rather than stacking per-frequency results,
+        # which would briefly hold two copies of the coefficients.
+        n_trials, n_signals = data_spectrum.shape[1:]
+        transformed = xp.empty(
+            (len(self._sample_indices), n_trials, len(self._frequencies), n_signals),
+            dtype=data_spectrum.dtype,
+        )
+        for frequency_index, (frequency, cycles, half_width) in enumerate(
+            zip(
+                self._frequencies,
+                self._n_cycles,
+                self._edge_half_width_samples,
+                strict=True,
+            )
         ):
             sigma = cycles / (2 * xp.pi * frequency)
             half_width = int(half_width)
@@ -2469,9 +2477,8 @@ class MorletWavelet:
             # full-convolution index i + max_half_width + half_width.
             start = max_half_width + half_width
             coefficient = convolved[start : start + n_time_samples] * scale
-            coefficients.append(coefficient[self._sample_indices])
+            transformed[:, :, frequency_index] = coefficient[self._sample_indices]
 
-        transformed = xp.stack(coefficients, axis=2)
         windows = _sliding_window(
             transformed,
             self._smoothing_samples,

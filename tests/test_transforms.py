@@ -1,3 +1,4 @@
+import tracemalloc
 import warnings
 from contextlib import nullcontext
 
@@ -5,6 +6,7 @@ import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
+from spectral_connectivity import transforms as transforms_module
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
     MorletWavelet,
@@ -1951,3 +1953,26 @@ def test_custom_tapers_must_match_window_length(tapers):
     is rejected at construction instead of failing inside fft()."""
     with pytest.raises(ValueError, match=r"tapers must have shape \(100, n_tapers\)"):
         Multitaper(np.zeros((100, 10, 2)), tapers=tapers)
+
+
+@pytest.mark.skipif(
+    transforms_module.xp is not np, reason="tracemalloc sees host allocations only"
+)
+def test_morlet_fft_peak_memory_stays_near_output_size():
+    """Coefficients are filled in place rather than stacked from a list.
+
+    Stacking per-frequency results holds the coefficients twice, and the
+    windowing copy adds a third; filling one array keeps the peak near twice
+    the output.
+    """
+    time_series = np.random.default_rng(0).standard_normal((10_000, 1, 8))
+    morlet = MorletWavelet(
+        time_series, sampling_frequency=1000, frequencies=np.linspace(4, 100, 40)
+    )
+    tracemalloc.start()
+    try:
+        coefficients = morlet.fft()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 2.5 * coefficients.nbytes
