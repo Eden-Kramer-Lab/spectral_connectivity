@@ -2447,7 +2447,7 @@ class MorletWavelet:
         scale = xp.sqrt(2.0 / self.sampling_frequency)
 
         # Fill one preallocated array rather than stacking per-frequency results,
-        # which would briefly hold two copies of the coefficients.
+        # which would hold the per-frequency list and the stacked array at once.
         n_trials, n_signals = data_spectrum.shape[1:]
         transformed = xp.empty(
             (len(self._sample_indices), n_trials, len(self._frequencies), n_signals),

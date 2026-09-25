@@ -412,11 +412,14 @@ class Connectivity:
     every directional measure, ``result.sel(source=a, target=b)`` is ``a -> b``
     (or "``a`` leads ``b``"). Prefer them unless you need this lower-level API.
 
-    Expensive intermediates (the minimum-phase factor, transfer function, noise
-    covariance, and MVAR coefficients) are cached on first access. Reassigning
-    ``fourier_coefficients`` or ``expectation_type`` automatically invalidates
+    Intermediates shared across measures (the expected cross-spectral matrix,
+    power, phase-lag moments, and the minimum-phase factor with the transfer
+    function, noise covariance, and MVAR coefficients derived from it) are
+    cached on first access. Reassigning ``fourier_coefficients``,
+    ``expectation_type``, or ``observation_weights`` automatically invalidates
     these caches, so reusing an instance for new data is safe (constructing a
-    new instance is still the clearer choice).
+    new instance is still the clearer choice). Call :meth:`clear_cache` to
+    release them while keeping the instance.
 
     The class supports both CPU (NumPy) and GPU (CuPy) computation depending
     on the SPECTRAL_CONNECTIVITY_ENABLE_GPU environment variable. For Granger
@@ -583,10 +586,11 @@ class Connectivity:
 
         Measures computed on one instance share intermediates such as the
         expected cross-spectral matrix and the minimum-phase factorization,
-        which can each take ``n_frequencies * n_signals**2`` values per time
-        window. Call this after the last measure that needs them to release the
-        memory while keeping the instance; later measures recompute them and
-        return identical results. Replacing ``fourier_coefficients``,
+        which can each take ``n_frequencies * n_signals**2`` values for every
+        observation that ``expectation_type`` leaves unaveraged (each time
+        window by default). Call this after the last measure that needs them to
+        release the memory while keeping the instance; later measures recompute
+        them and return the same results. Replacing ``fourier_coefficients``,
         ``expectation_type``, or ``observation_weights`` clears the cache
         automatically.
 
@@ -746,7 +750,7 @@ class Connectivity:
     def expectation_type(self) -> str:
         """Which dimensions the cross-spectral matrix is averaged over.
 
-        Reassigning clears cached directed-connectivity intermediates.
+        Reassigning clears all cached intermediates (see :meth:`clear_cache`).
         """
         return self._expectation_type
 
@@ -1161,8 +1165,9 @@ class Connectivity:
     def _pairwise_power_scale(self) -> NDArray[np.floating]:
         """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals).
 
-        Recomputed on each access: it is as large as the real part of the cached
-        cross-spectral matrix but costs only one outer product of ``_power``.
+        Recomputed on each access rather than cached: it has the shape of the
+        cached cross-spectral matrix but costs only an outer product and square
+        root of ``_power``.
         """
         return xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
 
