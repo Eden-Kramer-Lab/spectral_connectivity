@@ -47,6 +47,11 @@ def _lagged_signals(n_fft, rng, dtype=float, n_windows=2, n_signals=3):
     return signals
 
 
+def _real_signal_spectrum(n_fft=16, seed=0):
+    """Exactly conjugate-symmetric cross-spectrum (2 windows, 3 signals) of real signals."""
+    return _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(seed)))
+
+
 def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
     """The diagnostic is tiny for a resolved spectrum and large when aliased."""
     coefficients = np.array([[[0.9, 0.0], [0.8, 0.9]]])  # (1 lag, 2, 2)
@@ -87,13 +92,14 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals
     """
     rng = np.random.default_rng(0)
     n_times, n_freqs, n_signals = 3, 16, 2
-    if real_signals:
-        cross_spectral_matrix = _cross_spectrum_of(
-            _lagged_signals(n_freqs, rng, n_windows=n_times, n_signals=n_signals)
-        )
-    else:
-        coeffs = rng.standard_normal((n_times, n_freqs, n_signals, n_signals))
-        cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2))
+    signals = _lagged_signals(
+        n_freqs,
+        rng,
+        dtype=float if real_signals else complex,
+        n_windows=n_times,
+        n_signals=n_signals,
+    )
+    cross_spectral_matrix = _cross_spectrum_of(signals)
     cross_spectral_matrix[0] = np.diag([2.0, 0.5])
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
@@ -149,14 +155,13 @@ def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
     square root. Non-finite and indefinite matrices resolve to NaN without
     affecting the rest of the batch.
     """
-    identity = np.eye(2, dtype=complex)
     positive_definite = np.array([[2.0, 0.5 - 0.3j], [0.5 + 0.3j, 1.0]])
     singular = np.array([[1.0, 1j], [-1j, 1.0]])  # rank 1
     non_finite = np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=complex)
     indefinite = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     matrices = np.stack([positive_definite, singular, non_finite, indefinite])
 
-    square_root = _hermitian_square_root(matrices, identity)
+    square_root = _hermitian_square_root(matrices)
 
     np.testing.assert_allclose(
         square_root[:2] @ _conjugate_transpose(square_root[:2]), matrices[:2], atol=1e-14
@@ -233,36 +238,21 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     Wilson iteration for the entire batch (all sub-spectra returned NaN, with a
     warning implying the whole dataset was rank-deficient). The healthy windows
     must now converge to the factors they get on their own; only the bad window
-    is NaN, and the warning reports the correct count.
+    is NaN, and the warning reports the correct count. ``_warn_on_failure=False``
+    (used by spectral Granger) returns the same factor without the warning.
     """
     cross_spectral_matrix = _spectra_with_one_duplicated_channel(real_signals)
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
     with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
-        factor = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
+        factor = minimum_phase_decomposition(cross_spectral_matrix)
     assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
     healthy = minimum_phase_decomposition(cross_spectral_matrix[[0, 2]])
     np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
-
-
-@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
-def test_minimum_phase_decomposition_without_warning_still_returns_two_sided(real_signals):
-    """The silent failure path (used by spectral Granger) keeps the full shape.
-
-    ``_warn_on_failure=False`` returns early, before the warning. On the
-    half-spectrum path that return must still mirror the negative frequencies:
-    downstream code transforms the factor over its frequency axis, so a
-    half-length factor would silently change the healthy windows' results.
-    """
-    cross_spectral_matrix = _spectra_with_one_duplicated_channel(real_signals)
-
-    factor = minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
-
-    assert factor.shape == cross_spectral_matrix.shape
-    assert np.isnan(factor[1]).all()
-    healthy = minimum_phase_decomposition(cross_spectral_matrix[[0, 2]])
-    np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
+    np.testing.assert_array_equal(
+        minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False), factor
+    )
 
 
 def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
@@ -619,10 +609,6 @@ def test_is_conjugate_symmetric_detects_real_valued_signals(n_fft):
     assert not _is_conjugate_symmetric(complex_spectrum)
 
 
-def _real_signal_spectrum(n_fft=16):
-    return _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(0)))
-
-
 def test_is_conjugate_symmetric_requires_a_real_zero_frequency():
     """A Hermitian but complex zero-frequency matrix is not symmetric."""
     spectrum = _real_signal_spectrum()
@@ -712,11 +698,7 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     per-unit convergence handle extra dimensions.
     """
     spectrum = np.stack(
-        [
-            _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(seed)))
-            for seed in (1, 2)
-        ],
-        axis=1,
+        [_real_signal_spectrum(n_fft, seed) for seed in (1, 2)], axis=1
     )  # (window, batch, frequency, signal, signal)
 
     half_spectrum_factor = minimum_phase_decomposition(spectrum)
