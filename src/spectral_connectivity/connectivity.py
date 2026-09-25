@@ -1165,11 +1165,11 @@ class Connectivity:
     def _pairwise_power_scale(self) -> NDArray[np.floating]:
         """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals).
 
-        Recomputed on each access rather than cached: it has the shape of the
-        cached cross-spectral matrix but costs only an outer product and square
-        root of ``_power``.
+        Not cached: it is as large as the cross-spectral matrix but only an outer
+        product of ``sqrt(_power)``, which also cannot underflow or overflow.
         """
-        return xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
+        root_power = xp.sqrt(self._power)
+        return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
 
     @property
     def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
