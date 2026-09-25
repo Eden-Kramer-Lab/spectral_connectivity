@@ -38,7 +38,7 @@ from spectral_connectivity.utils import (
 )
 
 if TYPE_CHECKING:
-    from spectral_connectivity.transforms import Multitaper
+    from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
 
@@ -762,7 +762,7 @@ class Connectivity:
     @classmethod
     def from_multitaper(
         cls,
-        multitaper_instance: "Multitaper",
+        multitaper_instance: "SpectralTransform",
         expectation_type: str = "trials_tapers",
         dtype: Any = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
@@ -770,10 +770,14 @@ class Connectivity:
     ) -> "Connectivity":
         """Construct connectivity class using a multitaper instance.
 
+        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`;
+        :meth:`from_transform` is the transform-neutral spelling.
+
         Parameters
         ----------
-        multitaper_instance : Multitaper
-            Instance of Multitaper class.
+        multitaper_instance : SpectralTransform
+            A :class:`~spectral_connectivity.transforms.Multitaper` or any other
+            object satisfying the ``SpectralTransform`` protocol.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
@@ -800,13 +804,16 @@ class Connectivity:
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
-        # The transform contract (sidedness, observation weights, observation
-        # and time-bin independence) is part of the public constructor and must
-        # always reach the instance: a subclass that cannot accept it fails loudly here rather
-        # than silently computing on a one-sided, weighted, or correlated
-        # spectrum as if it were two-sided, unweighted, and independent. The
-        # keywords are passed only when non-default so a subclass mirroring the
-        # older signature keeps working with a plain two-sided transform.
+        # The optional attributes of the SpectralTransform contract (sidedness,
+        # observation weights, observation and time-bin independence; see that
+        # protocol's docstring for their defaults) are read with getattr so a
+        # transform may omit them. They are part of the public constructor and
+        # must always reach the instance: a subclass that cannot accept them
+        # fails loudly here rather than silently computing on a one-sided,
+        # weighted, or correlated spectrum as if it were two-sided, unweighted,
+        # and independent. The keywords are passed only when non-default so a
+        # subclass mirroring the older signature keeps working with a plain
+        # two-sided transform.
         if bool(getattr(multitaper_instance, "is_one_sided", False)):
             init_kwargs["is_one_sided"] = True
         weights = getattr(multitaper_instance, "observation_weights", None)
@@ -828,18 +835,43 @@ class Connectivity:
     @classmethod
     def from_transform(
         cls,
-        transform: Any,
+        transform: "SpectralTransform",
         expectation_type: str = "trials_tapers",
         dtype: Any = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct from any supported spectral transform.
+        """Construct from any spectral transform.
 
-        ``transform`` must expose ``fft()``, ``frequencies``, and ``time`` and
-        return the standard five-dimensional coefficient layout. This is the
-        transform-neutral spelling of :meth:`from_multitaper`; the older method
-        remains fully supported.
+        This is the transform-neutral spelling of :meth:`from_multitaper`; the
+        older method remains fully supported.
+
+        Parameters
+        ----------
+        transform : SpectralTransform
+            Any object with an ``fft()`` method returning coefficients shaped
+            ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``
+            and ``frequencies`` and ``time`` attributes, such as
+            :class:`~spectral_connectivity.transforms.Multitaper`,
+            :class:`~spectral_connectivity.transforms.MorletWavelet`, or a
+            user-defined class. Its optional ``is_one_sided``,
+            ``observation_weights``, ``observations_are_independent``, and
+            ``time_bins_are_independent`` attributes are forwarded when present;
+            see :class:`~spectral_connectivity.transforms.SpectralTransform`.
+        expectation_type : str, default="trials_tapers"
+            How to average the cross-spectral matrix.
+        dtype : np.dtype, default=complex128
+            Data type for computations.
+        minimum_phase_tolerance : float, default=1e-8
+            Relative convergence tolerance for the Wilson minimum-phase
+            factorization used by the directed measures.
+        minimum_phase_max_iterations : int, default=500
+            Maximum Wilson iterations.
+
+        Returns
+        -------
+        Connectivity
+            New Connectivity instance.
         """
         return cls.from_multitaper(
             transform,

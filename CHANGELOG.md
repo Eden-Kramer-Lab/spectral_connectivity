@@ -67,6 +67,13 @@ directly with results from 2.x.
   adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
   Connectivity expectations consume the local weights directly, and xarray
   results carry the `valid_time_frequency` mask.
+- `SpectralTransform`, a public, runtime-checkable `typing.Protocol` for the
+  transforms `Connectivity.from_transform` and `Connectivity.from_multitaper`
+  accept: `fft()`, `frequencies`, and `time` are required, and the optional
+  `is_one_sided`, `observation_weights`, `observations_are_independent`, and
+  `time_bins_are_independent` attributes keep their defaults when absent, so
+  existing custom transforms work unchanged. Both constructors are annotated
+  with it.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
   weighting. Adaptive weighting compares the periodogram against the process
