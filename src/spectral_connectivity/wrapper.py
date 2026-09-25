@@ -1475,9 +1475,10 @@ def _band_integration_weights(
     onto the grid -- ``[0, spacing / 2]`` and ``[f_last - spacing / 2, f_last]``
     -- and weighted twice. Each edge bin then still contributes a full spacing
     of power and a band covering every bin integrates to
-    ``sum(density) * spacing`` (Parseval). Only the bin at
-    ``nyquist_frequency`` is folded at the top: after cropping, the last bin is
-    an ordinary interior bin whose density is already doubled.
+    ``sum(density) * spacing`` (Parseval). Only a bin at ``nyquist_frequency``
+    is folded at the top: an odd-length FFT has no Nyquist bin, and after
+    cropping the last bin is an ordinary interior bin whose density is already
+    doubled.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -1491,7 +1492,9 @@ def _band_integration_weights(
         lower = np.maximum(lower, 0.0)
     if frequencies[0] == 0.0:
         scale[0] = 2.0
-    if nyquist_frequency is not None and frequencies[-1] == nyquist_frequency:
+    if nyquist_frequency is not None and np.isclose(
+        frequencies[-1], nyquist_frequency, rtol=1e-12, atol=0.0
+    ):
         upper[-1] = frequencies[-1]
         scale[-1] = 2.0
     weights: NDArray[np.floating] = scale * np.clip(
@@ -1500,13 +1503,23 @@ def _band_integration_weights(
     return weights
 
 
-def _grid_nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
-    """The Nyquist bin of ``result``'s frequency grid, as far as the grid shows.
+# Provenance prefixes of the transforms whose results record ``sampling_frequency``.
+_TRANSFORM_PROVENANCE_PREFIXES = ("mt_", "stft_", "welch_", "morlet_", "fourier_")
 
-    A grid anchored at 0 Hz is taken to be a complete one-sided spectrum whose
-    last bin is Nyquist. Only the grid as computed can say so: cropping or
-    decimating it makes an interior bin the last one.
+
+def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
+    """The Nyquist frequency of ``result``'s one-sided spectrum, if known.
+
+    A result records its transform's sampling rate, so its Nyquist frequency is
+    half of it; the grid has a bin there only for an even FFT length. Without a
+    recorded rate, a grid anchored at 0 Hz is taken to be a complete one-sided
+    spectrum whose last bin is Nyquist. Only the grid as computed can say so:
+    cropping or decimating it makes an interior bin the last one.
     """
+    for prefix in _TRANSFORM_PROVENANCE_PREFIXES:
+        sampling_frequency = result.attrs.get(prefix + "sampling_frequency")
+        if sampling_frequency is not None:
+            return float(sampling_frequency) / 2
     if "frequency" not in result.coords:
         return None
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -1535,11 +1548,11 @@ def frequency_band_reduce(
     contributes its density times the part of that cell inside the band, so
     band edges need not fall on bins, a one-bin band is not zero, and adjacent
     bands add up to their union. On a one-sided grid starting at 0 Hz the DC
-    bin and the last (Nyquist) bin own only the half-cell toward their
-    neighbour but count with a full spacing, matching the one-sided convention
-    in which those two bins are not doubled; integrating ``power`` over a band
-    that covers every bin therefore reproduces the total signal power
-    (Parseval).
+    bin and the Nyquist bin (present for an even FFT length) own only the
+    half-cell toward their neighbour but count with a full spacing, matching
+    the one-sided convention in which those two bins are not doubled;
+    integrating ``power`` over a band that covers every bin therefore
+    reproduces the total signal power (Parseval).
 
     Parameters
     ----------
@@ -1578,17 +1591,17 @@ def frequency_band_reduce(
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
 
-    The last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
-    reduce the result before cropping it; ``frequency_range`` in
-    :func:`multitaper_connectivity` and :func:`fourier_connectivity` keeps
-    track of the true Nyquist bin.
+    The Nyquist frequency is half the sampling rate recorded in ``result``'s
+    provenance attrs (e.g. ``mt_sampling_frequency``). If none is recorded,
+    the last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
+    reduce such a result before cropping it.
     """
     return _reduce_frequency_bands(
         result,
         bands,
         reduction=reduction,
         circular=circular,
-        nyquist_frequency=_grid_nyquist_frequency(result),
+        nyquist_frequency=_nyquist_frequency(result),
     )
 
 
@@ -1797,7 +1810,7 @@ def _select_and_reduce_frequencies(
 
     selected = result
     # Before cropping or decimation, which can make an interior bin the last.
-    nyquist_frequency = _grid_nyquist_frequency(result)
+    nyquist_frequency = _nyquist_frequency(result)
     requests_frequency_operation = (
         frequency_range is not None or frequency_decimation != 1 or frequency_bands is not None
     )
@@ -3410,7 +3423,7 @@ def fourier_connectivity(
                     stacklevel=2,
                 )
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
-    metadata = {
+    metadata: dict[str, Any] = {
         "source": "external_fourier_coefficients",
         "coefficient_shape_json": _canonical_json(tuple(coefficient_data.shape)),
         "frequency_coordinate": "provided" if frequencies is not None else "normalized",
@@ -3418,6 +3431,12 @@ def fourier_connectivity(
         "is_one_sided": one_sided,
         "one_sided_inferred": is_one_sided is None and inferred_one_sided,
     }
+    all_frequencies = connectivity.all_frequencies
+    if not one_sided and all_frequencies.size > 1:
+        # FFT-order bins are sampling_frequency / n_fft apart (bin 1 is -spacing
+        # when n_fft == 2), so the rate follows and places the Nyquist bin,
+        # which only an even n_fft has.
+        metadata["sampling_frequency"] = float(all_frequencies.size * abs(all_frequencies[1]))
     shared_attrs = _shared_provenance_attrs(
         connectivity,
         metadata,

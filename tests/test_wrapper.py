@@ -2782,6 +2782,73 @@ def test_frequency_band_integral_counts_the_nyquist_bin_fully():
     assert integral == pytest.approx(float(np.mean(tone**2)), rel=1e-3)
 
 
+def _last_bin_halves(integrate, frequencies):
+    """Integrals over the lower and upper half-cells of the last bin."""
+    spacing = frequencies[1] - frequencies[0]
+    last = frequencies[-1]
+    return integrate(
+        {"lower": (last - spacing / 2, last), "upper": (last, last + spacing / 2)}
+    )
+
+
+@pytest.mark.parametrize("path", ["wrapper", "frequency_band_reduce", "fourier"])
+def test_frequency_band_integral_of_odd_fft_last_bin_is_not_nyquist(path):
+    """An odd-length FFT has no Nyquist bin: its last one-sided bin is an
+    ordinary doubled bin whose cell extends half a spacing above it. Folding it
+    as Nyquist put its whole cell in the lower half and nothing in the upper.
+
+    Regression: the last bin of any grid starting at 0 Hz was taken as Nyquist.
+    """
+    n_time, sampling_frequency = 401, 100.0
+    time_series = np.random.default_rng(52).standard_normal((n_time, 1, 1))
+    power_kwargs = {
+        "sampling_frequency": sampling_frequency,
+        "method": "power",
+        "time_halfbandwidth_product": 1,
+        "n_fft_samples": n_time,
+    }
+    power = multitaper_connectivity(time_series, **power_kwargs).squeeze()
+    frequencies = power.frequency.values
+    assert frequencies[-1] < sampling_frequency / 2
+
+    if path == "wrapper":
+
+        def integrate(bands):
+            return multitaper_connectivity(
+                time_series,
+                frequency_bands=bands,
+                frequency_reduction="integral",
+                **power_kwargs,
+            ).squeeze()
+
+    elif path == "frequency_band_reduce":
+
+        def integrate(bands):
+            return frequency_band_reduce(power, bands, reduction="integral")
+
+    else:
+        coefficients = Multitaper(
+            time_series,
+            sampling_frequency=sampling_frequency,
+            time_halfbandwidth_product=1,
+            n_fft_samples=n_time,
+        ).fft()
+
+        def integrate(bands):
+            return fourier_connectivity(
+                coefficients,
+                frequencies=np.fft.fftfreq(n_time, 1 / sampling_frequency),
+                method="power",
+                frequency_bands=bands,
+                frequency_reduction="integral",
+            ).squeeze()
+
+    halves = _last_bin_halves(integrate, frequencies)
+    half_cell = float(power.isel(frequency=-1)) * (frequencies[1] - frequencies[0]) / 2
+    np.testing.assert_allclose(halves.sel(band="lower"), half_cell, rtol=1e-9)
+    np.testing.assert_allclose(halves.sel(band="upper"), half_cell, rtol=1e-9)
+
+
 @pytest.mark.parametrize(
     ("band", "frequency_range"),
     [((0.0, 4.0), (0.0, 4.0)), ((4.0, 8.0), (0.0, 8.0)), ((10.0, 30.0), (0.0, 30.0))],
