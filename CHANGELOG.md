@@ -485,9 +485,9 @@ directly with results from 2.x.
   and PDC families is 1.8-2.9x faster in benchmarks: it factors the
   cross-spectrum once and solves once per iteration instead of twice, and for
   real-valued signals iterates on the non-negative frequencies with real FFTs.
-  End to end, pairwise spectral Granger for 32 signals drops from 4.3 to 2.0 s,
-  conditional spectral Granger for 24 signals from 16.6 to 9.0 s, and DTF for
-  100 windows of 8 signals from 0.68 to 0.37 s. For well-conditioned spectra,
+  End to end, pairwise spectral Granger for 32 signals is about 2.3x faster,
+  conditional spectral Granger for 24 signals about 1.7x, and DTF for 100
+  windows of 8 signals about 1.9x. For well-conditioned spectra,
   results agree with the previous implementation to rounding (relative
   differences of about 1e-14 or less).
 
