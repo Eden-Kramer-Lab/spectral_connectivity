@@ -49,13 +49,10 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
     """Whether ``S(-f) == conj(S(f))`` exactly along the frequency axis (-3).
 
-    Real-valued signals give this symmetry in exact arithmetic, and SciPy's FFT
-    of real input preserves it bit for bit. The comparison is exact, so a
-    spectrum that is symmetric only up to rounding (possible with other FFT
-    backends such as CuPy's) takes the general two-sided path. NaN counts as
-    symmetric when it is mirrored at the conjugate frequency, so a batch with a
-    NaN window (e.g. a dead channel) keeps the fast path; that window's factor is
-    NaN on either path.
+    The comparison is exact (see :func:`minimum_phase_decomposition` Notes). NaN
+    counts as symmetric when it is mirrored at the conjugate frequency, so a
+    batch with a NaN window (e.g. a dead channel) keeps the fast path; that
+    window's factor is NaN on either path.
 
     Parameters
     ----------
@@ -248,11 +245,11 @@ def _get_causal_signal(
     at zero lag.
     """
     n_signals = linear_predictor.shape[-1]
-    is_half_spectrum = n_fft_samples is not None
     if n_fft_samples is None:
-        n_fft_samples = linear_predictor.shape[-3]
+        n_lags = linear_predictor.shape[-3]
         linear_predictor_coefficients = ifft(linear_predictor, axis=-3)
     else:
+        n_lags = n_fft_samples
         linear_predictor_coefficients = irfft(linear_predictor, n=n_fft_samples, axis=-3)
 
     # Take half of the roots on the unit circle
@@ -265,8 +262,8 @@ def _get_causal_signal(
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
-    linear_predictor_coefficients[..., (n_fft_samples + 1) // 2 :, :, :] = 0
-    if is_half_spectrum:
+    linear_predictor_coefficients[..., (n_lags + 1) // 2 :, :, :] = 0
+    if n_fft_samples is not None:
         return rfft(linear_predictor_coefficients, axis=-3)
     return fft(linear_predictor_coefficients, axis=-3)
 
@@ -496,7 +493,6 @@ def _solve_isolating_singular(
 
 def _hermitian_square_root(
     matrices: NDArray[np.complexfloating],
-    identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
     """Batched square root ``L`` with ``L Lᴴ = S`` of Hermitian PSD matrices.
 
@@ -513,9 +509,6 @@ def _hermitian_square_root(
     ----------
     matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
         Batched Hermitian matrices ``S``. Only the lower triangle is read.
-    identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
-        Identity used to stand in for non-finite matrices during the
-        eigendecomposition.
 
     Returns
     -------
@@ -524,7 +517,7 @@ def _hermitian_square_root(
     """
     n_signals = matrices.shape[-1]
     is_finite = xp.isfinite(matrices).all(axis=(-2, -1), keepdims=True)
-    eigenvalues, eigenvectors = xp.linalg.eigh(xp.where(is_finite, matrices, identity_matrix))
+    eigenvalues, eigenvectors = xp.linalg.eigh(xp.where(is_finite, matrices, 0))
     rounding = (
         n_signals
         * xp.finfo(eigenvalues.dtype).eps
@@ -581,7 +574,8 @@ def _get_linear_predictor(
     covariance_sandwich_estimator: NDArray[np.complexfloating] = xp.matmul(
         whitened_square_root, _conjugate_transpose(whitened_square_root)
     )
-    return covariance_sandwich_estimator + identity_matrix
+    covariance_sandwich_estimator += identity_matrix
+    return covariance_sandwich_estimator
 
 
 def minimum_phase_decomposition(
@@ -651,11 +645,9 @@ def minimum_phase_decomposition(
     (complex-valued signals), take the two-sided iteration, which does about
     twice the arithmetic per iteration.
 
-    Each update uses a square root ``L`` of ``S`` (``S = L Lᴴ``), computed once,
-    so the update is Hermitian positive semidefinite by construction. This lets
-    sub-spectra with near-collinear channels converge where the update formed
-    from ``S`` directly stalls at rounding level above the tolerance. An
-    indefinite or non-finite ``S`` has no such square root and is returned as
+    Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
+    computed once, which lets sub-spectra with near-collinear channels converge.
+    An indefinite or non-finite ``S`` has no such square root and is returned as
     NaN with the non-convergence warning.
 
     Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
@@ -694,31 +686,25 @@ def minimum_phase_decomposition(
     # takes precedence over retaining the input storage dtype: perform the
     # factorization at complex128 or better, matching the historical behavior.
     working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
-    working_cross_spectral_matrix = cross_spectral_matrix.astype(working_dtype, copy=False)
-    # An exactly conjugate-symmetric spectrum (real-valued signals) keeps that
-    # symmetry in every Wilson iterate: the Cholesky start is real, and the
-    # linear predictor's lag coefficients stay real, so the causal projection
-    # preserves it. Iterate on the non-negative frequencies only (with real FFTs
-    # in the causal projection) and mirror the rest at the end, which halves the
-    # arithmetic per iteration; other spectra take the two-sided path.
+    # The iterates of an exactly conjugate-symmetric spectrum stay symmetric (the
+    # Cholesky start is real, and so are the linear predictor's lag
+    # coefficients), so iterate on the non-negative frequencies and mirror the
+    # rest at the end. Slice before the upcast so the unused negative
+    # frequencies are never copied.
     n_fft_samples = cross_spectral_matrix.shape[-3]
-    half_spectrum_length: int | None = None
-    if _is_conjugate_symmetric(working_cross_spectral_matrix):
-        half_spectrum_length = n_fft_samples
-        working_cross_spectral_matrix = working_cross_spectral_matrix[
+    half_spectrum_n_fft: int | None = None
+    working_cross_spectral_matrix = cross_spectral_matrix
+    if _is_conjugate_symmetric(cross_spectral_matrix):
+        half_spectrum_n_fft = n_fft_samples
+        working_cross_spectral_matrix = cross_spectral_matrix[
             ..., : n_fft_samples // 2 + 1, :, :
         ]
-
-    def two_sided(factor: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-        if half_spectrum_length is None:
-            return factor
-        return _to_two_sided(factor, half_spectrum_length)
-
+    working_cross_spectral_matrix = working_cross_spectral_matrix.astype(
+        working_dtype, copy=False
+    )
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
     # S is fixed across iterations, so factor it once as S = L Lᴴ.
-    cross_spectral_square_root = _hermitian_square_root(
-        working_cross_spectral_matrix, identity_matrix
-    )
+    cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
     # converge does not mask the others sharing its time point.
@@ -726,7 +712,7 @@ def minimum_phase_decomposition(
     n_units = int(np.prod(batch_shape))  # np.prod(()) == 1 for a single unit
     is_converged = xp.zeros(batch_shape, dtype=bool)
     initial = _get_initial_conditions(
-        working_cross_spectral_matrix, half_spectrum_length
+        working_cross_spectral_matrix, half_spectrum_n_fft
     ).astype(working_dtype, copy=False)
     minimum_phase_factor = xp.broadcast_to(initial, working_cross_spectral_matrix.shape).copy()
 
@@ -753,7 +739,7 @@ def minimum_phase_decomposition(
             identity_matrix,
         )
         minimum_phase_factor = xp.matmul(
-            minimum_phase_factor, _get_causal_signal(linear_predictor, half_spectrum_length)
+            minimum_phase_factor, _get_causal_signal(linear_predictor, half_spectrum_n_fft)
         )
 
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
@@ -767,47 +753,47 @@ def minimum_phase_decomposition(
         # treat such units as finished so a single rank-deficient window does not
         # force the whole batch to exhaust the iteration budget. Combine the
         # "all finished" and "all converged" tests so the loop reduces the device
-        # to a Python bool at most once per iteration (a GPU synchronization; a
-        # no-op difference on CPU). The inner test only runs on the final
-        # iteration, so it costs one extra reduction total.
+        # to a Python bool once per iteration (a GPU synchronization; a no-op
+        # difference on CPU).
         singular_units = ~_all_finite_units(minimum_phase_factor, batch_shape)
         if xp.all(is_converged | singular_units):
-            if xp.all(is_converged):
-                return two_sided(minimum_phase_factor)
             break
 
-    # Not every sub-spectrum converged (iteration budget exhausted, or a factor
-    # became singular). Returning the partially-converged factor silently would
-    # feed numerically wrong values into every downstream directed-connectivity
-    # measure with no way for the caller to tell. Mark only the unconverged
-    # sub-spectra as NaN (leaving the converged ones intact) and warn loudly.
+    # If not every sub-spectrum converged (iteration budget exhausted, or a
+    # factor became singular), returning the partially-converged factor silently
+    # would feed numerically wrong values into every downstream
+    # directed-connectivity measure with no way for the caller to tell. Mark only
+    # the unconverged sub-spectra as NaN (leaving the converged ones intact) and
+    # warn loudly.
     n_failed = int((~is_converged).sum())
-    # A singular sub-spectrum is the unconverged one whose factor is non-finite.
-    singular_factor = bool(
-        (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
-    )
-    unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
-    minimum_phase_factor = xp.where(
-        unconverged,
-        xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
-        minimum_phase_factor,
-    )
-    if not _warn_on_failure:
-        return two_sided(minimum_phase_factor)
-    reason = (
-        "a sub-spectrum became singular (rank-deficient / duplicated channels)"
-        if singular_factor
-        else f"within {max_iterations} iterations (tolerance={tolerance})"
-    )
-    warnings.warn(
-        f"Wilson minimum-phase decomposition did not converge for "
-        f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
-        f"sub-spectra are returned as NaN and will produce NaN in any "
-        f"directed connectivity measure (spectral Granger, DTF, etc.). "
-        f"Consider increasing max_iterations, using more tapers/trials, or "
-        f"checking for near-singular cross-spectral matrices (highly "
-        f"correlated channels).",
-        UserWarning,
-        stacklevel=2,
-    )
-    return two_sided(minimum_phase_factor)
+    if n_failed:
+        # A singular sub-spectrum is the unconverged one whose factor is non-finite.
+        singular_factor = bool(
+            (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
+        )
+        unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
+        minimum_phase_factor = xp.where(
+            unconverged,
+            xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
+            minimum_phase_factor,
+        )
+        if _warn_on_failure:
+            reason = (
+                "a sub-spectrum became singular (rank-deficient / duplicated channels)"
+                if singular_factor
+                else f"within {max_iterations} iterations (tolerance={tolerance})"
+            )
+            warnings.warn(
+                f"Wilson minimum-phase decomposition did not converge for "
+                f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
+                f"sub-spectra are returned as NaN and will produce NaN in any "
+                f"directed connectivity measure (spectral Granger, DTF, etc.). "
+                f"Consider increasing max_iterations, using more tapers/trials, or "
+                f"checking for near-singular cross-spectral matrices (highly "
+                f"correlated channels).",
+                UserWarning,
+                stacklevel=2,
+            )
+    if half_spectrum_n_fft is not None:
+        minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
+    return minimum_phase_factor
