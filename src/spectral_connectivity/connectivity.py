@@ -3666,7 +3666,10 @@ class Connectivity:
         -----
         **Range**: [-1, 1]. The debiased finite-sample estimate can be negative
         when the signed cross-products are dominated by inconsistent phase lags;
-        negative values do not represent negative coupling.
+        negative values do not represent negative coupling. Pairs whose
+        imaginary cross-spectrum is zero up to rounding (in-phase signals, the
+        diagonal, and the purely real DC and Nyquist bins) have no phase lag to
+        estimate and are returned as 0.
 
         References
         ----------
@@ -3704,8 +3707,15 @@ class Connectivity:
         imaginary_csm_magnitude_sum = mean_absolute * n_observations
         weights = imaginary_csm_magnitude_sum**2 - squared_imaginary_csm_sum
         weights[weights == 0] = xp.nan
-
-        return (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights
+        # Pairs with no phase lag (in-phase signals, the zeroed diagonal) make
+        # the ratio one of rounding errors or 0/0; there is no lag to estimate,
+        # so 0, matching debiased_squared_phase_lag_index.
+        debiased: NDArray[np.floating] = xp.where(
+            self._has_no_phase_lag(mean_absolute),
+            0.0,
+            (imaginary_csm_sum**2 - squared_imaginary_csm_sum) / weights,
+        )
+        return debiased
 
     @_asnumpy
     def pairwise_phase_consistency(self) -> NDArray[np.floating]:

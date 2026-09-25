@@ -545,8 +545,7 @@ def test_debiased_squared_weighted_phase_lag_index(phase_offset_trials, snapshot
         "debiased_squared_weighted_phase_lag_index",
     )
     assert on_peak[0, 1] > 0.95
-    # NaN where the cross-spectrum is purely real (DC and Nyquist): 0 / 0.
-    assert np.abs(np.nanmedian(off_peak)) < 0.05
+    assert np.abs(np.median(off_peak)) < 0.05
     assert outputs == snapshot
 
 

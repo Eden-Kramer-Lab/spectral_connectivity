@@ -1715,6 +1715,9 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     dwpli_weights = abs_sum**2 - sq_sum
     dwpli_weights[dwpli_weights == 0] = np.nan
     expected_dwpli = non_negative((imag_sum**2 - sq_sum) / dwpli_weights)
+    # The diagonal has no phase lag, so it is 0 rather than 0 / 0.
+    diagonal = np.arange(shape[-1])
+    expected_dwpli[..., diagonal, diagonal] = 0.0
 
     np.testing.assert_array_equal(conn.phase_lag_index(), expected_pli)
     np.testing.assert_array_equal(conn.weighted_phase_lag_index(), expected_wpli)
@@ -3179,6 +3182,9 @@ def test_phase_lag_family_is_zero_for_in_phase_signals(scale):
     np.testing.assert_array_equal(connectivity.weighted_phase_lag_index()[..., 0, 1], 0.0)
     np.testing.assert_array_equal(
         connectivity.debiased_squared_phase_lag_index()[..., 0, 1], 0.0
+    )
+    np.testing.assert_array_equal(
+        connectivity.debiased_squared_weighted_phase_lag_index()[..., 0, 1], 0.0
     )
 
 
