@@ -49,9 +49,10 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
     """Whether ``S(-f) == conj(S(f))`` exactly along the frequency axis (-3).
 
-    This holds for the cross-spectrum of any real-valued signals computed from an
-    FFT of real input. The comparison is exact, so a spectrum that is symmetric
-    only up to rounding takes the general two-sided path. NaN counts as
+    Real-valued signals give this symmetry in exact arithmetic, and SciPy's FFT
+    of real input preserves it bit for bit. The comparison is exact, so a
+    spectrum that is symmetric only up to rounding (possible with other FFT
+    backends such as CuPy's) takes the general two-sided path. NaN counts as
     symmetric when it is mirrored at the conjugate frequency, so a batch with a
     NaN window (e.g. a dead channel) keeps the fast path; that window's factor is
     NaN on either path.
@@ -113,8 +114,10 @@ def _get_initial_conditions(
     Parameters
     ----------
     cross_spectral_matrix : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Cross-spectral density matrix to be decomposed.
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Cross-spectral density matrix to be decomposed. ``n_frequencies`` is
+        ``n_fft_samples`` for a two-sided spectrum, or ``n_fft_samples // 2 + 1``
+        when ``n_fft_samples`` is given.
     n_fft_samples : int, optional
         If given, ``cross_spectral_matrix`` holds only the non-negative
         frequencies of a conjugate-symmetric spectrum of this two-sided length.
@@ -220,8 +223,10 @@ def _get_causal_signal(
     Parameters
     ----------
     linear_predictor : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        Linear predictor matrix in frequency domain.
+        shape (..., n_frequencies, n_signals, n_signals)
+        Linear predictor matrix in frequency domain. ``n_frequencies`` is
+        ``n_fft_samples`` for a two-sided spectrum, or ``n_fft_samples // 2 + 1``
+        when ``n_fft_samples`` is given.
     n_fft_samples : int, optional
         If given, ``linear_predictor`` holds only the non-negative frequencies of
         a conjugate-symmetric spectrum of this two-sided length. Its lag
@@ -231,8 +236,9 @@ def _get_causal_signal(
     Returns
     -------
     causal_part_of_linear_predictor : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        Causal part of the linear predictor after plus operator.
+        shape (..., n_frequencies, n_signals, n_signals)
+        Causal part of the linear predictor after plus operator, on the same
+        frequencies as ``linear_predictor``.
 
     Notes
     -----
@@ -637,11 +643,13 @@ def minimum_phase_decomposition(
     may not converge for all time points; warnings are issued when the
     maximum iteration count is reached.
 
-    For real-valued signals the spectrum satisfies ``S(-f) = conj(S(f))``
-    exactly, and so does every iterate, so the iteration runs on the
-    non-negative frequencies with real FFTs and mirrors the rest. Other spectra
-    (e.g. of complex-valued signals) take the general two-sided iteration, which
-    costs about twice as much.
+    When the spectrum is exactly conjugate-symmetric, ``S(-f) == conj(S(f))``
+    bit for bit (as SciPy's FFT gives for real-valued signals), every iterate
+    keeps that symmetry, so the iteration runs on the non-negative frequencies
+    with real FFTs and mirrors the rest. Spectra symmetric only up to rounding
+    (possible with other FFT backends such as CuPy's), or not at all
+    (complex-valued signals), take the two-sided iteration, which does about
+    twice the arithmetic per iteration.
 
     Each update uses a square root ``L`` of ``S`` (``S = L Lᴴ``), computed once,
     so the update is Hermitian positive semidefinite by construction. This lets
@@ -687,10 +695,12 @@ def minimum_phase_decomposition(
     # factorization at complex128 or better, matching the historical behavior.
     working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
     working_cross_spectral_matrix = cross_spectral_matrix.astype(working_dtype, copy=False)
-    # Real-valued signals give S(-f) == conj(S(f)), and every Wilson iterate
-    # inherits that symmetry, so iterate on the non-negative frequencies only
-    # (with real FFTs in the causal projection) and mirror the rest at the end.
-    # This roughly halves the work; other spectra take the two-sided path.
+    # An exactly conjugate-symmetric spectrum (real-valued signals) keeps that
+    # symmetry in every Wilson iterate: the Cholesky start is real, and the
+    # linear predictor's lag coefficients stay real, so the causal projection
+    # preserves it. Iterate on the non-negative frequencies only (with real FFTs
+    # in the causal projection) and mirror the rest at the end, which halves the
+    # arithmetic per iteration; other spectra take the two-sided path.
     n_fft_samples = cross_spectral_matrix.shape[-3]
     half_spectrum_length: int | None = None
     if _is_conjugate_symmetric(working_cross_spectral_matrix):
@@ -730,7 +740,9 @@ def minimum_phase_decomposition(
                 int(is_converged.sum()),
                 n_units,
             )
-        # Every update below builds a new array, so the previous iterate needs no copy.
+        # No copy: ``old_minimum_phase_factor`` aliases the previous iterate,
+        # which is safe only while every update below builds a new array. Never
+        # update ``minimum_phase_factor`` in place.
         old_minimum_phase_factor = minimum_phase_factor
         # A rank-deficient sub-spectrum makes the batched solve inside
         # _get_linear_predictor singular; _solve_isolating_singular resolves only
