@@ -88,16 +88,6 @@ def test_power_and_cross_spectrum_caches_invalidate():
     assert c._power.shape != power_trials_tapers.shape
 
 
-def _cached_names(connectivity):
-    """Names of cached_property values currently held by ``connectivity``."""
-    return {
-        name
-        for klass in type(connectivity).__mro__
-        for name, descriptor in vars(klass).items()
-        if isinstance(descriptor, cached_property) and name in connectivity.__dict__
-    }
-
-
 def test_coherence_measures_retain_only_power_and_cross_spectrum():
     """Cheap derived quantities are recomputed rather than held.
 
@@ -109,12 +99,13 @@ def test_coherence_measures_retain_only_power_and_cross_spectrum():
     shape = (1, 4, 3, 8, 3)
     fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+    constructed = set(c.__dict__)
 
     c.coherence_magnitude()
     c.coherence_phase()
     c.imaginary_coherence()
 
-    assert _cached_names(c) == {"_power", "_cached_reduced_cross_spectral_matrix"}
+    assert set(c.__dict__) - constructed == {"_power", "_cached_reduced_cross_spectral_matrix"}
 
 
 def test_clear_cache_frees_intermediates_and_preserves_results():
@@ -123,17 +114,18 @@ def test_clear_cache_frees_intermediates_and_preserves_results():
     shape = (1, 4, 6, 8, 3)
     fourier = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
+    constructed = set(c.__dict__)
     measures = [
         "coherence_magnitude",
         "weighted_phase_lag_index",
         "directed_transfer_function",
     ]
     before = {measure: getattr(c, measure)() for measure in measures}
-    assert {"_minimum_phase_factor", "_transfer_function"} <= _cached_names(c)
+    assert {"_minimum_phase_factor", "_transfer_function"} <= set(c.__dict__)
 
     c.clear_cache()
 
-    assert _cached_names(c) == set()
+    assert set(c.__dict__) == constructed
     for measure in measures:
         np.testing.assert_array_equal(getattr(c, measure)(), before[measure])
 

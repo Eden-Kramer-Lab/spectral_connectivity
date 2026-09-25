@@ -1978,8 +1978,7 @@ def test_morlet_fft_peak_memory_stays_near_twice_output_size():
     # Tracing may already be on (PYTHONTRACEMALLOC, -X tracemalloc); measure
     # from a baseline and leave it running in that case.
     was_tracing = tracemalloc.is_tracing()
-    if not was_tracing:
-        tracemalloc.start()
+    tracemalloc.start()
     try:
         tracemalloc.reset_peak()
         baseline, _ = tracemalloc.get_traced_memory()
