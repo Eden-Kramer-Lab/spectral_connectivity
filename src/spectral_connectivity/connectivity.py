@@ -173,6 +173,11 @@ GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
 # tiles. The final reduced signal-by-signal result is unavoidable, but the large
 # trial/taper/time-resolved outer product is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
+# Element cap for the complex coefficients gathered per chunk of channel pairs
+# by ``Connectivity._subset_cross_spectral_matrix``. The gather and its
+# observation-major copy are each at most this size (32 MB at complex128), so
+# peak workspace stays bounded however many pairs are requested.
+SUBSET_CROSS_SPECTRUM_MAX_WORKSPACE_ELEMENTS = 2_000_000
 
 # Machine epsilons of E[|Im S_ij|] relative to sqrt(P_i P_j) below which a pair
 # has no phase lag. In-phase signals leave only rounding noise, measured at up
@@ -1184,14 +1189,15 @@ class Connectivity:
         ----------
         fourier_coefficients : array, optional
             Coefficients of shape
-            ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``
-            to reduce; defaults to this instance's coefficients.
+            ``(n_time_windows, n_trials, n_tapers, n_fft_samples, *batch,
+            n_signals)`` to reduce; defaults to this instance's coefficients.
             ``phase_locking_value`` passes unit-normalized coefficients so the
-            same batched matmul yields its normalized cross-spectrum.
+            same batched matmul yields its normalized cross-spectrum, and
+            ``_subset_cross_spectral_matrix`` passes a pair axis as ``batch``.
 
         Returns
         -------
-        array, shape (..., n_frequencies, n_signals, n_signals)
+        array, shape (..., n_frequencies, *batch, n_signals, n_signals)
             Expected cross-spectral matrix. The leading axes are whichever of
             time/trials/tapers are *not* averaged, matching the shape produced
             by the equivalent expectation over the full outer product.
@@ -1202,12 +1208,14 @@ class Connectivity:
         average_axes = self._expectation_axes
 
         signal_axis = fourier_coefficients.ndim - 1
-        frequency_axis = signal_axis - 1
+        frequency_axis = 3
+        # Frequency and any extra batch axes (axes 3 to signal_axis - 1) stay.
+        batch_axes = list(range(frequency_axis, signal_axis))
         kept_axes = [axis for axis in range(frequency_axis) if axis not in average_axes]
-        # Reorder to (kept leading axes..., frequency, averaged axes..., signals)
-        # so the averaged axes collapse into a single observation axis adjacent
-        # to signals, ready for a batched matmul.
-        order = [*kept_axes, frequency_axis, *average_axes, signal_axis]
+        # Reorder to (kept leading axes..., frequency, batch..., averaged axes...,
+        # signals) so the averaged axes collapse into a single observation axis
+        # adjacent to signals, ready for a batched matmul.
+        order = [*kept_axes, *batch_axes, *average_axes, signal_axis]
         observations = xp.transpose(fourier_coefficients, order)
 
         n_observations = int(
@@ -1215,14 +1223,25 @@ class Connectivity:
         )
         n_signals = fourier_coefficients.shape[signal_axis]
         observations = observations.reshape(
-            (*observations.shape[: len(kept_axes) + 1], n_observations, n_signals)
+            (
+                *observations.shape[: len(kept_axes) + len(batch_axes)],
+                n_observations,
+                n_signals,
+            )
         )
         weights = None
         if self._observation_weights is not None:
+            # Weights vary over observations and frequency, not the extra batch.
             weights = xp.transpose(
                 self._observation_weights[..., 0],
                 [*kept_axes, frequency_axis, *average_axes],
-            ).reshape((*observations.shape[:-2], n_observations))
+            ).reshape(
+                (
+                    *observations.shape[: len(kept_axes) + 1],
+                    *(1,) * (len(batch_axes) - 1),
+                    n_observations,
+                )
+            )
             observations = observations * xp.sqrt(weights)[..., xp.newaxis]
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
@@ -1254,7 +1273,14 @@ class Connectivity:
     def _subset_cross_spectral_matrix(
         self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.complexfloating]:
-        """Compute compact observation-level spectra for channel pairs.
+        """Compute compact expected cross-spectra for channel pairs.
+
+        Each pair's two signals are reduced over observations by the batched
+        matmul of :meth:`_reduced_cross_spectral_matrix`, with the pairs as a
+        batch axis processed in chunks of at most
+        ``SUBSET_CROSS_SPECTRUM_MAX_WORKSPACE_ELEMENTS`` gathered coefficients.
+        Neither the full ``n_signals x n_signals`` matrix nor an
+        observation-resolved 2-by-2 matrix per pair is formed.
 
         Parameters
         ----------
@@ -1264,9 +1290,9 @@ class Connectivity:
         Returns
         -------
         array, shape (..., n_pairs, n_frequencies, 2, 2)
-            One compact 2-by-2 cross-spectral matrix per requested pair. The
-            trial/taper/time observation axes remain present until the caller
-            applies its configured expectation.
+            One compact 2-by-2 expected cross-spectral matrix per requested
+            pair. The leading axes are the observation axes the configured
+            expectation keeps.
 
         """
         pair_indices = xp.asarray(pairs, dtype=int)
@@ -1280,13 +1306,23 @@ class Connectivity:
         if bool(xp.any(pair_indices < 0)) or bool(xp.any(pair_indices >= n_signals)):
             msg = f"pair indices must be between 0 and {n_signals - 1}."
             raise IndexError(msg)
-        # Advanced-index the signal axis into (..., frequency, pair, 2), then put
-        # pair before frequency so frequency remains axis -3 as required by the
-        # Wilson factorization after the observation expectation is applied.
-        coefficients = self._fourier_coefficients[..., pair_indices]
-        coefficients = xp.moveaxis(coefficients, -2, -3).astype(self._dtype, copy=False)
-        coefficients = coefficients[..., xp.newaxis]
-        return _complex_inner_product(coefficients, coefficients, dtype=self._dtype)
+        coefficients = self._fourier_coefficients
+        n_pairs = pair_indices.shape[0]
+        elements_per_pair = 2 * int(np.prod(coefficients.shape[:-1]))
+        pairs_per_chunk = max(
+            1, SUBSET_CROSS_SPECTRUM_MAX_WORKSPACE_ELEMENTS // elements_per_pair
+        )
+        # Each chunk: (time, trials, tapers, frequency, pair, 2) gathered, reduced
+        # to (..., frequency, pair, 2, 2).
+        chunks = [
+            self._reduced_cross_spectral_matrix(
+                coefficients[..., pair_indices[start : start + pairs_per_chunk]]
+            )
+            for start in range(0, n_pairs, pairs_per_chunk)
+        ]
+        # Put pair before frequency so frequency remains axis -3 as required by
+        # the Wilson factorization.
+        return xp.moveaxis(xp.concatenate(chunks, axis=-3), -3, -4)
 
     # These quantities feed every directed-connectivity measure and are
     # expensive to compute (the minimum-phase decomposition in particular), so
@@ -3875,12 +3911,9 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
-        pair_csm = self._expectation(
-            self._subset_cross_spectral_matrix(pairs), frequency_axis=4
-        )
         result = _estimate_subset_spectral_granger_prediction(
             self._power,
-            pair_csm,
+            self._subset_cross_spectral_matrix(pairs),
             pairs,
             n_signals=self._fourier_coefficients.shape[-1],
             minimum_phase_tolerance=self._minimum_phase_tolerance,

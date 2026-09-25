@@ -2388,8 +2388,8 @@ def test_subset_cross_spectral_matrix_is_compact_and_fully_initialized():
     pairs = np.array([[0, 3], [2, 4]])
 
     compact = conn._subset_cross_spectral_matrix(pairs)
-    full = conn._cross_spectral_matrix
-    assert compact.shape == (2, 3, 2, 2, 8, 2, 2)
+    full = conn._expectation_cross_spectral_matrix()
+    assert compact.shape == (2, 2, 8, 2, 2)
     for pair_number, pair in enumerate(pairs):
         expected = full[..., pair[:, None], pair[None, :]]
         actual = np.take(compact, pair_number, axis=-4)
@@ -2416,12 +2416,57 @@ def test_compact_subset_cross_spectrum_preserves_every_expectation(expectation_t
     conn = Connectivity(coefficients, expectation_type=expectation_type)
     pairs = np.array([[0, 3], [2, 4]])
 
-    compact = conn._expectation(conn._subset_cross_spectral_matrix(pairs))
+    compact = conn._subset_cross_spectral_matrix(pairs)
     full = conn._expectation(conn._cross_spectral_matrix)
     for pair_number, pair in enumerate(pairs):
         expected = full[..., pair[:, None], pair[None, :]]
         actual = np.take(compact, pair_number, axis=-4)
         np.testing.assert_allclose(actual, expected)
+
+
+@pytest.mark.parametrize("expectation_type", ["trials", "trials_tapers", "time_tapers"])
+def test_subset_cross_spectral_matrix_matches_weighted_full_expectation(
+    expectation_type, monkeypatch
+):
+    """Weighted pairs reduced in several chunks match the full weighted CSM."""
+    rng = np.random.default_rng(23)
+    shape = (2, 3, 2, 8, 5)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.5, 2.0, (*shape[:-1], 1))
+    conn = Connectivity(
+        coefficients, expectation_type=expectation_type, observation_weights=weights
+    )
+    pairs = np.array([[0, 3], [2, 4], [1, 0]])
+    # One pair's coefficients per chunk, so every pair takes its own chunk.
+    monkeypatch.setattr(
+        "spectral_connectivity.connectivity.SUBSET_CROSS_SPECTRUM_MAX_WORKSPACE_ELEMENTS",
+        2 * int(np.prod(shape[:-1])),
+    )
+
+    compact = conn._subset_cross_spectral_matrix(pairs)
+    full = conn._expectation_cross_spectral_matrix()
+    for pair_number, pair in enumerate(pairs):
+        expected = full[..., pair[:, None], pair[None, :]]
+        np.testing.assert_allclose(np.take(compact, pair_number, axis=-4), expected)
+
+
+def test_subset_cross_spectral_matrix_reduces_only_each_pairs_signals():
+    """Disjoint pairs covering every signal must not reduce a dense CSM."""
+    rng = np.random.default_rng(29)
+    shape = (1, 3, 1, 8, 8)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients)
+    reduced_signal_counts = []
+    reduce = conn._reduced_cross_spectral_matrix
+
+    def recording_reduce(fourier_coefficients):
+        reduced_signal_counts.append(fourier_coefficients.shape[-1])
+        return reduce(fourier_coefficients)
+
+    with patch.object(conn, "_reduced_cross_spectral_matrix", recording_reduce):
+        conn._subset_cross_spectral_matrix(np.array([[0, 1], [2, 3], [4, 5], [6, 7]]))
+    assert reduced_signal_counts
+    assert set(reduced_signal_counts) == {2}
 
 
 @pytest.mark.parametrize(
