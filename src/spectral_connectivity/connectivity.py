@@ -5446,28 +5446,6 @@ def _remove_instantaneous_causality(
     return variance.swapaxes(-1, -2) - noise_covariance**2 / variance
 
 
-def _set_diagonal_to_zero(
-    x: NDArray[np.floating],
-) -> NDArray[np.floating]:
-    """Set diagonal of the last two dimensions to zero.
-
-    Parameters
-    ----------
-    x : array_like
-        Input array.
-
-    Returns
-    -------
-    array_like
-        Array with diagonal elements set to zero.
-
-    """
-    n_signals = x.shape[-1]
-    diagonal_index = xp.diag_indices(n_signals)
-    x[..., diagonal_index[0], diagonal_index[1]] = 0
-    return x
-
-
 def _total_inflow(
     transfer_function: NDArray[np.complexfloating],
     noise_variance: float | NDArray[np.floating] = 1.0,
@@ -6528,18 +6506,6 @@ def _estimate_block_spectral_granger_prediction(
     second_from_first : array, shape (..., n_nonnegative_frequencies)
         Influence ``first -> second``.
     """
-    first_indices = np.asarray(first_indices, dtype=int)
-    second_indices = np.asarray(second_indices, dtype=int)
-    if first_indices.ndim != 1 or first_indices.size == 0:
-        msg = "first_indices must be a non-empty one-dimensional array."
-        raise ValueError(msg)
-    if second_indices.ndim != 1 or second_indices.size == 0:
-        msg = "second_indices must be a non-empty one-dimensional array."
-        raise ValueError(msg)
-    if np.intersect1d(first_indices, second_indices).size:
-        msg = "first_indices and second_indices must not overlap."
-        raise ValueError(msg)
-
     combined = xp.asarray(np.concatenate((first_indices, second_indices)))
     subsystem = csm[..., combined[:, xp.newaxis], combined[xp.newaxis, :]]
     transfer, covariance = _var_model_from_spectrum(

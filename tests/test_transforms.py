@@ -11,7 +11,6 @@ from spectral_connectivity.transforms import (
     Multitaper,
     ShortTimeFourierTransform,
     Welch,
-    _add_axes,
     _get_low_bias_tapers,
     _multitaper_fft,
     _sliding_window,
@@ -151,25 +150,6 @@ def test_morlet_time_bins_are_independent_only_four_sigma_apart():
     assert MorletWavelet(
         data, 128, frequencies, n_cycles=3, decimation=32
     ).time_bins_are_independent
-
-
-def test__add_axes():
-    # Add dimension if no trials
-    n_time_samples, n_signals = (2, 3)
-    test_data = np.ones((n_time_samples, n_signals))
-    expected_shape = (n_time_samples, 1, n_signals)
-    assert _add_axes(test_data).shape == expected_shape
-
-    # Add two dimensions if no trials and signals
-    test_data = np.ones((n_time_samples,))
-    expected_shape = (n_time_samples, 1, 1)
-    assert _add_axes(test_data).shape == expected_shape
-
-    # if there is a trial dimension, do nothing
-    n_trials = 10
-    test_data = np.ones((n_time_samples, n_trials, n_signals))
-    expected_shape = (n_time_samples, n_trials, n_signals)
-    assert _add_axes(test_data).shape == expected_shape
 
 
 @pytest.mark.parametrize(

@@ -366,8 +366,6 @@ def suggest_parameters(
     estimate_n_tapers : Calculate number of tapers
     Multitaper.summarize_parameters : Display parameters for existing analysis
     """
-    import warnings
-
     # Validate inputs
     if desired_freq_resolution is not None and desired_n_tapers is not None:
         warnings.warn(
@@ -919,8 +917,6 @@ class Multitaper:
 
         # Warn if time_halfbandwidth_product is unusually large
         if time_halfbandwidth_product > 10:
-            import warnings
-
             warnings.warn(
                 f"time_halfbandwidth_product = {time_halfbandwidth_product} is unusually large.\n"
                 "\n"
@@ -973,8 +969,6 @@ class Multitaper:
             and time_window_duration is not None
             and time_window_step > time_window_duration
         ):
-            import warnings
-
             warnings.warn(
                 f"time_window_step ({time_window_step}s) is larger than "
                 f"time_window_duration ({time_window_duration}s).\n"
@@ -990,8 +984,6 @@ class Multitaper:
         # Warn if data appears to be transposed (very few time points, many signals)
         n_time, _, n_signals = self._time_series.shape
         if n_time < n_signals:
-            import warnings
-
             warnings.warn(
                 f"Your time series has only {n_time} time points but {n_signals} signals. "
                 "This seems unusual and your data may be transposed.\n"
@@ -1009,8 +1001,6 @@ class Multitaper:
 
         # Warn if data contains NaN or Inf
         if not xp.all(xp.isfinite(self._time_series)):
-            import warnings
-
             warnings.warn(
                 "Input time_series contains NaN or infinite values.\n"
                 "\n"
@@ -1509,7 +1499,7 @@ FFT samples:          {self.n_fft_samples}
             Number of signals in the time series.
 
         """
-        return 1 if len(self._time_series.shape) < 2 else self._time_series.shape[-1]
+        return int(self._time_series.shape[-1])
 
     @property
     def n_trials(self) -> int:
@@ -1521,7 +1511,7 @@ FFT samples:          {self.n_fft_samples}
             Number of trials in the time series.
 
         """
-        return 1 if len(self._time_series.shape) < 3 else self._time_series.shape[1]
+        return int(self._time_series.shape[1])
 
     @property
     def frequency_resolution(self) -> float:
@@ -1605,9 +1595,8 @@ FFT samples:          {self.n_fft_samples}
             Complex-valued Fourier coefficients.
 
         """
-        time_series = _add_axes(self._time_series)
         time_series = _sliding_window(
-            time_series,
+            self._time_series,
             window_size=self.n_time_samples_per_window,
             step_size=self.n_time_samples_per_step,
             axis=0,
@@ -1861,8 +1850,6 @@ class Welch:
             "segment_duration and n_time_samples_per_segment resolve to different lengths.",
         )
         if segment_samples is None:
-            import warnings
-
             segment_samples = min(256, n_time_samples)
             # SciPy's historical 256-sample default does not scale with the
             # sampling rate, so at typical electrophysiology rates it yields a
@@ -2645,16 +2632,6 @@ def prepare_time_series(
     raise ValueError(msg)
 
 
-def _add_axes(time_series: NDArray[np.floating]) -> NDArray[np.floating]:
-    """If no trial or signal axes included, add one in."""
-    n_axes = len(time_series.shape)
-    if n_axes == 1:  # add trials and signals axes
-        return time_series[:, xp.newaxis, xp.newaxis]
-    if n_axes == 2:  # add trials axis
-        return time_series[:, xp.newaxis, ...]
-    return time_series
-
-
 def _sliding_window(
     data: NDArray[_ScalarT],
     window_size: int,
@@ -2800,8 +2777,6 @@ def _apply_adaptive_taper_weights(
     :meth:`Multitaper.fft`); a raw time-domain variance would over-weight the
     noise term by a factor of the sampling frequency.
     """
-    import warnings
-
     taper_power = xp.abs(coefficients) ** 2
     n_initial = min(2, coefficients.shape[2])
     spectrum = xp.mean(taper_power[:, :, :n_initial, :, :], axis=2)

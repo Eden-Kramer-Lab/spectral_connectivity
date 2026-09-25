@@ -20,7 +20,6 @@ from spectral_connectivity.connectivity import (
     _remove_instantaneous_causality,
     _reshape,
     _sanitized_nonnegative_granger,
-    _set_diagonal_to_zero,
     _squared_magnitude,
     _total_inflow,
     _total_outflow,
@@ -1222,16 +1221,6 @@ def test__complex_inner_product():
     assert np.allclose(
         _complex_inner_product(test_array1, test_array2), expected_inner_product
     )
-
-
-def test__set_diagonal_to_zero():
-    test_array = np.ones((2, 2, 2))
-    expected_array = np.ones((2, 2, 2))
-    expected_array[0, 0, 0] = 0
-    expected_array[0, 1, 1] = 0
-    expected_array[1, 0, 0] = 0
-    expected_array[1, 1, 1] = 0
-    assert np.allclose(_set_diagonal_to_zero(test_array), expected_array)
 
 
 def test__bandpass():
