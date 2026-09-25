@@ -101,9 +101,9 @@ def _cached_names(connectivity):
 def test_coherence_measures_retain_only_power_and_cross_spectrum():
     """Cheap derived quantities are recomputed rather than held.
 
-    The pairwise power normalizer ``sqrt(P_i P_j)`` is as large as the real part
-    of the cross-spectral matrix but costs one outer product to rebuild, so
-    holding it would add a third to the retained memory for no measurable speed.
+    The pairwise power normalizer ``sqrt(P_i P_j)`` has the shape of the
+    cross-spectral matrix. Holding it would add half again to the retained
+    memory to save one outer product and square root per measure call.
     """
     rng = np.random.default_rng(6)
     shape = (1, 4, 3, 8, 3)
@@ -126,10 +126,10 @@ def test_clear_cache_frees_intermediates_and_preserves_results():
     measures = [
         "coherence_magnitude",
         "weighted_phase_lag_index",
-        "pairwise_spectral_granger_prediction",
+        "directed_transfer_function",
     ]
     before = {measure: getattr(c, measure)() for measure in measures}
-    assert _cached_names(c)
+    assert {"_minimum_phase_factor", "_transfer_function"} <= _cached_names(c)
 
     c.clear_cache()
 
