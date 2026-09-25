@@ -1793,19 +1793,20 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     diagonal = np.arange(shape[-1])
     expected_dwpli[..., diagonal, diagonal] = 0.0
 
+    # The moments form Im(X_i conj(X_j)) in real arithmetic, which can round
+    # differently from the complex product by an ulp; signs are unaffected.
     np.testing.assert_array_equal(conn.phase_lag_index(), expected_pli)
-    np.testing.assert_array_equal(conn.weighted_phase_lag_index(), expected_wpli)
-    np.testing.assert_array_equal(
-        conn.debiased_squared_weighted_phase_lag_index(), expected_dwpli
+    np.testing.assert_allclose(
+        conn.weighted_phase_lag_index(), expected_wpli, rtol=1e-12, atol=1e-15
     )
+    cold_dwpli = conn.debiased_squared_weighted_phase_lag_index()
+    np.testing.assert_allclose(cold_dwpli, expected_dwpli, rtol=1e-12, atol=1e-15)
 
     # Computing wpli (which guards its weights in place on a copy) must not
     # change a later debiased_squared_weighted_phase_lag_index result.
     warm = Connectivity(fc, expectation_type=expectation_type)
     warm.weighted_phase_lag_index()
-    np.testing.assert_array_equal(
-        warm.debiased_squared_weighted_phase_lag_index(), expected_dwpli
-    )
+    np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
 def test_phase_lag_index_moments_are_computed_lazily():

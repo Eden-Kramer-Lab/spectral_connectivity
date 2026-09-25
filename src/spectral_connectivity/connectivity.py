@@ -90,6 +90,9 @@ _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
     "absolute": xp.abs,
     "squared": lambda imaginary: imaginary**2,
 }
+# Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), so each moment is antisymmetric (-1)
+# or symmetric (+1) across the signal pair.
+_IMAGINARY_MOMENT_PAIR_SYMMETRY = {"sign": -1, "imaginary": -1, "absolute": 1, "squared": 1}
 
 # Tikhonov regularization factor for stabilizing matrix inversions
 # Used to prevent numerical instability with near-singular matrices
@@ -3345,14 +3348,17 @@ class Connectivity:
         Parameters
         ----------
         mean_absolute : array, shape (..., n_frequencies, n_signals, n_signals)
-            ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`.
+            ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`, at
+            the non-negative frequencies.
 
         Returns
         -------
         no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
         """
         tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
-        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * self._pairwise_power_scale
+        n_frequencies = mean_absolute.shape[-3]
+        power_scale = self._pairwise_power_scale[..., :n_frequencies, :, :]
+        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * power_scale
         return no_lag
 
     def _imaginary_cross_spectrum_moments(
@@ -3385,14 +3391,22 @@ class Connectivity:
 
         Returns
         -------
-        tuple of arrays, each shape (..., n_frequencies, n_signals, n_signals)
-            The requested moments, in the order of ``keys``.
+        tuple of arrays, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+            The requested moments, in the order of ``keys``, at the non-negative
+            frequencies the phase-lag measures report.
         """
         self._validate_multiple_signals()
         cache = self._imaginary_moment_cache
         missing = [key for key in keys if key not in cache]
         if missing:
-            coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
+            # The phase-lag measures report only non-negative frequencies, so
+            # reduce only those bins (about half of a two-sided spectrum).
+            n_nonnegative = self._nonnegative_frequency_count(
+                self._fourier_coefficients.shape[-2]
+            )
+            coefficients = self._fourier_coefficients[..., :n_nonnegative, :].astype(
+                self._dtype, copy=False
+            )
             n_signals = coefficients.shape[-1]
             kept_observation_axes = [
                 axis for axis in range(3) if axis not in self._expectation_axes
@@ -3420,26 +3434,37 @@ class Connectivity:
             # Nonlinear sign/abs/square transforms prevent contracting the
             # observation axes before the outer product. Form only a source-row
             # tile at a time, reduce it immediately, and write the small result.
-            all_coefficients = coefficients[..., xp.newaxis]
+            # Im(X_i conj(X_j)) = Im(X_i) Re(X_j) - Re(X_i) Im(X_j), formed in
+            # real arithmetic rather than as a complex product. Each tile pairs
+            # its source rows only with targets from ``start`` on; the rest of
+            # the lower triangle is mirrored afterwards, which is exact because
+            # the pair (j, i) is the negation of (i, j) in floating point too.
+            real_part = coefficients.real[..., xp.newaxis, :]
+            imaginary_part = coefficients.imag[..., xp.newaxis, :]
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
-                source_coefficients = coefficients[..., start:stop, xp.newaxis]
-                imaginary = _complex_inner_product(
-                    source_coefficients,
-                    all_coefficients,
-                    dtype=self._dtype,
-                ).imag
+                source_real = coefficients.real[..., start:stop, xp.newaxis]
+                source_imaginary = coefficients.imag[..., start:stop, xp.newaxis]
+                imaginary = (
+                    source_imaginary * real_part[..., start:]
+                    - source_real * imaginary_part[..., start:]
+                )
                 local_diagonal = xp.arange(stop - start)
-                global_diagonal = xp.arange(start, stop)
-                imaginary[..., local_diagonal, global_diagonal] = 0
+                imaginary[..., local_diagonal, local_diagonal] = 0
 
                 for key in missing:
                     moment = _IMAGINARY_MOMENTS[key](imaginary)
-                    cache[key][..., start:stop, :] = self._expectation(moment)
+                    cache[key][..., start:stop, start:] = self._expectation(moment)
+
+            # Fill each tile's lower-left block (targets before ``start``).
+            rows, columns = xp.tril_indices(n_signals, k=-1)
+            for key in missing:
+                cache[key][..., rows, columns] = (
+                    _IMAGINARY_MOMENT_PAIR_SYMMETRY[key] * cache[key][..., columns, rows]
+                )
         return tuple(cache[key] for key in keys)
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
 
@@ -3510,7 +3535,6 @@ class Connectivity:
         return pli
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
 
@@ -3573,7 +3597,6 @@ class Connectivity:
         return directed_pli
 
     @_asnumpy
-    @_non_negative_frequencies(-3)
     def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
 
@@ -3639,7 +3662,6 @@ class Connectivity:
         return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
 
@@ -3699,7 +3721,6 @@ class Connectivity:
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
     @_asnumpy
-    @_non_negative_frequencies(-3)
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
 
