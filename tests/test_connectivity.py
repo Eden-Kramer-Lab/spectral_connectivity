@@ -7,18 +7,21 @@ import pytest
 import scipy.stats
 from scipy.ndimage import label
 
-from spectral_connectivity._array_utils import _conjugate_transpose
+from spectral_connectivity._array_utils import (
+    _complex_inner_product,
+    _conjugate_transpose,
+    _squared_magnitude,
+)
+from spectral_connectivity._granger import (
+    _remove_instantaneous_causality,
+    _sanitized_nonnegative_granger,
+)
+from spectral_connectivity._multivariate import _optimize_canonical_coherency_phase, _reshape
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
-    _complex_inner_product,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
-    _optimize_canonical_coherency_phase,
-    _remove_instantaneous_causality,
-    _reshape,
-    _sanitized_nonnegative_granger,
-    _squared_magnitude,
     _total_inflow,
     _total_outflow,
 )
@@ -2004,7 +2007,7 @@ def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
         )[0],
     }
     with patch(
-        "spectral_connectivity.connectivity._sanitized_nonnegative_granger",
+        "spectral_connectivity._granger._sanitized_nonnegative_granger",
         wraps=_sanitized_nonnegative_granger,
     ) as sanitizer:
         for name, compute in computations.items():
@@ -2177,7 +2180,7 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
     """A LinAlgError inside one pair's factorization used to be swallowed
     silently, leaving NaN with no explanation; it must warn once, naming the
     measure and the affected pairs."""
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import _granger
 
     rng = np.random.default_rng(18)
     shape = (1, 6, 2, 16, 3)
@@ -2187,9 +2190,7 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
         error_message = "Singular matrix"
         raise np.linalg.LinAlgError(error_message)
 
-    monkeypatch.setattr(
-        connectivity_module, "_estimate_transfer_function", failing_transfer_function
-    )
+    monkeypatch.setattr(_granger, "_estimate_transfer_function", failing_transfer_function)
     with pytest.warns(UserWarning, match="source -> target") as record:
         result = getattr(connectivity, measure)()
     assert np.isnan(result).all()
@@ -2304,17 +2305,22 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     Every (target, source) pair reuses those factorizations, so the cost is
     ``n_signals + 1`` Wilson factorizations rather than ``n_signals ** 2``.
     """
+    from spectral_connectivity import _granger
     from spectral_connectivity import connectivity as connectivity_module
 
     rng = np.random.default_rng(1)
     shape = (1, 20, 3, 32, 4)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     conn = Connectivity(coefficients)
-    with patch.object(
-        connectivity_module,
-        "minimum_phase_decomposition",
-        wraps=connectivity_module.minimum_phase_decomposition,
-    ) as factorize:
+    # Count factorizations requested from either module.
+    with (
+        patch.object(
+            _granger,
+            "minimum_phase_decomposition",
+            wraps=_granger.minimum_phase_decomposition,
+        ) as factorize,
+        patch.object(connectivity_module, "minimum_phase_decomposition", factorize),
+    ):
         conn.conditional_spectral_granger_prediction()
     assert factorize.call_count == shape[-1] + 1
 
@@ -3347,9 +3353,10 @@ def test_jackknife_fisher_stays_signed_for_a_signed_measure(weakly_coupled_conne
 def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""
+    from spectral_connectivity import _multivariate
     from spectral_connectivity import connectivity as conn_mod
 
-    real_svds = conn_mod.svds
+    real_svds = _multivariate.svds
 
     def ascending_svds(matrix, k):
         u, s, vh = real_svds(matrix, k)
@@ -3367,9 +3374,9 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
     # batched eigendecomposition, which never calls svds) so the mock takes
     # effect and this exercises the svds ordering logic it is written for.
     with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
-        with patch.object(conn_mod, "svds", ascending_svds):
+        with patch.object(_multivariate, "svds", ascending_svds):
             gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
-        with patch.object(conn_mod, "svds", descending_svds):
+        with patch.object(_multivariate, "svds", descending_svds):
             gc_desc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
     # Same result regardless of the order svds returned, and strongest-first.
     np.testing.assert_allclose(gc_asc, gc_desc)
