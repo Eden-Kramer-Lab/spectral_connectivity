@@ -18,7 +18,7 @@ The package follows a modular design with three main components:
 
 - **GPU/CPU Abstraction**: Uses `xp` namespace (numpy or cupy) controlled by `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable
 - **Caching**: Frequently computed quantities like cross-spectral matrices are cached for performance
-- **Expectation Framework**: Uses `EXPECTATION` dictionary to handle averaging over different dimensions (time, trials, tapers)
+- **Expectation Framework**: Uses the `EXPECTATION_AXES` dictionary to handle averaging over different dimensions (time, trials, tapers)
 
 ### Main Classes
 

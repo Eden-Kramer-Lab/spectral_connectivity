@@ -4,7 +4,7 @@ import inspect
 import warnings
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
-from functools import cached_property, partial, wraps
+from functools import cached_property, wraps
 from itertools import combinations
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast
@@ -79,7 +79,15 @@ EXPECTATION_AXES = {
     "trials_tapers": (1, 2),
     "time_trials_tapers": (0, 1, 2),
 }
-EXPECTATION = {name: partial(xp.mean, axis=axes) for name, axes in EXPECTATION_AXES.items()}
+
+# Per-observation functions of Im(S_ij) averaged by the phase-lag-index family;
+# see Connectivity._imaginary_cross_spectrum_moments.
+_IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
+    "sign": xp.sign,
+    "imaginary": lambda imaginary: imaginary,
+    "absolute": xp.abs,
+    "squared": lambda imaginary: imaginary**2,
+}
 
 # Tikhonov regularization factor for stabilizing matrix inversions
 # Used to prevent numerical instability with near-singular matrices
@@ -717,13 +725,13 @@ class Connectivity:
 
     @expectation_type.setter
     def expectation_type(self, value: str) -> None:
-        if value not in EXPECTATION:
+        if value not in EXPECTATION_AXES:
             # Detect the common mistake of the right words in the wrong order.
             words = set(value.split("_"))
             valid_words = {"time", "trials", "tapers"}
             suggestion = None
             if words.issubset(valid_words):
-                for valid_key in EXPECTATION:
+                for valid_key in EXPECTATION_AXES:
                     if set(valid_key.split("_")) == words:
                         suggestion = valid_key
                         break
@@ -738,7 +746,7 @@ class Connectivity:
                     f"\nDid you mean '{suggestion}'? (The words must be in a specific order)\n"
                 )
             error_msg += "\nValid options are:\n"
-            for key in sorted(EXPECTATION.keys()):
+            for key in sorted(EXPECTATION_AXES):
                 error_msg += f"  - '{key}'\n"
             error_msg += "\nMost common: 'trials_tapers' (average over both trials and tapers)"
             raise ValueError(error_msg)
@@ -1040,6 +1048,46 @@ class Connectivity:
         source of truth for trimming results to non-negative frequencies.
         """
         return n_frequencies if self._is_one_sided else n_frequencies // 2 + 1
+
+    def _one_sided_density(self, spectrum: BackendArray, frequency_axis: int) -> BackendArray:
+        """Fold a cached (cross-)spectral density onto non-negative frequencies.
+
+        Two-sided input is trimmed to its non-negative bins and the interior
+        positive-frequency bins are doubled, so the one-sided density integrates
+        to the same total power as the two-sided spectrum. DC (bin 0) is unique;
+        the Nyquist bin (present only for an even FFT length) is also unique, so
+        neither is doubled. The scale matches the spectrum's real dtype so a
+        float32 (complex64) request is not silently upcast to float64.
+        One-sided input is returned as a copy, detached from the cache so a
+        caller mutating the result cannot corrupt measures that reuse it.
+
+        Parameters
+        ----------
+        spectrum : array, shape (..., n_fft_samples, ...)
+            Cached spectrum with frequency at ``frequency_axis``.
+        frequency_axis : int
+            Negative index of the frequency axis.
+
+        Returns
+        -------
+        array, shape (..., n_frequencies, ...)
+        """
+        if self._is_one_sided:
+            return spectrum.copy()
+        n_fft_samples = spectrum.shape[frequency_axis]
+        trailing = (slice(None),) * (-frequency_axis - 1)
+        index: tuple[Any, ...] = (
+            ...,
+            slice(self._nonnegative_frequency_count(n_fft_samples)),
+            *trailing,
+        )
+        one_sided = spectrum[index]
+        scale = xp.full((one_sided.shape[frequency_axis],), 2.0, dtype=one_sided.real.dtype)
+        scale[0] = 1.0
+        if n_fft_samples % 2 == 0:
+            scale[-1] = 1.0
+        density: BackendArray = one_sided * scale.reshape((-1,) + (1,) * (-frequency_axis - 1))
+        return density
 
     @property
     @_asnumpy
@@ -1578,17 +1626,10 @@ class Connectivity:
                     1,
                 )
             observation_axis = 1
-            replicate_expectation = "trials_tapers"
-        elif self.expectation_type == "trials":
-            observation_coefficients = coefficients
-            observation_axis = 1
-            n_observations = coefficients.shape[observation_axis]
-            replicate_expectation = "trials"
         else:
             observation_coefficients = coefficients
-            observation_axis = 2
+            observation_axis = 2 if self.expectation_type == "tapers" else 1
             n_observations = coefficients.shape[observation_axis]
-            replicate_expectation = "tapers"
         if n_observations < 3:
             msg = (
                 f"jackknife requires at least 3 observations, got {n_observations}. "
@@ -1612,7 +1653,7 @@ class Connectivity:
             # place instead of copying and re-scanning it for every replicate.
             replicate_connectivity = Connectivity(
                 subset,
-                expectation_type=replicate_expectation,
+                expectation_type=self.expectation_type,
                 frequencies=self._frequencies,
                 time=self.time,
                 dtype=self._dtype,
@@ -1716,26 +1757,7 @@ class Connectivity:
         >>> connectivity.frequencies[[0, -1]]  # 0 Hz up to Nyquist in 0.5 Hz steps
         array([  0., 250.])
         """
-        power = self._power
-        if self._is_one_sided:
-            # Detach from the cached ``_power`` so a caller mutating the result
-            # cannot corrupt measures that reuse the cache.
-            return power.copy()
-        n_fft_samples = power.shape[-2]
-        one_sided = power[..., : self._nonnegative_frequency_count(n_fft_samples), :]
-
-        # Double the interior positive-frequency bins so the one-sided PSD
-        # integrates to the same total power as the two-sided spectrum. DC (bin
-        # 0) is unique; the Nyquist bin (present only for an even FFT length) is
-        # also unique, so neither is doubled. Match the spectrum's dtype so a
-        # float32 (complex64) request is not silently upcast to float64.
-        scale = xp.full((one_sided.shape[-2],), 2.0, dtype=one_sided.dtype)
-        scale[0] = 1.0
-        if n_fft_samples % 2 == 0:
-            scale[-1] = 1.0
-        # scale is 1-D over frequency (axis -2); add a trailing axis to broadcast
-        # across signals.
-        return one_sided * scale[:, xp.newaxis]
+        return self._one_sided_density(self._power, frequency_axis=-2)
 
     @_asnumpy
     def cross_spectral_density(self) -> NDArray[np.complexfloating]:
@@ -1780,20 +1802,9 @@ class Connectivity:
         >>> bool(np.allclose(csd[..., 0, 1], np.conj(csd[..., 1, 0])))
         True
         """
-        cross_spectral_density = self._cached_reduced_cross_spectral_matrix
-        if self._is_one_sided:
-            # Detach from the cached matrix so a caller mutating the result
-            # cannot corrupt measures that reuse the cache.
-            return cross_spectral_density.copy()
-        n_fft_samples = cross_spectral_density.shape[-3]
-        one_sided = cross_spectral_density[
-            ..., : self._nonnegative_frequency_count(n_fft_samples), :, :
-        ]
-        scale = xp.full((one_sided.shape[-3],), 2.0, dtype=one_sided.real.dtype)
-        scale[0] = 1.0
-        if n_fft_samples % 2 == 0:
-            scale[-1] = 1.0
-        return one_sided * scale[:, xp.newaxis, xp.newaxis]
+        return self._one_sided_density(
+            self._cached_reduced_cross_spectral_matrix, frequency_axis=-3
+        )
 
     @_asnumpy
     def coherency(self) -> NDArray[np.complexfloating]:
@@ -2749,19 +2760,16 @@ class Connectivity:
         >>> bool(mic[0, 20, 0, 1] > 0.2)  # lagged a-b coupling at 10 Hz (bin 20)
         True
         """
-        transformed, labels = self._group_imaginary_coherency(
-            group_labels, rank=rank, regularization=regularization
+        return self._group_imaginary_coherency(
+            group_labels,
+            lambda whitened: xp.clip(
+                xp.linalg.svd(whitened, full_matrices=False, compute_uv=False)[..., 0],
+                0.0,
+                1.0,
+            ),
+            rank=rank,
+            regularization=regularization,
         )
-        result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
-        result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
-        for first, second, matrix, connection_finite in transformed:
-            singular_values = xp.linalg.svd(matrix, full_matrices=False, compute_uv=False)
-            value = xp.where(
-                connection_finite, xp.clip(singular_values[..., 0], 0.0, 1.0), xp.nan
-            )
-            result[..., first, second] = value
-            result[..., second, first] = value
-        return to_numpy(result), to_numpy(labels)
 
     def multivariate_interaction_measure(
         self,
@@ -2824,28 +2832,28 @@ class Connectivity:
         >>> bool(mim[0, 20, 0, 1] > 0.05)  # lagged a-b interaction at 10 Hz (bin 20)
         True
         """
-        transformed, labels = self._group_imaginary_coherency(
-            group_labels, rank=rank, regularization=regularization
+        return self._group_imaginary_coherency(
+            group_labels,
+            lambda whitened: xp.sum(whitened**2, axis=(-2, -1)),
+            rank=rank,
+            regularization=regularization,
         )
-        result_shape = (*transformed[0][2].shape[:-2], len(labels), len(labels))
-        result = xp.full(result_shape, xp.nan, dtype=transformed[0][2].real.dtype)
-        for first, second, matrix, connection_finite in transformed:
-            value = xp.where(connection_finite, xp.sum(matrix**2, axis=(-2, -1)), xp.nan)
-            result[..., first, second] = value
-            result[..., second, first] = value
-        return to_numpy(result), to_numpy(labels)
 
     def _group_imaginary_coherency(
         self,
         group_labels: NDArray[np.integer],
+        reduce: Callable[[BackendArray], BackendArray],
         *,
         rank: int | None,
         regularization: float,
-    ) -> tuple[list[tuple[int, int, BackendArray, BackendArray]], NDArray[np.integer]]:
-        """Whiten imaginary CSD blocks for MIC/MIM.
+    ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
+        """Reduce whitened imaginary CSD blocks to a group-by-group measure.
 
-        Returns one ``(first, second, whitened, finite_bin)`` entry per group
-        pair and the sorted labels. Invalid bins (for example the NaN edges of
+        Shared by MIC and MIM. ``reduce`` maps each group pair's whitened
+        imaginary cross-spectrum, shape ``(..., n_first, n_second)``, to its
+        value, shape ``(...)``, which fills both ``[first, second]`` and
+        ``[second, first]`` of the returned ``(..., n_groups, n_groups)`` array
+        (diagonal NaN); the sorted labels are returned alongside. Invalid bins (for example the NaN edges of
         an ``edge_mode="nan"`` Morlet transform) are replaced with a safe value
         before the batched eigendecomposition/SVD so they cannot fail. Validity
         is tracked per group and combined per connection, so a NaN confined to
@@ -2877,7 +2885,9 @@ class Connectivity:
             )
             group_finite.append(finite)
 
-        transformed: list[tuple[int, int, BackendArray, BackendArray]] = []
+        result = xp.full(
+            (*spectrum.shape[:-2], len(labels), len(labels)), xp.nan, dtype=spectrum.real.dtype
+        )
         for first, second in combinations(range(len(labels)), 2):
             first_indices = group_indices[first]
             second_indices = group_indices[second]
@@ -2894,8 +2904,10 @@ class Connectivity:
                 xp.matmul(inverse_square_roots[first], between),
                 inverse_square_roots[second],
             )
-            transformed.append((first, second, whitened, connection_finite))
-        return transformed, labels
+            value = xp.where(connection_finite, reduce(whitened), xp.nan)
+            result[..., first, second] = value
+            result[..., second, first] = value
+        return to_numpy(result), to_numpy(labels)
 
     def global_coherence(
         self,
@@ -3313,12 +3325,6 @@ class Connectivity:
         cache = self._imaginary_moment_cache
         missing = [key for key in keys if key not in cache]
         if missing:
-            valid_keys = {"sign", "imaginary", "absolute", "squared"}
-            unknown = set(missing) - valid_keys
-            if unknown:
-                msg = f"unknown imaginary moment key(s): {sorted(unknown)}"
-                raise ValueError(msg)
-
             coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
             n_signals = coefficients.shape[-1]
             kept_observation_axes = [
@@ -3361,14 +3367,7 @@ class Connectivity:
                 imaginary[..., local_diagonal, global_diagonal] = 0
 
                 for key in missing:
-                    if key == "sign":
-                        moment = xp.sign(imaginary)
-                    elif key == "imaginary":
-                        moment = imaginary
-                    elif key == "absolute":
-                        moment = xp.abs(imaginary)
-                    else:  # key == "squared"; unknown keys were rejected above
-                        moment = imaginary**2
+                    moment = _IMAGINARY_MOMENTS[key](imaginary)
                     cache[key][..., start:stop, :] = self._expectation(moment)
         return tuple(cache[key] for key in keys)
 
@@ -3808,19 +3807,31 @@ class Connectivity:
         >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
         True
         """
-        self._require_two_sided_spectrum("pairwise_spectral_granger_prediction")
+        return self._pairwise_spectral_granger(
+            "pairwise_spectral_granger_prediction", time_reversed=False
+        )
+
+    def _pairwise_spectral_granger(
+        self, measure: str, *, time_reversed: bool
+    ) -> NDArray[np.floating]:
+        """Pairwise spectral Granger, optionally of the time-reversed process.
+
+        Time reversal of a real stationary process transposes its
+        cross-spectral matrix.
+        """
+        self._require_two_sided_spectrum(measure)
         csm = self._expectation_cross_spectral_matrix()
-        n_signals = csm.shape[-1]
-        pairs = combinations(range(n_signals), 2)
-        total_power = self._power
+        if time_reversed:
+            csm = xp.swapaxes(csm, -1, -2)
         result = _estimate_spectral_granger_prediction(
-            total_power,
+            self._power,
             csm,
-            pairs,
+            combinations(range(self.n_signals), 2),
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        _warn_nan_granger_pairs(result, "pairwise_spectral_granger_prediction")
+        # One frame deeper than a measure calling the warning directly.
+        _warn_nan_granger_pairs(result, measure, stacklevel=5)
         return result
 
     @_asnumpy
@@ -3932,17 +3943,9 @@ class Connectivity:
         >>> bool(reversed_granger[0, 20, 0, 1] > 10 * reversed_granger[0, 20, 1, 0])
         True
         """
-        self._require_two_sided_spectrum("time_reversed_spectral_granger_prediction")
-        csm = xp.swapaxes(self._expectation_cross_spectral_matrix(), -1, -2)
-        result = _estimate_spectral_granger_prediction(
-            self._power,
-            csm,
-            combinations(range(self.n_signals), 2),
-            minimum_phase_tolerance=self._minimum_phase_tolerance,
-            minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+        return self._pairwise_spectral_granger(
+            "time_reversed_spectral_granger_prediction", time_reversed=True
         )
-        _warn_nan_granger_pairs(result, "time_reversed_spectral_granger_prediction")
-        return result
 
     @_asnumpy
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
@@ -4474,6 +4477,72 @@ class Connectivity:
         )
         return full_frequency_dtf * squared_partial_coherence
 
+    def _significant_pair_phase(
+        self,
+        measure: str,
+        frequencies_of_interest: NDArray[np.floating] | None,
+        frequency_resolution: float | None,
+        significance_threshold: float,
+    ) -> tuple[np.ma.MaskedArray, NDArray[np.floating], NDArray[np.intp], int]:
+        """Unwrapped coherency phase per signal pair, masked where not significant.
+
+        Shared setup of :meth:`group_delay` and :meth:`delay`: validates the
+        frequency grid and observation weights, bandpasses the coherency,
+        gathers the upper-triangle signal pairs, and masks frequencies whose
+        coherence is not significant.
+
+        Returns
+        -------
+        coherence_phase : masked array, shape (..., n_band_frequencies, n_pairs)
+            Phase unwrapped along frequency; masked where not significant.
+        bandpassed_frequencies : array, shape (n_band_frequencies,)
+        signal_combination_ind : array of int, shape (n_pairs, 2)
+            ``(i, j)`` with ``i < j`` for each pair column.
+        n_signals : int
+        """
+        frequencies = self.frequencies
+        self._require_multiple_frequencies(measure)
+        self._require_uniform_frequency_grid(measure)
+        self._require_uniform_observation_weights(
+            measure,
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null, which assumes equally "
+            "weighted observations.",
+        )
+        self._warn_correlated_observations(
+            measure,
+            "Its coherence significance test uses the observation count as the "
+            "degrees of freedom of the zero-coherence null",
+        )
+        frequency_difference = frequencies[1] - frequencies[0]
+        independent_frequency_step = _get_independent_frequency_step(
+            frequency_difference, frequency_resolution
+        )
+        bandpassed_coherency, bandpassed_frequencies = _bandpass(
+            self._coherency(), frequencies, frequencies_of_interest
+        )
+        # Significance testing and the masked phase below are NumPy operations.
+        # Make the GPU-to-host boundary explicit before passing data into them;
+        # NumPy deliberately refuses implicit conversion of CuPy arrays.
+        bandpassed_coherency = to_numpy(bandpassed_coherency)
+        bandpassed_frequencies = to_numpy(bandpassed_frequencies)
+        n_signals = bandpassed_coherency.shape[-1]
+        signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
+        bandpassed_coherency = bandpassed_coherency[
+            ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
+        ]
+
+        is_significant = _find_significant_frequencies(
+            bandpassed_coherency,
+            self.n_observations,
+            independent_frequency_step,
+            significance_threshold=significance_threshold,
+        )
+        coherence_phase = np.ma.masked_array(
+            np.unwrap(np.angle(bandpassed_coherency), axis=-2), mask=~is_significant
+        )
+        return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
+
     def group_delay(
         self,
         frequencies_of_interest: NDArray[np.floating] | None = None,
@@ -4537,48 +4606,13 @@ class Connectivity:
         >>> bool(r_value[0, 0, 1] > 0.9)  # phase is linear in frequency
         True
         """
-        frequencies = self.frequencies
-        self._require_multiple_frequencies("group_delay")
-        self._require_uniform_frequency_grid("group_delay")
-        self._require_uniform_observation_weights(
-            "group_delay",
-            "Its coherence significance test uses the observation count as the "
-            "degrees of freedom of the zero-coherence null, which assumes equally "
-            "weighted observations.",
-        )
-        self._warn_correlated_observations(
-            "group_delay",
-            "Its coherence significance test uses the observation count as the "
-            "degrees of freedom of the zero-coherence null",
-        )
-        frequency_difference = frequencies[1] - frequencies[0]
-        independent_frequency_step = _get_independent_frequency_step(
-            frequency_difference, frequency_resolution
-        )
-        bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self._coherency(), frequencies, frequencies_of_interest
-        )
-        # Statistical inference and masked regression below are NumPy operations.
-        # Make the GPU-to-host boundary explicit before passing data into them;
-        # NumPy deliberately refuses implicit conversion of CuPy arrays.
-        bandpassed_coherency = to_numpy(bandpassed_coherency)
-        bandpassed_frequencies = to_numpy(bandpassed_frequencies)
-
-        n_signals = bandpassed_coherency.shape[-1]
-        signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
-        bandpassed_coherency = bandpassed_coherency[
-            ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
-        ]
-
-        is_significant = _find_significant_frequencies(
-            bandpassed_coherency,
-            self.n_observations,
-            independent_frequency_step,
-            significance_threshold=significance_threshold,
-        )
-        coherence_phase = np.ma.masked_array(
-            np.unwrap(np.angle(bandpassed_coherency), axis=-2),
-            mask=~is_significant,
+        coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
+            self._significant_pair_phase(
+                "group_delay",
+                frequencies_of_interest,
+                frequency_resolution,
+                significance_threshold,
+            )
         )
 
         # Vectorized masked linear regression of the unwrapped phase on
@@ -4616,7 +4650,7 @@ class Connectivity:
         # Guard against |r| drifting just past 1 from rounding.
         pair_r_value = np.clip(pair_r_value, -1.0, 1.0)
 
-        new_shape = (*bandpassed_coherency.shape[:-2], n_signals, n_signals)
+        new_shape = (*coherence_phase.shape[:-2], n_signals, n_signals)
         slope = np.full(new_shape, np.nan)
         slope[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = pair_slope
         slope[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = -pair_slope
@@ -4688,45 +4722,10 @@ class Connectivity:
         >>> round(float(np.nanmedian(delays[0, :, 3, 0, 1])), 3)
         0.006
         """
-        frequencies = self.frequencies
-        self._require_multiple_frequencies("delay")
-        self._require_uniform_frequency_grid("delay")
-        self._require_uniform_observation_weights(
-            "delay",
-            "Its coherence significance test uses the observation count as the "
-            "degrees of freedom of the zero-coherence null, which assumes equally "
-            "weighted observations.",
-        )
-        self._warn_correlated_observations(
-            "delay",
-            "Its coherence significance test uses the observation count as the "
-            "degrees of freedom of the zero-coherence null",
-        )
-        frequency_difference = frequencies[1] - frequencies[0]
-        independent_frequency_step = _get_independent_frequency_step(
-            frequency_difference, frequency_resolution
-        )
-        bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self._coherency(), frequencies, frequencies_of_interest
-        )
-        # Delay masking is NumPy-only. Transfer once at this boundary instead of
-        # mixing NumPy masks with device arrays throughout the calculation.
-        bandpassed_coherency = to_numpy(bandpassed_coherency)
-        bandpassed_frequencies = to_numpy(bandpassed_frequencies)
-        n_signals = bandpassed_coherency.shape[-1]
-        signal_combination_ind = np.asarray(list(combinations(np.arange(n_signals), 2)))
-        bandpassed_coherency = bandpassed_coherency[
-            ..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]
-        ]
-
-        is_significant = _find_significant_frequencies(
-            bandpassed_coherency,
-            self.n_observations,
-            independent_frequency_step,
-            significance_threshold=significance_threshold,
-        )
-        coherence_phase = np.ma.masked_array(
-            np.unwrap(np.angle(bandpassed_coherency), axis=-2), mask=~is_significant
+        coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
+            self._significant_pair_phase(
+                "delay", frequencies_of_interest, frequency_resolution, significance_threshold
+            )
         )
         possible_range = 2 * np.pi * np.arange(-n_range, n_range + 1)
         # Convert phase to a time delay: tau = (phase + 2*pi*k) / (2*pi*f). The
@@ -4748,7 +4747,7 @@ class Connectivity:
         # a genuine zero-lag delay. This matches the DC handling above.
         delays = np.ma.filled(delays, np.nan)
         new_shape = (
-            *bandpassed_coherency.shape[:-1],
+            *coherence_phase.shape[:-1],
             len(possible_range),
             n_signals,
             n_signals,
