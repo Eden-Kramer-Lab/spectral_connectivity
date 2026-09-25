@@ -2,7 +2,7 @@
 
 import warnings
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -543,6 +543,106 @@ def _immutable_array_snapshot(value: Any) -> BackendArray:
 def _readonly_array_copy(array: BackendArray) -> BackendArray:
     """Return a detached read-only copy of an internal array snapshot."""
     return mark_readonly_if_supported(array.copy())
+
+
+@runtime_checkable
+class SpectralTransform(Protocol):
+    """Interface a transform needs for :meth:`Connectivity.from_transform`.
+
+    Any object with an ``fft()`` method and ``frequencies`` and ``time``
+    attributes (plain attributes or properties) satisfies it; no subclassing or
+    registration is needed. :class:`Multitaper`, :class:`ShortTimeFourierTransform`,
+    :class:`Welch`, and :class:`MorletWavelet` all satisfy it.
+
+    Attributes
+    ----------
+    frequencies : ndarray, shape (n_fft_samples,), or None
+        Frequency of each bin of the ``fft()`` output, in Hz. A two-sided
+        transform lists them in standard FFT order (``numpy.fft.fftfreq``); a
+        one-sided transform lists non-negative, strictly increasing values.
+        ``None`` makes :class:`Connectivity` use normalized FFT frequencies.
+    time : ndarray, shape (n_time_windows,), or None
+        Time of each time window, in seconds. ``None`` makes
+        :class:`Connectivity` use the window indices.
+
+    Notes
+    -----
+    ``fft()`` must return the Fourier coefficients with shape
+    ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``.
+    :class:`Connectivity` takes ownership of the returned array without copying
+    it and marks it (and any array it is a view of) read-only, so ``fft()``
+    must return a new array on each call rather than one the transform or its
+    caller keeps using.
+
+    :meth:`Connectivity.from_transform` also reads the following optional
+    attributes. A transform that lacks one gets the default, which describes a
+    plain two-sided FFT of independent observations, so only a transform whose
+    output differs needs to define it:
+
+    ``is_one_sided`` : bool, default False
+        Whether the coefficients hold only non-negative frequencies (as for a
+        wavelet transform). One-sided coefficients are used as given, without
+        taking the half spectrum or doubling power, and cannot be used by the
+        Wilson-factorized directed measures.
+    ``observation_weights`` : ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), default None
+        Finite, non-negative weights applied to every expectation over the
+        coefficients and shared across signals, e.g. a smoothing kernel or a
+        mask for invalid edge estimates. ``None`` weights all observations
+        equally.
+    ``observations_are_independent`` : bool, default True
+        Whether the trial and taper observations are statistically
+        independent. Set it ``False`` when that axis holds correlated
+        estimates; measures whose corrections count observations then warn,
+        and the jackknife refuses to leave out tapers.
+    ``time_bins_are_independent`` : bool, default True
+        Whether successive time windows are independent (``False`` for windows
+        overlapping by more than half). It affects only expectations that
+        average over time.
+
+    The protocol declares only the required members, so ``isinstance`` checks
+    that ``fft``, ``frequencies``, and ``time`` exist, not their shapes or
+    values; :class:`Connectivity` validates those on construction.
+
+    Examples
+    --------
+    Wrap Fourier coefficients computed elsewhere:
+
+    >>> import numpy as np
+    >>> from spectral_connectivity import Connectivity, SpectralTransform
+    >>> class PrecomputedTransform:
+    ...     def __init__(self, coefficients, frequencies, time):
+    ...         self._coefficients = coefficients
+    ...         self.frequencies = frequencies
+    ...         self.time = time
+    ...
+    ...     def fft(self):
+    ...         return self._coefficients.copy()
+    >>> rng = np.random.default_rng(0)
+    >>> shape = (1, 10, 1, 16, 2)  # (time windows, trials, tapers, FFT bins, signals)
+    >>> coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    >>> transform = PrecomputedTransform(
+    ...     coefficients, np.fft.fftfreq(16, d=1 / 500), time=np.array([0.0])
+    ... )
+    >>> isinstance(transform, SpectralTransform)
+    True
+    >>> connectivity = Connectivity.from_transform(transform)
+    >>> connectivity.coherence_magnitude().shape  # (time, frequency, signal, signal)
+    (1, 9, 2, 2)
+    """
+
+    @property
+    def frequencies(self) -> NDArray[np.floating] | None:
+        """Frequency of each FFT bin, in Hz."""
+        ...
+
+    @property
+    def time(self) -> NDArray[np.floating] | None:
+        """Time of each time window, in seconds."""
+        ...
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
+        ...
 
 
 class Multitaper:
@@ -2508,6 +2608,16 @@ class MorletWavelet:
             else "None",
             "zero_mean": self.zero_mean,
         }
+
+
+if TYPE_CHECKING:
+    # mypy verifies that every built-in transform satisfies the public protocol.
+    _BUILTIN_TRANSFORMS: tuple[type[SpectralTransform], ...] = (
+        Multitaper,
+        ShortTimeFourierTransform,
+        Welch,
+        MorletWavelet,
+    )
 
 
 def prepare_time_series(
