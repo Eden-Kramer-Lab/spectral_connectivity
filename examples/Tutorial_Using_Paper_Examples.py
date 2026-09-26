@@ -61,7 +61,7 @@ def plot_directional(time_series, sampling_frequency, time_halfbandwidth_product
                 linewidth=5,
                 alpha=0.8,
             )
-        ax.set_title(f"x{ind2 + 1} → x{ind1 + 1}", fontsize=15)
+        ax.set_title(f"x{ind1 + 1} → x{ind2 + 1}", fontsize=15)
         ax.set_ylim((0, np.max([np.nanmax(np.stack(list(measures.values()))), 1.05])))
 
     axes[0, -1].legend()
