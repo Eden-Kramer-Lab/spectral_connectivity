@@ -1,5 +1,4 @@
-"""Multivariate coupling kernels: canonical coherence and coherency, MIC, and
-global coherence.
+"""Multivariate coupling kernels: canonical coherence/coherency, MIC, global coherence.
 
 Array-level computations behind the group and multivariate measures of
 :class:`Connectivity`.
@@ -623,13 +622,13 @@ def _global_coherence(
     # with few estimates is cheap even for many signals, while a large square
     # matrix is better served by the per-bin svds fallback.
     n_estimates = n_trials * n_tapers
-    if observation_weights is not None:
-        # The global-coherence eigenspectrum is formed from A @ A^H. Scaling each
-        # observation column by sqrt(weight) therefore produces the weighted
-        # cross-spectrum. The scalar division by sum(weight) cancels when
-        # component power is normalized by total power.
-        fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+    # The global-coherence eigenspectrum is formed from A @ A^H, so scaling each
+    # observation column by sqrt(weight) produces the weighted cross-spectrum. The
+    # scalar division by sum(weight) cancels when component power is normalized
+    # by total power.
     if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
+        if observation_weights is not None:
+            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
         return _batched_global_coherence(
             fourier_coefficients, max_rank, max_workspace_elements
         )
@@ -661,6 +660,11 @@ def _global_coherence(
                 .reshape((n_estimates, n_signals))
                 .T
             )
+            # Weight one bin at a time: this path serves the largest inputs, so
+            # it never holds a weighted copy of every coefficient.
+            if observation_weights is not None:
+                weights = observation_weights[time_ind, :, :, freq_ind, 0].reshape(n_estimates)
+                bin_coefficients = bin_coefficients * xp.sqrt(weights)[xp.newaxis, :]
             (
                 global_coherence[time_ind, freq_ind],
                 unnormalized_global_coherence[time_ind, freq_ind],
