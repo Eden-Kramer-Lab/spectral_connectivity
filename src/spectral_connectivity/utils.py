@@ -1,6 +1,7 @@
 """Utility functions for spectral_connectivity package."""
 
 import contextlib
+import functools
 import os
 import sys
 import warnings
@@ -56,6 +57,10 @@ def to_numpy(array: Any) -> NDArray[Any]:
 
 # Frame filenames share __file__'s (unresolved) form, so compare against that.
 _PACKAGE_DIRECTORY = str(Path(__file__).parent) + os.sep
+# Standard-library frames the package's own decorators and cached properties
+# (functools.cached_property, functools.wraps, contextlib) insert between
+# package frames; they are never the user's call.
+_TRANSPARENT_FILES = frozenset({functools.__file__, contextlib.__file__})
 
 
 def stacklevel_outside_package() -> int:
@@ -63,12 +68,16 @@ def stacklevel_outside_package() -> int:
 
     Pass it directly as ``warnings.warn(..., stacklevel=stacklevel_outside_package())``
     in the function that warns. Unlike a hand-counted level, it stays correct
-    however many package frames (measure, helpers, kernels) sit between the
+    however many package frames (measure, helpers, kernels, and the standard
+    library machinery of cached properties and decorators) sit between the
     user's call and the warning.
     """
     frame: FrameType | None = sys._getframe(1)  # the function calling warnings.warn
     level = 1
-    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_DIRECTORY):
+    while frame is not None and (
+        frame.f_code.co_filename.startswith(_PACKAGE_DIRECTORY)
+        or frame.f_code.co_filename in _TRANSPARENT_FILES
+    ):
         frame = frame.f_back
         level += 1
     return level

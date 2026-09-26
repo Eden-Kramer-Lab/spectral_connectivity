@@ -3788,27 +3788,78 @@ def test_partial_coherence_does_not_warn_with_enough_observations():
     assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
 
 
-@pytest.mark.parametrize("measure", ["blockwise", "conditional"])
-def test_granger_positivity_warnings_point_at_the_caller(monkeypatch, measure):
-    """The block kernel's not-positive-definite warning is attributed to the
-    user's call, not to a line inside the package."""
-    from spectral_connectivity import _granger
-
+def _granger_test_coefficients(n_signals, *, duplicate=False):
     rng = np.random.default_rng(8)
-    shape = (1, 20, 3, 16, 2)
-    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-    real_eigvalsh = _granger.xp.linalg.eigvalsh
-    monkeypatch.setattr(
-        _granger.xp.linalg, "eigvalsh", lambda matrices: -np.abs(real_eigvalsh(matrices))
+    shape = (1, 20, 3, 16, n_signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    if duplicate:
+        coefficients[..., -1] = coefficients[..., 0]
+    return coefficients
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "block_positivity",
+        "conditional_positivity",
+        "nan_pairs",
+        "nan_pairs_through_wrapper",
+        "wilson_nonconvergence",
+        "wilson_nonconvergence_direct",
+    ],
+)
+def test_granger_and_wilson_warnings_point_at_the_caller(monkeypatch, case):
+    """Warnings raised deep in the Granger kernels or the Wilson factorization
+    are attributed to the user's call, however it reaches them."""
+    from spectral_connectivity import _granger, multitaper_connectivity
+    from spectral_connectivity.minimum_phase_decomposition import (
+        minimum_phase_decomposition,
     )
+
+    if case == "block_positivity":
+        real_eigvalsh = _granger.xp.linalg.eigvalsh
+        monkeypatch.setattr(
+            _granger.xp.linalg, "eigvalsh", lambda matrices: -np.abs(real_eigvalsh(matrices))
+        )
+        match = "positive-definite"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(2)
+        ).blockwise_spectral_granger_prediction(np.array([0, 1]))
+    elif case == "conditional_positivity":
+        real_squared_magnitude = _granger._squared_magnitude
+        monkeypatch.setattr(
+            _granger, "_squared_magnitude", lambda x: -real_squared_magnitude(x)
+        )
+        match = "was not positive"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3)
+        ).conditional_spectral_granger_prediction()
+    elif case == "nan_pairs":
+        match = "source -> target"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3, duplicate=True)
+        ).pairwise_spectral_granger_prediction()
+    elif case == "nan_pairs_through_wrapper":
+        series = np.random.default_rng(9).standard_normal((512, 5, 3))
+        series[..., 2] = series[..., 0]
+        match = "source -> target"
+        call = lambda: multitaper_connectivity(  # noqa: E731
+            series, sampling_frequency=256, method="pairwise_spectral_granger_prediction"
+        )
+    elif case == "wilson_nonconvergence":
+        match = "did not converge"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3), minimum_phase_max_iterations=1
+        ).directed_transfer_function()
+    else:
+        csm = Connectivity(_granger_test_coefficients(3))._expectation_cross_spectral_matrix()
+        match = "did not converge"
+        call = lambda: minimum_phase_decomposition(csm, max_iterations=1)  # noqa: E731
 
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        if measure == "blockwise":
-            conn.blockwise_spectral_granger_prediction(np.array([0, 1]))
-        else:
-            conn.conditional_spectral_granger_prediction()
+        call()
 
-    positivity = [w for w in record if "positive-definite" in str(w.message)]
-    assert positivity
-    assert {w.filename for w in positivity} == {__file__}
+    matching = [w for w in record if match in str(w.message)]
+    assert matching
+    assert {w.filename for w in matching} == {__file__}

@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
+from spectral_connectivity.utils import stacklevel_outside_package
 
 logger = getLogger(__name__)
 
@@ -135,7 +136,7 @@ def _get_initial_conditions(
             "Their directed-connectivity values are not guaranteed correct — "
             "check for duplicated or near-collinear channels.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
         logger.warning(
             "Computing the initial conditions using the Cholesky failed for "
@@ -809,7 +810,7 @@ def minimum_phase_decomposition(
                 f"checking for near-singular cross-spectral matrices (highly "
                 f"correlated channels).",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
     if half_spectrum_n_fft is not None:
         minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)

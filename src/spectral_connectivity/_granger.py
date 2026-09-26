@@ -264,7 +264,6 @@ def _warn_nan_granger_pairs(
     *,
     requested: NDArray[np.bool_] | None = None,
     names: NDArray[Any] | None = None,
-    stacklevel: int = 4,
 ) -> None:
     """Warn once, naming the source -> target pairs whose Granger values failed.
 
@@ -284,9 +283,6 @@ def _warn_nan_granger_pairs(
         Entries the caller computed; unrequested entries are NaN by design.
     names : array, shape (n_units,), optional
         Group labels; signals are named by their 0-based index otherwise.
-    stacklevel : int, default=4
-        Points the warning at the user's call through the measure and its
-        ``_asnumpy`` wrapper; 3 for an undecorated measure.
     """
     n_units = result.shape[-1]
     # NaN at every frequency in at least one time window.
@@ -321,7 +317,7 @@ def _warn_nan_granger_pairs(
         "minimum_phase_max_iterations (a Connectivity argument) may let the "
         "factorization converge.",
         UserWarning,
-        stacklevel=stacklevel,
+        stacklevel=stacklevel_outside_package(),
     )
 
 

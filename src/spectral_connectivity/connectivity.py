@@ -3935,8 +3935,7 @@ class Connectivity:
             minimum_phase_tolerance=self._minimum_phase_tolerance,
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
-        # One frame deeper than a measure calling the warning directly.
-        _warn_nan_granger_pairs(result, measure, stacklevel=5)
+        _warn_nan_granger_pairs(result, measure)
         return result
 
     @_asnumpy
@@ -4241,7 +4240,6 @@ class Connectivity:
             result,
             "blockwise_spectral_granger_prediction",
             names=to_numpy(labels),
-            stacklevel=3,
         )
         return to_numpy(result), to_numpy(labels)
 
