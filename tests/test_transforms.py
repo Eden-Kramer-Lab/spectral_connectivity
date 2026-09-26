@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
-from spectral_connectivity import transforms as transforms_module
+from spectral_connectivity import _backend
 from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.transforms import (
     MorletWavelet,
@@ -1962,9 +1962,7 @@ def test_custom_tapers_must_match_window_length(tapers):
         Multitaper(np.zeros((100, 10, 2)), tapers=tapers)
 
 
-@pytest.mark.skipif(
-    transforms_module.xp is not np, reason="tracemalloc sees host allocations only"
-)
+@pytest.mark.skipif(_backend.ON_GPU, reason="tracemalloc sees host allocations only")
 def test_morlet_fft_peak_memory_stays_near_twice_output_size():
     """Coefficients are filled in place rather than stacked from a list.
 

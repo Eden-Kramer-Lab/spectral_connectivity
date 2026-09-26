@@ -2,18 +2,18 @@
 
 import warnings
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
+from spectral_connectivity._array_utils import _divide_where
+from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, xp
+from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
-    cupy_device_name,
-    gpu_request_error_message,
-    is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
@@ -463,54 +463,6 @@ def suggest_parameters(
     }
 
 
-# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
-# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
-if not TYPE_CHECKING and is_gpu_enabled():
-    try:
-        import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-    except ImportError as exc:
-        raise RuntimeError(gpu_request_error_message()) from exc
-    try:
-        # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
-        # imports cupy fine but fails here, which must not be reported as
-        # "CuPy is not installed".
-        from cupyx.scipy.signal import detrend as _backend_detrend
-    except ImportError as exc:
-        msg = (
-            f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
-            f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
-            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
-        )
-        raise RuntimeError(msg) from exc
-
-    try:
-        logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
-    except Exception:
-        logger.info("Using GPU for spectral_connectivity...")
-else:
-    logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
-    from scipy.signal import detrend as _backend_detrend
-
-
-def _divide_where(
-    numerator: BackendArray,
-    denominator: BackendArray,
-    condition: BackendArray,
-    fill: float,
-) -> BackendArray:
-    """Elementwise ``numerator / denominator`` where ``condition``, else ``fill``.
-
-    Backend-neutral replacement for ``xp.divide(..., where=...)``: CuPy ufuncs
-    do not accept the public ``where`` keyword, and the substituted unit
-    denominator also avoids NumPy divide warnings.
-    """
-    quotient = numerator / xp.where(condition, denominator, 1)
-    return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
-
-
 def _finite_scalar_start_time(start_time: Any) -> float:
     """``start_time`` as a finite float, squeezing a single-element array.
 
@@ -543,6 +495,127 @@ def _immutable_array_snapshot(value: Any) -> BackendArray:
 def _readonly_array_copy(array: BackendArray) -> BackendArray:
     """Return a detached read-only copy of an internal array snapshot."""
     return mark_readonly_if_supported(array.copy())
+
+
+@runtime_checkable
+class SpectralTransform(Protocol):
+    """Interface a transform needs for :meth:`Connectivity.from_transform`.
+
+    Any object with an ``fft()`` method and ``frequencies`` and ``time``
+    attributes (plain attributes or properties) satisfies it; no subclassing or
+    registration is needed. :class:`Multitaper`, :class:`ShortTimeFourierTransform`,
+    :class:`Welch`, and :class:`MorletWavelet` all satisfy it.
+
+    Attributes
+    ----------
+    frequencies : ndarray, shape (n_fft_samples,), or None
+        Frequency of each bin of the ``fft()`` output, in Hz. A two-sided
+        transform lists them in standard FFT order (``numpy.fft.fftfreq``); a
+        one-sided transform lists non-negative, strictly increasing values.
+        ``None`` makes :class:`Connectivity` use normalized frequencies in cycles per
+        sample: ``numpy.fft.fftfreq(n_fft_samples)`` for a two-sided transform,
+        ``numpy.linspace(0, 0.5, n_fft_samples)`` for a one-sided one.
+    time : ndarray, shape (n_time_windows,), or None
+        Time of each time window, in seconds. ``None`` makes
+        :class:`Connectivity` use the window indices.
+
+    Notes
+    -----
+    ``fft()`` must return the Fourier coefficients with shape
+    ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``.
+    ``fft()`` must return fresh, unshared storage on each call. Neither the
+    transform nor its caller may subsequently mutate that storage through any
+    alias. :class:`Connectivity` keeps it without copying and marks it read-only
+    where the backend supports this. The flag is only a safeguard: existing
+    writable NumPy views remain writable, and CuPy has no read-only flag.
+    Mutating the storage would silently change the coefficients while cached
+    results keep the old values.
+
+    The coefficients' scale sets the units of :meth:`Connectivity.power`;
+    normalized measures such as coherence and the phase-lag indices do not
+    depend on it, so an unscaled FFT is enough for those. For ``power()`` to be
+    a power spectral density (signal² / Hz), ``|coefficient|²`` must be a
+    density:
+
+    - a two-sided transform returns ``fft(window * x) / sqrt(sampling_frequency)``
+      for a unit-energy window (``sum(window**2) == 1``), as :class:`Multitaper`
+      does; ``power()`` then folds it onto the non-negative frequencies,
+      doubling every bin but DC and, for an even FFT length, Nyquist;
+    - a one-sided transform (``is_one_sided = True``) must fold in the negative
+      frequencies itself, multiplying every bin but 0 Hz and Nyquist by
+      ``sqrt(2)``, because ``power()`` uses one-sided coefficients as given.
+      :class:`MorletWavelet`, whose frequencies all lie strictly between 0 Hz
+      and Nyquist, scales every coefficient of a unit-energy wavelet by
+      ``sqrt(2 / sampling_frequency)``.
+
+    :meth:`Connectivity.from_transform` also reads the following optional
+    attributes. A transform that lacks one gets the default, which describes a
+    plain two-sided FFT of independent observations, so only a transform whose
+    output differs needs to define it:
+
+    ``is_one_sided`` : bool, default False
+        Whether the coefficients hold only non-negative frequencies (as for a
+        wavelet transform). One-sided coefficients are used as given, without
+        taking the half spectrum or doubling power, and cannot be used by the
+        Wilson-factorized directed measures.
+    ``observation_weights`` : ndarray, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), default None
+        Finite, non-negative weights applied to every expectation over the
+        coefficients and shared across signals, e.g. a smoothing kernel or a
+        mask for invalid edge estimates. ``None`` weights all observations
+        equally.
+    ``observations_are_independent`` : bool, default True
+        Whether the trial and taper observations are statistically
+        independent. Set it ``False`` when that axis holds correlated
+        estimates; measures whose corrections count observations then warn,
+        and the jackknife refuses to leave out tapers.
+    ``time_bins_are_independent`` : bool, default True
+        Whether successive time windows are independent (e.g. ``False`` for
+        windows overlapping by more than half). It affects only expectations that
+        average over time.
+
+    ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
+    exist (on Python 3.11 and earlier it also evaluates the two properties).
+    :meth:`Connectivity.from_transform` checks the coefficients' shape and
+    complex dtype, the coordinate lengths, the frequency order, and that the
+    flags are bools (NumPy bools included), not methods.
+
+    Examples
+    --------
+    Wrap Fourier coefficients computed elsewhere:
+
+    >>> import numpy as np
+    >>> from spectral_connectivity import Connectivity, SpectralTransform
+    >>> class PrecomputedTransform:
+    ...     def __init__(self, coefficients, frequencies, time):
+    ...         self._coefficients = coefficients
+    ...         self.frequencies = frequencies
+    ...         self.time = time
+    ...
+    ...     def fft(self):
+    ...         return self._coefficients.copy()
+    >>> rng = np.random.default_rng(0)
+    >>> shape = (1, 10, 1, 16, 2)  # (time windows, trials, tapers, FFT bins, signals)
+    >>> coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    >>> transform = PrecomputedTransform(
+    ...     coefficients, np.fft.fftfreq(16, d=1 / 500), time=np.array([0.0])
+    ... )
+    >>> isinstance(transform, SpectralTransform)
+    True
+    >>> connectivity = Connectivity.from_transform(transform)
+    >>> connectivity.coherence_magnitude().shape  # (time, frequency, signal, signal)
+    (1, 9, 2, 2)
+    """
+
+    @property
+    def frequencies(self) -> NDArray[np.floating] | None:
+        """Frequency of each FFT bin, in Hz."""
+
+    @property
+    def time(self) -> NDArray[np.floating] | None:
+        """Time of each time window, in seconds."""
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
 
 
 class Multitaper:
@@ -2517,6 +2590,16 @@ class MorletWavelet:
         }
 
 
+if TYPE_CHECKING:
+    # mypy verifies that every built-in transform satisfies the public protocol.
+    _BUILTIN_TRANSFORMS: tuple[type[SpectralTransform], ...] = (
+        Multitaper,
+        ShortTimeFourierTransform,
+        Welch,
+        MorletWavelet,
+    )
+
+
 def prepare_time_series(
     time_series: NDArray[np.floating], axis: str | None = None
 ) -> NDArray[np.floating]:
@@ -2752,7 +2835,7 @@ def _multitaper_fft(
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
     fft_kwargs: dict[str, Any] = {}
-    if workers is not None and not is_gpu_enabled():
+    if workers is not None and not ON_GPU:
         fft_kwargs["workers"] = workers
     coefficients: NDArray[np.complexfloating] = fft(
         projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs

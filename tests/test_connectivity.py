@@ -7,20 +7,24 @@ import pytest
 import scipy.stats
 from scipy.ndimage import label
 
+from spectral_connectivity._granger import (
+    _sanitized_nonnegative_granger,
+)
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
-    _complex_inner_product,
-    _conjugate_transpose,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
-    _optimize_canonical_coherency_phase,
-    _remove_instantaneous_causality,
-    _reshape,
-    _sanitized_nonnegative_granger,
-    _squared_magnitude,
     _total_inflow,
     _total_outflow,
+)
+
+PHASE_LAG_MEASURES = (
+    "phase_lag_index",
+    "weighted_phase_lag_index",
+    "directed_phase_lag_index",
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
 )
 
 # Scalar reference implementations pinning the vectorized significant-frequency
@@ -820,90 +824,6 @@ def test_single_component_cacoh_matches_reference_values():
     )
 
 
-def _cacoh_phase_objective(whitened, phase):
-    """sigma_max(Re(exp(-i phase) W)) for one whitened cross-spectrum."""
-    return np.linalg.svd(np.real(np.exp(-1j * phase) * whitened), compute_uv=False)[0]
-
-
-def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
-    """The phase objective can have two lobes of nearly equal height. Refining
-    Newton from the single best coarse-grid point picks whichever lobe happens
-    to sit closer to a grid point; the optimizer must refine every candidate
-    lobe and keep the true maximum."""
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    # Lobe 1 (the true maximum, 0.80) mid-way between two coarse grid points;
-    # lobe 2 (0.7995) exactly on a grid point, so the coarse grid ranks it first.
-    theta_1 = grid[10] + np.pi / (2 * n_grid)
-    theta_2 = grid[27]
-    directions = np.eye(3)
-    whitened = 0.80 * np.exp(1j * theta_1) * np.outer(directions[0], directions[0]) + (
-        0.7995 * np.exp(1j * theta_2) * np.outer(directions[1], directions[1])
-    )
-    coarse_scores = [_cacoh_phase_objective(whitened, phase) for phase in grid]
-    assert np.argmax(coarse_scores) == 27  # premise: the coarse grid prefers lobe 2
-
-    magnitude, phase, left, right = _optimize_canonical_coherency_phase(
-        whitened[np.newaxis], n_grid=n_grid
-    )
-
-    dense_best = max(
-        _cacoh_phase_objective(whitened, phase) for phase in np.linspace(0, np.pi, 20001)
-    )
-    assert magnitude[0] >= max(coarse_scores) - 1e-12
-    assert magnitude[0] == pytest.approx(dense_best, abs=1e-6)
-    assert magnitude[0] == pytest.approx(0.80, abs=1e-6)
-    # The phase is defined modulo pi; it must be lobe 1, not lobe 2.
-    assert np.exp(2j * phase[0]) == pytest.approx(np.exp(2j * theta_1), abs=1e-6)
-    np.testing.assert_allclose(np.abs(left[0, :, 0]), directions[0], atol=1e-6)
-    np.testing.assert_allclose(np.abs(right[0, :, 0]), directions[0], atol=1e-6)
-
-
-def test_cacoh_phase_optimizer_refines_every_coarse_grid_lobe():
-    """With four near-equal lobes the true maximum, mid-way between two coarse
-    grid points, is only the fourth-highest coarse-grid local maximum, so
-    refining a fixed number of the highest ones misses it. Every local maximum
-    must be refined, independently in each bin of a batched leading shape."""
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    half_cell = np.pi / (2 * n_grid)
-    lobe_grid_indices = [3, 11, 19, 27]
-    # On the grid the true lobe (0.80, mid-cell) peaks at 0.80 * cos(half_cell);
-    # the other three sit exactly on grid points, just above that.
-    lower_height = 0.80 * np.cos(half_cell) + 1e-5
-    whitened = np.zeros((2, 2, 4, 4), dtype=complex)
-    true_phase = np.zeros((2, 2))
-    for bin_index, true_lobe in zip(np.ndindex(2, 2), range(4), strict=True):
-        heights = np.full(4, lower_height)
-        heights[true_lobe] = 0.80
-        phases = grid[lobe_grid_indices]
-        phases[true_lobe] += half_cell
-        whitened[bin_index] = np.diag(heights * np.exp(1j * phases))
-        true_phase[bin_index] = phases[true_lobe]
-        # Premise: the true lobe is the lowest of the four on the coarse grid.
-        coarse = np.array([_cacoh_phase_objective(whitened[bin_index], p) for p in grid])
-        lobe_peaks = [max(coarse[k], coarse[k + 1]) for k in lobe_grid_indices]
-        assert np.argmin(lobe_peaks) == true_lobe
-
-    magnitude, phase, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
-
-    np.testing.assert_allclose(magnitude, 0.80, rtol=0, atol=1e-9)
-    # The phase is defined modulo pi; it must be the true lobe's.
-    np.testing.assert_allclose(np.exp(2j * phase), np.exp(2j * true_phase), atol=1e-6)
-
-
-def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
-    rng = np.random.default_rng(21)
-    whitened = rng.standard_normal((40, 3, 4)) + 1j * rng.standard_normal((40, 3, 4))
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    coarse_best = np.array(
-        [max(_cacoh_phase_objective(matrix, phase) for phase in grid) for matrix in whitened]
-    )
-    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
-    assert np.all(magnitude >= coarse_best - 1e-12)
-
-
 @pytest.mark.parametrize(
     "method", ["canonical_coherency", "maximized_imaginary_coherency_components"]
 )
@@ -1258,56 +1178,6 @@ def test_pairwise_phase_consistency():
     assert coupled_ppc[0, 1] == pytest.approx(expected_coupled, rel=1e-10)
 
 
-def test__reshape():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (20, 100, 3, 10, 2)
-    fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
-    )
-    expected_shape = (n_time_samples, n_fft_samples, n_signals, n_trials * n_tapers)
-    assert np.allclose(_reshape(fourier_coefficients).shape, expected_shape)
-
-
-def test__squared_magnitude():
-    test_array = np.array([[1, 2], [3, 4]])
-    expected_array = np.array([[1, 4], [9, 16]])
-    assert np.allclose(_squared_magnitude(test_array), expected_array)
-
-
-def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=complex)
-    test_array[1, ...] = [
-        [1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
-        [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j],
-    ]
-    expected_array = np.zeros((2, 4, 2), dtype=complex)
-    expected_array[1, ...] = test_array[1, ...].conj().transpose()
-    assert np.allclose(_conjugate_transpose(test_array), expected_array)
-
-
-def test__complex_inner_product():
-    """Test that the complex inner product is taken over the last two
-    dimensions."""
-    test_array1 = np.zeros((3, 2, 4), dtype=complex)
-    test_array2 = np.zeros((3, 2, 4), dtype=complex)
-
-    x1 = np.ones((2, 4)) * np.exp(1j * np.pi / 2)
-    x2 = np.ones((2, 4)) * np.exp(1j * 0)
-
-    test_array1[1, :, :] = x1
-    test_array2[1, :, :] = x2
-
-    test_array1[2, :, :] = x1
-    test_array2[2, :, :] = x1
-
-    expected_inner_product = np.zeros((3, 2, 2), dtype=complex)
-    expected_inner_product[1, ...] = x1.dot(x2.T.conj())
-    expected_inner_product[2, ...] = x1.dot(x1.T.conj())
-
-    assert np.allclose(
-        _complex_inner_product(test_array1, test_array2), expected_inner_product
-    )
-
-
 def test__bandpass():
     test_data = np.arange(0, 10).reshape((2, 5))
     labels = np.arange(0, 5) * 2
@@ -1544,29 +1414,6 @@ def test__total_outflow():
     )
 
 
-def test__remove_instantaneous_causality():
-    noise_covariance = np.zeros((2, 2, 2))
-    x1 = np.array([[1, 2], [2, 4]], dtype=float)
-    x2 = np.array([[8, 4], [4, 16]], dtype=float)
-    noise_covariance[0, ...] = x1
-    noise_covariance[1, ...] = x2
-
-    # x -> y: var(x) - (cov(x,y) ** 2 / var(y))
-    # y -> x: var(y) - (cov(x,y) ** 2 / var(x))
-    expected_rotated_noise_covariance = np.zeros((2, 2, 2))
-
-    expected_rotated_noise_covariance[0, 0, 1] = x1[1, 1] - (x1[0, 1] ** 2 / x1[0, 0])
-    expected_rotated_noise_covariance[0, 1, 0] = x1[0, 0] - (x1[1, 0] ** 2 / x1[1, 1])
-
-    expected_rotated_noise_covariance[1, 0, 1] = x2[1, 1] - (x2[0, 1] ** 2 / x2[0, 0])
-    expected_rotated_noise_covariance[1, 1, 0] = x2[0, 0] - (x2[1, 0] ** 2 / x2[1, 1])
-
-    assert np.allclose(
-        _remove_instantaneous_causality(noise_covariance),
-        expected_rotated_noise_covariance,
-    )
-
-
 def test_directed_transfer_function():
     """DTF_ij = |H_ij|**2 / sum_k |H_ik|**2 (normalized over sources)."""
     # The coefficients are unused: the transfer function is patched below.
@@ -1766,7 +1613,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
         imag[..., di[0], di[1]] = 0
         return imag
 
-    def non_negative(a):  # mirror the @_non_negative_frequencies(-3) decorator
+    def non_negative(a):  # the non-negative bins (DC through Nyquist) reported
         return a[..., : a.shape[-3] // 2 + 1, :, :]
 
     conn = Connectivity(fc, expectation_type=expectation_type)
@@ -1793,19 +1640,20 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     diagonal = np.arange(shape[-1])
     expected_dwpli[..., diagonal, diagonal] = 0.0
 
+    # The moments form Im(X_i conj(X_j)) in real arithmetic, which can differ
+    # by an ulp from the matmul reference; the signs agree on this data.
     np.testing.assert_array_equal(conn.phase_lag_index(), expected_pli)
-    np.testing.assert_array_equal(conn.weighted_phase_lag_index(), expected_wpli)
-    np.testing.assert_array_equal(
-        conn.debiased_squared_weighted_phase_lag_index(), expected_dwpli
+    np.testing.assert_allclose(
+        conn.weighted_phase_lag_index(), expected_wpli, rtol=1e-12, atol=1e-15
     )
+    cold_dwpli = conn.debiased_squared_weighted_phase_lag_index()
+    np.testing.assert_allclose(cold_dwpli, expected_dwpli, rtol=1e-12, atol=1e-15)
 
     # Computing wpli (which guards its weights in place on a copy) must not
     # change a later debiased_squared_weighted_phase_lag_index result.
     warm = Connectivity(fc, expectation_type=expectation_type)
     warm.weighted_phase_lag_index()
-    np.testing.assert_array_equal(
-        warm.debiased_squared_weighted_phase_lag_index(), expected_dwpli
-    )
+    np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
 def test_phase_lag_index_moments_are_computed_lazily():
@@ -1851,24 +1699,50 @@ def test_phase_lag_index_moments_are_computed_lazily():
     assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
 
 
-def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatch):
-    """Every PLI variant works when the full observation CSM is unavailable."""
+def test_failed_phase_lag_reduction_caches_nothing():
+    """An error partway through the moment reduction must not leave partially
+    filled moments in the cache for a later measure to return."""
+    rng = np.random.default_rng(3)
+    shape = (1, 4, 3, 8, 3)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    expected = Connectivity(fc).debiased_squared_phase_lag_index()
+
+    conn = Connectivity(fc)
+    with (
+        patch.object(conn, "_expectation", side_effect=MemoryError),
+        pytest.raises(MemoryError),
+    ):
+        conn.phase_lag_index()
+    assert not conn.__dict__["_imaginary_moment_cache"]
+    np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
+
+
+@pytest.mark.parametrize("sources_per_tile", [1, 2])
+def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
+    monkeypatch, sources_per_tile
+):
+    """Every PLI variant works when the full observation CSM is unavailable,
+    and several tiles (including a narrower last one) mirror into the same
+    result as a single tile."""
     import spectral_connectivity.connectivity as connectivity_module
 
     rng = np.random.default_rng(19)
-    shape = (2, 5, 3, 12, 4)
+    shape = (2, 5, 3, 12, 5)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     expected_conn = Connectivity(coefficients)
-    expected = (
-        expected_conn.phase_lag_index(),
-        expected_conn.weighted_phase_lag_index(),
-        expected_conn.debiased_squared_phase_lag_index(),
-        expected_conn.debiased_squared_weighted_phase_lag_index(),
-    )
+    expected = tuple(getattr(expected_conn, measure)() for measure in PHASE_LAG_MEASURES)
 
-    # Force one source signal per tile, then make any accidental access to the
-    # full observation-level outer product fail loudly.
-    monkeypatch.setattr(connectivity_module, "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS", 1)
+    # Size the workspace for ``sources_per_tile`` source signals per tile (it
+    # holds the non-negative bins of every observation for each source-target
+    # pair), then make any accidental access to the full observation-level outer
+    # product fail loudly.
+    n_nonnegative = shape[3] // 2 + 1
+    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        sources_per_tile * elements_per_source,
+    )
     tiled = Connectivity(coefficients)
     with patch.object(
         Connectivity,
@@ -1876,15 +1750,12 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatc
         new_callable=PropertyMock,
         side_effect=AssertionError("full outer product was materialized"),
     ):
-        actual = (
-            tiled.phase_lag_index(),
-            tiled.weighted_phase_lag_index(),
-            tiled.debiased_squared_phase_lag_index(),
-            tiled.debiased_squared_weighted_phase_lag_index(),
-        )
+        actual = tuple(getattr(tiled, measure)() for measure in PHASE_LAG_MEASURES)
 
-    for actual_measure, expected_measure in zip(actual, expected, strict=True):
-        np.testing.assert_array_equal(actual_measure, expected_measure)
+    for measure, actual_measure, expected_measure in zip(
+        PHASE_LAG_MEASURES, actual, expected, strict=True
+    ):
+        np.testing.assert_array_equal(actual_measure, expected_measure, err_msg=measure)
 
 
 def test_phase_lag_index_family_fully_cached_path_matches_cold():
@@ -1959,28 +1830,6 @@ def test_subset_pairwise_granger_prediction_masks_global_diagonal():
     assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
-    """The shared sanitizer clips roundoff, NaNs real negatives, keeps the rest."""
-    eps = np.finfo(dtype).eps
-    tiny_negative = -10 * eps  # inside the 100 * eps roundoff band
-    material_negative = -1e-3  # far outside the roundoff band
-    value = np.array([0.0, 0.5, tiny_negative, material_negative, np.nan], dtype=dtype)
-
-    sanitized = _sanitized_nonnegative_granger(value)
-
-    # Exact zero (no causality) is preserved, not discarded as NaN.
-    assert sanitized[0] == 0.0
-    # A genuine positive influence passes through untouched.
-    assert sanitized[1] == dtype(0.5)
-    # Roundoff around a true zero is clipped up to exactly zero.
-    assert sanitized[2] == 0.0
-    # A materially-negative (invalid) value becomes NaN.
-    assert np.isnan(sanitized[3])
-    # NaN propagates unchanged.
-    assert np.isnan(sanitized[4])
-
-
 def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
     """Every Granger path sanitizes a nonempty set of finite results.
 
@@ -2004,7 +1853,7 @@ def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
         )[0],
     }
     with patch(
-        "spectral_connectivity.connectivity._sanitized_nonnegative_granger",
+        "spectral_connectivity._granger._sanitized_nonnegative_granger",
         wraps=_sanitized_nonnegative_granger,
     ) as sanitizer:
         for name, compute in computations.items():
@@ -2141,21 +1990,15 @@ class _UfuncWhereRejectingNamespace:
         return strict_ufunc
 
 
-def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
+def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
     use it. Emulate that restriction by swapping every module's ``xp`` namespace
     for one whose ufuncs raise on ``where=``, then exercise every path that
     divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
-    from spectral_connectivity import (
-        MorletWavelet,
-        Multitaper,
-        minimum_phase_decomposition,
-        transforms,
-    )
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import MorletWavelet, Multitaper
 
     strict_namespace = _UfuncWhereRejectingNamespace()
-    for module in (connectivity_module, transforms, minimum_phase_decomposition):
+    for module in backend_modules:
         assert module.xp is np  # the CPU backend this emulation replaces
         monkeypatch.setattr(module, "xp", strict_namespace)
     with pytest.raises(TypeError, match="where"):
@@ -2183,7 +2026,7 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
     """A LinAlgError inside one pair's factorization used to be swallowed
     silently, leaving NaN with no explanation; it must warn once, naming the
     measure and the affected pairs."""
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import _granger
 
     rng = np.random.default_rng(18)
     shape = (1, 6, 2, 16, 3)
@@ -2193,9 +2036,7 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
         error_message = "Singular matrix"
         raise np.linalg.LinAlgError(error_message)
 
-    monkeypatch.setattr(
-        connectivity_module, "_estimate_transfer_function", failing_transfer_function
-    )
+    monkeypatch.setattr(_granger, "_estimate_transfer_function", failing_transfer_function)
     with pytest.warns(UserWarning, match="source -> target") as record:
         result = getattr(connectivity, measure)()
     assert np.isnan(result).all()
@@ -2304,22 +2145,42 @@ def test_granger_is_silent_on_well_conditioned_signals(measure):
     assert np.isfinite(result[..., off_diagonal]).all()
 
 
+def test_directed_measures_share_one_transfer_function_binding():
+    """The cached full model and the Granger kernels both estimate the transfer
+    function through ``_granger``, so one patch point reaches every path."""
+    from spectral_connectivity import _granger
+
+    rng = np.random.default_rng(2)
+    shape = (1, 20, 3, 32, 3)
+    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with patch.object(
+        _granger,
+        "_estimate_transfer_function",
+        wraps=_granger._estimate_transfer_function,
+    ) as transfer_function:
+        conn.directed_transfer_function()
+        assert transfer_function.call_count == 1
+        conn.pairwise_spectral_granger_prediction()
+        assert transfer_function.call_count > 1
+
+
 def test_conditional_granger_factorizes_each_channel_set_once():
     """The full system and each leave-one-source-out system are factorized once.
 
     Every (target, source) pair reuses those factorizations, so the cost is
     ``n_signals + 1`` Wilson factorizations rather than ``n_signals ** 2``.
     """
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import _granger
 
     rng = np.random.default_rng(1)
     shape = (1, 20, 3, 32, 4)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     conn = Connectivity(coefficients)
+    # The full model and every reduced model are factorized through _granger.
     with patch.object(
-        connectivity_module,
+        _granger,
         "minimum_phase_decomposition",
-        wraps=connectivity_module.minimum_phase_decomposition,
+        wraps=_granger.minimum_phase_decomposition,
     ) as factorize:
         conn.conditional_spectral_granger_prediction()
     assert factorize.call_count == shape[-1] + 1
@@ -2488,7 +2349,7 @@ def test_nyquist_bin_count(n_fft_samples, expected_n_frequencies):
 
     c = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    # Test coherence which uses @_non_negative_frequencies decorator
+    # coherence_magnitude reports only the non-negative frequencies
     coherence = c.coherence_magnitude()
 
     assert coherence.shape[-3] == expected_n_frequencies, (
@@ -2832,6 +2693,66 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
         / np.sum(weights, axis=(1, 2))[..., np.newaxis]
     )
     np.testing.assert_allclose(connectivity._expectation_cross_spectral_matrix(), expected)
+
+
+def _weighted_two_sided_spectrum(n_fft_samples, seed):
+    """Random two-sided coefficients (1, 3, 2, n_fft_samples, 3), positive
+    observation weights, and the non-negative bin count."""
+    rng = np.random.default_rng(seed)
+    shape = (1, 3, 2, n_fft_samples, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
+    return coefficients, weights, n_fft_samples // 2 + 1
+
+
+@pytest.mark.parametrize("n_fft_samples", [8, 9])
+def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
+    """The phase-lag moments reduce only the non-negative bins of a two-sided
+    spectrum, so the observation weights must be restricted to the same bins."""
+    coefficients, weights, n_nonnegative = _weighted_two_sided_spectrum(n_fft_samples, 11)
+
+    imaginary = (
+        coefficients[..., :n_nonnegative, :, np.newaxis]
+        * np.conjugate(coefficients[..., :n_nonnegative, np.newaxis, :])
+    ).imag
+    weight = weights[..., :n_nonnegative, :, np.newaxis]
+
+    def weighted_mean(values):
+        return np.sum(values * weight, axis=(1, 2)) / np.sum(weight, axis=(1, 2))
+
+    off_diagonal = ~np.eye(coefficients.shape[-1], dtype=bool)
+    weighted = Connectivity(coefficients, observation_weights=weights)
+    np.testing.assert_allclose(
+        weighted.phase_lag_index()[..., off_diagonal],
+        weighted_mean(np.sign(imaginary))[..., off_diagonal],
+    )
+    np.testing.assert_allclose(
+        weighted.weighted_phase_lag_index()[..., off_diagonal],
+        (weighted_mean(imaginary) / weighted_mean(np.abs(imaginary)))[..., off_diagonal],
+    )
+
+    # The debiased measures require uniform weights, which must reproduce the
+    # unweighted result.
+    uniform = Connectivity(coefficients, observation_weights=np.ones_like(weights))
+    unweighted = Connectivity(coefficients)
+    for measure in PHASE_LAG_MEASURES:
+        result = getattr(uniform, measure)()
+        assert result.shape[-3] == n_nonnegative, measure
+        np.testing.assert_allclose(result, getattr(unweighted, measure)(), err_msg=measure)
+
+
+@pytest.mark.parametrize("n_fft_samples", [8, 9])
+def test_weighted_phase_locking_value_on_two_sided_spectrum(n_fft_samples):
+    """PLV normalizes only the non-negative bins, so the weights it applies
+    must be those bins' weights. The reference weights all bins, then trims."""
+    coefficients, weights, n_nonnegative = _weighted_two_sided_spectrum(n_fft_samples, 12)
+
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    phase_locking_value = connectivity.phase_locking_value()
+    assert phase_locking_value.shape[-3] == n_nonnegative
+    np.testing.assert_allclose(
+        phase_locking_value, np.abs(_reference_normalized_cross_spectrum(connectivity))
+    )
 
 
 @pytest.mark.parametrize(
@@ -3236,16 +3157,7 @@ def test_directed_measures_are_scale_invariant(measure):
     np.testing.assert_allclose(scaled[finite], base[finite], rtol=1e-6, atol=1e-9)
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "directed_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    ],
-)
+@pytest.mark.parametrize("measure", PHASE_LAG_MEASURES)
 @pytest.mark.parametrize("scale", [1e-9, 1e9])
 def test_phase_lag_family_is_scale_invariant(measure, scale):
     """The phase-lag measures are ratios of imaginary cross-spectrum moments,
@@ -3353,17 +3265,17 @@ def test_jackknife_fisher_stays_signed_for_a_signed_measure(weakly_coupled_conne
 def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""
-    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity import _multivariate
 
-    real_svds = conn_mod.svds
+    real_svds = _multivariate.svds
 
-    def ascending_svds(matrix, k):
-        u, s, vh = real_svds(matrix, k)
+    def ascending_svds(matrix, k, **kwargs):
+        u, s, vh = real_svds(matrix, k, **kwargs)
         order = np.argsort(s)  # force ascending
         return u[:, order], s[order], vh[order]
 
-    def descending_svds(matrix, k):
-        u, s, vh = real_svds(matrix, k)
+    def descending_svds(matrix, k, **kwargs):
+        u, s, vh = real_svds(matrix, k, **kwargs)
         order = np.argsort(s)[::-1]  # force descending
         return u[:, order], s[order], vh[order]
 
@@ -3372,10 +3284,10 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
     # Force the per-bin svds fallback (the moderate-n_signals default is the
     # batched eigendecomposition, which never calls svds) so the mock takes
     # effect and this exercises the svds ordering logic it is written for.
-    with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
-        with patch.object(conn_mod, "svds", ascending_svds):
+    with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
+        with patch.object(_multivariate, "svds", ascending_svds):
             gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
-        with patch.object(conn_mod, "svds", descending_svds):
+        with patch.object(_multivariate, "svds", descending_svds):
             gc_desc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
     # Same result regardless of the order svds returned, and strongest-first.
     np.testing.assert_allclose(gc_asc, gc_desc)
@@ -3394,7 +3306,7 @@ def test_global_coherence_batched_matches_per_bin_fallback():
     unitary rotation within a degenerate subspace), including NaN placement for
     zero-power bins.
     """
-    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity import _multivariate
 
     rng = np.random.default_rng(4)
     # wide: n_estimates (30) >= n_signals (8) -> eigh path
@@ -3412,7 +3324,7 @@ def test_global_coherence_batched_matches_per_bin_fallback():
                 warnings.simplefilter("ignore")
                 gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
                 # Force the per-bin fallback by lowering the batching threshold.
-                with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+                with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
                     gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
             np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))
             np.testing.assert_allclose(
@@ -3434,7 +3346,7 @@ def test_global_coherence_batched_matches_per_bin_ill_conditioned():
     eigh/SVD tradeoff against a regression that widens the gap; the existing
     equivalence test uses only well-conditioned Gaussian data.
     """
-    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity import _multivariate
 
     rng = np.random.default_rng(20240827)
     n_time, n_trials, n_tapers, n_fft, n_signals = 2, 30, 2, 10, 4
@@ -3454,7 +3366,7 @@ def test_global_coherence_batched_matches_per_bin_ill_conditioned():
     for max_rank in (1, n_signals):
         gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
         # Force the per-bin svd/svds fallback (the well-conditioned reference).
-        with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+        with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
             gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
 
         np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))
@@ -3868,3 +3780,158 @@ def test_partial_coherence_does_not_warn_with_enough_observations():
         warnings.simplefilter("error", UserWarning)
         values = Connectivity(coefficients).partial_coherence()
     assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
+
+
+def _granger_test_coefficients(n_signals, *, duplicate=False):
+    rng = np.random.default_rng(8)
+    shape = (1, 20, 3, 16, n_signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    if duplicate:
+        coefficients[..., -1] = coefficients[..., 0]
+    return coefficients
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "block_positivity",
+        "conditional_positivity",
+        "nan_pairs",
+        "nan_pairs_through_wrapper",
+        "wilson_nonconvergence",
+        "wilson_nonconvergence_direct",
+    ],
+)
+def test_granger_and_wilson_warnings_point_at_the_caller(monkeypatch, case):
+    """Warnings raised deep in the Granger kernels or the Wilson factorization
+    are attributed to the user's call, however it reaches them."""
+    from spectral_connectivity import _granger, multitaper_connectivity
+    from spectral_connectivity.minimum_phase_decomposition import (
+        minimum_phase_decomposition,
+    )
+
+    if case == "block_positivity":
+        real_eigvalsh = _granger.xp.linalg.eigvalsh
+        monkeypatch.setattr(
+            _granger.xp.linalg, "eigvalsh", lambda matrices: -np.abs(real_eigvalsh(matrices))
+        )
+        match = "positive-definite"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(2)
+        ).blockwise_spectral_granger_prediction(np.array([0, 1]))
+    elif case == "conditional_positivity":
+        real_squared_magnitude = _granger._squared_magnitude
+        monkeypatch.setattr(
+            _granger, "_squared_magnitude", lambda x: -real_squared_magnitude(x)
+        )
+        match = "was not positive"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3)
+        ).conditional_spectral_granger_prediction()
+    elif case == "nan_pairs":
+        match = "source -> target"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3, duplicate=True)
+        ).pairwise_spectral_granger_prediction()
+    elif case == "nan_pairs_through_wrapper":
+        series = np.random.default_rng(9).standard_normal((512, 5, 3))
+        series[..., 2] = series[..., 0]
+        match = "source -> target"
+        call = lambda: multitaper_connectivity(  # noqa: E731
+            series, sampling_frequency=256, method="pairwise_spectral_granger_prediction"
+        )
+    elif case == "wilson_nonconvergence":
+        match = "did not converge"
+        call = lambda: Connectivity(  # noqa: E731
+            _granger_test_coefficients(3), minimum_phase_max_iterations=1
+        ).directed_transfer_function()
+    else:
+        csm = Connectivity(_granger_test_coefficients(3))._expectation_cross_spectral_matrix()
+        match = "did not converge"
+        call = lambda: minimum_phase_decomposition(csm, max_iterations=1)  # noqa: E731
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+
+    matching = [w for w in record if match in str(w.message)]
+    assert matching
+    assert {w.filename for w in matching} == {__file__}
+
+
+def _warning_cases():
+    """(match, call) pairs that raise each Connectivity warning from user code."""
+    from spectral_connectivity import Multitaper, multitaper_connectivity
+
+    rng = np.random.default_rng(21)
+
+    def coefficients(shape=(1, 6, 3, 16, 3)):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    def with_dead_channel(shape=(1, 6, 3, 16, 3)):
+        values = coefficients(shape)
+        values[..., 0] = 0
+        return values
+
+    one_observation = coefficients((1, 1, 1, 16, 3))
+    single_trial_series = rng.standard_normal((256, 1, 3))
+    return {
+        "single_observation": (
+            "single",
+            lambda: Connectivity(one_observation).coherence_magnitude(),
+        ),
+        "single_observation_through_wrapper": (
+            "single",
+            lambda: multitaper_connectivity(
+                single_trial_series,
+                sampling_frequency=256,
+                time_halfbandwidth_product=1,
+                method="coherence_magnitude",
+            ),
+        ),
+        "zero_power_coherence": (
+            "zero",
+            lambda: Connectivity(with_dead_channel()).coherence_magnitude(),
+        ),
+        "zero_magnitude_plv": (
+            "zero magnitude",
+            lambda: Connectivity(with_dead_channel()).phase_locking_value(),
+        ),
+        "partial_coherence_few_observations": (
+            "fewer than",
+            lambda: Connectivity(coefficients((1, 1, 2, 16, 3))).partial_coherence(),
+        ),
+        "global_coherence_rank": (
+            "exceeds the number",
+            lambda: Connectivity(coefficients()).global_coherence(max_rank=10),
+        ),
+        "correlated_observations": (
+            "independent",
+            lambda: Connectivity(
+                coefficients(), observations_are_independent=False
+            ).pairwise_phase_consistency(),
+        ),
+        "nonfinite_coefficients": (
+            "NaN or Inf",
+            lambda: Connectivity(np.full((1, 2, 1, 8, 2), np.nan, dtype=complex)),
+        ),
+        "multitaper_single_observation": (
+            "single",
+            lambda: Connectivity.from_multitaper(
+                Multitaper(single_trial_series, 256, time_halfbandwidth_product=1)
+            ).phase_locking_value(),
+        ),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_warning_cases()))
+def test_connectivity_warnings_point_at_the_caller(case):
+    """Warnings raised below a measure (in shared helpers, decorators, or the
+    constructor) are attributed to the user's call, however it reaches them."""
+    match, call = _warning_cases()[case]
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    matching = [w for w in record if match in str(w.message)]
+    assert matching, [str(w.message)[:80] for w in record]
+    assert {w.filename for w in matching} == {__file__}

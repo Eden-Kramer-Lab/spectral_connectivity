@@ -121,7 +121,7 @@ def test_clear_cache_frees_intermediates_and_preserves_results():
         "directed_transfer_function",
     ]
     before = {measure: getattr(c, measure)() for measure in measures}
-    assert {"_minimum_phase_factor", "_transfer_function"} <= set(c.__dict__)
+    assert {"_minimum_phase_factor", "_var_model"} <= set(c.__dict__)
 
     c.clear_cache()
 
@@ -437,6 +437,44 @@ def test_connectivity_rejects_non_1d_or_nonfinite_coordinates():
     bad_freqs[2] = np.nan
     with pytest.raises(ValueError, match="frequencies must contain only finite"):
         Connectivity(fourier_coefficients=fc, frequencies=bad_freqs)
+
+
+@pytest.mark.parametrize("n_fft", [64, 3000, 3001])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_fft_order_check_allows_for_the_coordinate_precision(n_fft, dtype):
+    """FFT-order frequencies stored at float32 (e.g. from netCDF) still pass."""
+    fc = np.zeros((1, 2, 1, n_fft, 2), dtype=complex)
+    frequencies = np.fft.fftfreq(n_fft, 1 / 1000).astype(dtype)
+    Connectivity(fourier_coefficients=fc, frequencies=frequencies)
+
+    off_grid = frequencies.astype(float)
+    off_grid[5] *= 1 + 1e-4
+    with pytest.raises(ValueError, match="standard FFT order"):
+        Connectivity(fourier_coefficients=fc, frequencies=off_grid.astype(dtype))
+
+
+@pytest.mark.parametrize(
+    "flag", ["is_one_sided", "observations_are_independent", "time_bins_are_independent"]
+)
+@pytest.mark.parametrize("value", ["False", None, 0, print])
+def test_constructor_flags_must_be_bools(flag, value):
+    """``bool()`` would read "False" or a function as True and None or 0 as
+    False, silently changing how the spectrum is treated."""
+    fc = np.zeros((1, 2, 1, 8, 2), dtype=complex)
+    with pytest.raises(TypeError, match=f"{flag} must be a bool"):
+        Connectivity(fourier_coefficients=fc, **{flag: value})
+
+
+@pytest.mark.parametrize("value", [np.True_, np.array(True), np.array(False)])
+def test_constructor_flags_accept_numpy_booleans(value):
+    fc = np.zeros((1, 2, 1, 8, 2), dtype=complex)
+    conn = Connectivity(fourier_coefficients=fc, observations_are_independent=value)
+    assert conn.observations_are_independent is bool(value)
+
+
+def test_empty_frequency_coordinate_is_accepted():
+    fc = np.zeros((1, 2, 1, 0, 2), dtype=complex)
+    Connectivity(fourier_coefficients=fc, frequencies=np.array([]))
 
 
 def test_from_multitaper_connectivity_is_picklable():
