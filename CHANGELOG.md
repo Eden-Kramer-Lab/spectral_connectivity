@@ -75,9 +75,19 @@ directly with results from 2.x.
   transforms `Connectivity.from_transform` and `Connectivity.from_multitaper`
   accept: `fft()`, `frequencies`, and `time` are required, and the optional
   `is_one_sided`, `observation_weights`, `observations_are_independent`, and
-  `time_bins_are_independent` attributes keep their defaults when absent, so
-  existing custom transforms work unchanged. Both constructors are annotated
-  with it.
+  `time_bins_are_independent` attributes fall back to their defaults when
+  absent, so a custom transform needs no new attributes. Its docstring states
+  the `fft()` ownership rule and the coefficient scaling that makes `power()` a
+  density. Both constructors are annotated with it, so mypy now checks custom
+  transforms passed to them, and a `Connectivity` subclass overriding
+  `from_multitaper` must widen its argument to `SpectralTransform`.
+- `Connectivity.from_transform` rejects custom-transform input that used to
+  give silently wrong results: two-sided frequencies not in `numpy.fft.fftfreq`
+  order (e.g. `rfft` output without `is_one_sided = True`), capability flags
+  that are not bools (a method, `"False"`, `None`), and an `AttributeError`
+  raised inside a capability property, which is no longer taken for the
+  attribute's absence. `Connectivity` also rejects real-valued Fourier
+  coefficients, whose phase-based measures were exactly 0.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
   weighting. Adaptive weighting compares the periodogram against the process

@@ -658,14 +658,16 @@ class Connectivity:
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
 
-        Used only by ``from_multitaper``, where ``value`` is the
-        ``Multitaper.fft()`` output and is referenced nowhere else. This avoids a
+        Used only by ``from_multitaper``, where ``value`` is ``transform.fft()``,
+        which the ``SpectralTransform`` contract requires to be fresh and
+        referenced nowhere else. This avoids a
         full copy of the largest array in the pipeline -- a transient ~2x peak on
         every construction, which can push a memory-constrained GPU into OOM.
 
         This is deliberately private and has no public ``copy=False`` surface: it
-        is safe only when the caller guarantees the array *and its writable NumPy
-        base buffer* are unshared, which ``from_multitaper`` controls.
+        is safe only when the array *and its writable NumPy base buffer* are
+        unshared, which ``from_multitaper`` relies on the transform for and
+        cannot check.
         """
         self._set_fourier_coefficients(value, adopt=True)
 
@@ -720,8 +722,9 @@ class Connectivity:
         # them. Marking the snapshot read-only turns an in-place edit via the
         # getter into a clear error rather than silently stale results.
         if adopt:
-            # `value` is unshared (Multitaper.fft output) but is a swapaxes VIEW
-            # whose base buffer is writable; freeze the whole base chain, not just
+            # `value` is unshared by the SpectralTransform contract but may be a
+            # view (Multitaper's is a swapaxes view) whose base buffer is
+            # writable; freeze the whole base chain, not just
             # the outer view, or the data stays reachable and mutable through
             # `.base`. No copy -- this is the memory-saving path.
             mark_readonly_chain_if_supported(value)
@@ -826,7 +829,7 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct connectivity class using a multitaper instance.
+        """Construct from a spectral transform (the original name of from_transform).
 
         Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`;
         :meth:`from_transform` is the transform-neutral spelling.
@@ -886,7 +889,8 @@ class Connectivity:
             init_kwargs["observations_are_independent"] = False
         if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
-        # fft() returns a freshly built, unshared array, so adopt it in place
+        # The SpectralTransform contract requires fft() to return a freshly
+        # built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
         # pass the private keyword when the subclass has not overridden __init__:
         # an overriding subclass need not accept it, and passing it would raise
@@ -921,9 +925,9 @@ class Connectivity:
             ``observation_weights``, ``observations_are_independent``, and
             ``time_bins_are_independent`` attributes are forwarded when present;
             see :class:`~spectral_connectivity.transforms.SpectralTransform`.
-            ``fft()`` must return fresh, unshared storage on each call that
-            nothing mutates afterwards: the result is used without copying and
-            marked read-only where the backend supports it.
+            ``fft()`` must return a new array on each call, and nothing may
+            modify it afterwards: the result is used without copying and marked
+            read-only where the backend supports it.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
@@ -932,7 +936,8 @@ class Connectivity:
             Relative convergence tolerance for the Wilson minimum-phase
             factorization used by the directed measures.
         minimum_phase_max_iterations : int, default=500
-            Maximum Wilson iterations.
+            Maximum Wilson iterations. Increase for near-singular cross-spectral
+            matrices (highly correlated channels) that fail to converge.
 
         Returns
         -------

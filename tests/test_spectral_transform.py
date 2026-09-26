@@ -274,7 +274,7 @@ class _DensityScaledTransform:
         else:
             coefficients = np.fft.fft(windowed, axis=0) / np.sqrt(sampling_frequency)
             self.frequencies = np.fft.fftfreq(n_samples, 1 / sampling_frequency)
-        # (time, trials, signals) -> (1 window, trials, 1 taper, frequency, signals)
+        # (frequency, trials, signals) -> (1 window, trials, 1 taper, frequency, signals)
         self._coefficients = np.moveaxis(coefficients, 0, 1)[np.newaxis, :, np.newaxis]
         self.time = np.array([0.0])
         self.energy = np.mean(np.sum(windowed**2, axis=0), axis=0)  # (n_signals,)

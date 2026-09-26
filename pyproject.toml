@@ -146,7 +146,7 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
-    # Protocol and overload stubs: a body of only ``...`` never runs
+    # Protocol stub bodies (``...``) never run
     "^\\s*\\.\\.\\.$",
 ]
 

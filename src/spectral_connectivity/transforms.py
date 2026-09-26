@@ -560,7 +560,9 @@ class SpectralTransform(Protocol):
         Frequency of each bin of the ``fft()`` output, in Hz. A two-sided
         transform lists them in standard FFT order (``numpy.fft.fftfreq``); a
         one-sided transform lists non-negative, strictly increasing values.
-        ``None`` makes :class:`Connectivity` use normalized FFT frequencies.
+        ``None`` makes :class:`Connectivity` use normalized frequencies in cycles per
+        sample: ``numpy.fft.fftfreq(n_fft_samples)`` for a two-sided transform,
+        ``numpy.linspace(0, 0.5, n_fft_samples)`` for a one-sided one.
     time : ndarray, shape (n_time_windows,), or None
         Time of each time window, in seconds. ``None`` makes
         :class:`Connectivity` use the window indices.
@@ -569,9 +571,9 @@ class SpectralTransform(Protocol):
     -----
     ``fft()`` must return the Fourier coefficients with shape
     ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``.
-    ``fft()`` must return fresh, unshared storage on each call, and neither the
-    transform nor its caller may mutate that storage afterwards through any
-    alias. :class:`Connectivity` keeps the array without copying it and marks
+    ``fft()`` must return a new array on each call (not an array the transform
+    keeps, or a view of one), and nothing may modify that array afterwards
+    through any alias. :class:`Connectivity` keeps the array without copying it and marks
     it (and any array it is a view of) read-only where the backend supports
     that, but this cannot catch every write: other views created beforehand
     stay writable, and CuPy arrays have no read-only flag. A write through such
@@ -587,10 +589,13 @@ class SpectralTransform(Protocol):
     - a two-sided transform returns ``fft(window * x) / sqrt(sampling_frequency)``
       for a unit-energy window (``sum(window**2) == 1``), as :class:`Multitaper`
       does; ``power()`` then folds it onto the non-negative frequencies,
-      doubling every bin but DC and an even-length Nyquist;
-    - a one-sided transform (``is_one_sided = True``) must do that folding
-      itself, multiplying those bins by ``sqrt(2)``, as :class:`MorletWavelet`
-      does, because ``power()`` uses one-sided coefficients as given.
+      doubling every bin but DC and, for an even FFT length, Nyquist;
+    - a one-sided transform (``is_one_sided = True``) must fold in the negative
+      frequencies itself, multiplying every bin but 0 Hz and Nyquist by
+      ``sqrt(2)``, because ``power()`` uses one-sided coefficients as given.
+      :class:`MorletWavelet`, whose frequencies all lie strictly between 0 Hz
+      and Nyquist, scales every coefficient of a unit-energy wavelet by
+      ``sqrt(2 / sampling_frequency)``.
 
     :meth:`Connectivity.from_transform` also reads the following optional
     attributes. A transform that lacks one gets the default, which describes a
@@ -613,13 +618,19 @@ class SpectralTransform(Protocol):
         estimates; measures whose corrections count observations then warn,
         and the jackknife refuses to leave out tapers.
     ``time_bins_are_independent`` : bool, default True
-        Whether successive time windows are independent (``False`` for windows
-        overlapping by more than half). It affects only expectations that
+        Whether successive time windows are independent (e.g. ``False`` for
+        windows overlapping by more than half). It affects only expectations that
         average over time.
 
+    The three flags must be bools (NumPy bools included), not methods.
+
     The protocol declares only the required members, so ``isinstance`` checks
-    that ``fft``, ``frequencies``, and ``time`` exist, not their shapes or
-    values; :class:`Connectivity` validates those on construction.
+    that ``fft``, ``frequencies``, and ``time`` exist, not their types, shapes or
+    values. :meth:`Connectivity.from_transform` checks the coefficients' shape and
+    complex dtype, the coordinate lengths, the frequency order, and the flag
+    types. On Python 3.11 and earlier, ``isinstance`` also evaluates the
+    ``frequencies`` and ``time`` properties, so it can raise if they do;
+    ``issubclass`` is not supported for this protocol.
 
     Examples
     --------
