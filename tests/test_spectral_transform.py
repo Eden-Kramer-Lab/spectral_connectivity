@@ -91,8 +91,15 @@ def test_objects_missing_a_required_member_do_not_satisfy_the_protocol(coefficie
         frequencies = np.fft.fftfreq(N_FFT_SAMPLES)
         time = np.arange(N_TIME_WINDOWS, dtype=float)
 
+    class NoFrequencies:
+        time = np.arange(N_TIME_WINDOWS, dtype=float)
+
+        def fft(self):
+            return coefficients
+
     assert not isinstance(NoTime(), SpectralTransform)
     assert not isinstance(NoFFT(), SpectralTransform)
+    assert not isinstance(NoFrequencies(), SpectralTransform)
     assert not isinstance(coefficients, SpectralTransform)
 
 
@@ -128,6 +135,45 @@ def test_optional_capability_attributes_are_honored(coefficients):
     np.testing.assert_array_equal(connectivity.observation_weights, weights)
     assert connectivity.observations_are_independent is False
     assert connectivity.time_bins_are_independent is False
+
+
+@pytest.mark.parametrize("one_sided", [False, True])
+def test_missing_frequencies_and_time_get_normalized_defaults(coefficients, one_sided):
+    """``frequencies = None`` gives normalized frequencies (cycles per sample)
+    and ``time = None`` the window indices, as the protocol documents."""
+    transform = _MinimalTransform(coefficients, None)
+    transform.time = None
+    transform.is_one_sided = one_sided
+
+    connectivity = Connectivity.from_transform(transform)
+
+    expected = (
+        np.linspace(0.0, 0.5, N_FFT_SAMPLES) if one_sided else np.fft.fftfreq(N_FFT_SAMPLES)
+    )
+    np.testing.assert_array_equal(connectivity.all_frequencies, expected)
+    np.testing.assert_array_equal(connectivity.time, np.arange(N_TIME_WINDOWS))
+    off_diagonal = ~np.eye(N_SIGNALS, dtype=bool)
+    assert np.isfinite(connectivity.coherence_magnitude()[..., off_diagonal]).all()
+
+
+def test_from_transform_forwards_dtype_and_wilson_options():
+    series = np.random.default_rng(5).standard_normal((256, 4, 3))
+    series[1:, :, 1] += 0.5 * series[:-1, :, 0]
+    transform = Multitaper(series, sampling_frequency=256, time_halfbandwidth_product=3)
+
+    # dtype sets the precision of the phase-locking computation.
+    single = Connectivity.from_transform(transform, dtype=np.complex64)
+    assert single.phase_locking_value().dtype == np.float32
+
+    # One Wilson iteration cannot converge at the default tolerance ...
+    capped = Connectivity.from_transform(transform, minimum_phase_max_iterations=1)
+    with pytest.warns(UserWarning, match="did not converge"):
+        assert np.isnan(capped.directed_transfer_function()).all()
+    # ... but does at a tolerance loose enough to accept the first iterate.
+    loose = Connectivity.from_transform(
+        transform, minimum_phase_max_iterations=1, minimum_phase_tolerance=1e6
+    )
+    assert np.isfinite(loose.directed_transfer_function()).all()
 
 
 _CAPABILITY_FLAGS = (
