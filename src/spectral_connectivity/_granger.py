@@ -20,7 +20,7 @@ from spectral_connectivity._array_utils import (
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
-from spectral_connectivity.utils import to_numpy
+from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 
 def _estimate_noise_covariance(
@@ -486,7 +486,7 @@ def _estimate_conditional_spectral_granger_prediction(
             "conditioning). Those bins are returned as NaN. Consider increasing "
             "minimum_phase_max_iterations or checking for collinear channels.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
     safe_total = xp.where(positive, total, 1.0)
     safe_intrinsic = xp.where(positive, intrinsic, 1.0)
@@ -628,7 +628,7 @@ def _block_spectral_granger_from_model(
             "bins are returned as NaN. Consider increasing "
             "minimum_phase_max_iterations or checking for collinear channels.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
     return xp.where(positive_definite, value, xp.nan)
 

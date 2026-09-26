@@ -3957,3 +3957,29 @@ def test_partial_coherence_does_not_warn_with_enough_observations():
         warnings.simplefilter("error", UserWarning)
         values = Connectivity(coefficients).partial_coherence()
     assert np.all(values[..., 0, 1] < 1.0 - 1e-6)
+
+
+@pytest.mark.parametrize("measure", ["blockwise", "conditional"])
+def test_granger_positivity_warnings_point_at_the_caller(monkeypatch, measure):
+    """The block kernel's not-positive-definite warning is attributed to the
+    user's call, not to a line inside the package."""
+    from spectral_connectivity import _granger
+
+    rng = np.random.default_rng(8)
+    shape = (1, 20, 3, 16, 2)
+    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    real_eigvalsh = _granger.xp.linalg.eigvalsh
+    monkeypatch.setattr(
+        _granger.xp.linalg, "eigvalsh", lambda matrices: -np.abs(real_eigvalsh(matrices))
+    )
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        if measure == "blockwise":
+            conn.blockwise_spectral_granger_prediction(np.array([0, 1]))
+        else:
+            conn.conditional_spectral_granger_prediction()
+
+    positivity = [w for w in record if "positive-definite" in str(w.message)]
+    assert positivity
+    assert {w.filename for w in positivity} == {__file__}
