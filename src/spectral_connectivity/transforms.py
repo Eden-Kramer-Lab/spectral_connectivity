@@ -574,6 +574,20 @@ class SpectralTransform(Protocol):
     must return a new array on each call rather than one the transform or its
     caller keeps using.
 
+    The coefficients' scale sets the units of :meth:`Connectivity.power`;
+    normalized measures such as coherence and the phase-lag indices do not
+    depend on it, so an unscaled FFT is enough for those. For ``power()`` to be
+    a power spectral density (signal² / Hz), ``|coefficient|²`` must be a
+    density:
+
+    - a two-sided transform returns ``fft(window * x) / sqrt(sampling_frequency)``
+      for a unit-energy window (``sum(window**2) == 1``), as :class:`Multitaper`
+      does; ``power()`` then folds it onto the non-negative frequencies,
+      doubling every bin but DC and an even-length Nyquist;
+    - a one-sided transform (``is_one_sided = True``) must do that folding
+      itself, multiplying those bins by ``sqrt(2)``, as :class:`MorletWavelet`
+      does, because ``power()`` uses one-sided coefficients as given.
+
     :meth:`Connectivity.from_transform` also reads the following optional
     attributes. A transform that lacks one gets the default, which describes a
     plain two-sided FFT of independent observations, so only a transform whose

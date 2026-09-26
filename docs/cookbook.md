@@ -186,6 +186,7 @@ unweighted spectrum otherwise; `help(SpectralTransform)` lists them. `fft()`
 must return a new array on each call, because `Connectivity` takes ownership of
 it. This transform is not scaled to a power spectral density, so its `power()`
 is in arbitrary units; normalized measures such as coherence are unaffected.
+`help(SpectralTransform)` gives the scaling that makes `power()` a density.
 
 ```python
 >>> from spectral_connectivity import Connectivity, SpectralTransform

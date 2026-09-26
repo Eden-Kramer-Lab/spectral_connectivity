@@ -128,3 +128,49 @@ def test_optional_capability_attributes_are_honored(coefficients):
     np.testing.assert_array_equal(connectivity.observation_weights, weights)
     assert connectivity.observations_are_independent is False
     assert connectivity.time_bins_are_independent is False
+
+
+class _DensityScaledTransform:
+    """One unit-energy Hann-windowed FFT per trial, scaled as SpectralTransform
+    documents for ``power()`` to be a power spectral density."""
+
+    def __init__(self, time_series, sampling_frequency, one_sided):
+        n_samples = time_series.shape[0]
+        window = np.hanning(n_samples)
+        window /= np.linalg.norm(window)  # unit energy
+        windowed = window[:, np.newaxis, np.newaxis] * time_series
+        if one_sided:
+            coefficients = np.fft.rfft(windowed, axis=0) / np.sqrt(sampling_frequency)
+            # Fold the negative frequencies in: every bin except DC and an
+            # even-length Nyquist carries twice the density.
+            n_interior_end = (n_samples + 1) // 2
+            coefficients[1:n_interior_end] *= np.sqrt(2.0)
+            self.frequencies = np.fft.rfftfreq(n_samples, 1 / sampling_frequency)
+            self.is_one_sided = True
+        else:
+            coefficients = np.fft.fft(windowed, axis=0) / np.sqrt(sampling_frequency)
+            self.frequencies = np.fft.fftfreq(n_samples, 1 / sampling_frequency)
+        # (time, trials, signals) -> (1 window, trials, 1 taper, frequency, signals)
+        self._coefficients = np.moveaxis(coefficients, 0, 1)[np.newaxis, :, np.newaxis]
+        self.time = np.array([0.0])
+        self.energy = np.mean(np.sum(windowed**2, axis=0), axis=0)  # (n_signals,)
+
+    def fft(self):
+        return self._coefficients.copy()
+
+
+@pytest.mark.parametrize("one_sided", [False, True])
+@pytest.mark.parametrize("n_samples", [16, 15])
+def test_documented_scaling_makes_power_a_density(one_sided, n_samples):
+    """With the scaling the SpectralTransform docstring gives, ``power()``
+    integrates over frequency to the windowed signal's energy (Parseval)."""
+    sampling_frequency = 250.0
+    time_series = np.random.default_rng(4).standard_normal((n_samples, 6, N_SIGNALS))
+    transform = _DensityScaledTransform(time_series, sampling_frequency, one_sided)
+
+    power = Connectivity.from_transform(transform).power()
+
+    frequency_step = sampling_frequency / n_samples
+    np.testing.assert_allclose(
+        np.sum(power[0], axis=0) * frequency_step, transform.energy, rtol=1e-12
+    )
