@@ -3857,3 +3857,81 @@ def test_granger_and_wilson_warnings_point_at_the_caller(monkeypatch, case):
     matching = [w for w in record if match in str(w.message)]
     assert matching
     assert {w.filename for w in matching} == {__file__}
+
+
+def _warning_cases():
+    """(match, call) pairs that raise each Connectivity warning from user code."""
+    from spectral_connectivity import Multitaper, multitaper_connectivity
+
+    rng = np.random.default_rng(21)
+
+    def coefficients(shape=(1, 6, 3, 16, 3)):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    def with_dead_channel(shape=(1, 6, 3, 16, 3)):
+        values = coefficients(shape)
+        values[..., 0] = 0
+        return values
+
+    one_observation = coefficients((1, 1, 1, 16, 3))
+    single_trial_series = rng.standard_normal((256, 1, 3))
+    return {
+        "single_observation": (
+            "single",
+            lambda: Connectivity(one_observation).coherence_magnitude(),
+        ),
+        "single_observation_through_wrapper": (
+            "single",
+            lambda: multitaper_connectivity(
+                single_trial_series,
+                sampling_frequency=256,
+                time_halfbandwidth_product=1,
+                method="coherence_magnitude",
+            ),
+        ),
+        "zero_power_coherence": (
+            "zero",
+            lambda: Connectivity(with_dead_channel()).coherence_magnitude(),
+        ),
+        "zero_magnitude_plv": (
+            "zero magnitude",
+            lambda: Connectivity(with_dead_channel()).phase_locking_value(),
+        ),
+        "partial_coherence_few_observations": (
+            "fewer than",
+            lambda: Connectivity(coefficients((1, 1, 2, 16, 3))).partial_coherence(),
+        ),
+        "global_coherence_rank": (
+            "exceeds the number",
+            lambda: Connectivity(coefficients()).global_coherence(max_rank=10),
+        ),
+        "correlated_observations": (
+            "independent",
+            lambda: Connectivity(
+                coefficients(), observations_are_independent=False
+            ).pairwise_phase_consistency(),
+        ),
+        "nonfinite_coefficients": (
+            "NaN or Inf",
+            lambda: Connectivity(np.full((1, 2, 1, 8, 2), np.nan, dtype=complex)),
+        ),
+        "multitaper_single_observation": (
+            "single",
+            lambda: Connectivity.from_multitaper(
+                Multitaper(single_trial_series, 256, time_halfbandwidth_product=1)
+            ).phase_locking_value(),
+        ),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_warning_cases()))
+def test_connectivity_warnings_point_at_the_caller(case):
+    """Warnings raised below a measure (in shared helpers, decorators, or the
+    constructor) are attributed to the user's call, however it reaches them."""
+    match, call = _warning_cases()[case]
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    matching = [w for w in record if match in str(w.message)]
+    assert matching, [str(w.message)[:80] for w in record]
+    assert {w.filename for w in matching} == {__file__}

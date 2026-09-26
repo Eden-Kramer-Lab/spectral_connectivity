@@ -54,6 +54,7 @@ from spectral_connectivity.utils import (
     is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
+    stacklevel_outside_package,
     to_numpy,
 )
 
@@ -723,7 +724,7 @@ class Connectivity:
                 "  - Review artifact removal procedures\n"
                 "  - Verify time_window_duration and time_halfbandwidth_product parameters",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         # Own the coefficients as an immutable snapshot: the cached intermediates
         # (_power, the reduced cross-spectrum, and the directed-measure factors)
@@ -777,7 +778,7 @@ class Connectivity:
                 "were reset to defaults or cleared. Construct a new Connectivity "
                 "if you need specific coordinates or weights for the new data.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
             if frequencies_stale:
                 self._frequencies = (
@@ -1070,7 +1071,7 @@ class Connectivity:
             f"{self.n_observations} overstates the effective sample size and the "
             f"result is biased.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
 
     def _warn_single_observation_degenerate(
@@ -1106,7 +1107,7 @@ class Connectivity:
                 "MorletWavelet to collect neighboring coefficients on the "
                 "observation axis.",
                 UserWarning,
-                stacklevel=3,
+                stacklevel=stacklevel_outside_package(),
             )
 
     def _require_multiple_frequencies(self, measure: str) -> None:
@@ -2312,7 +2313,7 @@ class Connectivity:
                 "unrelated to the data. Provide more trials or tapers than "
                 "signals, or analyze fewer signals.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
         # Drop negative frequencies before the per-bin inversion, not after.
@@ -2330,7 +2331,7 @@ class Connectivity:
                 "Some time-frequency cross-spectral matrices have zero power, "
                 "so partial coherence is undefined there and is returned as NaN.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         identity = xp.eye(self.n_signals, dtype=cross_spectral_density.dtype)
         safe_spectrum = xp.where(zero_power, identity, cross_spectral_density)
@@ -2473,7 +2474,7 @@ class Connectivity:
                 "their canonical coherence is forced to 1 regardless of the data. "
                 "Provide more trials or tapers, or use smaller groups.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         n_frequencies = self._fourier_coefficients.shape[-2]
         non_negative_frequencies = xp.arange(
@@ -2848,7 +2849,7 @@ class Connectivity:
                 "an all-zero spatial filter. Reduce n_components or pass an "
                 "explicit rank to avoid these phantom components.",
                 UserWarning,
-                stacklevel=3,
+                stacklevel=stacklevel_outside_package(),
             )
 
         return MultivariateConnectivityResult(
@@ -3171,7 +3172,7 @@ class Connectivity:
                 f"(min(n_signals, n_trials * n_tapers) = {max_available_rank}); "
                 f"clamping to {max_available_rank}.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
             max_rank = max_available_rank
 
@@ -3200,7 +3201,7 @@ class Connectivity:
                 "global coherence is undefined there and is returned as NaN. "
                 "This usually indicates a flat/dead channel or all-zero input.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
@@ -3235,7 +3236,7 @@ class Connectivity:
                 "the phase-locking normalization z / |z| is undefined there "
                 "and is returned as NaN.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         # z / |z| is undefined where |z| == 0; those coefficients are NaN
         # (rather than leaking a RuntimeWarning). A NaN coefficient at any
@@ -4335,7 +4336,7 @@ class Connectivity:
                 "Interpret the values as approximate, or use "
                 "partial_directed_coherence instead.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         noise_variance = _get_noise_variance(self._noise_covariance, axis=-1)
         directed_coherence: NDArray[np.floating] = (
@@ -4954,7 +4955,7 @@ def _divide_masking_zero_denominator(
     zero = denominator <= xp.finfo(denominator.dtype).tiny
     invalid = zero | ~xp.isfinite(denominator)
     if xp.any(zero):
-        warnings.warn(message, UserWarning, stacklevel=3)
+        warnings.warn(message, UserWarning, stacklevel=stacklevel_outside_package())
     # Dividing by a real array keeps the numerator's real/complex kind.
     return cast(NDArray[_NumberT], _divide_where(numerator, denominator, ~invalid, xp.nan))
 
