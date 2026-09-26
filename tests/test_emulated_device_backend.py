@@ -340,6 +340,8 @@ def test_backend_modules_include_every_array_module(backend_modules):
     names = {module.__name__ for module in backend_modules}
     assert {
         "spectral_connectivity._array_utils",
+        "spectral_connectivity._granger",
+        "spectral_connectivity._multivariate",
         "spectral_connectivity.connectivity",
         "spectral_connectivity.minimum_phase_decomposition",
         "spectral_connectivity.transforms",

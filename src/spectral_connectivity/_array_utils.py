@@ -1,4 +1,4 @@
-"""Backend-neutral array helpers shared by the transform and connectivity code."""
+"""Backend-neutral array and linear-algebra helpers shared across the package."""
 
 from typing import TypeVar
 
