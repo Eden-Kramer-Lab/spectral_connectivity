@@ -16,7 +16,7 @@ class _MeasureSpec:
     """One measure's wrapper contract and what its values mean.
 
     ``output_kind`` and the capability flags describe the result's shape and
-    orientation; the remaining fields label and interpret its values.
+    requirements; the remaining fields label and interpret its values.
     ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
     score and ``None`` a spectral density, whose units derive from the input's
     (see :meth:`units_for`). ``value_range`` bounds the returned
@@ -42,29 +42,16 @@ class _MeasureSpec:
     interpretation: str
     is_complex: bool = False
     is_default: bool = False
-    # Scientific directionality, native matrix orientation, and spectrum
-    # requirements are independent capabilities. For example dPLI and PSI are
-    # directional but already use source -> target orientation and do not need
+    # Scientific directionality and spectrum requirements are independent
+    # capabilities. For example dPLI and PSI are directional but do not need
     # Wilson factorization.
     is_directed: bool = False
-    transpose_output: bool = False
     requires_two_sided: bool = False
 
     @property
     def dims(self) -> tuple[str, ...]:
         """Dimensions of the main variable before band reduction or squeezing."""
         return _CATEGORY_DIMS[self.output_kind]
-
-    @property
-    def array_orientation(self) -> Literal["target_source", "source_target"] | None:
-        """How a directed measure's native ``Connectivity`` array is indexed.
-
-        ``transpose_output`` measures report ``[..., target, source]``, which the
-        wrapper transposes; ``None`` for an undirected measure.
-        """
-        if not self.is_directed:
-            return None
-        return "target_source" if self.transpose_output else "source_target"
 
     def units_for(self, signal_units: str | None) -> str:
         """UDUNITS string of the values for input in ``signal_units``.
@@ -75,19 +62,6 @@ class _MeasureSpec:
         if self.units is not None:
             return self.units
         return f"({signal_units})^2/Hz" if signal_units else ""
-
-    def __post_init__(self) -> None:
-        # Make the field couplings unrepresentable rather than merely unused, so
-        # a future registry entry cannot silently violate them.
-        if self.transpose_output and self.output_kind not in {
-            "pairwise",
-            "group_pairwise",
-        }:
-            msg = "transpose_output requires pairwise or group_pairwise output."
-            raise ValueError(msg)
-        if self.transpose_output and not self.is_directed:
-            msg = "transpose_output requires a directional measure."
-            raise ValueError(msg)
 
 
 def _wilson_directed_spec(
@@ -101,9 +75,8 @@ def _wilson_directed_spec(
 ) -> _MeasureSpec:
     """Spec of a directed measure computed from the Wilson-factorized spectrum.
 
-    Such measures report ``[..., target, source]``, which the wrapper
-    transposes to source -> target, and need a two-sided spectrum. Keeping the
-    three flags together means a new measure of this kind cannot miss one.
+    Such measures are directed and need a two-sided spectrum. Keeping the two
+    flags together means a new measure of this kind cannot miss one.
     """
     return _MeasureSpec(
         output_kind,
@@ -113,7 +86,6 @@ def _wilson_directed_spec(
         interpretation=interpretation,
         is_default=is_default,
         is_directed=True,
-        transpose_output=True,
         requires_two_sided=True,
     )
 
@@ -266,8 +238,6 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Phase locking with zero- and pi-lag contributions removed; insensitive to "
         "volume conduction.",
     ),
-    # dPLI's native row/column layout is already phase-leader -> phase-lagger,
-    # so it must not receive the transpose used by Granger/DTF-family outputs.
     "directed_phase_lag_index": _MeasureSpec(
         "pairwise",
         long_name="Directed phase lag index",
