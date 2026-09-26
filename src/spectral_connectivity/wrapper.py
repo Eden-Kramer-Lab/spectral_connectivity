@@ -25,7 +25,6 @@ from spectral_connectivity._input_handling import (
     _validated_signal_labels,
 )
 from spectral_connectivity._measure_registry import (
-    _CATEGORY_DIMS,
     _MEASURE_SPECS,
     _measure_description,
     _validate_method_names,
@@ -188,9 +187,6 @@ def list_measures(
             continue
         if directed is not None and spec.is_directed != directed:
             continue
-        orientation: Literal["target_source", "source_target"] | None = None
-        if spec.is_directed:
-            orientation = "target_source" if spec.transpose_output else "source_target"
         measures.append(
             MeasureInfo(
                 name=name,
@@ -200,11 +196,11 @@ def list_measures(
                 is_directed=spec.is_directed,
                 requires_two_sided=spec.requires_two_sided,
                 long_name=spec.long_name,
-                units=spec.units or "(input units)^2/Hz",
+                units=spec.units_for("input units"),
                 value_range=spec.value_range,
                 is_complex=spec.is_complex,
-                dims=_CATEGORY_DIMS[spec.output_kind],
-                array_orientation=orientation,
+                dims=spec.dims,
+                array_orientation=spec.array_orientation,
                 interpretation=spec.interpretation,
             )
         )

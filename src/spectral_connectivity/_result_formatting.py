@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
-    _get_measure_spec,
+    _MEASURE_SPECS,
     _measure_label_attrs,
 )
 from spectral_connectivity._provenance import _canonical_json, _store_provenance_item
@@ -106,7 +106,7 @@ def _connectivity_result_to_xarray(
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
     """
-    measure_spec = _get_measure_spec(method)
+    measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
     _check_method_accepts_kwargs(method, measure, kwargs)
     numerical_result = measure(**kwargs)

@@ -50,6 +50,32 @@ class _MeasureSpec:
     transpose_output: bool = False
     requires_two_sided: bool = False
 
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """Dimensions of the main variable before band reduction or squeezing."""
+        return _CATEGORY_DIMS[self.output_kind]
+
+    @property
+    def array_orientation(self) -> Literal["target_source", "source_target"] | None:
+        """How a directed measure's native ``Connectivity`` array is indexed.
+
+        ``transpose_output`` measures report ``[..., target, source]``, which the
+        wrapper transposes; ``None`` for an undirected measure.
+        """
+        if not self.is_directed:
+            return None
+        return "target_source" if self.transpose_output else "source_target"
+
+    def units_for(self, signal_units: str | None) -> str:
+        """UDUNITS string of the values for input in ``signal_units``.
+
+        A spectral density (``units is None``) is in ``(signal_units)^2/Hz``,
+        and has no known units (``""``) when ``signal_units`` is unknown.
+        """
+        if self.units is not None:
+            return self.units
+        return f"({signal_units})^2/Hz" if signal_units else ""
+
     def __post_init__(self) -> None:
         # Make the field couplings unrepresentable rather than merely unused, so
         # a future registry entry cannot silently violate them.
@@ -493,11 +519,6 @@ def _validate_method_names(methods: Sequence[str]) -> None:
     raise ValueError(" ".join(parts))
 
 
-def _get_measure_spec(method: str) -> _MeasureSpec | None:
-    """Return wrapper metadata for a registered measure, or None."""
-    return _MEASURE_SPECS.get(method)
-
-
 def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str]:
     """``long_name``/``units`` attrs for a measure's main variable.
 
@@ -505,7 +526,7 @@ def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str
     known; otherwise they get no ``units`` rather than an invented one.
     """
     spec = _MEASURE_SPECS.get(method)
-    long_name, units = (spec.long_name, spec.units) if spec else (method, "")
-    if units is None:
-        units = f"({signal_units})^2/Hz" if signal_units else ""
-    return {"long_name": long_name, **({"units": units} if units else {})}
+    if spec is None:
+        return {"long_name": method}
+    units = spec.units_for(signal_units)
+    return {"long_name": spec.long_name, **({"units": units} if units else {})}
