@@ -183,10 +183,12 @@ the multitaper step and use `fourier_connectivity`. NumPy inputs may use the
 `frequencies` and `time`. No subclassing is needed. `help(SpectralTransform)`
 lists the optional attributes such as `is_one_sided` (absent ones describe a
 two-sided, unweighted, independent spectrum) and the scaling that makes
-`power()` a density. `fft()` must return a new array on each call, and nothing
-may modify it afterwards, because `Connectivity` keeps it without copying. The
-example below is not scaled to a density, so its `power()` is in arbitrary
-units; normalized measures such as coherence are unaffected.
+`power()` a density. `fft()` must return fresh, unshared storage on each call.
+Neither the transform nor its caller may subsequently mutate it through any
+alias, because `Connectivity` keeps it without copying. Read-only flags are
+applied where the backend supports them. The example below is not scaled to a
+density, so its `power()` is in arbitrary units; normalized measures such as
+coherence are unaffected.
 
 ```python
 >>> from spectral_connectivity import Connectivity, SpectralTransform

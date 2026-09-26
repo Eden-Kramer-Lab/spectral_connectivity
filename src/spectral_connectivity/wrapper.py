@@ -18,6 +18,7 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
     _frequencies_in_band,
+    _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
@@ -3282,10 +3283,8 @@ def fourier_connectivity(
         )
         raise TypeError(msg)
     inferred_one_sided = False
-    if is_one_sided is not None and not isinstance(is_one_sided, (bool, np.bool_)):
-        # Runtime check of user input the annotation already excludes; a lone
-        # raise is exempt from mypy's unreachable check.
-        raise TypeError("is_one_sided must be a boolean or None.")  # noqa: EM101
+    if is_one_sided is not None:
+        is_one_sided = _validated_flag("is_one_sided", is_one_sided)
     if frequencies is not None:
         frequency_values = np.asarray(frequencies, dtype=float)
         if frequency_values.ndim != 1:

@@ -164,8 +164,9 @@ _CAPABILITY_FLAGS = (
 
 
 @pytest.mark.parametrize("flag", _CAPABILITY_FLAGS)
-@pytest.mark.parametrize("value", [np.True_, np.False_])
+@pytest.mark.parametrize("value", [np.True_, np.False_, np.array(True), np.array(False)])
 def test_capability_flags_accept_numpy_bools(coefficients, flag, value):
+    """Including 0-d boolean arrays, e.g. a flag computed as ``xp.all(...)``."""
     transform = _MinimalTransform(coefficients, FFT_FREQUENCIES)
     if flag == "is_one_sided" and value:
         transform.frequencies = np.linspace(0.0, 250.0, N_FFT_SAMPLES)

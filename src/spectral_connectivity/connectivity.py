@@ -283,22 +283,33 @@ def _optional_transform_attribute(transform: Any, name: str, default: Any) -> An
         return default
 
 
-def _transform_flag(transform: Any, name: str, default: bool) -> bool:
-    """Read an optional boolean ``SpectralTransform`` attribute strictly.
+def _validated_flag(name: str, value: Any) -> bool:
+    """Return ``value`` as a bool, or raise unless it is a boolean.
 
-    ``bool()`` would read a method or the string ``"False"`` as True and
-    ``None`` as False, silently changing how the spectrum is treated.
+    Accepts Python and NumPy bools and 0-d boolean arrays (e.g. a flag computed
+    as ``xp.all(...)``). ``bool()`` would read a method or the string
+    ``"False"`` as True and ``None`` or 0 as False, silently changing how the
+    spectrum is treated.
     """
-    value = _optional_transform_attribute(transform, name, default)
-    if not isinstance(value, bool | np.bool_):
+    is_boolean_scalar = getattr(value, "ndim", None) == 0 and (
+        getattr(getattr(value, "dtype", None), "kind", None) == "b"
+    )
+    if not (isinstance(value, bool) or is_boolean_scalar):
         msg = (
-            f"transform.{name} must be a bool, got {type(value).__name__} "
-            f"({value!r}). It sets how Connectivity treats the spectrum, so it is "
-            f"not guessed from a truth value. Define it as a bool attribute or "
-            f"property (not a method), or omit it for the default ({default})."
+            f"{name} must be a bool, got {type(value).__name__} ({value!r}). It "
+            f"sets how the spectrum is treated, so it is not guessed from a truth "
+            f"value: pass True or False (for a transform, a bool attribute or "
+            f"property, not a method)."
         )
         raise TypeError(msg)
     return bool(value)
+
+
+def _transform_flag(transform: Any, name: str, default: bool) -> bool:
+    """Read an optional boolean ``SpectralTransform`` attribute strictly."""
+    return _validated_flag(
+        f"transform.{name}", _optional_transform_attribute(transform, name, default)
+    )
 
 
 def _require_fft_order(frequencies: Any) -> None:
@@ -527,9 +538,13 @@ class Connectivity:
         # (the non-convergence warning advises increasing max_iterations).
         self._minimum_phase_tolerance = minimum_phase_tolerance
         self._minimum_phase_max_iterations = minimum_phase_max_iterations
-        self._is_one_sided = bool(is_one_sided)
-        self._observations_are_independent = bool(observations_are_independent)
-        self._time_bins_are_independent = bool(time_bins_are_independent)
+        self._is_one_sided = _validated_flag("is_one_sided", is_one_sided)
+        self._observations_are_independent = _validated_flag(
+            "observations_are_independent", observations_are_independent
+        )
+        self._time_bins_are_independent = _validated_flag(
+            "time_bins_are_independent", time_bins_are_independent
+        )
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
