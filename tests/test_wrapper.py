@@ -1537,16 +1537,27 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     assert 2 in recorded  # the taper-projection FFT received workers=2
 
     # On the GPU backend `workers` is not forwarded (cupyx's FFT has no such
-    # parameter). Simulate GPU on the CPU by patching the backend check.
+    # parameter). Simulate GPU on the CPU by patching the imported backend.
     gpu_multitaper = Multitaper(time_series, sampling_frequency=500, fft_workers=-1)
     _ = gpu_multitaper.tapers
     recorded = []
     with (
-        patch.object(transforms, "is_gpu_enabled", lambda: True),
+        patch.object(transforms, "ON_GPU", True),
         patch.object(transforms, "fft", spying_fft(recorded)),
     ):
         gpu_multitaper.fft()
     assert recorded == ["MISSING"]
+
+    # The backend imported at startup decides, not the environment variable,
+    # which may change afterwards (e.g. %env in a notebook).
+    recorded = []
+    with (
+        patch.dict("os.environ", {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}),
+        patch.object(transforms, "ON_GPU", False),
+        patch.object(transforms, "fft", spying_fft(recorded)),
+    ):
+        gpu_multitaper.fft()
+    assert recorded == [-1]
 
 
 def test_to_numpy_handles_device_arrays():

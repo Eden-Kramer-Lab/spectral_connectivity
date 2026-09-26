@@ -3,8 +3,9 @@
 The backend is chosen once, when this module is first imported, from the
 ``SPECTRAL_CONNECTIVITY_ENABLE_GPU`` environment variable (see
 :func:`spectral_connectivity.utils.is_gpu_enabled`). Modules take ``xp`` and the
-FFT, signal, and sparse linear-algebra routines from here, so they cannot
-disagree about the backend.
+FFT, signal, and sparse linear-algebra routines from here, and test ``ON_GPU``
+rather than the environment variable (which may change after import), so they
+cannot disagree about the backend.
 """
 
 from logging import getLogger
@@ -40,15 +41,28 @@ if not TYPE_CHECKING and is_gpu_enabled():
         )
         raise RuntimeError(msg) from exc
 
+    ON_GPU = True
     try:
         logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
     except Exception:
         logger.info("Using GPU for spectral_connectivity...")
 else:
     logger.info("Using CPU for spectral_connectivity...")
+    ON_GPU = False
     import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
     from scipy.fft import fft, fftfreq, ifft, irfft, next_fast_len, rfft
     from scipy.signal import detrend
     from scipy.sparse.linalg import svds
 
-__all__ = ["detrend", "fft", "fftfreq", "ifft", "irfft", "next_fast_len", "rfft", "svds", "xp"]
+__all__ = [
+    "ON_GPU",
+    "detrend",
+    "fft",
+    "fftfreq",
+    "ifft",
+    "irfft",
+    "next_fast_len",
+    "rfft",
+    "svds",
+    "xp",
+]

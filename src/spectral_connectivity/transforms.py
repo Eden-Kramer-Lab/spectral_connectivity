@@ -10,11 +10,10 @@ from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity._array_utils import _divide_where
+from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, xp
 from spectral_connectivity._backend import detrend as _backend_detrend
-from spectral_connectivity._backend import fft, fftfreq, ifft, next_fast_len, xp
 from spectral_connectivity.utils import (
     BackendArray,
-    is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
@@ -2836,7 +2835,7 @@ def _multitaper_fft(
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
     fft_kwargs: dict[str, Any] = {}
-    if workers is not None and not is_gpu_enabled():
+    if workers is not None and not ON_GPU:
         fft_kwargs["workers"] = workers
     coefficients: NDArray[np.complexfloating] = fft(
         projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs

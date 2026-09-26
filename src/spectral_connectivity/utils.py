@@ -239,14 +239,11 @@ def get_compute_backend() -> dict[str, Any]:
         except (ImportError, ValueError, AttributeError):
             cupy_available = False
 
-    # Determine the backend actually imported. Every module takes ``xp`` from
-    # spectral_connectivity._backend, which is numpy or cupy; type(module) is
-    # always <class 'module'>, so identify it by the module's own name.
-    backend = "cpu"
+    # Report the backend actually imported (spectral_connectivity._backend's
+    # ON_GPU), which the environment variable may no longer match; read it from
+    # sys.modules because _backend imports this module.
     backend_module = sys.modules.get("spectral_connectivity._backend")
-    xp_module = getattr(backend_module, "xp", None)
-    if xp_module is not None and "cupy" in getattr(xp_module, "__name__", ""):
-        backend = "gpu"
+    backend = "gpu" if getattr(backend_module, "ON_GPU", False) else "cpu"
 
     # Generate helpful message
     if backend == "gpu":

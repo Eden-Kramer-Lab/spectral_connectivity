@@ -21,7 +21,7 @@ import pytest
 from spectral_connectivity import _backend, get_compute_backend
 from spectral_connectivity.utils import GPU_ENV_VAR, is_gpu_enabled
 
-_SESSION_IS_CPU = _backend.xp.__name__ == "numpy"
+_SESSION_IS_CPU = not _backend.ON_GPU
 cpu_session_only = pytest.mark.skipif(
     not _SESSION_IS_CPU, reason="backend assertions assume a NumPy-backed import"
 )
@@ -32,6 +32,7 @@ def cpu_backend():
     """Report a NumPy-backed import regardless of the session's real backend."""
     fake_backend = types.ModuleType("spectral_connectivity._backend")
     fake_backend.xp = np
+    fake_backend.ON_GPU = False
     with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
         yield
 
@@ -211,16 +212,16 @@ class TestIsGpuEnabled:
 
 
 class TestBackendDetection:
-    """Test that get_compute_backend reports 'gpu' when xp is the cupy module."""
+    """get_compute_backend reports the backend _backend imported (ON_GPU)."""
 
-    def test_reports_gpu_when_backend_xp_is_cupy(self):
-        fake_cupy = types.ModuleType("cupy")  # __name__ == "cupy"
+    def test_reports_gpu_when_the_backend_imported_cupy(self):
         fake_backend = types.ModuleType("spectral_connectivity._backend")
-        fake_backend.xp = fake_cupy
+        fake_backend.xp = types.ModuleType("cupy")
+        fake_backend.ON_GPU = True
 
         with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
             result = get_compute_backend()
             assert result["backend"] == "gpu"
 
-    def test_reports_cpu_when_backend_xp_is_numpy(self, cpu_backend):
+    def test_reports_cpu_when_the_backend_imported_numpy(self, cpu_backend):
         assert get_compute_backend()["backend"] == "cpu"
