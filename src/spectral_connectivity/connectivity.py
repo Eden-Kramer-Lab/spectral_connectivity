@@ -265,6 +265,70 @@ def _ignore_nan_propagation_warnings(
     return wrapper
 
 
+_ABSENT = object()
+
+
+def _optional_transform_attribute(transform: Any, name: str, default: Any) -> Any:
+    """Read an optional ``SpectralTransform`` attribute, or ``default`` if absent.
+
+    Unlike ``getattr(transform, name, default)``, an ``AttributeError`` raised
+    inside a property the transform does define propagates instead of being
+    taken for the attribute's absence, which would silently apply the default.
+    """
+    value = getattr(transform, name, _ABSENT)
+    if value is not _ABSENT:
+        return value
+    if inspect.getattr_static(transform, name, _ABSENT) is not _ABSENT:
+        getattr(transform, name)  # re-raise the property's own AttributeError
+    return default
+
+
+def _transform_flag(transform: Any, name: str, default: bool) -> bool:
+    """Read an optional boolean ``SpectralTransform`` attribute strictly.
+
+    ``bool()`` would read a method or the string ``"False"`` as True and
+    ``None`` as False, silently changing how the spectrum is treated.
+    """
+    value = _optional_transform_attribute(transform, name, default)
+    if not isinstance(value, bool | np.bool_):
+        msg = (
+            f"transform.{name} must be a bool, got {type(value).__name__} "
+            f"({value!r}). It sets how Connectivity treats the spectrum, so it is "
+            f"not guessed from a truth value. Define it as a bool attribute or "
+            f"property (not a method), or omit it for the default ({default})."
+        )
+        raise TypeError(msg)
+    return bool(value)
+
+
+def _require_fft_order(frequencies: Any) -> None:
+    """Raise unless two-sided ``frequencies`` follow ``numpy.fft.fftfreq`` order.
+
+    Two-sided coefficients are folded onto their first ``n // 2 + 1`` bins as
+    the non-negative frequencies, so any other layout (e.g. ``rfft`` output
+    without ``is_one_sided = True``, or an ``fftshift``-ed spectrum) would
+    silently drop or mislabel frequencies.
+    """
+    values = to_numpy(frequencies).astype(float)
+    n_frequencies = values.size
+    expected = np.fft.fftfreq(n_frequencies)
+    scale = np.max(np.abs(values)) / np.max(np.abs(expected)) if n_frequencies > 1 else 0.0
+    if n_frequencies > 1 and scale > 0 and np.allclose(values, expected * scale):
+        return
+    if n_frequencies <= 1 and np.all(values == 0):
+        return
+    msg = (
+        f"transform.frequencies are not in two-sided FFT order "
+        f"(numpy.fft.fftfreq): got {values[:3]} ... {values[-2:]}. Connectivity "
+        f"treats the first n // 2 + 1 bins of a two-sided spectrum as its "
+        f"non-negative half, so any other layout would drop or mislabel "
+        f"frequencies. If fft() returns only non-negative frequencies (e.g. "
+        f"numpy.fft.rfft or a wavelet transform), set is_one_sided = True on the "
+        f"transform; otherwise return the coefficients in numpy.fft.fft order."
+    )
+    raise ValueError(msg)
+
+
 class Connectivity:
     """
     Compute functional and directed connectivity measures from spectral data.
@@ -808,14 +872,19 @@ class Connectivity:
         # and independent. The keywords are passed only when non-default so a
         # subclass mirroring the older signature keeps working with a plain
         # two-sided transform.
-        if bool(getattr(multitaper_instance, "is_one_sided", False)):
+        is_one_sided = _transform_flag(multitaper_instance, "is_one_sided", False)
+        if is_one_sided:
             init_kwargs["is_one_sided"] = True
-        weights = getattr(multitaper_instance, "observation_weights", None)
+        elif init_kwargs["frequencies"] is not None:
+            _require_fft_order(init_kwargs["frequencies"])
+        weights = _optional_transform_attribute(
+            multitaper_instance, "observation_weights", None
+        )
         if weights is not None:
             init_kwargs["observation_weights"] = weights
-        if not bool(getattr(multitaper_instance, "observations_are_independent", True)):
+        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
             init_kwargs["observations_are_independent"] = False
-        if not bool(getattr(multitaper_instance, "time_bins_are_independent", True)):
+        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
         # fft() returns a freshly built, unshared array, so adopt it in place
         # instead of copying (see Connectivity._adopt_fourier_coefficients). Only

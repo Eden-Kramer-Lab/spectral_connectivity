@@ -130,6 +130,74 @@ def test_optional_capability_attributes_are_honored(coefficients):
     assert connectivity.time_bins_are_independent is False
 
 
+_CAPABILITY_FLAGS = (
+    "is_one_sided",
+    "observations_are_independent",
+    "time_bins_are_independent",
+)
+
+
+@pytest.mark.parametrize("flag", _CAPABILITY_FLAGS)
+@pytest.mark.parametrize("value", [np.True_, np.False_])
+def test_capability_flags_accept_numpy_bools(coefficients, flag, value):
+    transform = _MinimalTransform(coefficients, np.fft.fftfreq(N_FFT_SAMPLES, d=1 / 500))
+    if flag == "is_one_sided" and value:
+        transform.frequencies = np.linspace(0.0, 250.0, N_FFT_SAMPLES)
+    setattr(transform, flag, value)
+
+    assert getattr(Connectivity.from_transform(transform), flag) is bool(value)
+
+
+@pytest.mark.parametrize("flag", _CAPABILITY_FLAGS)
+@pytest.mark.parametrize("kind", ["method", "string", "none", "int"])
+def test_capability_flags_must_be_bools(coefficients, flag, kind):
+    """``bool()`` would read a method or the string "False" as True, and None
+    as False, silently flipping how the spectrum is treated."""
+
+    def method(self):
+        return False
+
+    value = {"method": method, "string": "False", "none": None, "int": 0}[kind]
+    transform_class = type("Transform", (_MinimalTransform,), {flag: value})
+    transform = transform_class(coefficients, np.fft.fftfreq(N_FFT_SAMPLES))
+
+    with pytest.raises(TypeError, match=rf"transform\.{flag} must be a bool"):
+        Connectivity.from_transform(transform)
+
+
+def test_an_attribute_error_inside_a_capability_property_propagates(coefficients):
+    """A bug inside an optional property must not be mistaken for the
+    attribute being absent, which would silently apply the default."""
+
+    class Buggy(_MinimalTransform):
+        @property
+        def is_one_sided(self):
+            return self._one_sidded  # typo: raises AttributeError
+
+    transform = Buggy(coefficients, np.fft.fftfreq(N_FFT_SAMPLES))
+    with pytest.raises(AttributeError, match="_one_sidded"):
+        Connectivity.from_transform(transform)
+
+
+@pytest.mark.parametrize("layout", ["one_sided_unflagged", "fftshifted"])
+def test_two_sided_frequencies_must_be_in_fft_order(layout):
+    """Two-sided coefficients are folded assuming numpy.fft order, so any other
+    layout would silently drop or mislabel frequencies."""
+    n_samples, sampling_frequency = 16, 500.0
+    series = np.random.default_rng(3).standard_normal((n_samples, N_TRIALS, N_SIGNALS))
+    if layout == "one_sided_unflagged":  # rfft output without is_one_sided = True
+        spectrum = np.fft.rfft(series, axis=0)
+        frequencies = np.fft.rfftfreq(n_samples, 1 / sampling_frequency)
+    else:
+        spectrum = np.fft.fftshift(np.fft.fft(series, axis=0), axes=0)
+        frequencies = np.fft.fftshift(np.fft.fftfreq(n_samples, 1 / sampling_frequency))
+    coefficients = np.moveaxis(spectrum, 0, 1)[np.newaxis, :, np.newaxis]
+    transform = _MinimalTransform(coefficients, frequencies)
+
+    with pytest.raises(ValueError, match="not in two-sided FFT order"):
+        Connectivity.from_transform(transform)
+
+
 def test_real_valued_coefficients_are_rejected(coefficients):
     """Real coefficients carry no phase, so the imaginary coherence and the
     phase-lag indices would be exactly 0 rather than an error."""
