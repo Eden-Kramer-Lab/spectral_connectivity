@@ -278,6 +278,8 @@ def _warn_nan_granger_pairs(
     ----------
     result : array, shape (..., n_frequencies, n_units, n_units)
         Granger result, ``[..., target, source]``; the diagonal is ignored.
+        The public ``Connectivity`` method returns the transpose,
+        ``[..., source, target]``.
     measure : str
         Name of the public measure, used in the message.
     requested : bool array, shape (n_units, n_units), optional
@@ -514,7 +516,8 @@ def _estimate_all_conditional_spectral_granger(
     -------
     conditional_granger : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
         ``[..., target, source]`` is ``source -> target`` conditioned on the
-        other signals; the diagonal is NaN.
+        other signals; the diagonal is NaN. The public ``Connectivity`` method
+        returns the transpose, ``[..., source, target]``.
     """
     n_signals = spectrum.shape[-1]
     n_nonnegative = spectrum.shape[-3] // 2 + 1
@@ -568,6 +571,8 @@ def _estimate_blockwise_spectral_granger(
     -------
     block_granger : array, shape (..., n_nonnegative_frequencies, n_groups, n_groups)
         ``[..., target, source]`` is ``source -> target``; the diagonal is NaN.
+        The public ``Connectivity`` method returns the transpose,
+        ``[..., source, target]``.
     """
     n_groups = len(group_indices)
     n_nonnegative = spectrum.shape[-3] // 2 + 1

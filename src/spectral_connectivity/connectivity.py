@@ -216,6 +216,17 @@ def _asnumpy(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     return wrapper
 
 
+def _source_target(native: BackendArray) -> BackendArray:
+    """Reorder a ``[..., target, source]`` matrix to ``[..., source, target]``.
+
+    The Wilson-factorized kernels work in the transfer function's native
+    layout, where row ``i`` collects the inflow to signal ``i``; every public
+    directed measure returns the transpose so that ``[..., i, j]`` reads
+    ``i -> j`` like the labeled wrapper's ``sel(source=i, target=j)``.
+    """
+    return xp.swapaxes(native, -1, -2)
+
+
 def _ignore_nan_propagation_warnings(
     connectivity_measure: Callable[_P, _R],
 ) -> Callable[_P, _R]:
@@ -419,25 +430,22 @@ class Connectivity:
     Notes
     -----
     **Array orientation**: pairwise measures end in an ``(n_signals, n_signals)``
-    pair (``(n_groups, n_groups)`` for group measures), and its meaning depends
-    on the family of the measure:
-
-    - *Directed measures* (the spectral Granger family, directed transfer
-      function, directed coherence, (generalized) partial directed coherence,
-      and direct directed transfer function) are in target-source order:
-      ``result[..., i, j]`` is the influence of signal ``j`` on signal ``i``
-      (``j -> i``).
-    - *Lead/lag measures* (``directed_phase_lag_index``, ``phase_slope_index``,
-      ``group_delay``, ``delay``) and the antisymmetric phase measures
-      (``coherence_phase``, ``imaginary_coherency``, ``phase_lag_index``,
-      ``weighted_phase_lag_index``) are in source-target order: positive
-      ``result[..., i, j]`` (above 0.5 for ``directed_phase_lag_index``) means
-      signal ``i`` leads signal ``j``.
+    pair (``(n_groups, n_groups)`` for group measures, ordered as the returned
+    labels), indexed source first. For the directed measures (the spectral
+    Granger family, directed transfer function, directed coherence,
+    (generalized) partial directed coherence, and direct directed transfer
+    function) ``result[..., i, j]`` is the influence of signal ``i`` on signal
+    ``j`` (``i -> j``). For the lead/lag measures (``directed_phase_lag_index``,
+    ``phase_slope_index``, ``group_delay``, ``delay``) and the antisymmetric
+    phase measures (``coherence_phase``, ``imaginary_coherency``,
+    ``phase_lag_index``, ``weighted_phase_lag_index``) positive
+    ``result[..., i, j]`` (above 0.5 for ``directed_phase_lag_index``) means
+    signal ``i`` leads signal ``j``.
 
     The labeled wrappers :func:`~spectral_connectivity.multitaper_connectivity`
-    and :func:`~spectral_connectivity.fourier_connectivity` resolve this: for
-    every directional measure, ``result.sel(source=a, target=b)`` is ``a -> b``
-    (or "``a`` leads ``b``"). Prefer them unless you need this lower-level API.
+    and :func:`~spectral_connectivity.fourier_connectivity` use the same order:
+    ``result.sel(source=a, target=b)`` is ``a -> b`` (or "``a`` leads ``b``").
+    Prefer them unless you need this lower-level API.
 
     Intermediates shared across measures (the expected cross-spectral matrix,
     power, phase-lag moments, and the minimum-phase factor with the transfer
@@ -1656,9 +1664,8 @@ class Connectivity:
             Estimate, bias-corrected estimate, standard error, and confidence
             bounds, each with the measure's own shape (for a pairwise measure
             ``(n_time, n_nonnegative_frequencies, n_signals, n_signals)``).
-            The arrays keep ``Connectivity``'s native orientation: for directed
-            measures ``[..., i, j]`` is the influence ``j -> i``, the transpose
-            of the xarray wrapper's ``sel(source=j, target=i)`` layout.
+            For directed measures ``[..., i, j]`` is the influence ``i -> j``,
+            the same order as the xarray wrapper's ``sel(source=i, target=j)``.
 
         Raises
         ------
@@ -3873,7 +3880,7 @@ class Connectivity:
         pairwise_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Spectral Granger prediction values. Output ``[..., i, j]`` is the
-            influence of signal ``j`` on signal ``i`` (``j -> i``).
+            influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Notes
         -----
@@ -3907,8 +3914,8 @@ class Connectivity:
         >>> granger = connectivity.pairwise_spectral_granger_prediction()
         >>> granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(granger[0, 20, 0, 1] > 10 * granger[0, 20, 1, 0])
         True
         """
         return self._pairwise_spectral_granger(
@@ -3935,7 +3942,7 @@ class Connectivity:
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
         _warn_nan_granger_pairs(result, measure)
-        return result
+        return _source_target(result)
 
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
@@ -3954,7 +3961,7 @@ class Connectivity:
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Spectral Granger prediction for the specified pairs; entries for
             pairs not requested (and the diagonal) are NaN. Output ``[..., i, j]``
-            is the influence of signal ``j`` on signal ``i`` (``j -> i``).
+            is the influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Examples
         --------
@@ -3970,10 +3977,10 @@ class Connectivity:
         >>> granger = connectivity.subset_pairwise_spectral_granger_prediction(pairs=[(0, 1)])
         >>> granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(granger[0, 20, 0, 1] > 10 * granger[0, 20, 1, 0])
         True
-        >>> bool(np.isnan(granger[0, 20, 2, 0]))  # pair (0, 2) was not requested
+        >>> bool(np.isnan(granger[0, 20, 0, 2]))  # pair (0, 2) was not requested
         True
         """
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
@@ -3991,7 +3998,7 @@ class Connectivity:
         _warn_nan_granger_pairs(
             result, "subset_pairwise_spectral_granger_prediction", requested=requested
         )
-        return result
+        return _source_target(result)
 
     @_asnumpy
     def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
@@ -4006,8 +4013,8 @@ class Connectivity:
         -------
         time_reversed_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[..., i, j]`` is the influence of signal ``j`` on signal
-            ``i`` (``j -> i``) in the time-reversed data.
+            Output ``[..., i, j]`` is the influence of signal ``i`` on signal
+            ``j`` (``i -> j``) in the time-reversed data.
 
         Notes
         -----
@@ -4039,8 +4046,8 @@ class Connectivity:
         >>> reversed_granger = connectivity.time_reversed_spectral_granger_prediction()
         >>> reversed_granger.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # A genuine 0 -> 1 lead flips under time reversal: 1 -> 0 ([..., 0, 1]) dominates.
-        >>> bool(reversed_granger[0, 20, 0, 1] > 10 * reversed_granger[0, 20, 1, 0])
+        >>> # A genuine 0 -> 1 lead flips under time reversal: 1 -> 0 ([..., 1, 0]) dominates.
+        >>> bool(reversed_granger[0, 20, 1, 0] > 10 * reversed_granger[0, 20, 0, 1])
         True
         """
         return self._pairwise_spectral_granger(
@@ -4065,8 +4072,8 @@ class Connectivity:
         -------
         conditional_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[..., i, j]`` is the influence of signal ``j`` on signal
-            ``i`` (``j -> i``), conditional on every signal other than ``i``
+            Output ``[..., i, j]`` is the influence of signal ``i`` on signal
+            ``j`` (``i -> j``), conditional on every signal other than ``i``
             and ``j``. The diagonal is NaN.
 
         Notes
@@ -4114,12 +4121,12 @@ class Connectivity:
         >>> conditional = connectivity.conditional_spectral_granger_prediction()
         >>> conditional.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
-        >>> # [..., i, j] is j -> i. Pairwise Granger sees the indirect 0 -> 2 ([..., 2, 0]),
+        >>> # [..., i, j] is i -> j. Pairwise Granger sees the indirect 0 -> 2 ([..., 0, 2]),
         >>> # but conditioning on signal 1 removes it while keeping 1 -> 2 (10 Hz = bin 20).
         >>> pairwise = connectivity.pairwise_spectral_granger_prediction()
-        >>> bool(pairwise[0, 20, 2, 0] > 0.5), bool(conditional[0, 20, 2, 0] < 0.05)
+        >>> bool(pairwise[0, 20, 0, 2] > 0.5), bool(conditional[0, 20, 0, 2] < 0.05)
         (True, True)
-        >>> bool(conditional[0, 20, 2, 1] > 0.5)
+        >>> bool(conditional[0, 20, 1, 2] > 0.5)
         True
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
@@ -4146,7 +4153,7 @@ class Connectivity:
                 minimum_phase_max_iterations=max_iterations,
             )
         _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
-        return result
+        return _source_target(result)
 
     def blockwise_spectral_granger_prediction(
         self, group_labels: NDArray[np.integer]
@@ -4162,8 +4169,8 @@ class Connectivity:
         -------
         blockwise_granger : array
             Shape ``(..., n_nonnegative_frequencies, n_groups, n_groups)``.
-            Output ``[..., i, j]`` is the influence of group ``j`` on group ``i``
-            (``j -> i``), with groups ordered as in ``labels``. The diagonal is
+            Output ``[..., i, j]`` is the influence of group ``i`` on group ``j``
+            (``i -> j``), with groups ordered as in ``labels``. The diagonal is
             NaN.
         labels : array, shape (n_groups,)
             Sorted unique group labels.
@@ -4187,8 +4194,8 @@ class Connectivity:
         (1, 501, 2, 2)
         >>> labels
         array(['a', 'b'], dtype='<U1')
-        >>> # [..., i, j] is group j -> group i, so a -> b is [..., 1, 0] (10 Hz = bin 20).
-        >>> bool(granger[0, 20, 1, 0] > 10 * granger[0, 20, 0, 1])
+        >>> # [..., i, j] is group i -> group j, so a -> b is [..., 0, 1] (10 Hz = bin 20).
+        >>> bool(granger[0, 20, 0, 1] > 10 * granger[0, 20, 1, 0])
         True
         """
         self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
@@ -4205,7 +4212,7 @@ class Connectivity:
             "blockwise_spectral_granger_prediction",
             names=to_numpy(labels),
         )
-        return to_numpy(result), to_numpy(labels)
+        return to_numpy(_source_target(result)), to_numpy(labels)
 
     @_ignore_nan_propagation_warnings
     @_asnumpy
@@ -4222,13 +4229,13 @@ class Connectivity:
         directed_transfer_function : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Directed transfer function values. Output ``[..., i, j]`` is the
-            influence of signal ``j`` on signal ``i`` (``j -> i``).
+            influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Notes
         -----
         **Range**: [0, 1] (normalized). Represents proportion of inflow
         via transfer function; each target's values sum to 1 over sources
-        (``result.sum(axis=-1)`` is 1).
+        (``result.sum(axis=-2)`` is 1).
 
         References
         ----------
@@ -4250,12 +4257,16 @@ class Connectivity:
         >>> dtf = connectivity.directed_transfer_function()
         >>> dtf.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(dtf[0, 20, 1, 0] > 10 * dtf[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(dtf[0, 20, 0, 1] > 10 * dtf[0, 20, 1, 0])
+        True
+        >>> bool(np.allclose(dtf.sum(axis=-2), 1))  # each target's inflow sums to 1
         True
         """
-        return _squared_magnitude(
-            self._transfer_function / _total_inflow(self._transfer_function)
+        return _source_target(
+            _squared_magnitude(
+                self._transfer_function / _total_inflow(self._transfer_function)
+            )
         )
 
     @_ignore_nan_propagation_warnings
@@ -4265,17 +4276,18 @@ class Connectivity:
 
         Like the directed transfer function, but the noise variance weights
         **both** the numerator and the inflow normalization. The returned value
-        is the squared directed coherence
+        is the squared directed coherence of ``j -> i``,
         ``nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2``, where ``nv`` is the per-signal
         innovation (noise) variance and ``H`` is the transfer function; it sums
-        to 1 over sources ``j`` for each target ``i``.
+        to 1 over sources ``j`` for each target ``i`` (``result.sum(axis=-2)``
+        is 1).
 
         Returns
         -------
         directed_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Squared directed coherence values. Output ``[..., i, j]`` is the
-            influence of signal ``j`` on signal ``i`` (``j -> i``).
+            influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Notes
         -----
@@ -4312,8 +4324,8 @@ class Connectivity:
         >>> directed_coherence = connectivity.directed_coherence()
         >>> directed_coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(directed_coherence[0, 20, 1, 0] > 10 * directed_coherence[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(directed_coherence[0, 20, 0, 1] > 10 * directed_coherence[0, 20, 1, 0])
         True
         """
         # Directed coherence normalizes the noise-weighted inflow over sources
@@ -4344,7 +4356,7 @@ class Connectivity:
             * _squared_magnitude(self._transfer_function)
             / _total_inflow(self._transfer_function, noise_variance) ** 2
         )
-        return directed_coherence
+        return _source_target(directed_coherence)
 
     def _partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return device-native PDC for reuse by other device-native measures."""
@@ -4369,12 +4381,12 @@ class Connectivity:
         partial_directed_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Partial directed coherence values. Output ``[..., i, j]`` is the
-            influence of signal ``j`` on signal ``i`` (``j -> i``).
+            influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Notes
         -----
         **Range**: [0, 1]. Normalized direct coupling measure; each source's
-        values sum to 1 over targets (``result.sum(axis=-2)`` is 1).
+        values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
 
         References
         ----------
@@ -4396,11 +4408,13 @@ class Connectivity:
         >>> pdc = connectivity.partial_directed_coherence()
         >>> pdc.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(pdc[0, 20, 1, 0] > 10 * pdc[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(pdc[0, 20, 0, 1] > 10 * pdc[0, 20, 1, 0])
+        True
+        >>> bool(np.allclose(pdc.sum(axis=-1), 1))  # each source's outflow sums to 1
         True
         """
-        return self._partial_directed_coherence()
+        return _source_target(self._partial_directed_coherence())
 
     @_ignore_nan_propagation_warnings
     @_asnumpy
@@ -4422,7 +4436,7 @@ class Connectivity:
         generalized_partial_directed_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Generalized partial directed coherence values. Output ``[..., i, j]``
-            is the influence of signal ``j`` on signal ``i`` (``j -> i``).
+            is the influence of signal ``i`` on signal ``j`` (``i -> j``).
 
         Notes
         -----
@@ -4449,15 +4463,17 @@ class Connectivity:
         >>> gpdc = connectivity.generalized_partial_directed_coherence()
         >>> gpdc.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
-        >>> # [..., i, j] is j -> i, so 0 -> 1 is [..., 1, 0]. It dominates at 10 Hz (bin 20).
-        >>> bool(gpdc[0, 20, 1, 0] > 10 * gpdc[0, 20, 0, 1])
+        >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
+        >>> bool(gpdc[0, 20, 0, 1] > 10 * gpdc[0, 20, 1, 0])
         True
         """
         noise_variance = _get_noise_variance(self._noise_covariance)
-        return _squared_magnitude(
-            self._MVAR_Fourier_coefficients
-            / xp.sqrt(noise_variance)
-            / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
+        return _source_target(
+            _squared_magnitude(
+                self._MVAR_Fourier_coefficients
+                / xp.sqrt(noise_variance)
+                / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
+            )
         )
 
     @_ignore_nan_propagation_warnings
@@ -4476,14 +4492,15 @@ class Connectivity:
         the non-negative frequencies) and
         ``kappa^2_ij(f) = |G_ij(f)|^2 / (G_ii(f) G_jj(f))``, where
         ``G = A^H Sigma^-1 A`` is the inverse spectral matrix of the MVAR model
-        (``A = H^-1``, ``Sigma`` the innovation covariance).
+        (``A = H^-1``, ``Sigma`` the innovation covariance). ``chi^2_ij`` is the
+        influence ``j -> i``, returned at ``[..., j, i]``.
 
         Returns
         -------
         direct_directed_transfer_function : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[..., i, j]`` is the direct influence of signal ``j`` on
-            signal ``i`` (``j -> i``).
+            Output ``[..., i, j]`` is the direct influence of signal ``i`` on
+            signal ``j`` (``i -> j``).
 
         Notes
         -----
@@ -4515,9 +4532,9 @@ class Connectivity:
         >>> ddtf = connectivity.direct_directed_transfer_function()
         >>> ddtf.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
-        >>> # [..., i, j] is j -> i. The direct 1 -> 2 ([..., 2, 1]) far exceeds the
-        >>> # indirect 0 -> 2 ([..., 2, 0]) that is relayed through signal 1 (10 Hz = bin 20).
-        >>> bool(ddtf[0, 20, 2, 1] > 10 * ddtf[0, 20, 2, 0])
+        >>> # [..., i, j] is i -> j. The direct 1 -> 2 ([..., 1, 2]) far exceeds the
+        >>> # indirect 0 -> 2 ([..., 0, 2]) that is relayed through signal 1 (10 Hz = bin 20).
+        >>> bool(ddtf[0, 20, 1, 2] > 10 * ddtf[0, 20, 0, 2])
         True
         """
         full_frequency_dtf = _squared_magnitude(
@@ -4539,7 +4556,7 @@ class Connectivity:
             inverse_spectrum_diagonal[..., :, xp.newaxis]
             * inverse_spectrum_diagonal[..., xp.newaxis, :]
         )
-        return full_frequency_dtf * squared_partial_coherence
+        return _source_target(full_frequency_dtf * squared_partial_coherence)
 
     def _significant_pair_phase(
         self,
