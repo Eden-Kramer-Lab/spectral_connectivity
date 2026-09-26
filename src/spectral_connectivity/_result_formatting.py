@@ -127,11 +127,9 @@ def _connectivity_result_to_xarray(
                 "Register its output contract or use Connectivity directly."
             )
             raise UnsupportedMeasureError(msg)
-        # A proven-pairwise extension keeps its native, untransposed orientation.
-        output_kind, transpose_output = "pairwise", False
+        output_kind = "pairwise"
     else:
         output_kind = measure_spec.output_kind
-        transpose_output = measure_spec.transpose_output
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
@@ -182,8 +180,6 @@ def _connectivity_result_to_xarray(
                 f"its wrapper contract requires {expected_shape}."
             )
             raise ValueError(msg)
-        if transpose_output:
-            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates = {
             **base_coordinates,
             "source": signal_coordinates["source"],
@@ -246,8 +242,6 @@ def _connectivity_result_to_xarray(
                 f"its group-pairwise contract requires {expected_shape}."
             )
             raise ValueError(msg)
-        if transpose_output:
-            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates.update(
             {
                 "source_group": ("source_group", group_labels, {"long_name": "Source group"}),

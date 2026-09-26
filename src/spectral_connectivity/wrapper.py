@@ -106,13 +106,6 @@ class MeasureInfo:
         band reduction or squeezing. Rich results (``canonical_coherency``,
         ``global_coherence``, ...) are Datasets whose variable named ``name``
         has these dimensions.
-    array_orientation : {"target_source", "source_target"} or None
-        Index order of a directed measure's signal axes in the arrays returned
-        by the lower-level ``Connectivity`` method. ``"target_source"`` means
-        ``result[..., i, j]`` is the influence ``j -> i``; ``"source_target"``
-        means it describes ``i`` relative to ``j`` (e.g. ``i`` leads ``j``).
-        ``None`` for non-directed measures. The wrapper's results are always
-        labeled: ``result.sel(source=a, target=b)`` is ``a -> b``.
     interpretation : str
         How to read the values, including the sign convention where one exists.
     """
@@ -128,7 +121,6 @@ class MeasureInfo:
     value_range: tuple[float, float]
     is_complex: bool
     dims: tuple[str, ...]
-    array_orientation: Literal["target_source", "source_target"] | None
     interpretation: str
 
 
@@ -202,7 +194,6 @@ def list_measures(
                 value_range=spec.value_range,
                 is_complex=spec.is_complex,
                 dims=spec.dims,
-                array_orientation=spec.array_orientation,
                 interpretation=spec.interpretation,
             )
         )
@@ -676,10 +667,9 @@ def multitaper_connectivity(
 
     For directed measures (e.g. ``pairwise_spectral_granger_prediction``) the
     ``source`` and ``target`` axes are oriented so that
-    ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``.
-    (The underlying ``Connectivity`` methods use the transposed convention
-    ``output[i, j] = influence j -> i``; the wrapper transposes to the intuitive
-    source -> target layout.) Signed undirected phase measures
+    ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``,
+    the same order as the underlying ``Connectivity`` arrays, where
+    ``result[..., i, j]`` is ``i -> j``. Signed undirected phase measures
     (``coherence_phase``, ``imaginary_coherency``, ``phase_lag_index``,
     ``weighted_phase_lag_index``) are positive at ``sel(source=a, target=b)``
     when ``a`` leads ``b``.
