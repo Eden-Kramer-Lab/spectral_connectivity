@@ -2316,6 +2316,31 @@ def test_granger_is_silent_on_well_conditioned_signals(measure):
     assert np.isfinite(result[..., off_diagonal]).all()
 
 
+def test_directed_measures_share_one_transfer_function_binding(monkeypatch):
+    """The cached full model and the Granger kernels both estimate the transfer
+    function through ``_granger``, so one patch point reaches every path."""
+    from spectral_connectivity import _granger
+
+    calls = []
+    real_transfer_function = _granger._estimate_transfer_function
+
+    def counting_transfer_function(*args, **kwargs):
+        calls.append(1)
+        return real_transfer_function(*args, **kwargs)
+
+    monkeypatch.setattr(_granger, "_estimate_transfer_function", counting_transfer_function)
+    rng = np.random.default_rng(2)
+    shape = (1, 20, 3, 32, 3)
+    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+
+    conn.directed_transfer_function()
+    n_cached_path_calls = len(calls)
+    conn.pairwise_spectral_granger_prediction()
+
+    assert n_cached_path_calls == 1
+    assert len(calls) > n_cached_path_calls
+
+
 def test_conditional_granger_factorizes_each_channel_set_once():
     """The full system and each leave-one-source-out system are factorized once.
 
@@ -2323,21 +2348,17 @@ def test_conditional_granger_factorizes_each_channel_set_once():
     ``n_signals + 1`` Wilson factorizations rather than ``n_signals ** 2``.
     """
     from spectral_connectivity import _granger
-    from spectral_connectivity import connectivity as connectivity_module
 
     rng = np.random.default_rng(1)
     shape = (1, 20, 3, 32, 4)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     conn = Connectivity(coefficients)
-    # Count factorizations requested from either module.
-    with (
-        patch.object(
-            _granger,
-            "minimum_phase_decomposition",
-            wraps=_granger.minimum_phase_decomposition,
-        ) as factorize,
-        patch.object(connectivity_module, "minimum_phase_decomposition", factorize),
-    ):
+    # The full model and every reduced model are factorized through _granger.
+    with patch.object(
+        _granger,
+        "minimum_phase_decomposition",
+        wraps=_granger.minimum_phase_decomposition,
+    ) as factorize:
         conn.conditional_spectral_granger_prediction()
     assert factorize.call_count == shape[-1] + 1
 

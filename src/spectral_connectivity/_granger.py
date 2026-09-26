@@ -325,6 +325,50 @@ def _warn_nan_granger_pairs(
     )
 
 
+def _factorize_spectrum(
+    csm: NDArray[np.complexfloating],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+    warn_on_failure: bool = True,
+) -> NDArray[np.complexfloating]:
+    """Wilson minimum-phase factor of a two-sided cross-spectrum.
+
+    Every factorization behind the directed measures, the full model cached on
+    :class:`Connectivity` as well as the reduced and pairwise models, goes
+    through here and :func:`_var_model_from_factor`, so they share one binding
+    of the factorization and of the transfer-function and noise-covariance
+    estimators.
+    """
+    return minimum_phase_decomposition(
+        csm,
+        tolerance=minimum_phase_tolerance,
+        max_iterations=minimum_phase_max_iterations,
+        _warn_on_failure=warn_on_failure,
+    )
+
+
+def _var_model_from_factor(
+    minimum_phase: NDArray[np.complexfloating],
+) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+    """Transfer function and noise covariance of a two-sided minimum-phase factor.
+
+    Parameters
+    ----------
+    minimum_phase : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Minimum-phase factor of a two-sided cross-spectrum in standard FFT order.
+
+    Returns
+    -------
+    transfer_function : array
+        Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+    noise_covariance : array, shape (..., n_signals, n_signals)
+    """
+    n_nonnegative = minimum_phase.shape[-3] // 2 + 1
+    transfer = _estimate_transfer_function(minimum_phase, n_nonnegative)
+    return transfer, _estimate_noise_covariance(minimum_phase)
+
+
 def _var_model_from_spectrum(
     csm: NDArray[np.complexfloating],
     *,
@@ -344,15 +388,14 @@ def _var_model_from_spectrum(
         Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
     noise_covariance : array, shape (..., n_signals, n_signals)
     """
-    minimum_phase = minimum_phase_decomposition(
-        csm,
-        tolerance=minimum_phase_tolerance,
-        max_iterations=minimum_phase_max_iterations,
-        _warn_on_failure=False,
+    return _var_model_from_factor(
+        _factorize_spectrum(
+            csm,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+            warn_on_failure=False,
+        )
     )
-    n_nonnegative = csm.shape[-3] // 2 + 1
-    transfer = _estimate_transfer_function(minimum_phase, n_nonnegative)
-    return transfer, _estimate_noise_covariance(minimum_phase)
 
 
 def _estimate_conditional_spectral_granger_prediction(

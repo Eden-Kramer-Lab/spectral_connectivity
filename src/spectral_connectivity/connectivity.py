@@ -26,11 +26,11 @@ from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
     _estimate_block_spectral_granger_prediction,
     _estimate_conditional_spectral_granger_prediction,
-    _estimate_noise_covariance,
     _estimate_spectral_granger_prediction,
     _estimate_subset_spectral_granger_prediction,
-    _estimate_transfer_function,
+    _factorize_spectrum,
     _granger_result_dtype,
+    _var_model_from_factor,
     _var_model_from_spectrum,
     _warn_nan_granger_pairs,
 )
@@ -43,7 +43,6 @@ from spectral_connectivity._multivariate import (
     _mic_components,
     _normalize_fourier_coefficients,
 )
-from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
 )
@@ -1465,22 +1464,23 @@ class Connectivity:
     @cached_property
     def _minimum_phase_factor(self) -> NDArray[np.complexfloating]:
         self._require_two_sided_spectrum("Directed connectivity")
-        return minimum_phase_decomposition(
+        return _factorize_spectrum(
             self._expectation_cross_spectral_matrix(),
-            tolerance=self._minimum_phase_tolerance,
-            max_iterations=self._minimum_phase_max_iterations,
+            minimum_phase_tolerance=self._minimum_phase_tolerance,
+            minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
+
+    @cached_property
+    def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+        return _var_model_from_factor(self._minimum_phase_factor)
 
     @cached_property
     def _transfer_function(self) -> NDArray[np.complexfloating]:
-        minimum_phase = self._minimum_phase_factor
-        return _estimate_transfer_function(
-            minimum_phase, self._nonnegative_frequency_count(minimum_phase.shape[-3])
-        )
+        return self._var_model[0]
 
     @cached_property
     def _noise_covariance(self) -> NDArray[np.floating]:
-        return _estimate_noise_covariance(self._minimum_phase_factor)
+        return self._var_model[1]
 
     @cached_property
     def _MVAR_Fourier_coefficients(self) -> NDArray[np.complexfloating]:
