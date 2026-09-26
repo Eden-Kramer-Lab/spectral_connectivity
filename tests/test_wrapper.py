@@ -790,11 +790,18 @@ def test_dataarray_non_scalar_start_time_is_rejected():
 
 def test_measure_spec_rejects_inconsistent_field_combinations():
     """Illegal capability combinations are unrepresentable, not merely unused."""
-    labels = ("Label", "1", (0.0, 1.0), "Interpretation.")
+    labels = {
+        "long_name": "Label",
+        "units": "1",
+        "value_range": (0.0, 1.0),
+        "interpretation": "Interpretation.",
+    }
     with pytest.raises(ValueError, match="transpose_output requires pairwise"):
-        _MeasureSpec("power", *labels, is_directed=True, transpose_output=True)
+        _MeasureSpec("power", **labels, is_directed=True, transpose_output=True)
     with pytest.raises(ValueError, match="requires a directional measure"):
-        _MeasureSpec("pairwise", *labels, transpose_output=True)
+        _MeasureSpec("pairwise", **labels, transpose_output=True)
+    with pytest.raises(TypeError, match="positional"):
+        _MeasureSpec("pairwise", *labels.values())  # labels must be named
 
 
 def test_dataarray_numeric_time_coordinate_sets_output_time():
