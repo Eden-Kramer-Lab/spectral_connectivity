@@ -35,6 +35,7 @@ import pytest
 from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity
+from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
 from spectral_connectivity.wrapper import _connectivity_result_to_xarray
 
 
@@ -55,18 +56,30 @@ def _analytic_var(coefficients, noise_covariance, n_fft):
     return A, H, S
 
 
-def _fourier_coefficients_with_cross_spectrum(S):
+def _fourier_coefficients_with_cross_spectrum(S, conjugate_symmetric=False):
     """Fourier coefficients whose expected cross-spectrum is exactly ``S``.
 
     With ``S = L L^H`` (Cholesky) and ``n_tapers = n_signals``, taper ``k`` set to
     ``sqrt(n_signals) * L[:, k]`` makes the taper-mean of the outer products equal
     ``L L^H = S`` exactly. Shape: (1, 1, n_signals, n_fft, n_signals).
+
+    The analytic ``S`` is conjugate-symmetric only up to rounding, so the Wilson
+    factorization takes its two-sided path. With ``conjugate_symmetric=True`` the
+    coefficients are instead mirrored from the non-negative frequencies, with a
+    real zero and Nyquist frequency, as for real-valued signals; the
+    cross-spectrum is then exactly conjugate-symmetric and the factorization
+    takes its half-spectrum path.
     """
-    _, n_signals, _ = S.shape
+    n_fft, n_signals, _ = S.shape
     L = np.linalg.cholesky(S)  # (n_fft, n_signals, n_signals), lower-triangular
     # taper axis <- columns of L; scale so the taper-mean reproduces S.
     fc = np.sqrt(n_signals) * np.moveaxis(L, -1, -2)  # (n_fft, taper, signal)
     fc = np.moveaxis(fc, 0, 1)  # (taper, n_fft, signal)
+    if conjugate_symmetric:
+        fc[:, 0] = fc[:, 0].real
+        if n_fft % 2 == 0:
+            fc[:, n_fft // 2] = fc[:, n_fft // 2].real
+        fc[:, n_fft // 2 + 1 :] = fc[:, 1 : (n_fft + 1) // 2][:, ::-1].conj()
     return fc[None, None]  # (1, 1, n_tapers, n_fft, n_signals)
 
 
@@ -79,21 +92,39 @@ _NOISE = np.eye(2)
 _N_FFT = 128
 
 
-@pytest.fixture(scope="module")
-def var_oracle():
-    """Analytic A/H/S and a Connectivity fed the exact analytic cross-spectrum."""
+@pytest.fixture(scope="module", params=[False, True], ids=["two_sided", "half_spectrum"])
+def var_oracle(request):
+    """Analytic A/H/S and a Connectivity fed the exact analytic cross-spectrum.
+
+    Parametrized over both Wilson factorization paths (see
+    ``_fourier_coefficients_with_cross_spectrum``).
+    """
     A, H, S = _analytic_var(_COEFFICIENTS, _NOISE, _N_FFT)
     connectivity = Connectivity(
-        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S)
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            S, conjugate_symmetric=request.param
+        )
     )
-    return {"A": A, "H": H, "S": S, "connectivity": connectivity, "n_fft": _N_FFT}
+    return {
+        "A": A,
+        "H": H,
+        "S": S,
+        "connectivity": connectivity,
+        "n_fft": _N_FFT,
+        "conjugate_symmetric": request.param,
+    }
 
 
 def test_injected_cross_spectrum_matches_analytic(var_oracle):
-    """Sanity: the constructed Fourier coefficients reproduce S(f) exactly."""
+    """Sanity: the constructed Fourier coefficients reproduce S(f) exactly.
+
+    Also checks which Wilson path the spectrum takes, so each fixture variant
+    covers the path it is meant to.
+    """
     c = var_oracle["connectivity"]
     csm = np.asarray(c._expectation_cross_spectral_matrix())[0]  # (n_fft, n, n)
     np.testing.assert_allclose(csm, var_oracle["S"], atol=1e-8)
+    assert _is_conjugate_symmetric(csm) == var_oracle["conjugate_symmetric"]
 
 
 @pytest.mark.parametrize(
@@ -399,8 +430,11 @@ _CHAIN_COEFFICIENTS = np.stack(
 @pytest.mark.parametrize(
     ("n_fft", "atol"), [(128, 2e-5), (1024, 1e-10)], ids=["nfft128", "nfft1024"]
 )
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
 def test_conditional_granger_matches_state_space_oracle(
-    coefficients, noise_covariance, n_fft, atol
+    coefficients, noise_covariance, n_fft, atol, conjugate_symmetric
 ):
     """The reduced-model factorization agrees pointwise with the state-space
     (Riccati) route used by MVGC, so the result does not depend on how the
@@ -408,7 +442,9 @@ def test_conditional_granger_matches_state_space_oracle(
     factorization's own frequency-discretization error."""
     _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
     connectivity = Connectivity(
-        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(spectrum),
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        ),
         minimum_phase_tolerance=1e-12,
         minimum_phase_max_iterations=5000,
     )

@@ -35,14 +35,15 @@ def test_every_public_connectivity_measure_is_registered():
     """
     import inspect
 
-    non_measure_methods = {"jackknife", "minimum_phase_reconstruction_error"}
+    from spectral_connectivity.connectivity import _NON_MEASURE_METHODS
+
     public_methods = {
         name
         for name in dir(Connectivity)
         if not name.startswith("_")
         and inspect.isfunction(inspect.getattr_static(Connectivity, name))
     }
-    assert public_methods - non_measure_methods == set(_MEASURE_SPECS)
+    assert public_methods - _NON_MEASURE_METHODS == set(_MEASURE_SPECS)
 
 
 def test_returns_measureinfo_records_with_populated_fields():

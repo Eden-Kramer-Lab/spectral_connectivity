@@ -8,7 +8,7 @@ import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
-from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.connectivity import _NON_MEASURE_METHODS, Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     _canonical_json,
@@ -1537,16 +1537,27 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     assert 2 in recorded  # the taper-projection FFT received workers=2
 
     # On the GPU backend `workers` is not forwarded (cupyx's FFT has no such
-    # parameter). Simulate GPU on the CPU by patching the backend check.
+    # parameter). Simulate GPU on the CPU by patching the imported backend.
     gpu_multitaper = Multitaper(time_series, sampling_frequency=500, fft_workers=-1)
     _ = gpu_multitaper.tapers
     recorded = []
     with (
-        patch.object(transforms, "is_gpu_enabled", lambda: True),
+        patch.object(transforms, "ON_GPU", True),
         patch.object(transforms, "fft", spying_fft(recorded)),
     ):
         gpu_multitaper.fft()
     assert recorded == ["MISSING"]
+
+    # The backend imported at startup decides, not the environment variable,
+    # which may change afterwards (e.g. %env in a notebook).
+    recorded = []
+    with (
+        patch.dict("os.environ", {"SPECTRAL_CONNECTIVITY_ENABLE_GPU": "true"}),
+        patch.object(transforms, "ON_GPU", False),
+        patch.object(transforms, "fft", spying_fft(recorded)),
+    ):
+        gpu_multitaper.fft()
+    assert recorded == [-1]
 
 
 def test_to_numpy_handles_device_arrays():
@@ -1628,12 +1639,7 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
 
 @pytest.mark.parametrize(
     "name",
-    [
-        "jackknife",
-        "minimum_phase_reconstruction_error",
-        "from_transform",
-        "_clear_cached_intermediates",
-    ],
+    [*sorted(_NON_MEASURE_METHODS), "from_transform", "_expectation_cross_spectral_matrix"],
 )
 def test_non_measure_callables_are_rejected_as_unknown_measures(name):
     rng = np.random.default_rng(12)
@@ -2104,7 +2110,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     The backend is fixed when the package is imported; toggling
     SPECTRAL_CONNECTIVITY_ENABLE_GPU afterwards must not mislabel a result.
     """
-    from spectral_connectivity.utils import get_compute_backend
+    from spectral_connectivity import _backend
 
     monkeypatch.setenv("SPECTRAL_CONNECTIVITY_ENABLE_GPU", "true")
     rng = np.random.default_rng(0)
@@ -2114,7 +2120,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     )
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
-    assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
+    assert da.attrs["backend"] == ("GPU" if _backend.ON_GPU else "CPU")
 
 
 def test_multitaper_connectivity_rejects_empty_method_list():
@@ -3126,6 +3132,16 @@ def test_fourier_connectivity_rejects_fftshifted_coordinate():
         fourier_connectivity(
             coefficients,
             frequencies=np.fft.fftshift(np.fft.fftfreq(8, d=0.01)),
+            method="coherence_magnitude",
+        )
+
+
+@pytest.mark.parametrize("value", ["False", 0])
+def test_fourier_connectivity_rejects_a_non_bool_sidedness(value):
+    with pytest.raises(TypeError, match="is_one_sided must be a bool"):
+        fourier_connectivity(
+            np.ones((3, 8, 2), dtype=np.complex128),
+            is_one_sided=value,
             method="coherence_magnitude",
         )
 

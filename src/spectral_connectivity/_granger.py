@@ -14,12 +14,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from spectral_connectivity._array_utils import (
-    _complex_inner_product,
     _conjugate_transpose,
     _regularized_inverse,
     _squared_magnitude,
 )
-from spectral_connectivity._backend import ifft, xp
+from spectral_connectivity._backend import xp
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.utils import to_numpy
 
@@ -50,15 +49,28 @@ def _estimate_noise_covariance(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    return _complex_inner_product(
-        inverse_fourier_coefficients[..., 0, :, :],
-        inverse_fourier_coefficients[..., 0, :, :],
-    ).real
+    zero_lag = _zero_lag_coefficient(minimum_phase)
+    noise_covariance: NDArray[np.floating] = xp.matmul(zero_lag, zero_lag.swapaxes(-1, -2))
+    return noise_covariance
+
+
+def _zero_lag_coefficient(
+    minimum_phase: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
+    """Lag-0 coefficient of the minimum-phase factor, shape (..., n_signals, n_signals).
+
+    The inverse DFT at lag 0 is the mean over frequencies, so no full inverse
+    transform is needed; ``minimum_phase`` must therefore hold all
+    ``n_fft_samples`` bins, not a frequency slice. ``.real`` discards an
+    imaginary part that is rounding-level for the factor of a real process.
+    """
+    zero_lag: NDArray[np.floating] = xp.mean(minimum_phase, axis=-3).real
+    return zero_lag
 
 
 def _estimate_transfer_function(
     minimum_phase: NDArray[np.complexfloating],
+    n_frequencies: int,
 ) -> NDArray[np.complexfloating]:
     """Estimate transfer function non-parametrically from minimum phase factor.
 
@@ -70,12 +82,16 @@ def _estimate_transfer_function(
     ----------
     minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
+    n_frequencies : int
+        Return only the first ``n_frequencies`` bins (e.g. the non-negative
+        frequencies).
 
     Returns
     -------
     transfer_function : array
-        Shape (n_time_windows, n_fft_samples, n_signals, n_signals).
-        The transfer function of a MVAR model.
+        Shape (n_time_windows, n_frequencies, n_signals, n_signals). The
+        transfer function of a MVAR model; its lag-0 normalization always uses
+        all bins.
 
     References
     ----------
@@ -84,10 +100,9 @@ def _estimate_transfer_function(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
+    H_0 = _zero_lag_coefficient(minimum_phase)[..., xp.newaxis, :, :]
     transfer_function: NDArray[np.complexfloating] = xp.matmul(
-        minimum_phase, _regularized_inverse(H_0)
+        minimum_phase[..., :n_frequencies, :, :], _regularized_inverse(H_0)
     )
     return transfer_function
 
@@ -336,7 +351,7 @@ def _var_model_from_spectrum(
         _warn_on_failure=False,
     )
     n_nonnegative = csm.shape[-3] // 2 + 1
-    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    transfer = _estimate_transfer_function(minimum_phase, n_nonnegative)
     return transfer, _estimate_noise_covariance(minimum_phase)
 
 

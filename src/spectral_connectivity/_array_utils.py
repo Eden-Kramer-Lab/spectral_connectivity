@@ -8,13 +8,6 @@ from numpy.typing import DTypeLike, NDArray
 from spectral_connectivity._backend import xp
 from spectral_connectivity.utils import BackendArray
 
-# Tikhonov regularization factor for stabilizing matrix inversions
-# Used to prevent numerical instability with near-singular matrices
-TIKHONOV_REGULARIZATION_FACTOR = 1e-12
-
-# Preserves a helper's input dtype (real vs complex) in its return annotation.
-_NumberT = TypeVar("_NumberT", bound=np.number)
-
 
 def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
     """Compute conjugate transpose of the last two dimensions.
@@ -46,6 +39,15 @@ def _divide_where(
     """
     quotient = numerator / xp.where(condition, denominator, 1)
     return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
+
+
+# Tikhonov regularization factor for stabilizing matrix inversions
+# Used to prevent numerical instability with near-singular matrices
+TIKHONOV_REGULARIZATION_FACTOR = 1e-12
+
+
+# Preserves a helper's input dtype (real vs complex) in its return annotation.
+_NumberT = TypeVar("_NumberT", bound=np.number)
 
 
 def _regularized_inverse(

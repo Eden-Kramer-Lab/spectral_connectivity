@@ -173,4 +173,6 @@ True
 - `help(spectral_connectivity.multitaper_connectivity)` for every wrapper
   option (frequency cropping, decimation, `xarray` input dimensions).
 - Each `Connectivity` measure's docstring has a runnable example.
+- `help(spectral_connectivity.SpectralTransform)` for the interface a custom
+  transform needs to work with `Connectivity.from_transform`.
 - The [Cookbook](cookbook.md) has recipes for common tasks.

@@ -20,10 +20,12 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def backend_modules():
-    """Every package module that binds the array namespace ``xp``.
+    """Every package module that imports the array namespace ``xp`` from ``_backend``.
 
     Device-emulation tests swap ``xp`` in each of these. Discovering them, rather
     than listing them, keeps a new module from silently escaping the emulation.
+    ``_backend`` itself is excluded: its consumers have already bound their own
+    ``xp``, so swapping it there would change nothing.
     """
     modules = [
         importlib.import_module(info.name)
@@ -31,4 +33,8 @@ def backend_modules():
             spectral_connectivity.__path__, "spectral_connectivity."
         )
     ]
-    return tuple(module for module in modules if hasattr(module, "xp"))
+    return tuple(
+        module
+        for module in modules
+        if hasattr(module, "xp") and module.__name__ != "spectral_connectivity._backend"
+    )

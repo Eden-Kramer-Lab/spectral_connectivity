@@ -13,16 +13,17 @@ import numpy as np
 import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
+from spectral_connectivity._backend import ON_GPU
 from spectral_connectivity.connectivity import (
     _NON_MEASURE_METHODS,
     Connectivity,
     MultivariateConnectivityResult,
     _frequencies_in_band,
+    _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
     BackendArray,
-    get_compute_backend,
     is_positive_integer,
     to_numpy,
 )
@@ -1395,10 +1396,7 @@ def _shared_provenance_attrs(
     }
     attrs["package"] = "spectral_connectivity"
     attrs["package_version"] = _package_version()
-    # get_compute_backend() reports the backend actually imported (numpy vs
-    # cupy), not the current env var; is_gpu_enabled() would mislabel a result if
-    # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
-    attrs["backend"] = get_compute_backend()["backend"].upper()
+    attrs["backend"] = "GPU" if ON_GPU else "CPU"
     attrs["expectation_type"] = connectivity.expectation_type
     # A single fixed key is both collision-proof and a valid NetCDF attribute
     # name. Flattening arbitrary user keys would make unlike keys such as 1 and
@@ -3274,9 +3272,6 @@ def fourier_connectivity(
         frequency_dim=frequency_dim,
         signal_dim=signal_dim,
     )
-    if getattr(getattr(coefficient_data, "dtype", None), "kind", None) != "c":
-        msg = "fourier_coefficients must be complex-valued."
-        raise TypeError(msg)
     if time is not None and not _is_real_numeric_dtype(np.asarray(time).dtype):
         msg = (
             "time must contain numeric elapsed seconds (window centers); "
@@ -3285,10 +3280,8 @@ def fourier_connectivity(
         )
         raise TypeError(msg)
     inferred_one_sided = False
-    if is_one_sided is not None and not isinstance(is_one_sided, (bool, np.bool_)):
-        # Runtime check of user input the annotation already excludes; a lone
-        # raise is exempt from mypy's unreachable check.
-        raise TypeError("is_one_sided must be a boolean or None.")  # noqa: EM101
+    if is_one_sided is not None:
+        is_one_sided = _validated_flag("is_one_sided", is_one_sided)
     if frequencies is not None:
         frequency_values = np.asarray(frequencies, dtype=float)
         if frequency_values.ndim != 1:
@@ -3298,36 +3291,6 @@ def fourier_connectivity(
             frequency_values.size > 0 and not np.any(frequency_values < 0)
         )
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
-        # A one-sided coordinate (non-negative, strictly increasing) is validated
-        # by Connectivity itself; only the two-sided FFT-order check lives here.
-        if not one_sided and frequency_values.size == 1 and frequency_values[0] != 0.0:
-            msg = (
-                "frequencies must be uniformly spaced in standard FFT "
-                "order (a one-bin two-sided spectrum can contain only zero Hz)."
-            )
-            raise ValueError(msg)
-        if not one_sided and frequency_values.size > 1:
-            frequency_step = (
-                frequency_values[1] - frequency_values[0]
-                if frequency_values.size > 2
-                else abs(frequency_values[1])
-            )
-            expected_frequencies = np.fft.fftfreq(
-                frequency_values.size,
-                d=1.0 / (frequency_step * frequency_values.size),
-            )
-            tolerance = max(abs(frequency_step) * 1e-9, np.finfo(float).eps)
-            if frequency_step <= 0 or not np.allclose(
-                frequency_values,
-                expected_frequencies,
-                rtol=1e-9,
-                atol=tolerance,
-            ):
-                msg = (
-                    "frequencies must be uniformly spaced in standard FFT "
-                    "order (zero and positive bins followed by negative bins)."
-                )
-                raise ValueError(msg)
     else:
         if is_one_sided is None:
             warnings.warn(

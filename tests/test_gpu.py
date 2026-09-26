@@ -1,10 +1,10 @@
 """Tests for GPU backend detection and configuration.
 
 The compute backend is fixed when ``spectral_connectivity`` is first imported
-(``_backend.xp`` is numpy or cupy), so patching the environment afterwards only
-changes what :func:`get_compute_backend` reports as *requested*
-(``gpu_enabled``), never the imported ``backend``. Assertions about the imported
-backend therefore depend on the session's actual ``_backend.xp``.
+(``_backend.ON_GPU``), so patching the environment afterwards only changes what
+:func:`get_compute_backend` reports as *requested* (``gpu_enabled``), never the
+imported ``backend``. Assertions about the imported backend therefore depend on
+the session's actual ``_backend.ON_GPU``.
 """
 
 import importlib.machinery
@@ -15,25 +15,24 @@ import sys
 import types
 from unittest.mock import patch
 
-import numpy as np
 import pytest
+import scipy.fft
+import scipy.signal
+import scipy.sparse.linalg
 
 from spectral_connectivity import _backend, get_compute_backend
 from spectral_connectivity.utils import GPU_ENV_VAR, is_gpu_enabled
 
-_SESSION_IS_CPU = _backend.xp.__name__ == "numpy"
+_SESSION_IS_CPU = not _backend.ON_GPU
 cpu_session_only = pytest.mark.skipif(
     not _SESSION_IS_CPU, reason="backend assertions assume a NumPy-backed import"
 )
 
 
 @pytest.fixture
-def cpu_backend():
+def cpu_backend(monkeypatch):
     """Report a NumPy-backed import regardless of the session's real backend."""
-    fake_backend = types.ModuleType("spectral_connectivity._backend")
-    fake_backend.xp = np
-    with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
-        yield
+    monkeypatch.setattr(_backend, "ON_GPU", False)
 
 
 @pytest.fixture
@@ -211,16 +210,77 @@ class TestIsGpuEnabled:
 
 
 class TestBackendDetection:
-    """Test that get_compute_backend reports 'gpu' when xp is the cupy module."""
+    """get_compute_backend reports the backend _backend imported (ON_GPU)."""
 
-    def test_reports_gpu_when_backend_xp_is_cupy(self):
-        fake_cupy = types.ModuleType("cupy")  # __name__ == "cupy"
-        fake_backend = types.ModuleType("spectral_connectivity._backend")
-        fake_backend.xp = fake_cupy
+    def test_reports_gpu_when_the_backend_imported_cupy(self, monkeypatch):
+        monkeypatch.setattr(_backend, "ON_GPU", True)
+        assert get_compute_backend()["backend"] == "gpu"
 
-        with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
-            result = get_compute_backend()
-            assert result["backend"] == "gpu"
-
-    def test_reports_cpu_when_backend_xp_is_numpy(self, cpu_backend):
+    def test_reports_cpu_when_the_backend_imported_numpy(self, cpu_backend):
         assert get_compute_backend()["backend"] == "cpu"
+
+
+def _fake_cupy_modules(version="13.3.0", *, with_signal=True):
+    """``sys.modules`` entries standing in for a CuPy install of ``version``.
+
+    ``with_signal=False`` mimics CuPy 12, which lacks ``cupyx.scipy.signal``.
+    """
+    cupy = types.ModuleType("cupy")
+    cupy.__version__ = version
+    fft_module = types.ModuleType("cupyx.scipy.fft")
+    for name in ("fft", "fftfreq", "ifft", "irfft", "next_fast_len", "rfft"):
+        setattr(fft_module, name, getattr(scipy.fft, name))
+    linalg = types.ModuleType("cupyx.scipy.sparse.linalg")
+    linalg.svds = scipy.sparse.linalg.svds
+    signal = types.ModuleType("cupyx.scipy.signal")
+    signal.detrend = scipy.signal.detrend
+    return {
+        "cupy": cupy,
+        "cupyx": types.ModuleType("cupyx"),
+        "cupyx.scipy": types.ModuleType("cupyx.scipy"),
+        "cupyx.scipy.fft": fft_module,
+        "cupyx.scipy.sparse": types.ModuleType("cupyx.scipy.sparse"),
+        "cupyx.scipy.sparse.linalg": linalg,
+        "cupyx.scipy.signal": signal if with_signal else None,  # None blocks the import
+    }
+
+
+def _import_backend_copy(monkeypatch, modules):
+    """Run a fresh copy of ``_backend.py`` with the GPU requested.
+
+    The copy is a separate module object, so the session's real backend (which
+    every other module has already bound) is untouched.
+    """
+    monkeypatch.setenv(GPU_ENV_VAR, "true")
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    spec = importlib.util.spec_from_file_location("_backend_copy", _backend.__file__)
+    backend = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(backend)
+    return backend
+
+
+def test_backend_takes_cupy_routines_when_the_gpu_is_requested(monkeypatch):
+    modules = _fake_cupy_modules()
+    backend = _import_backend_copy(monkeypatch, modules)
+
+    assert backend.ON_GPU is True
+    assert backend.xp is modules["cupy"]
+    assert backend.fft is modules["cupyx.scipy.fft"].fft
+    assert backend.detrend is modules["cupyx.scipy.signal"].detrend
+
+
+@pytest.mark.parametrize(
+    ("modules", "message"),
+    [
+        ({"cupy": None}, "CuPy is not installed"),
+        (
+            _fake_cupy_modules("12.3.0", with_signal=False),
+            r"requires cupy-cuda12x>=13\.0, but CuPy 12\.3\.0 is installed",
+        ),
+    ],
+    ids=["cupy_missing", "cupy_12"],
+)
+def test_backend_explains_an_unusable_cupy(monkeypatch, modules, message):
+    with pytest.raises(RuntimeError, match=message):
+        _import_backend_copy(monkeypatch, modules)

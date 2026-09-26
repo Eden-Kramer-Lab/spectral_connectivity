@@ -175,6 +175,47 @@ the multitaper step and use `fourier_connectivity`. NumPy inputs may use the
 
 ```
 
+## Plug in your own transform
+
+`Connectivity.from_transform` accepts any object that satisfies the
+`SpectralTransform` protocol: an `fft()` method returning coefficients shaped
+`(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)`, plus
+`frequencies` and `time`. No subclassing is needed. `help(SpectralTransform)`
+lists the optional attributes such as `is_one_sided` (absent ones describe a
+two-sided, unweighted, independent spectrum) and the scaling that makes
+`power()` a density. `fft()` must return fresh, unshared storage on each call.
+Neither the transform nor its caller may subsequently mutate it through any
+alias, because `Connectivity` keeps it without copying. Read-only flags are
+applied where the backend supports them. The example below is not scaled to a
+density, so its `power()` is in arbitrary units; normalized measures such as
+coherence are unaffected.
+
+```python
+>>> from spectral_connectivity import Connectivity, SpectralTransform
+>>> class HannTransform:
+...     """One Hann-windowed FFT per trial, non-negative frequencies only."""
+...
+...     is_one_sided = True  # optional; omit for a two-sided FFT-order spectrum
+...
+...     def __init__(self, time_series, sampling_frequency):
+...         self.time_series = time_series  # (n_time_samples, n_trials, n_signals)
+...         n_time_samples = time_series.shape[0]
+...         self.frequencies = np.fft.rfftfreq(n_time_samples, d=1 / sampling_frequency)
+...         self.time = np.array([n_time_samples / 2 / sampling_frequency])
+...
+...     def fft(self):
+...         window = np.hanning(self.time_series.shape[0])[:, np.newaxis, np.newaxis]
+...         coefficients = np.fft.rfft(window * self.time_series, axis=0)
+...         # (frequency, trial, signal) -> (time, trial, taper, frequency, signal)
+...         return coefficients.transpose(1, 0, 2)[np.newaxis, :, np.newaxis]
+>>> transform = HannTransform(time_series, sampling_frequency=500)
+>>> isinstance(transform, SpectralTransform)
+True
+>>> Connectivity.from_transform(transform).coherence_magnitude().shape
+(1, 501, 3, 3)
+
+```
+
 ## Where to go next
 
 - Value ranges for every measure: `docs/CONNECTIVITY_METRIC_RANGES.md`.

@@ -23,7 +23,7 @@
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
 
 + it is designed to handle multiple time series at once
-+ it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed.
++ it caches frequently computed quantities such as the cross-spectral matrix and minimum-phase-decomposition, so that connectivity measures that use the same processing steps can be more quickly computed. Call `Connectivity.clear_cache()` to release these intermediates when memory is tight.
 + it decouples the time-frequency transform and the connectivity measures so that if you already have a preferred way of computing Fourier coefficients (i.e. from a wavelet transform), you can use that instead.
 + it implements the non-parametric version of the spectral granger causality in Python.
 + it implements the canonical coherence, which can
@@ -247,6 +247,12 @@ specific frequencies. `Welch`'s frequency resolution is `1 / segment_duration`
 Hz, so set `segment_duration` explicitly for electrophysiology data.
 `MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
 the xarray wrapper carries it as a two-dimensional coordinate.
+
+`Connectivity.from_transform` also accepts your own transform: any object
+satisfying the `SpectralTransform` protocol (an `fft()` method plus
+`frequencies` and `time`). `help(SpectralTransform)` gives its optional
+attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
+density; the [cookbook](docs/cookbook.md) has a worked example.
 
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
