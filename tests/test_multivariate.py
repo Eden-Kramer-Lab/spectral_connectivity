@@ -120,3 +120,19 @@ def test_global_coherence_weighted_per_bin_path_matches_batched(monkeypatch):
 
     np.testing.assert_allclose(per_bin, batched, rtol=1e-10)
     assert not np.allclose(per_bin, unweighted)  # the weights took effect
+
+
+def test_global_coherence_per_bin_path_is_reproducible(monkeypatch):
+    """The per-bin path's svds branch gives identical results run to run."""
+    from spectral_connectivity import Connectivity, _multivariate
+
+    monkeypatch.setattr(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    rng = np.random.default_rng(14)
+    shape = (1, 6, 3, 8, 8)  # max_rank=2 < min(n_signals, n_estimates) - 1: svds
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    first = Connectivity(coefficients).global_coherence(max_rank=2)
+    second = Connectivity(coefficients).global_coherence(max_rank=2)
+
+    np.testing.assert_array_equal(first[0], second[0])
+    np.testing.assert_array_equal(first[1], second[1])

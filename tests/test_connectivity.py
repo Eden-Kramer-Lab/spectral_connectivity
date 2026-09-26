@@ -3269,13 +3269,13 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
 
     real_svds = _multivariate.svds
 
-    def ascending_svds(matrix, k):
-        u, s, vh = real_svds(matrix, k)
+    def ascending_svds(matrix, k, **kwargs):
+        u, s, vh = real_svds(matrix, k, **kwargs)
         order = np.argsort(s)  # force ascending
         return u[:, order], s[order], vh[order]
 
-    def descending_svds(matrix, k):
-        u, s, vh = real_svds(matrix, k)
+    def descending_svds(matrix, k, **kwargs):
+        u, s, vh = real_svds(matrix, k, **kwargs)
         order = np.argsort(s)[::-1]  # force descending
         return u[:, order], s[order], vh[order]
 

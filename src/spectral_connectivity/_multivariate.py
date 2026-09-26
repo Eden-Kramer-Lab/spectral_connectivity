@@ -16,7 +16,7 @@ from spectral_connectivity._array_utils import (
     _conjugate_transpose,
     _divide_where,
 )
-from spectral_connectivity._backend import svds, xp
+from spectral_connectivity._backend import ON_GPU, svds, xp
 
 # Bin-chunk element cap for the batched path: peak memory scales with
 # chunk * (n_signals * n_estimates + min(n_signals, n_estimates)**2), so cap the
@@ -576,7 +576,16 @@ def _estimate_global_coherence(
         global_coherence = singular_values[:max_rank] ** 2 / total_power
         unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]
     else:
-        unnormalized_global_coherence, singular_values, _ = svds(scaled_coefficients, max_rank)
+        # ARPACK (SciPy's svds) starts from a random vector unless given one,
+        # which makes the result vary between runs at rounding level and the
+        # singular vectors' phase arbitrary; a fixed start makes it reproducible.
+        # CuPy's svds takes no starting vector.
+        start = (
+            {} if ON_GPU else {"v0": np.random.default_rng(0).standard_normal(n_components)}
+        )
+        unnormalized_global_coherence, singular_values, _ = svds(
+            scaled_coefficients, max_rank, **start
+        )
         # svds does not guarantee the order of the returned singular values, so
         # sort strongest-first explicitly (rather than assuming ascending) and
         # apply the same ordering to the vectors, matching the dense (svd)
