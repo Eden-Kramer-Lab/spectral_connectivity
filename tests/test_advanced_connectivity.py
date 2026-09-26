@@ -369,11 +369,11 @@ class TestGlobalCoherence:
         used only above ``GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS``) exercises it
         at a small size.
         """
-        import spectral_connectivity.connectivity as connectivity_module
+        import spectral_connectivity._multivariate as multivariate_module
 
         if path == "per_bin":
             monkeypatch.setattr(
-                connectivity_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
+                multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
             )
         n_signals = 3
         time_series = self.rng.standard_normal((80, 8, n_signals))
@@ -406,11 +406,11 @@ class TestGlobalCoherence:
         truncated ``svds`` branch, which must return components strongest-first
         like the batched eigendecomposition.
         """
-        import spectral_connectivity.connectivity as connectivity_module
+        import spectral_connectivity._multivariate as multivariate_module
 
         if path == "per_bin":
             monkeypatch.setattr(
-                connectivity_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
+                multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
             )
         n_signals = 6
         time_series = self.rng.standard_normal((80, 8, n_signals))
@@ -515,11 +515,11 @@ class TestGlobalCoherence:
         component holds the whole power (global coherence exactly 1). Checked on
         the batched thin-SVD path and on the forced per-bin fallback.
         """
-        import spectral_connectivity.connectivity as connectivity_module
+        import spectral_connectivity._multivariate as multivariate_module
 
         if path == "per_bin":
             monkeypatch.setattr(
-                connectivity_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
+                multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0
             )
         rng = np.random.default_rng(0)
         # (n_time, n_trials, n_tapers, n_fft, n_signals) with n_trials*n_tapers = 1

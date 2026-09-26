@@ -3443,7 +3443,6 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
     """global_coherence must order components strongest-first regardless of the
     order svds returns (which SciPy does not guarantee)."""
     from spectral_connectivity import _multivariate
-    from spectral_connectivity import connectivity as conn_mod
 
     real_svds = _multivariate.svds
 
@@ -3462,7 +3461,7 @@ def test_global_coherence_sparse_branch_orders_strongest_first():
     # Force the per-bin svds fallback (the moderate-n_signals default is the
     # batched eigendecomposition, which never calls svds) so the mock takes
     # effect and this exercises the svds ordering logic it is written for.
-    with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
+    with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 1):
         with patch.object(_multivariate, "svds", ascending_svds):
             gc_asc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=3)
         with patch.object(_multivariate, "svds", descending_svds):
@@ -3484,7 +3483,7 @@ def test_global_coherence_batched_matches_per_bin_fallback():
     unitary rotation within a degenerate subspace), including NaN placement for
     zero-power bins.
     """
-    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity import _multivariate
 
     rng = np.random.default_rng(4)
     # wide: n_estimates (30) >= n_signals (8) -> eigh path
@@ -3502,7 +3501,7 @@ def test_global_coherence_batched_matches_per_bin_fallback():
                 warnings.simplefilter("ignore")
                 gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
                 # Force the per-bin fallback by lowering the batching threshold.
-                with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+                with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
                     gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
             np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))
             np.testing.assert_allclose(
@@ -3524,7 +3523,7 @@ def test_global_coherence_batched_matches_per_bin_ill_conditioned():
     eigh/SVD tradeoff against a regression that widens the gap; the existing
     equivalence test uses only well-conditioned Gaussian data.
     """
-    from spectral_connectivity import connectivity as conn_mod
+    from spectral_connectivity import _multivariate
 
     rng = np.random.default_rng(20240827)
     n_time, n_trials, n_tapers, n_fft, n_signals = 2, 30, 2, 10, 4
@@ -3544,7 +3543,7 @@ def test_global_coherence_batched_matches_per_bin_ill_conditioned():
     for max_rank in (1, n_signals):
         gc_batched, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
         # Force the per-bin svd/svds fallback (the well-conditioned reference).
-        with patch.object(conn_mod, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
+        with patch.object(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0):
             gc_loop, _ = Connectivity(fc).global_coherence(max_rank=max_rank)
 
         np.testing.assert_array_equal(np.isnan(gc_batched), np.isnan(gc_loop))

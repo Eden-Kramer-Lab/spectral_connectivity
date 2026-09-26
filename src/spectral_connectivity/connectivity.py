@@ -36,10 +36,9 @@ from spectral_connectivity._granger import (
 )
 from spectral_connectivity._multivariate import (
     GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
-    _batched_global_coherence,
     _canonical_coherency_components,
     _estimate_canonical_coherence,
-    _estimate_global_coherence,
+    _global_coherence,
     _mic_components,
     _normalize_fourier_coefficients,
 )
@@ -159,16 +158,6 @@ def _validated_rank(rank: int | None) -> int | None:
     return rank
 
 
-# global_coherence computes, per time-frequency bin, the strongest components of
-# the (n_signals, n_estimates) coefficient matrix. When the decomposition
-# dimension min(n_signals, n_estimates) is modest these are found with a single
-# batched decomposition over all bins (eigh of the cross-spectral matrix when
-# n_estimates >= n_signals, otherwise the economy SVD of the thin matrix),
-# replacing a Python loop over bins and its per-bin device syncs on GPU. Above
-# this dimension the per-bin path is used (it finds only the requested top
-# components via svds when max_rank is small), where forming every component of
-# a large matrix would be wasteful.
-GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS = 64
 # Peak workspace cap for the phase-lag-index family's observation-level signal
 # tiles. The final reduced signal-by-signal result is unavoidable, but the large
 # trial/taper/time-resolved outer product is never materialized in full.
@@ -3169,13 +3158,7 @@ class Connectivity:
         True
         """
         self._validate_multiple_signals()
-        (
-            n_time_windows,
-            n_trials,
-            n_tapers,
-            n_fft_samples,
-            n_signals,
-        ) = self._fourier_coefficients.shape
+        _, n_trials, n_tapers, _, n_signals = self._fourier_coefficients.shape
 
         # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
         # coefficient matrix has at most min(n_signals, n_trials * n_tapers)
@@ -3194,11 +3177,6 @@ class Connectivity:
             )
             max_rank = max_available_rank
 
-        # The batched decomposition works on min(n_signals, n_estimates)-square
-        # matrices, so gate on that dimension (not n_signals alone): a thin
-        # matrix with few estimates is cheap even for many signals, while a large
-        # square matrix is better served by the per-bin svds fallback.
-        n_estimates = n_trials * n_tapers
         # Must be a genuine positive integer: it is a floor-divided into a chunk
         # size, so a float (NaN/inf included) or bool would either pick a
         # nonsensical chunk or blow up later inside range(). bool is an int
@@ -3211,65 +3189,12 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
-        if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
-            fourier_coefficients = self._fourier_coefficients
-            if self._observation_weights is not None:
-                # The global-coherence eigenspectrum is formed from A @ A^H.
-                # Scaling each observation column by sqrt(weight) therefore
-                # produces the weighted cross-spectrum. The scalar division by
-                # sum(weight) cancels when component power is normalized by
-                # total power.
-                fourier_coefficients = fourier_coefficients * xp.sqrt(
-                    self._observation_weights
-                )
-            global_coherence, unnormalized_global_coherence = _batched_global_coherence(
-                fourier_coefficients, max_rank, max_workspace_elements
-            )
-        else:
-            # A user who tuned max_workspace_elements for memory gets no effect
-            # here (the per-bin path decomposes one bin at a time); note it so the
-            # setting having no effect is discoverable, without warning on the
-            # common default-valued call.
-            if max_workspace_elements != GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS:
-                logger.debug(
-                    "global_coherence: max_workspace_elements=%d is ignored on "
-                    "the per-bin fallback path used when "
-                    "min(n_signals, n_estimates)=%d > %d.",
-                    max_workspace_elements,
-                    min(n_signals, n_estimates),
-                    GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS,
-                )
-            # Per-bin fallback for a large decomposition dimension, where forming
-            # every component is wasteful and svds (used when max_rank is small)
-            # finds only the top ones requested.
-            # S - singular values
-            global_coherence = xp.zeros((n_time_windows, n_fft_samples, max_rank))
-            # U - rotation
-            unnormalized_global_coherence = xp.zeros(
-                (n_time_windows, n_fft_samples, n_signals, max_rank),
-                dtype=xp.complex128,
-            )
-
-            for time_ind in range(n_time_windows):
-                for freq_ind in range(n_fft_samples):
-                    # reshape to (n_signals, n_trials * n_tapers)
-                    fourier_coefficients = (
-                        self._fourier_coefficients[time_ind, :, :, freq_ind, :]
-                        .reshape((n_trials * n_tapers, n_signals))
-                        .T
-                    )
-                    if self._observation_weights is not None:
-                        weights = self._observation_weights[
-                            time_ind, :, :, freq_ind, 0
-                        ].reshape(n_trials * n_tapers)
-                        fourier_coefficients = (
-                            fourier_coefficients * xp.sqrt(weights)[xp.newaxis, :]
-                        )
-
-                    (
-                        global_coherence[time_ind, freq_ind],
-                        unnormalized_global_coherence[time_ind, freq_ind],
-                    ) = _estimate_global_coherence(fourier_coefficients, max_rank=max_rank)
+        global_coherence, unnormalized_global_coherence = _global_coherence(
+            self._fourier_coefficients,
+            self._observation_weights,
+            max_rank,
+            max_workspace_elements,
+        )
 
         if xp.any(xp.isnan(global_coherence)):
             warnings.warn(

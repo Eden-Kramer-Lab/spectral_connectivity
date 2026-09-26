@@ -5,6 +5,7 @@ Array-level computations behind the group and multivariate measures of
 :class:`Connectivity`.
 """
 
+from logging import getLogger
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,20 @@ from spectral_connectivity._backend import svds, xp
 # chunk * (n_signals * n_estimates + min(n_signals, n_estimates)**2), so cap the
 # element count to keep it bounded regardless of the number of bins.
 GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
+
+# global_coherence computes, per time-frequency bin, the strongest components of
+# the (n_signals, n_estimates) coefficient matrix. When the decomposition
+# dimension min(n_signals, n_estimates) is modest these are found with a single
+# batched decomposition over all bins (eigh of the cross-spectral matrix when
+# n_estimates >= n_signals, otherwise the economy SVD of the thin matrix),
+# replacing a Python loop over bins and its per-bin device syncs on GPU. Above
+# this dimension the per-bin path is used (it finds only the requested top
+# components via svds when max_rank is small), where forming every component of
+# a large matrix would be wasteful.
+GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS = 64
+
+
+logger = getLogger(__name__)
 
 
 def _dominant_sign(vectors: NDArray[np.floating]) -> NDArray[np.floating]:
@@ -572,4 +587,82 @@ def _estimate_global_coherence(
         unnormalized_global_coherence = unnormalized_global_coherence[:, order]
         global_coherence = singular_values**2 / total_power
 
+    return global_coherence, unnormalized_global_coherence
+
+
+def _global_coherence(
+    fourier_coefficients: NDArray[np.complexfloating],
+    observation_weights: NDArray[np.floating] | None,
+    max_rank: int,
+    max_workspace_elements: int,
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    """Strongest global-coherence components of every time-frequency bin.
+
+    Uses one batched decomposition over all bins when the decomposition
+    dimension ``min(n_signals, n_estimates)`` is at most
+    ``GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS``, and a per-bin decomposition
+    otherwise.
+
+    Parameters
+    ----------
+    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+    observation_weights : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), or None
+    max_rank : int
+        Number of components, at most ``min(n_signals, n_trials * n_tapers)``.
+    max_workspace_elements : int
+        Element budget for the batched decomposition's chunks.
+
+    Returns
+    -------
+    global_coherence : array, shape (n_time_windows, n_fft_samples, max_rank)
+    unnormalized_global_coherence : array, shape (n_time_windows, n_fft_samples, n_signals, max_rank)
+    """
+    n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals = fourier_coefficients.shape
+    # The batched decomposition works on min(n_signals, n_estimates)-square
+    # matrices, so gate on that dimension (not n_signals alone): a thin matrix
+    # with few estimates is cheap even for many signals, while a large square
+    # matrix is better served by the per-bin svds fallback.
+    n_estimates = n_trials * n_tapers
+    if observation_weights is not None:
+        # The global-coherence eigenspectrum is formed from A @ A^H. Scaling each
+        # observation column by sqrt(weight) therefore produces the weighted
+        # cross-spectrum. The scalar division by sum(weight) cancels when
+        # component power is normalized by total power.
+        fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+    if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
+        return _batched_global_coherence(
+            fourier_coefficients, max_rank, max_workspace_elements
+        )
+
+    # A user who tuned max_workspace_elements for memory gets no effect here (the
+    # per-bin path decomposes one bin at a time); note it so the setting having
+    # no effect is discoverable, without warning on the common default-valued call.
+    if max_workspace_elements != GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS:
+        logger.debug(
+            "global_coherence: max_workspace_elements=%d is ignored on "
+            "the per-bin fallback path used when "
+            "min(n_signals, n_estimates)=%d > %d.",
+            max_workspace_elements,
+            min(n_signals, n_estimates),
+            GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS,
+        )
+    # Per-bin fallback for a large decomposition dimension, where forming every
+    # component is wasteful and svds (used when max_rank is small) finds only the
+    # top ones requested.
+    global_coherence = xp.zeros((n_time_windows, n_fft_samples, max_rank))
+    unnormalized_global_coherence = xp.zeros(
+        (n_time_windows, n_fft_samples, n_signals, max_rank), dtype=xp.complex128
+    )
+    for time_ind in range(n_time_windows):
+        for freq_ind in range(n_fft_samples):
+            # (n_signals, n_trials * n_tapers)
+            bin_coefficients = (
+                fourier_coefficients[time_ind, :, :, freq_ind, :]
+                .reshape((n_estimates, n_signals))
+                .T
+            )
+            (
+                global_coherence[time_ind, freq_ind],
+                unnormalized_global_coherence[time_ind, freq_ind],
+            ) = _estimate_global_coherence(bin_coefficients, max_rank=max_rank)
     return global_coherence, unnormalized_global_coherence
