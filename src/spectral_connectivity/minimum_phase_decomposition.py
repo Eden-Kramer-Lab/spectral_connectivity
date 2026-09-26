@@ -490,7 +490,7 @@ def _solve_2x2(
     )
     # Divide by 1 where singular so no divide warning fires, then mark NaN.
     solution /= xp.where(singular, 1, determinant)
-    return xp.where(singular, xp.asarray(xp.nan, dtype=solution.dtype), solution)
+    return xp.where(singular, xp.nan, solution)
 
 
 def _solve_isolating_singular(
@@ -508,7 +508,8 @@ def _solve_isolating_singular(
     sub-matrices resolve to NaN while the remaining ones are solved normally, so
     a single rank-deficient window (e.g. duplicated channels) does not poison
     the entire batch, and exactly singular sub-matrices resolve to NaN on both
-    backends.
+    backends. 2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats
+    only an exactly zero determinant as singular.
 
     Parameters
     ----------
@@ -518,9 +519,6 @@ def _solve_isolating_singular(
         Batched right-hand sides ``B``.
     identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity used to stand in for singular matrices during the solve.
-
-    2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats only an
-    exactly zero determinant as singular.
 
     Returns
     -------

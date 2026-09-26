@@ -88,8 +88,8 @@ _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
     "absolute": xp.abs,
     "squared": lambda imaginary: imaginary**2,
 }
-# Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), so each moment is antisymmetric (-1)
-# or symmetric (+1) across the signal pair.
+# Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
+# moment is exactly antisymmetric (-1) or symmetric (+1) across the signal pair.
 _IMAGINARY_MOMENT_PAIR_SYMMETRY = {"sign": -1, "imaginary": -1, "absolute": 1, "squared": 1}
 
 # Tikhonov regularization factor for stabilizing matrix inversions
@@ -1131,6 +1131,17 @@ class Connectivity:
         n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
         root_power = xp.sqrt(self._power[..., :n_nonnegative, :])
         return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
+
+    def _nonnegative_fourier_coefficients(self) -> NDArray[np.complexfloating]:
+        """Fourier coefficients at the non-negative frequencies, at ``self._dtype``.
+
+        A view when the dtype already matches.
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
+            ..., :n_nonnegative, :
+        ].astype(self._dtype, copy=False)
+        return coefficients
 
     def _nonnegative_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix at the non-negative frequencies (a view)."""
@@ -2196,14 +2207,8 @@ class Connectivity:
                 stacklevel=2,
             )
 
-        cross_spectral_density = self._expectation_cross_spectral_matrix()
         # Drop negative frequencies before the per-bin inversion, not after.
-        cross_spectral_density = cross_spectral_density[
-            ...,
-            : self._nonnegative_frequency_count(cross_spectral_density.shape[-3]),
-            :,
-            :,
-        ]
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         matrix_rms = xp.sqrt(
             xp.mean(
                 xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
@@ -2642,8 +2647,7 @@ class Connectivity:
             )
             raise ValueError(msg)
 
-        spectrum = self._expectation_cross_spectral_matrix()
-        spectrum = spectrum[..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :]
+        spectrum = self._nonnegative_cross_spectral_matrix()
         leading_shape = spectrum.shape[:-3]
         n_frequencies = spectrum.shape[-3]
         connections = np.asarray([(labels[first], labels[second]) for first, second in pairs])
@@ -2907,8 +2911,7 @@ class Connectivity:
         rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
 
-        spectrum = self._expectation_cross_spectral_matrix()
-        spectrum = spectrum[..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :]
+        spectrum = self._nonnegative_cross_spectral_matrix()
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
         # Whiten each group's within-block, substituting the identity at that
         # group's non-finite bins so the eigendecomposition converges there.
@@ -3178,10 +3181,7 @@ class Connectivity:
         # dtype already matches (the division below allocates a fresh array).
         # Only the non-negative frequencies are reported, so only those are
         # normalized and reduced.
-        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
-        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
-            ..., :n_nonnegative, :
-        ].astype(self._dtype, copy=False)
+        coefficients = self._nonnegative_fourier_coefficients()
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -3375,14 +3375,7 @@ class Connectivity:
         cache = self._imaginary_moment_cache
         missing = [key for key in keys if key not in cache]
         if missing:
-            # The phase-lag measures report only non-negative frequencies, so
-            # reduce only those bins (about half of a two-sided spectrum).
-            n_nonnegative = self._nonnegative_frequency_count(
-                self._fourier_coefficients.shape[-2]
-            )
-            coefficients = self._fourier_coefficients[..., :n_nonnegative, :].astype(
-                self._dtype, copy=False
-            )
+            coefficients = self._nonnegative_fourier_coefficients()
             n_signals = coefficients.shape[-1]
             kept_observation_axes = [
                 axis for axis in range(3) if axis not in self._expectation_axes
@@ -3413,22 +3406,14 @@ class Connectivity:
             # tile at a time, reduce it immediately, and write the small result.
             # Im(X_i conj(X_j)) = Im(X_i) Re(X_j) - Re(X_i) Im(X_j), formed in
             # real arithmetic rather than as a complex product. Each tile pairs
-            # its source rows only with targets from ``start`` on (so it still
-            # forms both orders of its own pairs), skipping the pairs with
-            # earlier rows. The strict lower triangle is filled from the upper
-            # one afterwards: per observation, Im(X_j conj(X_i)) is exactly the
-            # negation of Im(X_i conj(X_j)) in floating point, so each moment is
-            # exactly antisymmetric (sign, imaginary) or symmetric (absolute,
-            # squared).
-            real_part = coefficients.real[..., xp.newaxis, :]
-            imaginary_part = coefficients.imag[..., xp.newaxis, :]
+            # its source rows only with targets from ``start`` on; the strict
+            # lower triangle is filled by pair symmetry below.
+            real, imag = coefficients.real, coefficients.imag
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
-                source_real = coefficients.real[..., start:stop, xp.newaxis]
-                source_imaginary = coefficients.imag[..., start:stop, xp.newaxis]
                 imaginary = (
-                    source_imaginary * real_part[..., start:]
-                    - source_real * imaginary_part[..., start:]
+                    imag[..., start:stop, xp.newaxis] * real[..., xp.newaxis, start:]
+                    - real[..., start:stop, xp.newaxis] * imag[..., xp.newaxis, start:]
                 )
                 local_diagonal = xp.arange(stop - start)
                 imaginary[..., local_diagonal, local_diagonal] = 0
@@ -5347,7 +5332,7 @@ def _zero_lag_coefficient(
 
 def _estimate_transfer_function(
     minimum_phase: NDArray[np.complexfloating],
-    n_frequencies: int | None = None,
+    n_frequencies: int,
 ) -> NDArray[np.complexfloating]:
     """Estimate transfer function non-parametrically from minimum phase factor.
 
@@ -5359,16 +5344,16 @@ def _estimate_transfer_function(
     ----------
     minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
-    n_frequencies : int, optional
+    n_frequencies : int
         Return only the first ``n_frequencies`` bins (e.g. the non-negative
-        frequencies); all bins by default.
+        frequencies).
 
     Returns
     -------
     transfer_function : array
-        Shape (n_time_windows, n_frequencies, n_signals, n_signals), with
-        ``n_frequencies = n_fft_samples`` by default. The transfer function of
-        a MVAR model; its lag-0 normalization always uses all bins.
+        Shape (n_time_windows, n_frequencies, n_signals, n_signals). The
+        transfer function of a MVAR model; its lag-0 normalization always uses
+        all bins.
 
     References
     ----------
