@@ -1869,24 +1869,39 @@ def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
 
 
-def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatch):
-    """Every PLI variant works when the full observation CSM is unavailable."""
+@pytest.mark.parametrize("sources_per_tile", [1, 2])
+def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
+    monkeypatch, sources_per_tile
+):
+    """Every PLI variant works when the full observation CSM is unavailable,
+    and several tiles (including a narrower last one) mirror into the same
+    result as a single tile."""
     import spectral_connectivity.connectivity as connectivity_module
 
     rng = np.random.default_rng(19)
-    shape = (2, 5, 3, 12, 4)
+    shape = (2, 5, 3, 12, 5)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    expected_conn = Connectivity(coefficients)
-    expected = (
-        expected_conn.phase_lag_index(),
-        expected_conn.weighted_phase_lag_index(),
-        expected_conn.debiased_squared_phase_lag_index(),
-        expected_conn.debiased_squared_weighted_phase_lag_index(),
+    measures = (
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "directed_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
     )
+    expected_conn = Connectivity(coefficients)
+    expected = tuple(getattr(expected_conn, measure)() for measure in measures)
 
-    # Force one source signal per tile, then make any accidental access to the
-    # full observation-level outer product fail loudly.
-    monkeypatch.setattr(connectivity_module, "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS", 1)
+    # Size the workspace for ``sources_per_tile`` source signals per tile (it
+    # holds the non-negative bins of every observation for each source-target
+    # pair), then make any accidental access to the full observation-level outer
+    # product fail loudly.
+    n_nonnegative = shape[3] // 2 + 1
+    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        sources_per_tile * elements_per_source,
+    )
     tiled = Connectivity(coefficients)
     with patch.object(
         Connectivity,
@@ -1894,15 +1909,12 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatc
         new_callable=PropertyMock,
         side_effect=AssertionError("full outer product was materialized"),
     ):
-        actual = (
-            tiled.phase_lag_index(),
-            tiled.weighted_phase_lag_index(),
-            tiled.debiased_squared_phase_lag_index(),
-            tiled.debiased_squared_weighted_phase_lag_index(),
-        )
+        actual = tuple(getattr(tiled, measure)() for measure in measures)
 
-    for actual_measure, expected_measure in zip(actual, expected, strict=True):
-        np.testing.assert_array_equal(actual_measure, expected_measure)
+    for measure, actual_measure, expected_measure in zip(
+        measures, actual, expected, strict=True
+    ):
+        np.testing.assert_array_equal(actual_measure, expected_measure, err_msg=measure)
 
 
 def test_phase_lag_index_family_fully_cached_path_matches_cold():
