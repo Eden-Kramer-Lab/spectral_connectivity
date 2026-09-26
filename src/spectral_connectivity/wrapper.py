@@ -45,6 +45,19 @@ from spectral_connectivity.connectivity import (
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
+# The public API. UnsupportedMeasureError is defined in _result_formatting
+# (which raises it) and re-exported here; listing it makes the API reference
+# document it with the wrapper (see autosummary_ignore_module_all in docs/conf.py).
+__all__ = [
+    "MeasureInfo",
+    "UnsupportedMeasureError",
+    "connectivity_to_xarray",
+    "fourier_connectivity",
+    "frequency_band_reduce",
+    "list_measures",
+    "multitaper_connectivity",
+]
+
 logger = getLogger(__name__)
 
 
