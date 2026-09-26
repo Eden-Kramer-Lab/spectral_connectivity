@@ -3408,7 +3408,10 @@ class Connectivity:
             # real arithmetic rather than as a complex product. Each tile pairs
             # its source rows only with targets from ``start`` on; the strict
             # lower triangle is filled by pair symmetry below.
-            real, imag = coefficients.real, coefficients.imag
+            # Contiguous copies: transforms leave the signal axis slowest, which
+            # makes the tiles' broadcast products stride badly through memory.
+            real = xp.ascontiguousarray(coefficients.real)
+            imag = xp.ascontiguousarray(coefficients.imag)
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
                 imaginary = (
