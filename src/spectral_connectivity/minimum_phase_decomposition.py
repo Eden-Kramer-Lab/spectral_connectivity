@@ -7,43 +7,14 @@ pairwise spectral Granger prediction and other directed connectivity measures.
 
 import warnings
 from logging import DEBUG, getLogger
-from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import gpu_request_error_message, is_gpu_enabled
-
-# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
-# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
-if not TYPE_CHECKING and is_gpu_enabled():
-    try:
-        import cupy as xp
-        from cupyx.scipy.fft import fft, ifft, irfft, rfft
-    except ImportError as exc:
-        raise RuntimeError(gpu_request_error_message()) from exc
-else:
-    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, ifft, irfft, rfft
-
+from spectral_connectivity._array_utils import _conjugate_transpose
+from spectral_connectivity._backend import fft, ifft, irfft, rfft, xp
 
 logger = getLogger(__name__)
-
-
-def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
-    """Compute conjugate transpose of the last two dimensions.
-
-    Parameters
-    ----------
-    x : NDArray[complexfloating], shape (..., M, N)
-        Input array.
-
-    Returns
-    -------
-    x_H : NDArray[complexfloating], shape (..., N, M)
-        Conjugate transpose of last two dimensions.
-    """
-    return x.swapaxes(-1, -2).conjugate()
 
 
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:

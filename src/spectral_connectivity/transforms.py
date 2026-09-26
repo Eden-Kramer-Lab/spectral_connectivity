@@ -9,11 +9,11 @@ from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
+from spectral_connectivity._array_utils import _divide_where
+from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, xp
+from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
-    cupy_device_name,
-    gpu_request_error_message,
-    is_gpu_enabled,
     is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
@@ -461,54 +461,6 @@ def suggest_parameters(
         "n_time_windows": n_time_windows,
         "nyquist_frequency": nyquist_frequency,
     }
-
-
-# Type-check against the NumPy API, which CuPy mirrors: mypy sees only the CPU
-# branch (CuPy is untyped, so importing it would make ``xp`` ``Any``).
-if not TYPE_CHECKING and is_gpu_enabled():
-    try:
-        import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
-    except ImportError as exc:
-        raise RuntimeError(gpu_request_error_message()) from exc
-    try:
-        # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
-        # imports cupy fine but fails here, which must not be reported as
-        # "CuPy is not installed".
-        from cupyx.scipy.signal import detrend as _backend_detrend
-    except ImportError as exc:
-        msg = (
-            f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
-            f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
-            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
-        )
-        raise RuntimeError(msg) from exc
-
-    try:
-        logger.info("Using GPU for spectral_connectivity on %s", cupy_device_name(xp))
-    except Exception:
-        logger.info("Using GPU for spectral_connectivity...")
-else:
-    logger.info("Using CPU for spectral_connectivity...")
-    import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
-    from scipy.signal import detrend as _backend_detrend
-
-
-def _divide_where(
-    numerator: BackendArray,
-    denominator: BackendArray,
-    condition: BackendArray,
-    fill: float,
-) -> BackendArray:
-    """Elementwise ``numerator / denominator`` where ``condition``, else ``fill``.
-
-    Backend-neutral replacement for ``xp.divide(..., where=...)``: CuPy ufuncs
-    do not accept the public ``where`` keyword, and the substituted unit
-    denominator also avoids NumPy divide warnings.
-    """
-    quotient = numerator / xp.where(condition, denominator, 1)
-    return xp.where(condition, quotient, xp.asarray(fill, dtype=quotient.dtype))
 
 
 def _finite_scalar_start_time(start_time: Any) -> float:
@@ -2883,7 +2835,7 @@ def _multitaper_fft(
     # Only SciPy's CPU FFT accepts ``workers``; cupyx's FFT does not, so pass it
     # only when a worker count is requested and we are on the CPU backend.
     fft_kwargs: dict[str, Any] = {}
-    if workers is not None and not is_gpu_enabled():
+    if workers is not None and not ON_GPU:
         fft_kwargs["workers"] = workers
     coefficients: NDArray[np.complexfloating] = fft(
         projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs

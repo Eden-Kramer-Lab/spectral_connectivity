@@ -11,7 +11,6 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
     _complex_inner_product,
-    _conjugate_transpose,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
     _optimize_canonical_coherency_phase,
@@ -1281,17 +1280,6 @@ def test__squared_magnitude():
     assert np.allclose(_squared_magnitude(test_array), expected_array)
 
 
-def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=complex)
-    test_array[1, ...] = [
-        [1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
-        [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j],
-    ]
-    expected_array = np.zeros((2, 4, 2), dtype=complex)
-    expected_array[1, ...] = test_array[1, ...].conj().transpose()
-    assert np.allclose(_conjugate_transpose(test_array), expected_array)
-
-
 def test__complex_inner_product():
     """Test that the complex inner product is taken over the last two
     dimensions."""
@@ -2173,21 +2161,15 @@ class _UfuncWhereRejectingNamespace:
         return strict_ufunc
 
 
-def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch):
+def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
     use it. Emulate that restriction by swapping every module's ``xp`` namespace
     for one whose ufuncs raise on ``where=``, then exercise every path that
     divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
-    from spectral_connectivity import (
-        MorletWavelet,
-        Multitaper,
-        minimum_phase_decomposition,
-        transforms,
-    )
-    from spectral_connectivity import connectivity as connectivity_module
+    from spectral_connectivity import MorletWavelet, Multitaper
 
     strict_namespace = _UfuncWhereRejectingNamespace()
-    for module in (connectivity_module, transforms, minimum_phase_decomposition):
+    for module in backend_modules:
         assert module.xp is np  # the CPU backend this emulation replaces
         monkeypatch.setattr(module, "xp", strict_namespace)
     with pytest.raises(TypeError, match="where"):

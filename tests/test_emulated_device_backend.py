@@ -26,8 +26,7 @@ import numpy as np
 import pytest
 import scipy.fft
 
-from spectral_connectivity import Connectivity, minimum_phase_decomposition, transforms
-from spectral_connectivity import connectivity as connectivity_module
+from spectral_connectivity import Connectivity, _backend, minimum_phase_decomposition
 
 _CONVERSION_MESSAGE = (
     "Implicit conversion to a NumPy array is not allowed. "
@@ -244,13 +243,26 @@ class _DeviceNamespace:
 
 
 @pytest.fixture
-def xp(monkeypatch):
-    """Swap every package module's ``xp`` for the device emulation."""
+def xp(monkeypatch, backend_modules):
+    """Swap every package module's ``xp``, and the FFT, signal, and sparse
+    routines it took from ``_backend``, for the device emulation."""
     namespace = _DeviceNamespace(np, "cupy")
-    for module in (connectivity_module, transforms, minimum_phase_decomposition):
+    # Match routines by identity so aliases (``detrend as _backend_detrend``)
+    # are swapped too.
+    routines = {
+        id(getattr(_backend, name)): name
+        for name in _backend.__all__
+        if name not in ("xp", "ON_GPU")
+    }
+    for module in backend_modules:
         if module.xp is not np:
             pytest.skip("the emulation replaces the NumPy backend only")
         monkeypatch.setattr(module, "xp", namespace)
+        for attribute, value in list(vars(module).items()):
+            if id(value) in routines:
+                monkeypatch.setattr(
+                    module, attribute, _wrap_function(value, routines[id(value)])
+                )
     return namespace
 
 
@@ -323,23 +335,28 @@ def test_reassigned_coefficients_keep_the_time_coordinate_on_the_host(xp):
     assert connectivity.frequencies.shape == (5,)
 
 
+def test_backend_modules_include_every_array_module(backend_modules):
+    """Discovery finds the modules that compute with ``xp``."""
+    names = {module.__name__ for module in backend_modules}
+    assert {
+        "spectral_connectivity._array_utils",
+        "spectral_connectivity.connectivity",
+        "spectral_connectivity.minimum_phase_decomposition",
+        "spectral_connectivity.transforms",
+    } <= names
+
+
 def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch):
     """Directed measures on real-valued signals stay on the device.
 
     Their cross-spectra are conjugate-symmetric, so the Wilson factorization
-    iterates on the non-negative frequencies with real FFTs. CuPy supplies those
-    transforms from ``cupyx.scipy.fft``; route the module's SciPy imports
-    through the emulation so a host array reaching them fails here.
+    iterates on the non-negative frequencies with real FFTs, which the ``xp``
+    fixture routes through the emulation so a host array reaching them fails here.
     """
     rng = np.random.default_rng(4)
     coefficients = scipy.fft.fft(rng.standard_normal((1, 6, 3, 32, 3)), axis=-2)
     cross_spectrum = Connectivity(coefficients)._expectation_cross_spectral_matrix()
     assert minimum_phase_decomposition._is_conjugate_symmetric(cross_spectrum)
-
-    for name in ("fft", "ifft", "rfft", "irfft"):
-        monkeypatch.setattr(
-            minimum_phase_decomposition, name, _wrap_function(getattr(scipy.fft, name), name)
-        )
 
     device_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
     monkeypatch.undo()
@@ -347,3 +364,21 @@ def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch
 
     assert isinstance(device_granger, np.ndarray)
     np.testing.assert_array_equal(device_granger, host_granger)
+
+
+def test_multitaper_transform_runs_on_the_device(xp):
+    """The transform's FFT and detrend come from ``_backend``; the ``xp`` fixture
+    emulates them, so the whole Multitaper-to-Connectivity path stays on the
+    device."""
+    from spectral_connectivity import Multitaper, transforms
+
+    assert transforms.fft is not _backend.fft
+
+    rng = np.random.default_rng(6)
+    multitaper = Multitaper(
+        rng.standard_normal((256, 3, 2)), sampling_frequency=256, detrend_type="linear"
+    )
+    assert isinstance(multitaper.fft(), _DeviceArray)
+    coherence = Connectivity.from_multitaper(multitaper).coherence_magnitude()
+    assert isinstance(coherence, np.ndarray)  # public results come back to the host
+    assert np.isfinite(coherence[..., 0, 1]).all()

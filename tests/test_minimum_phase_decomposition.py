@@ -7,9 +7,9 @@ from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
 from spectral_connectivity import minimum_phase_decomposition as mpd_module
+from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.minimum_phase_decomposition import (
     _check_convergence,
-    _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
     _hermitian_square_root,
@@ -512,17 +512,6 @@ def test__check_convergence_tracks_extra_batch_dims():
     expected = np.ones((n_time, n_trials), dtype=bool)
     expected[0, 1] = False
     assert np.all(is_converged == expected)
-
-
-def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=complex)
-    test_array[1, ...] = [
-        [1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
-        [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j],
-    ]
-    expected_array = np.zeros((2, 4, 2), dtype=complex)
-    expected_array[1, ...] = test_array[1, ...].conj().transpose()
-    assert np.allclose(_conjugate_transpose(test_array), expected_array)
 
 
 def test__get_initial_conditions():
