@@ -1,6 +1,6 @@
 import warnings
 from contextlib import nullcontext
-from unittest.mock import PropertyMock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 import numpy as np
 import pytest
@@ -1850,6 +1850,23 @@ def test_phase_lag_index_moments_are_computed_lazily():
     cached_sign = reuse.__dict__["_imaginary_moment_cache"]["sign"]
     reuse.phase_lag_index()
     assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
+
+
+def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
+    """An error partway through the moment reduction must not leave partially
+    filled moments in the cache for a later measure to return."""
+    rng = np.random.default_rng(3)
+    shape = (1, 4, 3, 8, 3)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    expected = Connectivity(fc).debiased_squared_phase_lag_index()
+
+    conn = Connectivity(fc)
+    with monkeypatch.context() as patch:
+        patch.setattr(conn, "_expectation", Mock(side_effect=MemoryError))
+        with pytest.raises(MemoryError):
+            conn.phase_lag_index()
+    assert not conn.__dict__["_imaginary_moment_cache"]
+    np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
 
 
 def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(monkeypatch):

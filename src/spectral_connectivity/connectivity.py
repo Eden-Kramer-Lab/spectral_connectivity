@@ -3392,8 +3392,9 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
-            for key in missing:
-                cache[key] = xp.empty(result_shape, dtype=real_dtype)
+            # Filled here and cached only once complete, so an error partway
+            # through leaves no uninitialized moments behind.
+            moments = {key: xp.empty(result_shape, dtype=real_dtype) for key in missing}
 
             observation_frequency_elements = int(np.prod(coefficients.shape[:-1]))
             elements_per_source = max(1, observation_frequency_elements * n_signals)
@@ -3426,16 +3427,17 @@ class Connectivity:
                 local_diagonal = xp.arange(stop - start)
                 imaginary[..., local_diagonal, local_diagonal] = 0
 
-                for key in missing:
+                for key, reduced in moments.items():
                     moment = _IMAGINARY_MOMENTS[key](imaginary)
-                    cache[key][..., start:stop, start:] = self._expectation(moment)
+                    reduced[..., start:stop, start:] = self._expectation(moment)
 
             # Fill each tile's lower-left block (targets before ``start``).
             rows, columns = xp.tril_indices(n_signals, k=-1)
-            for key in missing:
-                cache[key][..., rows, columns] = (
-                    _IMAGINARY_MOMENT_PAIR_SYMMETRY[key] * cache[key][..., columns, rows]
+            for key, reduced in moments.items():
+                reduced[..., rows, columns] = (
+                    _IMAGINARY_MOMENT_PAIR_SYMMETRY[key] * reduced[..., columns, rows]
                 )
+            cache.update(moments)
         return tuple(cache[key] for key in keys)
 
     @_asnumpy
