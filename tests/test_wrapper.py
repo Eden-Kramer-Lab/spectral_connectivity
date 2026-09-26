@@ -8,15 +8,19 @@ import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
+from spectral_connectivity._input_handling import (
+    _reject_unmaterialized_backing,
+    _time_axis_from_dataarray,
+)
+from spectral_connectivity._measure_registry import _MeasureSpec
+from spectral_connectivity._provenance import (
+    _canonical_json,
+    _json_compatible,
+    _netcdf_provenance_value,
+)
 from spectral_connectivity.connectivity import _NON_MEASURE_METHODS, Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
-    _canonical_json,
-    _json_compatible,
-    _MeasureSpec,
-    _netcdf_provenance_value,
-    _reject_unmaterialized_backing,
-    _time_axis_from_dataarray,
     connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
@@ -786,10 +790,18 @@ def test_dataarray_non_scalar_start_time_is_rejected():
 
 def test_measure_spec_rejects_inconsistent_field_combinations():
     """Illegal capability combinations are unrepresentable, not merely unused."""
+    labels = {
+        "long_name": "Label",
+        "units": "1",
+        "value_range": (0.0, 1.0),
+        "interpretation": "Interpretation.",
+    }
     with pytest.raises(ValueError, match="transpose_output requires pairwise"):
-        _MeasureSpec("power", is_directed=True, transpose_output=True)
+        _MeasureSpec("power", **labels, is_directed=True, transpose_output=True)
     with pytest.raises(ValueError, match="requires a directional measure"):
-        _MeasureSpec("pairwise", transpose_output=True)
+        _MeasureSpec("pairwise", **labels, transpose_output=True)
+    with pytest.raises(TypeError, match="positional"):
+        _MeasureSpec("pairwise", *labels.values())  # labels must be named
 
 
 def test_dataarray_numeric_time_coordinate_sets_output_time():
@@ -1213,8 +1225,19 @@ def test_dataarray_dask_backing_is_rejected():
         dims=("sample", "channel"),
     )
     assert isinstance(data.data, _DaskProtocolArray)  # premise: backing kept lazy
-    with pytest.raises(TypeError, match="dask-backed"):
+    with pytest.raises(TypeError, match="multitaper_connectivity received a dask-backed"):
         multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
+
+
+def test_fourier_dataarray_dask_backing_is_rejected_by_name():
+    """The error names the function the user called."""
+    rng = np.random.default_rng(13)
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    data = xr.DataArray(
+        _DaskProtocolArray(coefficients), dims=("trial", "frequency", "channel")
+    )
+    with pytest.raises(TypeError, match="fourier_connectivity received a dask-backed"):
+        fourier_connectivity(data, method="coherence_magnitude")
 
 
 def test_dask_protocol_backing_is_rejected_without_optional_dependency():
@@ -1225,7 +1248,7 @@ def test_dask_protocol_backing_is_rejected_without_optional_dependency():
             return {}
 
     with pytest.raises(TypeError, match="dask-backed"):
-        _reject_unmaterialized_backing(LazyArray())
+        _reject_unmaterialized_backing(LazyArray(), "multitaper_connectivity")
 
 
 def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
@@ -3475,12 +3498,6 @@ def test_every_measure_has_a_long_name_and_units(method, units):
     assert result.attrs["long_name"]
 
 
-def test_measure_labels_cover_every_measure():
-    from spectral_connectivity.wrapper import _MEASURE_DESCRIPTIONS, _MEASURE_SPECS
-
-    assert set(_MEASURE_DESCRIPTIONS) == set(_MEASURE_SPECS)
-
-
 def test_large_array_input_attrs_are_summarized():
     """A large array attribute is recorded by shape and dtype, not copied into
     every variable's JSON (a 50,000-sample attr made a 12 MB file)."""
@@ -3546,3 +3563,57 @@ def test_signed_phase_measures_are_positive_when_source_leads(method):
     band = result.sel(frequency=slice(5, 20)).mean(["time", "frequency"])
     assert float(band.sel(source="a", target="b")) > 0.3
     assert float(band.sel(source="b", target="a")) < -0.3
+
+
+_WARNING_RNG = np.random.default_rng(41)
+_THREE_SIGNALS = _WARNING_RNG.standard_normal((256, 4, 3))
+_UNNAMED_TRIAL_AXIS = xr.DataArray(
+    _WARNING_RNG.standard_normal((256, 4, 2)), dims=("time", "drug_dose", "channel")
+)
+_TWO_SIGNAL_COEFFICIENTS = _WARNING_RNG.standard_normal(
+    (3, 8, 2)
+) + 1j * _WARNING_RNG.standard_normal((3, 8, 2))
+
+
+@pytest.mark.parametrize(
+    ("match", "call"),
+    [
+        pytest.param(
+            "squeeze=True but",
+            lambda: multitaper_connectivity(
+                _THREE_SIGNALS, 256, method="coherence_magnitude", squeeze=True
+            ),
+            id="squeeze_with_many_signals",
+        ),
+        pytest.param(
+            "squeeze=True is ignored",
+            lambda: multitaper_connectivity(
+                _THREE_SIGNALS,
+                256,
+                method=["coherence_magnitude", "phase_locking_value"],
+                squeeze=True,
+            ),
+            id="squeeze_with_many_measures",
+        ),
+        pytest.param(
+            "no frequency coordinate",
+            lambda: fourier_connectivity(
+                _TWO_SIGNAL_COEFFICIENTS, method="coherence_magnitude"
+            ),
+            id="fourier_without_frequencies",
+        ),
+        pytest.param(
+            "Assuming DataArray dimension",
+            lambda: multitaper_connectivity(_UNNAMED_TRIAL_AXIS, 256, method="power"),
+            id="dataarray_role_by_elimination",
+        ),
+    ],
+)
+def test_wrapper_warnings_point_at_the_caller(match, call):
+    """Warnings raised in the wrapper's helper modules name the user's call."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    matching = [w for w in record if match in str(w.message)]
+    assert matching, [str(w.message)[:80] for w in record]
+    assert {w.filename for w in matching} == {__file__}

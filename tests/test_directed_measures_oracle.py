@@ -35,8 +35,8 @@ import pytest
 from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity
+from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
-from spectral_connectivity.wrapper import _connectivity_result_to_xarray
 
 
 def _analytic_var(coefficients, noise_covariance, n_fft):

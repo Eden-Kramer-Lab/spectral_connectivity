@@ -14,8 +14,8 @@ import pytest
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, fourier_connectivity, multitaper_connectivity
+from spectral_connectivity._measure_registry import _MEASURE_SPECS
 from spectral_connectivity.wrapper import (
-    _MEASURE_SPECS,
     connectivity_to_xarray,
     frequency_band_reduce,
 )

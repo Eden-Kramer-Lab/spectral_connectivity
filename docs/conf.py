@@ -40,6 +40,9 @@ extensions = [
     "IPython.sphinxext.ipython_console_highlighting",  # syntax highlighting
 ]
 autosummary_generate = True
+# Document a module's __all__ when it has one, so re-exported public names (the
+# wrapper's UnsupportedMeasureError) appear on its page.
+autosummary_ignore_module_all = False
 add_module_names = False
 numpydoc_class_members_toctree = False
 
