@@ -514,17 +514,6 @@ def test__check_convergence_tracks_extra_batch_dims():
     assert np.all(is_converged == expected)
 
 
-def test__conjugate_transpose():
-    test_array = np.zeros((2, 2, 4), dtype=complex)
-    test_array[1, ...] = [
-        [1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j],
-        [1 - 2j, 3 - 4j, 5 - 6j, 7 - 8j],
-    ]
-    expected_array = np.zeros((2, 4, 2), dtype=complex)
-    expected_array[1, ...] = test_array[1, ...].conj().transpose()
-    assert np.allclose(_conjugate_transpose(test_array), expected_array)
-
-
 def test__get_initial_conditions():
     """The start is the upper-triangular Cholesky factor of the zero-lag matrix.
 
