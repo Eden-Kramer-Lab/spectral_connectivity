@@ -1,3 +1,6 @@
+import contextlib
+import warnings
+
 import numpy as np
 import pytest
 from scipy.fft import fft, ifft
@@ -230,14 +233,24 @@ def _spectra_with_one_duplicated_channel(real_signals):
     return cross_spectral_matrix
 
 
-# Whether the Cholesky start of a rank-deficient or NaN window raises (and so
-# warns) depends on the platform's LAPACK; these tests are about the iteration.
-_IGNORE_CHOLESKY_START_WARNING = pytest.mark.filterwarnings(
-    "ignore:Computing the initial conditions using the Cholesky failed:UserWarning"
-)
+@contextlib.contextmanager
+def _ignoring_cholesky_start_warning():
+    """Ignore the Cholesky-start warning, which depends on the platform's LAPACK.
+
+    Whether the Cholesky start of a rank-deficient or NaN window raises (and so
+    warns) differs between LAPACK builds; the tests using this are about the
+    iteration. A context manager rather than a ``filterwarnings`` mark, which
+    CI's ``-p no:warnings`` job does not register.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Computing the initial conditions using the Cholesky failed",
+            category=UserWarning,
+        )
+        yield
 
 
-@_IGNORE_CHOLESKY_START_WARNING
 @pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
 def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_signals):
     """One rank-deficient sub-spectrum must not NaN-poison the whole batch.
@@ -252,15 +265,15 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     cross_spectral_matrix = _spectra_with_one_duplicated_channel(real_signals)
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
-    with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
-        factor = minimum_phase_decomposition(cross_spectral_matrix)
+    with _ignoring_cholesky_start_warning():
+        with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
+            factor = minimum_phase_decomposition(cross_spectral_matrix)
+        silent = minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
     assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
     healthy = minimum_phase_decomposition(cross_spectral_matrix[[0, 2]])
     np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
-    np.testing.assert_array_equal(
-        minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False), factor
-    )
+    np.testing.assert_array_equal(silent, factor)
 
 
 def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
@@ -655,13 +668,15 @@ def test_is_conjugate_symmetric_accepts_mirrored_nan():
     assert not _is_conjugate_symmetric(spectrum)
 
 
-@_IGNORE_CHOLESKY_START_WARNING
 def test_nan_window_leaves_the_other_windows_unchanged():
     """A NaN window is NaN, and the healthy window matches its own factorization."""
     spectrum = _real_signal_spectrum()
     spectrum[1] = np.nan
 
-    with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
+    with (
+        _ignoring_cholesky_start_warning(),
+        pytest.warns(UserWarning, match="did not converge for 1 of 2"),
+    ):
         factor = minimum_phase_decomposition(spectrum)
 
     assert factor.shape == spectrum.shape
