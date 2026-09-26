@@ -130,6 +130,16 @@ def test_optional_capability_attributes_are_honored(coefficients):
     assert connectivity.time_bins_are_independent is False
 
 
+def test_real_valued_coefficients_are_rejected(coefficients):
+    """Real coefficients carry no phase, so the imaginary coherence and the
+    phase-lag indices would be exactly 0 rather than an error."""
+    transform = _MinimalTransform(coefficients.real, np.fft.fftfreq(N_FFT_SAMPLES))
+    with pytest.raises(ValueError, match="must be complex"):
+        Connectivity.from_transform(transform)
+    with pytest.raises(ValueError, match="must be complex"):
+        Connectivity(coefficients.real)
+
+
 class _DensityScaledTransform:
     """One unit-energy Hann-windowed FFT per trial, scaled as SpectralTransform
     documents for ``power()`` to be a power spectral density."""

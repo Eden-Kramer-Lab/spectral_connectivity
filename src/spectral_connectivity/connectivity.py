@@ -624,6 +624,15 @@ class Connectivity:
                 f"  fourier_coefficients = m.fft()"
             )
             raise ValueError(msg)
+        if not xp.iscomplexobj(value):
+            msg = (
+                f"fourier_coefficients must be complex, got dtype {value.dtype}. "
+                f"Real-valued coefficients carry no phase, so the imaginary "
+                f"coherence, the phase-lag indices and the coherence phase would "
+                f"all be exactly 0. Pass the complex FFT output (e.g. "
+                f"numpy.fft.fft), not its real part or magnitude."
+            )
+            raise ValueError(msg)
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
