@@ -121,7 +121,7 @@ def test_clear_cache_frees_intermediates_and_preserves_results():
         "directed_transfer_function",
     ]
     before = {measure: getattr(c, measure)() for measure in measures}
-    assert {"_minimum_phase_factor", "_transfer_function"} <= set(c.__dict__)
+    assert {"_minimum_phase_factor", "_var_model"} <= set(c.__dict__)
 
     c.clear_cache()
 

@@ -1,9 +1,12 @@
 """Utility functions for spectral_connectivity package."""
 
 import contextlib
+import functools
 import os
 import sys
 import warnings
+from pathlib import Path
+from types import FrameType
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 import numpy as np
@@ -50,6 +53,34 @@ def to_numpy(array: Any) -> NDArray[Any]:
     if callable(get) and hasattr(type(array), "__cuda_array_interface__"):
         return np.asarray(get())
     return np.asarray(array)
+
+
+# Frame filenames share __file__'s (unresolved) form, so compare against that.
+_PACKAGE_DIRECTORY = str(Path(__file__).parent) + os.sep
+# Standard-library frames the package's own decorators and cached properties
+# (functools.cached_property, functools.wraps, contextlib) insert between
+# package frames; they are never the user's call.
+_TRANSPARENT_FILES = frozenset({functools.__file__, contextlib.__file__})
+
+
+def stacklevel_outside_package() -> int:
+    """``stacklevel`` that attributes a warning to the first caller outside the package.
+
+    Pass it directly as ``warnings.warn(..., stacklevel=stacklevel_outside_package())``
+    in the function that warns. Unlike a hand-counted level, it stays correct
+    however many package frames (measure, helpers, kernels, and the standard
+    library machinery of cached properties and decorators) sit between the
+    user's call and the warning.
+    """
+    frame: FrameType | None = sys._getframe(1)  # the function calling warnings.warn
+    level = 1
+    while frame is not None and (
+        frame.f_code.co_filename.startswith(_PACKAGE_DIRECTORY)
+        or frame.f_code.co_filename in _TRANSPARENT_FILES
+    ):
+        frame = frame.f_back
+        level += 1
+    return level
 
 
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:

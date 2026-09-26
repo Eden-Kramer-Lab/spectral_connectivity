@@ -327,6 +327,15 @@ directly with results from 2.x.
 
 ### Fixed
 
+- Warnings from `Connectivity` measures, the spectral Granger kernels, and the
+  Wilson factorization now name the user's line. Several pointed inside the
+  package instead (e.g. `coherence_magnitude`'s single-observation warning, and
+  every Granger NaN-pair warning reached through `multitaper_connectivity`),
+  which also defeated per-module warning filters.
+- `global_coherence` is reproducible run to run on the CPU backend when it
+  decomposes bins one at a time (many signals and estimates). SciPy's `svds`
+  started from a random vector, so the values varied at rounding level and the
+  component vectors' phase was arbitrary between runs.
 - The documentation said every lower-level `Connectivity` result uses
   `result[..., i, j]` for `j -> i`. That holds for the Granger and
   directed-transfer-function families only; `directed_phase_lag_index`,
