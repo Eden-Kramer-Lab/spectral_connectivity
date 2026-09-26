@@ -97,3 +97,26 @@ def test__reshape():
     )
     expected_shape = (n_time_samples, n_fft_samples, n_signals, n_trials * n_tapers)
     assert np.allclose(_reshape(fourier_coefficients).shape, expected_shape)
+
+
+def test_global_coherence_weighted_per_bin_path_matches_batched(monkeypatch):
+    """Observation weights give the same components on the per-bin path, which
+    weights one bin at a time, as on the batched path."""
+    from spectral_connectivity import Connectivity, _multivariate
+
+    rng = np.random.default_rng(13)
+    shape = (2, 5, 3, 8, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.2, 1.0, (*shape[:-1], 1))
+
+    batched, _ = Connectivity(coefficients, observation_weights=weights).global_coherence(
+        max_rank=2
+    )
+    monkeypatch.setattr(_multivariate, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    per_bin, _ = Connectivity(coefficients, observation_weights=weights).global_coherence(
+        max_rank=2
+    )
+    unweighted, _ = Connectivity(coefficients).global_coherence(max_rank=2)
+
+    np.testing.assert_allclose(per_bin, batched, rtol=1e-10)
+    assert not np.allclose(per_bin, unweighted)  # the weights took effect
