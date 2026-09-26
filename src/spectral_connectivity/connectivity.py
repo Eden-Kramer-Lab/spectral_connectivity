@@ -1164,15 +1164,23 @@ class Connectivity:
             self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
 
-    @property
-    def _pairwise_power_scale(self) -> NDArray[np.floating]:
-        """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals).
+    def _nonnegative_pairwise_power_scale(self) -> NDArray[np.floating]:
+        """``sqrt(P_i P_j)`` at the non-negative frequencies.
 
-        Not cached: it is as large as the cross-spectral matrix but only an outer
-        product of ``sqrt(_power)``, which also cannot underflow or overflow.
+        Shape (..., n_nonnegative_frequencies, n_signals, n_signals). Built only
+        for the bins the normalized measures report, and recomputed per call: it
+        costs one outer product of ``sqrt(_power)``, which also cannot underflow
+        or overflow.
         """
-        root_power = xp.sqrt(self._power)
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        root_power = xp.sqrt(self._power[..., :n_nonnegative, :])
         return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
+
+    def _nonnegative_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+        """Expected cross-spectral matrix at the non-negative frequencies (a view)."""
+        cross_spectral_matrix = self._expectation_cross_spectral_matrix()
+        n_nonnegative = self._nonnegative_frequency_count(cross_spectral_matrix.shape[-3])
+        return cross_spectral_matrix[..., :n_nonnegative, :, :]
 
     @property
     def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -1228,6 +1236,8 @@ class Connectivity:
             ``phase_locking_value`` passes unit-normalized coefficients so the
             same batched matmul yields its normalized cross-spectrum, and
             ``_subset_cross_spectral_matrix`` passes a pair axis as ``batch``.
+            The frequency axis may hold only the leading bins (e.g. the
+            non-negative frequencies); observation weights are sliced to match.
 
         Returns
         -------
@@ -1267,7 +1277,9 @@ class Connectivity:
         if self._observation_weights is not None:
             # Weights vary over observations and frequency, not the extra batch.
             weights = xp.transpose(
-                self._observation_weights[..., 0],
+                self._observation_weights[
+                    ..., : fourier_coefficients.shape[frequency_axis], 0
+                ],
                 [*kept_axes, frequency_axis, *average_axes],
             ).reshape(
                 (
@@ -1924,7 +1936,6 @@ class Connectivity:
         """
         return self._coherency()
 
-    @_non_negative_frequencies(axis=-3)
     def _coherency(self) -> NDArray[np.complexfloating]:
         """Device-native complex coherency (see the public ``coherency``).
 
@@ -1935,8 +1946,8 @@ class Connectivity:
         """
         self._warn_single_observation_degenerate("coherency")
         complex_coherency = _divide_masking_zero_denominator(
-            self._expectation_cross_spectral_matrix(),
-            self._pairwise_power_scale,
+            self._nonnegative_cross_spectral_matrix(),
+            self._nonnegative_pairwise_power_scale(),
             "Some signals have (near-)zero power, so coherency is undefined "
             "for those pairs and is returned as NaN. This usually indicates "
             "a flat/dead channel or all-zero input.",
@@ -2036,7 +2047,6 @@ class Connectivity:
         return clipped
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def imaginary_coherence(self) -> NDArray[np.floating]:
         """Return the normalized imaginary component of the cross-spectrum.
 
@@ -2087,8 +2097,8 @@ class Connectivity:
         """
         imaginary_coh = xp.abs(
             _divide_masking_zero_denominator(
-                self._expectation_cross_spectral_matrix().imag,
-                self._pairwise_power_scale,
+                self._nonnegative_cross_spectral_matrix().imag,
+                self._nonnegative_pairwise_power_scale(),
                 "Some signals have (near-)zero power, so imaginary coherence is "
                 "undefined for those pairs and is returned as NaN. This usually "
                 "indicates a flat/dead channel or all-zero input.",
@@ -3185,7 +3195,6 @@ class Connectivity:
 
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
-    @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
@@ -3204,9 +3213,12 @@ class Connectivity:
         # would let float32 rounding push the unit magnitudes -- and thus the
         # averaged PLV/PPC -- slightly past 1. copy=False avoids a copy when the
         # dtype already matches (the division below allocates a fresh array).
-        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients.astype(
-            self._dtype, copy=False
-        )
+        # Only the non-negative frequencies are reported, so only those are
+        # normalized and reduced.
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
+            ..., :n_nonnegative, :
+        ].astype(self._dtype, copy=False)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -3356,8 +3368,7 @@ class Connectivity:
         no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
         """
         tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
-        n_frequencies = mean_absolute.shape[-3]
-        power_scale = self._pairwise_power_scale[..., :n_frequencies, :, :]
+        power_scale = self._nonnegative_pairwise_power_scale()
         no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * power_scale
         return no_lag
 
