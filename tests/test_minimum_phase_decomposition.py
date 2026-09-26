@@ -50,9 +50,11 @@ def _lagged_signals(n_fft, rng, dtype=float, n_windows=2, n_signals=3):
     return signals
 
 
-def _real_signal_spectrum(n_fft=16, seed=0):
-    """Exactly conjugate-symmetric cross-spectrum (2 windows, 3 signals) of real signals."""
-    return _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(seed)))
+def _real_signal_spectrum(n_fft=16, seed=0, n_signals=3):
+    """Exactly conjugate-symmetric cross-spectrum (2 windows) of real signals."""
+    return _cross_spectrum_of(
+        _lagged_signals(n_fft, np.random.default_rng(seed), n_signals=n_signals)
+    )
 
 
 def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
@@ -134,10 +136,10 @@ def test_solve_isolating_singular_isolates_bad_units():
     where CuPy returns NaN instead of raising). ``_solve_isolating_singular``
     resolves only the singular unit to NaN and solves the others normally.
     """
-    identity = np.eye(2)
-    good = np.array([[2.0, 0.0], [0.0, 3.0]])
-    singular = np.array([[1.0, 2.0], [2.0, 4.0]])  # rank 1
-    rhs = np.eye(2)
+    identity = np.eye(3)
+    good = np.diag([2.0, 3.0, 4.0])
+    singular = np.outer([1.0, 2.0, 3.0], [1.0, 2.0, 4.0])  # rank 1
+    rhs = np.eye(3)
     coefficient = np.stack([good, singular, good])
     right_hand_side = np.stack([rhs, rhs, rhs])
 
@@ -149,6 +151,33 @@ def test_solve_isolating_singular_isolates_bad_units():
     assert np.allclose(solved[0], np.linalg.inv(good))
     assert np.isnan(solved[1]).all()
     assert np.allclose(solved[2], np.linalg.inv(good))
+
+
+def test_solve_2x2_marks_exactly_singular_and_non_finite_systems_nan():
+    """The closed-form 2x2 solve is NaN exactly where ``det(A) == 0`` or ``A``
+    is non-finite, without NumPy warnings; a near-singular system is solved."""
+    good = np.array([[2.0, 1j], [-1j, 3.0]])
+    near_singular = np.array([[1.0, 1.0], [1.0, 1.0 + 1e-12]], dtype=complex)
+    matrices = np.stack(
+        [
+            good,
+            np.array([[1.0, 2.0], [2.0, 4.0]], dtype=complex),  # det == 0
+            np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=complex),
+            np.array([[np.inf, 0.0], [0.0, 1.0]], dtype=complex),
+            near_singular,
+        ]
+    )
+    right_hand_side = np.broadcast_to(np.eye(2, dtype=complex), matrices.shape)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        solution = _solve_isolating_singular(
+            matrices, right_hand_side, np.eye(2, dtype=complex)
+        )
+
+    np.testing.assert_allclose(solution[0], np.linalg.inv(good))
+    assert np.isnan(solution[1:4]).all()
+    np.testing.assert_allclose(solution[4], np.linalg.inv(near_singular), rtol=1e-4)
 
 
 def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
@@ -197,6 +226,35 @@ def test_near_collinear_channels_converge():
     reference_error = minimum_phase_reconstruction_error(_cross_spectrum_of(signals))
     np.testing.assert_array_less(
         minimum_phase_reconstruction_error(spectrum, factor), 2 * reference_error
+    )
+
+
+@pytest.mark.parametrize("n_signals", [2, 3])
+def test_solve_isolating_singular_matches_lapack(n_signals):
+    """2x2 systems take a closed-form path; both paths match numpy.linalg.solve.
+
+    Includes a singular matrix, which must come back as NaN, alongside
+    well-conditioned and ill-conditioned complex ones, which must not.
+    """
+    rng = np.random.default_rng(3)
+    shape = (5, 7, n_signals, n_signals)
+    matrices = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    right_hand_side = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    matrices[1, 2] = np.outer(np.arange(1, n_signals + 1), np.ones(n_signals))  # rank 1
+    matrices[3, 4] = np.eye(n_signals) + 1e-9 * matrices[3, 4]  # ill-conditioned scaling
+    matrices[3, 4, 0] *= 1e-6
+    identity = np.eye(n_signals, dtype=complex)
+
+    solution = _solve_isolating_singular(matrices, right_hand_side, identity)
+
+    singular = np.zeros(shape[:2], dtype=bool)
+    singular[1, 2] = True
+    assert np.isnan(solution[singular]).all()
+    np.testing.assert_allclose(
+        solution[~singular],
+        np.linalg.solve(matrices[~singular], right_hand_side[~singular]),
+        rtol=1e-8,
+        atol=0,
     )
 
 
@@ -668,16 +726,20 @@ def test_is_conjugate_symmetric_accepts_mirrored_nan():
     assert not _is_conjugate_symmetric(spectrum)
 
 
-def test_nan_window_leaves_the_other_windows_unchanged():
-    """A NaN window is NaN, and the healthy window matches its own factorization."""
-    spectrum = _real_signal_spectrum()
+@pytest.mark.parametrize("n_signals", [2, 3])
+def test_nan_window_leaves_the_other_windows_unchanged(n_signals):
+    """A NaN window is NaN, and the healthy window matches its own factorization.
+
+    Two signals take the closed-form 2x2 solve, which must not emit NumPy
+    ``RuntimeWarning`` for the NaN window.
+    """
+    spectrum = _real_signal_spectrum(n_signals=n_signals)
     spectrum[1] = np.nan
 
-    with (
-        _ignoring_cholesky_start_warning(),
-        pytest.warns(UserWarning, match="did not converge for 1 of 2"),
-    ):
-        factor = minimum_phase_decomposition(spectrum)
+    with _ignoring_cholesky_start_warning():
+        warnings.simplefilter("error", RuntimeWarning)
+        with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
+            factor = minimum_phase_decomposition(spectrum)
 
     assert factor.shape == spectrum.shape
     assert np.isnan(factor[1]).all()

@@ -450,6 +450,49 @@ def _singular_matrix_mask(
     return (~is_finite) | (smallest <= tolerance)
 
 
+def _solve_2x2(
+    coefficient_matrix: NDArray[np.complexfloating],
+    right_hand_side: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """Closed-form solve of 2x2 systems; singular or non-finite ones are NaN.
+
+    Every 2-signal Wilson factorization (e.g. pairwise and subset spectral
+    Granger) solves 2x2 systems, where LAPACK's per-matrix overhead dominates.
+    Cramer's rule avoids it and, being backward stable for 2x2 systems, agrees
+    with ``linalg.solve`` to within rounding amplified by the condition number.
+
+    Only an exactly zero determinant counts as singular: a near-singular system
+    is solved like any other, whatever else is in the batch.
+
+    Parameters
+    ----------
+    coefficient_matrix : NDArray[complexfloating], shape (..., 2, 2)
+        Batched left-hand-side matrices ``A`` in ``A x = B``.
+    right_hand_side : NDArray[complexfloating], shape (..., 2, n_columns)
+        Batched right-hand sides ``B``.
+
+    Returns
+    -------
+    NDArray[complexfloating], same shape as ``right_hand_side``
+        Solution ``x``, with NaN where ``det(A) == 0`` or ``A`` is non-finite.
+    """
+    a, b = coefficient_matrix[..., 0, 0, None], coefficient_matrix[..., 0, 1, None]
+    c, d = coefficient_matrix[..., 1, 0, None], coefficient_matrix[..., 1, 1, None]
+    first_row, second_row = right_hand_side[..., 0, :], right_hand_side[..., 1, :]
+    # Any non-finite entry of A makes the determinant non-finite, so checking
+    # the determinant alone catches non-finite A. Such systems (and exactly
+    # singular ones, divided by 1 instead) are replaced by NaN at the end, so
+    # NumPy need not warn about the invalid values they produce on the way.
+    with np.errstate(invalid="ignore", over="ignore"):
+        determinant = (a * d - b * c)[..., xp.newaxis]
+        singular = ~xp.isfinite(determinant) | (determinant == 0)
+        solution = xp.stack(
+            (d * first_row - b * second_row, a * second_row - c * first_row), axis=-2
+        )
+        solution /= xp.where(singular, 1, determinant)
+    return xp.where(singular, xp.nan, solution)
+
+
 def _solve_isolating_singular(
     coefficient_matrix: NDArray[np.complexfloating],
     right_hand_side: NDArray[np.complexfloating],
@@ -465,7 +508,8 @@ def _solve_isolating_singular(
     sub-matrices resolve to NaN while the remaining ones are solved normally, so
     a single rank-deficient window (e.g. duplicated channels) does not poison
     the entire batch, and exactly singular sub-matrices resolve to NaN on both
-    backends.
+    backends. 2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats
+    only an exactly zero determinant as singular.
 
     Parameters
     ----------
@@ -481,6 +525,8 @@ def _solve_isolating_singular(
     NDArray[complexfloating], same shape as ``right_hand_side``
         Solution ``x``, with NaN for singular/non-finite ``A``.
     """
+    if coefficient_matrix.shape[-1] == 2:
+        return _solve_2x2(coefficient_matrix, right_hand_side)
     try:
         return xp.linalg.solve(coefficient_matrix, right_hand_side)
     except xp.linalg.LinAlgError:

@@ -328,7 +328,7 @@ def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch
 
     Their cross-spectra are conjugate-symmetric, so the Wilson factorization
     iterates on the non-negative frequencies with real FFTs. CuPy supplies those
-    transforms from ``cupyx.scipy.fft``; route the modules' SciPy imports
+    transforms from ``cupyx.scipy.fft``; route the module's SciPy imports
     through the emulation so a host array reaching them fails here.
     """
     rng = np.random.default_rng(4)
@@ -336,12 +336,10 @@ def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch
     cross_spectrum = Connectivity(coefficients)._expectation_cross_spectral_matrix()
     assert minimum_phase_decomposition._is_conjugate_symmetric(cross_spectrum)
 
-    for module, names in (
-        (minimum_phase_decomposition, ("fft", "ifft", "rfft", "irfft")),
-        (connectivity_module, ("ifft",)),
-    ):
-        for name in names:
-            monkeypatch.setattr(module, name, _wrap_function(getattr(scipy.fft, name), name))
+    for name in ("fft", "ifft", "rfft", "irfft"):
+        monkeypatch.setattr(
+            minimum_phase_decomposition, name, _wrap_function(getattr(scipy.fft, name), name)
+        )
 
     device_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
     monkeypatch.undo()
