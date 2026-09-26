@@ -250,9 +250,9 @@ def test_real_valued_coefficients_are_rejected(coefficients):
     """Real coefficients carry no phase, so the imaginary coherence and the
     phase-lag indices would be exactly 0 rather than an error."""
     transform = _MinimalTransform(coefficients.real, np.fft.fftfreq(N_FFT_SAMPLES))
-    with pytest.raises(ValueError, match="must be complex"):
+    with pytest.raises(TypeError, match="must be complex"):
         Connectivity.from_transform(transform)
-    with pytest.raises(ValueError, match="must be complex"):
+    with pytest.raises(TypeError, match="must be complex"):
         Connectivity(coefficients.real)
 
 

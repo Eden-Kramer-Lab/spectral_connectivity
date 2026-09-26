@@ -3274,9 +3274,6 @@ def fourier_connectivity(
         frequency_dim=frequency_dim,
         signal_dim=signal_dim,
     )
-    if getattr(getattr(coefficient_data, "dtype", None), "kind", None) != "c":
-        msg = "fourier_coefficients must be complex-valued."
-        raise TypeError(msg)
     if time is not None and not _is_real_numeric_dtype(np.asarray(time).dtype):
         msg = (
             "time must contain numeric elapsed seconds (window centers); "

@@ -703,7 +703,7 @@ class Connectivity:
                 f"all be exactly 0. Pass the complex FFT output (e.g. "
                 f"numpy.fft.fft), not its real part or magnitude."
             )
-            raise ValueError(msg)
+            raise TypeError(msg)
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
