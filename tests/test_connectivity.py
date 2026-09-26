@@ -1,6 +1,6 @@
 import warnings
 from contextlib import nullcontext
-from unittest.mock import Mock, PropertyMock, patch
+from unittest.mock import PropertyMock, patch
 
 import numpy as np
 import pytest
@@ -21,6 +21,14 @@ from spectral_connectivity.connectivity import (
     _squared_magnitude,
     _total_inflow,
     _total_outflow,
+)
+
+PHASE_LAG_MEASURES = (
+    "phase_lag_index",
+    "weighted_phase_lag_index",
+    "directed_phase_lag_index",
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
 )
 
 # Scalar reference implementations pinning the vectorized significant-frequency
@@ -1852,7 +1860,7 @@ def test_phase_lag_index_moments_are_computed_lazily():
     assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
 
 
-def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
+def test_failed_phase_lag_reduction_caches_nothing():
     """An error partway through the moment reduction must not leave partially
     filled moments in the cache for a later measure to return."""
     rng = np.random.default_rng(3)
@@ -1861,10 +1869,11 @@ def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
     expected = Connectivity(fc).debiased_squared_phase_lag_index()
 
     conn = Connectivity(fc)
-    with monkeypatch.context() as patch:
-        patch.setattr(conn, "_expectation", Mock(side_effect=MemoryError))
-        with pytest.raises(MemoryError):
-            conn.phase_lag_index()
+    with (
+        patch.object(conn, "_expectation", side_effect=MemoryError),
+        pytest.raises(MemoryError),
+    ):
+        conn.phase_lag_index()
     assert not conn.__dict__["_imaginary_moment_cache"]
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
 
@@ -1881,15 +1890,8 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
     rng = np.random.default_rng(19)
     shape = (2, 5, 3, 12, 5)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    measures = (
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "directed_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    )
     expected_conn = Connectivity(coefficients)
-    expected = tuple(getattr(expected_conn, measure)() for measure in measures)
+    expected = tuple(getattr(expected_conn, measure)() for measure in PHASE_LAG_MEASURES)
 
     # Size the workspace for ``sources_per_tile`` source signals per tile (it
     # holds the non-negative bins of every observation for each source-target
@@ -1909,10 +1911,10 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
         new_callable=PropertyMock,
         side_effect=AssertionError("full outer product was materialized"),
     ):
-        actual = tuple(getattr(tiled, measure)() for measure in measures)
+        actual = tuple(getattr(tiled, measure)() for measure in PHASE_LAG_MEASURES)
 
     for measure, actual_measure, expected_measure in zip(
-        measures, actual, expected, strict=True
+        PHASE_LAG_MEASURES, actual, expected, strict=True
     ):
         np.testing.assert_array_equal(actual_measure, expected_measure, err_msg=measure)
 
@@ -2864,15 +2866,21 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
     np.testing.assert_allclose(connectivity._expectation_cross_spectral_matrix(), expected)
 
 
+def _weighted_two_sided_spectrum(n_fft_samples, seed):
+    """Random two-sided coefficients (1, 3, 2, n_fft_samples, 3), positive
+    observation weights, and the non-negative bin count."""
+    rng = np.random.default_rng(seed)
+    shape = (1, 3, 2, n_fft_samples, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
+    return coefficients, weights, n_fft_samples // 2 + 1
+
+
 @pytest.mark.parametrize("n_fft_samples", [8, 9])
 def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
     """The phase-lag moments reduce only the non-negative bins of a two-sided
     spectrum, so the observation weights must be restricted to the same bins."""
-    rng = np.random.default_rng(11)
-    shape = (1, 3, 2, n_fft_samples, 3)
-    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
-    n_nonnegative = n_fft_samples // 2 + 1
+    coefficients, weights, n_nonnegative = _weighted_two_sided_spectrum(n_fft_samples, 11)
 
     imaginary = (
         coefficients[..., :n_nonnegative, :, np.newaxis]
@@ -2883,7 +2891,7 @@ def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
     def weighted_mean(values):
         return np.sum(values * weight, axis=(1, 2)) / np.sum(weight, axis=(1, 2))
 
-    off_diagonal = ~np.eye(shape[-1], dtype=bool)
+    off_diagonal = ~np.eye(coefficients.shape[-1], dtype=bool)
     weighted = Connectivity(coefficients, observation_weights=weights)
     np.testing.assert_allclose(
         weighted.phase_lag_index()[..., off_diagonal],
@@ -2898,13 +2906,7 @@ def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
     # unweighted result.
     uniform = Connectivity(coefficients, observation_weights=np.ones_like(weights))
     unweighted = Connectivity(coefficients)
-    for measure in (
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "directed_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    ):
+    for measure in PHASE_LAG_MEASURES:
         result = getattr(uniform, measure)()
         assert result.shape[-3] == n_nonnegative, measure
         np.testing.assert_allclose(result, getattr(unweighted, measure)(), err_msg=measure)
@@ -2913,26 +2915,15 @@ def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
 @pytest.mark.parametrize("n_fft_samples", [8, 9])
 def test_weighted_phase_locking_value_on_two_sided_spectrum(n_fft_samples):
     """PLV normalizes only the non-negative bins, so the weights it applies
-    must be those bins' weights."""
-    rng = np.random.default_rng(12)
-    shape = (1, 3, 2, n_fft_samples, 3)
-    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
-    n_nonnegative = n_fft_samples // 2 + 1
-
-    unit = coefficients[..., :n_nonnegative, :]
-    unit = unit / np.abs(unit)
-    weight = weights[..., :n_nonnegative, :, np.newaxis]
-    expected = np.abs(
-        np.sum(
-            unit[..., :, np.newaxis] * np.conjugate(unit[..., np.newaxis, :]) * weight,
-            axis=(1, 2),
-        )
-        / np.sum(weight, axis=(1, 2))
-    )
+    must be those bins' weights. The reference weights all bins, then trims."""
+    coefficients, weights, n_nonnegative = _weighted_two_sided_spectrum(n_fft_samples, 12)
 
     connectivity = Connectivity(coefficients, observation_weights=weights)
-    np.testing.assert_allclose(connectivity.phase_locking_value(), expected)
+    phase_locking_value = connectivity.phase_locking_value()
+    assert phase_locking_value.shape[-3] == n_nonnegative
+    np.testing.assert_allclose(
+        phase_locking_value, np.abs(_reference_normalized_cross_spectrum(connectivity))
+    )
 
 
 @pytest.mark.parametrize(
@@ -3337,16 +3328,7 @@ def test_directed_measures_are_scale_invariant(measure):
     np.testing.assert_allclose(scaled[finite], base[finite], rtol=1e-6, atol=1e-9)
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "phase_lag_index",
-        "weighted_phase_lag_index",
-        "directed_phase_lag_index",
-        "debiased_squared_phase_lag_index",
-        "debiased_squared_weighted_phase_lag_index",
-    ],
-)
+@pytest.mark.parametrize("measure", PHASE_LAG_MEASURES)
 @pytest.mark.parametrize("scale", [1e-9, 1e9])
 def test_phase_lag_family_is_scale_invariant(measure, scale):
     """The phase-lag measures are ratios of imaginary cross-spectrum moments,
