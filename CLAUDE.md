@@ -16,7 +16,7 @@ The package follows a modular design with three main components:
 
 ### Key Design Patterns
 
-- **GPU/CPU Abstraction**: Uses `xp` namespace (numpy or cupy) controlled by `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable. `_backend.py` selects it once at import; modules take `xp`, the routines that differ by backend (`fft`, `ifft`, `rfft`, `irfft`, `fftfreq`, `next_fast_len`, `detrend`, `svds`), and the `ON_GPU` flag from there rather than importing cupy/cupyx or those SciPy routines themselves or re-reading the environment variable. Host-side NumPy (`np`) and helpers such as `scipy.signal.windows` are imported normally. Device-emulation tests swap only `xp` in every module that binds it (the `backend_modules` fixture in `tests/conftest.py` discovers them); the backend's FFT and signal routines are not emulated unless a test patches them
+- **GPU/CPU Abstraction**: Uses `xp` namespace (numpy or cupy) controlled by `SPECTRAL_CONNECTIVITY_ENABLE_GPU` environment variable. `_backend.py` selects the backend once at import; take `xp`, the backend-specific FFT/signal/sparse routines, and `ON_GPU` from it rather than importing cupy/cupyx or those SciPy routines directly or re-reading the environment variable. Device-emulation tests swap `xp` and those routines in every module found by the `backend_modules` fixture (`tests/conftest.py`)
 - **Caching**: Frequently computed quantities like cross-spectral matrices are cached for performance
 - **Expectation Framework**: Uses the `EXPECTATION_AXES` dictionary to handle averaging over different dimensions (time, trials, tapers)
 
