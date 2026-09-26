@@ -90,15 +90,12 @@ datetime and timedelta **signal labels** remain valid.
 A dask-backed DataArray is rejected; materialize it first with
 `DataArray.compute()` (or `.load()`) and pass the result.
 
-For directed measures, `result.sel(source="a", target="b")` means influence
-from `a` to `b` (for phase measures, positive means `a` leads `b`). The
-directed-transfer-function family is available by name as an opt-in method.
-The lower-level `Connectivity` methods return plain arrays in one of two
-orders: for the Granger and directed-transfer-function families
-`result[..., i, j]` is `j -> i`, while for `directed_phase_lag_index`,
-`phase_slope_index`, `delay`, and `group_delay` a positive `result[..., i, j]`
-means `i` leads `j`. `list_measures()` reports each measure's
-`array_orientation`, value range, units, and interpretation; see
+For directed measures, `result.sel(source="a", target="b")` is the influence
+from `a` to `b`, and the lower-level `Connectivity` arrays use the same order:
+`result[..., i, j]` is `i -> j`. For lead/lag measures a positive value means
+the source leads. The directed-transfer-function family is available by name
+as an opt-in method. `list_measures()` reports each measure's value range,
+units, and interpretation; see
 [Connectivity Metric Ranges](CONNECTIVITY_METRIC_RANGES.md).
 
 For finer control, use the `Multitaper` and `Connectivity` classes directly:

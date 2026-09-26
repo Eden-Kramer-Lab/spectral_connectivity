@@ -52,8 +52,8 @@ valid `method`, with what its values mean.
 ... )
 >>> granger.value_range, granger.units, granger.dims
 ((0.0, inf), '1', ('time', 'frequency', 'source', 'target'))
->>> granger.is_directed, granger.array_orientation
-(True, 'target_source')
+>>> granger.is_directed
+True
 >>> [m.name for m in list_measures(directed=True)][:3]
 ['pairwise_spectral_granger_prediction', 'directed_phase_lag_index', 'subset_pairwise_spectral_granger_prediction']
 
@@ -80,14 +80,11 @@ True
 
 ```
 
-The lower-level `Connectivity` methods return plain arrays in **two different
-orders**; `MeasureInfo.array_orientation` names each measure's:
-
-- `"target_source"` (Granger and directed-transfer-function families):
-  `result[..., i, j]` is `j -> i`.
-- `"source_target"` (`directed_phase_lag_index`, `phase_slope_index`,
-  `delay`, `group_delay`): positive `result[..., i, j]` (above 0.5 for the
-  directed phase lag index) means `i` leads `j`.
+The lower-level `Connectivity` methods return plain arrays in the same order:
+`result[..., i, j]` is `i -> j` for every directed measure, and for
+`directed_phase_lag_index`, `phase_slope_index`, `delay`, and `group_delay` a
+positive `result[..., i, j]` (above 0.5 for the directed phase lag index)
+means `i` leads `j`.
 
 Prefer the wrapper's labeled results so you never index these by hand.
 
