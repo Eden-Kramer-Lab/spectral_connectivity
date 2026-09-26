@@ -228,14 +228,11 @@ directly with results from 2.x.
 ### Changed
 
 - The array backend is selected once, in `spectral_connectivity._backend`,
-  instead of separately in each module. An unrecognized
-  `SPECTRAL_CONNECTIVITY_ENABLE_GPU` value now warns once at import rather than
-  once per module (and again only when `get_compute_backend()` reports the
-  requested setting), and the "Using CPU/GPU" message is logged once by the
-  `spectral_connectivity._backend` logger. `Multitaper`'s `fft_workers` follows
-  the imported backend rather than re-reading the variable, which could change
-  after import and either drop the requested threads or pass `workers` to
-  CuPy's FFT.
+  instead of in each module: an unrecognized `SPECTRAL_CONNECTIVITY_ENABLE_GPU`
+  value warns, and the "Using CPU/GPU" message is logged, once at import rather
+  than once per module. `Multitaper`'s `fft_workers` and the xarray `backend`
+  attribute follow the imported backend instead of re-reading the variable
+  after import.
 - xarray results carry `long_name` and `units` on every variable (spectral
   densities in `(<input units>)^2/Hz` when the input states its units),
   `band_lower`/`band_upper` coordinates after band reduction, and an input
