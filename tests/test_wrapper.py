@@ -8,7 +8,7 @@ import scipy.fft
 import xarray as xr
 
 from spectral_connectivity import MorletWavelet, Multitaper, Welch
-from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.connectivity import _NON_MEASURE_METHODS, Connectivity
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     _canonical_json,
@@ -1628,12 +1628,7 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
 
 @pytest.mark.parametrize(
     "name",
-    [
-        "jackknife",
-        "minimum_phase_reconstruction_error",
-        "from_transform",
-        "_clear_cached_intermediates",
-    ],
+    [*sorted(_NON_MEASURE_METHODS), "from_transform", "_expectation_cross_spectral_matrix"],
 )
 def test_non_measure_callables_are_rejected_as_unknown_measures(name):
     rng = np.random.default_rng(12)
@@ -3126,6 +3121,16 @@ def test_fourier_connectivity_rejects_fftshifted_coordinate():
         fourier_connectivity(
             coefficients,
             frequencies=np.fft.fftshift(np.fft.fftfreq(8, d=0.01)),
+            method="coherence_magnitude",
+        )
+
+
+@pytest.mark.parametrize("value", ["False", 0])
+def test_fourier_connectivity_rejects_a_non_bool_sidedness(value):
+    with pytest.raises(TypeError, match="is_one_sided must be a bool"):
+        fourier_connectivity(
+            np.ones((3, 8, 2), dtype=np.complex128),
+            is_one_sided=value,
             method="coherence_magnitude",
         )
 

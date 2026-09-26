@@ -51,6 +51,10 @@ directly with results from 2.x.
   available unchanged. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
+- `Connectivity.clear_cache()` releases the intermediates cached for reuse
+  across measures (cross-spectral matrix, power, phase-lag moments, and the
+  minimum-phase factorization with the Granger quantities derived from it) so
+  memory-constrained runs can keep an instance without holding them.
 - `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
   relative reconstruction error of the Wilson factorization per sub-spectrum, so
   callers can check whether a cross-spectrum is resolved finely enough in
@@ -67,6 +71,26 @@ directly with results from 2.x.
   adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
   Connectivity expectations consume the local weights directly, and xarray
   results carry the `valid_time_frequency` mask.
+- `SpectralTransform`, a public, runtime-checkable `typing.Protocol` for the
+  transforms `Connectivity.from_transform` and `Connectivity.from_multitaper`
+  accept: `fft()`, `frequencies`, and `time` are required, and the optional
+  `is_one_sided`, `observation_weights`, `observations_are_independent`, and
+  `time_bins_are_independent` attributes fall back to their defaults when
+  absent, so a custom transform needs no new attributes. Both constructors are
+  annotated with it, so mypy now checks custom transforms passed to them, and a
+  `Connectivity` subclass overriding `from_multitaper` must widen its argument
+  to `SpectralTransform`.
+- `Connectivity` rejects input that used to give silently wrong results:
+  two-sided frequencies not uniformly spaced in `numpy.fft.fftfreq` order (e.g.
+  `rfft` output without `is_one_sided=True`), which `fourier_connectivity`
+  already rejected, and real-valued Fourier coefficients, whose phase-based
+  measures were exactly 0. `Connectivity`, `Connectivity.from_transform`, and
+  `fourier_connectivity` reject `is_one_sided`, `observations_are_independent`,
+  and `time_bins_are_independent` values that are not booleans (e.g. `"False"`,
+  `None`, 0, or a transform's flag written as a method), which `bool()` used to
+  misread; NumPy bools and 0-d boolean arrays are accepted. `from_transform` no
+  longer takes an `AttributeError` raised inside a capability property for the
+  attribute's absence.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
   weighting. Adaptive weighting compares the periodogram against the process
@@ -327,6 +351,12 @@ directly with results from 2.x.
   `n_signals * I` fallback; healthy units retain their Cholesky starts.
 - Wilson convergence is relative and scale-invariant, and non-converged units
   return `NaN` with a targeted warning.
+- The Wilson iteration builds each update from a square root of the
+  cross-spectrum, so it is Hermitian positive semidefinite by construction.
+  Sub-spectra with near-collinear channels (condition numbers around 1e10 and
+  above) now converge instead of stalling at rounding level above the tolerance
+  and returning `NaN`; their directed measures differ from 2.x there. An
+  indefinite cross-spectrum returns `NaN` with the non-convergence warning.
 - Directed-measure regularization is scale-invariant, directed coherence uses
   the correct source-axis noise variance, and it warns when correlated
   innovations materially violate its diagonal-covariance assumption.
@@ -469,6 +499,34 @@ directly with results from 2.x.
 - `Connectivity.from_multitaper` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
+- `MorletWavelet.fft` fills one preallocated coefficient array instead of
+  stacking per-frequency results, removing one full copy of the coefficients
+  from peak memory (about 3.1x to 2.1x the output size without decimation or
+  overlapping smoothing).
+- Coherence and phase-lag-index measures no longer retain the pairwise power
+  normalizer `sqrt(P_i P_j)`; it is recomputed from the cached power on each
+  call, cutting their retained cache by a third.
+- The Wilson minimum-phase factorization behind the spectral Granger, DTF,
+  and PDC families is 1.8-2.9x faster in benchmarks: it factors the
+  cross-spectrum once and solves once per iteration instead of twice, and for
+  real-valued signals iterates on the non-negative frequencies with real FFTs.
+  End to end, pairwise spectral Granger for 32 signals is about 2.3x faster,
+  conditional spectral Granger for 24 signals about 1.7x, and DTF for 100
+  windows of 8 signals about 1.9x. For well-conditioned spectra,
+  results agree with the previous implementation to rounding (relative
+  differences of about 1e-14 or less).
+- The default measure set is about 2x faster on top of that. Every 2-signal
+  Wilson factorization (pairwise and subset spectral Granger, and 2-signal
+  DTF/PDC) solves its 2x2 systems in closed form; the phase-lag-index family
+  reduces only the non-negative frequencies, forms the imaginary cross-spectrum
+  in real arithmetic from contiguous copies of the coefficients, and, when its workspace is split into several signal
+  tiles, skips each tile's pairs with earlier signals and fills them by
+  symmetry; coherency, imaginary coherence, and PLV/PPC normalize only the
+  frequencies they return; and the transfer function and noise covariance read
+  the factor's lag-0 coefficient as a frequency mean instead of a full inverse
+  FFT. `multitaper_connectivity` with the default measures is about 2.2x faster
+  for 32 signals x 50 trials, 2.7x for 64 signals x 100 trials, and 1.5x for 16
+  signals in 117 sliding windows, where pairwise Granger still dominates.
 
 ## [2.0.1] - 2026-05-12
 

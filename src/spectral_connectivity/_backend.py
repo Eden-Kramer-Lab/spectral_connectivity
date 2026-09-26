@@ -23,7 +23,7 @@ logger = getLogger(__name__)
 if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
-        from cupyx.scipy.fft import fft, fftfreq, ifft, next_fast_len
+        from cupyx.scipy.fft import fft, fftfreq, ifft, irfft, next_fast_len, rfft
         from cupyx.scipy.sparse.linalg import svds
     except ImportError as exc:
         raise RuntimeError(gpu_request_error_message()) from exc
@@ -47,8 +47,8 @@ if not TYPE_CHECKING and is_gpu_enabled():
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, fftfreq, ifft, next_fast_len
+    from scipy.fft import fft, fftfreq, ifft, irfft, next_fast_len, rfft
     from scipy.signal import detrend
     from scipy.sparse.linalg import svds
 
-__all__ = ["detrend", "fft", "fftfreq", "ifft", "next_fast_len", "svds", "xp"]
+__all__ = ["detrend", "fft", "fftfreq", "ifft", "irfft", "next_fast_len", "rfft", "svds", "xp"]

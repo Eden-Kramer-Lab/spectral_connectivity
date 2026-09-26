@@ -24,8 +24,9 @@ import types
 
 import numpy as np
 import pytest
+import scipy.fft
 
-from spectral_connectivity import Connectivity
+from spectral_connectivity import Connectivity, minimum_phase_decomposition
 
 _CONVERSION_MESSAGE = (
     "Implicit conversion to a NumPy array is not allowed. "
@@ -330,3 +331,29 @@ def test_backend_modules_include_every_array_module(backend_modules):
         "spectral_connectivity.minimum_phase_decomposition",
         "spectral_connectivity.transforms",
     } <= names
+
+
+def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch):
+    """Directed measures on real-valued signals stay on the device.
+
+    Their cross-spectra are conjugate-symmetric, so the Wilson factorization
+    iterates on the non-negative frequencies with real FFTs. CuPy supplies those
+    transforms from ``cupyx.scipy.fft``; route the module's SciPy imports
+    through the emulation so a host array reaching them fails here.
+    """
+    rng = np.random.default_rng(4)
+    coefficients = scipy.fft.fft(rng.standard_normal((1, 6, 3, 32, 3)), axis=-2)
+    cross_spectrum = Connectivity(coefficients)._expectation_cross_spectral_matrix()
+    assert minimum_phase_decomposition._is_conjugate_symmetric(cross_spectrum)
+
+    for name in ("fft", "ifft", "rfft", "irfft"):
+        monkeypatch.setattr(
+            minimum_phase_decomposition, name, _wrap_function(getattr(scipy.fft, name), name)
+        )
+
+    device_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
+    monkeypatch.undo()
+    host_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
+
+    assert isinstance(device_granger, np.ndarray)
+    np.testing.assert_array_equal(device_granger, host_granger)

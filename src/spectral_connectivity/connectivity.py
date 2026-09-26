@@ -7,13 +7,13 @@ from dataclasses import dataclass, replace
 from functools import cached_property, wraps
 from itertools import combinations
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity._array_utils import _conjugate_transpose, _divide_where
-from spectral_connectivity._backend import ifft, svds, xp
+from spectral_connectivity._backend import svds, xp
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
@@ -33,14 +33,16 @@ from spectral_connectivity.utils import (
 )
 
 if TYPE_CHECKING:
-    from spectral_connectivity.transforms import Multitaper
+    from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
 
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset({"jackknife", "minimum_phase_reconstruction_error"})
+_NON_MEASURE_METHODS = frozenset(
+    {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
+)
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -63,6 +65,9 @@ _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
     "absolute": xp.abs,
     "squared": lambda imaginary: imaginary**2,
 }
+# Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
+# moment is exactly antisymmetric (-1) or symmetric (+1) across the signal pair.
+_IMAGINARY_MOMENT_PAIR_SYMMETRY = {"sign": -1, "imaginary": -1, "absolute": 1, "squared": 1}
 
 # Tikhonov regularization factor for stabilizing matrix inversions
 # Used to prevent numerical instability with near-singular matrices
@@ -237,46 +242,89 @@ def _ignore_nan_propagation_warnings(
     return wrapper
 
 
-def _non_negative_frequencies(
-    axis: int,
-) -> Callable[
-    [Callable[Concatenate["Connectivity", _P], _R]],
-    Callable[Concatenate["Connectivity", _P], _R],
-]:
-    """Remove the negative frequencies.
+_ABSENT = object()
 
-    Parameters
-    ----------
-    axis : int
-        Axis along which to remove negative frequencies.
 
-    Returns
-    -------
-    callable
-        Decorator function.
+def _optional_transform_attribute(transform: Any, name: str, default: Any) -> Any:
+    """Read an optional ``SpectralTransform`` attribute, or ``default`` if absent.
 
+    Unlike ``getattr(transform, name, default)``, an ``AttributeError`` raised
+    inside a property the transform does define propagates instead of being
+    taken for the attribute's absence, which would silently apply the default.
     """
+    try:
+        return getattr(transform, name)
+    except AttributeError:
+        if inspect.getattr_static(transform, name, _ABSENT) is not _ABSENT:
+            raise
+        return default
 
-    def decorator(
-        connectivity_measure: Callable[Concatenate["Connectivity", _P], _R],
-    ) -> Callable[Concatenate["Connectivity", _P], _R]:
-        @wraps(connectivity_measure)
-        def wrapper(
-            connectivity: "Connectivity", /, *args: _P.args, **kwargs: _P.kwargs
-        ) -> _R:
-            measure = connectivity_measure(connectivity, *args, **kwargs)
-            if measure is None:
-                return measure
-            array = cast(BackendArray, measure)
-            n_frequencies = array.shape[axis]
-            n_nonnegative = connectivity._nonnegative_frequency_count(n_frequencies)
-            if n_nonnegative == n_frequencies:
-                return measure
-            return cast(_R, xp.take(array, indices=xp.arange(n_nonnegative), axis=axis))
 
-        return wrapper
+def _validated_flag(name: str, value: Any) -> bool:
+    """Return ``value`` as a bool, or raise unless it is a boolean.
 
-    return decorator
+    Accepts Python and NumPy bools and 0-d boolean arrays (e.g. a flag computed
+    as ``xp.all(...)``). ``bool()`` would read a method or the string
+    ``"False"`` as True and ``None`` or 0 as False, silently changing how the
+    spectrum is treated.
+    """
+    is_boolean_scalar = getattr(value, "ndim", None) == 0 and (
+        getattr(getattr(value, "dtype", None), "kind", None) == "b"
+    )
+    if not (isinstance(value, bool) or is_boolean_scalar):
+        msg = (
+            f"{name} must be a bool, got {type(value).__name__} ({value!r}). It "
+            f"sets how the spectrum is treated, so it is not guessed from a truth "
+            f"value: pass True or False (for a transform, a bool attribute or "
+            f"property, not a method)."
+        )
+        raise TypeError(msg)
+    return bool(value)
+
+
+def _transform_flag(transform: Any, name: str, default: bool) -> bool:
+    """Read an optional boolean ``SpectralTransform`` attribute strictly."""
+    return _validated_flag(
+        f"transform.{name}", _optional_transform_attribute(transform, name, default)
+    )
+
+
+def _require_fft_order(frequencies: Any) -> None:
+    """Raise unless two-sided ``frequencies`` are uniformly spaced in FFT order.
+
+    Two-sided coefficients are folded onto their first ``n // 2 + 1`` bins as
+    the non-negative frequencies, so any other layout (e.g. ``rfft`` output
+    labelled two-sided, or an ``fftshift``-ed spectrum) would silently drop or
+    mislabel frequencies.
+    """
+    values = to_numpy(frequencies)
+    # Allow for the coordinate's own rounding (e.g. float32 from netCDF), which
+    # the grid step inherits, but never less strictly than 1e-9.
+    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
+    rtol = max(1e-9, 8 * float(np.finfo(precision).eps))
+    values = values.astype(float)
+    if values.size == 0:
+        return
+    if values.size == 1:
+        in_order = bool(values[0] == 0.0)
+    else:
+        step = values[1] - values[0] if values.size > 2 else abs(values[1])
+        expected = np.fft.fftfreq(values.size, d=1.0 / (step * values.size))
+        in_order = bool(step > 0) and np.allclose(
+            values, expected, rtol=rtol, atol=max(abs(step) * rtol, np.finfo(float).eps)
+        )
+    if not in_order:
+        msg = (
+            f"frequencies must be uniformly spaced in standard FFT order (zero and "
+            f"positive bins followed by negative bins, as numpy.fft.fftfreq); got "
+            f"{values[:3]} ... {values[-2:]}. The first n // 2 + 1 bins of a "
+            f"two-sided spectrum are taken as its non-negative half, so any other "
+            f"layout would drop or mislabel frequencies. If the coefficients hold "
+            f"only non-negative frequencies (e.g. numpy.fft.rfft or a wavelet "
+            f"transform), mark them one-sided (is_one_sided=True); otherwise order "
+            f"them as numpy.fft.fft does."
+        )
+        raise ValueError(msg)
 
 
 class Connectivity:
@@ -385,11 +433,14 @@ class Connectivity:
     every directional measure, ``result.sel(source=a, target=b)`` is ``a -> b``
     (or "``a`` leads ``b``"). Prefer them unless you need this lower-level API.
 
-    Expensive intermediates (the minimum-phase factor, transfer function, noise
-    covariance, and MVAR coefficients) are cached on first access. Reassigning
-    ``fourier_coefficients`` or ``expectation_type`` automatically invalidates
+    Intermediates shared across measures (the expected cross-spectral matrix,
+    power, phase-lag moments, and the minimum-phase factor with the transfer
+    function, noise covariance, and MVAR coefficients derived from it) are
+    cached on first access. Reassigning ``fourier_coefficients``,
+    ``expectation_type``, or ``observation_weights`` automatically invalidates
     these caches, so reusing an instance for new data is safe (constructing a
-    new instance is still the clearer choice).
+    new instance is still the clearer choice). Call :meth:`clear_cache` to
+    release them while keeping the instance.
 
     The class supports both CPU (NumPy) and GPU (CuPy) computation depending
     on the SPECTRAL_CONNECTIVITY_ENABLE_GPU environment variable. For Granger
@@ -464,9 +515,13 @@ class Connectivity:
         # (the non-convergence warning advises increasing max_iterations).
         self._minimum_phase_tolerance = minimum_phase_tolerance
         self._minimum_phase_max_iterations = minimum_phase_max_iterations
-        self._is_one_sided = bool(is_one_sided)
-        self._observations_are_independent = bool(observations_are_independent)
-        self._time_bins_are_independent = bool(time_bins_are_independent)
+        self._is_one_sided = _validated_flag("is_one_sided", is_one_sided)
+        self._observations_are_independent = _validated_flag(
+            "observations_are_independent", observations_are_independent
+        )
+        self._time_bins_are_independent = _validated_flag(
+            "time_bins_are_independent", time_bins_are_independent
+        )
         # Fill documented defaults when coordinates are omitted: normalized
         # (sampling-frequency-1) FFT frequencies and integer time-window indices.
         # Otherwise coordinate-dependent methods (delay, group_delay,
@@ -500,6 +555,8 @@ class Connectivity:
             ):
                 msg = "One-sided frequencies must be non-negative and strictly increasing."
                 raise ValueError(msg)
+            if not self._is_one_sided:
+                _require_fft_order(frequency_values)
         if time is not None:
             _validate_coordinate("time", time, n_time_windows)
         if frequencies is None:
@@ -531,7 +588,7 @@ class Connectivity:
     def observation_weights(self, value: NDArray[np.floating] | None) -> None:
         if value is None:
             self._observation_weights = None
-            self._clear_cached_intermediates()
+            self.clear_cache()
             return
         weights = xp.asarray(value)
         expected_shape = (*self._fourier_coefficients.shape[:-1], 1)
@@ -549,14 +606,35 @@ class Connectivity:
         self._observation_weights = mark_readonly_if_supported(
             weights.astype(real_dtype, copy=True)
         )
-        self._clear_cached_intermediates()
+        self.clear_cache()
 
-    def _clear_cached_intermediates(self) -> None:
-        """Drop cached properties that depend on the spectral inputs.
+    def clear_cache(self) -> None:
+        """Free the intermediates cached for reuse across measures.
 
-        Discovering descriptors avoids a second, hand-maintained registry that
-        could omit a newly added cache. Subclass caches are cleared as well.
+        Measures computed on one instance share intermediates such as the
+        expected cross-spectral matrix and the minimum-phase factorization,
+        which can each take ``n_frequencies * n_signals**2`` values for every
+        observation that ``expectation_type`` leaves unaveraged (each time
+        window by default). Call this after the last measure that needs them to
+        release the memory while keeping the instance; later measures recompute
+        them and return the same results. Replacing ``fourier_coefficients``,
+        ``expectation_type``, or ``observation_weights`` clears the cache
+        automatically.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity
+        >>> rng = np.random.default_rng(0)
+        >>> fourier_coefficients = rng.standard_normal((1, 5, 3, 16, 4)) + 0j
+        >>> connectivity = Connectivity(fourier_coefficients)
+        >>> coherence = connectivity.coherence_magnitude()
+        >>> connectivity.clear_cache()
+        >>> bool(np.array_equal(connectivity.coherence_magnitude(), coherence, equal_nan=True))
+        True
         """
+        # Discovering descriptors avoids a second, hand-maintained registry that
+        # could omit a newly added cache. Subclass caches are cleared as well.
         for klass in type(self).__mro__:
             for name, descriptor in vars(klass).items():
                 if isinstance(descriptor, cached_property):
@@ -584,14 +662,16 @@ class Connectivity:
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
 
-        Used only by ``from_multitaper``, where ``value`` is the
-        ``Multitaper.fft()`` output and is referenced nowhere else. This avoids a
-        full copy of the largest array in the pipeline -- a transient ~2x peak on
-        every construction, which can push a memory-constrained GPU into OOM.
+        Used only by ``from_multitaper``, where ``value`` is ``transform.fft()``,
+        which the ``SpectralTransform`` contract requires to be fresh and
+        referenced nowhere else. This avoids a full copy of the largest array in
+        the pipeline -- a transient ~2x peak on every construction, which can
+        push a memory-constrained GPU into OOM.
 
         This is deliberately private and has no public ``copy=False`` surface: it
-        is safe only when the caller guarantees the array *and its writable NumPy
-        base buffer* are unshared, which ``from_multitaper`` controls.
+        is safe only when the array *and its writable NumPy base buffer* are
+        unshared, which ``from_multitaper`` relies on the transform for and
+        cannot check.
         """
         self._set_fourier_coefficients(value, adopt=True)
 
@@ -614,6 +694,15 @@ class Connectivity:
                 f"  fourier_coefficients = m.fft()"
             )
             raise ValueError(msg)
+        if not xp.iscomplexobj(value):
+            msg = (
+                f"fourier_coefficients must be complex, got dtype {value.dtype}. "
+                f"Real-valued coefficients carry no phase, so the imaginary "
+                f"coherence, the phase-lag indices and the coherence phase would "
+                f"all be exactly 0. Pass the complex FFT output (e.g. "
+                f"numpy.fft.fft), not its real part or magnitude."
+            )
+            raise TypeError(msg)
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
@@ -637,10 +726,11 @@ class Connectivity:
         # them. Marking the snapshot read-only turns an in-place edit via the
         # getter into a clear error rather than silently stale results.
         if adopt:
-            # `value` is unshared (Multitaper.fft output) but is a swapaxes VIEW
-            # whose base buffer is writable; freeze the whole base chain, not just
-            # the outer view, or the data stays reachable and mutable through
-            # `.base`. No copy -- this is the memory-saving path.
+            # `value` is unshared by the SpectralTransform contract but may be a
+            # view (Multitaper's is a swapaxes view) whose base buffer is
+            # writable; freeze the whole base chain, not just the outer view, or
+            # the data stays reachable and mutable through `.base`. No copy --
+            # this is the memory-saving path.
             mark_readonly_chain_if_supported(value)
             owned = value
         else:
@@ -653,7 +743,7 @@ class Connectivity:
             owned = mark_readonly_if_supported(value.copy(order="K"))
         value = owned
         self._fourier_coefficients = value
-        self._clear_cached_intermediates()
+        self.clear_cache()
         # On reassignment (not initial construction), a change in the number of
         # FFT bins or time windows invalidates the stored frequency/time
         # coordinates. Reset them to geometry-matching defaults so
@@ -699,7 +789,7 @@ class Connectivity:
     def expectation_type(self) -> str:
         """Which dimensions the cross-spectral matrix is averaged over.
 
-        Reassigning clears cached directed-connectivity intermediates.
+        Reassigning clears all cached intermediates (see :meth:`clear_cache`).
         """
         return self._expectation_type
 
@@ -732,23 +822,96 @@ class Connectivity:
             raise ValueError(error_msg)
 
         self._expectation_type = value
-        self._clear_cached_intermediates()
+        self.clear_cache()
 
     @classmethod
     def from_multitaper(
         cls,
-        multitaper_instance: "Multitaper",
+        multitaper_instance: "SpectralTransform",
         expectation_type: str = "trials_tapers",
         dtype: Any = xp.complex128,
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct connectivity class using a multitaper instance.
+        """Construct from a spectral transform; the original name of from_transform.
+
+        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`.
 
         Parameters
         ----------
-        multitaper_instance : Multitaper
-            Instance of Multitaper class.
+        multitaper_instance : SpectralTransform
+            The transform; ``transform`` in :meth:`from_transform`.
+        expectation_type, dtype, minimum_phase_tolerance, minimum_phase_max_iterations
+            As in :meth:`from_transform`.
+
+        Returns
+        -------
+        Connectivity
+            New Connectivity instance.
+
+        """
+        init_kwargs: dict[str, Any] = {
+            "expectation_type": expectation_type,
+            "dtype": dtype,
+            "minimum_phase_tolerance": minimum_phase_tolerance,
+            "minimum_phase_max_iterations": minimum_phase_max_iterations,
+        }
+        # The optional SpectralTransform attributes must always reach the
+        # instance: a subclass that cannot accept them fails loudly here rather
+        # than silently treating a one-sided, weighted, or correlated spectrum as
+        # two-sided, unweighted, and independent. They are passed only when
+        # non-default so a subclass mirroring the older signature keeps working
+        # with a plain two-sided transform. The flags are checked before the
+        # (possibly expensive) fft() so a bad one fails fast; the coordinates
+        # and weights are read after it, which may set them.
+        if _transform_flag(multitaper_instance, "is_one_sided", False):
+            init_kwargs["is_one_sided"] = True
+        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
+            init_kwargs["observations_are_independent"] = False
+        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
+            init_kwargs["time_bins_are_independent"] = False
+        init_kwargs["fourier_coefficients"] = multitaper_instance.fft()
+        init_kwargs["time"] = multitaper_instance.time
+        init_kwargs["frequencies"] = multitaper_instance.frequencies
+        weights = _optional_transform_attribute(
+            multitaper_instance, "observation_weights", None
+        )
+        if weights is not None:
+            init_kwargs["observation_weights"] = weights
+        # The SpectralTransform contract requires fft() to return a freshly
+        # built, unshared array, so adopt it in place instead of copying (see
+        # Connectivity._adopt_fourier_coefficients). Only pass the private
+        # keyword when the subclass has not overridden __init__:
+        # an overriding subclass need not accept it, and passing it would raise
+        # TypeError. Such a subclass falls back to the defensive-copy path.
+        if cls.__init__ is Connectivity.__init__:
+            init_kwargs["_adopt_fourier_coefficients"] = True
+        return cls(**init_kwargs)
+
+    @classmethod
+    def from_transform(
+        cls,
+        transform: "SpectralTransform",
+        expectation_type: str = "trials_tapers",
+        dtype: Any = xp.complex128,
+        minimum_phase_tolerance: float = 1e-8,
+        minimum_phase_max_iterations: int = 500,
+    ) -> "Connectivity":
+        """Construct from any spectral transform.
+
+        This is the transform-neutral spelling of :meth:`from_multitaper`; the
+        older method remains fully supported.
+
+        Parameters
+        ----------
+        transform : SpectralTransform
+            Such as :class:`~spectral_connectivity.transforms.Multitaper`,
+            :class:`~spectral_connectivity.transforms.MorletWavelet`, or a
+            user-defined class; see :class:`~spectral_connectivity.transforms.SpectralTransform`
+            for the required and optional members. ``fft()`` must return fresh,
+            unshared storage on each call. Neither the transform nor its caller
+            may subsequently mutate it through any alias: the result is used
+            without copying and marked read-only where the backend supports this.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
@@ -764,57 +927,6 @@ class Connectivity:
         -------
         Connectivity
             New Connectivity instance.
-
-        """
-        init_kwargs: dict[str, Any] = {
-            "fourier_coefficients": multitaper_instance.fft(),
-            "expectation_type": expectation_type,
-            "time": multitaper_instance.time,
-            "frequencies": multitaper_instance.frequencies,
-            "dtype": dtype,
-            "minimum_phase_tolerance": minimum_phase_tolerance,
-            "minimum_phase_max_iterations": minimum_phase_max_iterations,
-        }
-        # The transform contract (sidedness, observation weights, observation
-        # and time-bin independence) is part of the public constructor and must
-        # always reach the instance: a subclass that cannot accept it fails loudly here rather
-        # than silently computing on a one-sided, weighted, or correlated
-        # spectrum as if it were two-sided, unweighted, and independent. The
-        # keywords are passed only when non-default so a subclass mirroring the
-        # older signature keeps working with a plain two-sided transform.
-        if bool(getattr(multitaper_instance, "is_one_sided", False)):
-            init_kwargs["is_one_sided"] = True
-        weights = getattr(multitaper_instance, "observation_weights", None)
-        if weights is not None:
-            init_kwargs["observation_weights"] = weights
-        if not bool(getattr(multitaper_instance, "observations_are_independent", True)):
-            init_kwargs["observations_are_independent"] = False
-        if not bool(getattr(multitaper_instance, "time_bins_are_independent", True)):
-            init_kwargs["time_bins_are_independent"] = False
-        # fft() returns a freshly built, unshared array, so adopt it in place
-        # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
-        # pass the private keyword when the subclass has not overridden __init__:
-        # an overriding subclass need not accept it, and passing it would raise
-        # TypeError. Such a subclass falls back to the defensive-copy path.
-        if cls.__init__ is Connectivity.__init__:
-            init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
-
-    @classmethod
-    def from_transform(
-        cls,
-        transform: Any,
-        expectation_type: str = "trials_tapers",
-        dtype: Any = xp.complex128,
-        minimum_phase_tolerance: float = 1e-8,
-        minimum_phase_max_iterations: int = 500,
-    ) -> "Connectivity":
-        """Construct from any supported spectral transform.
-
-        ``transform`` must expose ``fft()``, ``frequencies``, and ``time`` and
-        return the standard five-dimensional coefficient layout. This is the
-        transform-neutral spelling of :meth:`from_multitaper`; the older method
-        remains fully supported.
         """
         return cls.from_multitaper(
             transform,
@@ -1110,10 +1222,34 @@ class Connectivity:
             self._fourier_coefficients * self._fourier_coefficients.conjugate()
         ).real
 
-    @cached_property
-    def _pairwise_power_scale(self) -> NDArray[np.floating]:
-        """``sqrt(P_i P_j)``, shape (..., n_fft_samples, n_signals, n_signals)."""
-        return xp.sqrt(self._power[..., :, xp.newaxis] * self._power[..., xp.newaxis, :])
+    def _nonnegative_pairwise_power_scale(self) -> NDArray[np.floating]:
+        """``sqrt(P_i P_j)`` at the non-negative frequencies.
+
+        Shape (..., n_nonnegative_frequencies, n_signals, n_signals). Built only
+        for the bins the normalized measures report, and recomputed per call: it
+        costs one outer product of ``sqrt(_power)``, which also cannot underflow
+        or overflow.
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        root_power = xp.sqrt(self._power[..., :n_nonnegative, :])
+        return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
+
+    def _nonnegative_fourier_coefficients(self) -> NDArray[np.complexfloating]:
+        """Fourier coefficients at the non-negative frequencies, at ``self._dtype``.
+
+        A view when the dtype already matches.
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
+            ..., :n_nonnegative, :
+        ].astype(self._dtype, copy=False)
+        return coefficients
+
+    def _nonnegative_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
+        """Expected cross-spectral matrix at the non-negative frequencies (a view)."""
+        cross_spectral_matrix = self._expectation_cross_spectral_matrix()
+        n_nonnegative = self._nonnegative_frequency_count(cross_spectral_matrix.shape[-3])
+        return cross_spectral_matrix[..., :n_nonnegative, :, :]
 
     @property
     def _cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -1169,6 +1305,8 @@ class Connectivity:
             ``phase_locking_value`` passes unit-normalized coefficients so the
             same batched matmul yields its normalized cross-spectrum, and
             ``_subset_cross_spectral_matrix`` passes a pair axis as ``batch``.
+            The frequency axis may hold only the leading bins (e.g. the
+            non-negative frequencies); observation weights are sliced to match.
 
         Returns
         -------
@@ -1208,7 +1346,9 @@ class Connectivity:
         if self._observation_weights is not None:
             # Weights vary over observations and frequency, not the extra batch.
             weights = xp.transpose(
-                self._observation_weights[..., 0],
+                self._observation_weights[
+                    ..., : fourier_coefficients.shape[frequency_axis], 0
+                ],
                 [*kept_axes, frequency_axis, *average_axes],
             ).reshape(
                 (
@@ -1313,9 +1453,11 @@ class Connectivity:
         )
 
     @cached_property
-    @_non_negative_frequencies(axis=-3)
     def _transfer_function(self) -> NDArray[np.complexfloating]:
-        return _estimate_transfer_function(self._minimum_phase_factor)
+        minimum_phase = self._minimum_phase_factor
+        return _estimate_transfer_function(
+            minimum_phase, self._nonnegative_frequency_count(minimum_phase.shape[-3])
+        )
 
     @cached_property
     def _noise_covariance(self) -> NDArray[np.floating]:
@@ -1326,7 +1468,11 @@ class Connectivity:
         return _regularized_inverse(self._transfer_function)
 
     def _expectation(self, values: BackendArray, *, frequency_axis: int = 3) -> BackendArray:
-        """Average observation axes, applying optional spectral weights."""
+        """Average observation axes, applying optional spectral weights.
+
+        ``values`` may hold only the leading (non-negative) frequency bins of
+        the spectrum; the weights are restricted to the same bins.
+        """
         if self._observation_weights is None:
             expected: BackendArray = xp.mean(values, axis=self._expectation_axes)
             return expected
@@ -1336,10 +1482,11 @@ class Connectivity:
         if frequency_axis < 3 or frequency_axis >= values.ndim:
             msg = "frequency_axis must follow the three observation axes."
             raise ValueError(msg)
+        n_frequencies = values.shape[frequency_axis]
         weight_shape = [1] * values.ndim
         weight_shape[0:3] = self._observation_weights.shape[0:3]
-        weight_shape[frequency_axis] = self._observation_weights.shape[3]
-        weights = self._observation_weights[..., 0].reshape(weight_shape)
+        weight_shape[frequency_axis] = n_frequencies
+        weights = self._observation_weights[..., :n_frequencies, 0].reshape(weight_shape)
         numerator = xp.sum(values * weights, axis=self._expectation_axes)
         denominator = xp.sum(weights, axis=self._expectation_axes)
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
@@ -1865,7 +2012,6 @@ class Connectivity:
         """
         return self._coherency()
 
-    @_non_negative_frequencies(axis=-3)
     def _coherency(self) -> NDArray[np.complexfloating]:
         """Device-native complex coherency (see the public ``coherency``).
 
@@ -1876,8 +2022,8 @@ class Connectivity:
         """
         self._warn_single_observation_degenerate("coherency")
         complex_coherency = _divide_masking_zero_denominator(
-            self._expectation_cross_spectral_matrix(),
-            self._pairwise_power_scale,
+            self._nonnegative_cross_spectral_matrix(),
+            self._nonnegative_pairwise_power_scale(),
             "Some signals have (near-)zero power, so coherency is undefined "
             "for those pairs and is returned as NaN. This usually indicates "
             "a flat/dead channel or all-zero input.",
@@ -1977,7 +2123,6 @@ class Connectivity:
         return clipped
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def imaginary_coherence(self) -> NDArray[np.floating]:
         """Return the normalized imaginary component of the cross-spectrum.
 
@@ -2028,8 +2173,8 @@ class Connectivity:
         """
         imaginary_coh = xp.abs(
             _divide_masking_zero_denominator(
-                self._expectation_cross_spectral_matrix().imag,
-                self._pairwise_power_scale,
+                self._nonnegative_cross_spectral_matrix().imag,
+                self._nonnegative_pairwise_power_scale(),
                 "Some signals have (near-)zero power, so imaginary coherence is "
                 "undefined for those pairs and is returned as NaN. This usually "
                 "indicates a flat/dead channel or all-zero input.",
@@ -2164,14 +2309,8 @@ class Connectivity:
                 stacklevel=2,
             )
 
-        cross_spectral_density = self._expectation_cross_spectral_matrix()
         # Drop negative frequencies before the per-bin inversion, not after.
-        cross_spectral_density = cross_spectral_density[
-            ...,
-            : self._nonnegative_frequency_count(cross_spectral_density.shape[-3]),
-            :,
-            :,
-        ]
+        cross_spectral_density = self._nonnegative_cross_spectral_matrix()
         matrix_rms = xp.sqrt(
             xp.mean(
                 xp.real(xp.conj(cross_spectral_density) * cross_spectral_density),
@@ -2610,8 +2749,7 @@ class Connectivity:
             )
             raise ValueError(msg)
 
-        spectrum = self._expectation_cross_spectral_matrix()
-        spectrum = spectrum[..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :]
+        spectrum = self._nonnegative_cross_spectral_matrix()
         leading_shape = spectrum.shape[:-3]
         n_frequencies = spectrum.shape[-3]
         connections = np.asarray([(labels[first], labels[second]) for first, second in pairs])
@@ -2875,8 +3013,7 @@ class Connectivity:
         rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
 
-        spectrum = self._expectation_cross_spectral_matrix()
-        spectrum = spectrum[..., : self._nonnegative_frequency_count(spectrum.shape[-3]), :, :]
+        spectrum = self._nonnegative_cross_spectral_matrix()
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
         # Whiten each group's within-block, substituting the identity at that
         # group's non-finite bins so the eigendecomposition converges there.
@@ -3126,7 +3263,6 @@ class Connectivity:
 
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
-    @_non_negative_frequencies(axis=-3)
     def _phase_locking_value(self) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
@@ -3145,9 +3281,9 @@ class Connectivity:
         # would let float32 rounding push the unit magnitudes -- and thus the
         # averaged PLV/PPC -- slightly past 1. copy=False avoids a copy when the
         # dtype already matches (the division below allocates a fresh array).
-        coefficients: NDArray[np.complexfloating] = self._fourier_coefficients.astype(
-            self._dtype, copy=False
-        )
+        # Only the non-negative frequencies are reported, so only those are
+        # normalized and reduced.
+        coefficients = self._nonnegative_fourier_coefficients()
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -3288,15 +3424,17 @@ class Connectivity:
 
         Parameters
         ----------
-        mean_absolute : array, shape (..., n_frequencies, n_signals, n_signals)
-            ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`.
+        mean_absolute : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+            ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`, at
+            the non-negative frequencies.
 
         Returns
         -------
-        no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
+        no_lag : array of bool, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
         """
         tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
-        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * self._pairwise_power_scale
+        power_scale = self._nonnegative_pairwise_power_scale()
+        no_lag: NDArray[np.bool_] = mean_absolute <= tolerance * power_scale
         return no_lag
 
     def _imaginary_cross_spectrum_moments(
@@ -3311,7 +3449,9 @@ class Connectivity:
         per-observation cross-spectral matrix, with the diagonal zeroed. This
         returns the requested reduced moments, computing (and caching) any not
         already available from signal-row tiles of the observation-level
-        cross-spectrum.
+        cross-spectrum. Only the non-negative bins are reduced, and each tile
+        covers targets from its first row on; the strict lower triangle is then
+        filled by pair symmetry (``_IMAGINARY_MOMENT_PAIR_SYMMETRY``).
 
         Computing only the requested keys keeps a single-measure call
         (e.g. ``phase_lag_index`` needs only ``"sign"``) from doing the other
@@ -3329,14 +3469,15 @@ class Connectivity:
 
         Returns
         -------
-        tuple of arrays, each shape (..., n_frequencies, n_signals, n_signals)
-            The requested moments, in the order of ``keys``.
+        tuple of arrays, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+            The requested moments, in the order of ``keys``, at the non-negative
+            frequencies the phase-lag measures report.
         """
         self._validate_multiple_signals()
         cache = self._imaginary_moment_cache
         missing = [key for key in keys if key not in cache]
         if missing:
-            coefficients = self._fourier_coefficients.astype(self._dtype, copy=False)
+            coefficients = self._nonnegative_fourier_coefficients()
             n_signals = coefficients.shape[-1]
             kept_observation_axes = [
                 axis for axis in range(3) if axis not in self._expectation_axes
@@ -3348,8 +3489,9 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
-            for key in missing:
-                cache[key] = xp.empty(result_shape, dtype=real_dtype)
+            # Filled here and cached only once complete, so an error partway
+            # through leaves no uninitialized moments behind.
+            moments = {key: xp.empty(result_shape, dtype=real_dtype) for key in missing}
 
             observation_frequency_elements = int(np.prod(coefficients.shape[:-1]))
             elements_per_source = max(1, observation_frequency_elements * n_signals)
@@ -3364,26 +3506,38 @@ class Connectivity:
             # Nonlinear sign/abs/square transforms prevent contracting the
             # observation axes before the outer product. Form only a source-row
             # tile at a time, reduce it immediately, and write the small result.
-            all_coefficients = coefficients[..., xp.newaxis]
+            # Im(X_i conj(X_j)) = Im(X_i) Re(X_j) - Re(X_i) Im(X_j), formed in
+            # real arithmetic rather than as a complex product. Each tile pairs
+            # its source rows only with targets from ``start`` on; the strict
+            # lower triangle is filled by pair symmetry below.
+            # Contiguous copies: transforms leave the signal axis slowest, which
+            # makes the tiles' broadcast products stride badly through memory.
+            real = xp.ascontiguousarray(coefficients.real)
+            imag = xp.ascontiguousarray(coefficients.imag)
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
-                source_coefficients = coefficients[..., start:stop, xp.newaxis]
-                imaginary = _complex_inner_product(
-                    source_coefficients,
-                    all_coefficients,
-                    dtype=self._dtype,
-                ).imag
+                imaginary = (
+                    imag[..., start:stop, xp.newaxis] * real[..., xp.newaxis, start:]
+                    - real[..., start:stop, xp.newaxis] * imag[..., xp.newaxis, start:]
+                )
                 local_diagonal = xp.arange(stop - start)
-                global_diagonal = xp.arange(start, stop)
-                imaginary[..., local_diagonal, global_diagonal] = 0
+                imaginary[..., local_diagonal, local_diagonal] = 0
 
-                for key in missing:
+                for key, reduced in moments.items():
                     moment = _IMAGINARY_MOMENTS[key](imaginary)
-                    cache[key][..., start:stop, :] = self._expectation(moment)
+                    reduced[..., start:stop, start:] = self._expectation(moment)
+
+            # Overwrite the strict lower triangle from the upper one: the pairs
+            # each tile skipped and the in-tile lower entries alike.
+            rows, columns = xp.tril_indices(n_signals, k=-1)
+            for key, reduced in moments.items():
+                reduced[..., rows, columns] = (
+                    _IMAGINARY_MOMENT_PAIR_SYMMETRY[key] * reduced[..., columns, rows]
+                )
+            cache.update(moments)
         return tuple(cache[key] for key in keys)
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def phase_lag_index(self) -> NDArray[np.floating]:
         """Return non-parametric synchrony measure mitigating power differences.
 
@@ -3454,7 +3608,6 @@ class Connectivity:
         return pli
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def directed_phase_lag_index(self) -> NDArray[np.floating]:
         """Return the directed phase-lag index (dPLI).
 
@@ -3517,7 +3670,6 @@ class Connectivity:
         return directed_pli
 
     @_asnumpy
-    @_non_negative_frequencies(-3)
     def weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return weighted average of phase lag index using imaginary coherency magnitudes.
 
@@ -3583,7 +3735,6 @@ class Connectivity:
         return _divide_where(mean_imaginary, mean_absolute, ~no_lag, 0.0)
 
     @_asnumpy
-    @_non_negative_frequencies(axis=-3)
     def debiased_squared_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of phase lag index corrected for positive bias.
 
@@ -3643,7 +3794,6 @@ class Connectivity:
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
     @_asnumpy
-    @_non_negative_frequencies(-3)
     def debiased_squared_weighted_phase_lag_index(self) -> NDArray[np.floating]:
         """Return square of weighted phase lag index corrected for bias.
 
@@ -4894,11 +5044,9 @@ def _estimate_noise_covariance(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    return _complex_inner_product(
-        inverse_fourier_coefficients[..., 0, :, :],
-        inverse_fourier_coefficients[..., 0, :, :],
-    ).real
+    zero_lag = _zero_lag_coefficient(minimum_phase)
+    noise_covariance: NDArray[np.floating] = xp.matmul(zero_lag, zero_lag.swapaxes(-1, -2))
+    return noise_covariance
 
 
 def _divide_masking_zero_denominator(
@@ -5273,8 +5421,23 @@ def _mic_components(
     )
 
 
+def _zero_lag_coefficient(
+    minimum_phase: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
+    """Lag-0 coefficient of the minimum-phase factor, shape (..., n_signals, n_signals).
+
+    The inverse DFT at lag 0 is the mean over frequencies, so no full inverse
+    transform is needed; ``minimum_phase`` must therefore hold all
+    ``n_fft_samples`` bins, not a frequency slice. ``.real`` discards an
+    imaginary part that is rounding-level for the factor of a real process.
+    """
+    zero_lag: NDArray[np.floating] = xp.mean(minimum_phase, axis=-3).real
+    return zero_lag
+
+
 def _estimate_transfer_function(
     minimum_phase: NDArray[np.complexfloating],
+    n_frequencies: int,
 ) -> NDArray[np.complexfloating]:
     """Estimate transfer function non-parametrically from minimum phase factor.
 
@@ -5286,12 +5449,16 @@ def _estimate_transfer_function(
     ----------
     minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
+    n_frequencies : int
+        Return only the first ``n_frequencies`` bins (e.g. the non-negative
+        frequencies).
 
     Returns
     -------
     transfer_function : array
-        Shape (n_time_windows, n_fft_samples, n_signals, n_signals).
-        The transfer function of a MVAR model.
+        Shape (n_time_windows, n_frequencies, n_signals, n_signals). The
+        transfer function of a MVAR model; its lag-0 normalization always uses
+        all bins.
 
     References
     ----------
@@ -5300,10 +5467,9 @@ def _estimate_transfer_function(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
+    H_0 = _zero_lag_coefficient(minimum_phase)[..., xp.newaxis, :, :]
     transfer_function: NDArray[np.complexfloating] = xp.matmul(
-        minimum_phase, _regularized_inverse(H_0)
+        minimum_phase[..., :n_frequencies, :, :], _regularized_inverse(H_0)
     )
     return transfer_function
 
@@ -6284,7 +6450,7 @@ def _var_model_from_spectrum(
         _warn_on_failure=False,
     )
     n_nonnegative = csm.shape[-3] // 2 + 1
-    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    transfer = _estimate_transfer_function(minimum_phase, n_nonnegative)
     return transfer, _estimate_noise_covariance(minimum_phase)
 
 
