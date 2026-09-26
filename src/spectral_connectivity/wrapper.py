@@ -30,12 +30,10 @@ from spectral_connectivity._measure_registry import (
     _validate_method_names,
 )
 from spectral_connectivity._provenance import _canonical_json, _shared_provenance_attrs
-
-# Re-exported: UnsupportedMeasureError is part of this module's public API.
 from spectral_connectivity._result_formatting import (
-    UnsupportedMeasureError as UnsupportedMeasureError,
+    UnsupportedMeasureError,
+    _connectivity_result_to_xarray,
 )
-from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.connectivity import (
     Connectivity,
     _frequencies_in_band,
@@ -48,6 +46,7 @@ from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 # (which raises it) and re-exported here; listing it makes the API reference
 # document it with the wrapper (see autosummary_ignore_module_all in docs/conf.py).
 __all__ = [
+    "DEFAULT_METHODS",
     "MeasureInfo",
     "UnsupportedMeasureError",
     "connectivity_to_xarray",
@@ -60,6 +59,7 @@ __all__ = [
 logger = getLogger(__name__)
 
 
+#: Measures computed when ``method`` is omitted, in result-variable order.
 DEFAULT_METHODS: tuple[str, ...] = tuple(
     name for name, spec in _MEASURE_SPECS.items() if spec.is_default
 )

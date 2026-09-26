@@ -19,7 +19,7 @@ class _MeasureSpec:
     orientation; the remaining fields label and interpret its values.
     ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
     score and ``None`` a spectral density, whose units derive from the input's
-    (see :func:`_measure_label_attrs`). ``value_range`` bounds the returned
+    (see :meth:`units_for`). ``value_range`` bounds the returned
     values, or their magnitude when ``is_complex``.
     """
 
@@ -302,9 +302,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "directed influence reverses under time reversal; directionality that does "
         "not reverse suggests instantaneous mixing.",
     ),
-    # Directed-transfer-function family: opt-in (not in the default set),
-    # directed (output[i, j] = influence j -> i, transposed to source -> target),
-    # and returning the full (time, frequency, source, target) layout.
+    # Directed-transfer-function family (opt-in).
     "directed_transfer_function": _wilson_directed_spec(
         "pairwise",
         long_name="Directed transfer function",
@@ -520,11 +518,7 @@ def _validate_method_names(methods: Sequence[str]) -> None:
 
 
 def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str]:
-    """``long_name``/``units`` attrs for a measure's main variable.
-
-    Spectral densities are in (input units)^2/Hz when the input's units are
-    known; otherwise they get no ``units`` rather than an invented one.
-    """
+    """``long_name``/``units`` attrs; no ``units`` when they are unknown."""
     spec = _MEASURE_SPECS.get(method)
     if spec is None:
         return {"long_name": method}
