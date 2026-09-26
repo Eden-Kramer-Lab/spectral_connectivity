@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from functools import cached_property, wraps
 from itertools import combinations
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Concatenate, Literal, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
@@ -57,7 +57,6 @@ _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_c
 if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
-        from cupyx.scipy.fft import ifft
         from cupyx.scipy.sparse.linalg import svds
 
         try:
@@ -69,7 +68,6 @@ if not TYPE_CHECKING and is_gpu_enabled():
 else:
     logger.info("Using CPU for spectral_connectivity...")
     import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import ifft
     from scipy.sparse.linalg import svds
 
 EXPECTATION_AXES = {
@@ -265,48 +263,6 @@ def _ignore_nan_propagation_warnings(
             return connectivity_measure(*args, **kwargs)
 
     return wrapper
-
-
-def _non_negative_frequencies(
-    axis: int,
-) -> Callable[
-    [Callable[Concatenate["Connectivity", _P], _R]],
-    Callable[Concatenate["Connectivity", _P], _R],
-]:
-    """Remove the negative frequencies.
-
-    Parameters
-    ----------
-    axis : int
-        Axis along which to remove negative frequencies.
-
-    Returns
-    -------
-    callable
-        Decorator function.
-
-    """
-
-    def decorator(
-        connectivity_measure: Callable[Concatenate["Connectivity", _P], _R],
-    ) -> Callable[Concatenate["Connectivity", _P], _R]:
-        @wraps(connectivity_measure)
-        def wrapper(
-            connectivity: "Connectivity", /, *args: _P.args, **kwargs: _P.kwargs
-        ) -> _R:
-            measure = connectivity_measure(connectivity, *args, **kwargs)
-            if measure is None:
-                return measure
-            array = cast(BackendArray, measure)
-            n_frequencies = array.shape[axis]
-            n_nonnegative = connectivity._nonnegative_frequency_count(n_frequencies)
-            if n_nonnegative == n_frequencies:
-                return measure
-            return cast(_R, xp.take(array, indices=xp.arange(n_nonnegative), axis=axis))
-
-        return wrapper
-
-    return decorator
 
 
 class Connectivity:
@@ -1384,9 +1340,11 @@ class Connectivity:
         )
 
     @cached_property
-    @_non_negative_frequencies(axis=-3)
     def _transfer_function(self) -> NDArray[np.complexfloating]:
-        return _estimate_transfer_function(self._minimum_phase_factor)
+        minimum_phase = self._minimum_phase_factor
+        return _estimate_transfer_function(
+            minimum_phase, self._nonnegative_frequency_count(minimum_phase.shape[-3])
+        )
 
     @cached_property
     def _noise_covariance(self) -> NDArray[np.floating]:
@@ -4982,11 +4940,9 @@ def _estimate_noise_covariance(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    return _complex_inner_product(
-        inverse_fourier_coefficients[..., 0, :, :],
-        inverse_fourier_coefficients[..., 0, :, :],
-    ).real
+    zero_lag = _zero_lag_coefficient(minimum_phase)
+    noise_covariance: NDArray[np.floating] = xp.matmul(zero_lag, zero_lag.swapaxes(-1, -2))
+    return noise_covariance
 
 
 def _divide_masking_zero_denominator(
@@ -5361,8 +5317,21 @@ def _mic_components(
     )
 
 
+def _zero_lag_coefficient(
+    minimum_phase: NDArray[np.complexfloating],
+) -> NDArray[np.floating]:
+    """Lag-0 coefficient of the minimum-phase factor, shape (..., n_signals, n_signals).
+
+    The inverse DFT at lag 0 is the mean over frequencies, so no full inverse
+    transform is needed. It is real for the factor of a real process.
+    """
+    zero_lag: NDArray[np.floating] = xp.mean(minimum_phase, axis=-3).real
+    return zero_lag
+
+
 def _estimate_transfer_function(
     minimum_phase: NDArray[np.complexfloating],
+    n_frequencies: int | None = None,
 ) -> NDArray[np.complexfloating]:
     """Estimate transfer function non-parametrically from minimum phase factor.
 
@@ -5374,11 +5343,14 @@ def _estimate_transfer_function(
     ----------
     minimum_phase : array, shape (n_time_windows, n_fft_samples, n_signals, n_signals)
         The matrix square root of a cross spectral matrix.
+    n_frequencies : int, optional
+        Return only the first ``n_frequencies`` bins (e.g. the non-negative
+        frequencies); all bins by default.
 
     Returns
     -------
     transfer_function : array
-        Shape (n_time_windows, n_fft_samples, n_signals, n_signals).
+        Shape (n_time_windows, n_frequencies, n_signals, n_signals).
         The transfer function of a MVAR model.
 
     References
@@ -5388,10 +5360,9 @@ def _estimate_transfer_function(
            causality. NeuroImage 41, 354-362.
 
     """
-    inverse_fourier_coefficients = ifft(minimum_phase, axis=-3).real
-    H_0 = inverse_fourier_coefficients[..., 0:1, :, :]
+    H_0 = _zero_lag_coefficient(minimum_phase)[..., xp.newaxis, :, :]
     transfer_function: NDArray[np.complexfloating] = xp.matmul(
-        minimum_phase, _regularized_inverse(H_0)
+        minimum_phase[..., :n_frequencies, :, :], _regularized_inverse(H_0)
     )
     return transfer_function
 
@@ -6372,7 +6343,7 @@ def _var_model_from_spectrum(
         _warn_on_failure=False,
     )
     n_nonnegative = csm.shape[-3] // 2 + 1
-    transfer = _estimate_transfer_function(minimum_phase)[..., :n_nonnegative, :, :]
+    transfer = _estimate_transfer_function(minimum_phase, n_nonnegative)
     return transfer, _estimate_noise_covariance(minimum_phase)
 
 
