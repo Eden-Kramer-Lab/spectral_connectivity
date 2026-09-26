@@ -1463,11 +1463,11 @@ class Connectivity:
     def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
         return _var_model_from_factor(self._minimum_phase_factor)
 
-    @cached_property
+    @property
     def _transfer_function(self) -> NDArray[np.complexfloating]:
         return self._var_model[0]
 
-    @cached_property
+    @property
     def _noise_covariance(self) -> NDArray[np.floating]:
         return self._var_model[1]
 

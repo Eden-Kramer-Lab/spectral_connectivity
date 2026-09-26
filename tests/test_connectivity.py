@@ -2145,29 +2145,23 @@ def test_granger_is_silent_on_well_conditioned_signals(measure):
     assert np.isfinite(result[..., off_diagonal]).all()
 
 
-def test_directed_measures_share_one_transfer_function_binding(monkeypatch):
+def test_directed_measures_share_one_transfer_function_binding():
     """The cached full model and the Granger kernels both estimate the transfer
     function through ``_granger``, so one patch point reaches every path."""
     from spectral_connectivity import _granger
 
-    calls = []
-    real_transfer_function = _granger._estimate_transfer_function
-
-    def counting_transfer_function(*args, **kwargs):
-        calls.append(1)
-        return real_transfer_function(*args, **kwargs)
-
-    monkeypatch.setattr(_granger, "_estimate_transfer_function", counting_transfer_function)
     rng = np.random.default_rng(2)
     shape = (1, 20, 3, 32, 3)
     conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
-
-    conn.directed_transfer_function()
-    n_cached_path_calls = len(calls)
-    conn.pairwise_spectral_granger_prediction()
-
-    assert n_cached_path_calls == 1
-    assert len(calls) > n_cached_path_calls
+    with patch.object(
+        _granger,
+        "_estimate_transfer_function",
+        wraps=_granger._estimate_transfer_function,
+    ) as transfer_function:
+        conn.directed_transfer_function()
+        assert transfer_function.call_count == 1
+        conn.pairwise_spectral_granger_prediction()
+        assert transfer_function.call_count > 1
 
 
 def test_conditional_granger_factorizes_each_channel_set_once():
