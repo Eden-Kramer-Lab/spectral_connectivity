@@ -13,6 +13,7 @@ import numpy as np
 import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
+from spectral_connectivity._backend import ON_GPU
 from spectral_connectivity.connectivity import (
     _NON_MEASURE_METHODS,
     Connectivity,
@@ -23,7 +24,6 @@ from spectral_connectivity.connectivity import (
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
     BackendArray,
-    get_compute_backend,
     is_positive_integer,
     to_numpy,
 )
@@ -1396,10 +1396,7 @@ def _shared_provenance_attrs(
     }
     attrs["package"] = "spectral_connectivity"
     attrs["package_version"] = _package_version()
-    # get_compute_backend() reports the backend actually imported (numpy vs
-    # cupy), not the current env var; is_gpu_enabled() would mislabel a result if
-    # SPECTRAL_CONNECTIVITY_ENABLE_GPU changed after import.
-    attrs["backend"] = get_compute_backend()["backend"].upper()
+    attrs["backend"] = "GPU" if ON_GPU else "CPU"
     attrs["expectation_type"] = connectivity.expectation_type
     # A single fixed key is both collision-proof and a valid NetCDF attribute
     # name. Flattening arbitrary user keys would make unlike keys such as 1 and

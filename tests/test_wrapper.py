@@ -2110,7 +2110,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     The backend is fixed when the package is imported; toggling
     SPECTRAL_CONNECTIVITY_ENABLE_GPU afterwards must not mislabel a result.
     """
-    from spectral_connectivity.utils import get_compute_backend
+    from spectral_connectivity import _backend
 
     monkeypatch.setenv("SPECTRAL_CONNECTIVITY_ENABLE_GPU", "true")
     rng = np.random.default_rng(0)
@@ -2120,7 +2120,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     )
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
-    assert da.attrs["backend"] == get_compute_backend()["backend"].upper()
+    assert da.attrs["backend"] == ("GPU" if _backend.ON_GPU else "CPU")
 
 
 def test_multitaper_connectivity_rejects_empty_method_list():

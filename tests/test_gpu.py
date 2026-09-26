@@ -1,10 +1,10 @@
 """Tests for GPU backend detection and configuration.
 
 The compute backend is fixed when ``spectral_connectivity`` is first imported
-(``_backend.xp`` is numpy or cupy), so patching the environment afterwards only
-changes what :func:`get_compute_backend` reports as *requested*
-(``gpu_enabled``), never the imported ``backend``. Assertions about the imported
-backend therefore depend on the session's actual ``_backend.xp``.
+(``_backend.ON_GPU``), so patching the environment afterwards only changes what
+:func:`get_compute_backend` reports as *requested* (``gpu_enabled``), never the
+imported ``backend``. Assertions about the imported backend therefore depend on
+the session's actual ``_backend.ON_GPU``.
 """
 
 import importlib.machinery
@@ -15,7 +15,6 @@ import sys
 import types
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 from spectral_connectivity import _backend, get_compute_backend
@@ -28,13 +27,9 @@ cpu_session_only = pytest.mark.skipif(
 
 
 @pytest.fixture
-def cpu_backend():
+def cpu_backend(monkeypatch):
     """Report a NumPy-backed import regardless of the session's real backend."""
-    fake_backend = types.ModuleType("spectral_connectivity._backend")
-    fake_backend.xp = np
-    fake_backend.ON_GPU = False
-    with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
-        yield
+    monkeypatch.setattr(_backend, "ON_GPU", False)
 
 
 @pytest.fixture
@@ -214,14 +209,9 @@ class TestIsGpuEnabled:
 class TestBackendDetection:
     """get_compute_backend reports the backend _backend imported (ON_GPU)."""
 
-    def test_reports_gpu_when_the_backend_imported_cupy(self):
-        fake_backend = types.ModuleType("spectral_connectivity._backend")
-        fake_backend.xp = types.ModuleType("cupy")
-        fake_backend.ON_GPU = True
-
-        with patch.dict(sys.modules, {"spectral_connectivity._backend": fake_backend}):
-            result = get_compute_backend()
-            assert result["backend"] == "gpu"
+    def test_reports_gpu_when_the_backend_imported_cupy(self, monkeypatch):
+        monkeypatch.setattr(_backend, "ON_GPU", True)
+        assert get_compute_backend()["backend"] == "gpu"
 
     def test_reports_cpu_when_the_backend_imported_numpy(self, cpu_backend):
         assert get_compute_backend()["backend"] == "cpu"
