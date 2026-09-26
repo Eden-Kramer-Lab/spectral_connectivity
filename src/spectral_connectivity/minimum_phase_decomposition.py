@@ -454,11 +454,15 @@ def _solve_2x2(
     coefficient_matrix: NDArray[np.complexfloating],
     right_hand_side: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
-    """Closed-form solve of 2x2 systems; exactly singular ones are NaN.
+    """Closed-form solve of 2x2 systems; singular or non-finite ones are NaN.
 
-    Pairwise and subset spectral Granger factor 2x2 spectra, where LAPACK's
-    per-matrix overhead dominates: Cramer's rule is about twice as fast and
-    agrees with ``linalg.solve`` to rounding.
+    Every 2-signal Wilson factorization (e.g. pairwise and subset spectral
+    Granger) solves 2x2 systems, where LAPACK's per-matrix overhead dominates.
+    Cramer's rule avoids it and, being backward stable for 2x2 systems, agrees
+    with ``linalg.solve`` to within rounding amplified by the condition number.
+
+    Only an exactly zero determinant counts as singular: a near-singular system
+    is solved like any other, whatever else is in the batch.
 
     Parameters
     ----------
@@ -470,8 +474,12 @@ def _solve_2x2(
     Returns
     -------
     NDArray[complexfloating], same shape as ``right_hand_side``
-        Solution ``x``, with NaN where ``det(A) == 0``.
+        Solution ``x``, with NaN where ``det(A) == 0`` or ``A`` is non-finite.
     """
+    # Zero non-finite matrices so they are exactly singular and the arithmetic
+    # below emits no invalid-value warnings for them.
+    is_finite = xp.isfinite(coefficient_matrix).all(axis=(-2, -1), keepdims=True)
+    coefficient_matrix = xp.where(is_finite, coefficient_matrix, 0)
     a, b = coefficient_matrix[..., 0, 0, None], coefficient_matrix[..., 0, 1, None]
     c, d = coefficient_matrix[..., 1, 0, None], coefficient_matrix[..., 1, 1, None]
     determinant = (a * d - b * c)[..., xp.newaxis]
@@ -510,6 +518,9 @@ def _solve_isolating_singular(
         Batched right-hand sides ``B``.
     identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity used to stand in for singular matrices during the solve.
+
+    2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats only an
+    exactly zero determinant as singular.
 
     Returns
     -------
