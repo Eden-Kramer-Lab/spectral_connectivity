@@ -7,7 +7,8 @@ frequency (Geweke 1982; Dhamala, Rangarajan & Ding 2008).
 """
 
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from itertools import combinations
 from typing import Any
 
 import numpy as np
@@ -488,6 +489,105 @@ def _estimate_conditional_spectral_granger_prediction(
     safe_intrinsic = xp.where(positive, intrinsic, 1.0)
     value = _sanitized_nonnegative_granger(xp.log(safe_total) - xp.log(safe_intrinsic))
     return xp.where(positive, value, xp.nan)
+
+
+def _estimate_all_conditional_spectral_granger(
+    spectrum: NDArray[np.complexfloating],
+    full_transfer: NDArray[np.complexfloating],
+    full_covariance: NDArray[np.floating],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+) -> NDArray[np.floating]:
+    """Conditional spectral Granger for every ordered pair of three or more signals.
+
+    Parameters
+    ----------
+    spectrum : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+    full_transfer : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+        Transfer function of the full model of every signal.
+    full_covariance : array, shape (..., n_signals, n_signals)
+        Noise covariance of the full model.
+
+    Returns
+    -------
+    conditional_granger : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+        ``[..., target, source]`` is ``source -> target`` conditioned on the
+        other signals; the diagonal is NaN.
+    """
+    n_signals = spectrum.shape[-1]
+    n_nonnegative = spectrum.shape[-3] // 2 + 1
+    result = xp.full(
+        (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals),
+        xp.nan,
+        dtype=_granger_result_dtype(spectrum),
+    )
+    all_indices = np.arange(n_signals)
+    for source in range(n_signals):
+        reduced_indices = all_indices[all_indices != source]
+        # Index the device spectrum with a device index array; the host copy is
+        # what the conditional estimator's bookkeeping consumes.
+        device_indices = xp.asarray(reduced_indices)
+        reduced_transfer, _ = _var_model_from_spectrum(
+            spectrum[..., device_indices[:, xp.newaxis], device_indices[xp.newaxis, :]],
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
+        reduced_inverse_transfer = _regularized_inverse(reduced_transfer)
+        for target in range(n_signals):
+            if target == source:
+                continue
+            result[..., target, source] = _estimate_conditional_spectral_granger_prediction(
+                full_transfer,
+                full_covariance,
+                reduced_inverse_transfer,
+                reduced_indices,
+                target,
+            )
+    return result
+
+
+def _estimate_blockwise_spectral_granger(
+    spectrum: NDArray[np.complexfloating],
+    group_indices: Sequence[NDArray[np.integer]],
+    *,
+    minimum_phase_tolerance: float,
+    minimum_phase_max_iterations: int,
+) -> NDArray[np.floating]:
+    """Block spectral Granger between every pair of signal groups.
+
+    Parameters
+    ----------
+    spectrum : array, shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+    group_indices : sequence of int arrays
+        Signal indices of each group.
+
+    Returns
+    -------
+    block_granger : array, shape (..., n_nonnegative_frequencies, n_groups, n_groups)
+        ``[..., target, source]`` is ``source -> target``; the diagonal is NaN.
+    """
+    n_groups = len(group_indices)
+    n_nonnegative = spectrum.shape[-3] // 2 + 1
+    result = xp.full(
+        (*spectrum.shape[:-3], n_nonnegative, n_groups, n_groups),
+        xp.nan,
+        dtype=_granger_result_dtype(spectrum),
+    )
+    # One factorization per unordered group pair supplies both directions.
+    for first, second in combinations(range(n_groups), 2):
+        result[..., first, second], result[..., second, first] = (
+            _estimate_block_spectral_granger_prediction(
+                spectrum,
+                group_indices[first],
+                group_indices[second],
+                minimum_phase_tolerance=minimum_phase_tolerance,
+                minimum_phase_max_iterations=minimum_phase_max_iterations,
+            )
+        )
+    return result
 
 
 def _estimate_block_spectral_granger_prediction(

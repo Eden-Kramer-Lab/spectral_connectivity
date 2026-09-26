@@ -24,14 +24,12 @@ from spectral_connectivity._array_utils import (
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
-    _estimate_block_spectral_granger_prediction,
-    _estimate_conditional_spectral_granger_prediction,
+    _estimate_all_conditional_spectral_granger,
+    _estimate_blockwise_spectral_granger,
     _estimate_spectral_granger_prediction,
     _estimate_subset_spectral_granger_prediction,
     _factorize_spectrum,
-    _granger_result_dtype,
     _var_model_from_factor,
-    _var_model_from_spectrum,
     _warn_nan_granger_pairs,
 )
 from spectral_connectivity._multivariate import (
@@ -4125,53 +4123,27 @@ class Connectivity:
         """
         self._require_two_sided_spectrum("conditional_spectral_granger_prediction")
         spectrum = self._expectation_cross_spectral_matrix()
-        n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
-        n_signals = self.n_signals
-        output_shape = (*spectrum.shape[:-3], n_nonnegative, n_signals, n_signals)
-        result = xp.full(output_shape, xp.nan, dtype=_granger_result_dtype(spectrum))
         tolerance = self._minimum_phase_tolerance
         max_iterations = self._minimum_phase_max_iterations
-
-        if n_signals == 2:
+        if self.n_signals == 2:
             # No conditioning set: the measure is pairwise Geweke Granger.
-            result[..., 0, 1], result[..., 1, 0] = _estimate_block_spectral_granger_prediction(
+            result = _estimate_blockwise_spectral_granger(
                 spectrum,
-                np.array([0]),
-                np.array([1]),
+                [np.array([0]), np.array([1])],
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
-            _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
-            return result
-
-        # The full model is the instance's cached factorization (the same CSM,
-        # tolerance and iteration cap), shared with the other directed measures.
-        full_transfer = self._transfer_function
-        full_covariance = self._noise_covariance
-        all_indices = np.arange(n_signals)
-        for source in range(n_signals):
-            reduced_indices = all_indices[all_indices != source]
-            # Index the device spectrum with a device index array; the host
-            # copy is what the conditional estimator's bookkeeping consumes.
-            device_indices = xp.asarray(reduced_indices)
-            reduced_transfer, _ = _var_model_from_spectrum(
-                spectrum[..., device_indices[:, xp.newaxis], device_indices[xp.newaxis, :]],
+        else:
+            # The full model is the instance's cached factorization (the same
+            # CSM, tolerance and iteration cap), shared with the other directed
+            # measures.
+            result = _estimate_all_conditional_spectral_granger(
+                spectrum,
+                self._transfer_function,
+                self._noise_covariance,
                 minimum_phase_tolerance=tolerance,
                 minimum_phase_max_iterations=max_iterations,
             )
-            reduced_inverse_transfer = _regularized_inverse(reduced_transfer)
-            for target in range(n_signals):
-                if target == source:
-                    continue
-                result[..., target, source] = (
-                    _estimate_conditional_spectral_granger_prediction(
-                        full_transfer,
-                        full_covariance,
-                        reduced_inverse_transfer,
-                        reduced_indices,
-                        target,
-                    )
-                )
         _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
         return result
 
@@ -4221,21 +4193,12 @@ class Connectivity:
         self._require_two_sided_spectrum("blockwise_spectral_granger_prediction")
         labels, indices, _ = self._validated_group_indices(group_labels)
 
-        spectrum = self._expectation_cross_spectral_matrix()
-        n_nonnegative = self._nonnegative_frequency_count(spectrum.shape[-3])
-        output_shape = (*spectrum.shape[:-3], n_nonnegative, len(labels), len(labels))
-        result = xp.full(output_shape, xp.nan, dtype=_granger_result_dtype(spectrum))
-        # One factorization per unordered group pair supplies both directions.
-        for first, second in combinations(range(len(labels)), 2):
-            result[..., first, second], result[..., second, first] = (
-                _estimate_block_spectral_granger_prediction(
-                    spectrum,
-                    indices[first],
-                    indices[second],
-                    minimum_phase_tolerance=self._minimum_phase_tolerance,
-                    minimum_phase_max_iterations=self._minimum_phase_max_iterations,
-                )
-            )
+        result = _estimate_blockwise_spectral_granger(
+            self._expectation_cross_spectral_matrix(),
+            indices,
+            minimum_phase_tolerance=self._minimum_phase_tolerance,
+            minimum_phase_max_iterations=self._minimum_phase_max_iterations,
+        )
         _warn_nan_granger_pairs(
             result,
             "blockwise_spectral_granger_prediction",
