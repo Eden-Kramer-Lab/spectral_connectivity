@@ -799,15 +799,14 @@ class TestGroupDelay:
         for; comparing to ``linregress`` (which also centers) would not exercise
         it.
         """
-        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 30, 1, 32, 3
+        n_time, n_trials, n_tapers, n_fft, n_signals = 1, 30, 1, 17, 3
         expected_slope = -0.7
-        # Frequency labels offset far from zero relative to their 0.001 spacing.
+        # One-sided frequency labels offset far from zero relative to their
+        # 0.001 spacing (a two-sided spectrum must be in FFT order).
         frequencies = 1e6 + np.arange(n_fft) * 0.001
-        # group_delay regresses over the non-negative frequencies; the raw-moment
-        # variance genuinely cancels to zero on that grid in float64 (the old
-        # failure the centering fixes).
-        band = frequencies[: n_fft // 2 + 1]
-        assert len(band) * (band @ band) - band.sum() ** 2 == 0.0
+        # The raw-moment variance genuinely cancels to zero on that grid in
+        # float64 (the old failure the centering fixes).
+        assert n_fft * (frequencies @ frequencies) - frequencies.sum() ** 2 == 0.0
 
         fourier = np.zeros((n_time, n_trials, n_tapers, n_fft, n_signals), dtype=complex)
         for trial in range(n_trials):
@@ -822,7 +821,7 @@ class TestGroupDelay:
             ) + 1j * self.rng.standard_normal(n_fft)
 
         _delay, slope, r_value = Connectivity(
-            fourier_coefficients=fourier, frequencies=frequencies
+            fourier_coefficients=fourier, frequencies=frequencies, is_one_sided=True
         ).group_delay()
 
         assert np.isfinite(slope[..., 0, 1]).all()

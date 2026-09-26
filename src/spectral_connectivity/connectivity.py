@@ -302,31 +302,34 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
 
 
 def _require_fft_order(frequencies: Any) -> None:
-    """Raise unless two-sided ``frequencies`` follow ``numpy.fft.fftfreq`` order.
+    """Raise unless two-sided ``frequencies`` are uniformly spaced in FFT order.
 
     Two-sided coefficients are folded onto their first ``n // 2 + 1`` bins as
     the non-negative frequencies, so any other layout (e.g. ``rfft`` output
-    without ``is_one_sided = True``, or an ``fftshift``-ed spectrum) would
-    silently drop or mislabel frequencies.
+    labelled two-sided, or an ``fftshift``-ed spectrum) would silently drop or
+    mislabel frequencies.
     """
     values = to_numpy(frequencies).astype(float)
-    n_frequencies = values.size
-    expected = np.fft.fftfreq(n_frequencies)
-    scale = np.max(np.abs(values)) / np.max(np.abs(expected)) if n_frequencies > 1 else 0.0
-    if n_frequencies > 1 and scale > 0 and np.allclose(values, expected * scale):
-        return
-    if n_frequencies <= 1 and np.all(values == 0):
-        return
-    msg = (
-        f"transform.frequencies are not in two-sided FFT order "
-        f"(numpy.fft.fftfreq): got {values[:3]} ... {values[-2:]}. Connectivity "
-        f"treats the first n // 2 + 1 bins of a two-sided spectrum as its "
-        f"non-negative half, so any other layout would drop or mislabel "
-        f"frequencies. If fft() returns only non-negative frequencies (e.g. "
-        f"numpy.fft.rfft or a wavelet transform), set is_one_sided = True on the "
-        f"transform; otherwise return the coefficients in numpy.fft.fft order."
-    )
-    raise ValueError(msg)
+    if values.size == 1:
+        in_order = bool(values[0] == 0.0)
+    else:
+        step = values[1] - values[0] if values.size > 2 else abs(values[1])
+        expected = np.fft.fftfreq(values.size, d=1.0 / (step * values.size))
+        in_order = bool(step > 0) and np.allclose(
+            values, expected, rtol=1e-9, atol=max(abs(step) * 1e-9, np.finfo(float).eps)
+        )
+    if not in_order:
+        msg = (
+            f"frequencies must be uniformly spaced in standard FFT order (zero and "
+            f"positive bins followed by negative bins, as numpy.fft.fftfreq); got "
+            f"{values[:3]} ... {values[-2:]}. The first n // 2 + 1 bins of a "
+            f"two-sided spectrum are taken as its non-negative half, so any other "
+            f"layout would drop or mislabel frequencies. If the coefficients hold "
+            f"only non-negative frequencies (e.g. numpy.fft.rfft or a wavelet "
+            f"transform), mark them one-sided (is_one_sided=True); otherwise order "
+            f"them as numpy.fft.fft does."
+        )
+        raise ValueError(msg)
 
 
 class Connectivity:
@@ -553,6 +556,8 @@ class Connectivity:
             ):
                 msg = "One-sided frequencies must be non-negative and strictly increasing."
                 raise ValueError(msg)
+            if not self._is_one_sided:
+                _require_fft_order(frequency_values)
         if time is not None:
             _validate_coordinate("time", time, n_time_windows)
         if frequencies is None:
@@ -875,11 +880,8 @@ class Connectivity:
         # and independent. The keywords are passed only when non-default so a
         # subclass mirroring the older signature keeps working with a plain
         # two-sided transform.
-        is_one_sided = _transform_flag(multitaper_instance, "is_one_sided", False)
-        if is_one_sided:
+        if _transform_flag(multitaper_instance, "is_one_sided", False):
             init_kwargs["is_one_sided"] = True
-        elif init_kwargs["frequencies"] is not None:
-            _require_fft_order(init_kwargs["frequencies"])
         weights = _optional_transform_attribute(
             multitaper_instance, "observation_weights", None
         )

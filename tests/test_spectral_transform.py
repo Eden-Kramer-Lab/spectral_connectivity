@@ -240,8 +240,10 @@ def test_two_sided_frequencies_must_be_in_fft_order(layout):
     coefficients = np.moveaxis(spectrum, 0, 1)[np.newaxis, :, np.newaxis]
     transform = _MinimalTransform(coefficients, frequencies)
 
-    with pytest.raises(ValueError, match="not in two-sided FFT order"):
+    with pytest.raises(ValueError, match="standard FFT order"):
         Connectivity.from_transform(transform)
+    with pytest.raises(ValueError, match="standard FFT order"):
+        Connectivity(coefficients, frequencies=frequencies)
 
 
 def test_real_valued_coefficients_are_rejected(coefficients):

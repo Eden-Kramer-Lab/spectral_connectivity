@@ -3298,36 +3298,6 @@ def fourier_connectivity(
             frequency_values.size > 0 and not np.any(frequency_values < 0)
         )
         one_sided = inferred_one_sided if is_one_sided is None else bool(is_one_sided)
-        # A one-sided coordinate (non-negative, strictly increasing) is validated
-        # by Connectivity itself; only the two-sided FFT-order check lives here.
-        if not one_sided and frequency_values.size == 1 and frequency_values[0] != 0.0:
-            msg = (
-                "frequencies must be uniformly spaced in standard FFT "
-                "order (a one-bin two-sided spectrum can contain only zero Hz)."
-            )
-            raise ValueError(msg)
-        if not one_sided and frequency_values.size > 1:
-            frequency_step = (
-                frequency_values[1] - frequency_values[0]
-                if frequency_values.size > 2
-                else abs(frequency_values[1])
-            )
-            expected_frequencies = np.fft.fftfreq(
-                frequency_values.size,
-                d=1.0 / (frequency_step * frequency_values.size),
-            )
-            tolerance = max(abs(frequency_step) * 1e-9, np.finfo(float).eps)
-            if frequency_step <= 0 or not np.allclose(
-                frequency_values,
-                expected_frequencies,
-                rtol=1e-9,
-                atol=tolerance,
-            ):
-                msg = (
-                    "frequencies must be uniformly spaced in standard FFT "
-                    "order (zero and positive bins followed by negative bins)."
-                )
-                raise ValueError(msg)
     else:
         if is_one_sided is None:
             warnings.warn(
