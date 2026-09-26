@@ -569,10 +569,14 @@ class SpectralTransform(Protocol):
     -----
     ``fft()`` must return the Fourier coefficients with shape
     ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``.
-    :class:`Connectivity` takes ownership of the returned array without copying
-    it and marks it (and any array it is a view of) read-only, so ``fft()``
-    must return a new array on each call rather than one the transform or its
-    caller keeps using.
+    ``fft()`` must return fresh, unshared storage on each call, and neither the
+    transform nor its caller may mutate that storage afterwards through any
+    alias. :class:`Connectivity` keeps the array without copying it and marks
+    it (and any array it is a view of) read-only where the backend supports
+    that, but this cannot catch every write: other views created beforehand
+    stay writable, and CuPy arrays have no read-only flag. A write through such
+    an alias would change the coefficients silently, while cached results keep
+    the old values.
 
     The coefficients' scale sets the units of :meth:`Connectivity.power`;
     normalized measures such as coherence and the phase-lag indices do not

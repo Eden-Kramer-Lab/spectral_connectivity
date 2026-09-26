@@ -843,8 +843,9 @@ class Connectivity:
             ``observation_weights``, ``observations_are_independent``, and
             ``time_bins_are_independent`` attributes are forwarded when present;
             see :class:`~spectral_connectivity.transforms.SpectralTransform`.
-            ``fft()`` must return a new array on each call: the result is used
-            without copying and marked read-only.
+            ``fft()`` must return fresh, unshared storage on each call that
+            nothing mutates afterwards: the result is used without copying and
+            marked read-only where the backend supports it.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
