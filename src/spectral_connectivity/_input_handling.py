@@ -644,8 +644,9 @@ def _unwrap_xarray_input(
     then transposed into the numerical core's positional order. A numeric time
     index supplies ``start_time`` and, when ``sampling_frequency`` is omitted,
     the sampling rate; when the rate is given it is validated against the index.
-    Returns ``(data, signal_names, inferred_sampling_frequency,
-    inferred_start_time)``.
+    Returns an :class:`_UnwrappedInput`: the array data, the signal names, the
+    sampling frequency and start time inferred from the time index, the input's
+    attrs, and its per-signal metadata (the last four ``None`` for a plain array).
     """
     if not isinstance(time_series, xr.DataArray):
         if any(dimension is not None for dimension in (time_dim, trial_dim, signal_dim)):
