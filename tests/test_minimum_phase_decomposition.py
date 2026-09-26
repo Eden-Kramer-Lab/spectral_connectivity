@@ -230,6 +230,14 @@ def _spectra_with_one_duplicated_channel(real_signals):
     return cross_spectral_matrix
 
 
+# Whether the Cholesky start of a rank-deficient or NaN window raises (and so
+# warns) depends on the platform's LAPACK; these tests are about the iteration.
+_IGNORE_CHOLESKY_START_WARNING = pytest.mark.filterwarnings(
+    "ignore:Computing the initial conditions using the Cholesky failed:UserWarning"
+)
+
+
+@_IGNORE_CHOLESKY_START_WARNING
 @pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
 def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_signals):
     """One rank-deficient sub-spectrum must not NaN-poison the whole batch.
@@ -647,16 +655,13 @@ def test_is_conjugate_symmetric_accepts_mirrored_nan():
     assert not _is_conjugate_symmetric(spectrum)
 
 
+@_IGNORE_CHOLESKY_START_WARNING
 def test_nan_window_leaves_the_other_windows_unchanged():
     """A NaN window is NaN, and the healthy window matches its own factorization."""
     spectrum = _real_signal_spectrum()
     spectrum[1] = np.nan
 
-    # The NaN window also fails the Cholesky start, which warns separately.
-    with (
-        pytest.warns(UserWarning, match="did not converge for 1 of 2"),
-        pytest.warns(UserWarning, match="Cholesky failed"),
-    ):
+    with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
         factor = minimum_phase_decomposition(spectrum)
 
     assert factor.shape == spectrum.shape
