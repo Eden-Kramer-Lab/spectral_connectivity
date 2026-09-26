@@ -43,7 +43,7 @@ from spectral_connectivity.connectivity import (
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import to_numpy
+from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 logger = getLogger(__name__)
 
@@ -429,7 +429,7 @@ def _format_and_reduce_measures(
             "squeeze=True is ignored for multi-measure results (a Dataset); "
             "request a single method (a string) to get a squeezed DataArray.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
         squeeze = False
 
@@ -953,7 +953,7 @@ def fourier_connectivity(
                 "frequencies only) pass is_one_sided=True, otherwise "
                 "is_one_sided=False to silence this warning.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         one_sided = bool(is_one_sided) if is_one_sided is not None else False
 
@@ -1049,7 +1049,7 @@ def fourier_connectivity(
                     "coefficients and request only one-sided-compatible measures, "
                     "or pass the full two-sided FFT of real-valued signals.",
                     UserWarning,
-                    stacklevel=2,
+                    stacklevel=stacklevel_outside_package(),
                 )
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     metadata: dict[str, Any] = {

@@ -13,7 +13,7 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import BackendArray, to_numpy
+from spectral_connectivity.utils import BackendArray, stacklevel_outside_package, to_numpy
 
 _UNSET = object()
 
@@ -309,7 +309,7 @@ def _resolve_dataarray_dimensions(
             f"Pass {assumed_role}_dim explicitly to silence this warning, or if "
             "the mapping is wrong.",
             UserWarning,
-            stacklevel=4,
+            stacklevel=stacklevel_outside_package(),
         )
         resolved[assumed_role] = assumed_dimension
         unresolved_roles.clear()
@@ -595,7 +595,7 @@ def _signal_labels_from_dataarray(
             f"be used. Pass ``signal_names`` explicitly, or attach a 1-D "
             f"coordinate named {signal_dimension!r} to label the output "
             f"source/target axes.",
-            stacklevel=4,
+            stacklevel=stacklevel_outside_package(),
         )
     return None
 
@@ -851,7 +851,7 @@ def _unwrap_fourier_input(
             "FFT-bin labels. Pass a 1-D `frequencies` array to keep meaningful "
             "frequency labels.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
     if frequencies is None:
         frequencies = coordinate_frequencies

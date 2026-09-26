@@ -3545,3 +3545,49 @@ def test_signed_phase_measures_are_positive_when_source_leads(method):
     band = result.sel(frequency=slice(5, 20)).mean(["time", "frequency"])
     assert float(band.sel(source="a", target="b")) > 0.3
     assert float(band.sel(source="b", target="a")) < -0.3
+
+
+def _wrapper_warning_cases():
+    rng = np.random.default_rng(41)
+    three_signals = rng.standard_normal((256, 4, 3))
+    dataarray = xr.DataArray(
+        rng.standard_normal((256, 4, 2)), dims=("time", "drug_dose", "channel")
+    )
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    return {
+        "squeeze_with_many_signals": (
+            "squeeze=True but",
+            lambda: multitaper_connectivity(
+                three_signals, 256, method="coherence_magnitude", squeeze=True
+            ),
+        ),
+        "squeeze_with_many_measures": (
+            "squeeze=True is ignored",
+            lambda: multitaper_connectivity(
+                three_signals,
+                256,
+                method=["coherence_magnitude", "phase_locking_value"],
+                squeeze=True,
+            ),
+        ),
+        "fourier_without_frequencies": (
+            "no frequency coordinate",
+            lambda: fourier_connectivity(coefficients, method="coherence_magnitude"),
+        ),
+        "dataarray_role_by_elimination": (
+            "Assuming DataArray dimension",
+            lambda: multitaper_connectivity(dataarray, 256, method="power"),
+        ),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_wrapper_warning_cases()))
+def test_wrapper_warnings_point_at_the_caller(case):
+    """Warnings raised in the wrapper's helper modules name the user's call."""
+    match, call = _wrapper_warning_cases()[case]
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    matching = [w for w in record if match in str(w.message)]
+    assert matching, [str(w.message)[:80] for w in record]
+    assert {w.filename for w in matching} == {__file__}

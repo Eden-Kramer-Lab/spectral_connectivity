@@ -20,6 +20,7 @@ from spectral_connectivity.connectivity import (
     MultivariateConnectivityResult,
     _frequencies_in_band,
 )
+from spectral_connectivity.utils import stacklevel_outside_package
 
 
 class UnsupportedMeasureError(ValueError):
@@ -230,7 +231,7 @@ def _connectivity_result_to_xarray(
                 f"squeeze=True but there are {connectivity.n_signals} signals; "
                 "returning the full (source, target) matrix.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
         return xar
 
