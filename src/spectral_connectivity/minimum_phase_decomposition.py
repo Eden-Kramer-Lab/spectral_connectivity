@@ -450,6 +450,41 @@ def _singular_matrix_mask(
     return (~is_finite) | (smallest <= tolerance)
 
 
+def _solve_2x2(
+    coefficient_matrix: NDArray[np.complexfloating],
+    right_hand_side: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """Closed-form solve of 2x2 systems; exactly singular ones are NaN.
+
+    Pairwise and subset spectral Granger factor 2x2 spectra, where LAPACK's
+    per-matrix overhead dominates: Cramer's rule is about twice as fast and
+    agrees with ``linalg.solve`` to rounding.
+
+    Parameters
+    ----------
+    coefficient_matrix : NDArray[complexfloating], shape (..., 2, 2)
+        Batched left-hand-side matrices ``A`` in ``A x = B``.
+    right_hand_side : NDArray[complexfloating], shape (..., 2, n_columns)
+        Batched right-hand sides ``B``.
+
+    Returns
+    -------
+    NDArray[complexfloating], same shape as ``right_hand_side``
+        Solution ``x``, with NaN where ``det(A) == 0``.
+    """
+    a, b = coefficient_matrix[..., 0, 0, None], coefficient_matrix[..., 0, 1, None]
+    c, d = coefficient_matrix[..., 1, 0, None], coefficient_matrix[..., 1, 1, None]
+    determinant = (a * d - b * c)[..., xp.newaxis]
+    singular = determinant == 0
+    first_row, second_row = right_hand_side[..., 0, :], right_hand_side[..., 1, :]
+    solution = xp.stack(
+        (d * first_row - b * second_row, a * second_row - c * first_row), axis=-2
+    )
+    # Divide by 1 where singular so no divide warning fires, then mark NaN.
+    solution /= xp.where(singular, 1, determinant)
+    return xp.where(singular, xp.asarray(xp.nan, dtype=solution.dtype), solution)
+
+
 def _solve_isolating_singular(
     coefficient_matrix: NDArray[np.complexfloating],
     right_hand_side: NDArray[np.complexfloating],
@@ -481,6 +516,8 @@ def _solve_isolating_singular(
     NDArray[complexfloating], same shape as ``right_hand_side``
         Solution ``x``, with NaN for singular/non-finite ``A``.
     """
+    if coefficient_matrix.shape[-1] == 2:
+        return _solve_2x2(coefficient_matrix, right_hand_side)
     try:
         return xp.linalg.solve(coefficient_matrix, right_hand_side)
     except xp.linalg.LinAlgError:

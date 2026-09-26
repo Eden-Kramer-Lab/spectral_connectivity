@@ -200,6 +200,35 @@ def test_near_collinear_channels_converge():
     )
 
 
+@pytest.mark.parametrize("n_signals", [2, 3])
+def test_solve_isolating_singular_matches_lapack(n_signals):
+    """2x2 systems take a closed-form path; both paths match numpy.linalg.solve.
+
+    Includes a singular matrix, which must come back as NaN, alongside
+    well-conditioned and ill-conditioned complex ones, which must not.
+    """
+    rng = np.random.default_rng(3)
+    shape = (5, 7, n_signals, n_signals)
+    matrices = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    right_hand_side = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    matrices[1, 2] = np.outer(np.arange(1, n_signals + 1), np.ones(n_signals))  # rank 1
+    matrices[3, 4] = np.eye(n_signals) + 1e-9 * matrices[3, 4]  # ill-conditioned scaling
+    matrices[3, 4, 0] *= 1e-6
+    identity = np.eye(n_signals, dtype=complex)
+
+    solution = _solve_isolating_singular(matrices, right_hand_side, identity)
+
+    singular = np.zeros(shape[:2], dtype=bool)
+    singular[1, 2] = True
+    assert np.isnan(solution[singular]).all()
+    np.testing.assert_allclose(
+        solution[~singular],
+        np.linalg.solve(matrices[~singular], right_hand_side[~singular]),
+        rtol=1e-8,
+        atol=0,
+    )
+
+
 def test_singular_matrix_mask_flags_singular_and_nonfinite():
     """The mask flags rank-deficient and non-finite matrices, not healthy ones."""
     identity = np.eye(2)
