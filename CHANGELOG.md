@@ -76,11 +76,10 @@ directly with results from 2.x.
   accept: `fft()`, `frequencies`, and `time` are required, and the optional
   `is_one_sided`, `observation_weights`, `observations_are_independent`, and
   `time_bins_are_independent` attributes fall back to their defaults when
-  absent, so a custom transform needs no new attributes. Its docstring states
-  the `fft()` ownership rule and the coefficient scaling that makes `power()` a
-  density. Both constructors are annotated with it, so mypy now checks custom
-  transforms passed to them, and a `Connectivity` subclass overriding
-  `from_multitaper` must widen its argument to `SpectralTransform`.
+  absent, so a custom transform needs no new attributes. Both constructors are
+  annotated with it, so mypy now checks custom transforms passed to them, and a
+  `Connectivity` subclass overriding `from_multitaper` must widen its argument
+  to `SpectralTransform`.
 - `Connectivity` rejects input that used to give silently wrong results:
   two-sided frequencies not uniformly spaced in `numpy.fft.fftfreq` order (e.g.
   `rfft` output without `is_one_sided=True`), which `fourier_connectivity`

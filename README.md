@@ -248,15 +248,11 @@ Hz, so set `segment_duration` explicitly for electrophysiology data.
 `MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
 the xarray wrapper carries it as a two-dimensional coordinate.
 
-`Connectivity.from_transform` also accepts your own transform: any object with
-an `fft()` method returning coefficients shaped
-`(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)` and
-`frequencies` and `time` attributes satisfies the `SpectralTransform` protocol.
-`help(SpectralTransform)` lists the optional attributes (`is_one_sided`,
-`observation_weights`, and the observation-independence flags) with their
-defaults, and the scaling that makes `power()` a density. `fft()` must return a
-new array on each call, because `Connectivity` keeps it without copying. The
-[cookbook](docs/cookbook.md) has a worked example.
+`Connectivity.from_transform` also accepts your own transform: any object
+satisfying the `SpectralTransform` protocol (an `fft()` method plus
+`frequencies` and `time`). `help(SpectralTransform)` gives its optional
+attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
+density; the [cookbook](docs/cookbook.md) has a worked example.
 
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
