@@ -19,12 +19,12 @@ from spectral_connectivity.utils import gpu_request_error_message, is_gpu_enable
 if not TYPE_CHECKING and is_gpu_enabled():
     try:
         import cupy as xp
-        from cupyx.scipy.fft import fft, ifft
+        from cupyx.scipy.fft import fft, ifft, irfft, rfft
     except ImportError as exc:
         raise RuntimeError(gpu_request_error_message()) from exc
 else:
     import numpy as xp  # noqa: ICN001 -- the backend-neutral array namespace
-    from scipy.fft import fft, ifft
+    from scipy.fft import fft, ifft, irfft, rfft
 
 
 logger = getLogger(__name__)
@@ -46,8 +46,61 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
     return x.swapaxes(-1, -2).conjugate()
 
 
+def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
+    """Whether ``S(-f) == conj(S(f))`` exactly along the frequency axis (-3).
+
+    The comparison is exact (see :func:`minimum_phase_decomposition` Notes). NaN
+    counts as symmetric when it is mirrored at the conjugate frequency, so a
+    batch with a NaN window (e.g. a dead channel) keeps the fast path; that
+    window's factor is NaN on either path.
+
+    Parameters
+    ----------
+    cross_spectral_matrix : NDArray[complexfloating],
+        shape (..., n_fft_samples, n_signals, n_signals)
+        Two-sided cross-spectral matrix in standard FFT order.
+
+    Returns
+    -------
+    bool
+    """
+    zero_frequency = cross_spectral_matrix[..., 0, :, :]
+    positive = cross_spectral_matrix[..., 1:, :, :]
+    negative = cross_spectral_matrix[..., :0:-1, :, :]
+    mirrored_nan = xp.isnan(positive) & xp.isnan(negative)
+    return bool(
+        xp.all((zero_frequency.imag == 0) | xp.isnan(zero_frequency))
+        and xp.all((positive.real == negative.real) | mirrored_nan)
+        and xp.all((positive.imag == -negative.imag) | mirrored_nan)
+    )
+
+
+def _to_two_sided(
+    nonnegative: NDArray[np.complexfloating], n_fft_samples: int
+) -> NDArray[np.complexfloating]:
+    """Restore negative frequencies from a conjugate-symmetric half spectrum.
+
+    Parameters
+    ----------
+    nonnegative : NDArray[complexfloating],
+        shape (..., n_fft_samples // 2 + 1, n_signals, n_signals)
+        Frequencies ``0`` through ``n_fft_samples // 2``.
+    n_fft_samples : int
+        Length of the two-sided frequency axis.
+
+    Returns
+    -------
+    NDArray[complexfloating], shape (..., n_fft_samples, n_signals, n_signals)
+        The spectrum in standard FFT order, with ``X(-f) = conj(X(f))``.
+    """
+    n_nonnegative = nonnegative.shape[-3]
+    negative = nonnegative[..., n_fft_samples - n_nonnegative : 0 : -1, :, :].conjugate()
+    return xp.concatenate((nonnegative, negative), axis=-3)
+
+
 def _get_initial_conditions(
     cross_spectral_matrix: NDArray[np.complexfloating],
+    n_fft_samples: int | None = None,
 ) -> NDArray[np.floating]:
     """Generate initial guess for minimum phase factor using Cholesky decomposition.
 
@@ -58,8 +111,13 @@ def _get_initial_conditions(
     Parameters
     ----------
     cross_spectral_matrix : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Cross-spectral density matrix to be decomposed.
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Cross-spectral density matrix to be decomposed. ``n_frequencies`` is
+        ``n_fft_samples`` for a two-sided spectrum, or ``n_fft_samples // 2 + 1``
+        when ``n_fft_samples`` is given.
+    n_fft_samples : int, optional
+        If given, ``cross_spectral_matrix`` holds only the non-negative
+        frequencies of a conjugate-symmetric spectrum of this two-sided length.
 
     Returns
     -------
@@ -79,7 +137,10 @@ def _get_initial_conditions(
     random state. This is a NumPy-backend detail: on CuPy the batched Cholesky
     above returns NaN rather than raising, so this branch is never taken.
     """
-    zero_lag = ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
+    if n_fft_samples is None:
+        zero_lag = ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
+    else:
+        zero_lag = irfft(cross_spectral_matrix, n=n_fft_samples, axis=-3)[..., 0:1, :, :]
     try:
         return xp.linalg.cholesky(zero_lag).swapaxes(-1, -2)
     except xp.linalg.LinAlgError:
@@ -145,6 +206,7 @@ def _get_initial_conditions(
 
 def _get_causal_signal(
     linear_predictor: NDArray[np.complexfloating],
+    n_fft_samples: int | None = None,
 ) -> NDArray[np.complexfloating]:
     """Extract causal part of linear predictor (plus operator).
 
@@ -158,14 +220,22 @@ def _get_causal_signal(
     Parameters
     ----------
     linear_predictor : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        Linear predictor matrix in frequency domain.
+        shape (..., n_frequencies, n_signals, n_signals)
+        Linear predictor matrix in frequency domain. ``n_frequencies`` is
+        ``n_fft_samples`` for a two-sided spectrum, or ``n_fft_samples // 2 + 1``
+        when ``n_fft_samples`` is given.
+    n_fft_samples : int, optional
+        If given, ``linear_predictor`` holds only the non-negative frequencies of
+        a conjugate-symmetric spectrum of this two-sided length. Its lag
+        coefficients are then real, so real FFTs replace the complex ones and
+        the result is again the non-negative half.
 
     Returns
     -------
     causal_part_of_linear_predictor : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        Causal part of the linear predictor after plus operator.
+        shape (..., n_frequencies, n_signals, n_signals)
+        Causal part of the linear predictor after plus operator, on the same
+        frequencies as ``linear_predictor``.
 
     Notes
     -----
@@ -175,8 +245,12 @@ def _get_causal_signal(
     at zero lag.
     """
     n_signals = linear_predictor.shape[-1]
-    n_fft_samples = linear_predictor.shape[-3]
-    linear_predictor_coefficients = ifft(linear_predictor, axis=-3)
+    if n_fft_samples is None:
+        n_lags = linear_predictor.shape[-3]
+        linear_predictor_coefficients = ifft(linear_predictor, axis=-3)
+    else:
+        n_lags = n_fft_samples
+        linear_predictor_coefficients = irfft(linear_predictor, n=n_fft_samples, axis=-3)
 
     # Take half of the roots on the unit circle
     linear_predictor_coefficients[..., 0, :, :] *= 0.5
@@ -188,7 +262,9 @@ def _get_causal_signal(
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
-    linear_predictor_coefficients[..., (n_fft_samples + 1) // 2 :, :, :] = 0
+    linear_predictor_coefficients[..., (n_lags + 1) // 2 :, :, :] = 0
+    if n_fft_samples is not None:
+        return rfft(linear_predictor_coefficients, axis=-3)
     return fft(linear_predictor_coefficients, axis=-3)
 
 
@@ -374,6 +450,49 @@ def _singular_matrix_mask(
     return (~is_finite) | (smallest <= tolerance)
 
 
+def _solve_2x2(
+    coefficient_matrix: NDArray[np.complexfloating],
+    right_hand_side: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """Closed-form solve of 2x2 systems; singular or non-finite ones are NaN.
+
+    Every 2-signal Wilson factorization (e.g. pairwise and subset spectral
+    Granger) solves 2x2 systems, where LAPACK's per-matrix overhead dominates.
+    Cramer's rule avoids it and, being backward stable for 2x2 systems, agrees
+    with ``linalg.solve`` to within rounding amplified by the condition number.
+
+    Only an exactly zero determinant counts as singular: a near-singular system
+    is solved like any other, whatever else is in the batch.
+
+    Parameters
+    ----------
+    coefficient_matrix : NDArray[complexfloating], shape (..., 2, 2)
+        Batched left-hand-side matrices ``A`` in ``A x = B``.
+    right_hand_side : NDArray[complexfloating], shape (..., 2, n_columns)
+        Batched right-hand sides ``B``.
+
+    Returns
+    -------
+    NDArray[complexfloating], same shape as ``right_hand_side``
+        Solution ``x``, with NaN where ``det(A) == 0`` or ``A`` is non-finite.
+    """
+    a, b = coefficient_matrix[..., 0, 0, None], coefficient_matrix[..., 0, 1, None]
+    c, d = coefficient_matrix[..., 1, 0, None], coefficient_matrix[..., 1, 1, None]
+    first_row, second_row = right_hand_side[..., 0, :], right_hand_side[..., 1, :]
+    # Any non-finite entry of A makes the determinant non-finite, so checking
+    # the determinant alone catches non-finite A. Such systems (and exactly
+    # singular ones, divided by 1 instead) are replaced by NaN at the end, so
+    # NumPy need not warn about the invalid values they produce on the way.
+    with np.errstate(invalid="ignore", over="ignore"):
+        determinant = (a * d - b * c)[..., xp.newaxis]
+        singular = ~xp.isfinite(determinant) | (determinant == 0)
+        solution = xp.stack(
+            (d * first_row - b * second_row, a * second_row - c * first_row), axis=-2
+        )
+        solution /= xp.where(singular, 1, determinant)
+    return xp.where(singular, xp.nan, solution)
+
+
 def _solve_isolating_singular(
     coefficient_matrix: NDArray[np.complexfloating],
     right_hand_side: NDArray[np.complexfloating],
@@ -388,7 +507,9 @@ def _solve_isolating_singular(
     gives the NumPy path the same behavior: singular (or already non-finite)
     sub-matrices resolve to NaN while the remaining ones are solved normally, so
     a single rank-deficient window (e.g. duplicated channels) does not poison
-    the entire batch and the CPU and GPU results agree.
+    the entire batch, and exactly singular sub-matrices resolve to NaN on both
+    backends. 2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats
+    only an exactly zero determinant as singular.
 
     Parameters
     ----------
@@ -404,6 +525,8 @@ def _solve_isolating_singular(
     NDArray[complexfloating], same shape as ``right_hand_side``
         Solution ``x``, with NaN for singular/non-finite ``A``.
     """
+    if coefficient_matrix.shape[-1] == 2:
+        return _solve_2x2(coefficient_matrix, right_hand_side)
     try:
         return xp.linalg.solve(coefficient_matrix, right_hand_side)
     except xp.linalg.LinAlgError:
@@ -414,32 +537,70 @@ def _solve_isolating_singular(
         return xp.where(broadcast, xp.nan, solved)
 
 
+def _hermitian_square_root(
+    matrices: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """Batched square root ``L`` with ``L Lᴴ = S`` of Hermitian PSD matrices.
+
+    Built from the eigendecomposition ``S = V Λ Vᴴ`` as ``L = V Λ^(1/2)``, which
+    exists for every positive semidefinite ``S``, including singular ones
+    (duplicated channels), where a Cholesky factorization fails. Eigenvalues
+    that are negative only by rounding (within ``n_signals * eps`` of the
+    largest magnitude) are clipped to zero. A matrix with a larger negative
+    eigenvalue is not positive semidefinite, and a non-finite matrix has no
+    eigendecomposition; both resolve to NaN so the Wilson iteration marks that
+    sub-spectrum as failed instead of silently factoring a different matrix.
+
+    Parameters
+    ----------
+    matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched Hermitian matrices ``S``. Only the lower triangle is read.
+
+    Returns
+    -------
+    NDArray[complexfloating], same shape as ``matrices``
+        Square roots ``L``, with NaN for non-finite or indefinite ``S``.
+    """
+    n_signals = matrices.shape[-1]
+    is_finite = xp.isfinite(matrices).all(axis=(-2, -1), keepdims=True)
+    eigenvalues, eigenvectors = xp.linalg.eigh(xp.where(is_finite, matrices, 0))
+    rounding = (
+        n_signals
+        * xp.finfo(eigenvalues.dtype).eps
+        * xp.max(xp.abs(eigenvalues), axis=-1, keepdims=True)
+    )
+    is_valid = is_finite & (eigenvalues >= -rounding).all(axis=-1)[..., xp.newaxis, xp.newaxis]
+    square_root = eigenvectors * xp.sqrt(xp.maximum(eigenvalues, 0))[..., xp.newaxis, :]
+    return xp.where(is_valid, square_root, xp.nan)
+
+
 def _get_linear_predictor(
     minimum_phase_factor: NDArray[np.complexfloating],
-    cross_spectral_matrix: NDArray[np.complexfloating],
+    cross_spectral_square_root: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
     """Compute linear predictor for Wilson algorithm update step.
 
     Calculates how much to adjust the current minimum phase factor guess
-    by solving: G^{-1} S G^{-H} + I, where G is the current guess, S is
-    the cross-spectral matrix, and H denotes conjugate transpose.
+    as G^{-1} S G^{-H} + I, where G is the current guess, S is the
+    cross-spectral matrix, and H denotes conjugate transpose.
 
     Parameters
     ----------
     minimum_phase_factor : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Current minimum phase square root estimate.
-    cross_spectral_matrix : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
-        Target cross-spectral matrix to be factored.
-    I : NDArray[complexfloating], shape (n_signals, n_signals)
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Current minimum phase square root estimate G.
+    cross_spectral_square_root : NDArray[complexfloating],
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
+        Square root ``L`` of the target cross-spectral matrix, ``S = L Lᴴ``
+        (see :func:`_hermitian_square_root`).
+    identity_matrix : NDArray[complexfloating], shape (n_signals, n_signals)
         Identity matrix.
 
     Returns
     -------
     linear_predictor : NDArray[complexfloating],
-        shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
+        shape (n_time_samples, ..., n_frequencies, n_signals, n_signals)
         Adjustment matrix for updating minimum phase factor estimate.
 
     Notes
@@ -447,16 +608,20 @@ def _get_linear_predictor(
     This implements the core update step of the Wilson algorithm:
     computing the "covariance sandwich estimator" that measures the
     discrepancy between the current factorization and target matrix.
+    It is formed as ``X Xᴴ`` with ``X = G⁻¹ L``: one solve per matrix, and the
+    result is Hermitian positive semidefinite by construction. Applying ``G⁻¹``
+    to ``S`` on both sides (two solves, or an explicit inverse) leaves rounding
+    asymmetry in the update, which for near-collinear channels keeps the
+    iteration from reaching the convergence tolerance.
     """
-    covariance_sandwich_estimator = _solve_isolating_singular(
-        minimum_phase_factor, cross_spectral_matrix, identity_matrix
+    whitened_square_root = _solve_isolating_singular(
+        minimum_phase_factor, cross_spectral_square_root, identity_matrix
     )
-    covariance_sandwich_estimator = _solve_isolating_singular(
-        minimum_phase_factor,
-        _conjugate_transpose(covariance_sandwich_estimator),
-        identity_matrix,
+    covariance_sandwich_estimator: NDArray[np.complexfloating] = xp.matmul(
+        whitened_square_root, _conjugate_transpose(whitened_square_root)
     )
-    return covariance_sandwich_estimator + identity_matrix
+    covariance_sandwich_estimator += identity_matrix
+    return covariance_sandwich_estimator
 
 
 def minimum_phase_decomposition(
@@ -518,6 +683,19 @@ def minimum_phase_decomposition(
     may not converge for all time points; warnings are issued when the
     maximum iteration count is reached.
 
+    When the spectrum is exactly conjugate-symmetric, ``S(-f) == conj(S(f))``
+    bit for bit (as SciPy's FFT gives for real-valued signals), every iterate
+    keeps that symmetry, so the iteration runs on the non-negative frequencies
+    with real FFTs and mirrors the rest. Spectra symmetric only up to rounding
+    (possible with other FFT backends such as CuPy's), or not at all
+    (complex-valued signals), take the two-sided iteration, which does about
+    twice the arithmetic per iteration.
+
+    Each update is built from a square root ``L`` of ``S`` (``S = L Lᴴ``),
+    computed once, which lets sub-spectra with near-collinear channels converge.
+    An indefinite or non-finite ``S`` has no such square root and is returned as
+    NaN with the non-convergence warning.
+
     Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
     factorization assumes the cross-spectrum is resolved finely enough in
     frequency that the corresponding autocovariance decays within the analysis
@@ -554,18 +732,35 @@ def minimum_phase_decomposition(
     # takes precedence over retaining the input storage dtype: perform the
     # factorization at complex128 or better, matching the historical behavior.
     working_dtype = xp.result_type(cross_spectral_matrix.dtype, xp.complex128)
-    working_cross_spectral_matrix = cross_spectral_matrix.astype(working_dtype, copy=False)
+    # The iterates of an exactly conjugate-symmetric spectrum stay symmetric (the
+    # Cholesky start is real, and so are the linear predictor's lag
+    # coefficients), so iterate on the non-negative frequencies and mirror the
+    # rest at the end. Slice before the upcast so the unused negative
+    # frequencies are never copied.
+    n_fft_samples = cross_spectral_matrix.shape[-3]
+    half_spectrum_n_fft: int | None = None
+    working_cross_spectral_matrix = cross_spectral_matrix
+    if _is_conjugate_symmetric(cross_spectral_matrix):
+        half_spectrum_n_fft = n_fft_samples
+        working_cross_spectral_matrix = cross_spectral_matrix[
+            ..., : n_fft_samples // 2 + 1, :, :
+        ]
+    working_cross_spectral_matrix = working_cross_spectral_matrix.astype(
+        working_dtype, copy=False
+    )
     identity_matrix = xp.eye(n_signals, dtype=working_dtype)
+    # S is fixed across iterations, so factor it once as S = L Lᴴ.
+    cross_spectral_square_root = _hermitian_square_root(working_cross_spectral_matrix)
     # One convergence flag per independent sub-spectrum (all leading batch dims
     # except the frequency and signal axes), so that a sub-spectrum failing to
     # converge does not mask the others sharing its time point.
     batch_shape = cross_spectral_matrix.shape[:-3]
     n_units = int(np.prod(batch_shape))  # np.prod(()) == 1 for a single unit
     is_converged = xp.zeros(batch_shape, dtype=bool)
-    initial = _get_initial_conditions(working_cross_spectral_matrix).astype(
-        working_dtype, copy=False
-    )
-    minimum_phase_factor = xp.broadcast_to(initial, cross_spectral_matrix.shape).copy()
+    initial = _get_initial_conditions(
+        working_cross_spectral_matrix, half_spectrum_n_fft
+    ).astype(working_dtype, copy=False)
+    minimum_phase_factor = xp.broadcast_to(initial, working_cross_spectral_matrix.shape).copy()
 
     for iteration in range(max_iterations):
         # ``int(is_converged.sum())`` would sync the device (and reduce on CPU)
@@ -577,17 +772,20 @@ def minimum_phase_decomposition(
                 int(is_converged.sum()),
                 n_units,
             )
-        old_minimum_phase_factor = minimum_phase_factor.copy()
+        # No copy: ``old_minimum_phase_factor`` aliases the previous iterate,
+        # which is safe only while every update below builds a new array. Never
+        # update ``minimum_phase_factor`` in place.
+        old_minimum_phase_factor = minimum_phase_factor
         # A rank-deficient sub-spectrum makes the batched solve inside
         # _get_linear_predictor singular; _solve_isolating_singular resolves only
         # that unit to NaN (matching the GPU path) instead of aborting the batch.
         linear_predictor = _get_linear_predictor(
             minimum_phase_factor,
-            working_cross_spectral_matrix,
+            cross_spectral_square_root,
             identity_matrix,
         )
         minimum_phase_factor = xp.matmul(
-            minimum_phase_factor, _get_causal_signal(linear_predictor)
+            minimum_phase_factor, _get_causal_signal(linear_predictor, half_spectrum_n_fft)
         )
 
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
@@ -601,47 +799,47 @@ def minimum_phase_decomposition(
         # treat such units as finished so a single rank-deficient window does not
         # force the whole batch to exhaust the iteration budget. Combine the
         # "all finished" and "all converged" tests so the loop reduces the device
-        # to a Python bool at most once per iteration (a GPU synchronization; a
-        # no-op difference on CPU). The inner test only runs on the final
-        # iteration, so it costs one extra reduction total.
+        # to a Python bool once per iteration (a GPU synchronization; a no-op
+        # difference on CPU).
         singular_units = ~_all_finite_units(minimum_phase_factor, batch_shape)
         if xp.all(is_converged | singular_units):
-            if xp.all(is_converged):
-                return minimum_phase_factor
             break
 
-    # Not every sub-spectrum converged (iteration budget exhausted, or a factor
-    # became singular). Returning the partially-converged factor silently would
-    # feed numerically wrong values into every downstream directed-connectivity
-    # measure with no way for the caller to tell. Mark only the unconverged
-    # sub-spectra as NaN (leaving the converged ones intact) and warn loudly.
+    # If not every sub-spectrum converged (iteration budget exhausted, or a
+    # factor became singular), returning the partially-converged factor silently
+    # would feed numerically wrong values into every downstream
+    # directed-connectivity measure with no way for the caller to tell. Mark only
+    # the unconverged sub-spectra as NaN (leaving the converged ones intact) and
+    # warn loudly.
     n_failed = int((~is_converged).sum())
-    # A singular sub-spectrum is the unconverged one whose factor is non-finite.
-    singular_factor = bool(
-        (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
-    )
-    unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
-    minimum_phase_factor = xp.where(
-        unconverged,
-        xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
-        minimum_phase_factor,
-    )
-    if not _warn_on_failure:
-        return minimum_phase_factor
-    reason = (
-        "a sub-spectrum became singular (rank-deficient / duplicated channels)"
-        if singular_factor
-        else f"within {max_iterations} iterations (tolerance={tolerance})"
-    )
-    warnings.warn(
-        f"Wilson minimum-phase decomposition did not converge for "
-        f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
-        f"sub-spectra are returned as NaN and will produce NaN in any "
-        f"directed connectivity measure (spectral Granger, DTF, etc.). "
-        f"Consider increasing max_iterations, using more tapers/trials, or "
-        f"checking for near-singular cross-spectral matrices (highly "
-        f"correlated channels).",
-        UserWarning,
-        stacklevel=2,
-    )
+    if n_failed:
+        # A singular sub-spectrum is the unconverged one whose factor is non-finite.
+        singular_factor = bool(
+            (~is_converged & ~_all_finite_units(minimum_phase_factor, batch_shape)).any()
+        )
+        unconverged = ~is_converged[..., xp.newaxis, xp.newaxis, xp.newaxis]
+        minimum_phase_factor = xp.where(
+            unconverged,
+            xp.asarray(xp.nan, dtype=minimum_phase_factor.dtype),
+            minimum_phase_factor,
+        )
+        if _warn_on_failure:
+            reason = (
+                "a sub-spectrum became singular (rank-deficient / duplicated channels)"
+                if singular_factor
+                else f"within {max_iterations} iterations (tolerance={tolerance})"
+            )
+            warnings.warn(
+                f"Wilson minimum-phase decomposition did not converge for "
+                f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
+                f"sub-spectra are returned as NaN and will produce NaN in any "
+                f"directed connectivity measure (spectral Granger, DTF, etc.). "
+                f"Consider increasing max_iterations, using more tapers/trials, or "
+                f"checking for near-singular cross-spectral matrices (highly "
+                f"correlated channels).",
+                UserWarning,
+                stacklevel=2,
+            )
+    if half_spectrum_n_fft is not None:
+        minimum_phase_factor = _to_two_sided(minimum_phase_factor, half_spectrum_n_fft)
     return minimum_phase_factor
