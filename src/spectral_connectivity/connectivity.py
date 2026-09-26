@@ -309,14 +309,21 @@ def _require_fft_order(frequencies: Any) -> None:
     labelled two-sided, or an ``fftshift``-ed spectrum) would silently drop or
     mislabel frequencies.
     """
-    values = to_numpy(frequencies).astype(float)
+    values = to_numpy(frequencies)
+    # Allow for the coordinate's own rounding (e.g. float32 from netCDF), which
+    # the grid step inherits, but never less strictly than 1e-9.
+    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
+    rtol = max(1e-9, 8 * float(np.finfo(precision).eps))
+    values = values.astype(float)
+    if values.size == 0:
+        return
     if values.size == 1:
         in_order = bool(values[0] == 0.0)
     else:
         step = values[1] - values[0] if values.size > 2 else abs(values[1])
         expected = np.fft.fftfreq(values.size, d=1.0 / (step * values.size))
         in_order = bool(step > 0) and np.allclose(
-            values, expected, rtol=1e-9, atol=max(abs(step) * 1e-9, np.finfo(float).eps)
+            values, expected, rtol=rtol, atol=max(abs(step) * rtol, np.finfo(float).eps)
         )
     if not in_order:
         msg = (
@@ -916,9 +923,10 @@ class Connectivity:
             Such as :class:`~spectral_connectivity.transforms.Multitaper`,
             :class:`~spectral_connectivity.transforms.MorletWavelet`, or a
             user-defined class; see :class:`~spectral_connectivity.transforms.SpectralTransform`
-            for the required and optional members. ``fft()`` must return a new
-            array on each call, and nothing may modify it afterwards: the result
-            is used without copying.
+            for the required and optional members. ``fft()`` must return fresh,
+            unshared storage on each call. Neither the transform nor its caller
+            may subsequently mutate it through any alias: the result is used
+            without copying and marked read-only where the backend supports this.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128

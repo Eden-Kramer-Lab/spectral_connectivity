@@ -439,6 +439,25 @@ def test_connectivity_rejects_non_1d_or_nonfinite_coordinates():
         Connectivity(fourier_coefficients=fc, frequencies=bad_freqs)
 
 
+@pytest.mark.parametrize("n_fft", [64, 3000, 3001])
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_fft_order_check_allows_for_the_coordinate_precision(n_fft, dtype):
+    """FFT-order frequencies stored at float32 (e.g. from netCDF) still pass."""
+    fc = np.zeros((1, 2, 1, n_fft, 2), dtype=complex)
+    frequencies = np.fft.fftfreq(n_fft, 1 / 1000).astype(dtype)
+    Connectivity(fourier_coefficients=fc, frequencies=frequencies)
+
+    off_grid = frequencies.astype(float)
+    off_grid[5] *= 1 + 1e-4
+    with pytest.raises(ValueError, match="standard FFT order"):
+        Connectivity(fourier_coefficients=fc, frequencies=off_grid.astype(dtype))
+
+
+def test_empty_frequency_coordinate_is_accepted():
+    fc = np.zeros((1, 2, 1, 0, 2), dtype=complex)
+    Connectivity(fourier_coefficients=fc, frequencies=np.array([]))
+
+
 def test_from_multitaper_connectivity_is_picklable():
     """A Connectivity built from Multitaper round-trips with standard pickle."""
 
