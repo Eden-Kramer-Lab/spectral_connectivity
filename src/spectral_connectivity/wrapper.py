@@ -27,6 +27,8 @@ from spectral_connectivity._input_handling import (
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
     _measure_description,
+    _requested_methods,
+    _requires_two_sided,
     _validate_method_names,
 )
 from spectral_connectivity._provenance import _canonical_json, _shared_provenance_attrs
@@ -415,7 +417,7 @@ def _format_and_reduce_measures(
     signal_labels: NDArray[Any],
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
-    connectivity_kwargs: Mapping[str, Any],
+    connectivity_kwargs: Mapping[str, Any] | None,
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -429,6 +431,8 @@ def _format_and_reduce_measures(
     (skipping structurally-unsupported ones in a multi-measure batch), merges the
     survivors, and applies any frequency crop/decimation/band reduction.
     """
+    if connectivity_kwargs is None:
+        connectivity_kwargs = {}
     if squeeze and not return_dataarray:
         # squeeze reduces a pairwise measure to a (time, frequency) array whose
         # source/target become scalar coordinates; in a Dataset those scalars are
@@ -752,23 +756,10 @@ def multitaper_connectivity(
         raise ValueError(msg)
     if inferred_start_time is not None and explicit_start_time is _UNSET:
         kwargs["start_time"] = inferred_start_time
-    if connectivity_kwargs is None:
-        connectivity_kwargs = {}
-    return_dataarray = False  # Default: return dataset
-    if method is None:
-        # The explicit, portably serializable / xarray-compatible default set
-        # (see DEFAULT_METHODS). Complex, component/group, frequency-reduced,
-        # and directed-transfer-function results remain opt-in by name.
-        method = list(DEFAULT_METHODS)
-    elif isinstance(method, str):
-        method = [method]  # Convert to list
-        return_dataarray = True  # Return dataarray if methods was not an iterable
-    else:
-        method = list(method)
-    if len(method) == 0:
-        msg = "method must name at least one connectivity measure; got an empty list."
-        raise ValueError(msg)
-    _validate_method_names(method)
+    # The default set (DEFAULT_METHODS) is portably serializable; complex,
+    # component/group, frequency-reduced, and directed-transfer-function results
+    # remain opt-in by name.
+    method, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -976,30 +967,17 @@ def fourier_connectivity(
         minimum_phase_max_iterations=minimum_phase_max_iterations,
         is_one_sided=one_sided,
     )
-    if connectivity_kwargs is None:
-        connectivity_kwargs = {}
-
-    return_dataarray = isinstance(method, str)
-    if method is None:
-        # Two-sided-only measures are rejected below when sidedness is neither
-        # verifiable nor declared, so leave them out of the default set then too.
-        methods = [
+    # Two-sided-only measures are rejected below when sidedness is neither
+    # verifiable nor declared, so leave them out of the default set then too.
+    two_sided_unavailable = one_sided or (frequencies is None and is_one_sided is None)
+    methods, return_dataarray = _requested_methods(
+        method,
+        [
             name
             for name in DEFAULT_METHODS
-            if not (
-                (one_sided or (frequencies is None and is_one_sided is None))
-                and name in _MEASURE_SPECS
-                and _MEASURE_SPECS[name].requires_two_sided
-            )
-        ]
-    elif isinstance(method, str):
-        methods = [method]
-    else:
-        methods = list(method)
-    if not methods:
-        msg = "method must name at least one connectivity measure; got an empty list."
-        raise ValueError(msg)
-    _validate_method_names(methods)
+            if not (two_sided_unavailable and _requires_two_sided(name))
+        ],
+    )
     if frequencies is None:
         # Without a frequency coordinate two-sidedness cannot be verified, so an
         # *assumed* two-sided spectrum (is_one_sided=None) must not let one-sided
@@ -1008,11 +986,7 @@ def fourier_connectivity(
         # full-spectrum requirement unless the caller declared the spectrum
         # two-sided with is_one_sided=False; other directional measures such as
         # dPLI and PSI remain valid on one-sided coefficients.
-        two_sided_methods = [
-            name
-            for name in methods
-            if name in _MEASURE_SPECS and _MEASURE_SPECS[name].requires_two_sided
-        ]
+        two_sided_methods = [name for name in methods if _requires_two_sided(name)]
         if two_sided_methods and one_sided:
             # The caller already declared one-sided input, so no frequency vector
             # would enable Wilson factorization -- give the accurate reason.

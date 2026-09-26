@@ -2,7 +2,7 @@
 
 import difflib
 import inspect
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import KW_ONLY, dataclass
 from typing import Literal
 
@@ -445,6 +445,34 @@ _CATEGORY_DIMS: dict[str, tuple[str, ...]] = {
     "group_delay": ("time", "source", "target"),
     "phase_slope": ("time", "source", "target"),
 }
+
+
+def _requires_two_sided(method: str) -> bool:
+    """Whether a registered measure needs a two-sided spectrum (Wilson factorization)."""
+    spec = _MEASURE_SPECS.get(method)
+    return spec is not None and spec.requires_two_sided
+
+
+def _requested_methods(
+    method: str | Iterable[str] | None, defaults: Sequence[str]
+) -> tuple[list[str], bool]:
+    """The measures a wrapper call requests, and whether it named a single one.
+
+    ``None`` requests ``defaults``; a string requests that one measure, whose
+    result is returned as a DataArray rather than a Dataset. An empty request
+    or an unknown name raises.
+    """
+    if method is None:
+        methods = list(defaults)
+    elif isinstance(method, str):
+        methods = [method]
+    else:
+        methods = list(method)
+    if not methods:
+        msg = "method must name at least one connectivity measure; got an empty list."
+        raise ValueError(msg)
+    _validate_method_names(methods)
+    return methods, isinstance(method, str)
 
 
 def _measure_description(name: str) -> str:
