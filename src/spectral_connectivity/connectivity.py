@@ -275,12 +275,12 @@ def _optional_transform_attribute(transform: Any, name: str, default: Any) -> An
     inside a property the transform does define propagates instead of being
     taken for the attribute's absence, which would silently apply the default.
     """
-    value = getattr(transform, name, _ABSENT)
-    if value is not _ABSENT:
-        return value
-    if inspect.getattr_static(transform, name, _ABSENT) is not _ABSENT:
-        getattr(transform, name)  # re-raise the property's own AttributeError
-    return default
+    try:
+        return getattr(transform, name)
+    except AttributeError:
+        if inspect.getattr_static(transform, name, _ABSENT) is not _ABSENT:
+            raise
+        return default
 
 
 def _transform_flag(transform: Any, name: str, default: bool) -> bool:
@@ -665,9 +665,9 @@ class Connectivity:
 
         Used only by ``from_multitaper``, where ``value`` is ``transform.fft()``,
         which the ``SpectralTransform`` contract requires to be fresh and
-        referenced nowhere else. This avoids a
-        full copy of the largest array in the pipeline -- a transient ~2x peak on
-        every construction, which can push a memory-constrained GPU into OOM.
+        referenced nowhere else. This avoids a full copy of the largest array in
+        the pipeline -- a transient ~2x peak on every construction, which can
+        push a memory-constrained GPU into OOM.
 
         This is deliberately private and has no public ``copy=False`` surface: it
         is safe only when the array *and its writable NumPy base buffer* are
@@ -729,9 +729,9 @@ class Connectivity:
         if adopt:
             # `value` is unshared by the SpectralTransform contract but may be a
             # view (Multitaper's is a swapaxes view) whose base buffer is
-            # writable; freeze the whole base chain, not just
-            # the outer view, or the data stays reachable and mutable through
-            # `.base`. No copy -- this is the memory-saving path.
+            # writable; freeze the whole base chain, not just the outer view, or
+            # the data stays reachable and mutable through `.base`. No copy --
+            # this is the memory-saving path.
             mark_readonly_chain_if_supported(value)
             owned = value
         else:
@@ -834,10 +834,9 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct from a spectral transform (the original name of from_transform).
+        """Construct from a spectral transform; the original name of from_transform.
 
-        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`;
-        :meth:`from_transform` is the transform-neutral spelling.
+        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`.
 
         Parameters
         ----------
@@ -870,16 +869,12 @@ class Connectivity:
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }
-        # The optional attributes of the SpectralTransform contract (sidedness,
-        # observation weights, observation and time-bin independence; see that
-        # protocol's docstring for their defaults) are read with getattr so a
-        # transform may omit them. They are part of the public constructor and
-        # must always reach the instance: a subclass that cannot accept them
-        # fails loudly here rather than silently computing on a one-sided,
-        # weighted, or correlated spectrum as if it were two-sided, unweighted,
-        # and independent. The keywords are passed only when non-default so a
-        # subclass mirroring the older signature keeps working with a plain
-        # two-sided transform.
+        # The optional SpectralTransform attributes must always reach the
+        # instance: a subclass that cannot accept them fails loudly here rather
+        # than silently treating a one-sided, weighted, or correlated spectrum as
+        # two-sided, unweighted, and independent. They are passed only when
+        # non-default so a subclass mirroring the older signature keeps working
+        # with a plain two-sided transform.
         if _transform_flag(multitaper_instance, "is_one_sided", False):
             init_kwargs["is_one_sided"] = True
         weights = _optional_transform_attribute(
@@ -892,9 +887,9 @@ class Connectivity:
         if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
         # The SpectralTransform contract requires fft() to return a freshly
-        # built, unshared array, so adopt it in place
-        # instead of copying (see Connectivity._adopt_fourier_coefficients). Only
-        # pass the private keyword when the subclass has not overridden __init__:
+        # built, unshared array, so adopt it in place instead of copying (see
+        # Connectivity._adopt_fourier_coefficients). Only pass the private
+        # keyword when the subclass has not overridden __init__:
         # an overriding subclass need not accept it, and passing it would raise
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
@@ -918,18 +913,12 @@ class Connectivity:
         Parameters
         ----------
         transform : SpectralTransform
-            Any object with an ``fft()`` method returning coefficients shaped
-            ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``
-            and ``frequencies`` and ``time`` attributes, such as
-            :class:`~spectral_connectivity.transforms.Multitaper`,
+            Such as :class:`~spectral_connectivity.transforms.Multitaper`,
             :class:`~spectral_connectivity.transforms.MorletWavelet`, or a
-            user-defined class. Its optional ``is_one_sided``,
-            ``observation_weights``, ``observations_are_independent``, and
-            ``time_bins_are_independent`` attributes are forwarded when present;
-            see :class:`~spectral_connectivity.transforms.SpectralTransform`.
-            ``fft()`` must return a new array on each call, and nothing may
-            modify it afterwards: the result is used without copying and marked
-            read-only where the backend supports it.
+            user-defined class; see :class:`~spectral_connectivity.transforms.SpectralTransform`
+            for the required and optional members. ``fft()`` must return a new
+            array on each call, and nothing may modify it afterwards: the result
+            is used without copying.
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128

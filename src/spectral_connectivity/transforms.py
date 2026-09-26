@@ -571,14 +571,12 @@ class SpectralTransform(Protocol):
     -----
     ``fft()`` must return the Fourier coefficients with shape
     ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``.
-    ``fft()`` must return a new array on each call (not an array the transform
-    keeps, or a view of one), and nothing may modify that array afterwards
-    through any alias. :class:`Connectivity` keeps the array without copying it and marks
-    it (and any array it is a view of) read-only where the backend supports
-    that, but this cannot catch every write: other views created beforehand
-    stay writable, and CuPy arrays have no read-only flag. A write through such
-    an alias would change the coefficients silently, while cached results keep
-    the old values.
+    ``fft()`` must return a new array on each call (not one the transform
+    keeps, or a view of one), and nothing may modify it afterwards.
+    :class:`Connectivity` keeps it without copying and marks it read-only where
+    it can, but only as a safeguard: views made beforehand stay writable and
+    CuPy has no read-only flag, so a write through one would silently change
+    the coefficients while cached results keep the old values.
 
     The coefficients' scale sets the units of :meth:`Connectivity.power`;
     normalized measures such as coherence and the phase-lag indices do not
@@ -622,15 +620,11 @@ class SpectralTransform(Protocol):
         windows overlapping by more than half). It affects only expectations that
         average over time.
 
-    The three flags must be bools (NumPy bools included), not methods.
-
-    The protocol declares only the required members, so ``isinstance`` checks
-    that ``fft``, ``frequencies``, and ``time`` exist, not their types, shapes or
-    values. :meth:`Connectivity.from_transform` checks the coefficients' shape and
-    complex dtype, the coordinate lengths, the frequency order, and the flag
-    types. On Python 3.11 and earlier, ``isinstance`` also evaluates the
-    ``frequencies`` and ``time`` properties, so it can raise if they do;
-    ``issubclass`` is not supported for this protocol.
+    ``isinstance`` checks only that ``fft``, ``frequencies``, and ``time``
+    exist (on Python 3.11 and earlier it also evaluates the two properties).
+    :meth:`Connectivity.from_transform` checks the coefficients' shape and
+    complex dtype, the coordinate lengths, the frequency order, and that the
+    flags are bools (NumPy bools included), not methods.
 
     Examples
     --------
@@ -662,16 +656,13 @@ class SpectralTransform(Protocol):
     @property
     def frequencies(self) -> NDArray[np.floating] | None:
         """Frequency of each FFT bin, in Hz."""
-        ...
 
     @property
     def time(self) -> NDArray[np.floating] | None:
         """Time of each time window, in seconds."""
-        ...
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
-        ...
 
 
 class Multitaper:
