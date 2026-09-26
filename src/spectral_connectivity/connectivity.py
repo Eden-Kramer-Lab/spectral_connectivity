@@ -883,7 +883,6 @@ class Connectivity:
 
         """
         init_kwargs: dict[str, Any] = {
-            "fourier_coefficients": multitaper_instance.fft(),
             "expectation_type": expectation_type,
             "time": multitaper_instance.time,
             "frequencies": multitaper_instance.frequencies,
@@ -896,18 +895,20 @@ class Connectivity:
         # than silently treating a one-sided, weighted, or correlated spectrum as
         # two-sided, unweighted, and independent. They are passed only when
         # non-default so a subclass mirroring the older signature keeps working
-        # with a plain two-sided transform.
+        # with a plain two-sided transform. The flags are checked before the
+        # (possibly expensive) fft() so a bad one fails fast.
         if _transform_flag(multitaper_instance, "is_one_sided", False):
             init_kwargs["is_one_sided"] = True
+        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
+            init_kwargs["observations_are_independent"] = False
+        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
+            init_kwargs["time_bins_are_independent"] = False
+        init_kwargs["fourier_coefficients"] = multitaper_instance.fft()
         weights = _optional_transform_attribute(
             multitaper_instance, "observation_weights", None
         )
         if weights is not None:
             init_kwargs["observation_weights"] = weights
-        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
-            init_kwargs["observations_are_independent"] = False
-        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
-            init_kwargs["time_bins_are_independent"] = False
         # The SpectralTransform contract requires fft() to return a freshly
         # built, unshared array, so adopt it in place instead of copying (see
         # Connectivity._adopt_fourier_coefficients). Only pass the private

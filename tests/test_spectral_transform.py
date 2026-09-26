@@ -192,6 +192,22 @@ def test_capability_flags_must_be_bools(coefficients, flag, kind):
         Connectivity.from_transform(transform)
 
 
+def test_flags_are_validated_before_the_coefficients_are_computed(coefficients):
+    """A bad flag fails before the (possibly expensive) ``fft()`` runs."""
+
+    class Counting(_MinimalTransform):
+        is_one_sided = "False"
+        n_fft_calls = 0
+
+        def fft(self):
+            Counting.n_fft_calls += 1
+            return super().fft()
+
+    with pytest.raises(TypeError, match="is_one_sided must be a bool"):
+        Connectivity.from_transform(Counting(coefficients, FFT_FREQUENCIES))
+    assert Counting.n_fft_calls == 0
+
+
 def test_an_attribute_error_inside_a_capability_property_propagates(coefficients):
     """A bug inside an optional property must not be mistaken for the
     attribute being absent, which would silently apply the default."""
