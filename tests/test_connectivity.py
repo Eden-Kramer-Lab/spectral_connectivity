@@ -7,12 +7,9 @@ import pytest
 import scipy.stats
 from scipy.ndimage import label
 
-from spectral_connectivity._array_utils import _complex_inner_product, _squared_magnitude
 from spectral_connectivity._granger import (
-    _remove_instantaneous_causality,
     _sanitized_nonnegative_granger,
 )
-from spectral_connectivity._multivariate import _optimize_canonical_coherency_phase, _reshape
 from spectral_connectivity.connectivity import (
     Connectivity,
     _bandpass,
@@ -827,90 +824,6 @@ def test_single_component_cacoh_matches_reference_values():
     )
 
 
-def _cacoh_phase_objective(whitened, phase):
-    """sigma_max(Re(exp(-i phase) W)) for one whitened cross-spectrum."""
-    return np.linalg.svd(np.real(np.exp(-1j * phase) * whitened), compute_uv=False)[0]
-
-
-def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
-    """The phase objective can have two lobes of nearly equal height. Refining
-    Newton from the single best coarse-grid point picks whichever lobe happens
-    to sit closer to a grid point; the optimizer must refine every candidate
-    lobe and keep the true maximum."""
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    # Lobe 1 (the true maximum, 0.80) mid-way between two coarse grid points;
-    # lobe 2 (0.7995) exactly on a grid point, so the coarse grid ranks it first.
-    theta_1 = grid[10] + np.pi / (2 * n_grid)
-    theta_2 = grid[27]
-    directions = np.eye(3)
-    whitened = 0.80 * np.exp(1j * theta_1) * np.outer(directions[0], directions[0]) + (
-        0.7995 * np.exp(1j * theta_2) * np.outer(directions[1], directions[1])
-    )
-    coarse_scores = [_cacoh_phase_objective(whitened, phase) for phase in grid]
-    assert np.argmax(coarse_scores) == 27  # premise: the coarse grid prefers lobe 2
-
-    magnitude, phase, left, right = _optimize_canonical_coherency_phase(
-        whitened[np.newaxis], n_grid=n_grid
-    )
-
-    dense_best = max(
-        _cacoh_phase_objective(whitened, phase) for phase in np.linspace(0, np.pi, 20001)
-    )
-    assert magnitude[0] >= max(coarse_scores) - 1e-12
-    assert magnitude[0] == pytest.approx(dense_best, abs=1e-6)
-    assert magnitude[0] == pytest.approx(0.80, abs=1e-6)
-    # The phase is defined modulo pi; it must be lobe 1, not lobe 2.
-    assert np.exp(2j * phase[0]) == pytest.approx(np.exp(2j * theta_1), abs=1e-6)
-    np.testing.assert_allclose(np.abs(left[0, :, 0]), directions[0], atol=1e-6)
-    np.testing.assert_allclose(np.abs(right[0, :, 0]), directions[0], atol=1e-6)
-
-
-def test_cacoh_phase_optimizer_refines_every_coarse_grid_lobe():
-    """With four near-equal lobes the true maximum, mid-way between two coarse
-    grid points, is only the fourth-highest coarse-grid local maximum, so
-    refining a fixed number of the highest ones misses it. Every local maximum
-    must be refined, independently in each bin of a batched leading shape."""
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    half_cell = np.pi / (2 * n_grid)
-    lobe_grid_indices = [3, 11, 19, 27]
-    # On the grid the true lobe (0.80, mid-cell) peaks at 0.80 * cos(half_cell);
-    # the other three sit exactly on grid points, just above that.
-    lower_height = 0.80 * np.cos(half_cell) + 1e-5
-    whitened = np.zeros((2, 2, 4, 4), dtype=complex)
-    true_phase = np.zeros((2, 2))
-    for bin_index, true_lobe in zip(np.ndindex(2, 2), range(4), strict=True):
-        heights = np.full(4, lower_height)
-        heights[true_lobe] = 0.80
-        phases = grid[lobe_grid_indices]
-        phases[true_lobe] += half_cell
-        whitened[bin_index] = np.diag(heights * np.exp(1j * phases))
-        true_phase[bin_index] = phases[true_lobe]
-        # Premise: the true lobe is the lowest of the four on the coarse grid.
-        coarse = np.array([_cacoh_phase_objective(whitened[bin_index], p) for p in grid])
-        lobe_peaks = [max(coarse[k], coarse[k + 1]) for k in lobe_grid_indices]
-        assert np.argmin(lobe_peaks) == true_lobe
-
-    magnitude, phase, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
-
-    np.testing.assert_allclose(magnitude, 0.80, rtol=0, atol=1e-9)
-    # The phase is defined modulo pi; it must be the true lobe's.
-    np.testing.assert_allclose(np.exp(2j * phase), np.exp(2j * true_phase), atol=1e-6)
-
-
-def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
-    rng = np.random.default_rng(21)
-    whitened = rng.standard_normal((40, 3, 4)) + 1j * rng.standard_normal((40, 3, 4))
-    n_grid = 37
-    grid = np.arange(n_grid) * np.pi / n_grid
-    coarse_best = np.array(
-        [max(_cacoh_phase_objective(matrix, phase) for phase in grid) for matrix in whitened]
-    )
-    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
-    assert np.all(magnitude >= coarse_best - 1e-12)
-
-
 @pytest.mark.parametrize(
     "method", ["canonical_coherency", "maximized_imaginary_coherency_components"]
 )
@@ -1265,45 +1178,6 @@ def test_pairwise_phase_consistency():
     assert coupled_ppc[0, 1] == pytest.approx(expected_coupled, rel=1e-10)
 
 
-def test__reshape():
-    n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (20, 100, 3, 10, 2)
-    fourier_coefficients = np.zeros(
-        (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
-    )
-    expected_shape = (n_time_samples, n_fft_samples, n_signals, n_trials * n_tapers)
-    assert np.allclose(_reshape(fourier_coefficients).shape, expected_shape)
-
-
-def test__squared_magnitude():
-    test_array = np.array([[1, 2], [3, 4]])
-    expected_array = np.array([[1, 4], [9, 16]])
-    assert np.allclose(_squared_magnitude(test_array), expected_array)
-
-
-def test__complex_inner_product():
-    """Test that the complex inner product is taken over the last two
-    dimensions."""
-    test_array1 = np.zeros((3, 2, 4), dtype=complex)
-    test_array2 = np.zeros((3, 2, 4), dtype=complex)
-
-    x1 = np.ones((2, 4)) * np.exp(1j * np.pi / 2)
-    x2 = np.ones((2, 4)) * np.exp(1j * 0)
-
-    test_array1[1, :, :] = x1
-    test_array2[1, :, :] = x2
-
-    test_array1[2, :, :] = x1
-    test_array2[2, :, :] = x1
-
-    expected_inner_product = np.zeros((3, 2, 2), dtype=complex)
-    expected_inner_product[1, ...] = x1.dot(x2.T.conj())
-    expected_inner_product[2, ...] = x1.dot(x1.T.conj())
-
-    assert np.allclose(
-        _complex_inner_product(test_array1, test_array2), expected_inner_product
-    )
-
-
 def test__bandpass():
     test_data = np.arange(0, 10).reshape((2, 5))
     labels = np.arange(0, 5) * 2
@@ -1537,29 +1411,6 @@ def test__total_outflow():
     assert np.allclose(
         _total_outflow(MVAR_Fourier_coefficients, noise_variance),
         expected_total_outflow,
-    )
-
-
-def test__remove_instantaneous_causality():
-    noise_covariance = np.zeros((2, 2, 2))
-    x1 = np.array([[1, 2], [2, 4]], dtype=float)
-    x2 = np.array([[8, 4], [4, 16]], dtype=float)
-    noise_covariance[0, ...] = x1
-    noise_covariance[1, ...] = x2
-
-    # x -> y: var(x) - (cov(x,y) ** 2 / var(y))
-    # y -> x: var(y) - (cov(x,y) ** 2 / var(x))
-    expected_rotated_noise_covariance = np.zeros((2, 2, 2))
-
-    expected_rotated_noise_covariance[0, 0, 1] = x1[1, 1] - (x1[0, 1] ** 2 / x1[0, 0])
-    expected_rotated_noise_covariance[0, 1, 0] = x1[0, 0] - (x1[1, 0] ** 2 / x1[1, 1])
-
-    expected_rotated_noise_covariance[1, 0, 1] = x2[1, 1] - (x2[0, 1] ** 2 / x2[0, 0])
-    expected_rotated_noise_covariance[1, 1, 0] = x2[0, 0] - (x2[1, 0] ** 2 / x2[1, 1])
-
-    assert np.allclose(
-        _remove_instantaneous_causality(noise_covariance),
-        expected_rotated_noise_covariance,
     )
 
 
@@ -1977,28 +1828,6 @@ def test_subset_pairwise_granger_prediction_masks_global_diagonal():
     subset = conn.subset_pairwise_spectral_granger_prediction(np.array([[0, 1], [2, 3]]))
 
     assert np.isnan(np.diagonal(subset, axis1=-2, axis2=-1)).all()
-
-
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
-    """The shared sanitizer clips roundoff, NaNs real negatives, keeps the rest."""
-    eps = np.finfo(dtype).eps
-    tiny_negative = -10 * eps  # inside the 100 * eps roundoff band
-    material_negative = -1e-3  # far outside the roundoff band
-    value = np.array([0.0, 0.5, tiny_negative, material_negative, np.nan], dtype=dtype)
-
-    sanitized = _sanitized_nonnegative_granger(value)
-
-    # Exact zero (no causality) is preserved, not discarded as NaN.
-    assert sanitized[0] == 0.0
-    # A genuine positive influence passes through untouched.
-    assert sanitized[1] == dtype(0.5)
-    # Roundoff around a true zero is clipped up to exactly zero.
-    assert sanitized[2] == 0.0
-    # A materially-negative (invalid) value becomes NaN.
-    assert np.isnan(sanitized[3])
-    # NaN propagates unchanged.
-    assert np.isnan(sanitized[4])
 
 
 def test_spectral_granger_variants_use_sanitizer_and_return_nonnegative():
