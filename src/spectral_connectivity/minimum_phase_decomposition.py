@@ -476,20 +476,20 @@ def _solve_2x2(
     NDArray[complexfloating], same shape as ``right_hand_side``
         Solution ``x``, with NaN where ``det(A) == 0`` or ``A`` is non-finite.
     """
-    # Zero non-finite matrices so they are exactly singular and the arithmetic
-    # below emits no invalid-value warnings for them.
-    is_finite = xp.isfinite(coefficient_matrix).all(axis=(-2, -1), keepdims=True)
-    coefficient_matrix = xp.where(is_finite, coefficient_matrix, 0)
     a, b = coefficient_matrix[..., 0, 0, None], coefficient_matrix[..., 0, 1, None]
     c, d = coefficient_matrix[..., 1, 0, None], coefficient_matrix[..., 1, 1, None]
-    determinant = (a * d - b * c)[..., xp.newaxis]
-    singular = determinant == 0
     first_row, second_row = right_hand_side[..., 0, :], right_hand_side[..., 1, :]
-    solution = xp.stack(
-        (d * first_row - b * second_row, a * second_row - c * first_row), axis=-2
-    )
-    # Divide by 1 where singular so no divide warning fires, then mark NaN.
-    solution /= xp.where(singular, 1, determinant)
+    # Any non-finite entry of A makes the determinant non-finite, so checking
+    # the determinant alone catches non-finite A. Such systems (and exactly
+    # singular ones, divided by 1 instead) are replaced by NaN at the end, so
+    # NumPy need not warn about the invalid values they produce on the way.
+    with np.errstate(invalid="ignore", over="ignore"):
+        determinant = (a * d - b * c)[..., xp.newaxis]
+        singular = ~xp.isfinite(determinant) | (determinant == 0)
+        solution = xp.stack(
+            (d * first_row - b * second_row, a * second_row - c * first_row), axis=-2
+        )
+        solution /= xp.where(singular, 1, determinant)
     return xp.where(singular, xp.nan, solution)
 
 
