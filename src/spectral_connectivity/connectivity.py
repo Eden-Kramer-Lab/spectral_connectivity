@@ -875,8 +875,6 @@ class Connectivity:
         """
         init_kwargs: dict[str, Any] = {
             "expectation_type": expectation_type,
-            "time": multitaper_instance.time,
-            "frequencies": multitaper_instance.frequencies,
             "dtype": dtype,
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
@@ -887,7 +885,8 @@ class Connectivity:
         # two-sided, unweighted, and independent. They are passed only when
         # non-default so a subclass mirroring the older signature keeps working
         # with a plain two-sided transform. The flags are checked before the
-        # (possibly expensive) fft() so a bad one fails fast.
+        # (possibly expensive) fft() so a bad one fails fast; the coordinates
+        # and weights are read after it, which may set them.
         if _transform_flag(multitaper_instance, "is_one_sided", False):
             init_kwargs["is_one_sided"] = True
         if not _transform_flag(multitaper_instance, "observations_are_independent", True):
@@ -895,6 +894,8 @@ class Connectivity:
         if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
             init_kwargs["time_bins_are_independent"] = False
         init_kwargs["fourier_coefficients"] = multitaper_instance.fft()
+        init_kwargs["time"] = multitaper_instance.time
+        init_kwargs["frequencies"] = multitaper_instance.frequencies
         weights = _optional_transform_attribute(
             multitaper_instance, "observation_weights", None
         )

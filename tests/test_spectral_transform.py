@@ -208,6 +208,23 @@ def test_flags_are_validated_before_the_coefficients_are_computed(coefficients):
     assert Counting.n_fft_calls == 0
 
 
+def test_coordinates_are_read_after_the_coefficients_are_computed(coefficients):
+    """A transform may set ``frequencies`` and ``time`` while computing ``fft()``."""
+
+    class Lazy:
+        frequencies = None
+        time = None
+
+        def fft(self):
+            self.frequencies = FFT_FREQUENCIES
+            self.time = 10.0 + np.arange(N_TIME_WINDOWS)
+            return coefficients.copy()
+
+    connectivity = Connectivity.from_transform(Lazy())
+    np.testing.assert_array_equal(connectivity.all_frequencies, FFT_FREQUENCIES)
+    np.testing.assert_array_equal(connectivity.time, 10.0 + np.arange(N_TIME_WINDOWS))
+
+
 def test_an_attribute_error_inside_a_capability_property_propagates(coefficients):
     """A bug inside an optional property must not be mistaken for the
     attribute being absent, which would silently apply the default."""
