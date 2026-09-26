@@ -3125,6 +3125,16 @@ def test_fourier_connectivity_rejects_fftshifted_coordinate():
         )
 
 
+@pytest.mark.parametrize("value", ["False", 0])
+def test_fourier_connectivity_rejects_a_non_bool_sidedness(value):
+    with pytest.raises(TypeError, match="is_one_sided must be a bool"):
+        fourier_connectivity(
+            np.ones((3, 8, 2), dtype=np.complex128),
+            is_one_sided=value,
+            method="coherence_magnitude",
+        )
+
+
 def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
     data = np.random.default_rng(304).standard_normal((128, 3, 2))
     welch = connectivity_to_xarray(

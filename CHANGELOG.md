@@ -71,6 +71,26 @@ directly with results from 2.x.
   adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
   Connectivity expectations consume the local weights directly, and xarray
   results carry the `valid_time_frequency` mask.
+- `SpectralTransform`, a public, runtime-checkable `typing.Protocol` for the
+  transforms `Connectivity.from_transform` and `Connectivity.from_multitaper`
+  accept: `fft()`, `frequencies`, and `time` are required, and the optional
+  `is_one_sided`, `observation_weights`, `observations_are_independent`, and
+  `time_bins_are_independent` attributes fall back to their defaults when
+  absent, so a custom transform needs no new attributes. Both constructors are
+  annotated with it, so mypy now checks custom transforms passed to them, and a
+  `Connectivity` subclass overriding `from_multitaper` must widen its argument
+  to `SpectralTransform`.
+- `Connectivity` rejects input that used to give silently wrong results:
+  two-sided frequencies not uniformly spaced in `numpy.fft.fftfreq` order (e.g.
+  `rfft` output without `is_one_sided=True`), which `fourier_connectivity`
+  already rejected, and real-valued Fourier coefficients, whose phase-based
+  measures were exactly 0. `Connectivity`, `Connectivity.from_transform`, and
+  `fourier_connectivity` reject `is_one_sided`, `observations_are_independent`,
+  and `time_bins_are_independent` values that are not booleans (e.g. `"False"`,
+  `None`, 0, or a transform's flag written as a method), which `bool()` used to
+  misread; NumPy bools and 0-d boolean arrays are accepted. `from_transform` no
+  longer takes an `AttributeError` raised inside a capability property for the
+  attribute's absence.
 - Multitaper `taper_weighting` supports historical uniform weighting,
   eigenvalue weighting, and Thomson adaptive frequency/signal-specific
   weighting. Adaptive weighting compares the periodogram against the process
