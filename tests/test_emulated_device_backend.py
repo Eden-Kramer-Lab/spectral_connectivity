@@ -24,6 +24,7 @@ import types
 
 import numpy as np
 import pytest
+import scipy.fft
 
 from spectral_connectivity import Connectivity, minimum_phase_decomposition, transforms
 from spectral_connectivity import connectivity as connectivity_module
@@ -320,3 +321,31 @@ def test_reassigned_coefficients_keep_the_time_coordinate_on_the_host(xp):
         connectivity.fourier_coefficients = xp.asarray(_coefficients(rng, (2, 4, 3, 8, 3)))
     np.testing.assert_array_equal(np.asarray(connectivity.time), [0, 1])
     assert connectivity.frequencies.shape == (5,)
+
+
+def test_wilson_factorization_of_real_signals_runs_on_the_device(xp, monkeypatch):
+    """Directed measures on real-valued signals stay on the device.
+
+    Their cross-spectra are conjugate-symmetric, so the Wilson factorization
+    iterates on the non-negative frequencies with real FFTs. CuPy supplies those
+    transforms from ``cupyx.scipy.fft``; route the modules' SciPy imports
+    through the emulation so a host array reaching them fails here.
+    """
+    rng = np.random.default_rng(4)
+    coefficients = scipy.fft.fft(rng.standard_normal((1, 6, 3, 32, 3)), axis=-2)
+    cross_spectrum = Connectivity(coefficients)._expectation_cross_spectral_matrix()
+    assert minimum_phase_decomposition._is_conjugate_symmetric(cross_spectrum)
+
+    for module, names in (
+        (minimum_phase_decomposition, ("fft", "ifft", "rfft", "irfft")),
+        (connectivity_module, ("ifft",)),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, _wrap_function(getattr(scipy.fft, name), name))
+
+    device_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
+    monkeypatch.undo()
+    host_granger = Connectivity(coefficients).pairwise_spectral_granger_prediction()
+
+    assert isinstance(device_granger, np.ndarray)
+    np.testing.assert_array_equal(device_granger, host_granger)

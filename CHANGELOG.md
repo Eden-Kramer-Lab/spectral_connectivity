@@ -326,6 +326,12 @@ directly with results from 2.x.
   `n_signals * I` fallback; healthy units retain their Cholesky starts.
 - Wilson convergence is relative and scale-invariant, and non-converged units
   return `NaN` with a targeted warning.
+- The Wilson iteration builds each update from a square root of the
+  cross-spectrum, so it is Hermitian positive semidefinite by construction.
+  Sub-spectra with near-collinear channels (condition numbers around 1e10 and
+  above) now converge instead of stalling at rounding level above the tolerance
+  and returning `NaN`; their directed measures differ from 2.x there. An
+  indefinite cross-spectrum returns `NaN` with the non-convergence warning.
 - Directed-measure regularization is scale-invariant, directed coherence uses
   the correct source-axis noise variance, and it warns when correlated
   innovations materially violate its diagonal-covariance assumption.
@@ -475,6 +481,15 @@ directly with results from 2.x.
 - Coherence and phase-lag-index measures no longer retain the pairwise power
   normalizer `sqrt(P_i P_j)`; it is recomputed from the cached power on each
   call, cutting their retained cache by a third.
+- The Wilson minimum-phase factorization behind the spectral Granger, DTF,
+  and PDC families is 1.8-2.9x faster in benchmarks: it factors the
+  cross-spectrum once and solves once per iteration instead of twice, and for
+  real-valued signals iterates on the non-negative frequencies with real FFTs.
+  End to end, pairwise spectral Granger for 32 signals is about 2.3x faster,
+  conditional spectral Granger for 24 signals about 1.7x, and DTF for 100
+  windows of 8 signals about 1.9x. For well-conditioned spectra,
+  results agree with the previous implementation to rounding (relative
+  differences of about 1e-14 or less).
 
 ## [2.0.1] - 2026-05-12
 

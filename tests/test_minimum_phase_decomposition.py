@@ -1,15 +1,22 @@
+import contextlib
+import warnings
+
 import numpy as np
 import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity.minimum_phase_decomposition import (
     _check_convergence,
     _conjugate_transpose,
     _get_causal_signal,
     _get_initial_conditions,
+    _hermitian_square_root,
+    _is_conjugate_symmetric,
     _singular_matrix_mask,
     _solve_isolating_singular,
+    _to_two_sided,
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
 )
@@ -24,6 +31,28 @@ def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
         A -= coefficients[lag][None] * np.exp(-1j * omega * (lag + 1))[:, None, None]
     H = np.linalg.inv(A)
     return (H @ noise_covariance.astype(complex) @ H.conj().swapaxes(-1, -2))[None]
+
+
+def _cross_spectrum_of(signals):
+    """Trial-averaged cross-spectrum of ``signals`` shaped (window, trial, time, signal)."""
+    coefficients = fft(signals, axis=-2)
+    n_trials = signals.shape[1]
+    return np.einsum("wtfi,wtfj->wfij", coefficients, coefficients.conj()) / n_trials
+
+
+def _lagged_signals(n_fft, rng, dtype=float, n_windows=2, n_signals=3):
+    """Signals shaped (window, trial, time, signal); signal 1 follows signal 0 by one sample."""
+    shape = (n_windows, 40, n_fft, n_signals)
+    signals = rng.standard_normal(shape)
+    if dtype is complex:
+        signals = signals + 1j * rng.standard_normal(shape)
+    signals[..., 1:, 1] += 0.8 * signals[..., :-1, 0]
+    return signals
+
+
+def _real_signal_spectrum(n_fft=16, seed=0):
+    """Exactly conjugate-symmetric cross-spectrum (2 windows, 3 signals) of real signals."""
+    return _cross_spectrum_of(_lagged_signals(n_fft, np.random.default_rng(seed)))
 
 
 def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
@@ -51,7 +80,8 @@ def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():
     np.testing.assert_allclose(from_factor, recomputed, rtol=1e-6, atol=1e-10)
 
 
-def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
+@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals):
     """Only the unconverged sub-spectra are NaN (entirely), with a counted warning.
 
     Window 0 is a white, uncorrelated spectrum ``diag([2, 0.5])``: its Cholesky
@@ -59,16 +89,26 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans():
     converges in one iteration. Windows 1 and 2 are generic spectra that need
     many iterations. With ``max_iterations=1`` the documented contract is that
     the converged window is returned intact, every entry of each unconverged
-    window is NaN, and the warning reports the failed count.
+    window is NaN, and the warning reports the failed count. Spectra of real
+    signals are exactly conjugate-symmetric, so that case runs the
+    half-spectrum iteration and must return the full two-sided shape.
     """
     rng = np.random.default_rng(0)
     n_times, n_freqs, n_signals = 3, 16, 2
-    coeffs = rng.standard_normal((n_times, n_freqs, n_signals, n_signals))
-    cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2))
+    signals = _lagged_signals(
+        n_freqs,
+        rng,
+        dtype=float if real_signals else complex,
+        n_windows=n_times,
+        n_signals=n_signals,
+    )
+    cross_spectral_matrix = _cross_spectrum_of(signals)
     cross_spectral_matrix[0] = np.diag([2.0, 0.5])
+    assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
     with pytest.warns(UserWarning, match="did not converge for 2 of 3"):
         factor = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=1)
+    assert factor.shape == cross_spectral_matrix.shape
     np.testing.assert_allclose(
         factor[0], np.broadcast_to(np.diag([np.sqrt(2.0), np.sqrt(0.5)]), factor[0].shape)
     )
@@ -111,6 +151,55 @@ def test_solve_isolating_singular_isolates_bad_units():
     assert np.allclose(solved[2], np.linalg.inv(good))
 
 
+def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
+    """``L Lᴴ = S`` for positive semidefinite S, including singular S.
+
+    Singular S (a duplicated channel) has no Cholesky factor but does have this
+    square root. Non-finite and indefinite matrices resolve to NaN without
+    affecting the rest of the batch.
+    """
+    positive_definite = np.array([[2.0, 0.5 - 0.3j], [0.5 + 0.3j, 1.0]])
+    singular = np.array([[1.0, 1j], [-1j, 1.0]])  # rank 1
+    non_finite = np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=complex)
+    indefinite = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
+    matrices = np.stack([positive_definite, singular, non_finite, indefinite])
+
+    square_root = _hermitian_square_root(matrices)
+
+    np.testing.assert_allclose(
+        square_root[:2] @ _conjugate_transpose(square_root[:2]), matrices[:2], atol=1e-14
+    )
+    assert np.isnan(square_root[2:]).all()
+
+
+def test_near_collinear_channels_converge():
+    """Near-duplicate channels converge instead of stalling above the tolerance.
+
+    Regression: forming the update ``G⁻¹ S G⁻ᴴ`` from S directly (two solves or
+    an explicit inverse) leaves rounding asymmetry that, for a cross-spectrum
+    with condition number around 1e10, keeps the relative change between
+    iterates just above the 1e-8 tolerance. Every window then came back NaN with
+    a non-convergence warning. Building the update from a square root of S
+    converges, and the factor reconstructs S as well as it does for
+    well-conditioned channels.
+    """
+    signals = _lagged_signals(64, np.random.default_rng(0))
+    near_duplicate = signals.copy()
+    near_duplicate[..., 2] = signals[..., 0] + 3e-5 * signals[..., 2]
+    spectrum = _cross_spectrum_of(near_duplicate)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        factor = minimum_phase_decomposition(spectrum)
+
+    reference_error = minimum_phase_reconstruction_error(_cross_spectrum_of(signals))
+    np.testing.assert_array_less(
+        minimum_phase_reconstruction_error(spectrum, factor), 2 * reference_error
+    )
+
+
 def test_singular_matrix_mask_flags_singular_and_nonfinite():
     """The mask flags rank-deficient and non-finite matrices, not healthy ones."""
     identity = np.eye(2)
@@ -126,32 +215,65 @@ def test_singular_matrix_mask_flags_singular_and_nonfinite():
     assert mask_nan.tolist() == [False, True]
 
 
-def test_minimum_phase_decomposition_isolates_one_singular_subspectrum():
+def _spectra_with_one_duplicated_channel(real_signals):
+    """Three windows of 2-signal spectra; window 1 duplicates a channel (rank 1)."""
+    rng = np.random.default_rng(0)
+    n_times, n_freqs, n_signals = 3, 16, 2
+    if real_signals:
+        signals = _lagged_signals(n_freqs, rng, n_windows=n_times, n_signals=n_signals)
+        signals[1, ..., 1] = signals[1, ..., 0]
+        return _cross_spectrum_of(signals)
+    coeffs = rng.standard_normal(
+        (n_times, n_freqs, n_signals, n_signals)
+    ) + 1j * rng.standard_normal((n_times, n_freqs, n_signals, n_signals))
+    cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2))
+    bad = coeffs[1].copy()
+    bad[:, 1, :] = bad[:, 0, :]
+    cross_spectral_matrix[1] = np.matmul(bad, bad.conj().swapaxes(-1, -2))
+    return cross_spectral_matrix
+
+
+@contextlib.contextmanager
+def _ignoring_cholesky_start_warning():
+    """Ignore the Cholesky-start warning, which depends on the platform's LAPACK.
+
+    Whether the Cholesky start of a rank-deficient or NaN window raises (and so
+    warns) differs between LAPACK builds; the tests using this are about the
+    iteration. A context manager rather than a ``filterwarnings`` mark, which
+    CI's ``-p no:warnings`` job does not register.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Computing the initial conditions using the Cholesky failed",
+            category=UserWarning,
+        )
+        yield
+
+
+@pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
+def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_signals):
     """One rank-deficient sub-spectrum must not NaN-poison the whole batch.
 
     Regression: a singular factor in a single time window used to abort the
     Wilson iteration for the entire batch (all sub-spectra returned NaN, with a
     warning implying the whole dataset was rank-deficient). The healthy windows
-    must now converge to finite factors; only the bad window is NaN, and the
-    warning reports the correct count.
+    must now converge to the factors they get on their own; only the bad window
+    is NaN, and the warning reports the correct count. ``_warn_on_failure=False``
+    (used by spectral Granger) returns the same factor without the warning.
     """
+    cross_spectral_matrix = _spectra_with_one_duplicated_channel(real_signals)
+    assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
-    rng = np.random.default_rng(0)
-    n_times, n_freqs, n_signals = 3, 16, 2
-    coeffs = rng.standard_normal(
-        (n_times, n_freqs, n_signals, n_signals)
-    ) + 1j * rng.standard_normal((n_times, n_freqs, n_signals, n_signals))
-    cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2))
-    # Window 1: duplicate a channel so its sub-spectrum is rank-deficient.
-    bad = coeffs[1].copy()
-    bad[:, 1, :] = bad[:, 0, :]
-    cross_spectral_matrix[1] = np.matmul(bad, bad.conj().swapaxes(-1, -2))
-
-    with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
-        factor = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
-    assert np.isfinite(factor[0]).all()  # healthy window converged
+    with _ignoring_cholesky_start_warning():
+        with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
+            factor = minimum_phase_decomposition(cross_spectral_matrix)
+        silent = minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
+    assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
-    assert np.isfinite(factor[2]).all()  # healthy window converged
+    healthy = minimum_phase_decomposition(cross_spectral_matrix[[0, 2]])
+    np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
+    np.testing.assert_array_equal(silent, factor)
 
 
 def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
@@ -495,3 +617,120 @@ def test_minimum_phase_decomposition_promotes_complex64_working_precision():
     csm = factor @ factor.swapaxes(-1, -2).conj()
     result = minimum_phase_decomposition(csm)
     assert result.dtype == np.complex128
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_is_conjugate_symmetric_detects_real_valued_signals(n_fft):
+    """Real signals give S(-f) == conj(S(f)) exactly; complex signals do not."""
+    rng = np.random.default_rng(0)
+    real_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng))
+    complex_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng, dtype=complex))
+
+    assert _is_conjugate_symmetric(real_spectrum)
+    assert not _is_conjugate_symmetric(complex_spectrum)
+
+
+def test_is_conjugate_symmetric_requires_a_real_zero_frequency():
+    """A Hermitian but complex zero-frequency matrix is not symmetric."""
+    spectrum = _real_signal_spectrum()
+    spectrum[..., 0, 0, 1] += 1e-3j
+    spectrum[..., 0, 1, 0] -= 1e-3j
+    assert not _is_conjugate_symmetric(spectrum)
+
+
+def test_is_conjugate_symmetric_requires_conjugated_imaginary_parts():
+    """Equal real parts are not enough: the imaginary parts must flip sign.
+
+    Copying S(f) to -f (instead of conj(S(f))) keeps every matrix Hermitian and
+    the real parts symmetric, so only the imaginary-part check can reject it.
+    """
+    spectrum = _real_signal_spectrum()
+    spectrum[..., -1, :, :] = spectrum[..., 1, :, :]
+    assert np.any(spectrum[..., 1, :, :].imag != 0)
+    assert not _is_conjugate_symmetric(spectrum)
+
+
+def test_is_conjugate_symmetric_is_exact():
+    """A one-ulp change to one negative-frequency real part breaks symmetry."""
+    spectrum = _real_signal_spectrum()
+    spectrum[..., -1, 0, 0] = np.nextafter(spectrum[..., -1, 0, 0].real, np.inf)
+    assert not _is_conjugate_symmetric(spectrum)
+
+
+def test_is_conjugate_symmetric_accepts_mirrored_nan():
+    """NaN mirrored at the conjugate frequency keeps the fast path; unpaired NaN does not."""
+    spectrum = _real_signal_spectrum()
+    spectrum[1] = np.nan  # a dead window
+    assert _is_conjugate_symmetric(spectrum)
+
+    spectrum = _real_signal_spectrum()
+    spectrum[0, 1, 0, 0] = np.nan
+    assert not _is_conjugate_symmetric(spectrum)
+
+
+def test_nan_window_leaves_the_other_windows_unchanged():
+    """A NaN window is NaN, and the healthy window matches its own factorization."""
+    spectrum = _real_signal_spectrum()
+    spectrum[1] = np.nan
+
+    with (
+        _ignoring_cholesky_start_warning(),
+        pytest.warns(UserWarning, match="did not converge for 1 of 2"),
+    ):
+        factor = minimum_phase_decomposition(spectrum)
+
+    assert factor.shape == spectrum.shape
+    assert np.isnan(factor[1]).all()
+    np.testing.assert_allclose(
+        factor[:1], minimum_phase_decomposition(spectrum[:1]), rtol=1e-12
+    )
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_to_two_sided_restores_the_negative_frequencies(n_fft):
+    spectrum = _real_signal_spectrum(n_fft)
+    np.testing.assert_array_equal(
+        _to_two_sided(spectrum[..., : n_fft // 2 + 1, :, :], n_fft), spectrum
+    )
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_get_causal_signal_on_the_half_spectrum_matches_the_two_sided_projection(n_fft):
+    """Real FFTs on the non-negative half give the two-sided projection's half."""
+    linear_predictor = _real_signal_spectrum(n_fft)
+    n_nonnegative = n_fft // 2 + 1
+
+    half = _get_causal_signal(linear_predictor[..., :n_nonnegative, :, :], n_fft)
+    full = _get_causal_signal(linear_predictor)
+
+    assert half.shape == (2, n_nonnegative, 3, 3)
+    np.testing.assert_allclose(half, full[..., :n_nonnegative, :, :], rtol=0, atol=1e-13)
+
+
+@pytest.mark.parametrize("n_fft", [16, 17])
+def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, n_fft):
+    """Iterating on the non-negative frequencies reproduces the full iteration.
+
+    For real-valued signals every Wilson iterate satisfies G(-f) == conj(G(f)),
+    so the factorization may run on the non-negative half of the spectrum and
+    mirror the rest. Forcing the full two-sided iteration must give the same
+    factor up to rounding. Two leading batch axes check that the mirroring and
+    per-unit convergence handle extra dimensions.
+    """
+    spectrum = np.stack(
+        [_real_signal_spectrum(n_fft, seed) for seed in (1, 2)], axis=1
+    )  # (window, batch, frequency, signal, signal)
+
+    half_spectrum_factor = minimum_phase_decomposition(spectrum)
+    monkeypatch.setattr(mpd_module, "_is_conjugate_symmetric", lambda _: False)
+    full_spectrum_factor = minimum_phase_decomposition(spectrum)
+
+    assert half_spectrum_factor.shape == full_spectrum_factor.shape
+    np.testing.assert_allclose(
+        half_spectrum_factor,
+        full_spectrum_factor,
+        rtol=0,
+        atol=1e-13 * np.abs(full_spectrum_factor).max(),
+    )
+    mirrored = half_spectrum_factor[..., (-np.arange(n_fft)) % n_fft, :, :]
+    np.testing.assert_array_equal(half_spectrum_factor, mirrored.conj())
