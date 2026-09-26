@@ -3554,44 +3554,52 @@ def test_signed_phase_measures_are_positive_when_source_leads(method):
     assert float(band.sel(source="b", target="a")) < -0.3
 
 
-def _wrapper_warning_cases():
-    rng = np.random.default_rng(41)
-    three_signals = rng.standard_normal((256, 4, 3))
-    dataarray = xr.DataArray(
-        rng.standard_normal((256, 4, 2)), dims=("time", "drug_dose", "channel")
-    )
-    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
-    return {
-        "squeeze_with_many_signals": (
+_WARNING_RNG = np.random.default_rng(41)
+_THREE_SIGNALS = _WARNING_RNG.standard_normal((256, 4, 3))
+_UNNAMED_TRIAL_AXIS = xr.DataArray(
+    _WARNING_RNG.standard_normal((256, 4, 2)), dims=("time", "drug_dose", "channel")
+)
+_TWO_SIGNAL_COEFFICIENTS = _WARNING_RNG.standard_normal(
+    (3, 8, 2)
+) + 1j * _WARNING_RNG.standard_normal((3, 8, 2))
+
+
+@pytest.mark.parametrize(
+    ("match", "call"),
+    [
+        pytest.param(
             "squeeze=True but",
             lambda: multitaper_connectivity(
-                three_signals, 256, method="coherence_magnitude", squeeze=True
+                _THREE_SIGNALS, 256, method="coherence_magnitude", squeeze=True
             ),
+            id="squeeze_with_many_signals",
         ),
-        "squeeze_with_many_measures": (
+        pytest.param(
             "squeeze=True is ignored",
             lambda: multitaper_connectivity(
-                three_signals,
+                _THREE_SIGNALS,
                 256,
                 method=["coherence_magnitude", "phase_locking_value"],
                 squeeze=True,
             ),
+            id="squeeze_with_many_measures",
         ),
-        "fourier_without_frequencies": (
+        pytest.param(
             "no frequency coordinate",
-            lambda: fourier_connectivity(coefficients, method="coherence_magnitude"),
+            lambda: fourier_connectivity(
+                _TWO_SIGNAL_COEFFICIENTS, method="coherence_magnitude"
+            ),
+            id="fourier_without_frequencies",
         ),
-        "dataarray_role_by_elimination": (
+        pytest.param(
             "Assuming DataArray dimension",
-            lambda: multitaper_connectivity(dataarray, 256, method="power"),
+            lambda: multitaper_connectivity(_UNNAMED_TRIAL_AXIS, 256, method="power"),
+            id="dataarray_role_by_elimination",
         ),
-    }
-
-
-@pytest.mark.parametrize("case", sorted(_wrapper_warning_cases()))
-def test_wrapper_warnings_point_at_the_caller(case):
+    ],
+)
+def test_wrapper_warnings_point_at_the_caller(match, call):
     """Warnings raised in the wrapper's helper modules name the user's call."""
-    match, call = _wrapper_warning_cases()[case]
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         call()
