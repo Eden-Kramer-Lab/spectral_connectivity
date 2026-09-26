@@ -3,8 +3,9 @@
 A transform needs only ``fft()``, ``frequencies``, and ``time``; the optional
 capability attributes (``is_one_sided``, ``observation_weights``,
 ``observations_are_independent``, ``time_bins_are_independent``) default to a
-two-sided, unweighted, independent spectrum when absent. The forwarding of the
-two independence flags is covered in ``test_observation_independence.py``.
+two-sided, unweighted, independent spectrum when absent. How the two
+independence flags change the measures is covered in
+``test_observation_independence.py``.
 """
 
 import numpy as np
@@ -21,6 +22,7 @@ from spectral_connectivity import (
 )
 
 N_TIME_WINDOWS, N_TRIALS, N_TAPERS, N_FFT_SAMPLES, N_SIGNALS = 2, 4, 3, 16, 2
+FFT_FREQUENCIES = np.fft.fftfreq(N_FFT_SAMPLES, d=1 / 500)
 
 
 class _MinimalTransform:
@@ -33,18 +35,6 @@ class _MinimalTransform:
 
     def fft(self):
         return self._coefficients.copy()
-
-
-class _OneSidedWeightedTransform(_MinimalTransform):
-    """Also exposes every optional capability attribute, all non-default."""
-
-    is_one_sided = True
-    observations_are_independent = False
-    time_bins_are_independent = False
-
-    def __init__(self, coefficients, frequencies, observation_weights):
-        super().__init__(coefficients, frequencies)
-        self.observation_weights = observation_weights
 
 
 @pytest.fixture
@@ -69,7 +59,6 @@ def builtin_transforms():
 
 def test_protocol_is_exported_from_the_package():
     assert "SpectralTransform" in spectral_connectivity.__all__
-    assert spectral_connectivity.SpectralTransform is SpectralTransform
 
 
 def test_builtin_transforms_satisfy_the_protocol(builtin_transforms):
@@ -77,34 +66,21 @@ def test_builtin_transforms_satisfy_the_protocol(builtin_transforms):
         assert isinstance(transform, SpectralTransform), type(transform).__name__
 
 
-def test_objects_missing_a_required_member_do_not_satisfy_the_protocol(coefficients):
-    frequencies = np.fft.fftfreq(N_FFT_SAMPLES)
-    assert isinstance(_MinimalTransform(coefficients, frequencies), SpectralTransform)
-
-    class NoTime:
-        frequencies = np.fft.fftfreq(N_FFT_SAMPLES)
-
-        def fft(self):
-            return coefficients
-
-    class NoFFT:
-        frequencies = np.fft.fftfreq(N_FFT_SAMPLES)
-        time = np.arange(N_TIME_WINDOWS, dtype=float)
-
-    class NoFrequencies:
-        time = np.arange(N_TIME_WINDOWS, dtype=float)
-
-        def fft(self):
-            return coefficients
-
-    assert not isinstance(NoTime(), SpectralTransform)
-    assert not isinstance(NoFFT(), SpectralTransform)
-    assert not isinstance(NoFrequencies(), SpectralTransform)
+@pytest.mark.parametrize("missing", ["fft", "frequencies", "time"])
+def test_objects_missing_a_required_member_do_not_satisfy_the_protocol(coefficients, missing):
+    members = {
+        "fft": lambda self: coefficients,
+        "frequencies": FFT_FREQUENCIES,
+        "time": np.arange(N_TIME_WINDOWS, dtype=float),
+    }
+    assert isinstance(type("Complete", (), members)(), SpectralTransform)
+    del members[missing]
+    assert not isinstance(type("Incomplete", (), members)(), SpectralTransform)
     assert not isinstance(coefficients, SpectralTransform)
 
 
 def test_minimal_transform_gets_the_documented_defaults(coefficients):
-    frequencies = np.fft.fftfreq(N_FFT_SAMPLES, d=1 / 500)
+    frequencies = FFT_FREQUENCIES
     transform = _MinimalTransform(coefficients, frequencies)
 
     connectivity = Connectivity.from_transform(transform)
@@ -126,7 +102,11 @@ def test_optional_capability_attributes_are_honored(coefficients):
     weights = np.random.default_rng(2).uniform(
         0.5, 1.5, (N_TIME_WINDOWS, N_TRIALS, N_TAPERS, N_FFT_SAMPLES, 1)
     )
-    transform = _OneSidedWeightedTransform(coefficients, frequencies, weights)
+    transform = _MinimalTransform(coefficients, frequencies)
+    transform.is_one_sided = True
+    transform.observation_weights = weights
+    transform.observations_are_independent = False
+    transform.time_bins_are_independent = False
 
     connectivity = Connectivity.from_transform(transform)
 
@@ -186,7 +166,7 @@ _CAPABILITY_FLAGS = (
 @pytest.mark.parametrize("flag", _CAPABILITY_FLAGS)
 @pytest.mark.parametrize("value", [np.True_, np.False_])
 def test_capability_flags_accept_numpy_bools(coefficients, flag, value):
-    transform = _MinimalTransform(coefficients, np.fft.fftfreq(N_FFT_SAMPLES, d=1 / 500))
+    transform = _MinimalTransform(coefficients, FFT_FREQUENCIES)
     if flag == "is_one_sided" and value:
         transform.frequencies = np.linspace(0.0, 250.0, N_FFT_SAMPLES)
     setattr(transform, flag, value)
@@ -205,7 +185,7 @@ def test_capability_flags_must_be_bools(coefficients, flag, kind):
 
     value = {"method": method, "string": "False", "none": None, "int": 0}[kind]
     transform_class = type("Transform", (_MinimalTransform,), {flag: value})
-    transform = transform_class(coefficients, np.fft.fftfreq(N_FFT_SAMPLES))
+    transform = transform_class(coefficients, FFT_FREQUENCIES)
 
     with pytest.raises(TypeError, match=rf"transform\.{flag} must be a bool"):
         Connectivity.from_transform(transform)
@@ -220,24 +200,22 @@ def test_an_attribute_error_inside_a_capability_property_propagates(coefficients
         def is_one_sided(self):
             return self._one_sidded  # typo: raises AttributeError
 
-    transform = Buggy(coefficients, np.fft.fftfreq(N_FFT_SAMPLES))
+    transform = Buggy(coefficients, FFT_FREQUENCIES)
     with pytest.raises(AttributeError, match="_one_sidded"):
         Connectivity.from_transform(transform)
 
 
-@pytest.mark.parametrize("layout", ["one_sided_unflagged", "fftshifted"])
-def test_two_sided_frequencies_must_be_in_fft_order(layout):
+@pytest.mark.parametrize(
+    "frequencies",
+    [
+        np.linspace(0.0, 250.0, N_FFT_SAMPLES),  # one-sided, is_one_sided not set
+        np.fft.fftshift(FFT_FREQUENCIES),
+    ],
+    ids=["one_sided_unflagged", "fftshifted"],
+)
+def test_two_sided_frequencies_must_be_in_fft_order(coefficients, frequencies):
     """Two-sided coefficients are folded assuming numpy.fft order, so any other
     layout would silently drop or mislabel frequencies."""
-    n_samples, sampling_frequency = 16, 500.0
-    series = np.random.default_rng(3).standard_normal((n_samples, N_TRIALS, N_SIGNALS))
-    if layout == "one_sided_unflagged":  # rfft output without is_one_sided = True
-        spectrum = np.fft.rfft(series, axis=0)
-        frequencies = np.fft.rfftfreq(n_samples, 1 / sampling_frequency)
-    else:
-        spectrum = np.fft.fftshift(np.fft.fft(series, axis=0), axes=0)
-        frequencies = np.fft.fftshift(np.fft.fftfreq(n_samples, 1 / sampling_frequency))
-    coefficients = np.moveaxis(spectrum, 0, 1)[np.newaxis, :, np.newaxis]
     transform = _MinimalTransform(coefficients, frequencies)
 
     with pytest.raises(ValueError, match="standard FFT order"):
@@ -249,7 +227,7 @@ def test_two_sided_frequencies_must_be_in_fft_order(layout):
 def test_real_valued_coefficients_are_rejected(coefficients):
     """Real coefficients carry no phase, so the imaginary coherence and the
     phase-lag indices would be exactly 0 rather than an error."""
-    transform = _MinimalTransform(coefficients.real, np.fft.fftfreq(N_FFT_SAMPLES))
+    transform = _MinimalTransform(coefficients.real, FFT_FREQUENCIES)
     with pytest.raises(TypeError, match="must be complex"):
         Connectivity.from_transform(transform)
     with pytest.raises(TypeError, match="must be complex"):
