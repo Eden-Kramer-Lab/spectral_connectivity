@@ -1355,7 +1355,11 @@ class Connectivity:
         return _regularized_inverse(self._transfer_function)
 
     def _expectation(self, values: BackendArray, *, frequency_axis: int = 3) -> BackendArray:
-        """Average observation axes, applying optional spectral weights."""
+        """Average observation axes, applying optional spectral weights.
+
+        ``values`` may hold only the leading (non-negative) frequency bins of
+        the spectrum; the weights are restricted to the same bins.
+        """
         if self._observation_weights is None:
             expected: BackendArray = xp.mean(values, axis=self._expectation_axes)
             return expected
@@ -1365,10 +1369,11 @@ class Connectivity:
         if frequency_axis < 3 or frequency_axis >= values.ndim:
             msg = "frequency_axis must follow the three observation axes."
             raise ValueError(msg)
+        n_frequencies = values.shape[frequency_axis]
         weight_shape = [1] * values.ndim
         weight_shape[0:3] = self._observation_weights.shape[0:3]
-        weight_shape[frequency_axis] = self._observation_weights.shape[3]
-        weights = self._observation_weights[..., 0].reshape(weight_shape)
+        weight_shape[frequency_axis] = n_frequencies
+        weights = self._observation_weights[..., :n_frequencies, 0].reshape(weight_shape)
         numerator = xp.sum(values * weights, axis=self._expectation_axes)
         denominator = xp.sum(weights, axis=self._expectation_axes)
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)

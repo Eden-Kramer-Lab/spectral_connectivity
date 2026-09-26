@@ -2835,6 +2835,52 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
     np.testing.assert_allclose(connectivity._expectation_cross_spectral_matrix(), expected)
 
 
+@pytest.mark.parametrize("n_fft_samples", [8, 9])
+def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
+    """The phase-lag moments reduce only the non-negative bins of a two-sided
+    spectrum, so the observation weights must be restricted to the same bins."""
+    rng = np.random.default_rng(11)
+    shape = (1, 3, 2, n_fft_samples, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
+    n_nonnegative = n_fft_samples // 2 + 1
+
+    imaginary = (
+        coefficients[..., :n_nonnegative, :, np.newaxis]
+        * np.conjugate(coefficients[..., :n_nonnegative, np.newaxis, :])
+    ).imag
+    weight = weights[..., :n_nonnegative, :, np.newaxis]
+
+    def weighted_mean(values):
+        return np.sum(values * weight, axis=(1, 2)) / np.sum(weight, axis=(1, 2))
+
+    off_diagonal = ~np.eye(shape[-1], dtype=bool)
+    weighted = Connectivity(coefficients, observation_weights=weights)
+    np.testing.assert_allclose(
+        weighted.phase_lag_index()[..., off_diagonal],
+        weighted_mean(np.sign(imaginary))[..., off_diagonal],
+    )
+    np.testing.assert_allclose(
+        weighted.weighted_phase_lag_index()[..., off_diagonal],
+        (weighted_mean(imaginary) / weighted_mean(np.abs(imaginary)))[..., off_diagonal],
+    )
+
+    # The debiased measures require uniform weights, which must reproduce the
+    # unweighted result.
+    uniform = Connectivity(coefficients, observation_weights=np.ones_like(weights))
+    unweighted = Connectivity(coefficients)
+    for measure in (
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "directed_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+    ):
+        result = getattr(uniform, measure)()
+        assert result.shape[-3] == n_nonnegative, measure
+        np.testing.assert_allclose(result, getattr(unweighted, measure)(), err_msg=measure)
+
+
 @pytest.mark.parametrize(
     "weights",
     [
