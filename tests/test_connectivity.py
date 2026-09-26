@@ -2898,6 +2898,31 @@ def test_weighted_phase_lag_measures_on_two_sided_spectrum(n_fft_samples):
         np.testing.assert_allclose(result, getattr(unweighted, measure)(), err_msg=measure)
 
 
+@pytest.mark.parametrize("n_fft_samples", [8, 9])
+def test_weighted_phase_locking_value_on_two_sided_spectrum(n_fft_samples):
+    """PLV normalizes only the non-negative bins, so the weights it applies
+    must be those bins' weights."""
+    rng = np.random.default_rng(12)
+    shape = (1, 3, 2, n_fft_samples, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.1, 1.0, size=(*shape[:-1], 1))
+    n_nonnegative = n_fft_samples // 2 + 1
+
+    unit = coefficients[..., :n_nonnegative, :]
+    unit = unit / np.abs(unit)
+    weight = weights[..., :n_nonnegative, :, np.newaxis]
+    expected = np.abs(
+        np.sum(
+            unit[..., :, np.newaxis] * np.conjugate(unit[..., np.newaxis, :]) * weight,
+            axis=(1, 2),
+        )
+        / np.sum(weight, axis=(1, 2))
+    )
+
+    connectivity = Connectivity(coefficients, observation_weights=weights)
+    np.testing.assert_allclose(connectivity.phase_locking_value(), expected)
+
+
 @pytest.mark.parametrize(
     "weights",
     [
