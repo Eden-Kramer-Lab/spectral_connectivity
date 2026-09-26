@@ -490,11 +490,13 @@ directly with results from 2.x.
   windows of 8 signals about 1.9x. For well-conditioned spectra,
   results agree with the previous implementation to rounding (relative
   differences of about 1e-14 or less).
-- The default measure set is about 2x faster on top of that. Pairwise and
-  subset spectral Granger solve their 2x2 Wilson systems in closed form; the
-  phase-lag-index family reduces only the non-negative frequencies, forms the
-  imaginary cross-spectrum in real arithmetic, and computes each signal pair
-  once; coherency, imaginary coherence, and PLV/PPC normalize only the
+- The default measure set is about 2x faster on top of that. Every 2-signal
+  Wilson factorization (pairwise and subset spectral Granger, and 2-signal
+  DTF/PDC) solves its 2x2 systems in closed form; the phase-lag-index family
+  reduces only the non-negative frequencies, forms the imaginary cross-spectrum
+  in real arithmetic, and, when its workspace is split into several signal
+  tiles, skips each tile's pairs with earlier signals and fills them by
+  symmetry; coherency, imaginary coherence, and PLV/PPC normalize only the
   frequencies they return; and the transfer function and noise covariance read
   the factor's lag-0 coefficient as a frequency mean instead of a full inverse
   FFT. `multitaper_connectivity` with the default measures is about 2.0x faster

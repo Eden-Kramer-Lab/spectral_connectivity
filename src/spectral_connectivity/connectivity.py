@@ -3322,13 +3322,13 @@ class Connectivity:
 
         Parameters
         ----------
-        mean_absolute : array, shape (..., n_frequencies, n_signals, n_signals)
+        mean_absolute : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
             ``E[|Im S_ij|]`` from :meth:`_imaginary_cross_spectrum_moments`, at
             the non-negative frequencies.
 
         Returns
         -------
-        no_lag : array of bool, shape (..., n_frequencies, n_signals, n_signals)
+        no_lag : array of bool, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
         """
         tolerance = _ZERO_PHASE_LAG_EPSILONS * xp.finfo(mean_absolute.dtype).eps
         power_scale = self._nonnegative_pairwise_power_scale()
@@ -3347,7 +3347,9 @@ class Connectivity:
         per-observation cross-spectral matrix, with the diagonal zeroed. This
         returns the requested reduced moments, computing (and caching) any not
         already available from signal-row tiles of the observation-level
-        cross-spectrum.
+        cross-spectrum. Only the non-negative bins are reduced, and each tile
+        covers targets from its first row on; the strict lower triangle is then
+        filled by pair symmetry (``_IMAGINARY_MOMENT_PAIR_SYMMETRY``).
 
         Computing only the requested keys keeps a single-measure call
         (e.g. ``phase_lag_index`` needs only ``"sign"``) from doing the other
@@ -3411,9 +3413,13 @@ class Connectivity:
             # tile at a time, reduce it immediately, and write the small result.
             # Im(X_i conj(X_j)) = Im(X_i) Re(X_j) - Re(X_i) Im(X_j), formed in
             # real arithmetic rather than as a complex product. Each tile pairs
-            # its source rows only with targets from ``start`` on; the rest of
-            # the lower triangle is mirrored afterwards, which is exact because
-            # the pair (j, i) is the negation of (i, j) in floating point too.
+            # its source rows only with targets from ``start`` on (so it still
+            # forms both orders of its own pairs), skipping the pairs with
+            # earlier rows. The strict lower triangle is filled from the upper
+            # one afterwards: per observation, Im(X_j conj(X_i)) is exactly the
+            # negation of Im(X_i conj(X_j)) in floating point, so each moment is
+            # exactly antisymmetric (sign, imaginary) or symmetric (absolute,
+            # squared).
             real_part = coefficients.real[..., xp.newaxis, :]
             imaginary_part = coefficients.imag[..., xp.newaxis, :]
             for start in range(0, n_signals, signals_per_block):
@@ -3431,7 +3437,8 @@ class Connectivity:
                     moment = _IMAGINARY_MOMENTS[key](imaginary)
                     reduced[..., start:stop, start:] = self._expectation(moment)
 
-            # Fill each tile's lower-left block (targets before ``start``).
+            # Overwrite the strict lower triangle from the upper one: the pairs
+            # each tile skipped and the in-tile lower entries alike.
             rows, columns = xp.tril_indices(n_signals, k=-1)
             for key, reduced in moments.items():
                 reduced[..., rows, columns] = (
@@ -5330,7 +5337,9 @@ def _zero_lag_coefficient(
     """Lag-0 coefficient of the minimum-phase factor, shape (..., n_signals, n_signals).
 
     The inverse DFT at lag 0 is the mean over frequencies, so no full inverse
-    transform is needed. It is real for the factor of a real process.
+    transform is needed; ``minimum_phase`` must therefore hold all
+    ``n_fft_samples`` bins, not a frequency slice. ``.real`` discards an
+    imaginary part that is rounding-level for the factor of a real process.
     """
     zero_lag: NDArray[np.floating] = xp.mean(minimum_phase, axis=-3).real
     return zero_lag
@@ -5357,8 +5366,9 @@ def _estimate_transfer_function(
     Returns
     -------
     transfer_function : array
-        Shape (n_time_windows, n_frequencies, n_signals, n_signals).
-        The transfer function of a MVAR model.
+        Shape (n_time_windows, n_frequencies, n_signals, n_signals), with
+        ``n_frequencies = n_fft_samples`` by default. The transfer function of
+        a MVAR model; its lag-0 normalization always uses all bins.
 
     References
     ----------

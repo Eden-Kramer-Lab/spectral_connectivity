@@ -1766,7 +1766,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
         imag[..., di[0], di[1]] = 0
         return imag
 
-    def non_negative(a):  # mirror the @_non_negative_frequencies(-3) decorator
+    def non_negative(a):  # the non-negative bins (DC through Nyquist) reported
         return a[..., : a.shape[-3] // 2 + 1, :, :]
 
     conn = Connectivity(fc, expectation_type=expectation_type)
@@ -1793,8 +1793,8 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     diagonal = np.arange(shape[-1])
     expected_dwpli[..., diagonal, diagonal] = 0.0
 
-    # The moments form Im(X_i conj(X_j)) in real arithmetic, which can round
-    # differently from the complex product by an ulp; signs are unaffected.
+    # The moments form Im(X_i conj(X_j)) in real arithmetic, which can differ
+    # by an ulp from the matmul reference; the signs agree on this data.
     np.testing.assert_array_equal(conn.phase_lag_index(), expected_pli)
     np.testing.assert_allclose(
         conn.weighted_phase_lag_index(), expected_wpli, rtol=1e-12, atol=1e-15
@@ -2518,7 +2518,7 @@ def test_nyquist_bin_count(n_fft_samples, expected_n_frequencies):
 
     c = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    # Test coherence which uses @_non_negative_frequencies decorator
+    # coherence_magnitude reports only the non-negative frequencies
     coherence = c.coherence_magnitude()
 
     assert coherence.shape[-3] == expected_n_frequencies, (
