@@ -863,18 +863,9 @@ class Connectivity:
         Parameters
         ----------
         multitaper_instance : SpectralTransform
-            A :class:`~spectral_connectivity.transforms.Multitaper` or any other
-            object satisfying the ``SpectralTransform`` protocol.
-        expectation_type : str, default="trials_tapers"
-            How to average the cross-spectral matrix.
-        dtype : np.dtype, default=complex128
-            Data type for computations.
-        minimum_phase_tolerance : float, default=1e-8
-            Relative convergence tolerance for the Wilson minimum-phase
-            factorization used by the directed measures.
-        minimum_phase_max_iterations : int, default=500
-            Maximum Wilson iterations. Increase for near-singular cross-spectral
-            matrices (highly correlated channels) that fail to converge.
+            The transform; ``transform`` in :meth:`from_transform`.
+        expectation_type, dtype, minimum_phase_tolerance, minimum_phase_max_iterations
+            As in :meth:`from_transform`.
 
         Returns
         -------
