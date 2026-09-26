@@ -1225,8 +1225,19 @@ def test_dataarray_dask_backing_is_rejected():
         dims=("sample", "channel"),
     )
     assert isinstance(data.data, _DaskProtocolArray)  # premise: backing kept lazy
-    with pytest.raises(TypeError, match="dask-backed"):
+    with pytest.raises(TypeError, match="multitaper_connectivity received a dask-backed"):
         multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
+
+
+def test_fourier_dataarray_dask_backing_is_rejected_by_name():
+    """The error names the function the user called."""
+    rng = np.random.default_rng(13)
+    coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
+    data = xr.DataArray(
+        _DaskProtocolArray(coefficients), dims=("trial", "frequency", "channel")
+    )
+    with pytest.raises(TypeError, match="fourier_connectivity received a dask-backed"):
+        fourier_connectivity(data, method="coherence_magnitude")
 
 
 def test_dask_protocol_backing_is_rejected_without_optional_dependency():
@@ -1237,7 +1248,7 @@ def test_dask_protocol_backing_is_rejected_without_optional_dependency():
             return {}
 
     with pytest.raises(TypeError, match="dask-backed"):
-        _reject_unmaterialized_backing(LazyArray())
+        _reject_unmaterialized_backing(LazyArray(), "multitaper_connectivity")
 
 
 def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):

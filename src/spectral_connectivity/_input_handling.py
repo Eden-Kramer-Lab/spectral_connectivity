@@ -611,16 +611,17 @@ def _signal_coordinates_from_dataarray(
     }
 
 
-def _reject_unmaterialized_backing(data: Any) -> None:
+def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
     """Reject a lazy backing array the positional spectral math cannot consume.
 
     xarray materializes a masked array to a NaN-filled ndarray on construction,
     so a mask surfaces loudly as NaN downstream and needs no guard here. A dask
-    array, by contrast, is handed through ``.data`` unmaterialized.
+    array, by contrast, is handed through ``.data`` unmaterialized. ``caller``
+    is the public function the user called, named in the error.
     """
     if callable(getattr(data, "__dask_graph__", None)):
         msg = (
-            "multitaper_connectivity received a dask-backed DataArray, which is "
+            f"{caller} received a dask-backed DataArray, which is "
             "not supported. Materialize it first with DataArray.compute() (or "
             "DataArray.load()) and pass the result."
         )
@@ -672,7 +673,7 @@ def _unwrap_xarray_input(
     )
 
     data = time_series.transpose(*dimension_order).data
-    _reject_unmaterialized_backing(data)
+    _reject_unmaterialized_backing(data, "multitaper_connectivity")
     units = time_series.attrs.get("units")
     return _UnwrappedInput(
         data,
@@ -760,7 +761,7 @@ def _unwrap_fourier_input(
     if coefficient_array.ndim < 3 or coefficient_array.ndim > 5:
         msg = "A Fourier coefficient DataArray must have 3 to 5 dimensions."
         raise ValueError(msg)
-    _reject_unmaterialized_backing(coefficient_array.data)
+    _reject_unmaterialized_backing(coefficient_array.data, "fourier_connectivity")
 
     role_to_dimension: dict[str, Hashable] = {}
     claimed_dimensions: set[Hashable] = set()
