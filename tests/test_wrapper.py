@@ -1965,8 +1965,9 @@ def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
 
 
 def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
-    """A pairwise extension containing 'directed' is neither rejected nor
-    transposed (treated as a directed measure) because of its name."""
+    """A pairwise extension containing 'directed' is not given a directed
+    measure's two-sided-spectrum requirement because of its name, and is
+    labeled exactly as returned."""
     rng = np.random.default_rng(8)
     m = Multitaper(rng.standard_normal((128, 3, 2)), sampling_frequency=128)
     # Non-symmetric native matrix: entry [i, j] = 10 * i + j.
@@ -1983,7 +1984,7 @@ def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
 
     data_array = connectivity_to_xarray(m, method="undirected_similarity")
     assert data_array.dims == ("time", "frequency", "source", "target")
-    # An unregistered extension keeps its native [source, target] orientation.
+    # An unregistered extension is labeled as returned: [i, j] is (source i, target j).
     np.testing.assert_array_equal(data_array.sel(source="0", target="1"), 1.0)
     np.testing.assert_array_equal(data_array.sel(source="1", target="0"), 10.0)
 
@@ -2330,7 +2331,7 @@ def test_directed_measures_are_oriented_source_to_target(method, unidirectional_
 
     For a unidirectional VAR (signal 0 drives 1), the causal entry is
     sel(source=0, target=1); it must dominate the anti-causal sel(source=1,
-    target=0). Without the wrapper's directed transpose these two are swapped.
+    target=0). A Connectivity array left target first would swap them.
     """
     da = multitaper_connectivity(
         unidirectional_var,

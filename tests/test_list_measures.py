@@ -31,7 +31,7 @@ def test_every_public_connectivity_measure_is_registered():
 
     An unregistered method would be invisible to ``list_measures()`` and, when
     requested by name, would fall back to the undirected pairwise contract
-    (no source/target transpose, no two-sided-spectrum requirement).
+    (not directed, no two-sided-spectrum requirement).
     """
     import inspect
 
