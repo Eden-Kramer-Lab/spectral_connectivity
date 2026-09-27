@@ -5,6 +5,7 @@ from unittest.mock import PropertyMock, patch
 import numpy as np
 import pytest
 import scipy.stats
+from scipy.integrate import trapezoid
 from scipy.ndimage import label
 
 from spectral_connectivity._granger import (
@@ -19,6 +20,8 @@ from spectral_connectivity.connectivity import (
     _total_inflow,
     _total_outflow,
 )
+from spectral_connectivity.simulate import simulate_shared_oscillation
+from spectral_connectivity.transforms import Multitaper
 
 PHASE_LAG_MEASURES = (
     "phase_lag_index",
@@ -223,6 +226,43 @@ def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
     np.testing.assert_allclose(csd, np.conj(np.swapaxes(csd, -1, -2)))
     diagonal = np.diagonal(csd, axis1=-2, axis2=-1).real
     np.testing.assert_allclose(diagonal, conn.power())
+
+
+def test_cross_spectral_density_recovers_planted_amplitude_and_phase():
+    """Two coherent 40 Hz sinusoids: the CSD peaks there with their phase and power.
+
+    Signal 1 (amplitude 2) leads signal 0 (amplitude 1) by pi / 3. The CSD's
+    ``[..., i, j]`` is ``E[X_i conj(X_j)]``, so ``[..., 1, 0]`` has angle
+    ``+pi / 3``, with the sign ``coherence_phase`` documents for "``i`` leads
+    ``j``". Integrated over the peak, the one-sided cross-power of two
+    coherent sinusoids is ``A0 * A1 / 2 = 1``.
+    """
+    sampling_frequency = 500
+    time_series = simulate_shared_oscillation(
+        40,
+        sampling_frequency,
+        1000,
+        n_trials=50,
+        amplitudes=[1.0, 2.0],
+        phase_offsets=[0.0, np.pi / 3],
+        noise_levels=0.5,
+        random_state=0,
+    )
+    multitaper = Multitaper(
+        time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=2
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    frequencies = connectivity.frequencies
+    csd = connectivity.cross_spectral_density()[0]  # (n_frequencies, n_signals, n_signals)
+
+    peak = np.argmax(np.abs(csd[:, 0, 1]))
+    assert frequencies[peak] == 40.0
+    assert np.angle(csd[peak, 1, 0]) == pytest.approx(np.pi / 3, abs=0.05)
+    assert connectivity.coherence_phase()[0, peak, 1, 0] > 0
+
+    band = np.abs(frequencies - frequencies[peak]) <= 2 * multitaper.frequency_resolution
+    cross_power = trapezoid(csd[band, 0, 1], frequencies[band])
+    assert np.abs(cross_power) == pytest.approx(1.0, rel=0.05)
 
 
 @pytest.mark.parametrize(
