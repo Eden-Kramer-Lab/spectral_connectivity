@@ -6,19 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-**The Granger and transfer-function measures changed direction.** For the
-spectral Granger family, directed transfer function, directed coherence,
-(generalized) partial directed coherence, and direct directed transfer function,
-`multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b` (2.x
-returned `b -> a`), and `result[..., i, j]` from their `Connectivity` methods is
-now `i -> j` (2.x returned `j -> i`). Indexing code written for 2.x still runs
-but reads the opposite direction; see the first two rows of the migration guide
-below. `phase_slope_index`, `group_delay`, and `delay` were already source first
-and are unchanged; do not swap them. Until 3.2 the methods that existed in 2.x
-(pairwise and subset spectral Granger, directed transfer function, directed
-coherence, (generalized) partial directed coherence, and direct directed
-transfer function), `multitaper_connectivity`, and `connectivity_to_xarray` emit
-a `DirectedOrientationWarning` as a reminder; silence it with
+**The Granger and transfer-function measures changed direction.** `result[...,
+i, j]` from the `Connectivity` methods of the spectral Granger family, directed
+transfer function, directed coherence, (generalized) partial directed coherence,
+and direct directed transfer function is now `i -> j` (2.x returned `j -> i`).
+For pairwise and subset spectral Granger prediction, the directed measures the
+2.x wrapper accepted, `multitaper_connectivity(...).sel(source="a", target="b")`
+is now `a -> b` (2.x returned `b -> a`). Indexing code written for 2.x still
+runs but reads the opposite direction; see the first two rows of the migration
+guide below. `phase_slope_index`, `group_delay`, and `delay` were already source
+first and are unchanged; do not swap them. Until 3.2 the `Connectivity` methods
+that existed in 2.x (pairwise and subset spectral Granger, directed transfer
+function, directed coherence, (generalized) partial directed coherence, and
+direct directed transfer function) emit a `DirectedOrientationWarning` as a
+reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
+pairwise and subset spectral Granger prediction; silence it with
 `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 
@@ -30,7 +32,7 @@ directly with results from 2.x.
 
 | Previous behavior | New behavior / required action |
 | --- | --- |
-| `multitaper_connectivity` labeled the spectral Granger and transfer-function measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); `phase_slope_index`, `group_delay`, and `delay` were labeled correctly | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `multitaper_connectivity` labeled pairwise and subset spectral Granger prediction with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); it rejected the transfer-function measures and labeled `phase_slope_index`, `group_delay`, and `delay` correctly | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
 | `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
 | `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
@@ -54,7 +56,8 @@ directly with results from 2.x.
 - `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
   3.2) emitted by the seven `Connectivity` methods whose arrays were target
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
-  when they compute one of them. It points at the calling line, so Python's
+  when they compute pairwise or subset spectral Granger prediction (the 2.x
+  wrapper rejected the transfer-function measures). It points at the calling line, so Python's
   default filter shows it once per call site.
 - Spectral primitives and pairwise measures: one-sided
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
@@ -417,11 +420,11 @@ directly with results from 2.x.
 - The documentation build installs the current checkout on Read the Docs,
   confines generated sources to ignored directories, and the introductory
   tutorial no longer uses the removed `blocks` argument.
-- The xarray wrapper now labels directed measures (e.g.
-  `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
-  the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
-  transposed, silently returning the reverse direction. Recompute any directed
-  results obtained through `multitaper_connectivity`. The underlying
+- The xarray wrapper now labels pairwise and subset spectral Granger
+  prediction so that `sel(source=a, target=b)` is the influence *from* `a` *to*
+  `b`; previously the `source`/`target` axes were transposed, silently
+  returning the reverse direction. Recompute any Granger results obtained
+  through `multitaper_connectivity`. The underlying
   `Connectivity` arrays now use the same source-first order (see Changed).
 - The wrapper rejects an empty `method` list, duplicate `signal_names`, and
   requests where no method yields a compatible result, instead of silently

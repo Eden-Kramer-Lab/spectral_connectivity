@@ -20,20 +20,22 @@
 
 > [!WARNING]
 > **Upgrading from 2.x: the Granger and transfer-function measures changed
-> direction.** For the spectral Granger family, directed transfer function,
-> directed coherence, (generalized) partial directed coherence, and direct
-> directed transfer function, `multitaper_connectivity(...).sel(source="a",
-> target="b")` is now the influence `a -> b` (2.x returned `b -> a`), and
-> `result[..., i, j]` from their `Connectivity` methods is now `i -> j` (2.x
-> returned `j -> i`). Indexing code written for 2.x still runs but reads the
-> opposite direction: swap its indices and recompute stored results.
+> direction.** `result[..., i, j]` from the `Connectivity` methods of the
+> spectral Granger family, directed transfer function, directed coherence,
+> (generalized) partial directed coherence, and direct directed transfer
+> function is now `i -> j` (2.x returned `j -> i`). For pairwise and subset
+> spectral Granger prediction, the directed measures the 2.x wrapper accepted,
+> `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
+> (2.x returned `b -> a`). Indexing code written for 2.x still runs but reads
+> the opposite direction: swap its indices and recompute stored results.
 > `phase_slope_index`, `group_delay`, and `delay` were already source first and
 > are unchanged; do not swap them. `directed_phase_lag_index` is new in 3.0 and
-> also source first. Until 3.2 the methods that existed in 2.x (pairwise and
-> subset spectral Granger, directed transfer function, directed coherence,
-> (generalized) partial directed coherence, and direct directed transfer
-> function), `multitaper_connectivity`, and `connectivity_to_xarray` emit a
-> `DirectedOrientationWarning` as a reminder; silence it with
+> also source first. Until 3.2 the `Connectivity` methods that existed in 2.x
+> (pairwise and subset spectral Granger, directed transfer function, directed
+> coherence, (generalized) partial directed coherence, and direct directed
+> transfer function) emit a `DirectedOrientationWarning` as a reminder, as do
+> `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and subset
+> spectral Granger prediction; silence it with
 > `warnings.filterwarnings("ignore",
 > category=spectral_connectivity.DirectedOrientationWarning)`. See the
 > [migration guide](CHANGELOG.md#migration-guide).
