@@ -559,6 +559,13 @@ directly with results from 2.x.
 - Phase locking uses unit-normalized coefficients with the same batched
   reduction. Phase-lag measures use bounded signal-row tiles and cache only
   reduced moments.
+- The phase-lag-index family forms its observation-level tiles once and
+  reduces all four moments it needs from that pass, in reused buffers. On a
+  2000-sample, 100-trial, 32-signal multitaper spectrum (CPU,
+  `benchmarks/bench_default_measures.py`) the four phase-lag measures together
+  take 1.4 s instead of 3.9 s and the eleven default measures 3.7 s instead of
+  5.9 s. Outputs are unchanged: every default measure is bit-identical except
+  `debiased_squared_weighted_phase_lag_index`, which differs by at most 1.4e-17.
 - Compact subset spectral-Granger factors only the requested 2-by-2 spectra.
 - Global coherence uses chunked batched eigendecomposition/SVD for modest
   decomposition dimensions and retains a per-bin sparse fallback for large
