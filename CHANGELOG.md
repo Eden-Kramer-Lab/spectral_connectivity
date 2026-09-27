@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+**Directed measures changed direction.** Every directed result now reads
+source → target: `multitaper_connectivity(...).sel(source="a", target="b")` is
+`a -> b` (2.x returned `b -> a`), and `result[..., i, j]` from every directed
+`Connectivity` method is `i -> j` (2.x returned `j -> i`). Indexing code written
+for 2.x still runs but reads the opposite direction; see the first two rows of
+the migration guide below.
+
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
 directly with results from 2.x.
@@ -14,14 +21,14 @@ directly with results from 2.x.
 
 | Previous behavior | New behavior / required action |
 | --- | --- |
+| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
 | `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
 | `delay` returned cycles | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
 | `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
-| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
-| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |

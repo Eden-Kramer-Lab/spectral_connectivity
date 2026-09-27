@@ -9,6 +9,19 @@
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
 [![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
+:::{warning}
+**Upgrading from 2.x: every directed measure now reads source → target.**
+In 3.0, `multitaper_connectivity(...).sel(source="a", target="b")` is the
+influence `a -> b` (2.x returned `b -> a`), and `result[..., i, j]` from every
+directed `Connectivity` method (the spectral Granger family, directed transfer
+function, directed coherence, (generalized) partial directed coherence, and
+direct directed transfer function) is `i -> j` (2.x returned `j -> i`).
+Indexing code written for 2.x still runs but reads the opposite direction: swap
+its indices and recompute stored results. The lead/lag measures (`directed_phase_lag_index`,
+`phase_slope_index`, `group_delay`, `delay`) are unchanged. See the
+[migration guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide).
+:::
+
 ## What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
