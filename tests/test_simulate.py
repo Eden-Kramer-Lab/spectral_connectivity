@@ -339,6 +339,16 @@ def test_lagged_broadband_rejects_mismatched_noise_levels():
         simulate_lagged_broadband((0, 3), [0.1, 0.2, 0.3], n_time_samples=50)
 
 
+@pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int64])
+def test_lagged_broadband_accepts_any_integer_lag_dtype(dtype):
+    """Narrow integer lags must not overflow in the slice arithmetic."""
+    expected = simulate_lagged_broadband([0, 3], 0.0, n_time_samples=500, random_state=0)
+    result = simulate_lagged_broadband(
+        np.array([0, 3], dtype=dtype), 0.0, n_time_samples=500, random_state=0
+    )
+    np.testing.assert_array_equal(result, expected)
+
+
 def test_lagged_broadband_rejects_negative_noise_levels():
     """``noise_levels`` are standard deviations, so a negative one is a mistake."""
     with pytest.raises(ValueError, match="must be non-negative"):

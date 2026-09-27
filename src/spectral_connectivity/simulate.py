@@ -210,7 +210,11 @@ def simulate_lagged_broadband(
     extra_shape = () if n_trials is None else (n_trials,)
     source = rng.standard_normal((n_time_samples + max_lag, *extra_shape))
     time_series = np.stack(
-        [source[max_lag - lag : max_lag - lag + n_time_samples] for lag in lags_array],
+        # Python ints, so a narrow dtype such as int8 cannot overflow the bounds.
+        [
+            source[max_lag - lag : max_lag - lag + n_time_samples]
+            for lag in lags_array.tolist()
+        ],
         axis=-1,
     )
     return _add_noise(time_series, noise_array, rng)
