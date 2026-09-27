@@ -283,7 +283,7 @@ class TestSummarizeParameters:
                 4,
                 0.5,
                 [
-                    r"Sampling frequency:\s+1000 Hz",
+                    r"Sampling frequency:\s+1000\.0 Hz",
                     r"Time-halfbandwidth product:\s+4",
                     r"Number of tapers:\s+7",
                     r"Window duration:\s+0\.500 s \(500 samples\)",
@@ -296,7 +296,7 @@ class TestSummarizeParameters:
                 3,
                 1.0,
                 [
-                    r"Sampling frequency:\s+1000 Hz",
+                    r"Sampling frequency:\s+1000\.0 Hz",
                     r"Time-halfbandwidth product:\s+3",
                     r"Number of tapers:\s+5",
                     r"Window duration:\s+1\.000 s \(1000 samples\)",

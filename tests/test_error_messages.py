@@ -227,6 +227,7 @@ def test_numpy_scalar_sampling_frequency_is_accepted(rate):
     """A NumPy scalar or 0-d array (e.g. ``dataset["fs"].values``) is a valid rate."""
     ts = np.random.default_rng(0).standard_normal((500, 2, 2))
     transform = Multitaper(ts, sampling_frequency=rate)
+    assert type(transform.sampling_frequency) is float
     expected = Multitaper(ts, sampling_frequency=500.0)
     np.testing.assert_allclose(transform.frequencies, expected.frequencies)
 
@@ -236,3 +237,5 @@ def test_numpy_scalar_sampling_frequency_is_accepted(rate):
     )
     np.testing.assert_allclose(result.frequency, baseline.frequency)
     np.testing.assert_allclose(result.values, baseline.values, equal_nan=True)
+    assert result.attrs["mt_sampling_frequency"] == 500.0
+    assert type(result.attrs["mt_sampling_frequency"]) is float

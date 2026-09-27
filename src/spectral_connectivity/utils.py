@@ -41,6 +41,66 @@ def is_positive_integer(value: Any, minimum: int = 1) -> bool:
     )
 
 
+def _validate_sampling_frequency(sampling_frequency: Any) -> float:
+    """Validate a sampling rate and return it as a Python ``float``.
+
+    Shared by every transform and by the DataArray input path so each gives the
+    same guidance rather than a bare one-line message or a raw ``isfinite``
+    ``TypeError``. Any real scalar is accepted, including a NumPy scalar or a
+    0-d array such as ``dataset["fs"].values``; booleans (dtype kind ``"b"``),
+    strings and arrays with dimensions are rejected.
+
+    Parameters
+    ----------
+    sampling_frequency : Any
+        The rate in samples per second.
+
+    Returns
+    -------
+    float
+        The rate, normalized so downstream ``float`` annotations hold.
+
+    Raises
+    ------
+    TypeError
+        If the rate is not a real scalar number.
+    ValueError
+        If the rate is not finite and positive.
+    """
+    array = np.asarray(sampling_frequency)
+    if array.ndim != 0 or array.dtype.kind not in "iuf":
+        if isinstance(sampling_frequency, str):
+            how = "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
+        else:
+            how = "Pass it as a single number, e.g. sampling_frequency=1000."
+        msg = (
+            "sampling_frequency must be a number (samples per second), got "
+            f"{type(sampling_frequency).__name__} {sampling_frequency!r}.\n"
+            "\n"
+            "It labels the frequency axis and scales power, so it cannot be "
+            "inferred from a plain array.\n"
+            "\n"
+            f"{how}"
+        )
+        raise TypeError(msg)
+    rate = float(array)
+    if not np.isfinite(rate) or rate <= 0:
+        msg = (
+            f"sampling_frequency must be finite and positive, got "
+            f"{sampling_frequency!r}.\n"
+            "\n"
+            "The sampling frequency is the rate at which your data was collected.\n"
+            "Common values:\n"
+            "  - EEG: 250-1000 Hz\n"
+            "  - LFP/ephys: 1000-30000 Hz\n"
+            "  - fMRI: 0.5-2 Hz (1/TR)\n"
+            "\n"
+            "Check your data acquisition settings or metadata."
+        )
+        raise ValueError(msg)
+    return rate
+
+
 def to_numpy(array: Any) -> NDArray[Any]:
     """Return an array on the host without implicit device conversion.
 

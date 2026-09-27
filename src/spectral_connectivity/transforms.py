@@ -14,6 +14,7 @@ from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
+    _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
     to_numpy,
@@ -41,52 +42,6 @@ MIN_EIGENVALUE_THRESHOLD = 0.9
 # - The -1 ensures we stay within the well-concentrated region
 # - Reference: Slepian (1978), "Prolate spheroidal wave functions"
 TAPER_MULTIPLIER = 2.0
-
-
-def _validate_sampling_frequency(sampling_frequency: Any) -> None:
-    """Raise an actionable error for a non-numeric, non-finite or non-positive rate.
-
-    Shared by every transform and by the DataArray input path so each gives the
-    same guidance rather than a bare one-line message or a raw ``isfinite``
-    ``TypeError``. Any real scalar is accepted, including a 0-d NumPy array such
-    as ``dataset["fs"].values``; booleans, strings and arrays with dimensions are
-    rejected.
-    """
-    array = np.asarray(sampling_frequency)
-    if (
-        isinstance(sampling_frequency, (bool, np.bool_))
-        or array.ndim != 0
-        or array.dtype.kind not in "iuf"
-    ):
-        if isinstance(sampling_frequency, str):
-            how = "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
-        else:
-            how = "Pass it as a single number, e.g. sampling_frequency=1000."
-        msg = (
-            "sampling_frequency must be a number (samples per second), got "
-            f"{type(sampling_frequency).__name__} {sampling_frequency!r}.\n"
-            "\n"
-            "It labels the frequency axis and scales power, so it cannot be "
-            "inferred from a plain array.\n"
-            "\n"
-            f"{how}"
-        )
-        raise TypeError(msg)
-    rate = float(array)
-    if not np.isfinite(rate) or rate <= 0:
-        msg = (
-            f"sampling_frequency must be finite and positive, got "
-            f"{sampling_frequency!r}.\n"
-            "\n"
-            "The sampling frequency is the rate at which your data was collected.\n"
-            "Common values:\n"
-            "  - EEG: 250-1000 Hz\n"
-            "  - LFP/ephys: 1000-30000 Hz\n"
-            "  - fMRI: 0.5-2 Hz (1/TR)\n"
-            "\n"
-            "Check your data acquisition settings or metadata."
-        )
-        raise ValueError(msg)
 
 
 def _resolve_sample_count(
@@ -991,7 +946,7 @@ class Multitaper:
 
             raise ValueError(error_msg)
 
-        _validate_sampling_frequency(sampling_frequency)
+        sampling_frequency = _validate_sampling_frequency(sampling_frequency)
 
         # Validate time_halfbandwidth_product
         if time_halfbandwidth_product < 1:
@@ -1275,7 +1230,7 @@ class Multitaper:
         <BLANKLINE>
         Spectral Parameters
         -------------------
-        Sampling frequency:            1000 Hz
+        Sampling frequency:            1000.0 Hz
         Time-halfbandwidth product:    3
         Number of tapers:              5
         <BLANKLINE>
@@ -1800,7 +1755,7 @@ class ShortTimeFourierTransform(Multitaper):
         n_time_samples_per_step: int | None = None,
         fft_workers: int | None = None,
     ) -> None:
-        _validate_sampling_frequency(sampling_frequency)
+        sampling_frequency = _validate_sampling_frequency(sampling_frequency)
         for name, value in (
             ("time_window_duration", time_window_duration),
             ("time_window_step", time_window_step),
@@ -1930,7 +1885,7 @@ class Welch:
         n_fft_samples: int | None = None,
         fft_workers: int | None = None,
     ) -> None:
-        _validate_sampling_frequency(sampling_frequency)
+        sampling_frequency = _validate_sampling_frequency(sampling_frequency)
         if segment_duration is not None and (
             not np.isfinite(segment_duration) or segment_duration <= 0
         ):
@@ -2172,7 +2127,7 @@ class MorletWavelet:
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
             raise ValueError(msg)
-        _validate_sampling_frequency(sampling_frequency)
+        sampling_frequency = _validate_sampling_frequency(sampling_frequency)
         # Parameter arrays are validated on the host; ``to_numpy`` brings a CuPy
         # array over explicitly (CuPy rejects implicit ``np.asarray``) and is a
         # no-op for NumPy input.
