@@ -8,10 +8,8 @@ signals with known amplitudes and phase offsets. All return ``float64`` NumPy
 arrays with time on the first axis and signals on the last.
 """
 
-from collections.abc import Sequence
-
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
@@ -22,7 +20,7 @@ def _generator(random_state: int | np.random.Generator | None) -> np.random.Gene
 
 
 def _per_signal(
-    values: float | Sequence[float], n_signals: int, name: str
+    values: ArrayLike, n_signals: int, name: str, *, nonnegative: bool = False
 ) -> NDArray[np.floating]:
     """Broadcast a scalar or per-signal parameter to shape ``(n_signals,)``."""
     values_array = np.asarray(values, dtype=float)
@@ -31,6 +29,9 @@ def _per_signal(
             f"{name} must be a scalar or have one entry per signal ({n_signals}); "
             f"got shape {values_array.shape}"
         )
+        raise ValueError(msg)
+    if nonnegative and np.any(values_array < 0):
+        msg = f"{name} are standard deviations and must be non-negative; got {values_array}"
         raise ValueError(msg)
     return np.broadcast_to(values_array.reshape(-1), (n_signals,))
 
@@ -126,8 +127,8 @@ def simulate_MVAR(
 
 
 def simulate_lagged_broadband(
-    lags: Sequence[int],
-    noise_levels: float | Sequence[float],
+    lags: ArrayLike,
+    noise_levels: ArrayLike,
     n_time_samples: int,
     n_trials: int | None = None,
     random_state: int | np.random.Generator | None = None,
@@ -142,11 +143,11 @@ def simulate_lagged_broadband(
 
     Parameters
     ----------
-    lags : sequence of int, length n_signals
+    lags : array_like of int, shape (n_signals,)
         Delay of each signal behind the source, in samples. Must be
         non-negative integers; express a lead as a smaller lag on the leading
         signal, e.g. ``lags=(0, 3)`` for signal 0 leading signal 1 by 3 samples.
-    noise_levels : float or sequence of float, length n_signals
+    noise_levels : float or array_like of float, shape (n_signals,)
         Standard deviation of the independent Gaussian noise added to each
         signal. A scalar applies to every signal; 0 gives the pure delayed
         source.
@@ -196,12 +197,13 @@ def simulate_lagged_broadband(
         or np.any(lags_array < 0)
     ):
         msg = (
-            "lags must be non-negative integers; express a lead as a smaller lag "
-            "on the leading signal, e.g. lags=(0, 3)"
+            "lags must be non-negative integers (an integer dtype, so 3 rather "
+            "than 3.0); express a lead as a smaller lag on the leading signal, "
+            "e.g. lags=(0, 3)"
         )
         raise ValueError(msg)
     n_signals = lags_array.size
-    noise_array = _per_signal(noise_levels, n_signals, "noise_levels")
+    noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)
     rng = _generator(random_state)
 
     max_lag = int(lags_array.max())
@@ -219,10 +221,10 @@ def simulate_shared_oscillation(
     sampling_frequency: float,
     n_time_samples: int,
     n_trials: int,
-    amplitudes: Sequence[float],
+    amplitudes: ArrayLike,
     *,
-    phase_offsets: float | Sequence[float] = 0.0,
-    noise_levels: float | Sequence[float] = 0.0,
+    phase_offsets: ArrayLike = 0.0,
+    noise_levels: ArrayLike = 0.0,
     random_phase_per_trial: bool = True,
     random_state: int | np.random.Generator | None = None,
 ) -> NDArray[np.floating]:
@@ -247,12 +249,12 @@ def simulate_shared_oscillation(
         Number of time samples per trial; time ``t`` runs from 0.
     n_trials : int
         Number of trials.
-    amplitudes : sequence of float, length n_signals
+    amplitudes : array_like of float, shape (n_signals,)
         Amplitude of the sinusoid in each signal; its length sets
         ``n_signals``.
-    phase_offsets : float or sequence of float, length n_signals, default=0.0
+    phase_offsets : float or array_like of float, shape (n_signals,), default=0.0
         Phase added to the sinusoid in each signal, in radians.
-    noise_levels : float or sequence of float, length n_signals, default=0.0
+    noise_levels : float or array_like of float, shape (n_signals,), default=0.0
         Standard deviation of the independent Gaussian noise added to each
         signal.
     random_phase_per_trial : bool, default=True
@@ -310,7 +312,7 @@ def simulate_shared_oscillation(
         raise ValueError(msg)
     n_signals = amplitudes_array.size
     phase_offsets_array = _per_signal(phase_offsets, n_signals, "phase_offsets")
-    noise_array = _per_signal(noise_levels, n_signals, "noise_levels")
+    noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)
     rng = _generator(random_state)
 
     trial_phases = (

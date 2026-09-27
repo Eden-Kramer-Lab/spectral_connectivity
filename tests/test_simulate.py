@@ -94,7 +94,9 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
     np.testing.assert_allclose(library, reference)
 
 
-@pytest.mark.parametrize("lags", [(-3, 0), (0, 1.5)], ids=["negative", "fractional"])
+@pytest.mark.parametrize(
+    "lags", [(-3, 0), (0, 1.5), (0, 3.0)], ids=["negative", "fractional", "whole_float"]
+)
 def test_lagged_broadband_rejects_negative_or_fractional_lags(lags):
     """Lags must be non-negative integers; a lead is a smaller lag, not a negative one."""
     with pytest.raises(ValueError, match="non-negative integers"):
@@ -321,8 +323,9 @@ def test_shared_oscillation_parameters_apply_per_signal():
         ({"amplitudes": 1.0}, "amplitudes must be 1-D"),
         ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, 0.2, 0.3]}, "noise_levels"),
         ({"amplitudes": [1.0, 1.0], "phase_offsets": [0.0, 1.0, 2.0]}, "phase_offsets"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, -0.1]}, "must be non-negative"),
     ],
-    ids=["scalar_amplitudes", "noise_levels_length", "phase_offsets_length"],
+    ids=["scalar_amplitudes", "noise_levels_length", "phase_offsets_length", "negative_noise"],
 )
 def test_shared_oscillation_rejects_mismatched_parameters(kwargs, match):
     """Per-signal parameters must be scalars or have one entry per signal."""
@@ -334,3 +337,9 @@ def test_lagged_broadband_rejects_mismatched_noise_levels():
     """``noise_levels`` must be a scalar or have one entry per lag."""
     with pytest.raises(ValueError, match="noise_levels"):
         simulate_lagged_broadband((0, 3), [0.1, 0.2, 0.3], n_time_samples=50)
+
+
+def test_lagged_broadband_rejects_negative_noise_levels():
+    """``noise_levels`` are standard deviations, so a negative one is a mistake."""
+    with pytest.raises(ValueError, match="must be non-negative"):
+        simulate_lagged_broadband((0, 3), -0.1, n_time_samples=50)
