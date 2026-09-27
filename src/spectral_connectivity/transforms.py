@@ -235,6 +235,11 @@ def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
     return int(np.floor(TAPER_MULTIPLIER * time_halfbandwidth_product)) - 1
 
 
+def _ceil_hundredths(value: float) -> float:
+    """Round ``value`` up to two decimals, ignoring floating-point error."""
+    return float(np.ceil(round(value * 100, 6)) / 100)
+
+
 def suggest_parameters(
     sampling_frequency: float,
     signal_duration: float,
@@ -405,8 +410,12 @@ def suggest_parameters(
         if time_window_duration > max_window_for_min_windows:
             # Adjust NW to give us at least min_n_windows
             time_window_duration = max_window_for_min_windows
-            # Recalculate NW to achieve target resolution with this window
-            time_halfbandwidth_product = desired_freq_resolution * time_window_duration / 2.0
+            # Recalculate NW to achieve target resolution with this window.
+            # Rounding drops floating-point error, which at a boundary such as
+            # 30 Hz * 0.1 s / 2 = 1.4999999999999998 would cost a taper.
+            time_halfbandwidth_product = round(
+                desired_freq_resolution * time_window_duration / 2.0, 12
+            )
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
 
@@ -432,6 +441,14 @@ def suggest_parameters(
         # Only the shortened-window path above can leave one taper. Two tapers
         # need resolution * window >= this bandwidth product (delta_f = 2 NW / T).
         two_taper_bandwidth = TAPER_MULTIPLIER * MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS
+        # Round the "at least" values up so that passing them back as printed
+        # meets the bound.
+        min_signal_duration = _ceil_hundredths(
+            min_n_windows * two_taper_bandwidth / desired_freq_resolution
+        )
+        min_freq_resolution = _ceil_hundredths(
+            two_taper_bandwidth * min_n_windows / signal_duration
+        )
         warnings.warn(
             f"A {desired_freq_resolution} Hz resolution with at least "
             f"{min_n_windows} time windows of a {signal_duration} s signal "
@@ -439,11 +456,8 @@ def suggest_parameters(
             f"{time_halfbandwidth_product:.2f}), so the estimate is not "
             "averaged across tapers and will be noisy.\n"
             "For at least 2 tapers, use either:\n"
-            f"  - a longer signal (at least "
-            f"{min_n_windows * two_taper_bandwidth / desired_freq_resolution:.2f} s), "
-            "or\n"
-            f"  - a coarser frequency resolution (at least "
-            f"{two_taper_bandwidth * min_n_windows / signal_duration:.2f} Hz).",
+            f"  - a longer signal (at least {min_signal_duration:.2f} s), or\n"
+            f"  - a coarser frequency resolution (at least {min_freq_resolution:.2f} Hz).",
             UserWarning,
             stacklevel=2,
         )

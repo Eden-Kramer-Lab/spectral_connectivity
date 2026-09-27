@@ -216,19 +216,64 @@ class TestSuggestParameters:
                 desired_freq_resolution=4.0,
             )
         assert params["n_tapers"] == 1
+        # The warning points at the caller, not at suggest_parameters.
+        assert record[0].filename == __file__
         message = str(record[0].message)
         assert "4.0 Hz" in message  # what was requested
-        assert "longer signal" in message
-        assert "coarser frequency resolution" in message
+        assert "time_halfbandwidth_product=1.33" in message
+        # Two tapers need NW >= 1.5 over three windows: T >= 9 / 4 Hz and
+        # resolution >= 9 / 2 s.
+        assert "a longer signal (at least 2.25 s)" in message
+        assert "a coarser frequency resolution (at least 4.50 Hz)" in message
 
-    def test_no_taper_warning_with_enough_tapers(self):
-        """A resolution target that keeps several tapers does not warn."""
+    @pytest.mark.parametrize(
+        ("signal_duration", "desired_freq_resolution"),
+        [(2.0, 4.0), (0.3, 20.0), (1.1, 7.0)],
+    )
+    def test_taper_warning_advice_leaves_two_tapers(
+        self, signal_duration, desired_freq_resolution
+    ):
+        """Feeding back either suggested value, as printed, gives two tapers
+        without a warning (pyproject's filterwarnings turns one into an error)."""
+        with pytest.warns(UserWarning, match=r"1 taper") as record:
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=signal_duration,
+                desired_freq_resolution=desired_freq_resolution,
+            )
+        message = str(record[0].message)
+        longer = float(re.search(r"longer signal \(at least ([\d.]+) s\)", message)[1])
+        coarser = float(re.search(r"resolution \(at least ([\d.]+) Hz\)", message)[1])
+        for params in (
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=longer,
+                desired_freq_resolution=desired_freq_resolution,
+            ),
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=signal_duration,
+                desired_freq_resolution=coarser,
+            ),
+        ):
+            assert params["n_tapers"] >= 2
+
+    def test_no_taper_warning_at_two_tapers(self):
+        """The boundary case, exactly two tapers, does not warn (pyproject's
+        filterwarnings turns a warning into an error)."""
         params = suggest_parameters(
             sampling_frequency=1000,
-            signal_duration=10.0,
-            desired_freq_resolution=2.0,
+            signal_duration=2.0,
+            desired_freq_resolution=5.0,
         )
-        assert params["n_tapers"] == 5
+        assert params["n_tapers"] == 2
+
+    def test_single_requested_taper_does_not_warn(self):
+        """Only a resolution target can leave one taper by surprise."""
+        params = suggest_parameters(
+            sampling_frequency=1000, signal_duration=5.0, desired_n_tapers=1
+        )
+        assert params["n_tapers"] == 1
 
     def test_invalid_target_resolution_raises_error(self):
         """Test that impossible frequency resolution raises error."""
