@@ -1,6 +1,7 @@
 import inspect
 import json
 import warnings
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -12,7 +13,11 @@ from spectral_connectivity._input_handling import (
     _reject_unmaterialized_backing,
     _time_axis_from_dataarray,
 )
-from spectral_connectivity._measure_registry import _MeasureSpec
+from spectral_connectivity._measure_registry import (
+    _MEASURE_SPECS,
+    _is_group_measure,
+    _MeasureSpec,
+)
 from spectral_connectivity._provenance import (
     _canonical_json,
     _json_compatible,
@@ -773,8 +778,23 @@ def test_dataarray_nonpositive_sampling_frequency_is_rejected(bad_rate):
         dims=("time", "channel"),
         coords={"time": np.arange(raw.shape[0]) / 64.0},
     )
-    with pytest.raises(ValueError, match="sampling_frequency must be a positive"):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite and positive"):
         multitaper_connectivity(data, sampling_frequency=bad_rate, method="power")
+
+
+def test_dataarray_path_rejects_string_sampling_frequency():
+    """The DataArray time-coordinate check gives the same typed error as the transforms."""
+    raw = np.random.default_rng(49).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": np.arange(raw.shape[0]) / 500.0},
+    )
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        _time_axis_from_dataarray(data, "time", "500")
+    assert "'500'" in str(excinfo.value)
+    with pytest.raises(TypeError, match="sampling_frequency must be a number"):
+        multitaper_connectivity(data, sampling_frequency="500", method="power")
 
 
 def test_dataarray_non_scalar_start_time_is_rejected():
@@ -1674,9 +1694,254 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
         multitaper_connectivity(
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
-            method=["coherence_magnitude", "canonical_coherence"],
-            connectivity_kwargs={"group_labels": [0, 0, 1]},
+            method=["coherence_magnitude", "phase_slope_index"],
+            connectivity_kwargs={"frequencies_of_interest": [5.0, 50.0]},
         )
+
+
+def test_transform_setting_in_connectivity_kwargs_points_to_multitaper_connectivity():
+    rng = np.random.default_rng(13)
+    with pytest.raises(
+        TypeError, match="connectivity_kwargs configures the measure only"
+    ) as excinfo:
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)),
+            sampling_frequency=250,
+            method="coherence_magnitude",
+            connectivity_kwargs={"time_halfbandwidth_product": 4},
+        )
+    message = str(excinfo.value)
+    assert "pass it to multitaper_connectivity directly" in message
+    assert "fourier_coefficients" not in message
+
+
+def test_transform_setting_in_connectivity_kwargs_points_to_the_fourier_transform(
+    four_signal_coefficients,
+):
+    coefficients, frequencies, time = four_signal_coefficients
+    with pytest.raises(
+        TypeError, match="connectivity_kwargs configures the measure only"
+    ) as excinfo:
+        fourier_connectivity(
+            coefficients,
+            frequencies=frequencies,
+            time=time,
+            method="coherence_magnitude",
+            connectivity_kwargs={"time_halfbandwidth_product": 4},
+        )
+    message = str(excinfo.value)
+    assert "set it on the transform that produced fourier_coefficients" in message
+    assert "multitaper_connectivity" not in message
+
+
+def test_connectivity_to_xarray_gives_no_transform_settings_hint():
+    """Its caller built the transform, so there is no wrapper to point to."""
+    transform = Multitaper(np.random.default_rng(13).standard_normal((256, 2, 3)), 250)
+    with pytest.raises(TypeError, match="does not accept keyword argument") as excinfo:
+        connectivity_to_xarray(transform, "coherence_magnitude", time_halfbandwidth_product=4)
+    assert "transform setting" not in str(excinfo.value)
+
+
+@pytest.fixture(scope="module")
+def four_signal_noise():
+    """Seeded white noise, shape (1000, 4, 4): four signals, so two groups of two."""
+    return np.random.default_rng(0).standard_normal((1000, 4, 4))
+
+
+@pytest.fixture(scope="module")
+def four_signal_coefficients(four_signal_noise):
+    """``(fft, frequencies, time)`` of ``four_signal_noise`` for fourier_connectivity."""
+    transform = Multitaper(four_signal_noise, sampling_frequency=1000)
+    return transform.fft(), transform.frequencies, transform.time
+
+
+def test_is_group_measure_matches_the_measures_that_take_group_labels():
+    """The signature rule agrees with the registry's group output kinds."""
+    registered_group = {
+        name
+        for name, spec in _MEASURE_SPECS.items()
+        if spec.output_kind in {"group_pairwise", "multivariate_components"}
+    }
+    assert registered_group
+    assert {name for name in _MEASURE_SPECS if _is_group_measure(name)} == registered_group
+
+
+@pytest.fixture
+def extension_group_measure(monkeypatch):
+    """An unregistered ``Connectivity`` extension that takes ``group_labels``.
+
+    Returns the list of labels each call received.
+    """
+    received = []
+
+    def custom_group_power(self, group_labels=None):
+        received.append(group_labels)
+        return np.zeros(
+            (len(self.time), len(self.frequencies), self.n_signals, self.n_signals)
+        )
+
+    monkeypatch.setattr(Connectivity, "custom_group_power", custom_group_power, raising=False)
+    return received
+
+
+@pytest.mark.parametrize(
+    ("method", "label_kwargs"),
+    [
+        ("custom_group_power", {"group_labels": [0, 0, 1, 1]}),
+        ("custom_group_power", {"connectivity_kwargs": {"group_labels": [0, 0, 1, 1]}}),
+        (["canonical_coherence", "custom_group_power"], {"group_labels": [0, 0, 1, 1]}),
+    ],
+    ids=["named_argument", "dict_form", "mixed_batch"],
+)
+def test_extension_measure_taking_group_labels_receives_them(
+    four_signal_noise, extension_group_measure, method, label_kwargs
+):
+    multitaper_connectivity(
+        four_signal_noise, sampling_frequency=1000, method=method, **label_kwargs
+    )
+    assert extension_group_measure == [[0, 0, 1, 1]]
+
+
+def test_extension_measure_taking_group_labels_is_named_when_labels_are_missing(
+    four_signal_noise, extension_group_measure
+):
+    with pytest.raises(
+        ValueError,
+        match="group_labels is required for canonical_coherence, custom_group_power",
+    ):
+        multitaper_connectivity(
+            four_signal_noise,
+            sampling_frequency=1000,
+            method=["canonical_coherence", "custom_group_power"],
+        )
+    assert extension_group_measure == []
+
+
+# One case per group_labels error: (measure/label arguments, message pattern).
+_GROUP_LABEL_ERRORS = {
+    # The message names the argument to pass, not only the failure.
+    "missing": (
+        {"method": "canonical_coherence"},
+        r"group_labels is required for[\s\S]*group_labels=",
+    ),
+    "no_group_measure": (
+        {"method": "coherence_magnitude", "group_labels": [0, 1]},
+        "none of the requested measures compares groups",
+    ),
+    "given_twice": (
+        {
+            "method": "canonical_coherence",
+            "group_labels": [0, 0, 1, 1],
+            "connectivity_kwargs": {"group_labels": [0, 1, 0, 1]},
+        },
+        "pass it once",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_GROUP_LABEL_ERRORS))
+def test_group_label_errors_fail_before_the_fft(four_signal_noise, case):
+    arguments, pattern = _GROUP_LABEL_ERRORS[case]
+    with (
+        mock.patch.object(Multitaper, "fft", autospec=True) as fft,
+        pytest.raises(ValueError, match=pattern),
+    ):
+        multitaper_connectivity(four_signal_noise, sampling_frequency=1000, **arguments)
+    fft.assert_not_called()
+
+
+@pytest.mark.parametrize("case", list(_GROUP_LABEL_ERRORS))
+def test_fourier_connectivity_group_label_errors(four_signal_coefficients, case):
+    coefficients, frequencies, time = four_signal_coefficients
+    arguments, pattern = _GROUP_LABEL_ERRORS[case]
+    with pytest.raises(ValueError, match=pattern):
+        fourier_connectivity(coefficients, frequencies=frequencies, time=time, **arguments)
+
+
+@pytest.mark.parametrize(
+    "label_arguments",
+    [
+        {"group_labels": [0, 0, 1, 1]},
+        {"connectivity_kwargs": {"group_labels": [0, 0, 1, 1]}},
+    ],
+    ids=["argument", "connectivity_kwargs"],
+)
+def test_group_labels_reach_every_group_measure_in_a_batch(four_signal_noise, label_arguments):
+    result = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method=["canonical_coherence", "coherence_magnitude"],
+        **label_arguments,
+    )
+    assert isinstance(result, xr.Dataset)
+    assert result["canonical_coherence"].sizes["source_group"] == 2
+    assert result["coherence_magnitude"].sizes["source"] == 4
+    # The labels reached the group measure only.
+    assert "arg_group_labels_json" in result["canonical_coherence"].attrs
+    assert "arg_group_labels_json" not in result["coherence_magnitude"].attrs
+
+
+def test_group_labels_recorded_in_provenance(four_signal_noise):
+    labels = ["CA1", "CA1", "PFC", "PFC"]
+    result = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method=["canonical_coherence", "coherence_magnitude"],
+        group_labels=labels,
+    )
+    assert json.loads(result["canonical_coherence"].attrs["arg_group_labels_json"]) == labels
+
+
+def test_connectivity_kwargs_group_labels_still_works(four_signal_noise):
+    connectivity_kwargs = {"group_labels": [0, 0, 1, 1]}
+    from_dict = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="canonical_coherence",
+        connectivity_kwargs=connectivity_kwargs,
+    )
+    from_argument = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="canonical_coherence",
+        group_labels=[0, 0, 1, 1],
+    )
+    # Identical including measure_kwargs_json: both forms record the same kwargs.
+    xr.testing.assert_identical(from_dict, from_argument)
+    assert connectivity_kwargs == {"group_labels": [0, 0, 1, 1]}
+
+
+def test_group_labels_none_in_connectivity_kwargs_means_no_labels(four_signal_noise):
+    """``{"group_labels": None}`` matches the argument's ``None`` default."""
+    with_none = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="coherence_magnitude",
+        connectivity_kwargs={"group_labels": None},
+    )
+    without = multitaper_connectivity(
+        four_signal_noise, sampling_frequency=1000, method="coherence_magnitude"
+    )
+    xr.testing.assert_identical(with_none, without)
+    with pytest.raises(ValueError, match="group_labels is required for"):
+        multitaper_connectivity(
+            four_signal_noise,
+            sampling_frequency=1000,
+            method="canonical_coherence",
+            connectivity_kwargs={"group_labels": None},
+        )
+
+
+def test_fourier_connectivity_accepts_group_labels(four_signal_coefficients):
+    coefficients, frequencies, time = four_signal_coefficients
+    result = fourier_connectivity(
+        coefficients,
+        frequencies=frequencies,
+        time=time,
+        method="canonical_coherence",
+        group_labels=["CA1", "CA1", "PFC", "PFC"],
+    )
+    assert result.source_group.values.tolist() == ["CA1", "PFC"]
 
 
 def test_multi_method_shares_single_fft(monkeypatch):

@@ -878,8 +878,10 @@ def test_multivariate_components_validate_group_geometry(method):
     ],
 )
 @pytest.mark.parametrize("missing_label", [np.nan, None])
-def test_group_measures_reject_missing_labels(method, missing_label):
-    """A missing label must not create an empty, all-false signal group."""
+@pytest.mark.parametrize("present_labels", [[0, 0, 1], ["a", "a", "b"]])
+def test_group_measures_reject_missing_labels(method, missing_label, present_labels):
+    """A missing label must not create an empty, all-false signal group, nor,
+    among string labels, a group named "nan" or "None"."""
     rng = np.random.default_rng(924)
     coefficients = rng.standard_normal((1, 6, 2, 8, 4)) + 1j * rng.standard_normal(
         (1, 6, 2, 8, 4)
@@ -887,7 +889,7 @@ def test_group_measures_reject_missing_labels(method, missing_label):
     connectivity = Connectivity(coefficients)
 
     with pytest.raises(ValueError, match="missing values"):
-        getattr(connectivity, method)([0, 0, 1, missing_label])
+        getattr(connectivity, method)([*present_labels, missing_label])
 
 
 def test_mic_rejects_single_group_and_non_positive_rank():

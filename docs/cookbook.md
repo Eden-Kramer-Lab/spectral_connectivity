@@ -134,6 +134,29 @@ measure. Shared spectra are cached, so this is cheaper than separate calls.
 
 ```
 
+## Group measures: canonical coherence between areas
+
+Group measures (`list_measures(category="group_pairwise")` and
+`list_measures(category="multivariate_components")`) compare *groups* of
+signals, such as all channels in one brain area against all channels in
+another. Pass `group_labels`, one label per signal naming its group; a
+`group_pairwise` result is indexed by `source_group` and `target_group`
+instead of by signal.
+
+```python
+>>> between_areas = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=500,
+...     method="canonical_coherence",
+...     group_labels=["CA1", "CA1", "PFC"],
+... )
+>>> between_areas.dims
+('time', 'frequency', 'source_group', 'target_group')
+>>> between_areas.coords["source_group"].values.tolist()
+['CA1', 'PFC']
+
+```
+
 ## Collapse into frequency bands
 
 Pass `frequency_bands` to average (or integrate) each measure within named

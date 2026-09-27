@@ -423,6 +423,17 @@ def _requires_two_sided(method: str) -> bool:
     return spec is not None and spec.requires_two_sided
 
 
+def _is_group_measure(method: str) -> bool:
+    """Whether a measure compares groups of signals, i.e. takes ``group_labels``.
+
+    Decided from the ``Connectivity`` method's signature rather than the
+    registry, so an unregistered extension measure that takes ``group_labels``
+    counts too.
+    """
+    measure = getattr(Connectivity, method, None)
+    return callable(measure) and "group_labels" in inspect.signature(measure).parameters
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
 ) -> tuple[list[str], bool]:

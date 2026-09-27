@@ -13,7 +13,12 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import BackendArray, stacklevel_outside_package, to_numpy
+from spectral_connectivity.utils import (
+    BackendArray,
+    _validate_sampling_frequency,
+    stacklevel_outside_package,
+    to_numpy,
+)
 
 _UNSET = object()
 
@@ -349,17 +354,11 @@ def _time_axis_from_dataarray(
     ]
     if not candidates:
         return _TimeAxis(None, None)
-    if sampling_frequency is not None and (
-        not np.isfinite(sampling_frequency) or sampling_frequency <= 0
-    ):
+    if sampling_frequency is not None:
         # This path takes the reciprocal of the rate below; validate up front so
         # a bad value gives a clear message instead of a raw ZeroDivisionError or
         # a misleading coordinate-spacing error.
-        msg = (
-            "sampling_frequency must be a positive, finite number for a "
-            f"DataArray with a numeric time coordinate; got {sampling_frequency!r}."
-        )
-        raise ValueError(msg)
+        sampling_frequency = _validate_sampling_frequency(sampling_frequency)
     exact_time = [item for item in candidates if str(item[0]).lower() == "time"]
     semantic_auxiliary = [
         item

@@ -124,10 +124,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
   directed-transfer-function families work with `multitaper_connectivity`, but
   not with Morlet wavelets or other one-sided coefficients, which raise a
   `ValueError`.
-- **Group measures need labels.** Pass `group_labels` (one label per signal)
-  through `connectivity_kwargs` for `canonical_coherence`,
+- **Group measures need labels.** Pass `group_labels=...` (one label per
+  signal, e.g. `["CA1", "CA1", "PFC"]`) directly to `multitaper_connectivity`
+  or `fourier_connectivity` for `canonical_coherence`,
   `blockwise_spectral_granger_prediction`, and the other `group_pairwise` and
-  `multivariate_components` measures.
+  `multivariate_components` measures. The labels reach only the measures that
+  take them, so one call may mix group and pairwise measures.
 - **Band summaries.** Use `frequency_bands={"theta": (4, 8)}` rather than
   averaging frequency bins by hand: phase measures get a circular mean and
   complex measures a complex mean.

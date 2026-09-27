@@ -11,8 +11,14 @@ import re
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper
-from spectral_connectivity.transforms import detrend
+from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity.transforms import (
+    MorletWavelet,
+    ShortTimeFourierTransform,
+    Welch,
+    detrend,
+)
+from spectral_connectivity.wrapper import connectivity_to_xarray
 
 
 class TestDetrendErrorMessages:
@@ -189,3 +195,89 @@ class TestExplicitSampleCountGuards:
         )
         with pytest.raises(ValueError, match="at least 1 sample"):
             mt.fft()
+
+
+def test_sampling_frequency_string_names_the_argument():
+    """A rate passed as a string names the argument instead of a raw ufunc error."""
+    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        multitaper_connectivity(ts, sampling_frequency="1000", method="power")
+    # A string gets its own hint on top of the generic one.
+    assert "rather than '1000'" in str(excinfo.value)
+
+
+# ``True`` is an ``int`` subclass and a complex rate would silently lose its
+# imaginary part, so neither is a sampling rate.
+@pytest.mark.parametrize(
+    "bad_rate",
+    [
+        "1000",
+        np.array("1000"),
+        True,
+        np.bool_(True),
+        1 + 0j,
+        np.complex128(500),
+        None,
+        np.array([500.0]),
+    ],
+    ids=[
+        "str",
+        "0d_str_array",
+        "bool",
+        "numpy_bool",
+        "complex",
+        "numpy_complex",
+        "none",
+        "1d_array",
+    ],
+)
+def test_non_scalar_or_non_numeric_sampling_frequency_is_rejected(bad_rate):
+    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        Multitaper(ts, sampling_frequency=bad_rate)
+    assert "e.g. sampling_frequency=1000" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "rate",
+    [np.array(500.0), np.float32(500), np.int64(500)],
+    ids=["0d_array", "float32", "int64"],
+)
+def test_numpy_scalar_sampling_frequency_is_accepted(rate):
+    """A NumPy scalar or 0-d array (e.g. ``dataset["fs"].values``) is a valid rate."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    transform = Multitaper(ts, sampling_frequency=rate)
+    assert type(transform.sampling_frequency) is float
+    expected = Multitaper(ts, sampling_frequency=500.0)
+    np.testing.assert_allclose(transform.frequencies, expected.frequencies)
+
+    result = multitaper_connectivity(ts, sampling_frequency=rate, method="coherence_magnitude")
+    baseline = multitaper_connectivity(
+        ts, sampling_frequency=500.0, method="coherence_magnitude"
+    )
+    np.testing.assert_allclose(result.frequency, baseline.frequency)
+    np.testing.assert_allclose(result.values, baseline.values, equal_nan=True)
+    assert result.attrs["mt_sampling_frequency"] == 500.0
+    assert type(result.attrs["mt_sampling_frequency"]) is float
+
+
+@pytest.mark.parametrize(
+    ("transform_class", "extra", "prefix"),
+    [
+        (Multitaper, {}, "mt_"),
+        (ShortTimeFourierTransform, {}, "stft_"),
+        (Welch, {}, "welch_"),
+        (MorletWavelet, {"frequencies": [10.0, 20.0]}, "morlet_"),
+    ],
+    ids=["multitaper", "stft", "welch", "morlet"],
+)
+def test_every_transform_records_a_numpy_rate_as_a_float(transform_class, extra, prefix):
+    """The rate is normalized to ``float`` on the transform and in provenance,
+    so a 0-d array is never serialized as a string or a NumPy scalar."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    transform = transform_class(ts, sampling_frequency=np.array(500.0), **extra)
+    assert type(transform.sampling_frequency) is float
+    attrs = connectivity_to_xarray(transform, method="power").attrs
+    rate = attrs[f"{prefix}sampling_frequency"]
+    assert type(rate) is float
+    assert rate == 500.0

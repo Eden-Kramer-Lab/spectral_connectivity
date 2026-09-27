@@ -36,25 +36,36 @@ class UnsupportedMeasureError(ValueError):
 
 
 def _check_method_accepts_kwargs(
-    method: str, measure: Callable[..., Any], kwargs: Mapping[str, Any]
+    method: str,
+    measure: Callable[..., Any],
+    kwargs: Mapping[str, Any],
+    transform_settings_hint: str | None = None,
 ) -> None:
     """Raise an actionable error when ``kwargs`` names a parameter ``measure``
     does not accept.
 
     ``connectivity_kwargs`` is broadcast to every requested method, so a
-    keyword needed by one measure (e.g. ``group_labels``) reaches the others.
+    keyword needed by one measure (e.g. ``pairs``) reaches the others.
+    ``transform_settings_hint`` completes the sentence "If <keyword> is a
+    transform setting, ..." for the calling wrapper; ``None``
+    (``connectivity_to_xarray``, whose transform is already built) adds no hint.
     """
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         return
     rejected = sorted(set(kwargs) - set(parameters))
     if rejected:
+        names = ", ".join(map(repr, rejected))
         msg = (
-            f"{method} does not accept keyword argument(s) "
-            f"{', '.join(map(repr, rejected))}. connectivity_kwargs is passed to "
-            "every requested method, so request measures that need different "
-            "arguments in separate calls."
+            f"{method} does not accept keyword argument(s) {names}. "
+            "connectivity_kwargs is passed to every requested method, so request "
+            "measures that need different arguments in separate calls."
         )
+        if transform_settings_hint is not None:
+            msg += (
+                "\nconnectivity_kwargs configures the measure only. If "
+                f"{names} is a transform setting, {transform_settings_hint}."
+            )
         raise TypeError(msg)
 
 
@@ -100,16 +111,19 @@ def _connectivity_result_to_xarray(
     shared_attrs: Mapping[str, Any],
     *,
     signal_metadata: _SignalMetadata | None = None,
+    transform_settings_hint: str | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
+    ``transform_settings_hint`` is passed to the keyword-argument check so a
+    rejected keyword gets the calling wrapper's hint.
     """
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
-    _check_method_accepts_kwargs(method, measure, kwargs)
+    _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
     token = _warn_orientation_change.set(False)
