@@ -343,6 +343,14 @@ def zero_drives_one():
     return simulate_MVAR(coefficients, n_time_samples=1000, n_trials=40, random_state=0)
 
 
+@pytest.fixture(scope="module")
+def zero_drives_one_connectivity(zero_drives_one):
+    """``Connectivity`` of ``zero_drives_one`` with the settings used below."""
+    return Connectivity.from_transform(
+        Multitaper(zero_drives_one, sampling_frequency=200, time_halfbandwidth_product=3)
+    )
+
+
 _BAND = [5.0, 60.0]
 _ORIENTATION_KWARGS = {
     "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1, 2])},
@@ -362,19 +370,31 @@ _LEADS_ABOVE = {
 }
 
 
+def _in_band(connectivity, result):
+    """A frequency-resolved ``(..., frequency, n, n)`` result within the band."""
+    frequencies = connectivity.frequencies
+    in_band = (frequencies >= _BAND[0]) & (frequencies <= _BAND[1])
+    return np.asarray(result)[..., in_band, :, :]
+
+
+# How each measure's output becomes (..., n, n) values over the band; the
+# default is the frequency slice.
+_BAND_MATRICES = {
+    # (values, labels)
+    "blockwise_spectral_granger_prediction": lambda c, result: _in_band(c, result[0]),
+    # (delay, slope, r_value), already fit over the band
+    "group_delay": lambda c, result: result[0],
+    # (..., frequency, candidate, n, n): the zero-wrap candidate
+    "delay": lambda c, result: result[..., result.shape[-3] // 2, :, :],
+    # already summed over the band
+    "phase_slope_index": lambda c, result: result,
+}
+
+
 def _zero_one_and_one_zero(connectivity, name):
     """A directed measure's ``[..., 0, 1]`` and ``[..., 1, 0]`` over the band."""
     result = getattr(connectivity, name)(**_ORIENTATION_KWARGS.get(name, {}))
-    if name in {"blockwise_spectral_granger_prediction", "group_delay"}:
-        # (values, labels) and (delay, slope, r_value).
-        result = result[0]
-    if name == "delay":
-        # (..., frequency, candidate, n, n): the zero-wrap candidate over the band.
-        result = result[..., result.shape[-3] // 2, :, :]
-    elif name not in {"phase_slope_index", "group_delay"}:
-        frequencies = connectivity.frequencies
-        in_band = (frequencies >= _BAND[0]) & (frequencies <= _BAND[1])
-        result = np.asarray(result)[..., in_band, :, :]
+    result = _BAND_MATRICES.get(name, _in_band)(connectivity, result)
     return result[..., 0, 1], result[..., 1, 0]
 
 
@@ -407,7 +427,9 @@ def test_directed_measures_place_source_first(zero_drives_one, measure):
     [measure for measure in list_measures(directed=True) if measure.category == "pairwise"],
     ids=lambda measure: measure.name,
 )
-def test_wrapper_returns_directed_connectivity_arrays_unchanged(zero_drives_one, measure):
+def test_wrapper_returns_directed_connectivity_arrays_unchanged(
+    zero_drives_one, zero_drives_one_connectivity, measure
+):
     """The wrapper labels a directed ``Connectivity`` array's last two axes
     ``source`` and ``target`` without reordering them, so its values equal the
     ``Connectivity`` method's output exactly."""
@@ -421,10 +443,7 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(zero_drives_one,
             method=measure.name,
             connectivity_kwargs=kwargs,
         )
-        connectivity = Connectivity.from_transform(
-            Multitaper(zero_drives_one, sampling_frequency=200, time_halfbandwidth_product=3)
-        )
-        expected = getattr(connectivity, measure.name)(**kwargs)
+        expected = getattr(zero_drives_one_connectivity, measure.name)(**kwargs)
 
     assert result.dims[-2:] == ("source", "target")
     np.testing.assert_array_equal(result.values, expected, strict=True)
