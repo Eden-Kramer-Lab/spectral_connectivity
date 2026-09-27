@@ -28,6 +28,7 @@ import pytest
 import scipy.fft
 
 from spectral_connectivity import Connectivity, _backend, minimum_phase_decomposition
+from spectral_connectivity.connectivity import PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
 
 _CONVERSION_MESSAGE = (
     "Implicit conversion to a NumPy array is not allowed. "
@@ -397,7 +398,10 @@ def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
         "debiased_squared_phase_lag_index",
         "debiased_squared_weighted_phase_lag_index",
     )
-    coefficients = _coefficients(np.random.default_rng(9), shape=(1, 4, 3, 16, 3))
+    # Enough observations that the first measure reduces all four moments.
+    coefficients = _coefficients(
+        np.random.default_rng(9), shape=(1, PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS, 1, 16, 3)
+    )
     device = Connectivity(xp.asarray(coefficients))
     with patch.object(
         device, "_reduce_phase_lag_tile", wraps=device._reduce_phase_lag_tile

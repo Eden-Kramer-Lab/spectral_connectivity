@@ -13,6 +13,7 @@ from spectral_connectivity._granger import (
 )
 from spectral_connectivity.connectivity import (
     EXPECTATION_AXES,
+    PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS,
     Connectivity,
     DirectedOrientationWarning,
     _bandpass,
@@ -1823,15 +1824,48 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
+PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
+
+
+def _many_observation_coefficients(rng, n_signals=4):
+    """Coefficients with exactly ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS``
+    averaged observations (trials x 4 tapers), shape (1, n_trials, 4, 16, n_signals).
+    """
+    n_trials = -(-PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS // 4)
+    shape = (1, n_trials, 4, 16, n_signals)
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+
+@pytest.mark.parametrize(
+    ("many_observations", "expected_keys"),
+    [(False, {"sign", "absolute"}), (True, set(PHASE_LAG_MOMENTS))],
+)
+def test_lone_phase_lag_index_computes_all_moments_only_with_many_observations(
+    many_observations, expected_keys
+):
+    """Reducing the two moments a later measure might need pays off only when
+    each tile holds many observations per reduced value. With few (a
+    time-resolved single-trial spectrum), a lone PLI computes only its own."""
+    rng = np.random.default_rng(2)
+    if many_observations:
+        fc = _many_observation_coefficients(rng)
+    else:
+        shape = (8, 1, 3, 16, 4)  # 3 observations in each of 8 windows
+        fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(fc)
+    assert (conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS) == many_observations
+
+    pli = conn.phase_lag_index()
+    assert set(conn._imaginary_moment_cache) == expected_keys
+    np.testing.assert_array_equal(pli, Connectivity(fc).phase_lag_index())
+
+
 @pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
 def test_phase_lag_moments_are_computed_together_once(first_measure):
-    """Any one phase-lag measure caches all four moments from one pass over the
-    tiles, so every later measure of the family reads them without re-forming
-    a tile."""
-    rng = np.random.default_rng(1)
-    shape = (2, 6, 4, 16, 4)
-    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    conn = Connectivity(fc)
+    """With many observations, any one phase-lag measure caches all four
+    moments from one pass over the tiles, so every later measure of the family
+    reads them without re-forming a tile."""
+    conn = Connectivity(_many_observation_coefficients(np.random.default_rng(1)))
 
     with patch.object(
         conn, "_reduce_phase_lag_tile", wraps=conn._reduce_phase_lag_tile
@@ -1897,9 +1931,6 @@ def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
     assert calls == [0, 1]
     assert not conn.__dict__["_imaginary_moment_cache"]
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
-
-
-PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
 
 
 @pytest.fixture
