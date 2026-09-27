@@ -773,8 +773,23 @@ def test_dataarray_nonpositive_sampling_frequency_is_rejected(bad_rate):
         dims=("time", "channel"),
         coords={"time": np.arange(raw.shape[0]) / 64.0},
     )
-    with pytest.raises(ValueError, match="sampling_frequency must be a positive"):
+    with pytest.raises(ValueError, match="sampling_frequency must be finite and positive"):
         multitaper_connectivity(data, sampling_frequency=bad_rate, method="power")
+
+
+def test_dataarray_path_rejects_string_sampling_frequency():
+    """The DataArray time-coordinate check gives the same typed error as the transforms."""
+    raw = np.random.default_rng(49).standard_normal((128, 2))
+    data = xr.DataArray(
+        raw,
+        dims=("time", "channel"),
+        coords={"time": np.arange(raw.shape[0]) / 500.0},
+    )
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        _time_axis_from_dataarray(data, "time", "500")
+    assert "'500'" in str(excinfo.value)
+    with pytest.raises(TypeError, match="sampling_frequency must be a number"):
+        multitaper_connectivity(data, sampling_frequency="500", method="power")
 
 
 def test_dataarray_non_scalar_start_time_is_rejected():

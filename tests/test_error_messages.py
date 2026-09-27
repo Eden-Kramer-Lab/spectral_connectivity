@@ -11,7 +11,7 @@ import re
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from spectral_connectivity.transforms import detrend
 
 
@@ -189,3 +189,18 @@ class TestExplicitSampleCountGuards:
         )
         with pytest.raises(ValueError, match="at least 1 sample"):
             mt.fft()
+
+
+def test_sampling_frequency_string_names_the_argument():
+    """A rate passed as a string names the argument instead of a raw ufunc error."""
+    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        multitaper_connectivity(ts, sampling_frequency="1000", method="power")
+    assert "'1000'" in str(excinfo.value)
+
+
+def test_sampling_frequency_bool_is_rejected():
+    """``True`` is an ``int`` subclass but not a sampling rate."""
+    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
+    with pytest.raises(TypeError, match="sampling_frequency must be a number"):
+        Multitaper(ts, sampling_frequency=True)

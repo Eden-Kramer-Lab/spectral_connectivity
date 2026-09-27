@@ -43,12 +43,26 @@ MIN_EIGENVALUE_THRESHOLD = 0.9
 TAPER_MULTIPLIER = 2.0
 
 
-def _validate_sampling_frequency(sampling_frequency: float) -> None:
-    """Raise an actionable error for a non-finite or non-positive sampling rate.
+def _validate_sampling_frequency(sampling_frequency: Any) -> None:
+    """Raise an actionable error for a non-numeric, non-finite or non-positive rate.
 
-    Shared by every transform so the newer STFT/Welch/Morlet classes give the
-    same guidance as :class:`Multitaper` rather than a bare one-line message.
+    Shared by every transform and by the DataArray input path so each gives the
+    same guidance rather than a bare one-line message or a raw ``isfinite``
+    ``TypeError``.
     """
+    if isinstance(sampling_frequency, bool) or not isinstance(
+        sampling_frequency, (int, float, np.integer, np.floating)
+    ):
+        msg = (
+            "sampling_frequency must be a number (samples per second), got "
+            f"{type(sampling_frequency).__name__} {sampling_frequency!r}.\n"
+            "\n"
+            "It labels the frequency axis and scales power, so it cannot be "
+            "inferred from a plain array.\n"
+            "\n"
+            "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
+        )
+        raise TypeError(msg)
     if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
         msg = (
             f"sampling_frequency must be finite and positive, got "
