@@ -1734,6 +1734,14 @@ def test_transform_setting_in_connectivity_kwargs_points_to_the_fourier_transfor
     assert "multitaper_connectivity" not in message
 
 
+def test_connectivity_to_xarray_gives_no_transform_settings_hint():
+    """Its caller built the transform, so there is no wrapper to point to."""
+    transform = Multitaper(np.random.default_rng(13).standard_normal((256, 2, 3)), 250)
+    with pytest.raises(TypeError, match="does not accept keyword argument") as excinfo:
+        connectivity_to_xarray(transform, "coherence_magnitude", time_halfbandwidth_product=4)
+    assert "transform setting" not in str(excinfo.value)
+
+
 @pytest.fixture(scope="module")
 def four_signal_noise():
     """Seeded white noise, shape (1000, 4, 4): four signals, so two groups of two."""
@@ -1811,7 +1819,11 @@ def test_extension_measure_taking_group_labels_is_named_when_labels_are_missing(
 
 # One case per group_labels error: (measure/label arguments, message pattern).
 _GROUP_LABEL_ERRORS = {
-    "missing": ({"method": "canonical_coherence"}, "group_labels is required for"),
+    # The message names the argument to pass, not only the failure.
+    "missing": (
+        {"method": "canonical_coherence"},
+        r"group_labels is required for[\s\S]*group_labels=",
+    ),
     "no_group_measure": (
         {"method": "coherence_magnitude", "group_labels": [0, 1]},
         "none of the requested measures compares groups",
@@ -1846,30 +1858,20 @@ def test_fourier_connectivity_group_label_errors(four_signal_coefficients, case)
         fourier_connectivity(coefficients, frequencies=frequencies, time=time, **arguments)
 
 
-def test_group_measure_without_group_labels_explains_the_argument(four_signal_noise):
-    with pytest.raises(ValueError, match="group_labels is required for") as excinfo:
-        multitaper_connectivity(
-            four_signal_noise, sampling_frequency=1000, method="canonical_coherence"
-        )
-    assert "group_labels=" in str(excinfo.value)
-
-
-def test_group_labels_with_only_pairwise_measures_is_rejected(four_signal_noise):
-    with pytest.raises(ValueError, match="none of the requested measures compares groups"):
-        multitaper_connectivity(
-            four_signal_noise,
-            sampling_frequency=1000,
-            method="coherence_magnitude",
-            group_labels=[0, 1],
-        )
-
-
-def test_group_labels_reach_every_group_measure_in_a_batch(four_signal_noise):
+@pytest.mark.parametrize(
+    "label_arguments",
+    [
+        {"group_labels": [0, 0, 1, 1]},
+        {"connectivity_kwargs": {"group_labels": [0, 0, 1, 1]}},
+    ],
+    ids=["argument", "connectivity_kwargs"],
+)
+def test_group_labels_reach_every_group_measure_in_a_batch(four_signal_noise, label_arguments):
     result = multitaper_connectivity(
         four_signal_noise,
         sampling_frequency=1000,
         method=["canonical_coherence", "coherence_magnitude"],
-        group_labels=[0, 0, 1, 1],
+        **label_arguments,
     )
     assert isinstance(result, xr.Dataset)
     assert result["canonical_coherence"].sizes["source_group"] == 2
@@ -1909,14 +1911,24 @@ def test_connectivity_kwargs_group_labels_still_works(four_signal_noise):
     assert connectivity_kwargs == {"group_labels": [0, 0, 1, 1]}
 
 
-def test_group_labels_given_twice_is_rejected(four_signal_noise):
-    with pytest.raises(ValueError, match="pass it once"):
+def test_group_labels_none_in_connectivity_kwargs_means_no_labels(four_signal_noise):
+    """``{"group_labels": None}`` matches the argument's ``None`` default."""
+    with_none = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="coherence_magnitude",
+        connectivity_kwargs={"group_labels": None},
+    )
+    without = multitaper_connectivity(
+        four_signal_noise, sampling_frequency=1000, method="coherence_magnitude"
+    )
+    xr.testing.assert_identical(with_none, without)
+    with pytest.raises(ValueError, match="group_labels is required for"):
         multitaper_connectivity(
             four_signal_noise,
             sampling_frequency=1000,
             method="canonical_coherence",
-            group_labels=[0, 0, 1, 1],
-            connectivity_kwargs={"group_labels": [0, 1, 0, 1]},
+            connectivity_kwargs={"group_labels": None},
         )
 
 

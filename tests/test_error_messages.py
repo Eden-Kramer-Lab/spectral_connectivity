@@ -12,7 +12,13 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
-from spectral_connectivity.transforms import detrend
+from spectral_connectivity.transforms import (
+    MorletWavelet,
+    ShortTimeFourierTransform,
+    Welch,
+    detrend,
+)
+from spectral_connectivity.wrapper import connectivity_to_xarray
 
 
 class TestDetrendErrorMessages:
@@ -196,20 +202,34 @@ def test_sampling_frequency_string_names_the_argument():
     ts = np.random.default_rng(0).standard_normal((256, 1, 2))
     with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
         multitaper_connectivity(ts, sampling_frequency="1000", method="power")
-    assert "'1000'" in str(excinfo.value)
+    # A string gets its own hint on top of the generic one.
+    assert "rather than '1000'" in str(excinfo.value)
 
 
-def test_sampling_frequency_bool_is_rejected():
-    """``True`` is an ``int`` subclass but not a sampling rate."""
-    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
-    with pytest.raises(TypeError, match="sampling_frequency must be a number"):
-        Multitaper(ts, sampling_frequency=True)
-
-
+# ``True`` is an ``int`` subclass and a complex rate would silently lose its
+# imaginary part, so neither is a sampling rate.
 @pytest.mark.parametrize(
     "bad_rate",
-    ["1000", True, np.bool_(True), np.array([500.0])],
-    ids=["str", "bool", "numpy_bool", "1d_array"],
+    [
+        "1000",
+        np.array("1000"),
+        True,
+        np.bool_(True),
+        1 + 0j,
+        np.complex128(500),
+        None,
+        np.array([500.0]),
+    ],
+    ids=[
+        "str",
+        "0d_str_array",
+        "bool",
+        "numpy_bool",
+        "complex",
+        "numpy_complex",
+        "none",
+        "1d_array",
+    ],
 )
 def test_non_scalar_or_non_numeric_sampling_frequency_is_rejected(bad_rate):
     ts = np.random.default_rng(0).standard_normal((256, 1, 2))
@@ -239,3 +259,25 @@ def test_numpy_scalar_sampling_frequency_is_accepted(rate):
     np.testing.assert_allclose(result.values, baseline.values, equal_nan=True)
     assert result.attrs["mt_sampling_frequency"] == 500.0
     assert type(result.attrs["mt_sampling_frequency"]) is float
+
+
+@pytest.mark.parametrize(
+    ("transform_class", "extra", "prefix"),
+    [
+        (Multitaper, {}, "mt_"),
+        (ShortTimeFourierTransform, {}, "stft_"),
+        (Welch, {}, "welch_"),
+        (MorletWavelet, {"frequencies": [10.0, 20.0]}, "morlet_"),
+    ],
+    ids=["multitaper", "stft", "welch", "morlet"],
+)
+def test_every_transform_records_a_numpy_rate_as_a_float(transform_class, extra, prefix):
+    """The rate is normalized to ``float`` on the transform and in provenance,
+    so a 0-d array is never serialized as a string or a NumPy scalar."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    transform = transform_class(ts, sampling_frequency=np.array(500.0), **extra)
+    assert type(transform.sampling_frequency) is float
+    attrs = connectivity_to_xarray(transform, method="power").attrs
+    rate = attrs[f"{prefix}sampling_frequency"]
+    assert type(rate) is float
+    assert rate == 500.0
