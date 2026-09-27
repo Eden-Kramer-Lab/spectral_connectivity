@@ -4,7 +4,7 @@ mne-connectivity is not a dependency of this package, so its results are
 recorded once into ``mne_connectivity_reference.npz`` beside this script. Run
 it by hand, in a throwaway environment, only when this script changes::
 
-    uv run --with mne-connectivity python tests/reference/generate_mne_connectivity_reference.py
+    uv run --with mne-connectivity==0.9.0 python tests/reference/generate_mne_connectivity_reference.py
 
 The data are ``simulate_lagged_broadband(LAGS, NOISE_LEVEL, N_TIME_SAMPLES,
 n_trials=N_TRIALS, random_state=SEED)`` at ``SAMPLING_FREQUENCY``: signal 0
@@ -41,6 +41,7 @@ from pathlib import Path
 import mne
 import mne_connectivity
 import numpy as np
+import scipy
 
 from spectral_connectivity.simulate import simulate_lagged_broadband
 
@@ -175,6 +176,7 @@ def main() -> None:
         mt_low_bias=True,
         mne_connectivity_version=mne_connectivity.__version__,
         mne_version=mne.__version__,
+        scipy_version=scipy.__version__,
     )
     size = OUTPUT.stat().st_size
     if size > MAX_BYTES:
