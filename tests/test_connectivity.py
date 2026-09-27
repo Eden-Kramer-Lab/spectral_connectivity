@@ -1822,63 +1822,66 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
-def test_phase_lag_index_moments_are_computed_lazily():
-    """A single-measure call computes only the moments that measure needs.
-
-    The reduced imaginary-cross-spectrum moments are computed per key on demand,
-    so a lone ``phase_lag_index`` does not also compute (or retain) the other
-    measures' moments, while the family shares the ones already computed.
-    """
+@pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
+def test_phase_lag_moments_are_computed_together_once(first_measure):
+    """Any one phase-lag measure caches all four moments from one pass over the
+    tiles, so every later measure of the family reads them without re-forming
+    a tile."""
     rng = np.random.default_rng(1)
     shape = (2, 6, 4, 16, 4)
-    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(np.complex128)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(fc)
 
-    pli_only = Connectivity(fc)
-    pli_only.phase_lag_index()
-    # "absolute" is the zero-lag test's scale.
-    assert set(pli_only.__dict__["_imaginary_moment_cache"]) == {"sign", "absolute"}
+    with patch.object(
+        conn, "_reduce_phase_lag_tile", wraps=conn._reduce_phase_lag_tile
+    ) as reduce_tile:
+        getattr(conn, first_measure)()
+        assert reduce_tile.call_count == 1  # 4 signals fit in one tile
+        cached = dict(conn.__dict__["_imaginary_moment_cache"])
+        assert set(cached) == {"sign", "imaginary", "absolute", "squared"}
 
-    wpli_only = Connectivity(fc)
-    wpli_only.weighted_phase_lag_index()
-    assert set(wpli_only.__dict__["_imaginary_moment_cache"]) == {
-        "imaginary",
-        "absolute",
-    }
-
-    # The family accumulates all four moments across measures.
-    family = Connectivity(fc)
-    family.phase_lag_index()
-    family.weighted_phase_lag_index()
-    family.debiased_squared_weighted_phase_lag_index()
-    assert set(family.__dict__["_imaginary_moment_cache"]) == {
-        "sign",
-        "imaginary",
-        "absolute",
-        "squared",
-    }
-
-    # A repeated measure reuses the cached moment object (it is not recomputed).
-    reuse = Connectivity(fc)
-    reuse.phase_lag_index()
-    cached_sign = reuse.__dict__["_imaginary_moment_cache"]["sign"]
-    reuse.phase_lag_index()
-    assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
+        for measure in PHASE_LAG_MEASURES:
+            getattr(conn, measure)()
+        assert reduce_tile.call_count == 1
+    # The cached arrays themselves are reused, not recomputed and replaced.
+    for key, moment in conn.__dict__["_imaginary_moment_cache"].items():
+        assert moment is cached[key]
 
 
-def test_failed_phase_lag_reduction_caches_nothing():
-    """An error partway through the moment reduction must not leave partially
-    filled moments in the cache for a later measure to return."""
+def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
+    """An error partway through the tile loop must not leave partially filled
+    moments in the cache for a later measure to return."""
+    import spectral_connectivity.connectivity as connectivity_module
+
     rng = np.random.default_rng(3)
     shape = (1, 4, 3, 8, 3)
     fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     expected = Connectivity(fc).debiased_squared_phase_lag_index()
 
+    # One source signal per tile, and the second tile fails after the first
+    # has been written.
+    n_nonnegative = shape[3] // 2 + 1
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        int(np.prod(shape[:3])) * n_nonnegative * shape[-1],
+    )
     conn = Connectivity(fc)
+    reduce_tile = conn._reduce_phase_lag_tile
+    calls = []
+
+    def fail_on_second_tile(*args):
+        calls.append(args[3])
+        if len(calls) == 2:
+            raise MemoryError
+        return reduce_tile(*args)
+
     with (
-        patch.object(conn, "_expectation", side_effect=MemoryError),
+        patch.object(conn, "_reduce_phase_lag_tile", side_effect=fail_on_second_tile),
         pytest.raises(MemoryError),
     ):
         conn.phase_lag_index()
+    assert calls == [0, 1]
     assert not conn.__dict__["_imaginary_moment_cache"]
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
 
