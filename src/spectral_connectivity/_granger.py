@@ -4,6 +4,9 @@ Kernels behind the spectral Granger measures of :class:`Connectivity`: each
 factors (sub-)spectra with the Wilson minimum-phase decomposition, reads off the
 transfer function and noise covariance, and decomposes predictive power by
 frequency (Geweke 1982; Dhamala, Rangarajan & Ding 2008).
+
+Every kernel here returns ``[..., target, source]``; the public
+:class:`Connectivity` methods return the transpose.
 """
 
 import warnings
@@ -278,8 +281,6 @@ def _warn_nan_granger_pairs(
     ----------
     result : array, shape (..., n_frequencies, n_units, n_units)
         Granger result, ``[..., target, source]``; the diagonal is ignored.
-        The public ``Connectivity`` method returns the transpose,
-        ``[..., source, target]``.
     measure : str
         Name of the public measure, used in the message.
     requested : bool array, shape (n_units, n_units), optional
@@ -516,8 +517,7 @@ def _estimate_all_conditional_spectral_granger(
     -------
     conditional_granger : array, shape (..., n_nonnegative_frequencies, n_signals, n_signals)
         ``[..., target, source]`` is ``source -> target`` conditioned on the
-        other signals; the diagonal is NaN. The public ``Connectivity`` method
-        returns the transpose, ``[..., source, target]``.
+        other signals; the diagonal is NaN.
     """
     n_signals = spectrum.shape[-1]
     n_nonnegative = spectrum.shape[-3] // 2 + 1
@@ -571,8 +571,6 @@ def _estimate_blockwise_spectral_granger(
     -------
     block_granger : array, shape (..., n_nonnegative_frequencies, n_groups, n_groups)
         ``[..., target, source]`` is ``source -> target``; the diagonal is NaN.
-        The public ``Connectivity`` method returns the transpose,
-        ``[..., source, target]``.
     """
     n_groups = len(group_indices)
     n_nonnegative = spectrum.shape[-3] // 2 + 1
