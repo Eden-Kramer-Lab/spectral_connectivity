@@ -285,6 +285,9 @@ def suggest_parameters(
         If both desired_freq_resolution and desired_n_tapers are specified.
         In this case, desired_freq_resolution takes precedence and
         desired_n_tapers is ignored.
+    UserWarning
+        If keeping desired_freq_resolution with at least 3 time windows leaves
+        fewer than 2 tapers; use a longer signal or a coarser resolution.
 
     Notes
     -----
@@ -404,6 +407,24 @@ def suggest_parameters(
             time_halfbandwidth_product = desired_freq_resolution * time_window_duration / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
+            n_tapers_left = estimate_n_tapers(time_halfbandwidth_product)
+            if n_tapers_left < 2:
+                # Two tapers need NW >= 1.5, i.e. windows of 3 / resolution seconds.
+                min_window_two_tapers = 3.0 / desired_freq_resolution
+                warnings.warn(
+                    f"A {desired_freq_resolution} Hz resolution with at least "
+                    f"{min_n_windows} time windows of a {signal_duration} s signal "
+                    f"leaves {n_tapers_left} taper (time_halfbandwidth_product="
+                    f"{time_halfbandwidth_product:.2f}), so the estimate is not "
+                    "averaged across tapers and will be noisy.\n"
+                    "For at least 2 tapers, use either:\n"
+                    f"  - a longer signal (at least "
+                    f"{min_n_windows * min_window_two_tapers:.2f} s), or\n"
+                    f"  - a coarser frequency resolution (at least "
+                    f"{3.0 * min_n_windows / signal_duration:.2f} Hz).",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
     # User wants specific number of tapers
     elif desired_n_tapers is not None:

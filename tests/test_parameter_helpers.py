@@ -203,6 +203,33 @@ class TestSuggestParameters:
         assert np.isclose(params["frequency_resolution"], 5.0)
         assert params["n_tapers"] != 7
 
+    def test_warns_when_resolution_target_leaves_one_taper(self):
+        """Shortening windows for a fine resolution can leave a single taper.
+
+        2 s at 4 Hz needs three 0.67 s windows, so NW = 4 * 0.67 / 2 = 1.33 and
+        floor(2 * NW) - 1 = 1 taper: no averaging across tapers at all.
+        """
+        with pytest.warns(UserWarning, match=r"1 taper") as record:
+            params = suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=2.0,
+                desired_freq_resolution=4.0,
+            )
+        assert params["n_tapers"] == 1
+        message = str(record[0].message)
+        assert "4.0 Hz" in message  # what was requested
+        assert "longer signal" in message
+        assert "coarser frequency resolution" in message
+
+    def test_no_taper_warning_with_enough_tapers(self):
+        """A resolution target that keeps several tapers does not warn."""
+        params = suggest_parameters(
+            sampling_frequency=1000,
+            signal_duration=10.0,
+            desired_freq_resolution=2.0,
+        )
+        assert params["n_tapers"] == 5
+
     def test_invalid_target_resolution_raises_error(self):
         """Test that impossible frequency resolution raises error."""
         with pytest.raises(ValueError, match=r"Cannot achieve.*frequency resolution"):
