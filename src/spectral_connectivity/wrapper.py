@@ -495,9 +495,10 @@ def _resolve_group_labels(
         raise ValueError(msg)
     if group_methods and group_labels is None:
         msg = (
-            f"group_labels is required for {', '.join(group_methods)}, which compare "
-            f"groups of signals: one label per signal ({n_signals} here) naming the "
-            "group it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
+            f"group_labels is required for {', '.join(group_methods)}: group measures "
+            "compare groups of signals and need one label per signal "
+            f"({n_signals} here) naming the group each signal belongs to, e.g. "
+            "group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
             "Pass it as group_labels=... (the same labels apply to every group "
             "measure in this call)."
         )

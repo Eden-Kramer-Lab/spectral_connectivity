@@ -1230,7 +1230,7 @@ class Multitaper:
         <BLANKLINE>
         Spectral Parameters
         -------------------
-        Sampling frequency:            1000.0 Hz
+        Sampling frequency:            1000 Hz
         Time-halfbandwidth product:    3
         Number of tapers:              5
         <BLANKLINE>
@@ -1287,7 +1287,7 @@ Trials:          {self.n_trials}
 
 Spectral Parameters
 -------------------
-Sampling frequency:            {self.sampling_frequency} Hz
+Sampling frequency:            {self.sampling_frequency:g} Hz
 Time-halfbandwidth product:    {self.time_halfbandwidth_product}
 Number of tapers:              {self.n_tapers}
 
@@ -2183,7 +2183,7 @@ class MorletWavelet:
             raise ValueError(msg)
 
         self._time_series = _immutable_array_snapshot(data)
-        self.sampling_frequency = float(sampling_frequency)
+        self.sampling_frequency = sampling_frequency
         self._frequencies = _immutable_array_snapshot(frequency_values)
         self._n_cycles = _immutable_array_snapshot(cycle_values)
         self.decimation = int(decimation)
