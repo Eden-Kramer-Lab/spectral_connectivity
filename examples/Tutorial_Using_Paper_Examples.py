@@ -19,12 +19,18 @@
 # Here we simulate multivariate autoregressive processes from papers in order to show how various directed connectivity measures work. See the papers for details.
 
 # %%
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.transforms import prepare_time_series
+
+# This tutorial indexes directed measures source first ([..., i, j] is i -> j),
+# so the reminder meant for code written for 2.x does not apply here.
+warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
 
 
 def plot_directional(time_series, sampling_frequency, time_halfbandwidth_product=2):
