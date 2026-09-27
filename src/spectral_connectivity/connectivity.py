@@ -4917,7 +4917,8 @@ class Connectivity:
             significance_threshold=significance_threshold,
         )
         coherence_phase = np.ma.masked_array(
-            np.unwrap(np.angle(bandpassed_coherency), axis=-2), mask=~is_significant
+            _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),
+            mask=~is_significant,
         )
         return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
 
@@ -5426,6 +5427,28 @@ def _total_outflow(
             axis=-2,
         )
     )
+
+
+def _unwrap_across_undefined(
+    phase: NDArray[np.floating], axis: int = -1
+) -> NDArray[np.floating]:
+    """``np.unwrap`` that skips NaN (undefined) phases instead of spreading them.
+
+    ``np.unwrap`` accumulates corrections along ``axis``, so a single NaN makes
+    every later value NaN. Each NaN is instead held at the last defined phase
+    (or the first, before any is defined) while unwrapping, which unwraps the
+    defined values as if the undefined ones were absent, and is restored to NaN
+    afterwards. Without NaN the result equals ``np.unwrap``.
+    """
+    phase = np.moveaxis(phase, axis, -1)
+    is_defined = ~np.isnan(phase)
+    positions = np.arange(phase.shape[-1])
+    last_defined = np.maximum.accumulate(np.where(is_defined, positions, 0), axis=-1)
+    first_defined = np.argmax(is_defined, axis=-1)[..., np.newaxis]
+    source = np.where(np.cumsum(is_defined, axis=-1) == 0, first_defined, last_defined)
+    filled = np.take_along_axis(phase, source, axis=-1)
+    unwrapped = np.where(is_defined, np.unwrap(filled, axis=-1), np.nan)
+    return np.moveaxis(unwrapped, -1, axis)
 
 
 def _bandpass(

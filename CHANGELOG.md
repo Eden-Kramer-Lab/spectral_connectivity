@@ -395,6 +395,9 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `group_delay` and `delay` unwrapped the coherence phase before excluding
+  undefined bins, so one bin without a defined phase (e.g. a zero-power DC
+  bin) made every later frequency NaN; the unwrapping now skips such bins.
 - The paper tutorial's Dhamala 2a/2b panels plotted `[..., 0, 1]` under the
   title "x1 -> x2", which in 2.x was the x2 -> x1 entry. The re-executed
   figures are now labeled correctly.

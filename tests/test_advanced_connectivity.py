@@ -919,6 +919,32 @@ class TestGroupDelay:
         assert np.isfinite(delay[..., off_diagonal]).all()
         np.testing.assert_allclose(delay, -np.swapaxes(delay, -1, -2), rtol=0, atol=1e-12)
 
+    def test_undefined_frequency_bin_does_not_invalidate_later_bins(self):
+        """A bin with no defined phase (here a zeroed DC bin, 0/0 coherency)
+        must not NaN every later bin through the phase unwrapping."""
+        sampling_frequency = 1000
+        time_series = simulate_lagged_broadband(
+            [0, 1], 0.3, n_time_samples=1000, n_trials=30, random_state=self.rng
+        )
+        multitaper = Multitaper(
+            time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=3
+        )
+        coefficients = np.array(multitaper.fft())
+        coefficients[..., 0, :] = 0  # the DC bin of every signal
+        frequencies = np.fft.fftfreq(coefficients.shape[-2], 1 / sampling_frequency)
+        conn = Connectivity(coefficients, frequencies=frequencies)
+
+        with pytest.warns(UserWarning, match="zero power"):
+            delay, _slope, _r_value = conn.group_delay()
+        # Signal 0 leads signal 1 by one sample, 1 ms.
+        assert abs(delay[0, 0, 1] - 1 / sampling_frequency) < 1e-4
+
+        with pytest.warns(UserWarning, match="zero power"):
+            possible_delays = conn.delay(frequencies_of_interest=[20, 200], n_range=1)
+        zero_wrap = possible_delays[0, :, 1, 0, 1]
+        assert np.isfinite(zero_wrap).mean() > 0.9
+        assert abs(np.nanmedian(zero_wrap) - 1 / sampling_frequency) < 1e-4
+
 
 class TestAdvancedConnectivityIntegration:
     """Integration tests for advanced connectivity measures."""
