@@ -415,3 +415,21 @@ def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     for measure in measures:
         assert isinstance(on_device[measure], np.ndarray)
         np.testing.assert_array_equal(on_device[measure], getattr(host, measure)())
+
+
+def test_weighted_phase_lag_family_runs_on_the_device(xp, monkeypatch):
+    """With observation weights each moment is a weighted expectation of a
+    per-observation function of Im(S); that path also runs on device arrays."""
+    # The debiased measures reject non-uniform weights, so they are not here.
+    measures = ("phase_lag_index", "weighted_phase_lag_index", "directed_phase_lag_index")
+    rng = np.random.default_rng(10)
+    coefficients = _coefficients(rng, shape=(1, 8, 1, 16, 3))
+    weights = rng.uniform(0.5, 1.5, size=(1, 8, 1, 16, 1))
+    device = Connectivity(xp.asarray(coefficients), observation_weights=xp.asarray(weights))
+    on_device = {measure: getattr(device, measure)() for measure in measures}
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients, observation_weights=weights)
+    for measure in measures:
+        assert isinstance(on_device[measure], np.ndarray)
+        np.testing.assert_allclose(on_device[measure], getattr(host, measure)(), rtol=1e-12)

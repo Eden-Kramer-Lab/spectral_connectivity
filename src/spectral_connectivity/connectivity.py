@@ -85,11 +85,12 @@ EXPECTATION_AXES = {
 }
 
 # Per-observation functions of Im(S_ij) averaged by the phase-lag-index family;
-# see Connectivity._imaginary_cross_spectrum_moments.
+# see Connectivity._imaginary_cross_spectrum_moments. They look ``xp`` up when
+# called, not at import, so a swapped backend (the device-emulation tests) applies.
 _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
-    "sign": xp.sign,
+    "sign": lambda imaginary: xp.sign(imaginary),
     "imaginary": lambda imaginary: imaginary,
-    "absolute": xp.abs,
+    "absolute": lambda imaginary: xp.abs(imaginary),
     "squared": lambda imaginary: imaginary**2,
 }
 # Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
