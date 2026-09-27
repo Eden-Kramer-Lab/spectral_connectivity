@@ -1699,15 +1699,39 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
         )
 
 
-def test_transform_setting_in_connectivity_kwargs_points_to_the_transform():
+def test_transform_setting_in_connectivity_kwargs_points_to_multitaper_connectivity():
     rng = np.random.default_rng(13)
-    with pytest.raises(TypeError, match="connectivity_kwargs configures the measure only"):
+    with pytest.raises(
+        TypeError, match="connectivity_kwargs configures the measure only"
+    ) as excinfo:
         multitaper_connectivity(
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
             method="coherence_magnitude",
             connectivity_kwargs={"time_halfbandwidth_product": 4},
         )
+    message = str(excinfo.value)
+    assert "pass it to multitaper_connectivity directly" in message
+    assert "fourier_coefficients" not in message
+
+
+def test_transform_setting_in_connectivity_kwargs_points_to_the_fourier_transform(
+    four_signal_coefficients,
+):
+    coefficients, frequencies, time = four_signal_coefficients
+    with pytest.raises(
+        TypeError, match="connectivity_kwargs configures the measure only"
+    ) as excinfo:
+        fourier_connectivity(
+            coefficients,
+            frequencies=frequencies,
+            time=time,
+            method="coherence_magnitude",
+            connectivity_kwargs={"time_halfbandwidth_product": 4},
+        )
+    message = str(excinfo.value)
+    assert "set it on the transform that produced fourier_coefficients" in message
+    assert "multitaper_connectivity" not in message
 
 
 @pytest.fixture(scope="module")

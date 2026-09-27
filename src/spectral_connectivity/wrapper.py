@@ -518,6 +518,7 @@ def _format_and_reduce_measures(
     shared_attrs: Mapping[str, Any],
     connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
+    caller: Literal["multitaper_connectivity", "fourier_connectivity"],
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -531,7 +532,8 @@ def _format_and_reduce_measures(
     to the group measures only, honors ``squeeze`` only for a single-measure
     DataArray, formats each measure (skipping structurally-unsupported ones in a
     multi-measure batch), merges the survivors, and applies any frequency
-    crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free.
+    crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free;
+    ``caller`` names the public wrapper for error messages.
     """
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
@@ -561,6 +563,7 @@ def _format_and_reduce_measures(
             squeeze,
             shared_attrs,
             signal_metadata=signal_metadata,
+            caller=caller,
             **measure_kwargs(methods[0]),
         )
     else:
@@ -575,6 +578,7 @@ def _format_and_reduce_measures(
                         False,
                         shared_attrs,
                         signal_metadata=signal_metadata,
+                        caller=caller,
                         **measure_kwargs(this_method),
                     )
                 )
@@ -925,6 +929,7 @@ def multitaper_connectivity(
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
+        caller="multitaper_connectivity",
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1216,6 +1221,7 @@ def fourier_connectivity(
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
+        caller="fourier_connectivity",
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
