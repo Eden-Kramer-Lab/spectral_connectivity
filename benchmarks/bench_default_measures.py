@@ -11,10 +11,12 @@ Three fixed cases (seed 0, 1000 Hz, white noise):
   makes each repeat take several minutes.
 
 For each case this times the multitaper transform, then every measure in
-``DEFAULT_METHODS`` (``coherence_magnitude`` among them) on a fresh
-``Connectivity``, and the whole default set on one ``Connectivity`` (the way
-the wrapper computes it, sharing cached intermediates), and likewise the
-default phase-lag-index measures together. The measure timings
+``DEFAULT_METHODS`` (``coherence_magnitude`` among them) plus the opt-in
+``pairwise_spectral_granger_prediction`` on a fresh ``Connectivity``, the
+default phase-lag-index measures together, the default set on one
+``Connectivity`` (the way the wrapper computes it, sharing cached
+intermediates), and the default set with pairwise Granger, whose outputs are
+the ones saved and compared. The measure timings
 start from the precomputed coefficients, so they exclude the transform. Each
 time is the fastest of ``--repeat`` runs, printed with the process's peak
 resident memory so far.
@@ -54,6 +56,9 @@ except ImportError:  # Windows: no getrusage, so no peak-memory column
 SAMPLING_FREQUENCY = 1000.0
 TOLERANCE = 1e-12
 PHASE_LAG_MEASURES = tuple(name for name in DEFAULT_METHODS if "phase_lag" in name)
+# Pairwise Granger is opt-in, but its Wilson kernels change often, so its
+# outputs stay under the parity gate.
+PARITY_MEASURES = (*DEFAULT_METHODS, "pairwise_spectral_granger_prediction")
 CASES: dict[str, dict[str, Any]] = {
     "a": {"n_time": 5000, "n_trials": 50, "n_signals": 8, "time_window_duration": 0.5},
     "b": {"n_time": 2000, "n_trials": 100, "n_signals": 32, "time_window_duration": None},
@@ -121,7 +126,7 @@ def run_case(
     seconds, coefficients = _best_time(multitaper.fft, repeat)
     rows.append(("Multitaper.fft", seconds, _peak_rss_mb()))
 
-    for measure in DEFAULT_METHODS:
+    for measure in PARITY_MEASURES:
         seconds, _ = _best_time(
             lambda measure=measure: getattr(
                 _connectivity(multitaper, coefficients), measure
@@ -136,10 +141,14 @@ def run_case(
     rows.append(
         (f"phase-lag set ({len(PHASE_LAG_MEASURES)} measures)", seconds, _peak_rss_mb())
     )
-    seconds, outputs = _best_time(
+    seconds, _ = _best_time(
         lambda: _measure_set(multitaper, coefficients, DEFAULT_METHODS), repeat
     )
     rows.append(("default set", seconds, _peak_rss_mb()))
+    seconds, outputs = _best_time(
+        lambda: _measure_set(multitaper, coefficients, PARITY_MEASURES), repeat
+    )
+    rows.append(("default set + pairwise Granger", seconds, _peak_rss_mb()))
     print(f"\nCase ({name}): {parameters}, fourier_coefficients {coefficients.shape}")
     memory_header = f" {'peak MB':>9}" if resource is not None else ""
     print(f"{'measure':<45} {'seconds':>9}{memory_header}")
