@@ -6,10 +6,13 @@ dependency; its outputs are recorded once in
 beside it.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from nitime.algorithms import coherence as nitime_coherence
 from nitime.algorithms import multi_taper_csd
+from scipy.signal.windows import dpss
 
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity.simulate import simulate_lagged_broadband
@@ -103,3 +106,161 @@ def test_coherence_matches_nitime(nitime_series):
         np.moveaxis(expected_csd, -1, 0)[interior],
         rtol=1e-6,
     )
+
+
+_MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
+_MNE_MEASURES = (
+    "coh",
+    "imcoh",
+    "psi",
+    "cacoh",
+    "plv",
+    "ciplv",
+    "ppc",
+    "pli",
+    "dpli",
+    "wpli",
+    "wpli2_debiased",
+)
+_MNE_UNMATCHED = tuple(
+    f"{measure} (NW 3)"
+    for measure in ("plv", "ciplv", "ppc", "pli", "dpli", "wpli", "wpli2_debiased")
+)
+_TRANSFORMS = {"identity": np.asarray, "sqrt": np.sqrt, "abs": np.abs}
+
+
+@pytest.fixture(scope="module")
+def mne_reference():
+    """The recorded mne-connectivity outputs and their settings."""
+    with np.load(_MNE_REFERENCE) as reference:
+        return {key: reference[key] for key in reference.files}
+
+
+def _mne_tapers(n_time_samples, time_halfbandwidth_product):
+    """mne-connectivity's taper set with its taper weights folded in.
+
+    MNE uses periodic DPSS (``sym=False``), keeps those with concentration
+    above 0.9 (``mt_low_bias=True``) and weights taper ``k`` by
+    ``sqrt(eigenvalue_k)``. Scaling each taper by that weight and averaging
+    uniformly gives MNE's weighted cross-spectrum times a constant, which every
+    normalized measure cancels. Shape ``(n_time_samples, n_tapers)``.
+    """
+    tapers, eigenvalues = dpss(
+        n_time_samples,
+        time_halfbandwidth_product,
+        int(2 * time_halfbandwidth_product),
+        sym=False,
+        return_ratios=True,
+    )
+    keep = eigenvalues > 0.9
+    return (tapers[keep] * np.sqrt(eigenvalues[keep])[:, np.newaxis]).T
+
+
+@pytest.fixture(scope="module")
+def mne_matched_connectivity(mne_reference):
+    """``Connectivity`` for each recorded ``NW``, from the recorded data and settings."""
+    n_time_samples = int(mne_reference["n_time_samples"])
+    time_series = simulate_lagged_broadband(
+        mne_reference["lags"],
+        float(mne_reference["noise_level"]),
+        n_time_samples,
+        n_trials=int(mne_reference["n_trials"]),
+        random_state=int(mne_reference["seed"]),
+    )
+    return {
+        nw: Connectivity.from_transform(
+            Multitaper(
+                time_series,
+                sampling_frequency=float(mne_reference["sampling_frequency"]),
+                time_halfbandwidth_product=nw,
+                tapers=_mne_tapers(n_time_samples, nw),
+            )
+        )
+        for nw in np.unique(mne_reference["time_halfbandwidth_products"]).tolist()
+    }
+
+
+@pytest.mark.parametrize("measure", _MNE_MEASURES)
+def test_measures_match_mne_connectivity_reference(
+    measure, mne_reference, mne_matched_connectivity
+):
+    """Each measure equals mne-connectivity 0.9's on the same data and tapers.
+
+    The fixture records, per MNE method, the ``Connectivity`` method, the
+    element-wise transform, the ``NW`` and the tolerance (see
+    ``tests/reference/generate_mne_connectivity_reference.py``):
+
+    ============== ============================================= ==== =====
+    MNE            this package                                  NW   atol
+    ============== ============================================= ==== =====
+    coh            sqrt(coherence_magnitude)                     3    1e-12
+    imcoh          imaginary_coherency                           3    1e-12
+    psi            phase_slope_index over the same (10, 60) Hz   3    1e-12
+    cacoh          abs(canonical_coherency component 1)          3    1e-7
+    plv            phase_locking_value                           1    1e-12
+    ciplv          corrected_imaginary_phase_locking_value       1    1e-12
+    ppc            pairwise_phase_consistency                    1    1e-12
+    pli            abs(phase_lag_index)                          1    1e-12
+    dpli           directed_phase_lag_index                      1    1e-12
+    wpli           abs(weighted_phase_lag_index)                 1    1e-12
+    wpli2_debiased debiased_squared_weighted_phase_lag_index     1    1e-12
+    ============== ============================================= ==== =====
+
+    MNE's connection ``seed -> target`` is ``[..., seed, target]`` here: both
+    packages form the cross-spectrum as ``X_seed conj(X_target)``, so the
+    signed measures (imcoh, psi, dpli) need no sign change. The comparison uses
+    MNE's own tapers (see ``_mne_tapers``): with this package's symmetric DPSS
+    and ``taper_weighting="eigen"`` instead, coh and imcoh differ by up to
+    5e-4, and at NW 1 the sign-based PLI flips on bins whose imaginary part is
+    near zero (one epoch in 30, 0.067). CaCoh is maximized over a phase by an iterative
+    optimizer in each package, hence its looser tolerance; its phase is defined
+    only modulo pi and is not compared.
+
+    Unmatched, and recorded as such in the fixture: the phase measures with
+    more than one taper -- ``plv``, ``ciplv``, ``ppc``, ``pli``, ``dpli``,
+    ``wpli`` and ``wpli2_debiased`` at NW 3. MNE sums each epoch's tapers into
+    one cross-spectrum before the phase non-linearity; this package treats
+    every trial x taper as an observation. With one taper (NW 1) both reduce to
+    the same per-epoch estimator, which is what is compared.
+    """
+    index = mne_reference["measures"].tolist().index(measure)
+    method = str(mne_reference["our_methods"][index])
+    transform = _TRANSFORMS[str(mne_reference["our_transforms"][index])]
+    connectivity = mne_matched_connectivity[
+        int(mne_reference["time_halfbandwidth_products"][index])
+    ]
+    frequency_index = np.searchsorted(connectivity.frequencies, mne_reference["freqs"])
+    np.testing.assert_allclose(
+        connectivity.frequencies[frequency_index], mne_reference["freqs"]
+    )
+    seeds, targets = mne_reference["seeds"], mne_reference["targets"]
+
+    if method == "phase_slope_index":
+        ours = connectivity.phase_slope_index(
+            frequencies_of_interest=mne_reference["psi_band"]
+        )[0][seeds, targets]
+    elif method == "canonical_coherency":
+        result = connectivity.canonical_coherency(mne_reference["cacoh_group_labels"])
+        ours = result.scores[0, frequency_index, 0, 0]
+    else:
+        ours = getattr(connectivity, method)()[0][frequency_index][:, seeds, targets].T
+
+    np.testing.assert_allclose(
+        transform(ours),
+        mne_reference[measure],
+        rtol=0,
+        atol=float(mne_reference["atol"][index]),
+    )
+
+
+def test_mne_connectivity_reference_lists_unmatched_measures(mne_reference):
+    """Every recorded measure is compared, and the unmatched ones are named.
+
+    The unmatched entries are exactly those the comparison test's docstring
+    lists, each with a reason, and none of them is among the compared keys, so
+    nothing is skipped silently.
+    """
+    assert mne_reference["measures"].tolist() == list(_MNE_MEASURES)
+    assert mne_reference["unmatched"].tolist() == list(_MNE_UNMATCHED)
+    assert set(_MNE_UNMATCHED).isdisjoint(_MNE_MEASURES)
+    assert all(reason.strip() for reason in mne_reference["unmatched_reasons"].tolist())
