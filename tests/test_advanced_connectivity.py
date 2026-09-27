@@ -890,7 +890,8 @@ class TestGroupDelay:
                 reference_slope[(*lead, i, j)] = fit[0]
                 reference_slope[(*lead, j, i)] = -fit[0]
                 reference_r[(*lead, i, j)] = fit[2]
-                reference_r[(*lead, j, i)] = fit[2]
+                # linregress on the reverse pair's phase, -phase, gives -r.
+                reference_r[(*lead, j, i)] = -fit[2]
 
         np.testing.assert_array_equal(np.isnan(slope), np.isnan(reference_slope))
         np.testing.assert_allclose(
@@ -918,6 +919,50 @@ class TestGroupDelay:
         off_diagonal = ~np.eye(lags.size, dtype=bool)
         assert np.isfinite(delay[..., off_diagonal]).all()
         np.testing.assert_allclose(delay, -np.swapaxes(delay, -1, -2), rtol=0, atol=1e-12)
+
+    def test_group_delay_slope_and_r_value_flip_with_the_pair_order(self):
+        """Reversing a pair negates its phase, so both the slope and the
+        phase-frequency correlation change sign: a decreasing phase has r < 0."""
+        time_series = simulate_lagged_broadband(
+            [0, 3, 8], [0.3, 0.3, 0.3], 200, 10, random_state=self.rng
+        )
+        conn = Connectivity.from_multitaper(
+            Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
+        )
+        _delay, slope, r_value = conn.group_delay(frequencies_of_interest=[10, 90])
+
+        off_diagonal = ~np.eye(3, dtype=bool)
+        assert (np.abs(r_value[..., off_diagonal]) > 0.9).all()  # premise: linear phase
+        np.testing.assert_array_equal(slope, -np.swapaxes(slope, -1, -2))
+        np.testing.assert_array_equal(
+            r_value[..., off_diagonal], -np.swapaxes(r_value, -1, -2)[..., off_diagonal]
+        )
+
+    def test_undefined_frequency_bin_does_not_invalidate_later_bins(self):
+        """A bin with no defined phase (here a zeroed DC bin, 0/0 coherency)
+        must not NaN every later bin through the phase unwrapping."""
+        sampling_frequency = 1000
+        time_series = simulate_lagged_broadband(
+            [0, 1], 0.3, n_time_samples=1000, n_trials=30, random_state=self.rng
+        )
+        multitaper = Multitaper(
+            time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=3
+        )
+        coefficients = np.array(multitaper.fft())
+        coefficients[..., 0, :] = 0  # the DC bin of every signal
+        frequencies = np.fft.fftfreq(coefficients.shape[-2], 1 / sampling_frequency)
+        conn = Connectivity(coefficients, frequencies=frequencies)
+
+        with pytest.warns(UserWarning, match="zero power"):
+            delay, _slope, _r_value = conn.group_delay()
+        # Signal 0 leads signal 1 by one sample, 1 ms.
+        assert abs(delay[0, 0, 1] - 1 / sampling_frequency) < 1e-4
+
+        with pytest.warns(UserWarning, match="zero power"):
+            possible_delays = conn.delay(frequencies_of_interest=[20, 200], n_range=1)
+        zero_wrap = possible_delays[0, :, 1, 0, 1]
+        assert np.isfinite(zero_wrap).mean() > 0.9
+        assert abs(np.nanmedian(zero_wrap) - 1 / sampling_frequency) < 1e-4
 
 
 class TestAdvancedConnectivityIntegration:
@@ -1036,6 +1081,29 @@ class TestDelay:
     @pytest.fixture(autouse=True)
     def setup_rng(self):
         self.rng = np.random.default_rng(3)
+
+    def test_reverse_delay_candidates_follow_the_formula(self):
+        """Candidate k of the reverse pair is (-phase + 2 pi k) / (2 pi f), which
+        is minus the forward pair's candidate -k."""
+        time_series = simulate_lagged_broadband(
+            [0, 3], 0.3, n_time_samples=1000, n_trials=20, random_state=self.rng
+        )
+        conn = Connectivity.from_multitaper(
+            Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
+        )
+        n_range = 2
+        delays = conn.delay(frequencies_of_interest=[20, 100], n_range=n_range)
+        forward, reverse = delays[..., 0, 1], delays[..., 1, 0]
+        assert np.isfinite(forward).any()
+        np.testing.assert_array_equal(reverse, -forward[..., ::-1])
+        # Spelled out for k = +1: the reverse pair's candidate adds one cycle.
+        frequencies = conn.frequencies[(conn.frequencies > 20) & (conn.frequencies < 100)]
+        reverse_phase = -forward[0, :, n_range] * 2 * np.pi * frequencies
+        np.testing.assert_allclose(
+            reverse[0, :, n_range + 1],
+            (reverse_phase + 2 * np.pi) / (2 * np.pi * frequencies),
+            rtol=1e-12,
+        )
 
     def test_delay_recovers_frequency_independent_time_delay(self):
         """A constant physical delay must be frequency-independent (in seconds).

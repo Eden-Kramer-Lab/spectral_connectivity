@@ -103,6 +103,17 @@ def _coordinate_attrs(
     return time_attrs, frequency_attrs
 
 
+def _delay_units(shared_attrs: Mapping[str, Any]) -> tuple[str, str]:
+    """``(delay_units, slope_units)`` for the result's frequency coordinate.
+
+    A delay is in the reciprocal units of frequency, so on the normalized grid
+    ``fourier_connectivity`` fills in (cycles/sample) it is in samples.
+    """
+    if shared_attrs.get("fourier_frequency_coordinate") == "normalized":
+        return "samples", "rad/(cycles/sample)"
+    return "s", "rad/Hz"
+
+
 def _connectivity_result_to_xarray(
     connectivity: Connectivity,
     method: str,
@@ -314,7 +325,7 @@ def _connectivity_result_to_xarray(
             coords=coordinates,
             dims=("time", "frequency", "candidate", "source", "target"),
             name=method,
-            attrs=measure_attrs,
+            attrs={**measure_attrs, "units": _delay_units(shared_attrs)[0]},
         )
 
     if output_kind == "phase_slope":
@@ -340,13 +351,14 @@ def _connectivity_result_to_xarray(
 
     if output_kind == "group_delay":
         delay, slope, r_value = numerical_result
+        delay_units, slope_units = _delay_units(shared_attrs)
         dataset_coordinates = {
             "time": base_coordinates["time"],
             **signal_coordinates,
         }
         variables = {
-            "group_delay": ("Group delay", np.asarray(delay), "s"),
-            "group_delay_slope": ("phase slope", np.asarray(slope), "rad/Hz"),
+            "group_delay": ("Group delay", np.asarray(delay), delay_units),
+            "group_delay_slope": ("phase slope", np.asarray(slope), slope_units),
             "group_delay_r_value": (
                 "phase-frequency correlation",
                 np.asarray(r_value),

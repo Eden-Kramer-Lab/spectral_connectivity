@@ -4917,7 +4917,8 @@ class Connectivity:
             significance_threshold=significance_threshold,
         )
         coherence_phase = np.ma.masked_array(
-            np.unwrap(np.angle(bandpassed_coherency), axis=-2), mask=~is_significant
+            _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),
+            mask=~is_significant,
         )
         return coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals
 
@@ -4944,14 +4945,17 @@ class Connectivity:
         Returns
         -------
         delay : array, shape (..., n_signals, n_signals)
-            Time delays between signal pairs, in seconds. Positive
-            ``[..., i, j]`` means signal ``i`` leads signal ``j``. The diagonal
-            is NaN.
+            Time delays between signal pairs, in the reciprocal units of
+            ``frequencies``: seconds for Hz, samples for cycles/sample.
+            Positive ``[..., i, j]`` means signal ``i`` leads signal ``j``. The
+            diagonal is NaN.
         slope : array, shape (..., n_signals, n_signals)
-            Slope of the coherence phase vs frequency, in radians per Hz
-            (``delay = slope / (2 * pi)``); same sign convention as ``delay``.
+            Slope of the coherence phase vs frequency, in radians per unit of
+            ``frequencies`` (``delay = slope / (2 * pi)``); same sign
+            convention as ``delay``.
         r_value : array, shape (..., n_signals, n_signals)
-            Correlation coefficient of the linear phase-frequency fit.
+            Correlation coefficient of the linear phase-frequency fit, with the
+            sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``).
 
         Notes
         -----
@@ -5037,7 +5041,10 @@ class Connectivity:
 
         r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = pair_r_value
-        r_value[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = pair_r_value
+        # The reverse pair's phase is negated, so its correlation is too.
+        r_value[
+            ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
+        ] = -pair_r_value
 
         return delay, slope, r_value
 
@@ -5075,9 +5082,10 @@ class Connectivity:
             Shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals),
             where ``n_frequencies`` counts only the frequencies inside
             ``frequencies_of_interest``. Candidate ``k`` (index ``k + n_range``)
-            adds ``k`` cycles of phase. Array of possible time delays in
-            seconds; positive ``[..., i, j]`` means signal ``i`` leads signal
-            ``j``. The true delay is the candidate that is consistent
+            adds ``k`` cycles of phase. Array of possible time delays in the
+            reciprocal units of ``frequencies`` (seconds for Hz, samples for
+            cycles/sample); positive ``[..., i, j]`` means signal ``i`` leads
+            signal ``j``. The true delay is the candidate that is consistent
             (frequency-independent) across the band. Frequencies without
             significant coherence, and the 0 Hz (DC) bin, are undefined and
             returned as NaN.
@@ -5134,9 +5142,11 @@ class Connectivity:
         possible_delays[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
             delays
         )
+        # The reverse pair's phase is -phase, so its candidate k,
+        # (-phase + 2*pi*k) / (2*pi*f), is minus the forward candidate -k.
         possible_delays[
             ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
-        ] = -delays
+        ] = -delays[..., ::-1, :]
 
         return possible_delays
 
@@ -5426,6 +5436,28 @@ def _total_outflow(
             axis=-2,
         )
     )
+
+
+def _unwrap_across_undefined(
+    phase: NDArray[np.floating], axis: int = -1
+) -> NDArray[np.floating]:
+    """``np.unwrap`` that skips NaN (undefined) phases instead of spreading them.
+
+    ``np.unwrap`` accumulates corrections along ``axis``, so a single NaN makes
+    every later value NaN. Each NaN is instead held at the last defined phase
+    (or the first, before any is defined) while unwrapping, which unwraps the
+    defined values as if the undefined ones were absent, and is restored to NaN
+    afterwards. Without NaN the result equals ``np.unwrap``.
+    """
+    phase = np.moveaxis(phase, axis, -1)
+    is_defined = ~np.isnan(phase)
+    positions = np.arange(phase.shape[-1])
+    last_defined = np.maximum.accumulate(np.where(is_defined, positions, 0), axis=-1)
+    first_defined = np.argmax(is_defined, axis=-1)[..., np.newaxis]
+    source = np.where(np.cumsum(is_defined, axis=-1) == 0, first_defined, last_defined)
+    filled = np.take_along_axis(phase, source, axis=-1)
+    unwrapped = np.where(is_defined, np.unwrap(filled, axis=-1), np.nan)
+    return np.moveaxis(unwrapped, -1, axis)
 
 
 def _bandpass(
