@@ -443,7 +443,7 @@ def _resolve_group_labels(
     connectivity_kwargs: Mapping[str, Any] | None,
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
     n_signals: int,
-) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any]]:
+) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any], frozenset[str]]:
     """Resolve ``group_labels`` from the argument or ``connectivity_kwargs``.
 
     Runs before any spectral work so a missing or misplaced label fails fast.
@@ -465,6 +465,8 @@ def _resolve_group_labels(
         The labels from whichever form supplied them.
     label_free_kwargs : dict
         A copy of ``connectivity_kwargs`` without ``group_labels``.
+    group_methods : frozenset of str
+        The requested measures that take ``group_labels``.
 
     Raises
     ------
@@ -482,7 +484,7 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     group_labels = group_labels if group_labels is not None else legacy_labels
-    group_methods = [m for m in methods if _is_group_measure(m)]
+    group_methods = [method for method in methods if _is_group_measure(method)]
     if group_labels is not None and not group_methods:
         msg = (
             "group_labels was given, but none of the requested measures compares "
@@ -492,20 +494,15 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     if group_methods and group_labels is None:
-        verbs = (
-            "compares groups of signals and needs"
-            if len(group_methods) == 1
-            else "compare groups of signals and need"
-        )
         msg = (
-            f"{', '.join(group_methods)} {verbs} "
-            f"group_labels: one label per signal ({n_signals} here) naming the group "
-            "it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
+            f"group_labels is required for {', '.join(group_methods)}, which compare "
+            f"groups of signals: one label per signal ({n_signals} here) naming the "
+            "group it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
             "Pass it as group_labels=... (the same labels apply to every group "
             "measure in this call)."
         )
         raise ValueError(msg)
-    return group_labels, label_free_kwargs
+    return group_labels, label_free_kwargs, frozenset(group_methods)
 
 
 def _format_and_reduce_measures(
@@ -518,7 +515,8 @@ def _format_and_reduce_measures(
     shared_attrs: Mapping[str, Any],
     connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-    caller: Literal["multitaper_connectivity", "fourier_connectivity"],
+    group_methods: frozenset[str],
+    transform_settings_hint: str,
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -529,16 +527,17 @@ def _format_and_reduce_measures(
 
     Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
     passes the already-resolved ``group_labels`` (see :func:`_resolve_group_labels`)
-    to the group measures only, honors ``squeeze`` only for a single-measure
+    to ``group_methods`` only, honors ``squeeze`` only for a single-measure
     DataArray, formats each measure (skipping structurally-unsupported ones in a
     multi-measure batch), merges the survivors, and applies any frequency
     crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free;
-    ``caller`` names the public wrapper for error messages.
+    ``transform_settings_hint`` tells a rejected keyword argument where transform
+    settings go for the calling wrapper.
     """
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
         """Keyword arguments for one measure: ``group_labels`` reaches group measures only."""
-        if _is_group_measure(method):
+        if method in group_methods:
             return {**connectivity_kwargs, "group_labels": group_labels}
         return connectivity_kwargs
 
@@ -563,7 +562,7 @@ def _format_and_reduce_measures(
             squeeze,
             shared_attrs,
             signal_metadata=signal_metadata,
-            caller=caller,
+            transform_settings_hint=transform_settings_hint,
             **measure_kwargs(methods[0]),
         )
     else:
@@ -578,7 +577,7 @@ def _format_and_reduce_measures(
                         False,
                         shared_attrs,
                         signal_metadata=signal_metadata,
-                        caller=caller,
+                        transform_settings_hint=transform_settings_hint,
                         **measure_kwargs(this_method),
                     )
                 )
@@ -906,7 +905,7 @@ def multitaper_connectivity(
     # Resolve group labels before Connectivity.from_multitaper runs the FFT, so
     # a missing or misplaced label fails fast. The constructor has validated the
     # input shape, so m.n_signals is the true signal count.
-    group_labels, connectivity_kwargs = _resolve_group_labels(
+    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         method, connectivity_kwargs, group_labels, m.n_signals
     )
     # Capture metadata and build the shared calculation object from the same
@@ -929,7 +928,8 @@ def multitaper_connectivity(
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
-        caller="multitaper_connectivity",
+        group_methods=group_methods,
+        transform_settings_hint="pass it to multitaper_connectivity directly",
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1132,7 +1132,7 @@ def fourier_connectivity(
             if not (two_sided_unavailable and _requires_two_sided(name))
         ],
     )
-    group_labels, connectivity_kwargs = _resolve_group_labels(
+    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )
     if frequencies is None:
@@ -1221,7 +1221,8 @@ def fourier_connectivity(
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
-        caller="fourier_connectivity",
+        group_methods=group_methods,
+        transform_settings_hint=("set it on the transform that produced fourier_coefficients"),
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,

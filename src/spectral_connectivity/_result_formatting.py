@@ -3,7 +3,7 @@
 import inspect
 import warnings
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -39,16 +39,16 @@ def _check_method_accepts_kwargs(
     method: str,
     measure: Callable[..., Any],
     kwargs: Mapping[str, Any],
-    caller: Literal["multitaper_connectivity", "fourier_connectivity"] | None = None,
+    transform_settings_hint: str | None = None,
 ) -> None:
     """Raise an actionable error when ``kwargs`` names a parameter ``measure``
     does not accept.
 
     ``connectivity_kwargs`` is broadcast to every requested method, so a
-    keyword needed by one measure (e.g. ``pairs``) reaches the others. When
-    ``caller`` names a public wrapper, the message also says where a transform
-    setting belongs for that wrapper; ``None`` (``connectivity_to_xarray``,
-    whose transform is already built) adds no such hint.
+    keyword needed by one measure (e.g. ``pairs``) reaches the others.
+    ``transform_settings_hint`` completes the sentence "If <keyword> is a
+    transform setting, ..." for the calling wrapper; ``None``
+    (``connectivity_to_xarray``, whose transform is already built) adds no hint.
     """
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
@@ -61,17 +61,10 @@ def _check_method_accepts_kwargs(
             "connectivity_kwargs is passed to every requested method, so request "
             "measures that need different arguments in separate calls."
         )
-        if caller == "multitaper_connectivity":
+        if transform_settings_hint is not None:
             msg += (
                 "\nconnectivity_kwargs configures the measure only. If "
-                f"{names} is a transform setting, pass it to "
-                "multitaper_connectivity directly."
-            )
-        elif caller == "fourier_connectivity":
-            msg += (
-                "\nconnectivity_kwargs configures the measure only. If "
-                f"{names} is a transform setting, set it on the transform that "
-                "produced fourier_coefficients."
+                f"{names} is a transform setting, {transform_settings_hint}."
             )
         raise TypeError(msg)
 
@@ -118,19 +111,19 @@ def _connectivity_result_to_xarray(
     shared_attrs: Mapping[str, Any],
     *,
     signal_metadata: _SignalMetadata | None = None,
-    caller: Literal["multitaper_connectivity", "fourier_connectivity"] | None = None,
+    transform_settings_hint: str | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
-    ``caller`` names the public wrapper so a rejected keyword argument gets the
-    hint that fits it.
+    ``transform_settings_hint`` is passed to the keyword-argument check so a
+    rejected keyword gets the calling wrapper's hint.
     """
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
-    _check_method_accepts_kwargs(method, measure, kwargs, caller)
+    _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
     token = _warn_orientation_change.set(False)

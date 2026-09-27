@@ -1798,7 +1798,8 @@ def test_extension_measure_taking_group_labels_is_named_when_labels_are_missing(
     four_signal_noise, extension_group_measure
 ):
     with pytest.raises(
-        ValueError, match="canonical_coherence, custom_group_power compare groups"
+        ValueError,
+        match="group_labels is required for canonical_coherence, custom_group_power",
     ):
         multitaper_connectivity(
             four_signal_noise,
@@ -1810,7 +1811,7 @@ def test_extension_measure_taking_group_labels_is_named_when_labels_are_missing(
 
 # One case per group_labels error: (measure/label arguments, message pattern).
 _GROUP_LABEL_ERRORS = {
-    "missing": ({"method": "canonical_coherence"}, "needs group_labels"),
+    "missing": ({"method": "canonical_coherence"}, "group_labels is required for"),
     "no_group_measure": (
         {"method": "coherence_magnitude", "group_labels": [0, 1]},
         "none of the requested measures compares groups",
@@ -1846,7 +1847,7 @@ def test_fourier_connectivity_group_label_errors(four_signal_coefficients, case)
 
 
 def test_group_measure_without_group_labels_explains_the_argument(four_signal_noise):
-    with pytest.raises(ValueError, match="needs group_labels") as excinfo:
+    with pytest.raises(ValueError, match="group_labels is required for") as excinfo:
         multitaper_connectivity(
             four_signal_noise, sampling_frequency=1000, method="canonical_coherence"
         )
