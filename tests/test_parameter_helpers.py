@@ -1,6 +1,7 @@
 """Tests for parameter helper functions."""
 
 import re
+import warnings
 
 import numpy as np
 import pytest
@@ -283,6 +284,38 @@ class TestSuggestParameters:
                 sampling_frequency=1000,
                 signal_duration=0.5,
                 desired_freq_resolution=0.1,
+            )
+
+    @pytest.mark.parametrize(
+        ("signal_duration", "desired_freq_resolution"),
+        [(0.5, 0.1), (0.05, 0.122), (1.0, 2.7)],
+    )
+    def test_unachievable_resolution_advice_is_achievable(
+        self, signal_duration, desired_freq_resolution
+    ):
+        """Either suggested value, passed back as printed, no longer raises
+        (6 / 0.122 = 49.1803 s must not print as 49.18 s)."""
+        with pytest.raises(ValueError, match="Cannot achieve") as excinfo:
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=signal_duration,
+                desired_freq_resolution=desired_freq_resolution,
+            )
+        message = str(excinfo.value)
+        longer = float(re.search(r"Longer signal \(at least ([\d.]+)s\)", message)[1])
+        coarser = float(re.search(r"resolution \(at least ([\d.]+) Hz\)", message)[1])
+        with warnings.catch_warnings():
+            # A single-taper warning is fine here; only the error is under test.
+            warnings.simplefilter("ignore", UserWarning)
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=longer,
+                desired_freq_resolution=desired_freq_resolution,
+            )
+            suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=signal_duration,
+                desired_freq_resolution=coarser,
             )
 
     def test_parameters_are_reasonable(self):

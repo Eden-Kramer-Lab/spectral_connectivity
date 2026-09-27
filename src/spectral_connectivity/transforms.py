@@ -396,9 +396,10 @@ def suggest_parameters(
                 f"Available signal duration: {signal_duration:.2f}s\n"
                 "\n"
                 "To achieve this resolution, you need either:\n"
-                f"  - Longer signal (at least {time_window_duration:.2f}s)\n"
+                f"  - Longer signal (at least {_ceil_hundredths(time_window_duration):.2f}s)\n"
                 f"  - Coarser frequency resolution (at least "
-                f"{TAPER_MULTIPLIER * time_halfbandwidth_product / signal_duration:.2f} Hz)"
+                f"{_ceil_hundredths(TAPER_MULTIPLIER * time_halfbandwidth_product / signal_duration):.2f}"
+                " Hz)"
             )
             raise ValueError(msg)
 
