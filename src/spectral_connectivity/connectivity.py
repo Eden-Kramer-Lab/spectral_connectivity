@@ -3589,9 +3589,20 @@ class Connectivity:
             workspace_size = observation_frequency_elements * signals_per_block * n_signals
             tile_buffer = xp.empty(workspace_size, dtype=real_dtype)
             scratch_buffer = xp.empty(workspace_size, dtype=real_dtype)
+            observation_frequency_shape = coefficients.shape[:-1]
+            block_diagonal = xp.arange(signals_per_block)
+            # Contracts a tile's observation axes in the squared moment, e.g.
+            # "abcdef,abcdef->adef" (time, trial, taper, frequency, row, column).
+            letters = "abcdef"
+            kept = "".join(
+                letter
+                for axis, letter in enumerate(letters)
+                if axis not in self._expectation_axes
+            )
+            squared_subscripts = f"{letters},{letters}->{kept}"
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
-                tile_shape = (*coefficients.shape[:-1], stop - start, n_signals - start)
+                tile_shape = (*observation_frequency_shape, stop - start, n_signals - start)
                 tile_size = (
                     observation_frequency_elements * (stop - start) * (n_signals - start)
                 )
@@ -3608,9 +3619,11 @@ class Connectivity:
                     out=scratch,
                 )
                 xp.subtract(imaginary, scratch, out=imaginary)
-                local_diagonal = xp.arange(stop - start)
+                local_diagonal = block_diagonal[: stop - start]
                 imaginary[..., local_diagonal, local_diagonal] = 0
-                self._reduce_phase_lag_tile(imaginary, scratch, moments, start, stop)
+                self._reduce_phase_lag_tile(
+                    imaginary, scratch, moments, start, stop, squared_subscripts
+                )
 
             # Overwrite the strict lower triangle from the upper one: the pairs
             # each tile skipped and the in-tile lower entries alike.
@@ -3629,6 +3642,7 @@ class Connectivity:
         moments: dict[str, BackendArray],
         start: int,
         stop: int,
+        squared_subscripts: str,
     ) -> None:
         """Average the four phase-lag moments of one tile into ``moments``.
 
@@ -3645,6 +3659,9 @@ class Connectivity:
             ``[..., start:stop, start:]`` of each is written.
         start, stop : int
             The tile's source rows.
+        squared_subscripts : str
+            ``einsum`` subscripts contracting ``imaginary * imaginary`` over the
+            averaged observation axes (used without observation weights).
 
         Notes
         -----
@@ -3675,13 +3692,8 @@ class Connectivity:
             invalid, xp.nan, (positive - negative) / n_observations
         )
         moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
-        # Contract the observation axes of imaginary * imaginary without
-        # materializing the product, e.g. "abcdef,abcdef->adef".
-        letters = "abcdef"[: imaginary.ndim]
-        kept = "".join(
-            letter for axis, letter in enumerate(letters) if axis not in observation_axes
-        )
-        squared_sum = xp.einsum(f"{letters},{letters}->{kept}", imaginary, imaginary)
+        # Sum of squares without materializing imaginary * imaginary.
+        squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
         moments["squared"][block] = squared_sum / n_observations
         xp.abs(imaginary, out=scratch)
         moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
