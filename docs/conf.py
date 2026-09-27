@@ -116,6 +116,8 @@ myst_enable_extensions = [
     "deflist",
     "colon_fence",
 ]
+# GitHub-style slugs for h1-h3, so `page.md#heading` links resolve in Sphinx too.
+myst_heading_anchors = 3
 
 # MyST-NB
 nb_execution_mode = "cache"

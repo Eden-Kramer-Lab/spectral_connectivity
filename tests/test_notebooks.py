@@ -10,7 +10,7 @@ compressed float32 and compares element-wise with ``np.allclose``
 (``rtol=1e-6``, ``atol=1e-9``); they all live in one file,
 ``tests/__snapshots__/test_notebooks.ambr``. Because that tolerance is tight,
 CI runs the snapshot tests (``-k "not executes"``) on a single reference
-platform. ``test_tutorial_notebook_executes`` (marked ``slow``) runs the two
+platform. ``test_tutorial_notebook_executes`` (marked ``slow``) runs the
 tutorial notebooks end to end with nbconvert; CI executes those same notebooks
 in a separate step.
 """
@@ -1012,7 +1012,12 @@ _EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "notebook", ["Tutorial_On_Simulated_Examples.ipynb", "Tutorial_Using_Paper_Examples.ipynb"]
+    "notebook",
+    [
+        "Intro_tutorial.ipynb",
+        "Tutorial_On_Simulated_Examples.ipynb",
+        "Tutorial_Using_Paper_Examples.ipynb",
+    ],
 )
 def test_tutorial_notebook_executes(notebook, tmp_path):
     """The tutorial notebook executes without errors.

@@ -239,6 +239,83 @@ True
 
 ```
 
+## Pass a labeled DataArray
+
+`time_series` may be an `xarray.DataArray`. Dimension names, not positions,
+define the roles, so a `time` coordinate in seconds supplies the sampling
+frequency and the signal labels become the `source`/`target` coordinates:
+
+```python
+>>> import xarray as xr
+>>> da = xr.DataArray(
+...     rng.standard_normal((1000, 4, 3)),
+...     dims=("time", "trial", "signal"),
+...     coords={"time": np.arange(1000) / 500, "signal": ["CA1", "CA3", "PFC"]},
+... )
+>>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+>>> coherence.attrs["mt_sampling_frequency"]
+500.0
+>>> coherence.source.values.tolist()
+['CA1', 'CA3', 'PFC']
+
+```
+
+For other dimension names, say which dimension plays which role:
+
+```python
+>>> custom = da.rename(time="t", trial="epoch", signal="channel")
+>>> coherence = multitaper_connectivity(
+...     custom,
+...     method="coherence_magnitude",
+...     time_dim="t",
+...     trial_dim="epoch",
+...     signal_dim="channel",
+... )
+>>> coherence.attrs["mt_sampling_frequency"], coherence.target.values.tolist()
+(500.0, ['CA1', 'CA3', 'PFC'])
+
+```
+
+Common cases:
+
+- Common time, trial and signal dimension names are recognized and transposed
+  automatically; pass `time_dim`, `trial_dim` and `signal_dim` for others.
+- A numeric `time` coordinate is elapsed seconds and supplies
+  `sampling_frequency`. A numeric `sample` coordinate is sample numbers, which
+  have no time scale, so pass `sampling_frequency` with it. Either one labels
+  the output window centers, and a `sampling_frequency` you pass is checked
+  against it.
+- A 1-D index on the signal dimension, including its label type, becomes the
+  `source`/`target` coordinates unless you pass `signal_names`.
+
+If you hit an error or a warning:
+
+- Ambiguous dimension names raise instead of falling back to axis position:
+  name the roles with `time_dim`, `trial_dim` and `signal_dim`. When a single
+  unrecognized dimension is left for the one remaining role, it is assigned by
+  elimination and a warning names the mapping.
+- Inferring the rate needs enough coordinate precision: pass
+  `sampling_frequency` for low-precision or large-offset time coordinates.
+- Signal labels must be unique, non-missing, NetCDF-compatible scalars
+  (strings, real numbers, datetimes or timedeltas); integer labels must fit the
+  signed 32-bit range for portable NetCDF3 files.
+- Datetime, timedelta and object-valued time coordinates are not supported
+  yet; convert them to elapsed seconds as below. (Datetime and timedelta
+  *signal labels* are fine.)
+- A dask-backed DataArray is rejected; call `.compute()` (or `.load()`) first.
+
+```python
+>>> stamped = da.assign_coords(
+...     time=np.datetime64("2024-01-01T00:00", "ns") + np.arange(1000) * np.timedelta64(2, "ms")
+... )
+>>> elapsed = stamped.assign_coords(
+...     time=(stamped.time - stamped.time[0]) / np.timedelta64(1, "s")
+... )
+>>> multitaper_connectivity(elapsed, method="coherence_magnitude").attrs["mt_sampling_frequency"]
+500.0
+
+```
+
 ## Where to go next
 
 - Value ranges for every measure: `docs/CONNECTIVITY_METRIC_RANGES.md`.

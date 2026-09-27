@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: spectral_connectivity
 #     language: python
@@ -16,21 +16,15 @@
 # %% [markdown]
 # # Tutorial
 #
-# The `spectral_connectivity` package has two main classes used for computation:
-# + `Multitaper`
-# + `Connectivity`.
+# The `spectral_connectivity` package's main entry point for time series is `multitaper_connectivity`, which runs the multitaper transform, computes the connectivity measures you ask for, and returns a labeled array that is convenient for understanding the output and plotting (if you already have Fourier coefficients, `fourier_connectivity` takes those instead). Underneath it are two classes:
+# + `Multitaper` computes the multitaper Fourier transform.
+# + `Connectivity` computes frequency-domain measures from the Fourier coefficients.
 #
-# There is also a function called `multitaper_connectivity` which combines the usage of the two classes and outputs a labeled array, which can be convenient for understanding the output and plotting.
+# This tutorial starts with the function and then walks through each class.
 #
-# This tutorial will walk you through the usage of each.
+# ## Quick start
 #
-# ## Multitaper
-#
-# `Multitaper` is used to compute the multitaper Fourier transform of a set of signals. It returns Fourier coefficients that can subsequently be used by the `Connectivity` class to compute frequency-domain metrics on the signals such as power and coherence.
-#
-# Let's simulate a set of signals and see how to use the `Multitaper` class. We simulate two signals (`signal`) which oscillate at 200 Hz and are offset in phase by $\frac{\pi}{2}$. We also simulate some white noise to add to the signal (`noise`). We want to compute the multitaper Fourier transform of these two signals.
-#
-#
+# We simulate two signals (`signal`) which oscillate at 200 Hz and are offset in phase by $\frac{\pi}{2}$. We also simulate some white noise to add to the signal (`noise`).
 
 # %%
 import numpy as np
@@ -56,7 +50,37 @@ signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
 noise = rng.normal(0, 4, signal.shape)
 
 # %% [markdown]
-# We can plot these two signals with and without the noise added:
+# `multitaper_connectivity` takes the noisy signals as a 2-D `(n_time_samples, n_signals)` array (a 3-D `(n_time_samples, n_trials, n_signals)` array adds trials), the sampling frequency, and the name of the measure. With a single trial, the estimate is averaged over tapers only, so we ask for more tapers with `time_halfbandwidth_product=10`: more averaging, at the cost of coarser frequency resolution (the tradeoff is explained below).
+
+# %%
+from spectral_connectivity import list_measures, multitaper_connectivity
+
+coherence = multitaper_connectivity(
+    signal + noise,
+    sampling_frequency=sampling_frequency,
+    method="coherence_magnitude",
+    time_halfbandwidth_product=10,
+)
+coherence
+
+# %% [markdown]
+# The result is labeled by `time`, `frequency`, `source`, and `target`. There is a single `time` value because the transform used one window covering the whole recording, labeled by its center; time resolution comes later. We select the pair of signals by name, crop to 100-300 Hz, and plot against frequency. The coherence peaks at the simulated 200 Hz:
+
+# %%
+coherence.sel(source="0", target="1", frequency=slice(100, 300)).plot(x="frequency")
+
+# %% [markdown]
+# `list_measures` enumerates the valid `method` names. With `default_only=True` it returns the measures computed when `method` is omitted:
+
+# %%
+[measure.name for measure in list_measures(default_only=True)]
+
+# %% [markdown]
+# ## Under the hood: Multitaper
+#
+# `Multitaper` is used to compute the multitaper Fourier transform of a set of signals. It returns Fourier coefficients that can subsequently be used by the `Connectivity` class to compute frequency-domain metrics on the signals such as power and coherence.
+#
+# Let's see how to use the `Multitaper` class on the simulated signals. We can plot these two signals with and without the noise added:
 
 # %%
 import matplotlib.pyplot as plt
@@ -185,7 +209,7 @@ multitaper.frequencies
 # Now that we have computed the `fft` we have all the ingredients we need to compute the connectivity measures.
 
 # %% [markdown]
-# ## The Connectivity class
+# ## Under the hood: Connectivity
 #
 # The `Connectivity` class computes frequency-domain connectivity measures from Fourier coefficients. Let's import the class and look at the docstring:
 
@@ -329,17 +353,11 @@ plt.ylabel("Frequency")
 plt.colorbar()
 
 # %% [markdown]
-# There are a number of other connectivity measures besides coherence. See the other notebooks for examples on how to use them.
+# ### Time-resolved connectivity with the wrapper
 #
-# ## multitaper_connectivity
-#
-# There is a third option for how to compute the connectivity measures. The output of this option is a labeled array using the xarray package. This can be convenient because one always knows what the dimensions are. In addition, xarray arrays make plotting easy.
-#
-# Let's repeat the example above of computing the coherence over time with this interface and see how this makes things easier.
+# `multitaper_connectivity` accepts the same transform settings as `Multitaper`, so the time-resolved coherence above is a single call, and its output is a labeled array: one always knows what the dimensions are, and xarray makes plotting easy.
 
 # %%
-from spectral_connectivity import multitaper_connectivity
-
 coherence = multitaper_connectivity(
     signal_with_noise,
     sampling_frequency=sampling_frequency,
@@ -351,7 +369,7 @@ coherence = multitaper_connectivity(
 coherence
 
 # %% [markdown]
-# We see that the labeled output conveniently gives us the time and frequencies and signal labels for each dimension. Manipulating xarray by their label name is convenient. Lets' say we only want frequencies between 100 and 300 Hz. We can grab this data in a convenient way:
+# We see that the labeled output conveniently gives us the time and frequencies and signal labels for each dimension. Manipulating xarray by their label name is convenient. Let's say we only want frequencies between 100 and 300 Hz. We can grab this data in a convenient way:
 
 # %%
 coherence.sel(frequency=slice(100, 300))
@@ -366,6 +384,8 @@ coherence.sel(frequency=slice(100, 300)).plot(
 
 # %% [markdown]
 # Fully explaining using xarray arrays is beyond the scope of this tutorial, but see the [xarray documentation](https://docs.xarray.dev/en/stable/) to explore all the possibilities.
+#
+# There are a number of other connectivity measures besides coherence. See the other notebooks for examples on how to use them.
 
 # %% [markdown]
 # ## Using GPUs

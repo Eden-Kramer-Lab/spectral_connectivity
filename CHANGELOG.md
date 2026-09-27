@@ -261,6 +261,9 @@ directly with results from 2.x.
   nitime oracle for adaptive multitaper power, invariance of CaCoh components to
   within-group mixing, and wrapper-level orientation checks for every directed
   measure.
+- `suggest_parameters` warns when keeping the requested frequency resolution
+  with at least three time windows leaves a single taper, and says how much
+  longer the signal or how much coarser the resolution must be for two.
 
 ### Changed
 
@@ -368,6 +371,8 @@ directly with results from 2.x.
   files the test suite reads; `CLAUDE.md` and `CONTRIBUTING.md` state Python
   3.10-3.14 and the `uv` commands CI actually runs. The stale
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
+- README and tutorial lead with `multitaper_connectivity`; the DataArray
+  contract moved to a cookbook recipe.
 
 ### Fixed
 

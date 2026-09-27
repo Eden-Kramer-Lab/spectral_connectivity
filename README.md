@@ -80,12 +80,39 @@ coherence = multitaper_connectivity(
     method="coherence_magnitude",
     time_halfbandwidth_product=3,
 )
+# -> DataArray with dims (time, frequency, source, target)
 
 # Ask for several measures at once (returns an xarray.Dataset)
 measures = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
     method=["coherence_magnitude", "imaginary_coherence", "phase_locking_value"],
+)
+```
+
+Extra keyword arguments, like `time_halfbandwidth_product` here, configure the
+multitaper transform. Options for the measure itself go in
+`connectivity_kwargs`, and group measures take `group_labels` (see the
+[group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).
+
+The `3` above is a common default. To pick values from your recording's length
+and the frequency resolution you need, use `suggest_parameters`:
+
+```python
+from spectral_connectivity import suggest_parameters
+
+params = suggest_parameters(
+    sampling_frequency=1000,
+    signal_duration=10.0,  # seconds
+    desired_freq_resolution=2.0,  # Hz
+)
+# -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
+coherence = multitaper_connectivity(
+    time_series,
+    sampling_frequency=1000,
+    method="coherence_magnitude",
+    time_halfbandwidth_product=params["time_halfbandwidth_product"],
+    time_window_duration=params["time_window_duration"],
 )
 ```
 
@@ -123,38 +150,14 @@ physical interpretation of band power/covariance. The same reduction is
 available for an already-computed result via
 `frequency_band_reduce(result, bands, reduction="mean")`.
 
-`time_series` may also be an `xarray.DataArray`. **For DataArray inputs, dimension
-names define axis roles; positions do not.** Common dimension names are
-inferred and transposed automatically; for domain-specific names, pass
-`time_dim`, `trial_dim`, and `signal_dim` explicitly. Ambiguous dimensions raise
-instead of falling back to axis position; when a single unrecognized dimension
-is left for the one remaining role, it is assigned by elimination and a warning
-names the assumed mapping. Numeric `time`
-coordinates are interpreted as elapsed seconds and numeric `sample` coordinates
-as sample numbers, and are used to label output window centers. When
-`sampling_frequency` is given it is checked against the time index; when it is
-omitted, a numeric elapsed-seconds `time` coordinate infers it (a `sample`
-index cannot, having no time scale). Inference also requires enough coordinate
-precision to resolve the rate reliably; pass `sampling_frequency` explicitly for
-low-precision or large-offset time coordinates. A 1-D index on the signal
-dimension is preserved—including its label type—as the output's `source` and
-`target` coordinates unless `signal_names` is passed explicitly. Signal labels
-must be unique, non-missing, NetCDF-compatible scalar strings, real numbers,
-datetimes, or timedeltas; integer labels must fit the signed 32-bit range for
-portable NetCDF3 serialization.
-
-Datetime, timedelta, and object-valued **time coordinates** are not yet
-supported. Convert them to numeric elapsed seconds before calling
-`multitaper_connectivity`, for example:
-
-```python
-da = da.assign_coords(time=(da.time - da.time[0]) / np.timedelta64(1, "s"))
-```
-
-datetime and timedelta **signal labels** remain valid.
-
-A dask-backed DataArray is rejected; materialize it first with
-`DataArray.compute()` (or `.load()`) and pass the result.
+`time_series` may also be an `xarray.DataArray`. Dimension names, not
+positions, define the roles: common names for time, trial and signal dimensions
+are recognized, `sampling_frequency` is inferred from a numeric `time`
+coordinate in seconds, and the signal index becomes the `source`/`target`
+labels. For other dimension names pass `time_dim`, `trial_dim` and
+`signal_dim`; the cookbook's
+[DataArray recipe](docs/cookbook.md#pass-a-labeled-dataarray) has the full
+contract (label types, datetime coordinates, dask).
 
 For directed measures, `result.sel(source="a", target="b")` is the influence
 from `a` to `b`, and the lower-level `Connectivity` arrays use the same order:
@@ -163,26 +166,6 @@ the source leads. The directed-transfer-function family is available by name
 as an opt-in method. `list_measures()` reports each measure's value range,
 units, and interpretation; see
 [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
-
-#### Choosing parameters
-
-Not sure what `time_halfbandwidth_product`, number of tapers, or window
-duration to use? `suggest_parameters` picks reasonable values from your
-sampling rate, signal duration, and desired frequency resolution:
-
-```python
-from spectral_connectivity import suggest_parameters
-
-params = suggest_parameters(
-    sampling_frequency=1000,
-    signal_duration=2.0,  # seconds
-    desired_freq_resolution=4.0,  # Hz
-)
-print(params)  # -> time_halfbandwidth_product, time_window_duration, n_tapers, ...
-```
-
-See also `estimate_frequency_resolution`, `estimate_n_tapers`, and
-`Multitaper.summarize_parameters()` for related helpers.
 
 #### Lower-level API
 
