@@ -3492,24 +3492,35 @@ class Connectivity:
         ``debiased_squared_weighted_phase_lag_index``) each average a function --
         ``sign``, identity, ``abs`` or square -- of the imaginary part of the
         per-observation cross-spectral matrix, with the diagonal zeroed. This
-        returns the requested reduced moments from a cache that the first
-        request fills with all four, formed from signal-row tiles of the
-        observation-level cross-spectrum. Only the non-negative bins are
-        reduced, and each tile covers targets from its first row on; the strict
-        lower triangle is then filled by pair symmetry
-        (``_IMAGINARY_MOMENT_PAIR_SYMMETRY``).
+        returns the requested reduced moments from a cache, computing any that
+        are missing from signal-row tiles of the observation-level
+        cross-spectrum. Only the non-negative bins are reduced, and each tile
+        covers targets from its first row on; the strict lower triangle is then
+        filled by pair symmetry (``_IMAGINARY_MOMENT_PAIR_SYMMETRY``).
 
-        Forming the tiles is memory traffic over every observation and
-        dominates the cost; each reduction is a single further pass over a
-        tile. Reducing all four moments from one formation therefore costs less
-        than forming the tiles a second time, which any two of the measures
-        requesting different moments would otherwise do. Each tile is reduced
-        immediately (see :meth:`_reduce_phase_lag_tile`) into two workspace
-        buffers allocated once per call, avoiding an observation-resolved
-        ``n_signals**2`` intermediate. The reduced ``n_signals**2`` outputs are
-        unavoidable. The cached moments are invalidated with the other cached
-        intermediates and are treated as read-only (callers copy before any
-        in-place edit).
+        Without observation weights, forming the tiles is memory traffic over
+        every observation and dominates the cost, while each reduction is a
+        single further pass over a tile. The first request therefore reduces
+        all four moments from one formation, which costs less than forming the
+        tiles a second time for a later measure that needs different moments.
+        The four reduced moments (each ``(n_time_windows, n_frequencies,
+        n_signals, n_signals)`` for the default expectation) are then retained
+        until :meth:`clear_cache`; peak memory during the call is nevertheless
+        lower than forming the tiles with fresh temporaries (741 -> 536 MB of
+        traced allocation for one measure on a 100-trial, 5-taper, 1001-bin,
+        32-signal spectrum). With observation weights each moment is a full
+        weighted :meth:`_expectation` with tile-sized temporaries, so only the
+        missing requested moments are computed: computing all four made a lone
+        weighted measure 7-14% (``phase_lag_index``) and 33-54%
+        (``weighted_phase_lag_index``) slower on a Hann-weighted Morlet
+        transform (4000 samples, 40 trials, 16 signals, 30 frequencies).
+
+        Each tile is reduced immediately (see :meth:`_reduce_phase_lag_tile`)
+        into two workspace buffers allocated once per call, avoiding an
+        observation-resolved ``n_signals**2`` intermediate. The reduced
+        ``n_signals**2`` outputs are unavoidable. The cached moments are
+        invalidated with the other cached intermediates and are treated as
+        read-only (callers copy before any in-place edit).
 
         Parameters
         ----------
@@ -3538,11 +3549,16 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
-            # Filled here and cached only once complete, so an error partway
-            # through leaves no uninitialized moments behind.
-            moments = {
-                key: xp.empty(result_shape, dtype=real_dtype) for key in _IMAGINARY_MOMENTS
-            }
+            # Without weights all four moments are single-pass reductions of the
+            # tile, so they are computed together. With weights each is a full
+            # ``_expectation`` with tile-sized temporaries, so only the missing
+            # requested ones are. Filled here and cached only once complete, so
+            # an error partway through leaves no uninitialized moments behind.
+            if self._observation_weights is None:
+                computed_keys = list(_IMAGINARY_MOMENTS)
+            else:
+                computed_keys = list(dict.fromkeys(key for key in keys if key not in cache))
+            moments = {key: xp.empty(result_shape, dtype=real_dtype) for key in computed_keys}
 
             observation_frequency_elements = int(np.prod(coefficients.shape[:-1]))
             elements_per_source = max(1, observation_frequency_elements * n_signals)
@@ -3621,7 +3637,8 @@ class Connectivity:
         scratch : array, same shape as ``imaginary``
             Workspace; overwritten.
         moments : dict of str to array, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
-            Reduced moments keyed as ``_IMAGINARY_MOMENTS``; the block
+            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all four
+            without observation weights, any subset with them. The block
             ``[..., start:stop, start:]`` of each is written.
         start, stop : int
             The tile's source rows.

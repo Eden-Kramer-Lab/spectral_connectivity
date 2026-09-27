@@ -1913,6 +1913,23 @@ def hann_morlet_coefficients():
     return coefficients, weights
 
 
+def test_weighted_phase_lag_moments_are_computed_per_request(hann_morlet_coefficients):
+    """With observation weights each moment is a full weighted expectation, so a
+    lone measure computes only the moments it needs, and a later measure adds
+    only its missing ones."""
+    coefficients, weights = hann_morlet_coefficients
+    conn = Connectivity(coefficients, observation_weights=weights, is_one_sided=True)
+    cache = conn._imaginary_moment_cache
+
+    conn.phase_lag_index()
+    assert set(cache) == {"sign", "absolute"}  # "absolute" scales the no-lag test
+    cached_absolute = cache["absolute"]
+
+    conn.weighted_phase_lag_index()
+    assert set(cache) == {"sign", "imaginary", "absolute"}
+    assert cache["absolute"] is cached_absolute  # not recomputed
+
+
 @pytest.mark.parametrize("weighted", [False, True])
 def test_weighted_phase_lag_index_is_exactly_one_at_a_tiny_constant_lag(
     weighted, hann_morlet_coefficients
