@@ -8,18 +8,20 @@ it and checks that the fixture recorded the same values).
 # MNE method: (Connectivity method, element-wise transform, NW, atol). The
 # bivariate measures agree to roundoff (measured <= 2e-15). CaCoh maximizes
 # over a phase with an iterative optimizer in each package (measured 5e-9).
+# The one-taper phase measures use 1e-9: cross-platform BLAS/FFT roundoff (the
+# fixture was generated on macOS) reaches ~5e-12 on Linux and Windows.
 MEASURES = {
     "coh": ("coherence_magnitude", "sqrt", 3, 1e-12),
     "imcoh": ("imaginary_coherency", "identity", 3, 1e-12),
     "psi": ("phase_slope_index", "identity", 3, 1e-12),
     "cacoh": ("canonical_coherency", "abs", 3, 1e-7),
-    "plv": ("phase_locking_value", "identity", 1, 1e-12),
-    "ciplv": ("corrected_imaginary_phase_locking_value", "identity", 1, 1e-12),
-    "ppc": ("pairwise_phase_consistency", "identity", 1, 1e-12),
-    "pli": ("phase_lag_index", "abs", 1, 1e-12),
-    "dpli": ("directed_phase_lag_index", "identity", 1, 1e-12),
-    "wpli": ("weighted_phase_lag_index", "abs", 1, 1e-12),
-    "wpli2_debiased": ("debiased_squared_weighted_phase_lag_index", "identity", 1, 1e-12),
+    "plv": ("phase_locking_value", "identity", 1, 1e-9),
+    "ciplv": ("corrected_imaginary_phase_locking_value", "identity", 1, 1e-9),
+    "ppc": ("pairwise_phase_consistency", "identity", 1, 1e-9),
+    "pli": ("phase_lag_index", "abs", 1, 1e-9),
+    "dpli": ("directed_phase_lag_index", "identity", 1, 1e-9),
+    "wpli": ("weighted_phase_lag_index", "abs", 1, 1e-9),
+    "wpli2_debiased": ("debiased_squared_weighted_phase_lag_index", "identity", 1, 1e-9),
 }
 
 # The phase measures are compared with one taper (NW 1); with several tapers

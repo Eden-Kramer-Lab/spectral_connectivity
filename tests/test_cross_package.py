@@ -180,13 +180,13 @@ def test_measures_match_mne_connectivity_reference(
     imcoh          imaginary_coherency                           3    1e-12
     psi            phase_slope_index over the same (10, 60) Hz   3    1e-12
     cacoh          abs(canonical_coherency component 1)          3    1e-7
-    plv            phase_locking_value                           1    1e-12
-    ciplv          corrected_imaginary_phase_locking_value       1    1e-12
-    ppc            pairwise_phase_consistency                    1    1e-12
-    pli            abs(phase_lag_index)                          1    1e-12
-    dpli           directed_phase_lag_index                      1    1e-12
-    wpli           abs(weighted_phase_lag_index)                 1    1e-12
-    wpli2_debiased debiased_squared_weighted_phase_lag_index     1    1e-12
+    plv            phase_locking_value                           1    1e-9
+    ciplv          corrected_imaginary_phase_locking_value       1    1e-9
+    ppc            pairwise_phase_consistency                    1    1e-9
+    pli            abs(phase_lag_index)                          1    1e-9
+    dpli           directed_phase_lag_index                      1    1e-9
+    wpli           abs(weighted_phase_lag_index)                 1    1e-9
+    wpli2_debiased debiased_squared_weighted_phase_lag_index     1    1e-9
     ============== ============================================= ==== =====
 
     MNE's connection ``seed -> target`` is ``[..., seed, target]`` here: both
