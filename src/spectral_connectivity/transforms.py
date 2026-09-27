@@ -651,8 +651,8 @@ class Multitaper:
 
         **Important:** If your data is 1D or 2D, use `prepare_time_series()`
         helper function to convert it to the required 3D format.
-    sampling_frequency : float, default=1000
-        Sampling rate in Hz of the time series data.
+    sampling_frequency : float
+        Samples per second; required because it labels the frequency axis and scales power.
     time_halfbandwidth_product : float, default=3
         Time-bandwidth product (often denoted as NW) controlling the trade-off
         between frequency resolution and variance reduction.
@@ -871,7 +871,7 @@ class Multitaper:
     def __init__(
         self,
         time_series: NDArray[np.floating],
-        sampling_frequency: float = 1000,
+        sampling_frequency: float,
         time_halfbandwidth_product: float = 3,
         detrend_type: str | None = "constant",
         time_window_duration: float | None = None,
@@ -1751,8 +1751,8 @@ class ShortTimeFourierTransform(Multitaper):
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
         Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
-    sampling_frequency : float, default=1000
-        Samples per second (Hz).
+    sampling_frequency : float
+        Samples per second; required because it labels the frequency axis and scales power.
     detrend_type : {"constant", "linear"} or None, default="constant"
         Detrending applied to each window before the FFT.
     time_window_duration : float, optional
@@ -1780,7 +1780,7 @@ class ShortTimeFourierTransform(Multitaper):
     def __init__(
         self,
         time_series: NDArray[np.floating],
-        sampling_frequency: float = 1000,
+        sampling_frequency: float,
         detrend_type: str | None = "constant",
         time_window_duration: float | None = None,
         time_window_step: float | None = None,
@@ -1882,8 +1882,8 @@ class Welch:
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
         Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
-    sampling_frequency : float, default=1000
-        Samples per second (Hz).
+    sampling_frequency : float
+        Samples per second; required because it labels the frequency axis and scales power.
     segment_duration : float, optional
         Segment length in seconds; sets the frequency resolution
         (``1 / segment_duration`` Hz). Strongly recommended -- the fallback of
@@ -1911,7 +1911,7 @@ class Welch:
     def __init__(
         self,
         time_series: NDArray[np.floating],
-        sampling_frequency: float = 1000,
+        sampling_frequency: float,
         segment_duration: float | None = None,
         segment_overlap: float = 0.5,
         n_time_samples_per_segment: int | None = None,

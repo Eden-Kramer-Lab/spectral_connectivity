@@ -43,7 +43,7 @@ def test_transform_is_one_sided_flags():
     assert MorletWavelet.is_one_sided is True
 
     time_series = np.ones((16, 1, 1))
-    assert Multitaper(time_series=time_series).is_one_sided is False
+    assert Multitaper(sampling_frequency=1000, time_series=time_series).is_one_sided is False
 
 
 def test_dpss_and_stft_observations_are_independent():
@@ -222,7 +222,9 @@ def test_n_tapers(time_halfbandwidth_product, expected_n_tapers):
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(
-        time_series=time_series, time_halfbandwidth_product=time_halfbandwidth_product
+        sampling_frequency=1000,
+        time_series=time_series,
+        time_halfbandwidth_product=time_halfbandwidth_product,
     )
     assert m.n_tapers == expected_n_tapers
 
@@ -323,14 +325,14 @@ def test_frequencies():
 def test_n_signals():
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    m = Multitaper(time_series=time_series)
+    m = Multitaper(sampling_frequency=1000, time_series=time_series)
     assert m.n_signals == n_signals
 
 
 def test_n_trials():
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    m = Multitaper(time_series=time_series)
+    m = Multitaper(sampling_frequency=1000, time_series=time_series)
     assert m.n_trials == n_trials
 
     # Test with 2D input converted using prepare_time_series
@@ -338,7 +340,7 @@ def test_n_trials():
 
     time_series_2d = np.zeros((n_time_samples, n_signals))
     time_series_3d = prepare_time_series(time_series_2d, axis="signals")
-    m = Multitaper(time_series=time_series_3d)
+    m = Multitaper(sampling_frequency=1000, time_series=time_series_3d)
     assert m.n_trials == 1
 
 
@@ -349,10 +351,11 @@ def test_n_trials():
 def test_frequency_resolution(
     time_halfbandwidth_product, time_window_duration, expected_frequency_resolution
 ):
-    # 1000 samples at the default 1000 Hz, so even the 1 s window fits the signal.
+    # 1000 samples at 1000 Hz, so even the 1 s window fits the signal.
     n_time_samples, n_trials, n_signals = 1000, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(
+        sampling_frequency=1000,
         time_series=time_series,
         time_halfbandwidth_product=time_halfbandwidth_product,
         time_window_duration=time_window_duration,
@@ -371,6 +374,7 @@ def test_n_samples_per_time_step(
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
 
     m = Multitaper(
+        sampling_frequency=1000,
         time_window_duration=0.10,
         n_time_samples_per_step=n_time_samples_per_step,
         time_series=time_series,
@@ -650,12 +654,12 @@ def test_morlet_start_time_accepts_a_single_element_array():
 def test_tapers():
     n_time_samples, n_trials, n_signals = 100, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    m = Multitaper(time_series, is_low_bias=False)
+    m = Multitaper(time_series, sampling_frequency=1000, is_low_bias=False)
     assert m.tapers.shape == (n_time_samples, m.n_tapers)
 
     # Custom tapers span the whole (100-sample) window and are used as given.
     custom_tapers = np.random.default_rng(303).standard_normal((n_time_samples, 3))
-    m = Multitaper(time_series, tapers=custom_tapers)
+    m = Multitaper(time_series, sampling_frequency=1000, tapers=custom_tapers)
     np.testing.assert_array_equal(m.tapers, custom_tapers)
     assert m.fft().shape == (1, n_trials, 3, m.n_fft_samples, n_signals)
 
@@ -722,7 +726,7 @@ def test__multitaper_fft():
 def test_fft():
     n_time_samples, n_trials, n_signals, n_windows = 100, 10, 2, 1
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
-    m = Multitaper(time_series=time_series)
+    m = Multitaper(sampling_frequency=1000, time_series=time_series)
     coefficients = m.fft()
     assert coefficients.shape == (
         n_windows,
@@ -735,7 +739,7 @@ def test_fft():
 
     # An all-ones input is pure DC, which the default constant detrend removes...
     ones = np.ones((n_time_samples, n_trials, n_signals))
-    np.testing.assert_allclose(Multitaper(ones).fft(), 0, atol=1e-12)
+    np.testing.assert_allclose(Multitaper(ones, sampling_frequency=1000).fft(), 0, atol=1e-12)
     # ...and without detrending each taper's coefficients are the taper's own
     # transform over 1 / sampling_frequency, identical for every trial and signal.
     sampling_frequency = 1000
@@ -758,7 +762,7 @@ def test_multitaper_requires_3d_input():
     # 1D input should raise ValueError
     time_series_1d = rng.standard_normal(100)
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
-        Multitaper(time_series=time_series_1d)
+        Multitaper(sampling_frequency=1000, time_series=time_series_1d)
 
     # 2D input should raise ValueError with helpful message
     time_series_2d = rng.standard_normal((100, 5))
@@ -766,16 +770,16 @@ def test_multitaper_requires_3d_input():
         ValueError,
         match=r"Expected 3D array.*got 2D.*Use prepare_time_series|np.newaxis",
     ):
-        Multitaper(time_series=time_series_2d)
+        Multitaper(sampling_frequency=1000, time_series=time_series_2d)
 
     # 4D input should raise ValueError
     time_series_4d = rng.standard_normal((100, 10, 5, 3))
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 4D"):
-        Multitaper(time_series=time_series_4d)
+        Multitaper(sampling_frequency=1000, time_series=time_series_4d)
 
     # 3D input should work
     time_series_3d = rng.standard_normal((100, 10, 5))
-    m = Multitaper(time_series=time_series_3d)
+    m = Multitaper(sampling_frequency=1000, time_series=time_series_3d)
     assert m.time_series.ndim == 3
 
 
@@ -893,15 +897,21 @@ def test_multitaper_rejects_invalid_time_halfbandwidth():
 
     # Test negative value
     with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
-        Multitaper(time_series=time_series, time_halfbandwidth_product=-1)
+        Multitaper(
+            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=-1
+        )
 
     # Test zero
     with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
-        Multitaper(time_series=time_series, time_halfbandwidth_product=0)
+        Multitaper(
+            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=0
+        )
 
     # Test value less than 1
     with pytest.raises(ValueError, match=r"time_halfbandwidth_product.*must be at least 1"):
-        Multitaper(time_series=time_series, time_halfbandwidth_product=0.5)
+        Multitaper(
+            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=0.5
+        )
 
 
 def test_multitaper_rejects_negative_time_window_duration():
@@ -974,7 +984,9 @@ def test_multitaper_warns_on_large_time_halfbandwidth():
     time_series = rng.standard_normal((100, 1, 1))
 
     with pytest.warns(UserWarning, match=r"unusually large"):
-        Multitaper(time_series=time_series, time_halfbandwidth_product=15)
+        Multitaper(
+            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=15
+        )
 
 
 def test_multitaper_warns_on_step_larger_than_duration():
@@ -1865,6 +1877,19 @@ def test_transform_rejects_non_positive_sampling_frequency(transform_cls):
         transform_cls(np.ones((64, 1, 2)), sampling_frequency=0)
 
 
+@pytest.mark.parametrize(
+    "transform_cls",
+    [Multitaper, Welch, ShortTimeFourierTransform],
+    ids=["Multitaper", "Welch", "ShortTimeFourierTransform"],
+)
+def test_transforms_require_sampling_frequency(transform_cls):
+    """No transform assumes a rate: it labels frequencies and scales power."""
+    with pytest.raises(
+        TypeError, match="missing 1 required positional argument: 'sampling_frequency'"
+    ):
+        transform_cls(np.ones((64, 1, 2)))
+
+
 def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
     """A one-sample smoothing window with a larger step must still decimate
     ``time`` and ``observation_weights`` to match ``fft()``."""
@@ -1959,7 +1984,7 @@ def test_custom_tapers_must_match_window_length(tapers):
     """Custom tapers must be (n_time_samples_per_window, n_tapers); a mismatch
     is rejected at construction instead of failing inside fft()."""
     with pytest.raises(ValueError, match=r"tapers must have shape \(100, n_tapers\)"):
-        Multitaper(np.zeros((100, 10, 2)), tapers=tapers)
+        Multitaper(np.zeros((100, 10, 2)), sampling_frequency=1000, tapers=tapers)
 
 
 @pytest.mark.skipif(_backend.ON_GPU, reason="tracemalloc sees host allocations only")

@@ -103,7 +103,7 @@ signal.shape
 # %% [markdown]
 # ### sampling_frequency
 #
-# The next most important input is the `sampling_frequency`. The `sampling_frequency` is the number of samples per time unit the signal(s) are recorded at. This is set by default to 1000 samples per second. If your signal is sampled at a different rate, this needs to be set. In our simulated signal, we have sampled time at 1000 samples per second:
+# The next most important input is the `sampling_frequency`. The `sampling_frequency` is the number of samples per time unit the signal(s) are recorded at. It is required, because it labels the frequency axis and scales power, so pass the rate your signal was recorded at. In our simulated signal, we have sampled time at 1000 samples per second:
 
 # %%
 sampling_frequency
