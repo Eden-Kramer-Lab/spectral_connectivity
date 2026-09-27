@@ -368,6 +368,8 @@ directly with results from 2.x.
   files the test suite reads; `CLAUDE.md` and `CONTRIBUTING.md` state Python
   3.10-3.14 and the `uv` commands CI actually runs. The stale
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
+- README and tutorial lead with `multitaper_connectivity`; the DataArray
+  contract moved to a cookbook recipe.
 
 ### Fixed
 
