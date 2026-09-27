@@ -220,9 +220,11 @@ def _source_target(native: BackendArray) -> BackendArray:
     """Reorder a ``[..., target, source]`` matrix to ``[..., source, target]``.
 
     The Wilson-factorized kernels work in the transfer function's native
-    layout, where row ``i`` collects the inflow to signal ``i``; every public
-    directed measure returns the transpose so that ``[..., i, j]`` reads
-    ``i -> j`` like the labeled wrapper's ``sel(source=i, target=j)``.
+    layout, where row ``i`` collects the inflow to signal ``i``. The public
+    measures built on them (the spectral Granger family and the transfer
+    function / MVAR measures) return the transpose so that ``[..., i, j]``
+    reads ``i -> j`` like the labeled wrapper's ``sel(source=i, target=j)``.
+    The lead/lag measures are computed source first and do not use it.
     """
     return xp.swapaxes(native, -1, -2)
 
@@ -4276,11 +4278,11 @@ class Connectivity:
 
         Like the directed transfer function, but the noise variance weights
         **both** the numerator and the inflow normalization. The returned value
-        is the squared directed coherence of ``j -> i``,
-        ``nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2``, where ``nv`` is the per-signal
-        innovation (noise) variance and ``H`` is the transfer function; it sums
-        to 1 over sources ``j`` for each target ``i`` (``result.sum(axis=-2)``
-        is 1).
+        is the squared directed coherence ``nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2``,
+        written in the transfer function's native ``[target, source]`` indexing
+        (``H_ij`` is ``j -> i``), where ``nv`` is the per-signal innovation
+        (noise) variance and ``H`` is the transfer function. Each target's values
+        sum to 1 over sources (``result.sum(axis=-2)`` is 1).
 
         Returns
         -------
@@ -4327,9 +4329,11 @@ class Connectivity:
         >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
         >>> bool(directed_coherence[0, 20, 0, 1] > 10 * directed_coherence[0, 20, 1, 0])
         True
+        >>> bool(np.allclose(directed_coherence.sum(axis=-2), 1))  # each target's inflow
+        True
         """
         # Directed coherence normalizes the noise-weighted inflow over sources
-        # (axis -1), so the per-source noise variance must vary along that axis.
+        # (native axis -1), so the per-source noise variance must vary along that axis.
         # The squared measure is nv_j |H_ij|^2 / sum_k nv_k |H_ik|^2, which sums
         # to 1 over sources like the directed transfer function. This uses only
         # the diagonal of the noise covariance, which equals the PSD denominator
@@ -4440,7 +4444,8 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: [0, 1]. Normalized, scaled by noise variance.
+        **Range**: [0, 1]. Normalized, scaled by noise variance; each source's
+        values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
 
         References
         ----------
@@ -4465,6 +4470,8 @@ class Connectivity:
         (1, 501, 2, 2)
         >>> # [..., i, j] is i -> j, so 0 -> 1 is [..., 0, 1]. It dominates at 10 Hz (bin 20).
         >>> bool(gpdc[0, 20, 0, 1] > 10 * gpdc[0, 20, 1, 0])
+        True
+        >>> bool(np.allclose(gpdc.sum(axis=-1), 1))  # each source's outflow sums to 1
         True
         """
         noise_variance = _get_noise_variance(self._noise_covariance)
@@ -4492,8 +4499,9 @@ class Connectivity:
         the non-negative frequencies) and
         ``kappa^2_ij(f) = |G_ij(f)|^2 / (G_ii(f) G_jj(f))``, where
         ``G = A^H Sigma^-1 A`` is the inverse spectral matrix of the MVAR model
-        (``A = H^-1``, ``Sigma`` the innovation covariance). ``chi^2_ij`` is the
-        influence ``j -> i``, returned at ``[..., j, i]``.
+        (``A = H^-1``, ``Sigma`` the innovation covariance). These formulas are
+        written in the transfer function's native ``[target, source]`` indexing
+        (``chi^2_ij`` is ``j -> i``).
 
         Returns
         -------
@@ -4532,10 +4540,12 @@ class Connectivity:
         >>> ddtf = connectivity.direct_directed_transfer_function()
         >>> ddtf.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
-        >>> # [..., i, j] is i -> j. The direct 1 -> 2 ([..., 1, 2]) far exceeds the
-        >>> # indirect 0 -> 2 ([..., 0, 2]) that is relayed through signal 1 (10 Hz = bin 20).
-        >>> bool(ddtf[0, 20, 1, 2] > 10 * ddtf[0, 20, 0, 2])
-        True
+        >>> # [..., i, j] is i -> j. The direct 1 -> 2 ([..., 1, 2]) far exceeds both the
+        >>> # reverse 2 -> 1 ([..., 2, 1]) and the indirect 0 -> 2 ([..., 0, 2]) that is
+        >>> # relayed through signal 1 (10 Hz = bin 20).
+        >>> direct = ddtf[0, 20, 1, 2]
+        >>> bool(direct > 10 * ddtf[0, 20, 2, 1]), bool(direct > 10 * ddtf[0, 20, 0, 2])
+        (True, True)
         """
         full_frequency_dtf = _squared_magnitude(
             self._transfer_function / _total_inflow(self._transfer_function, axis=(-1, -3))

@@ -168,8 +168,9 @@ def test_non_causal_direction_is_zero(var_oracle, measure):
 
 # A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with unequal, uncorrelated
 # innovation variances. The indirect path makes the analytic (native
-# [target, source]) DTF[2, 0] > 0 while PDC[2, 0] == 0, and the unequal variances make DC differ from DTF and gPDC differ from PDC, so
-# each measure's normalization (row vs column, noise weighting) is identifiable.
+# [target, source]) DTF[2, 0] > 0 while PDC[2, 0] == 0, and the unequal
+# variances make DC differ from DTF and gPDC differ from PDC, so each
+# measure's normalization (row vs column, noise weighting) is identifiable.
 _CHAIN_NOISE = np.diag([1.0, 2.0, 0.5])
 _CHAIN_N_FFT = 256
 
@@ -178,9 +179,10 @@ def _analytic_directed_measures(A, H, noise_covariance):
     """Closed-form directed measures of a VAR on the non-negative FFT grid.
 
     The results keep the transfer function's native ``[target, source]``
-    layout, ``[..., i, j]`` is the influence ``j -> i``; the public methods
-    return the transpose. ``A`` and ``H`` are on the full FFT grid; ``noise_covariance`` must be diagonal (variances ``sigma``).
-    Returns squared DTF, PDC, DC, gPDC, and dDTF.
+    layout, in which ``[..., i, j]`` is the influence ``j -> i``; the public
+    methods return the transpose. ``A`` and ``H`` are on the full FFT grid;
+    ``noise_covariance`` must be diagonal (variances ``sigma``). Returns
+    squared DTF, PDC, DC, gPDC, and dDTF.
     """
     n_non_negative = A.shape[0] // 2 + 1
     A, H = A[:n_non_negative], H[:n_non_negative]

@@ -368,10 +368,10 @@ def _zero_one_and_one_zero(connectivity, name):
     if name in {"blockwise_spectral_granger_prediction", "group_delay"}:
         # (values, labels) and (delay, slope, r_value).
         result = result[0]
-    elif name == "delay":
+    if name == "delay":
         # (..., frequency, candidate, n, n): the zero-wrap candidate over the band.
         result = result[..., result.shape[-3] // 2, :, :]
-    elif name != "phase_slope_index":
+    elif name not in {"phase_slope_index", "group_delay"}:
         frequencies = connectivity.frequencies
         in_band = (frequencies >= _BAND[0]) & (frequencies <= _BAND[1])
         result = np.asarray(result)[..., in_band, :, :]
@@ -400,3 +400,31 @@ def test_directed_measures_place_source_first(zero_drives_one, measure):
         assert np.nanmedian(zero_to_one) > _LEADS_ABOVE[measure.name]
     else:
         assert np.nanmax(zero_to_one) > 10 * np.nanmax(one_to_zero)
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [measure for measure in list_measures(directed=True) if measure.category == "pairwise"],
+    ids=lambda measure: measure.name,
+)
+def test_wrapper_returns_directed_connectivity_arrays_unchanged(zero_drives_one, measure):
+    """The wrapper labels a directed ``Connectivity`` array's last two axes
+    ``source`` and ``target`` without reordering them, so its values equal the
+    ``Connectivity`` method's output exactly."""
+    kwargs = _ORIENTATION_KWARGS.get(measure.name, {})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = multitaper_connectivity(
+            zero_drives_one,
+            sampling_frequency=200,
+            time_halfbandwidth_product=3,
+            method=measure.name,
+            connectivity_kwargs=kwargs,
+        )
+        connectivity = Connectivity.from_transform(
+            Multitaper(zero_drives_one, sampling_frequency=200, time_halfbandwidth_product=3)
+        )
+        expected = getattr(connectivity, measure.name)(**kwargs)
+
+    assert result.dims[-2:] == ("source", "target")
+    np.testing.assert_array_equal(result.values, expected, strict=True)
