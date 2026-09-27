@@ -56,6 +56,12 @@ jobs:
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482  # v0.6.4
         with:
           persona: regular
+          # The action uploads SARIF by default, which needs `security-events: write`;
+          # this workflow grants only `contents: read` (SPEC 8) and the repository has
+          # no code scanning to justify widening it, so skip the upload and report the
+          # findings as annotations instead (`annotations` requires advanced-security: false).
+          advanced-security: false
+          annotations: true
 
   lockfile:
     name: uv.lock is current
