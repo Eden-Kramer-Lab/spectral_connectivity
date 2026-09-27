@@ -2023,8 +2023,12 @@ def test_phase_lag_moments_propagate_nan_observations(make_connectivity):
     assert invalid.any()
     assert (~invalid).any()
     for measure in PHASE_LAG_MEASURES:
-        # wPLI's guarded division meets the NaN moments and may flag them.
-        with np.errstate(invalid="ignore"):
+        # Pre-existing: the weighted measures' _divide_where meets NaN / NaN
+        # moments and NumPy may emit "invalid value encountered in divide".
+        quiet_nan_division = (
+            np.errstate(invalid="ignore") if "weighted" in measure else nullcontext()
+        )
+        with quiet_nan_division:
             value = getattr(conn, measure)()
         for pair in [(0, 1), (1, 0)]:
             pair_value = value[..., pair[0], pair[1]]

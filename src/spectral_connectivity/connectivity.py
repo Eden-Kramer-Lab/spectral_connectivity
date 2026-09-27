@@ -159,8 +159,11 @@ def _validated_rank(rank: int | None) -> int | None:
 
 
 # Peak workspace cap for the phase-lag-index family's observation-level signal
-# tiles. The final reduced signal-by-signal result is unavoidable, but the large
-# trial/taper/time-resolved outer product is never materialized in full.
+# tiles. The tile loop holds two float buffers of this many elements, plus, one
+# at a time, the three boolean comparison temporaries of the same count that
+# each tile's sign and NaN reductions make. The final reduced signal-by-signal
+# result is unavoidable, but the large trial/taper/time-resolved outer product
+# is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
 # Element cap for the complex coefficients gathered per chunk of channel pairs
 # by ``Connectivity._subset_cross_spectral_matrix``. The gather and its
@@ -3653,7 +3656,8 @@ class Connectivity:
         ``absolute`` rather than the imaginary part of the (differently
         rounded) cross-spectral matrix, so their ratio in
         ``weighted_phase_lag_index`` is exactly 1 in magnitude at a constant
-        lag however small. With observation weights each moment goes through
+        lag above the no-lag guard (:meth:`_has_no_phase_lag`, below which it
+        is defined as 0). With observation weights each moment goes through
         :meth:`_expectation`, which needs the per-observation values.
         """
         block = (..., slice(start, stop), slice(start, None))
