@@ -29,7 +29,14 @@
 > opposite direction: swap its indices and recompute stored results.
 > `phase_slope_index`, `group_delay`, and `delay` were already source first and
 > are unchanged; do not swap them. `directed_phase_lag_index` is new in 3.0 and
-> also source first. See the [migration guide](CHANGELOG.md#migration-guide).
+> also source first. Until 3.2 the methods that existed in 2.x (pairwise and
+> subset spectral Granger, directed transfer function, directed coherence,
+> (generalized) partial directed coherence, and direct directed transfer
+> function), `multitaper_connectivity`, and `connectivity_to_xarray` emit a
+> `DirectedOrientationWarning` as a reminder; silence it with
+> `warnings.filterwarnings("ignore",
+> category=spectral_connectivity.DirectedOrientationWarning)`. See the
+> [migration guide](CHANGELOG.md#migration-guide).
 
 ## What is spectral_connectivity?
 

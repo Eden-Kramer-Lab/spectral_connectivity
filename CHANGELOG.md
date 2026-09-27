@@ -14,7 +14,13 @@ returned `b -> a`), and `result[..., i, j]` from their `Connectivity` methods is
 now `i -> j` (2.x returned `j -> i`). Indexing code written for 2.x still runs
 but reads the opposite direction; see the first two rows of the migration guide
 below. `phase_slope_index`, `group_delay`, and `delay` were already source first
-and are unchanged; do not swap them.
+and are unchanged; do not swap them. Until 3.2 the methods that existed in 2.x
+(pairwise and subset spectral Granger, directed transfer function, directed
+coherence, (generalized) partial directed coherence, and direct directed
+transfer function), `multitaper_connectivity`, and `connectivity_to_xarray` emit
+a `DirectedOrientationWarning` as a reminder; silence it with
+`warnings.filterwarnings("ignore",
+category=spectral_connectivity.DirectedOrientationWarning)`.
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
@@ -45,6 +51,11 @@ directly with results from 2.x.
 
 ### Added
 
+- `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
+  3.2) emitted by the seven `Connectivity` methods whose arrays were target
+  first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
+  when they compute one of them. It points at the calling line, so Python's
+  default filter shows it once per call site.
 - Spectral primitives and pairwise measures: one-sided
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
   corrected imaginary PLV, and directed PLI.
