@@ -31,7 +31,6 @@ difference per measure against that file and exits non-zero when any exceeds
 from __future__ import annotations
 
 import argparse
-import resource
 import sys
 import time
 import warnings
@@ -41,6 +40,11 @@ from typing import Any
 import numpy as np
 
 from spectral_connectivity import DEFAULT_METHODS, Connectivity, Multitaper
+
+try:
+    import resource
+except ImportError:  # Windows: no getrusage, so no peak-memory column
+    resource = None  # type: ignore[assignment]
 
 SAMPLING_FREQUENCY = 1000.0
 TOLERANCE = 1e-12
@@ -52,7 +56,9 @@ CASES: dict[str, dict[str, Any]] = {
 
 
 def _peak_rss_mb() -> float:
-    """Peak resident memory of this process so far, in MB."""
+    """Peak resident memory of this process so far, in MB (NaN without ``resource``)."""
+    if resource is None:
+        return np.nan
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     # ru_maxrss is bytes on macOS and kilobytes on Linux.
     return peak / 2**20 if sys.platform == "darwin" else peak / 2**10
@@ -120,9 +126,11 @@ def run_case(
     )
     rows.append(("default set", seconds, _peak_rss_mb()))
     print(f"\nCase ({name}): {parameters}, fourier_coefficients {coefficients.shape}")
-    print(f"{'measure':<45} {'seconds':>9} {'peak MB':>9}")
+    memory_header = f" {'peak MB':>9}" if resource is not None else ""
+    print(f"{'measure':<45} {'seconds':>9}{memory_header}")
     for label, row_seconds, peak in rows:
-        print(f"{label:<45} {row_seconds:>9.3f} {peak:>9.0f}")
+        memory = f" {peak:>9.0f}" if resource is not None else ""
+        print(f"{label:<45} {row_seconds:>9.3f}{memory}")
     return rows, outputs
 
 
@@ -139,13 +147,29 @@ def max_abs_difference(actual: np.ndarray, expected: np.ndarray) -> float:
     return float(np.max(np.abs(actual[finite] - expected[finite])))
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        msg = f"must be at least 1, got {value}"
+        raise argparse.ArgumentTypeError(msg)
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--save", metavar="PATH", help="write the outputs to an .npz")
     group.add_argument("--compare", metavar="PATH", help="compare with a saved .npz")
-    parser.add_argument("--repeat", type=int, default=3, help="runs per timing (min)")
-    parser.add_argument("--cases", default="ab", help="which cases to run, e.g. 'b'")
+    parser.add_argument(
+        "--repeat", type=_positive_int, default=3, help="runs per timing; the fastest is kept"
+    )
+    parser.add_argument(
+        "--cases",
+        nargs="+",
+        choices=sorted(CASES),
+        default=sorted(CASES),
+        help="which cases to run, e.g. '--cases b'",
+    )
     args = parser.parse_args()
 
     outputs = {}
@@ -164,6 +188,10 @@ def main() -> int:
             failed = False
             print(f"\n{'case/measure':<50} {'max abs diff':>14}")
             for key, value in outputs.items():
+                if key not in baseline.files:
+                    failed = True
+                    print(f"{key:<50} {'FAIL: missing':>14}")
+                    continue
                 difference = max_abs_difference(value, baseline[key])
                 failed |= not difference <= TOLERANCE
                 print(f"{key:<50} {difference:>14.3e}")
