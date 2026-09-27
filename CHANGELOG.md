@@ -49,6 +49,8 @@ directly with results from 2.x.
 | `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
+| `Multitaper`, `ShortTimeFourierTransform`, `Welch` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
+| group labels went through `connectivity_kwargs={"group_labels": ...}` | pass `group_labels=...` directly (the dict form still works for other measure arguments) |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
 ### Added
@@ -243,6 +245,19 @@ directly with results from 2.x.
   measures are forced toward 1 even for independent signals; the docstring
   states the remedy. With multiple trials the expectation also averages
   independent realizations, so no warning is emitted.
+- A `sampling_frequency` that is not a number (e.g. the string `"1000"` or
+  `True`) raises a `TypeError` naming the argument and showing how to pass it,
+  from every transform and from the `xarray.DataArray` input path, instead of a
+  raw `ufunc 'isfinite'` error.
+- `multitaper_connectivity` and `fourier_connectivity` take a named
+  `group_labels=...` argument and pass it only to the group measures
+  (`canonical_coherence`, `canonical_coherency`,
+  `maximized_imaginary_coherency`, `multivariate_interaction_measure`,
+  `blockwise_spectral_granger_prediction`,
+  `maximized_imaginary_coherency_components`), so one call can mix group and
+  pairwise measures. A group measure without labels, labels with no group
+  measure, or labels given both ways raise an actionable `ValueError` instead of
+  a bare missing-argument `TypeError`.
 - Regression coverage: an emulated CuPy-like backend that rejects host/device
   mixing, Parseval oracles for one-sided `power` and for band integration, a
   nitime oracle for adaptive multitaper power, invariance of CaCoh components to
