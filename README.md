@@ -19,16 +19,17 @@
 | [**Citation**](#citation)
 
 > [!WARNING]
-> **Upgrading from 2.x: every directed measure now reads source → target.**
-> In 3.0, `multitaper_connectivity(...).sel(source="a", target="b")` is the
-> influence `a -> b` (2.x returned `b -> a`), and `result[..., i, j]` from every
-> directed `Connectivity` method (the spectral Granger family, directed transfer
-> function, directed coherence, (generalized) partial directed coherence, and
-> direct directed transfer function) is `i -> j` (2.x returned `j -> i`).
-> Indexing code written for 2.x still runs but reads the opposite direction: swap
-> its indices and recompute stored results. The lead/lag measures (`directed_phase_lag_index`,
-> `phase_slope_index`, `group_delay`, `delay`) are unchanged. See the
-> [migration guide](CHANGELOG.md#migration-guide).
+> **Upgrading from 2.x: the Granger and transfer-function measures changed
+> direction.** For the spectral Granger family, directed transfer function,
+> directed coherence, (generalized) partial directed coherence, and direct
+> directed transfer function, `multitaper_connectivity(...).sel(source="a",
+> target="b")` is now the influence `a -> b` (2.x returned `b -> a`), and
+> `result[..., i, j]` from their `Connectivity` methods is now `i -> j` (2.x
+> returned `j -> i`). Indexing code written for 2.x still runs but reads the
+> opposite direction: swap its indices and recompute stored results.
+> `phase_slope_index`, `group_delay`, and `delay` were already source first and
+> are unchanged; do not swap them. `directed_phase_lag_index` is new in 3.0 and
+> also source first. See the [migration guide](CHANGELOG.md#migration-guide).
 
 ## What is spectral_connectivity?
 

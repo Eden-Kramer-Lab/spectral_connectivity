@@ -292,8 +292,11 @@ def connectivity_to_xarray(
     multi-quantity measures return a Dataset with explicit semantic axes.
 
     .. versionchanged:: 3.0
-       For directed measures ``sel(source=a, target=b)`` is ``a -> b``; 2.x
-       returned ``b -> a``.
+       For the spectral Granger family and the transfer-function measures
+       (directed transfer function, directed coherence, (generalized) partial
+       directed coherence, direct directed transfer function)
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``.
+       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters
     ----------
@@ -520,8 +523,11 @@ def multitaper_connectivity(
     requested connectivity measures, returning results as labeled xarray objects.
 
     .. versionchanged:: 3.0
-       For directed measures ``sel(source=a, target=b)`` is ``a -> b``; 2.x
-       returned ``b -> a``.
+       For the spectral Granger family and the transfer-function measures
+       (directed transfer function, directed coherence, (generalized) partial
+       directed coherence, direct directed transfer function)
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``.
+       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters
     ----------

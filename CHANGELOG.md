@@ -6,12 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-**Directed measures changed direction.** Every directed result now reads
-source → target: `multitaper_connectivity(...).sel(source="a", target="b")` is
-`a -> b` (2.x returned `b -> a`), and `result[..., i, j]` from every directed
-`Connectivity` method is `i -> j` (2.x returned `j -> i`). Indexing code written
-for 2.x still runs but reads the opposite direction; see the first two rows of
-the migration guide below.
+**The Granger and transfer-function measures changed direction.** For the
+spectral Granger family, directed transfer function, directed coherence,
+(generalized) partial directed coherence, and direct directed transfer function,
+`multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b` (2.x
+returned `b -> a`), and `result[..., i, j]` from their `Connectivity` methods is
+now `i -> j` (2.x returned `j -> i`). Indexing code written for 2.x still runs
+but reads the opposite direction; see the first two rows of the migration guide
+below. `phase_slope_index`, `group_delay`, and `delay` were already source first
+and are unchanged; do not swap them.
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
@@ -21,8 +24,8 @@ directly with results from 2.x.
 
 | Previous behavior | New behavior / required action |
 | --- | --- |
-| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
-| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
+| `multitaper_connectivity` labeled the spectral Granger and transfer-function measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); `phase_slope_index`, `group_delay`, and `delay` were labeled correctly | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
 | `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
