@@ -49,6 +49,7 @@ directly with results from 2.x.
 | `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
+| `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
@@ -151,8 +152,7 @@ directly with results from 2.x.
   are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
   provide multiple trials/tapers. `Welch` warns when its default segment length
   yields coarse frequency resolution. `fourier_connectivity` rejects directed
-  measures on unlabeled coefficients whose two-sidedness cannot be verified,
-  and omits them from its default method set in that case.
+  measures on unlabeled coefficients whose two-sidedness cannot be verified.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,
@@ -339,7 +339,9 @@ directly with results from 2.x.
   cannot become stale through external mutation.
 - `multitaper_connectivity(method=None)` uses the stable, exported
   `DEFAULT_METHODS` allowlist. Measures with incompatible result shapes point
-  users to `Connectivity` directly.
+  users to `Connectivity` directly. Every directed measure is opt-in by name,
+  pairwise spectral Granger included: it factorizes the spectrum and costs
+  more than the rest of the default set together.
 - Multi-component `canonical_coherency` deflates in whitened space, so
   components beyond the first are uncorrelated within each group and invariant
   to invertible within-group mixing; single-component results are unchanged.
@@ -575,9 +577,9 @@ directly with results from 2.x.
   n_signals)` arrays) until `clear_cache()`. In that regime, on a 2000-sample,
   100-trial, 32-signal multitaper spectrum (500 observations; CPU,
   `benchmarks/bench_default_measures.py`), the four phase-lag measures together
-  take 1.4 s instead of 3.9 s, the eleven default measures 3.5 s instead of
-  5.9 s, and a single phase-lag measure is 1.1-1.9x faster with a lower peak
-  (741 -> 536 MB of traced allocation). With fewer observations (e.g. a
+  take 1.4 s instead of 3.9 s, the ten default measures with pairwise Granger
+  3.5 s instead of 5.9 s, and a single phase-lag measure is 1.1-1.9x faster
+  with a lower peak (741 -> 536 MB of traced allocation). With fewer observations (e.g. a
   time-resolved single-trial spectrum with 3 tapers) or with observation
   weights, only the requested moments are computed, because there the extra
   moments cost more than re-forming the tiles; on 1199 windows x 3 tapers x

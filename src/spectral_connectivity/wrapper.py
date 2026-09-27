@@ -682,11 +682,14 @@ def multitaper_connectivity(
         ``DEFAULT_METHODS``) — not every measure. ``coherency`` is left out of the
         default because complex arrays are not portably serializable across all
         supported xarray versions and NetCDF engines, but it can be requested by
-        name. The directed-transfer-function family
-        (``directed_transfer_function``, ``directed_coherence``,
-        ``partial_directed_coherence``, ``generalized_partial_directed_coherence``,
-        ``direct_directed_transfer_function``) is also opt-in by name (see the
-        Notes on directed orientation). Measures with nonstandard layouts,
+        name. Every directed measure is opt-in by name, including
+        ``pairwise_spectral_granger_prediction`` and the
+        directed-transfer-function family (``directed_transfer_function``,
+        ``directed_coherence``, ``partial_directed_coherence``,
+        ``generalized_partial_directed_coherence``,
+        ``direct_directed_transfer_function``); the spectral Granger and
+        transfer-function measures factorize the spectrum and dominate the cost
+        (see the Notes on directed orientation). Measures with nonstandard layouts,
         including ``global_coherence``, ``phase_slope_index``, ``group_delay``,
         ``delay``, ``canonical_coherence``, and blockwise spectral Granger, are
         available by name and return labeled DataArrays or Datasets with their
@@ -990,10 +993,7 @@ def fourier_connectivity(
     method : str or list of str, optional
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
-        Dataset with one variable per measure. With ``None``, measures that
-        require a two-sided spectrum are omitted when the input is one-sided,
-        or when it has no frequency coordinate and ``is_one_sided`` was not
-        passed to declare its sidedness.
+        Dataset with one variable per measure.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to the
         DataArray signal coordinate or ``"0"``, ``"1"``, ....
@@ -1123,17 +1123,8 @@ def fourier_connectivity(
         minimum_phase_max_iterations=minimum_phase_max_iterations,
         is_one_sided=one_sided,
     )
-    # Two-sided-only measures are rejected below when sidedness is neither
-    # verifiable nor declared, so leave them out of the default set then too.
-    two_sided_unavailable = one_sided or (frequencies is None and is_one_sided is None)
-    methods, return_dataarray = _requested_methods(
-        method,
-        [
-            name
-            for name in DEFAULT_METHODS
-            if not (two_sided_unavailable and _requires_two_sided(name))
-        ],
-    )
+    # No default measure needs a two-sided spectrum, so the defaults suit any input.
+    methods, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )

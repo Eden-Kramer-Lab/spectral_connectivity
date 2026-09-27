@@ -17,6 +17,7 @@ from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
     _is_group_measure,
     _MeasureSpec,
+    _requires_two_sided,
 )
 from spectral_connectivity._provenance import (
     _canonical_json,
@@ -29,6 +30,7 @@ from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
+    list_measures,
     multitaper_connectivity,
 )
 
@@ -2033,7 +2035,6 @@ def test_default_method_set_is_explicit_and_ordered():
         "debiased_squared_weighted_phase_lag_index",
         "imaginary_coherence",
         "pairwise_phase_consistency",
-        "pairwise_spectral_granger_prediction",
         "phase_lag_index",
         "phase_locking_value",
         "power",
@@ -2043,6 +2044,12 @@ def test_default_method_set_is_explicit_and_ordered():
     # The deliberately excluded measures must not be in the default.
     for excluded in ("coherency", "global_coherence", "phase_slope_index"):
         assert excluded not in DEFAULT_METHODS
+    # Every directed measure is opt-in, so no default needs a two-sided
+    # spectrum, and fourier_connectivity's default suits one-sided input.
+    assert not {measure.name for measure in list_measures(directed=True)} & set(
+        DEFAULT_METHODS
+    )
+    assert not any(_requires_two_sided(name) for name in DEFAULT_METHODS)
 
     rng = np.random.default_rng(1)
     ds = multitaper_connectivity(rng.standard_normal((256, 3)), sampling_frequency=250)
@@ -3232,8 +3239,9 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
 
 def test_fourier_connectivity_warns_on_one_sided_input_declared_two_sided():
     """rfft-like coefficients declared ``is_one_sided=False`` would silently give
-    wrong Granger values, so the missing conjugate symmetry is reported, both
-    for an explicit two-sided-only method and for the default method set."""
+    wrong Granger values, so the missing conjugate symmetry is reported for a
+    two-sided-only method; the default set and functional measures do not rely
+    on the declaration's symmetry and stay silent."""
     rng = np.random.default_rng(326)
     time_series = rng.standard_normal((5, 256, 2))
     time_series[:, 1:, 1] += 0.8 * time_series[:, :-1, 0]
@@ -3245,12 +3253,10 @@ def test_fourier_connectivity_warns_on_one_sided_input_declared_two_sided():
             method="pairwise_spectral_granger_prediction",
             is_one_sided=False,
         )
-    with pytest.warns(UserWarning, match="not conjugate-symmetric"):
-        fourier_connectivity(one_sided, is_one_sided=False)
-    # Functional measures do not rely on the two-sided declaration's symmetry.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         fourier_connectivity(one_sided, method="coherence_magnitude", is_one_sided=False)
+        fourier_connectivity(one_sided, is_one_sided=False)
 
 
 def test_fourier_connectivity_two_sided_check_tolerates_single_precision():

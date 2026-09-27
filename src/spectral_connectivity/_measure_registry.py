@@ -160,7 +160,6 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Nonparametric spectral Granger causality from source to target: 0 is no "
         "directed influence; larger values mean more of the target's power is "
         "predicted by the source's past. Not conditioned on other signals.",
-        is_default=True,
     ),
     "phase_lag_index": _MeasureSpec(
         "pairwise",
