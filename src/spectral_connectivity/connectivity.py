@@ -4952,7 +4952,8 @@ class Connectivity:
             Slope of the coherence phase vs frequency, in radians per Hz
             (``delay = slope / (2 * pi)``); same sign convention as ``delay``.
         r_value : array, shape (..., n_signals, n_signals)
-            Correlation coefficient of the linear phase-frequency fit.
+            Correlation coefficient of the linear phase-frequency fit, with the
+            sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``).
 
         Notes
         -----
@@ -5038,7 +5039,10 @@ class Connectivity:
 
         r_value = np.ones(new_shape)
         r_value[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = pair_r_value
-        r_value[..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]] = pair_r_value
+        # The reverse pair's phase is negated, so its correlation is too.
+        r_value[
+            ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
+        ] = -pair_r_value
 
         return delay, slope, r_value
 

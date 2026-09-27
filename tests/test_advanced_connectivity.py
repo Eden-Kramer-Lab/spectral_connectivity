@@ -890,7 +890,8 @@ class TestGroupDelay:
                 reference_slope[(*lead, i, j)] = fit[0]
                 reference_slope[(*lead, j, i)] = -fit[0]
                 reference_r[(*lead, i, j)] = fit[2]
-                reference_r[(*lead, j, i)] = fit[2]
+                # linregress on the reverse pair's phase, -phase, gives -r.
+                reference_r[(*lead, j, i)] = -fit[2]
 
         np.testing.assert_array_equal(np.isnan(slope), np.isnan(reference_slope))
         np.testing.assert_allclose(
@@ -918,6 +919,24 @@ class TestGroupDelay:
         off_diagonal = ~np.eye(lags.size, dtype=bool)
         assert np.isfinite(delay[..., off_diagonal]).all()
         np.testing.assert_allclose(delay, -np.swapaxes(delay, -1, -2), rtol=0, atol=1e-12)
+
+    def test_group_delay_slope_and_r_value_flip_with_the_pair_order(self):
+        """Reversing a pair negates its phase, so both the slope and the
+        phase-frequency correlation change sign: a decreasing phase has r < 0."""
+        time_series = simulate_lagged_broadband(
+            [0, 3, 8], [0.3, 0.3, 0.3], 200, 10, random_state=self.rng
+        )
+        conn = Connectivity.from_multitaper(
+            Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
+        )
+        _delay, slope, r_value = conn.group_delay(frequencies_of_interest=[10, 90])
+
+        off_diagonal = ~np.eye(3, dtype=bool)
+        assert (np.abs(r_value[..., off_diagonal]) > 0.9).all()  # premise: linear phase
+        np.testing.assert_array_equal(slope, -np.swapaxes(slope, -1, -2))
+        np.testing.assert_array_equal(
+            r_value[..., off_diagonal], -np.swapaxes(r_value, -1, -2)[..., off_diagonal]
+        )
 
     def test_undefined_frequency_bin_does_not_invalidate_later_bins(self):
         """A bin with no defined phase (here a zeroed DC bin, 0/0 coherency)
