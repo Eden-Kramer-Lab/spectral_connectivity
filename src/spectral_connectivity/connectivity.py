@@ -2467,7 +2467,9 @@ class Connectivity:
             )
             raise ValueError(msg)
         has_missing_label = False
-        for group_label in labels_array:
+        # Check the labels as given: np.asarray turns a NaN among strings into
+        # the string "nan", which would otherwise become a group of its own.
+        for group_label in np.asarray(group_labels, dtype=object):
             if group_label is None:
                 has_missing_label = True
                 break
