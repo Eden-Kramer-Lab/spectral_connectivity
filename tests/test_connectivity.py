@@ -1849,11 +1849,28 @@ def test_phase_lag_moments_are_computed_together_once(first_measure):
         assert moment is cached[key]
 
 
+def _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile):
+    """Size the phase-lag tile workspace for ``sources_per_tile`` source signals.
+
+    A tile holds the non-negative bins of every observation for each
+    source-target pair, so one source row of two-sided coefficients of
+    ``shape`` (time, trial, taper, fft bin, signal) takes
+    ``n_time * n_trials * n_tapers * n_nonnegative * n_signals`` elements.
+    """
+    import spectral_connectivity.connectivity as connectivity_module
+
+    n_nonnegative = shape[3] // 2 + 1
+    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        sources_per_tile * elements_per_source,
+    )
+
+
 def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
     """An error partway through the tile loop must not leave partially filled
     moments in the cache for a later measure to return."""
-    import spectral_connectivity.connectivity as connectivity_module
-
     rng = np.random.default_rng(3)
     shape = (1, 4, 3, 8, 3)
     fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
@@ -1861,12 +1878,7 @@ def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
 
     # One source signal per tile, and the second tile fails after the first
     # has been written.
-    n_nonnegative = shape[3] // 2 + 1
-    monkeypatch.setattr(
-        connectivity_module,
-        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
-        int(np.prod(shape[:3])) * n_nonnegative * shape[-1],
-    )
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile=1)
     conn = Connectivity(fc)
     reduce_tile = conn._reduce_phase_lag_tile
     calls = []
@@ -2066,8 +2078,6 @@ def test_phase_lag_family_single_measure_matches_batch():
 def test_phase_lag_moments_partial_last_block(monkeypatch, weighted):
     """Five signals in tiles of two source rows (2, 2, then a partial 1) give
     the same moments as one tile, with and without observation weights."""
-    import spectral_connectivity.connectivity as connectivity_module
-
     rng = np.random.default_rng(14)
     shape = (2, 4, 3, 12, 5)
     fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
@@ -2075,13 +2085,7 @@ def test_phase_lag_moments_partial_last_block(monkeypatch, weighted):
     single_block = Connectivity(fc, observation_weights=weights)
     expected = single_block._imaginary_cross_spectrum_moments(*PHASE_LAG_MOMENTS)
 
-    n_nonnegative = shape[3] // 2 + 1
-    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
-    monkeypatch.setattr(
-        connectivity_module,
-        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
-        2 * elements_per_source,
-    )
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile=2)
     tiled = Connectivity(fc, observation_weights=weights)
     with patch.object(
         tiled, "_reduce_phase_lag_tile", wraps=tiled._reduce_phase_lag_tile
@@ -2103,25 +2107,15 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
     """Every PLI variant works when the full observation CSM is unavailable,
     and several tiles (including a narrower last one) mirror into the same
     result as a single tile."""
-    import spectral_connectivity.connectivity as connectivity_module
-
     rng = np.random.default_rng(19)
     shape = (2, 5, 3, 12, 5)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     expected_conn = Connectivity(coefficients)
     expected = tuple(getattr(expected_conn, measure)() for measure in PHASE_LAG_MEASURES)
 
-    # Size the workspace for ``sources_per_tile`` source signals per tile (it
-    # holds the non-negative bins of every observation for each source-target
-    # pair), then make any accidental access to the full observation-level outer
-    # product fail loudly.
-    n_nonnegative = shape[3] // 2 + 1
-    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
-    monkeypatch.setattr(
-        connectivity_module,
-        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
-        sources_per_tile * elements_per_source,
-    )
+    # Tile ``sources_per_tile`` source signals at a time, then make any
+    # accidental access to the full observation-level outer product fail loudly.
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile)
     tiled = Connectivity(coefficients)
     with patch.object(
         Connectivity,
