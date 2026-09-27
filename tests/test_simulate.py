@@ -286,3 +286,46 @@ def test_shared_oscillation_seed_determinism():
     first = simulate_shared_oscillation(**kwargs, random_state=5)
     np.testing.assert_array_equal(first, simulate_shared_oscillation(**kwargs, random_state=5))
     assert not np.allclose(first, simulate_shared_oscillation(**kwargs, random_state=6))
+
+
+def test_shared_oscillation_parameters_apply_per_signal():
+    """``amplitudes[k]`` and ``noise_levels[k]`` set signal k's amplitude and noise."""
+    amplitudes = np.array([0.5, 1.0, 3.0])
+    noise_levels = np.array([0.2, 1.0, 0.5])
+    kwargs = {
+        "frequency": _FREQUENCY,
+        "sampling_frequency": _SAMPLING_FREQUENCY,
+        "n_time_samples": _N_TIME_SAMPLES,
+        "n_trials": 20,
+        "amplitudes": amplitudes,
+        "random_state": 0,
+    }
+    noise_free = simulate_shared_oscillation(**kwargs)
+    noisy = simulate_shared_oscillation(**kwargs, noise_levels=noise_levels)
+    # Same seed: same trial phases, so the difference is exactly the added noise.
+    residual_sd = (noisy - noise_free).std(axis=(0, 1))
+    np.testing.assert_allclose(residual_sd, noise_levels, rtol=0.02)
+    # 25 samples per 40 Hz cycle put a sample within 7.2 degrees of each crest.
+    peak_amplitude = np.abs(noise_free).max(axis=(0, 1))
+    np.testing.assert_allclose(peak_amplitude, amplitudes, rtol=0.01)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"amplitudes": 1.0}, "amplitudes must be 1-D"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, 0.2, 0.3]}, "noise_levels"),
+        ({"amplitudes": [1.0, 1.0], "phase_offsets": [0.0, 1.0, 2.0]}, "phase_offsets"),
+    ],
+    ids=["scalar_amplitudes", "noise_levels_length", "phase_offsets_length"],
+)
+def test_shared_oscillation_rejects_mismatched_parameters(kwargs, match):
+    """Per-signal parameters must be scalars or have one entry per signal."""
+    with pytest.raises(ValueError, match=match):
+        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 100, 2, **kwargs)
+
+
+def test_lagged_broadband_rejects_mismatched_noise_levels():
+    """``noise_levels`` must be a scalar or have one entry per lag."""
+    with pytest.raises(ValueError, match="noise_levels"):
+        simulate_lagged_broadband((0, 3), [0.1, 0.2, 0.3], n_time_samples=50)

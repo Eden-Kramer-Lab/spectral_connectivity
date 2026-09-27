@@ -21,6 +21,20 @@ def _generator(random_state: int | np.random.Generator | None) -> np.random.Gene
     return np.random.default_rng(random_state)
 
 
+def _per_signal(
+    values: float | Sequence[float], n_signals: int, name: str
+) -> NDArray[np.floating]:
+    """Broadcast a scalar or per-signal parameter to shape ``(n_signals,)``."""
+    values_array = np.asarray(values, dtype=float)
+    if values_array.ndim > 1 or values_array.size not in (1, n_signals):
+        msg = (
+            f"{name} must be a scalar or have one entry per signal ({n_signals}); "
+            f"got shape {values_array.shape}"
+        )
+        raise ValueError(msg)
+    return np.broadcast_to(values_array.reshape(-1), (n_signals,))
+
+
 def simulate_MVAR(
     coefficients: NDArray[np.floating],
     noise_covariance: NDArray[np.floating] | None = None,
@@ -139,7 +153,8 @@ def simulate_lagged_broadband(
     Raises
     ------
     ValueError
-        If any lag is negative or not an integer.
+        If any lag is negative or not an integer, or if ``noise_levels`` is
+        neither a scalar nor one value per signal.
 
     Notes
     -----
@@ -173,7 +188,7 @@ def simulate_lagged_broadband(
         )
         raise ValueError(msg)
     n_signals = lags_array.size
-    noise_array = np.broadcast_to(np.asarray(noise_levels, dtype=float), (n_signals,))
+    noise_array = _per_signal(noise_levels, n_signals, "noise_levels")
     rng = _generator(random_state)
 
     max_lag = int(lags_array.max())
@@ -202,7 +217,8 @@ def simulate_shared_oscillation(
 
     ``signal[t, r, k] = amplitudes[k] * sin(2 pi frequency t / sampling_frequency
     + phi_r + phase_offsets[k]) + noise_levels[k] * N(0, 1)``. Signal ``k`` leads
-    signal ``m`` by ``phase_offsets[k] - phase_offsets[m]`` radians. Each trial
+    signal ``m`` by ``phase_offsets[k] - phase_offsets[m]`` radians (modulo
+    2 pi; differences beyond +-pi read as lags). Each trial
     ``r`` draws an independent uniform phase ``phi_r`` unless
     ``random_phase_per_trial=False`` (then ``phi_r = 0``). Set an amplitude to
     0 to leave a signal out of the oscillation; add two calls (same
@@ -237,6 +253,12 @@ def simulate_shared_oscillation(
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
         The oscillation plus noise.
 
+    Raises
+    ------
+    ValueError
+        If ``amplitudes`` is not 1-D, or if ``phase_offsets`` or
+        ``noise_levels`` is neither a scalar nor one value per signal.
+
     Notes
     -----
     The trial phases are drawn before the noise, so two calls with the same
@@ -258,12 +280,24 @@ def simulate_shared_oscillation(
     ... )
     >>> time_series.shape
     (500, 20, 3)
+    >>> # 10 Hz is FFT bin 5 of 500 samples at 1000 Hz. Signal 1 leads signal 0
+    >>> # by pi / 2, so the phase of X_1 conj(X_0) there is about +pi / 2.
+    >>> fourier = np.fft.rfft(time_series, axis=0)[5]  # (n_trials, n_signals)
+    >>> phase = np.angle(np.mean(fourier[:, 1] * np.conj(fourier[:, 0])))
+    >>> bool(abs(phase - np.pi / 2) < 0.1)
+    True
 
     """
     amplitudes_array = np.asarray(amplitudes, dtype=float)
-    n_signals = amplitudes_array.shape[0]
-    phase_offsets_array = np.broadcast_to(np.asarray(phase_offsets, dtype=float), (n_signals,))
-    noise_array = np.broadcast_to(np.asarray(noise_levels, dtype=float), (n_signals,))
+    if amplitudes_array.ndim != 1:
+        msg = (
+            "amplitudes must be 1-D with one entry per signal; "
+            f"got shape {amplitudes_array.shape}"
+        )
+        raise ValueError(msg)
+    n_signals = amplitudes_array.size
+    phase_offsets_array = _per_signal(phase_offsets, n_signals, "phase_offsets")
+    noise_array = _per_signal(noise_levels, n_signals, "noise_levels")
     rng = _generator(random_state)
 
     trial_phases = (
