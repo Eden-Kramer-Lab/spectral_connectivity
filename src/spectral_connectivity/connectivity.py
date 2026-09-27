@@ -216,8 +216,8 @@ def _asnumpy(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     return wrapper
 
 
-def _source_target(native: BackendArray) -> BackendArray:
-    """Reorder a ``[..., target, source]`` matrix to ``[..., source, target]``.
+def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Reorder a measure's ``[..., target, source]`` output to ``[..., source, target]``.
 
     The Wilson-factorized kernels work in the transfer function's native
     layout, where row ``i`` collects the inflow to signal ``i``. The public
@@ -225,8 +225,18 @@ def _source_target(native: BackendArray) -> BackendArray:
     function / MVAR measures) return the transpose so that ``[..., i, j]``
     reads ``i -> j`` like the labeled wrapper's ``sel(source=i, target=j)``.
     The lead/lag measures are computed source first and do not use it.
+
+    Apply it above :func:`_asnumpy`: swapping the host array is a free view,
+    whereas a swapped device array would force a contiguous device copy on
+    transfer.
     """
-    return xp.swapaxes(native, -1, -2)
+
+    @wraps(connectivity_measure)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        native = connectivity_measure(*args, **kwargs)
+        return cast(_R, np.swapaxes(cast(NDArray[Any], native), -1, -2))
+
+    return wrapper
 
 
 def _ignore_nan_propagation_warnings(
@@ -3868,6 +3878,7 @@ class Connectivity:
         )
         return ppc.real
 
+    @_source_first
     @_asnumpy
     def pairwise_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return amount of power at a node explained by other nodes.
@@ -3944,8 +3955,9 @@ class Connectivity:
             minimum_phase_max_iterations=self._minimum_phase_max_iterations,
         )
         _warn_nan_granger_pairs(result, measure)
-        return _source_target(result)
+        return result
 
+    @_source_first
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
         self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
@@ -4000,8 +4012,9 @@ class Connectivity:
         _warn_nan_granger_pairs(
             result, "subset_pairwise_spectral_granger_prediction", requested=requested
         )
-        return _source_target(result)
+        return result
 
+    @_source_first
     @_asnumpy
     def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction after time reversal.
@@ -4056,6 +4069,7 @@ class Connectivity:
             "time_reversed_spectral_granger_prediction", time_reversed=True
         )
 
+    @_source_first
     @_asnumpy
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction conditioned on all others.
@@ -4155,7 +4169,7 @@ class Connectivity:
                 minimum_phase_max_iterations=max_iterations,
             )
         _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
-        return _source_target(result)
+        return result
 
     def blockwise_spectral_granger_prediction(
         self, group_labels: NDArray[np.integer]
@@ -4214,9 +4228,11 @@ class Connectivity:
             "blockwise_spectral_granger_prediction",
             names=to_numpy(labels),
         )
-        return to_numpy(_source_target(result)), to_numpy(labels)
+        # Swap on the host, like _source_first: [..., target, source] -> source first.
+        return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
 
     @_ignore_nan_propagation_warnings
+    @_source_first
     @_asnumpy
     def directed_transfer_function(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by inflow.
@@ -4265,13 +4281,12 @@ class Connectivity:
         >>> bool(np.allclose(dtf.sum(axis=-2), 1))  # each target's inflow sums to 1
         True
         """
-        return _source_target(
-            _squared_magnitude(
-                self._transfer_function / _total_inflow(self._transfer_function)
-            )
+        return _squared_magnitude(
+            self._transfer_function / _total_inflow(self._transfer_function)
         )
 
     @_ignore_nan_propagation_warnings
+    @_source_first
     @_asnumpy
     def directed_coherence(self) -> NDArray[np.floating]:
         """Return the squared directed coherence (noise-weighted DTF).
@@ -4360,7 +4375,7 @@ class Connectivity:
             * _squared_magnitude(self._transfer_function)
             / _total_inflow(self._transfer_function, noise_variance) ** 2
         )
-        return _source_target(directed_coherence)
+        return directed_coherence
 
     def _partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return device-native PDC for reuse by other device-native measures."""
@@ -4369,6 +4384,7 @@ class Connectivity:
         )
 
     @_ignore_nan_propagation_warnings
+    @_source_first
     @_asnumpy
     def partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by outflow.
@@ -4418,9 +4434,10 @@ class Connectivity:
         >>> bool(np.allclose(pdc.sum(axis=-1), 1))  # each source's outflow sums to 1
         True
         """
-        return _source_target(self._partial_directed_coherence())
+        return self._partial_directed_coherence()
 
     @_ignore_nan_propagation_warnings
+    @_source_first
     @_asnumpy
     def generalized_partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return generalized partial directed coherence.
@@ -4475,15 +4492,14 @@ class Connectivity:
         True
         """
         noise_variance = _get_noise_variance(self._noise_covariance)
-        return _source_target(
-            _squared_magnitude(
-                self._MVAR_Fourier_coefficients
-                / xp.sqrt(noise_variance)
-                / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
-            )
+        return _squared_magnitude(
+            self._MVAR_Fourier_coefficients
+            / xp.sqrt(noise_variance)
+            / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
         )
 
     @_ignore_nan_propagation_warnings
+    @_source_first
     @_asnumpy
     def direct_directed_transfer_function(self) -> NDArray[np.floating]:
         """Return the direct directed transfer function (dDTF).
@@ -4566,7 +4582,7 @@ class Connectivity:
             inverse_spectrum_diagonal[..., :, xp.newaxis]
             * inverse_spectrum_diagonal[..., xp.newaxis, :]
         )
-        return _source_target(full_frequency_dtf * squared_partial_coherence)
+        return full_frequency_dtf * squared_partial_coherence
 
     def _significant_pair_phase(
         self,
