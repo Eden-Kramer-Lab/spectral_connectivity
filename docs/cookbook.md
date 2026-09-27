@@ -139,8 +139,9 @@ measure. Shared spectra are cached, so this is cheaper than separate calls.
 Group measures (`list_measures(category="group_pairwise")` and
 `list_measures(category="multivariate_components")`) compare *groups* of
 signals, such as all channels in one brain area against all channels in
-another. Pass `group_labels`, one label per signal naming its group; the
-result is indexed by group instead of by signal.
+another. Pass `group_labels`, one label per signal naming its group; a
+`group_pairwise` result is indexed by `source_group` and `target_group`
+instead of by signal.
 
 ```python
 >>> between_areas = multitaper_connectivity(

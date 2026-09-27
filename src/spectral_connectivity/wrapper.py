@@ -478,9 +478,8 @@ def _resolve_group_labels(
     legacy_labels = label_free_kwargs.pop("group_labels", None)
     if group_labels is not None and legacy_labels is not None:
         msg = (
-            "group_labels was given both as an argument and inside connectivity_kwargs; "
-            "the dict form still works on its own, but the two cannot both be given, "
-            "so pass it once, as group_labels=..."
+            "group_labels was given both as an argument and inside "
+            "connectivity_kwargs; pass it once, as group_labels=..."
         )
         raise ValueError(msg)
     group_labels = group_labels if group_labels is not None else legacy_labels
@@ -717,8 +716,9 @@ def multitaper_connectivity(
         ``n_components`` for ``canonical_coherency``; passed to every requested
         measure. Transform settings do not go here (see ``**kwargs``).
     group_labels : sequence, optional
-        One label per signal naming the group it belongs to; labels may be any
-        hashable values (integers or area names such as ``"CA1"``). Required by
+        One label per signal naming the group it belongs to; labels are scalars
+        such as integers or area names (``"CA1"``), and missing values
+        (``None``, NaN) are rejected. Required by
         the group measures (``canonical_coherence``, ``canonical_coherency``,
         ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
         ``blockwise_spectral_granger_prediction`` and
@@ -1023,8 +1023,9 @@ def fourier_connectivity(
         checked. With a frequency coordinate it is inferred from
         ``frequencies``.
     group_labels : sequence, optional
-        One label per signal naming the group it belongs to; labels may be any
-        hashable values (integers or area names such as ``"CA1"``). Required by
+        One label per signal naming the group it belongs to; labels are scalars
+        such as integers or area names (``"CA1"``), and missing values
+        (``None``, NaN) are rejected. Required by
         the group measures (``canonical_coherence``, ``canonical_coherency``,
         ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
         ``blockwise_spectral_granger_prediction`` and

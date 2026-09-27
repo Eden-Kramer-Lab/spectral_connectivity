@@ -50,7 +50,6 @@ directly with results from 2.x.
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
-| group labels went through `connectivity_kwargs={"group_labels": ...}` | pass `group_labels=...` directly (the dict form still works) |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 
 ### Added
@@ -254,9 +253,9 @@ directly with results from 2.x.
   `maximized_imaginary_coherency`, `multivariate_interaction_measure`,
   `blockwise_spectral_granger_prediction`,
   `maximized_imaginary_coherency_components`), so one call can mix group and
-  pairwise measures. A group measure without labels, labels with no group
-  measure, or labels given both ways raise an actionable `ValueError` instead of
-  a bare missing-argument `TypeError`.
+  pairwise measures; `connectivity_kwargs={"group_labels": ...}` is accepted
+  too. A group measure without labels, labels with no group measure, or labels
+  given both ways raise an actionable `ValueError`.
 - Regression coverage: an emulated CuPy-like backend that rejects host/device
   mixing, Parseval oracles for one-sided `power` and for band integration, a
   nitime oracle for adaptive multitaper power, invariance of CaCoh components to
