@@ -119,7 +119,9 @@ def test_wrapper_warns_once_about_its_labels(time_series):
     (warning,) = _orientation_warnings(record)
     message = str(warning.message)
     assert "sel(source=a, target=b) is a -> b" in message
-    assert "directed_transfer_function, pairwise_spectral_granger_prediction" in message
+    # The 2.x wrapper rejected the transfer-function measures, so only Granger's
+    # labels changed.
+    assert "For pairwise_spectral_granger_prediction, sel" in message
     assert "[..., source, target]" not in message
     assert warning.filename == __file__
 
@@ -139,11 +141,28 @@ def test_wrapper_is_silent_for_unchanged_measures(time_series):
     assert _orientation_warnings(record) == []
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "directed_transfer_function",
+        "directed_coherence",
+        "partial_directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+    ],
+)
+def test_wrapper_is_silent_for_measures_the_2x_wrapper_rejected(time_series, method):
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        multitaper_connectivity(time_series, sampling_frequency=100, method=method)
+    assert _orientation_warnings(record) == []
+
+
 def test_connectivity_to_xarray_warns_once_about_its_labels(time_series):
     transform = Multitaper(time_series, sampling_frequency=100)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        connectivity_to_xarray(transform, method="partial_directed_coherence")
+        connectivity_to_xarray(transform, method="pairwise_spectral_granger_prediction")
     (warning,) = _orientation_warnings(record)
     assert "sel(source=a, target=b)" in str(warning.message)
     assert warning.filename == __file__

@@ -38,7 +38,6 @@ from spectral_connectivity._result_formatting import (
 )
 from spectral_connectivity.connectivity import (
     _MIGRATION_GUIDE_URL,
-    _ORIENTATION_CHANGED_MEASURES,
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
@@ -283,12 +282,20 @@ def frequency_band_reduce(
     )
 
 
+# The directed measures whose 2.x wrapper labels were transposed. The 2.x
+# wrapper rejected every method named "directed", so the transfer-function
+# measures had no 2.x labels to flip.
+_LABEL_ORIENTATION_CHANGED_MEASURES = frozenset(
+    {"pairwise_spectral_granger_prediction", "subset_pairwise_spectral_granger_prediction"}
+)
+
+
 def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
-    """Warn that ``sel(source, target)`` of the 2.x target-first measures flipped.
+    """Warn that ``sel(source, target)`` of the 2.x Granger measures flipped.
 
     Remove with :class:`DirectedOrientationWarning` in 3.2.
     """
-    changed = sorted(_ORIENTATION_CHANGED_MEASURES.intersection(methods))
+    changed = sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods))
     if changed:
         warnings.warn(
             f"For {', '.join(changed)}, sel(source=a, target=b) is a -> b since "
@@ -313,10 +320,10 @@ def connectivity_to_xarray(
     multi-quantity measures return a Dataset with explicit semantic axes.
 
     .. versionchanged:: 3.0
-       For the spectral Granger family and the transfer-function measures
-       (directed transfer function, directed coherence, (generalized) partial
-       directed coherence, direct directed transfer function)
-       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``.
+       For ``pairwise_spectral_granger_prediction`` and
+       ``subset_pairwise_spectral_granger_prediction``,
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
+       2.x wrapper rejected the transfer-function measures, and
        ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters
@@ -545,10 +552,10 @@ def multitaper_connectivity(
     requested connectivity measures, returning results as labeled xarray objects.
 
     .. versionchanged:: 3.0
-       For the spectral Granger family and the transfer-function measures
-       (directed transfer function, directed coherence, (generalized) partial
-       directed coherence, direct directed transfer function)
-       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``.
+       For ``pairwise_spectral_granger_prediction`` and
+       ``subset_pairwise_spectral_granger_prediction``,
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
+       2.x wrapper rejected the transfer-function measures, and
        ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters

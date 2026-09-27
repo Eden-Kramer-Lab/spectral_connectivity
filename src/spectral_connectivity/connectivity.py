@@ -246,8 +246,10 @@ class DirectedOrientationWarning(UserWarning):
     Emitted by the ``Connectivity`` methods that returned
     ``[..., target, source]`` in 2.x and now return ``[..., source, target]``,
     and by :func:`~spectral_connectivity.multitaper_connectivity` and
-    :func:`~spectral_connectivity.connectivity_to_xarray` when they compute one
-    of those measures, whose ``sel(source=a, target=b)`` was ``b -> a`` in 2.x.
+    :func:`~spectral_connectivity.connectivity_to_xarray` when they compute
+    pairwise or subset spectral Granger prediction, whose
+    ``sel(source=a, target=b)`` was ``b -> a`` in 2.x (the 2.x wrapper rejected
+    the transfer-function measures).
     Code written for 2.x keeps running but reads the opposite direction. This
     warning is temporary; silence it, without hiding other warnings, with
     ``warnings.filterwarnings("ignore", category=DirectedOrientationWarning)``.
