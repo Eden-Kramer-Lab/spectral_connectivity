@@ -95,7 +95,9 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
 
 
 @pytest.mark.parametrize(
-    "lags", [(-3, 0), (0, 1.5), (0, 3.0)], ids=["negative", "fractional", "whole_float"]
+    "lags",
+    [(-3, 0), (0, 1.5), (0, 3.0), [[0, 3]], 3],
+    ids=["negative", "fractional", "whole_float", "2d", "scalar"],
 )
 def test_lagged_broadband_rejects_negative_or_fractional_lags(lags):
     """Lags must be non-negative integers; a lead is a smaller lag, not a negative one."""
@@ -258,6 +260,41 @@ def test_shared_oscillation_random_trial_phase(random_phase_per_trial):
     )
 
 
+def test_shared_oscillation_matches_its_formula():
+    """Without noise or trial phase, signal k is amplitudes[k] * sin(2 pi f t +
+    phase_offsets[k]) with t = n / sampling_frequency starting at 0."""
+    amplitudes = np.array([1.0, 0.5, 2.0])
+    phase_offsets = np.array([0.0, 0.3, -1.2])
+    result = simulate_shared_oscillation(
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        100,
+        2,
+        amplitudes,
+        phase_offsets=phase_offsets,
+        random_phase_per_trial=False,
+    )
+    time = np.arange(100) / _SAMPLING_FREQUENCY
+    expected = amplitudes * np.sin(
+        2 * np.pi * _FREQUENCY * time[:, np.newaxis] + phase_offsets
+    )
+    for trial in range(2):
+        np.testing.assert_allclose(result[:, trial], expected, atol=1e-12)
+
+
+def test_shared_oscillation_trial_phases_cover_the_circle():
+    """Per-trial phases are uniform on [0, 2 pi), so they average out across
+    trials: a half-range draw would plant cross-trial phase consistency."""
+    n_trials = 500
+    # 100 samples at 1000 Hz hold exactly four 40 Hz cycles, so it is FFT bin 4.
+    result = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, [1.0], random_state=0
+    )
+    phases = np.angle(np.fft.rfft(result[:, :, 0], axis=0)[4])
+    mean_resultant_length = np.abs(np.mean(np.exp(1j * phases)))
+    assert mean_resultant_length < 3 / np.sqrt(n_trials)
+
+
 def test_shared_oscillation_zero_amplitude_is_flat():
     """An amplitude of 0 (without noise) leaves that signal identically zero."""
     time_series = simulate_shared_oscillation(
@@ -324,8 +361,15 @@ def test_shared_oscillation_parameters_apply_per_signal():
         ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, 0.2, 0.3]}, "noise_levels"),
         ({"amplitudes": [1.0, 1.0], "phase_offsets": [0.0, 1.0, 2.0]}, "phase_offsets"),
         ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, -0.1]}, "must be non-negative"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [[0.1, 0.2]]}, "noise_levels"),
     ],
-    ids=["scalar_amplitudes", "noise_levels_length", "phase_offsets_length", "negative_noise"],
+    ids=[
+        "scalar_amplitudes",
+        "noise_levels_length",
+        "phase_offsets_length",
+        "negative_noise",
+        "2d_noise_levels",
+    ],
 )
 def test_shared_oscillation_rejects_mismatched_parameters(kwargs, match):
     """Per-signal parameters must be scalars or have one entry per signal."""
