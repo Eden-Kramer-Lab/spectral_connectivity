@@ -52,15 +52,14 @@ def test_coherence_matches_nitime(nitime_series):
     - One-sided doubling of the interior bins (not DC or Nyquist) and the
       division by ``Fs`` match, so with ``Fs`` passed the CSD needs no
       rescaling. Without ``Fs`` nitime divides by its default ``2 * pi``.
+      Every bin is compared, so the undoubled DC and Nyquist bins are checked
+      too (mean removal does not zero the DC bin of a tapered series).
     - Orientation: nitime's ``csd[i, j]`` is ``E[X_i conj(X_j)]``, the same as
       ``cross_spectral_density()[..., i, j]``.
     - ``NFFT`` defaults to the series length; the transform is given the same
       ``n_fft_samples``. (nitime labels frequencies with
       ``linspace(0, Fs / 2, NFFT // 2 + 1)``, which is only the FFT grid for an
       even ``NFFT``; the series here is even.)
-
-    DC is excluded from the comparison: after mean removal its power is
-    roundoff-level.
     """
     n_time, _ = nitime_series.shape
     transform = Multitaper(
@@ -71,7 +70,6 @@ def test_coherence_matches_nitime(nitime_series):
         taper_weighting="eigen",
     )
     connectivity = Connectivity.from_transform(transform)
-    interior = slice(1, -1)
 
     _, expected_coherence = nitime_coherence(
         nitime_series.T,
@@ -86,8 +84,8 @@ def test_coherence_matches_nitime(nitime_series):
     coherence = connectivity.coherence_magnitude()[0]  # (n_frequencies, n_signals, n_signals)
     off_diagonal = ~np.eye(3, dtype=bool)
     np.testing.assert_allclose(
-        coherence[interior][:, off_diagonal],
-        np.moveaxis(expected_coherence, -1, 0)[interior][:, off_diagonal],
+        coherence[:, off_diagonal],
+        np.moveaxis(expected_coherence, -1, 0)[:, off_diagonal],
         rtol=0,
         atol=1e-8,
     )
@@ -102,8 +100,8 @@ def test_coherence_matches_nitime(nitime_series):
     )
     np.testing.assert_allclose(connectivity.frequencies, frequencies)
     np.testing.assert_allclose(
-        connectivity.cross_spectral_density()[0][interior],
-        np.moveaxis(expected_csd, -1, 0)[interior],
+        connectivity.cross_spectral_density()[0],
+        np.moveaxis(expected_csd, -1, 0),
         rtol=1e-6,
     )
 
