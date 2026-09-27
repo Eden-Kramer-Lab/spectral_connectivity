@@ -3888,6 +3888,10 @@ class Connectivity:
 
         Also known as spectral granger causality.
 
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
+
         Returns
         -------
         pairwise_granger : array
@@ -3963,6 +3967,10 @@ class Connectivity:
         self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.floating]:
         """Return predictive power for a subset of signal pairs.
+
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
 
         Parameters
         ----------
@@ -4242,6 +4250,10 @@ class Connectivity:
 
         Characterizes the direct and indirect coupling to a node.
 
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
+
         Returns
         -------
         directed_transfer_function : array
@@ -4298,6 +4310,10 @@ class Connectivity:
         (``H_ij`` is ``j -> i``), where ``nv`` is the per-signal innovation
         (noise) variance and ``H`` is the transfer function. Each target's values
         sum to 1 over sources (``result.sum(axis=-2)`` is 1).
+
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
 
         Returns
         -------
@@ -4396,6 +4412,10 @@ class Connectivity:
         of other observed signals, leaving only the direct coupling between
         two signals.
 
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
+
         Returns
         -------
         partial_directed_coherence : array
@@ -4451,6 +4471,10 @@ class Connectivity:
 
         The generalized partial directed coherence scales the relative
         strength of coupling by the noise variance.
+
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
 
         Returns
         -------
@@ -4518,6 +4542,10 @@ class Connectivity:
         (``A = H^-1``, ``Sigma`` the innovation covariance). These formulas are
         written in the transfer function's native ``[target, source]`` indexing
         (``chi^2_ij`` is ``j -> i``).
+
+        .. versionchanged:: 3.0
+           The output is source first (``[..., i, j]`` is ``i -> j``); 2.x
+           returned the transpose (``j -> i``).
 
         Returns
         -------

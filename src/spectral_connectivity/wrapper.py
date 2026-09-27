@@ -291,6 +291,10 @@ def connectivity_to_xarray(
     Ordinary pairwise measures return a DataArray; component-resolved or
     multi-quantity measures return a Dataset with explicit semantic axes.
 
+    .. versionchanged:: 3.0
+       For directed measures ``sel(source=a, target=b)`` is ``a -> b``; 2.x
+       returned ``b -> a``.
+
     Parameters
     ----------
     m : transform
@@ -514,6 +518,10 @@ def multitaper_connectivity(
     This is the main high-level function for connectivity analysis. It performs
     multitaper spectral analysis on the input time series and computes the
     requested connectivity measures, returning results as labeled xarray objects.
+
+    .. versionchanged:: 3.0
+       For directed measures ``sel(source=a, target=b)`` is ``a -> b``; 2.x
+       returned ``b -> a``.
 
     Parameters
     ----------
