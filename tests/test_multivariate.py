@@ -3,7 +3,9 @@
 import numpy as np
 import pytest
 
+from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity._multivariate import _optimize_canonical_coherency_phase, _reshape
+from spectral_connectivity.simulate import simulate_shared_oscillation
 
 
 def _cacoh_phase_objective(whitened, phase):
@@ -136,3 +138,64 @@ def test_global_coherence_per_bin_path_is_reproducible(monkeypatch):
 
     np.testing.assert_array_equal(first[0], second[0])
     np.testing.assert_array_equal(first[1], second[1])
+
+
+_GROUP_LABELS = [0, 0, 0, 1, 1, 1]
+_SHARED_FREQUENCY = 20.0
+
+
+def _two_group_oscillation(group_1_phase):
+    """Six signals sharing a 20 Hz rhythm, group 1 offset by ``group_1_phase``.
+
+    Signals 0-2 (group 0) and 3-5 (group 1) see one sinusoid with unequal
+    amplitudes plus independent noise; 100 trials x 5 tapers (NW 3) give 500
+    observations, enough to hold MIC's positive finite-sample bias near 0.08.
+    Returns the ``Connectivity`` and the indices of the 20 Hz bin and of the
+    bins more than 10 Hz from it.
+    """
+    time_series = simulate_shared_oscillation(
+        _SHARED_FREQUENCY,
+        500,
+        1000,
+        n_trials=100,
+        amplitudes=[1, 0.8, 1.2, 1, 1.1, 0.9],
+        phase_offsets=[0, 0, 0, group_1_phase, group_1_phase, group_1_phase],
+        noise_levels=0.5,
+        random_state=1,
+    )
+    connectivity = Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
+    )
+    frequencies = connectivity.frequencies
+    peak = np.flatnonzero(frequencies == _SHARED_FREQUENCY).item()
+    off_peak = np.abs(frequencies - _SHARED_FREQUENCY) > 10
+    return connectivity, peak, off_peak
+
+
+def test_mic_recovers_lagged_between_group_source():
+    """A pi / 2 lag between the groups is an imaginary-axis interaction: MIC
+    reaches it at 20 Hz and stays at its bias level elsewhere, and MIM (the sum
+    of squared singular values) is at least MIC squared (the largest)."""
+    connectivity, peak, off_peak = _two_group_oscillation(np.pi / 2)
+    mic, labels = connectivity.maximized_imaginary_coherency(_GROUP_LABELS)
+    mim, _ = connectivity.multivariate_interaction_measure(_GROUP_LABELS)
+    np.testing.assert_array_equal(labels, [0, 1])
+    mic, mim = mic[0, :, 0, 1], mim[0, :, 0, 1]
+
+    assert mic[peak] > 0.9
+    assert np.median(mic[off_peak]) < 0.15
+    assert np.all(mim >= mic**2 - 1e-9)
+
+
+def test_mic_rejects_zero_lag_shared_source():
+    """A zero-lag shared source (volume conduction) has no imaginary part: MIC
+    at 20 Hz stays at its own off-peak bias level, while canonical coherence,
+    which is not blind to zero lag, finds the shared rhythm."""
+    connectivity, peak, off_peak = _two_group_oscillation(0.0)
+    mic, _ = connectivity.maximized_imaginary_coherency(_GROUP_LABELS)
+    canonical, _ = connectivity.canonical_coherence(_GROUP_LABELS)
+    mic = mic[0, :, 0, 1]
+
+    assert mic[peak] < 0.15
+    assert mic[peak] <= 2 * np.median(mic[off_peak])
+    assert canonical[0, peak, 0, 1] > 0.9
