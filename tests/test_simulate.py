@@ -362,6 +362,7 @@ def test_shared_oscillation_parameters_apply_per_signal():
         ({"amplitudes": [1.0, 1.0], "phase_offsets": [0.0, 1.0, 2.0]}, "phase_offsets"),
         ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, -0.1]}, "must be non-negative"),
         ({"amplitudes": [1.0, 1.0], "noise_levels": [[0.1, 0.2]]}, "noise_levels"),
+        ({"amplitudes": []}, "at least one"),
     ],
     ids=[
         "scalar_amplitudes",
@@ -369,6 +370,7 @@ def test_shared_oscillation_parameters_apply_per_signal():
         "phase_offsets_length",
         "negative_noise",
         "2d_noise_levels",
+        "no_signals",
     ],
 )
 def test_shared_oscillation_rejects_mismatched_parameters(kwargs, match):
@@ -391,6 +393,11 @@ def test_lagged_broadband_accepts_any_integer_lag_dtype(dtype):
         np.array([0, 3], dtype=dtype), 0.0, n_time_samples=500, random_state=0
     )
     np.testing.assert_array_equal(result, expected)
+
+
+def test_lagged_broadband_rejects_no_signals():
+    with pytest.raises(ValueError, match="at least one"):
+        simulate_lagged_broadband([], 0.1, n_time_samples=50)
 
 
 def test_lagged_broadband_rejects_negative_noise_levels():

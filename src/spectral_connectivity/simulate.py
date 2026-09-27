@@ -191,6 +191,9 @@ def simulate_lagged_broadband(
 
     """
     lags_array = np.asarray(lags)
+    if lags_array.size == 0:
+        msg = "lags must have at least one entry, one per signal"
+        raise ValueError(msg)
     if (
         lags_array.ndim != 1
         or not np.issubdtype(lags_array.dtype, np.integer)
@@ -308,9 +311,9 @@ def simulate_shared_oscillation(
 
     """
     amplitudes_array = np.asarray(amplitudes, dtype=float)
-    if amplitudes_array.ndim != 1:
+    if amplitudes_array.ndim != 1 or amplitudes_array.size == 0:
         msg = (
-            "amplitudes must be 1-D with one entry per signal; "
+            "amplitudes must be 1-D with at least one entry, one per signal; "
             f"got shape {amplitudes_array.shape}"
         )
         raise ValueError(msg)
