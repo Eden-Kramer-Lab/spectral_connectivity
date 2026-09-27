@@ -1,6 +1,7 @@
 import inspect
 import json
 import warnings
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -1715,6 +1716,13 @@ def four_signal_noise():
     return np.random.default_rng(0).standard_normal((1000, 4, 4))
 
 
+@pytest.fixture(scope="module")
+def four_signal_coefficients(four_signal_noise):
+    """``(fft, frequencies, time)`` of ``four_signal_noise`` for fourier_connectivity."""
+    transform = Multitaper(four_signal_noise, sampling_frequency=1000)
+    return transform.fft(), transform.frequencies, transform.time
+
+
 def test_is_group_measure_matches_the_measures_that_take_group_labels():
     """The signature rule agrees with the registry's group output kinds."""
     registered_group = {
@@ -1760,6 +1768,57 @@ def test_extension_measure_taking_group_labels_receives_them(
         four_signal_noise, sampling_frequency=1000, method=method, **label_kwargs
     )
     assert extension_group_measure == [[0, 0, 1, 1]]
+
+
+def test_extension_measure_taking_group_labels_is_named_when_labels_are_missing(
+    four_signal_noise, extension_group_measure
+):
+    with pytest.raises(
+        ValueError, match="canonical_coherence, custom_group_power compare groups"
+    ):
+        multitaper_connectivity(
+            four_signal_noise,
+            sampling_frequency=1000,
+            method=["canonical_coherence", "custom_group_power"],
+        )
+    assert extension_group_measure == []
+
+
+# One case per group_labels error: (measure/label arguments, message pattern).
+_GROUP_LABEL_ERRORS = {
+    "missing": ({"method": "canonical_coherence"}, "needs group_labels"),
+    "no_group_measure": (
+        {"method": "coherence_magnitude", "group_labels": [0, 1]},
+        "none of the requested measures compares groups",
+    ),
+    "given_twice": (
+        {
+            "method": "canonical_coherence",
+            "group_labels": [0, 0, 1, 1],
+            "connectivity_kwargs": {"group_labels": [0, 1, 0, 1]},
+        },
+        "pass it once",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_GROUP_LABEL_ERRORS))
+def test_group_label_errors_fail_before_the_fft(four_signal_noise, case):
+    arguments, pattern = _GROUP_LABEL_ERRORS[case]
+    with (
+        mock.patch.object(Multitaper, "fft", autospec=True) as fft,
+        pytest.raises(ValueError, match=pattern),
+    ):
+        multitaper_connectivity(four_signal_noise, sampling_frequency=1000, **arguments)
+    fft.assert_not_called()
+
+
+@pytest.mark.parametrize("case", list(_GROUP_LABEL_ERRORS))
+def test_fourier_connectivity_group_label_errors(four_signal_coefficients, case):
+    coefficients, frequencies, time = four_signal_coefficients
+    arguments, pattern = _GROUP_LABEL_ERRORS[case]
+    with pytest.raises(ValueError, match=pattern):
+        fourier_connectivity(coefficients, frequencies=frequencies, time=time, **arguments)
 
 
 def test_group_measure_without_group_labels_explains_the_argument(four_signal_noise):
@@ -1836,11 +1895,12 @@ def test_group_labels_given_twice_is_rejected(four_signal_noise):
         )
 
 
-def test_fourier_connectivity_accepts_group_labels(four_signal_noise):
-    transform = Multitaper(four_signal_noise, sampling_frequency=1000)
+def test_fourier_connectivity_accepts_group_labels(four_signal_coefficients):
+    coefficients, frequencies, time = four_signal_coefficients
     result = fourier_connectivity(
-        transform.fft(),
-        frequencies=transform.frequencies,
+        coefficients,
+        frequencies=frequencies,
+        time=time,
         method="canonical_coherence",
         group_labels=["CA1", "CA1", "PFC", "PFC"],
     )

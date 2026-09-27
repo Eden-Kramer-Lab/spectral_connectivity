@@ -438,6 +438,76 @@ def _combine_formatted_results(
     return combined
 
 
+def _resolve_group_labels(
+    methods: Sequence[str],
+    connectivity_kwargs: Mapping[str, Any] | None,
+    group_labels: Sequence[Hashable] | NDArray[Any] | None,
+    n_signals: int,
+) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any]]:
+    """Resolve ``group_labels`` from the argument or ``connectivity_kwargs``.
+
+    Runs before any spectral work so a missing or misplaced label fails fast.
+
+    Parameters
+    ----------
+    methods : sequence of str
+        The requested measure names.
+    connectivity_kwargs : mapping or None
+        The caller's measure keyword arguments; copied, never mutated.
+    group_labels : sequence, array or None
+        The ``group_labels=`` argument.
+    n_signals : int
+        Number of signals, quoted in the missing-labels message.
+
+    Returns
+    -------
+    group_labels : sequence, array or None
+        The labels from whichever form supplied them.
+    label_free_kwargs : dict
+        A copy of ``connectivity_kwargs`` without ``group_labels``.
+
+    Raises
+    ------
+    ValueError
+        If the labels are given both ways, given with no group measure
+        requested, or missing while a group measure is requested.
+    """
+    label_free_kwargs = dict(connectivity_kwargs or {})
+    legacy_labels = label_free_kwargs.pop("group_labels", None)
+    if group_labels is not None and legacy_labels is not None:
+        msg = (
+            "group_labels was given both as an argument and inside connectivity_kwargs; "
+            "the dict form still works on its own, but the two cannot both be given, "
+            "so pass it once, as group_labels=..."
+        )
+        raise ValueError(msg)
+    group_labels = group_labels if group_labels is not None else legacy_labels
+    group_methods = [m for m in methods if _is_group_measure(m)]
+    if group_labels is not None and not group_methods:
+        msg = (
+            "group_labels was given, but none of the requested measures compares "
+            f"groups of signals: {list(methods)!r}. Request a group measure (see "
+            "list_measures(category='group_pairwise') or "
+            "list_measures(category='multivariate_components')) or drop group_labels."
+        )
+        raise ValueError(msg)
+    if group_methods and group_labels is None:
+        verbs = (
+            "compares groups of signals and needs"
+            if len(group_methods) == 1
+            else "compare groups of signals and need"
+        )
+        msg = (
+            f"{', '.join(group_methods)} {verbs} "
+            f"group_labels: one label per signal ({n_signals} here) naming the group "
+            "it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
+            "Pass it as group_labels=... (the same labels apply to every group "
+            "measure in this call)."
+        )
+        raise ValueError(msg)
+    return group_labels, label_free_kwargs
+
+
 def _format_and_reduce_measures(
     connectivity: Connectivity,
     methods: list[str],
@@ -446,7 +516,7 @@ def _format_and_reduce_measures(
     signal_labels: NDArray[Any],
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
-    connectivity_kwargs: Mapping[str, Any] | None,
+    connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
@@ -457,41 +527,14 @@ def _format_and_reduce_measures(
     """Format the requested measures to xarray and apply frequency reduction.
 
     Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
-    routes ``group_labels`` to the group measures only, honors ``squeeze`` only
-    for a single-measure DataArray, formats each measure (skipping
-    structurally-unsupported ones in a multi-measure batch), merges the
-    survivors, and applies any frequency crop/decimation/band reduction.
+    passes the already-resolved ``group_labels`` (see :func:`_resolve_group_labels`)
+    to the group measures only, honors ``squeeze`` only for a single-measure
+    DataArray, formats each measure (skipping structurally-unsupported ones in a
+    multi-measure batch), merges the survivors, and applies any frequency
+    crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free.
     """
-    # Copy before popping: the caller's mapping is theirs.
-    connectivity_kwargs = dict(connectivity_kwargs or {})
-    legacy_labels = connectivity_kwargs.pop("group_labels", None)
-    if group_labels is not None and legacy_labels is not None:
-        msg = (
-            "group_labels was given both as an argument and inside connectivity_kwargs; "
-            "pass it once, as group_labels=..."
-        )
-        raise ValueError(msg)
-    group_labels = group_labels if group_labels is not None else legacy_labels
-    group_methods = [m for m in methods if _is_group_measure(m)]
-    if group_labels is not None and not group_methods:
-        msg = (
-            "group_labels was given, but none of the requested measures compares "
-            f"groups of signals: {methods!r}. Request a group measure (see "
-            "list_measures(category='group_pairwise') or "
-            "list_measures(category='multivariate_components')) or drop group_labels."
-        )
-        raise ValueError(msg)
-    if group_methods and group_labels is None:
-        msg = (
-            f"{group_methods[0]} compares groups of signals and needs group_labels: "
-            f"one label per signal ({connectivity.n_signals} here) naming the group "
-            "it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
-            "Pass it as group_labels=... (the same labels apply to every group "
-            "measure in this call)."
-        )
-        raise ValueError(msg)
 
-    def measure_kwargs(method: str) -> dict[str, Any]:
+    def measure_kwargs(method: str) -> Mapping[str, Any]:
         """Keyword arguments for one measure: ``group_labels`` reaches group measures only."""
         if _is_group_measure(method):
             return {**connectivity_kwargs, "group_labels": group_labels}
@@ -670,11 +713,14 @@ def multitaper_connectivity(
         ``n_components`` for ``canonical_coherency``; passed to every requested
         measure. Transform settings do not go here (see ``**kwargs``).
     group_labels : sequence, optional
-        One label per signal naming the group it belongs to; required by the
-        group measures (``canonical_coherence``, ``canonical_coherency``,
+        One label per signal naming the group it belongs to; labels may be any
+        hashable values (integers or area names such as ``"CA1"``). Required by
+        the group measures (``canonical_coherence``, ``canonical_coherency``,
         ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
         ``blockwise_spectral_granger_prediction`` and
-        ``maximized_imaginary_coherency_components``) and rejected otherwise.
+        ``maximized_imaginary_coherency_components``); an error is raised if no
+        requested measure takes it (labels are passed only to the measures that
+        do).
     frequency_range : (float, float), optional
         Inclusive frequency interval retained in the labeled result.
     frequency_decimation : int, default=1
@@ -853,6 +899,12 @@ def multitaper_connectivity(
         time_window_duration=time_window_duration,
         **kwargs,
     )
+    # Resolve group labels before Connectivity.from_multitaper runs the FFT, so
+    # a missing or misplaced label fails fast. The constructor has validated the
+    # input shape, so m.n_signals is the true signal count.
+    group_labels, connectivity_kwargs = _resolve_group_labels(
+        method, connectivity_kwargs, group_labels, m.n_signals
+    )
     # Capture metadata and build the shared calculation object from the same
     # immutable transform. The private formatter below never accepts a separate
     # Multitaper, so data and labels cannot be paired accidentally.
@@ -965,11 +1017,14 @@ def fourier_connectivity(
         checked. With a frequency coordinate it is inferred from
         ``frequencies``.
     group_labels : sequence, optional
-        One label per signal naming the group it belongs to; required by the
-        group measures (``canonical_coherence``, ``canonical_coherency``,
+        One label per signal naming the group it belongs to; labels may be any
+        hashable values (integers or area names such as ``"CA1"``). Required by
+        the group measures (``canonical_coherence``, ``canonical_coherency``,
         ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
         ``blockwise_spectral_granger_prediction`` and
-        ``maximized_imaginary_coherency_components``) and rejected otherwise.
+        ``maximized_imaginary_coherency_components``); an error is raised if no
+        requested measure takes it (labels are passed only to the measures that
+        do).
     frequency_range : (float, float), optional
         Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
         or band reduction.
@@ -1071,6 +1126,9 @@ def fourier_connectivity(
             for name in DEFAULT_METHODS
             if not (two_sided_unavailable and _requires_two_sided(name))
         ],
+    )
+    group_labels, connectivity_kwargs = _resolve_group_labels(
+        methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )
     if frequencies is None:
         # Without a frequency coordinate two-sidedness cannot be verified, so an
