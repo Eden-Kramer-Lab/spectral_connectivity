@@ -48,11 +48,20 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> None:
 
     Shared by every transform and by the DataArray input path so each gives the
     same guidance rather than a bare one-line message or a raw ``isfinite``
-    ``TypeError``.
+    ``TypeError``. Any real scalar is accepted, including a 0-d NumPy array such
+    as ``dataset["fs"].values``; booleans, strings and arrays with dimensions are
+    rejected.
     """
-    if isinstance(sampling_frequency, bool) or not isinstance(
-        sampling_frequency, (int, float, np.integer, np.floating)
+    array = np.asarray(sampling_frequency)
+    if (
+        isinstance(sampling_frequency, (bool, np.bool_))
+        or array.ndim != 0
+        or array.dtype.kind not in "iuf"
     ):
+        if isinstance(sampling_frequency, str):
+            how = "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
+        else:
+            how = "Pass it as a single number, e.g. sampling_frequency=1000."
         msg = (
             "sampling_frequency must be a number (samples per second), got "
             f"{type(sampling_frequency).__name__} {sampling_frequency!r}.\n"
@@ -60,10 +69,11 @@ def _validate_sampling_frequency(sampling_frequency: Any) -> None:
             "It labels the frequency axis and scales power, so it cannot be "
             "inferred from a plain array.\n"
             "\n"
-            "Pass it as a number, e.g. sampling_frequency=1000 rather than '1000'."
+            f"{how}"
         )
         raise TypeError(msg)
-    if not np.isfinite(sampling_frequency) or sampling_frequency <= 0:
+    rate = float(array)
+    if not np.isfinite(rate) or rate <= 0:
         msg = (
             f"sampling_frequency must be finite and positive, got "
             f"{sampling_frequency!r}.\n"

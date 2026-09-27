@@ -204,3 +204,35 @@ def test_sampling_frequency_bool_is_rejected():
     ts = np.random.default_rng(0).standard_normal((256, 1, 2))
     with pytest.raises(TypeError, match="sampling_frequency must be a number"):
         Multitaper(ts, sampling_frequency=True)
+
+
+@pytest.mark.parametrize(
+    "bad_rate",
+    ["1000", True, np.bool_(True), np.array([500.0])],
+    ids=["str", "bool", "numpy_bool", "1d_array"],
+)
+def test_non_scalar_or_non_numeric_sampling_frequency_is_rejected(bad_rate):
+    ts = np.random.default_rng(0).standard_normal((256, 1, 2))
+    with pytest.raises(TypeError, match="sampling_frequency must be a number") as excinfo:
+        Multitaper(ts, sampling_frequency=bad_rate)
+    assert "e.g. sampling_frequency=1000" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "rate",
+    [np.array(500.0), np.float32(500), np.int64(500)],
+    ids=["0d_array", "float32", "int64"],
+)
+def test_numpy_scalar_sampling_frequency_is_accepted(rate):
+    """A NumPy scalar or 0-d array (e.g. ``dataset["fs"].values``) is a valid rate."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    transform = Multitaper(ts, sampling_frequency=rate)
+    expected = Multitaper(ts, sampling_frequency=500.0)
+    np.testing.assert_allclose(transform.frequencies, expected.frequencies)
+
+    result = multitaper_connectivity(ts, sampling_frequency=rate, method="coherence_magnitude")
+    baseline = multitaper_connectivity(
+        ts, sampling_frequency=500.0, method="coherence_magnitude"
+    )
+    np.testing.assert_allclose(result.frequency, baseline.frequency)
+    np.testing.assert_allclose(result.values, baseline.values, equal_nan=True)
