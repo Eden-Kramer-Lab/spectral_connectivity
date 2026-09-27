@@ -75,7 +75,8 @@ uv run mypy src/
 ### Benchmarking
 ```bash
 # Time the default measures and save their outputs; re-run with --compare after
-# any connectivity.py change to cached intermediates (fails above 1e-12)
+# any connectivity.py change to cached intermediates (fails above 1e-12). Add
+# --cases a b c for the time-resolved few-observation case (several minutes)
 uv run python benchmarks/bench_default_measures.py --save baseline.npz
 uv run python benchmarks/bench_default_measures.py --compare baseline.npz
 ```

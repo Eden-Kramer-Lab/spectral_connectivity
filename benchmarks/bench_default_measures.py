@@ -1,9 +1,14 @@
 """Time the default connectivity measures and check their outputs for parity.
 
-Two fixed cases (seed 0, 1000 Hz, white noise):
+Three fixed cases (seed 0, 1000 Hz, white noise):
 
 - (a) ``n_time=5000, n_trials=50, n_signals=8, time_window_duration=0.5``
 - (b) ``n_time=2000, n_trials=100, n_signals=32, time_window_duration=None``
+- (c) time-resolved, few observations per window: ``n_time=60000, n_trials=1,
+  n_signals=32, time_window_duration=0.1, time_window_step=0.05,
+  time_halfbandwidth_product=2`` (1199 windows of 3 tapers). Run it with
+  ``--cases a b c``; ``pairwise_spectral_granger_prediction`` over 1199 windows
+  makes each repeat take several minutes.
 
 For each case this times the multitaper transform, then every measure in
 ``DEFAULT_METHODS`` (``coherence_magnitude`` among them) on a fresh
@@ -23,7 +28,7 @@ then check the change against it::
     uv run python benchmarks/bench_default_measures.py --compare baseline.npz
 
 ``--save`` writes every default measure's array (from the default-set run) for
-both cases to one ``.npz``. ``--compare`` prints the largest absolute
+the cases run to one ``.npz``. ``--compare`` prints the largest absolute
 difference per measure against that file and exits non-zero when any exceeds
 ``1e-12`` or the NaN patterns differ.
 """
@@ -52,7 +57,17 @@ PHASE_LAG_MEASURES = tuple(name for name in DEFAULT_METHODS if "phase_lag" in na
 CASES: dict[str, dict[str, Any]] = {
     "a": {"n_time": 5000, "n_trials": 50, "n_signals": 8, "time_window_duration": 0.5},
     "b": {"n_time": 2000, "n_trials": 100, "n_signals": 32, "time_window_duration": None},
+    "c": {
+        "n_time": 60000,
+        "n_trials": 1,
+        "n_signals": 32,
+        "time_window_duration": 0.1,
+        "time_window_step": 0.05,
+        "time_halfbandwidth_product": 2,
+    },
 }
+# Case keys that set the simulated data's shape; the rest go to Multitaper.
+SHAPE_KEYS = ("n_time", "n_trials", "n_signals")
 
 
 def _peak_rss_mb() -> float:
@@ -101,7 +116,7 @@ def run_case(
     multitaper = Multitaper(
         time_series,
         sampling_frequency=SAMPLING_FREQUENCY,
-        time_window_duration=parameters["time_window_duration"],
+        **{key: value for key, value in parameters.items() if key not in SHAPE_KEYS},
     )
     seconds, coefficients = _best_time(multitaper.fft, repeat)
     rows.append(("Multitaper.fft", seconds, _peak_rss_mb()))
@@ -167,8 +182,8 @@ def main() -> int:
         "--cases",
         nargs="+",
         choices=sorted(CASES),
-        default=sorted(CASES),
-        help="which cases to run, e.g. '--cases b'",
+        default=["a", "b"],
+        help="cases to run (default: a b; case c spends minutes in spectral Granger)",
     )
     args = parser.parse_args()
 
