@@ -42,7 +42,9 @@ def _check_method_accepts_kwargs(
     does not accept.
 
     ``connectivity_kwargs`` is broadcast to every requested method, so a
-    keyword needed by one measure (e.g. ``group_labels``) reaches the others.
+    keyword needed by one measure (e.g. ``pairs``) reaches the others. Both
+    wrappers share this check, so its hint about transform settings must hold
+    for ``fourier_connectivity``, which takes none.
     """
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
@@ -53,7 +55,11 @@ def _check_method_accepts_kwargs(
             f"{method} does not accept keyword argument(s) "
             f"{', '.join(map(repr, rejected))}. connectivity_kwargs is passed to "
             "every requested method, so request measures that need different "
-            "arguments in separate calls."
+            "arguments in separate calls.\n"
+            "connectivity_kwargs configures the measure only. Transform settings "
+            "such as time_halfbandwidth_product belong to the transform: pass them "
+            "to multitaper_connectivity directly, or set them on the transform "
+            "that produced the coefficients you give fourier_connectivity."
         )
         raise TypeError(msg)
 

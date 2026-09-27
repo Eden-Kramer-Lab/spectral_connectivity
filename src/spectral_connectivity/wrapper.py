@@ -26,6 +26,7 @@ from spectral_connectivity._input_handling import (
 )
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
+    _is_group_measure,
     _measure_description,
     _requested_methods,
     _requires_two_sided,
@@ -446,6 +447,7 @@ def _format_and_reduce_measures(
     squeeze: bool,
     shared_attrs: Mapping[str, Any],
     connectivity_kwargs: Mapping[str, Any] | None,
+    group_labels: Sequence[Hashable] | NDArray[Any] | None,
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -455,12 +457,46 @@ def _format_and_reduce_measures(
     """Format the requested measures to xarray and apply frequency reduction.
 
     Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
-    honors ``squeeze`` only for a single-measure DataArray, formats each measure
-    (skipping structurally-unsupported ones in a multi-measure batch), merges the
+    routes ``group_labels`` to the group measures only, honors ``squeeze`` only
+    for a single-measure DataArray, formats each measure (skipping
+    structurally-unsupported ones in a multi-measure batch), merges the
     survivors, and applies any frequency crop/decimation/band reduction.
     """
-    if connectivity_kwargs is None:
-        connectivity_kwargs = {}
+    # Copy before popping: the caller's mapping is theirs.
+    connectivity_kwargs = dict(connectivity_kwargs or {})
+    legacy_labels = connectivity_kwargs.pop("group_labels", None)
+    if group_labels is not None and legacy_labels is not None:
+        msg = (
+            "group_labels was given both as an argument and inside connectivity_kwargs; "
+            "pass it once, as group_labels=..."
+        )
+        raise ValueError(msg)
+    group_labels = group_labels if group_labels is not None else legacy_labels
+    group_methods = [m for m in methods if _is_group_measure(m)]
+    if group_labels is not None and not group_methods:
+        msg = (
+            "group_labels was given, but none of the requested measures compares "
+            f"groups of signals: {methods!r}. Request a group measure (see "
+            "list_measures(category='group_pairwise') or "
+            "list_measures(category='multivariate_components')) or drop group_labels."
+        )
+        raise ValueError(msg)
+    if group_methods and group_labels is None:
+        msg = (
+            f"{group_methods[0]} compares groups of signals and needs group_labels: "
+            f"one label per signal ({connectivity.n_signals} here) naming the group "
+            "it belongs to, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC'].\n"
+            "Pass it as group_labels=... (the same labels apply to every group "
+            "measure in this call)."
+        )
+        raise ValueError(msg)
+
+    def measure_kwargs(method: str) -> dict[str, Any]:
+        """Keyword arguments for one measure: ``group_labels`` reaches group measures only."""
+        if _is_group_measure(method):
+            return {**connectivity_kwargs, "group_labels": group_labels}
+        return connectivity_kwargs
+
     if squeeze and not return_dataarray:
         # squeeze reduces a pairwise measure to a (time, frequency) array whose
         # source/target become scalar coordinates; in a Dataset those scalars are
@@ -482,7 +518,7 @@ def _format_and_reduce_measures(
             squeeze,
             shared_attrs,
             signal_metadata=signal_metadata,
-            **connectivity_kwargs,
+            **measure_kwargs(methods[0]),
         )
     else:
         formatted_results: list[xr.DataArray | xr.Dataset] = []
@@ -496,7 +532,7 @@ def _format_and_reduce_measures(
                         False,
                         shared_attrs,
                         signal_metadata=signal_metadata,
-                        **connectivity_kwargs,
+                        **measure_kwargs(this_method),
                     )
                 )
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
@@ -536,6 +572,7 @@ def multitaper_connectivity(
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
     *,
+    group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
@@ -628,7 +665,16 @@ def multitaper_connectivity(
         whose variables can have incompatible axes such as ``power``'s), squeeze
         is ignored with a warning.
     connectivity_kwargs : dict, optional
-        Additional keyword arguments passed to connectivity methods.
+        Extra keyword arguments for the *measure* (a ``Connectivity`` method),
+        e.g. ``pairs`` for ``subset_pairwise_spectral_granger_prediction`` or
+        ``n_components`` for ``canonical_coherency``; passed to every requested
+        measure. Transform settings do not go here (see ``**kwargs``).
+    group_labels : sequence, optional
+        One label per signal naming the group it belongs to; required by the
+        group measures (``canonical_coherence``, ``canonical_coherency``,
+        ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
+        ``blockwise_spectral_granger_prediction`` and
+        ``maximized_imaginary_coherency_components``) and rejected otherwise.
     frequency_range : (float, float), optional
         Inclusive frequency interval retained in the labeled result.
     frequency_decimation : int, default=1
@@ -649,10 +695,12 @@ def multitaper_connectivity(
     signal_dim : hashable, optional
         DataArray dimension containing signals or channels. Common names such as
         ``"signal"`` and ``"channel"`` are inferred automatically.
-    **kwargs : dict
-        Additional arguments passed to the Multitaper constructor
-        (e.g., time_halfbandwidth_product, n_tapers, n_fft_samples,
-        fft_workers=-1 to parallelize the CPU FFT across all cores).
+    **kwargs
+        Extra keyword arguments for the *transform* (``Multitaper``), e.g.
+        ``time_halfbandwidth_product``, ``n_tapers``, ``time_window_step``,
+        ``taper_weighting`` (or ``fft_workers=-1`` to parallelize the CPU FFT
+        across all cores). Measure settings do not go here (see
+        ``connectivity_kwargs``).
 
     Returns
     -------
@@ -824,6 +872,7 @@ def multitaper_connectivity(
         squeeze=squeeze,
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
+        group_labels=group_labels,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -844,6 +893,7 @@ def fourier_connectivity(
     connectivity_kwargs: dict[str, Any] | None = None,
     is_one_sided: bool | None = None,
     *,
+    group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
@@ -897,9 +947,11 @@ def fourier_connectivity(
         With more than 2 signals a warning is issued and the full matrix is
         returned; for ``power`` squeeze is a no-op. Length-one ``time`` is kept.
     connectivity_kwargs : dict, optional
-        Keyword arguments passed to every requested measure (for example
-        ``group_labels`` for group measures). Measures that need different
-        arguments must be requested in separate calls.
+        Extra keyword arguments for the *measure* (a ``Connectivity`` method),
+        e.g. ``pairs`` for ``subset_pairwise_spectral_granger_prediction`` or
+        ``n_components`` for ``canonical_coherency``; passed to every requested
+        measure. Transform settings do not go here: they belong to the transform
+        that produced ``fourier_coefficients``.
     is_one_sided : bool, optional
         Declare whether the coefficients cover only non-negative frequencies.
         When no frequency coordinate is available the sidedness cannot be
@@ -912,6 +964,12 @@ def fourier_connectivity(
         warns, and refuses those measures because the assumption cannot be
         checked. With a frequency coordinate it is inferred from
         ``frequencies``.
+    group_labels : sequence, optional
+        One label per signal naming the group it belongs to; required by the
+        group measures (``canonical_coherence``, ``canonical_coherency``,
+        ``maximized_imaginary_coherency``, ``multivariate_interaction_measure``,
+        ``blockwise_spectral_granger_prediction`` and
+        ``maximized_imaginary_coherency_components``) and rejected otherwise.
     frequency_range : (float, float), optional
         Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
         or band reduction.
@@ -1099,6 +1157,7 @@ def fourier_connectivity(
         squeeze=squeeze,
         shared_attrs=shared_attrs,
         connectivity_kwargs=connectivity_kwargs,
+        group_labels=group_labels,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,

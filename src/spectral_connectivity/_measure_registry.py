@@ -423,6 +423,15 @@ def _requires_two_sided(method: str) -> bool:
     return spec is not None and spec.requires_two_sided
 
 
+def _is_group_measure(method: str) -> bool:
+    """Whether a registered measure compares groups of signals (takes ``group_labels``)."""
+    spec = _MEASURE_SPECS.get(method)
+    return spec is not None and spec.output_kind in {
+        "group_pairwise",
+        "multivariate_components",
+    }
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
 ) -> tuple[list[str], bool]:

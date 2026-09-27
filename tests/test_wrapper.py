@@ -12,7 +12,11 @@ from spectral_connectivity._input_handling import (
     _reject_unmaterialized_backing,
     _time_axis_from_dataarray,
 )
-from spectral_connectivity._measure_registry import _MeasureSpec
+from spectral_connectivity._measure_registry import (
+    _MEASURE_SPECS,
+    _is_group_measure,
+    _MeasureSpec,
+)
 from spectral_connectivity._provenance import (
     _canonical_json,
     _json_compatible,
@@ -1689,9 +1693,121 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
         multitaper_connectivity(
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
-            method=["coherence_magnitude", "canonical_coherence"],
-            connectivity_kwargs={"group_labels": [0, 0, 1]},
+            method=["coherence_magnitude", "phase_slope_index"],
+            connectivity_kwargs={"frequencies_of_interest": [5.0, 50.0]},
         )
+
+
+def test_transform_setting_in_connectivity_kwargs_points_to_the_transform():
+    rng = np.random.default_rng(13)
+    with pytest.raises(TypeError, match="connectivity_kwargs configures the measure only"):
+        multitaper_connectivity(
+            rng.standard_normal((256, 2, 3)),
+            sampling_frequency=250,
+            method="coherence_magnitude",
+            connectivity_kwargs={"time_halfbandwidth_product": 4},
+        )
+
+
+@pytest.fixture(scope="module")
+def four_signal_noise():
+    """Seeded white noise, shape (1000, 4, 4): four signals, so two groups of two."""
+    return np.random.default_rng(0).standard_normal((1000, 4, 4))
+
+
+def test_is_group_measure_matches_the_measures_that_take_group_labels():
+    takes_group_labels = {
+        name
+        for name in _MEASURE_SPECS
+        if "group_labels" in inspect.signature(getattr(Connectivity, name)).parameters
+    }
+    assert takes_group_labels
+    assert {name for name in _MEASURE_SPECS if _is_group_measure(name)} == takes_group_labels
+
+
+def test_group_measure_without_group_labels_explains_the_argument(four_signal_noise):
+    with pytest.raises(ValueError, match="needs group_labels") as excinfo:
+        multitaper_connectivity(
+            four_signal_noise, sampling_frequency=1000, method="canonical_coherence"
+        )
+    assert "group_labels=" in str(excinfo.value)
+
+
+def test_group_labels_with_only_pairwise_measures_is_rejected(four_signal_noise):
+    with pytest.raises(ValueError, match="none of the requested measures compares groups"):
+        multitaper_connectivity(
+            four_signal_noise,
+            sampling_frequency=1000,
+            method="coherence_magnitude",
+            group_labels=[0, 1],
+        )
+
+
+def test_group_labels_reach_every_group_measure_in_a_batch(four_signal_noise):
+    result = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method=["canonical_coherence", "coherence_magnitude"],
+        group_labels=[0, 0, 1, 1],
+    )
+    assert isinstance(result, xr.Dataset)
+    assert result["canonical_coherence"].sizes["source_group"] == 2
+    assert result["coherence_magnitude"].sizes["source"] == 4
+    # The labels reached the group measure only.
+    assert "arg_group_labels_json" in result["canonical_coherence"].attrs
+    assert "arg_group_labels_json" not in result["coherence_magnitude"].attrs
+
+
+def test_group_labels_recorded_in_provenance(four_signal_noise):
+    labels = ["CA1", "CA1", "PFC", "PFC"]
+    result = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method=["canonical_coherence", "coherence_magnitude"],
+        group_labels=labels,
+    )
+    assert json.loads(result["canonical_coherence"].attrs["arg_group_labels_json"]) == labels
+
+
+def test_connectivity_kwargs_group_labels_still_works(four_signal_noise):
+    connectivity_kwargs = {"group_labels": [0, 0, 1, 1]}
+    from_dict = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="canonical_coherence",
+        connectivity_kwargs=connectivity_kwargs,
+    )
+    from_argument = multitaper_connectivity(
+        four_signal_noise,
+        sampling_frequency=1000,
+        method="canonical_coherence",
+        group_labels=[0, 0, 1, 1],
+    )
+    # Identical including measure_kwargs_json: both forms record the same kwargs.
+    xr.testing.assert_identical(from_dict, from_argument)
+    assert connectivity_kwargs == {"group_labels": [0, 0, 1, 1]}
+
+
+def test_group_labels_given_twice_is_rejected(four_signal_noise):
+    with pytest.raises(ValueError, match="pass it once"):
+        multitaper_connectivity(
+            four_signal_noise,
+            sampling_frequency=1000,
+            method="canonical_coherence",
+            group_labels=[0, 0, 1, 1],
+            connectivity_kwargs={"group_labels": [0, 1, 0, 1]},
+        )
+
+
+def test_fourier_connectivity_accepts_group_labels(four_signal_noise):
+    transform = Multitaper(four_signal_noise, sampling_frequency=1000)
+    result = fourier_connectivity(
+        transform.fft(),
+        frequencies=transform.frequencies,
+        method="canonical_coherence",
+        group_labels=["CA1", "CA1", "PFC", "PFC"],
+    )
+    assert result.source_group.values.tolist() == ["CA1", "PFC"]
 
 
 def test_multi_method_shares_single_fft(monkeypatch):
