@@ -4,6 +4,10 @@ import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity.simulate import (
+    simulate_lagged_broadband,
+    simulate_shared_oscillation,
+)
 
 
 @pytest.mark.parametrize("method", ["group_delay", "delay"])
@@ -94,23 +98,6 @@ def _global_coherence_oracle(fourier_coefficients):
     return eigenvalues / np.trace(csm, axis1=-2, axis2=-1).real[..., np.newaxis]
 
 
-def _lagged_broadband(rng, lags, noise_levels, n_time, n_trials):
-    """Signals that share one broadband source, each delayed by ``lags`` samples.
-
-    Signal ``k`` is the common white-noise source circularly delayed by
-    ``lags[k]`` samples plus independent noise of standard deviation
-    ``noise_levels[k]``. Shape (n_time, n_trials, n_signals).
-    """
-    common = rng.standard_normal((n_time, n_trials))
-    return np.stack(
-        [
-            np.roll(common, lag, axis=0) + noise * rng.standard_normal((n_time, n_trials))
-            for lag, noise in zip(lags, noise_levels, strict=True)
-        ],
-        axis=-1,
-    )
-
-
 class TestCanonicalCoherence:
     """Test canonical_coherence() method."""
 
@@ -131,19 +118,27 @@ class TestCanonicalCoherence:
         n_time = 200
         n_trials = 10
         sampling_frequency = 500
-        time = np.arange(n_time)[:, np.newaxis] / sampling_frequency
 
-        shared = np.sin(2 * np.pi * 20 * time + self.rng.uniform(0, 2 * np.pi, n_trials))
-        private = np.sin(2 * np.pi * 40 * time + self.rng.uniform(0, 2 * np.pi, n_trials))
-        group1 = [
-            shared + 0.5 * self.rng.standard_normal((n_time, n_trials)) for _ in range(3)
-        ]
-        group2 = [
-            shared + private + 0.5 * self.rng.standard_normal((n_time, n_trials))
-            for _ in range(3)
-        ]
-        # Shape (n_time, n_trials, n_signals)
-        time_series = np.stack(group1 + group2, axis=-1)
+        # Shape (n_time, n_trials, n_signals): every signal carries 20 Hz plus
+        # noise; only group 2 (signals 3-5) carries the 40 Hz rhythm.
+        shared = simulate_shared_oscillation(
+            20,
+            sampling_frequency,
+            n_time,
+            n_trials,
+            amplitudes=[1.0] * 6,
+            noise_levels=0.5,
+            random_state=self.rng,
+        )
+        private = simulate_shared_oscillation(
+            40,
+            sampling_frequency,
+            n_time,
+            n_trials,
+            amplitudes=[0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            random_state=self.rng,
+        )
+        time_series = shared + private
 
         m = Multitaper(
             time_series=time_series,
@@ -276,15 +271,15 @@ class TestGlobalCoherence:
         n_trials = 10
         n_signals = 5
         sampling_frequency = 500
-        time = np.arange(n_time)[:, np.newaxis] / sampling_frequency
 
-        common = np.sin(2 * np.pi * 30 * time + self.rng.uniform(0, 2 * np.pi, n_trials))
-        time_series = np.stack(
-            [
-                (0.5 + 0.2 * i) * common + 0.3 * self.rng.standard_normal((n_time, n_trials))
-                for i in range(n_signals)
-            ],
-            axis=-1,
+        time_series = simulate_shared_oscillation(
+            30,
+            sampling_frequency,
+            n_time,
+            n_trials,
+            amplitudes=0.5 + 0.2 * np.arange(n_signals),
+            noise_levels=0.3,
+            random_state=self.rng,
         )  # (n_time, n_trials, n_signals)
 
         m = Multitaper(
@@ -626,7 +621,9 @@ class TestGroupDelay:
         """
         sampling_frequency = 200
         lags = np.array([0, 3, 8])
-        time_series = _lagged_broadband(self.rng, lags, [0.3, 0.3, 0.3], 200, 5)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3, 0.3, 0.3], 200, 5, random_state=self.rng
+        )
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=sampling_frequency,
@@ -659,7 +656,9 @@ class TestGroupDelay:
         """
         sampling_frequency = 200
         lags = np.array([0, 3, 8])
-        time_series = _lagged_broadband(self.rng, lags, [0.3, 0.3, 0.3], 200, 5)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3, 0.3, 0.3], 200, 5, random_state=self.rng
+        )
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=sampling_frequency,
@@ -698,7 +697,9 @@ class TestGroupDelay:
         """
         sampling_frequency = 200
         lags = np.array([0, 3, 8])
-        time_series = _lagged_broadband(self.rng, lags, [0.3, 0.3, 0.8], 200, 5)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3, 0.3, 0.8], 200, 5, random_state=self.rng
+        )
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=sampling_frequency,
@@ -733,7 +734,9 @@ class TestGroupDelay:
     def test_group_delay_output_ranges(self):
         """Every off-diagonal output is defined, with r in [-1, 1] and a near-linear fit."""
         lags = np.array([0, 3, 8])
-        time_series = _lagged_broadband(self.rng, lags, [0.3, 0.3, 0.3], 200, 5)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3, 0.3, 0.3], 200, 5, random_state=self.rng
+        )
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=200,
@@ -898,7 +901,9 @@ class TestGroupDelay:
     def test_group_delay_antisymmetry(self):
         """Group delay is antisymmetric: delay[i, j] == -delay[j, i]."""
         lags = np.array([0, 3, 8])
-        time_series = _lagged_broadband(self.rng, lags, [0.3, 0.3, 0.3], 200, 10)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3, 0.3, 0.3], 200, 10, random_state=self.rng
+        )
         m = Multitaper(
             time_series=time_series,
             sampling_frequency=200,
@@ -936,7 +941,9 @@ class TestAdvancedConnectivityIntegration:
         sampling_frequency = 500
         lags = np.array([0, 2, 4, 6, 8, 10])
         n_signals = lags.size
-        time_series = _lagged_broadband(self.rng, lags, [0.3] * n_signals, n_time, n_trials)
+        time_series = simulate_lagged_broadband(
+            lags, [0.3] * n_signals, n_time, n_trials, random_state=self.rng
+        )
 
         m = Multitaper(
             time_series=time_series,

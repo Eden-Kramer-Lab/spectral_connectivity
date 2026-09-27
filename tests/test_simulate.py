@@ -1,6 +1,11 @@
 import numpy as np
+import pytest
 
-from spectral_connectivity.simulate import simulate_MVAR
+from spectral_connectivity.simulate import (
+    simulate_lagged_broadband,
+    simulate_MVAR,
+    simulate_shared_oscillation,
+)
 
 
 def test_simulate_MVAR_deterministic_with_seed():
@@ -87,3 +92,315 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
         for trial in range(n_trials):
             reference[t, trial] += coefficients[0] @ reference[t - 1, trial]
     np.testing.assert_allclose(library, reference)
+
+
+@pytest.mark.parametrize(
+    "lags",
+    [(-3, 0), (0, 1.5), (0, 3.0), [[0, 3]], 3],
+    ids=["negative", "fractional", "whole_float", "2d", "scalar"],
+)
+def test_lagged_broadband_rejects_negative_or_fractional_lags(lags):
+    """Lags must be non-negative integers; a lead is a smaller lag, not a negative one."""
+    with pytest.raises(ValueError, match="non-negative integers"):
+        simulate_lagged_broadband(lags, noise_levels=0.1, n_time_samples=50, random_state=0)
+
+
+@pytest.mark.parametrize(
+    ("n_trials", "expected_shape"),
+    [(None, (50, 3)), (4, (50, 4, 3))],
+    ids=["no_trials", "trials"],
+)
+def test_lagged_broadband_shape(n_trials, expected_shape):
+    """The trial axis is present only when ``n_trials`` is given."""
+    time_series = simulate_lagged_broadband(
+        (0, 2, 5), noise_levels=0.1, n_time_samples=50, n_trials=n_trials, random_state=0
+    )
+    assert time_series.shape == expected_shape
+    assert time_series.dtype == np.float64
+
+
+def test_lagged_broadband_cross_correlation_peaks_at_lag():
+    """Signal 1 repeats signal 0 ``lags[1] - lags[0]`` samples later."""
+    lags = (2, 9)
+    time_series = simulate_lagged_broadband(
+        lags, noise_levels=0.1, n_time_samples=5000, random_state=0
+    )
+    signal0, signal1 = time_series[:, 0], time_series[:, 1]
+    # np.correlate(a, v, "full")[i] = sum_n a[n + k] * v[n] with k = i - (len(v) - 1).
+    cross_correlation = np.correlate(signal1, signal0, mode="full")
+    shift = np.argmax(cross_correlation) - (signal0.size - 1)
+    assert shift == lags[1] - lags[0]
+
+
+@pytest.mark.parametrize("leader", [0, 1])
+@pytest.mark.parametrize("n_trials", [None, 3])
+def test_lagged_broadband_reproduces_pair_helper_semantics(leader, n_trials):
+    """``lags=(0, L)`` slices one seeded source and adds one noise draw.
+
+    Replays by hand the leader/follower construction (source first, then
+    ``rng.normal(0, noise_sd, shape)``); the simulator must reproduce it bit for
+    bit, so that results built on the earlier construction do not change.
+    """
+    n_time_samples, lag, noise_sd, seed = 200, 15, 0.25, 42
+    lags = (0, lag) if leader == 0 else (lag, 0)
+
+    rng = np.random.default_rng(seed)
+    extra = () if n_trials is None else (n_trials,)
+    source = rng.standard_normal((n_time_samples + lag, *extra))
+    ahead, behind = source[lag:], source[:n_time_samples]
+    expected = np.stack([ahead, behind] if leader == 0 else [behind, ahead], axis=-1)
+    expected = expected + rng.normal(0, noise_sd, expected.shape)
+
+    time_series = simulate_lagged_broadband(
+        lags, noise_sd, n_time_samples, n_trials, random_state=np.random.default_rng(seed)
+    )
+    np.testing.assert_array_equal(time_series, expected)
+
+
+def test_lagged_broadband_noise_free_is_shifted_source():
+    """With ``noise_levels=0`` every signal is the source delayed by its lag."""
+    lags, n_time_samples, n_trials = np.array([0, 3, 8]), 100, 4
+    time_series = simulate_lagged_broadband(
+        lags, noise_levels=0, n_time_samples=n_time_samples, n_trials=n_trials, random_state=7
+    )
+    source = np.random.default_rng(7).standard_normal((n_time_samples + lags.max(), n_trials))
+    # source[max_lag + t] is "now", so signal k at time t is source[max_lag + t - lags[k]].
+    for k, lag in enumerate(lags):
+        np.testing.assert_array_equal(
+            time_series[..., k], source[lags.max() - lag : lags.max() - lag + n_time_samples]
+        )
+    # Signal 0 leads: signal 2 at time t + 8 equals signal 0 at time t.
+    np.testing.assert_array_equal(time_series[8:, :, 2], time_series[:-8, :, 0])
+
+
+_SAMPLING_FREQUENCY = 1000
+_N_TIME_SAMPLES = 1000  # 1 s, so ``frequency`` below falls exactly on an FFT bin
+_FREQUENCY = 40
+
+
+def _fourier_at_frequency(time_series):
+    """FFT coefficient at ``_FREQUENCY``, shape (n_trials, n_signals)."""
+    return np.fft.rfft(time_series, axis=0)[
+        round(_FREQUENCY * _N_TIME_SAMPLES / _SAMPLING_FREQUENCY)
+    ]
+
+
+def test_shared_oscillation_shape():
+    """Shape is (n_time_samples, n_trials, n_signals) with n_signals = len(amplitudes)."""
+    time_series = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, 300, 5, amplitudes=[1.0, 0.5, 2.0], random_state=0
+    )
+    assert time_series.shape == (300, 5, 3)
+    assert time_series.dtype == np.float64
+
+
+def test_shared_oscillation_frequency_dominates_spectrum():
+    """The planted frequency is the largest bin of every signal's spectrum."""
+    time_series = simulate_shared_oscillation(
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        _N_TIME_SAMPLES,
+        10,
+        amplitudes=[1.0, 2.0, 0.5],
+        noise_levels=1.0,
+        random_state=0,
+    )
+    power = np.abs(np.fft.rfft(time_series, axis=0)) ** 2  # (n_freqs, n_trials, n_signals)
+    frequencies = np.fft.rfftfreq(_N_TIME_SAMPLES, d=1 / _SAMPLING_FREQUENCY)
+    np.testing.assert_array_equal(frequencies[np.argmax(power, axis=0)], _FREQUENCY)
+
+
+def test_shared_oscillation_phase_offsets():
+    """Cross-spectrum phase at the planted bin is the difference of the offsets."""
+    phase_offsets = np.array([0.0, np.pi / 3, -np.pi / 4])
+    time_series = simulate_shared_oscillation(
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        _N_TIME_SAMPLES,
+        2,
+        amplitudes=[1.0, 2.0, 0.5],
+        phase_offsets=phase_offsets,
+        noise_levels=0,
+        random_phase_per_trial=False,
+    )
+    fourier = _fourier_at_frequency(time_series)  # (n_trials, n_signals)
+    cross_spectrum = fourier[:, :, np.newaxis] * np.conj(fourier[:, np.newaxis, :])
+    expected = phase_offsets[:, np.newaxis] - phase_offsets[np.newaxis, :]
+    # Compare on the circle, so a difference near +-pi does not wrap spuriously.
+    phase_error = np.angle(cross_spectrum * np.exp(-1j * expected))
+    np.testing.assert_allclose(phase_error, 0, atol=1e-6)
+
+
+@pytest.mark.parametrize("random_phase_per_trial", [True, False])
+def test_shared_oscillation_random_trial_phase(random_phase_per_trial):
+    """Trials start at different phases only when ``random_phase_per_trial`` is set.
+
+    Either way, all signals share each trial's phase: the between-signal phase
+    difference is the same on every trial.
+    """
+    time_series = simulate_shared_oscillation(
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        _N_TIME_SAMPLES,
+        20,
+        amplitudes=[1.0, 1.0],
+        phase_offsets=[0.0, np.pi / 2],
+        random_phase_per_trial=random_phase_per_trial,
+        random_state=0,
+    )
+    fourier = _fourier_at_frequency(time_series)  # (n_trials, n_signals)
+    # Each trial's phase relative to trial 0, compared on the circle.
+    trial_phase_change = np.angle(fourier[:, 0] * np.conj(fourier[0, 0]))
+    if random_phase_per_trial:
+        assert np.all(np.abs(trial_phase_change[1:]) > 1e-3)
+    else:
+        np.testing.assert_allclose(trial_phase_change, 0, atol=1e-6)
+    np.testing.assert_allclose(
+        np.angle(fourier[:, 0] * np.conj(fourier[:, 1])), -np.pi / 2, atol=1e-6
+    )
+
+
+def test_shared_oscillation_matches_its_formula():
+    """Without noise or trial phase, signal k is amplitudes[k] * sin(2 pi f t +
+    phase_offsets[k]) with t = n / sampling_frequency starting at 0."""
+    amplitudes = np.array([1.0, 0.5, 2.0])
+    phase_offsets = np.array([0.0, 0.3, -1.2])
+    result = simulate_shared_oscillation(
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        100,
+        2,
+        amplitudes,
+        phase_offsets=phase_offsets,
+        random_phase_per_trial=False,
+    )
+    time = np.arange(100) / _SAMPLING_FREQUENCY
+    expected = amplitudes * np.sin(
+        2 * np.pi * _FREQUENCY * time[:, np.newaxis] + phase_offsets
+    )
+    for trial in range(2):
+        np.testing.assert_allclose(result[:, trial], expected, atol=1e-12)
+
+
+def test_shared_oscillation_trial_phases_cover_the_circle():
+    """Per-trial phases are uniform on [0, 2 pi), so they average out across
+    trials: a half-range draw would plant cross-trial phase consistency."""
+    n_trials = 500
+    # 100 samples at 1000 Hz hold exactly four 40 Hz cycles, so it is FFT bin 4.
+    result = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, [1.0], random_state=0
+    )
+    phases = np.angle(np.fft.rfft(result[:, :, 0], axis=0)[4])
+    mean_resultant_length = np.abs(np.mean(np.exp(1j * phases)))
+    assert mean_resultant_length < 3 / np.sqrt(n_trials)
+
+
+def test_shared_oscillation_zero_amplitude_is_flat():
+    """An amplitude of 0 (without noise) leaves that signal identically zero."""
+    time_series = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, 200, 3, amplitudes=[1.0, 0.0], random_state=0
+    )
+    assert np.all(time_series[..., 1] == 0)
+    assert np.any(time_series[..., 0] != 0)
+
+
+@pytest.mark.parametrize(
+    ("simulate", "kwargs"),
+    [
+        (
+            simulate_lagged_broadband,
+            {"lags": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64, "n_trials": 2},
+        ),
+        (
+            simulate_shared_oscillation,
+            {
+                "frequency": _FREQUENCY,
+                "sampling_frequency": _SAMPLING_FREQUENCY,
+                "n_time_samples": 100,
+                "n_trials": 3,
+                "amplitudes": [1.0, 0.5],
+                "noise_levels": 0.3,
+            },
+        ),
+    ],
+    ids=["lagged_broadband", "shared_oscillation"],
+)
+def test_simulator_seed_determinism(simulate, kwargs):
+    """The same seed reproduces the output; a different seed changes it."""
+    first = simulate(**kwargs, random_state=3)
+    np.testing.assert_array_equal(first, simulate(**kwargs, random_state=3))
+    assert not np.allclose(first, simulate(**kwargs, random_state=4))
+
+
+def test_shared_oscillation_parameters_apply_per_signal():
+    """``amplitudes[k]`` and ``noise_levels[k]`` set signal k's amplitude and noise."""
+    amplitudes = np.array([0.5, 1.0, 3.0])
+    noise_levels = np.array([0.2, 1.0, 0.5])
+    kwargs = {
+        "frequency": _FREQUENCY,
+        "sampling_frequency": _SAMPLING_FREQUENCY,
+        "n_time_samples": _N_TIME_SAMPLES,
+        "n_trials": 20,
+        "amplitudes": amplitudes,
+        "random_state": 0,
+    }
+    noise_free = simulate_shared_oscillation(**kwargs)
+    noisy = simulate_shared_oscillation(**kwargs, noise_levels=noise_levels)
+    # Same seed: same trial phases, so the difference is exactly the added noise.
+    residual_sd = (noisy - noise_free).std(axis=(0, 1))
+    np.testing.assert_allclose(residual_sd, noise_levels, rtol=0.02)
+    # 25 samples per 40 Hz cycle put a sample within 7.2 degrees of each crest.
+    peak_amplitude = np.abs(noise_free).max(axis=(0, 1))
+    np.testing.assert_allclose(peak_amplitude, amplitudes, rtol=0.01)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"amplitudes": 1.0}, "amplitudes must be 1-D"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, 0.2, 0.3]}, "noise_levels"),
+        ({"amplitudes": [1.0, 1.0], "phase_offsets": [0.0, 1.0, 2.0]}, "phase_offsets"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [0.1, -0.1]}, "must be non-negative"),
+        ({"amplitudes": [1.0, 1.0], "noise_levels": [[0.1, 0.2]]}, "noise_levels"),
+        ({"amplitudes": []}, "at least one"),
+    ],
+    ids=[
+        "scalar_amplitudes",
+        "noise_levels_length",
+        "phase_offsets_length",
+        "negative_noise",
+        "2d_noise_levels",
+        "no_signals",
+    ],
+)
+def test_shared_oscillation_rejects_mismatched_parameters(kwargs, match):
+    """Per-signal parameters must be scalars or have one entry per signal."""
+    with pytest.raises(ValueError, match=match):
+        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 100, 2, **kwargs)
+
+
+def test_lagged_broadband_rejects_mismatched_noise_levels():
+    """``noise_levels`` must be a scalar or have one entry per lag."""
+    with pytest.raises(ValueError, match="noise_levels"):
+        simulate_lagged_broadband((0, 3), [0.1, 0.2, 0.3], n_time_samples=50)
+
+
+@pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int64])
+def test_lagged_broadband_accepts_any_integer_lag_dtype(dtype):
+    """Narrow integer lags must not overflow in the slice arithmetic."""
+    expected = simulate_lagged_broadband([0, 3], 0.0, n_time_samples=500, random_state=0)
+    result = simulate_lagged_broadband(
+        np.array([0, 3], dtype=dtype), 0.0, n_time_samples=500, random_state=0
+    )
+    np.testing.assert_array_equal(result, expected)
+
+
+def test_lagged_broadband_rejects_no_signals():
+    with pytest.raises(ValueError, match="at least one"):
+        simulate_lagged_broadband([], 0.1, n_time_samples=50)
+
+
+def test_lagged_broadband_rejects_negative_noise_levels():
+    """``noise_levels`` are standard deviations, so a negative one is a mistake."""
+    with pytest.raises(ValueError, match="must be non-negative"):
+        simulate_lagged_broadband((0, 3), -0.1, n_time_samples=50)

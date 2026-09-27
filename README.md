@@ -63,6 +63,8 @@ See the following notebooks for more information on how to use the package:
 + [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
 + [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
 
+The simulated-examples notebook builds every case with `spectral_connectivity.simulate` and asserts what each plot shows.
+
 ### Usage Example
 
 The quickest way to get connectivity measures is the high-level
