@@ -22,7 +22,7 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
 from spectral_connectivity.transforms import Multitaper
-from tests.test_directed_measures_oracle import (
+from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
     _companion_spectral_radius,
