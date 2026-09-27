@@ -1415,13 +1415,14 @@ def test__total_outflow():
 
 
 def test_directed_transfer_function():
-    """DTF_ij = |H_ij|**2 / sum_k |H_ik|**2 (normalized over sources)."""
+    """DTF of j -> i is |H_ij|**2 / sum_k |H_ik|**2, returned at [j, i]."""
     # The coefficients are unused: the transfer function is patched below.
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
     # |H|**2 = [[1, 4], [9, 25]] ([target, source]); the complex entries check
-    # that the squared magnitude, not the real part, is used.
+    # that the squared magnitude, not the real part, is used. The result is
+    # [source, target], so each target's column sums to 1 over sources.
     transfer_function = np.array([[1.0, 2.0j], [3.0, 4.0 - 3.0j]])
-    expected = np.array([[1 / 5, 4 / 5], [9 / 34, 25 / 34]])
+    expected = np.array([[1 / 5, 9 / 34], [4 / 5, 25 / 34]])
     with patch.object(
         Connectivity, "_transfer_function", new_callable=PropertyMock
     ) as mock_prop:
@@ -1431,12 +1432,13 @@ def test_directed_transfer_function():
 
 
 def test_partial_directed_coherence():
-    """PDC_ij = |A_ij|**2 / sum_k |A_kj|**2 (normalized over targets)."""
+    """PDC of j -> i is |A_ij|**2 / sum_k |A_kj|**2, returned at [j, i]."""
     # The coefficients are unused: the MVAR coefficients are patched below.
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
-    # |A|**2 = [[1, 4], [9, 25]] ([target, source]).
+    # |A|**2 = [[1, 4], [9, 25]] ([target, source]). The result is
+    # [source, target], so each source's row sums to 1 over targets.
     mvar_coefficients = np.array([[1.0, 2.0j], [3.0, 4.0 - 3.0j]])
-    expected = np.array([[1 / 10, 4 / 29], [9 / 10, 25 / 29]])
+    expected = np.array([[1 / 10, 9 / 10], [4 / 29, 25 / 29]])
     with patch.object(
         Connectivity, "_MVAR_Fourier_coefficients", new_callable=PropertyMock
     ) as mock_prop:
@@ -1451,7 +1453,8 @@ def test_directed_coherence_is_bounded_and_normalized():
     Regression test for a noise-variance broadcasting bug: the source noise
     variance was applied on the target axis (-2) instead of the source axis
     (-1), producing values > 1 whenever channels had unequal noise variances.
-    The squared directed coherence sums to 1 over sources (like DTF).
+    The squared directed coherence sums to 1 over sources (like DTF), axis -2
+    of the returned ``[source, target]`` array.
     """
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
     transfer_function = np.arange(1, 5).reshape((2, 2)).astype(float)  # [target, src]
@@ -1468,8 +1471,8 @@ def test_directed_coherence_is_bounded_and_normalized():
         mock_noise.return_value = noise_covariance
         dc = c.directed_coherence()
         assert np.all((dc >= 0.0) & (dc <= 1.0))
-        assert np.allclose(dc.sum(axis=-1), 1.0)
-        expected = np.array([[10 / 14, 4 / 14], [90 / 106, 16 / 106]])
+        assert np.allclose(dc.sum(axis=-2), 1.0)
+        expected = np.array([[10 / 14, 90 / 106], [4 / 14, 16 / 106]])
         assert np.allclose(np.squeeze(dc), expected)
 
 
@@ -1810,8 +1813,8 @@ def test_subset_pairwise_granger_prediction():
     pairs = np.array([[0, 1]])
     gp_subset = c.subset_pairwise_spectral_granger_prediction(pairs)
     gp_all = c.pairwise_spectral_granger_prediction()
-    # Output [i, j] is j -> i: the x -> y influence dominates y -> x.
-    assert np.nanmean(gp_all[..., 1, 0]) > 10 * np.nanmean(gp_all[..., 0, 1])
+    # Output [i, j] is i -> j: the x -> y influence dominates y -> x.
+    assert np.nanmean(gp_all[..., 0, 1]) > 10 * np.nanmean(gp_all[..., 1, 0])
     assert gp_subset.shape == gp_all.shape
     for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)

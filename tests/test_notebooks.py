@@ -869,8 +869,9 @@ def test_global_coherence(snapshot):
 
 # ============ Tutorial_Using_Paper_Examples tests ============
 # Only keeping 3 representative MVAR examples. Directed measures follow the
-# [i, j] = j -> i convention, matching simulate_MVAR's coefficients[lag, i, j]
-# (x_i(t) += coefficients[lag, i, j] * x_j(t - lag - 1)).
+# [i, j] = i -> j convention, the transpose of simulate_MVAR's
+# coefficients[lag, i, j] (x_i(t) += coefficients[lag, i, j] * x_j(t - lag - 1),
+# so coefficients[lag, i, j] is j -> i).
 
 
 def _mean_over_frequencies(measure):
@@ -918,9 +919,9 @@ def test_baccala_example2(snapshot):
     # PDC reflects direct coupling only: coefficients[0, 2, 0] == 0 (no 0 -> 2),
     # while every other off-diagonal coefficient is non-zero.
     pdc = _mean_over_frequencies(outputs["partial_directed_coherence"])
-    assert pdc[2, 0] < 0.03
-    for i, j in [(0, 1), (0, 2), (1, 0), (1, 2), (2, 1)]:
-        assert pdc[i, j] > 0.05
+    assert pdc[0, 2] < 0.03
+    for source, target in [(0, 1), (1, 0), (1, 2), (2, 0), (2, 1)]:
+        assert pdc[source, target] > 0.05
     assert outputs == snapshot
 
 
@@ -960,8 +961,8 @@ def test_dtf_and_ddtf_one_way_coupled_var(snapshot):
     # coefficients[0, 1, 0] = 0.4 (0 -> 1); coefficients[0, 0, 1] = 0 (no 1 -> 0).
     for measure in ("directed_transfer_function", "direct_directed_transfer_function"):
         mean = _mean_over_frequencies(outputs[measure])
-        assert mean[0, 1] < 0.01
-        assert mean[1, 0] > 10 * mean[0, 1]
+        assert mean[1, 0] < 0.01
+        assert mean[0, 1] > 10 * mean[1, 0]
     assert outputs == snapshot
 
 
@@ -999,10 +1000,10 @@ def test_conditional_granger_three_signal_regression(snapshot):
     # 0 <-> 1, 0 -> 2 and 1 -> 2 are all coupled.
     for measure in ("pairwise_spectral_granger", "conditional_spectral_granger"):
         granger = _mean_over_frequencies(outputs[measure])
-        assert granger[0, 2] < 0.02
-        assert granger[1, 2] < 0.02
-        for i, j in [(0, 1), (1, 0), (2, 0), (2, 1)]:
-            assert granger[i, j] > 0.05
+        assert granger[2, 0] < 0.02
+        assert granger[2, 1] < 0.02
+        for source, target in [(0, 1), (1, 0), (0, 2), (1, 2)]:
+            assert granger[source, target] > 0.05
     assert outputs == snapshot
 
 
