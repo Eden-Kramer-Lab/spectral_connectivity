@@ -80,6 +80,7 @@ coherence = multitaper_connectivity(
     method="coherence_magnitude",
     time_halfbandwidth_product=3,
 )
+# -> DataArray with dims (time, frequency, source, target)
 
 # Ask for several measures at once (returns an xarray.Dataset)
 measures = multitaper_connectivity(
@@ -89,21 +90,23 @@ measures = multitaper_connectivity(
 )
 ```
 
-Extra keyword arguments (`**kwargs`) configure the transform (window, tapers);
-`connectivity_kwargs` configure the measure; group measures take `group_labels`.
+Extra keyword arguments, like `time_halfbandwidth_product` here, configure the
+multitaper transform. Options for the measure itself go in
+`connectivity_kwargs`, and group measures take `group_labels` (see the
+[group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).
 
-Not sure which `time_halfbandwidth_product` or window duration to use?
-`suggest_parameters` picks them from your sampling rate, signal duration, and
-desired frequency resolution:
+The `3` above is a common default. To pick values from your recording's length
+and the frequency resolution you need, use `suggest_parameters`:
 
 ```python
 from spectral_connectivity import suggest_parameters
 
 params = suggest_parameters(
     sampling_frequency=1000,
-    signal_duration=2.0,  # seconds
-    desired_freq_resolution=4.0,  # Hz
+    signal_duration=10.0,  # seconds
+    desired_freq_resolution=2.0,  # Hz
 )
+# -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=1000,
