@@ -202,6 +202,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "tests/*" = ["ARG"]  # pytest fixtures are used by name, not by value
+"benchmarks/*" = ["T201"]  # benchmark scripts report to stdout
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"

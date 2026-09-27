@@ -559,6 +559,28 @@ directly with results from 2.x.
 - Phase locking uses unit-normalized coefficients with the same batched
   reduction. Phase-lag measures use bounded signal-row tiles and cache only
   reduced moments.
+- The phase-lag-index family forms its observation-level tiles in reused
+  buffers. Without observation weights and with at least 64 averaged
+  observations per window (`PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`), the first
+  phase-lag call reduces all four moments the family needs from one pass and
+  retains them (up to four `(n_time_windows, n_frequencies, n_signals,
+  n_signals)` arrays) until `clear_cache()`. In that regime, on a 2000-sample,
+  100-trial, 32-signal multitaper spectrum (500 observations; CPU,
+  `benchmarks/bench_default_measures.py`), the four phase-lag measures together
+  take 1.4 s instead of 3.9 s, the eleven default measures 3.5 s instead of
+  5.9 s, and a single phase-lag measure is 1.1-1.9x faster with a lower peak
+  (741 -> 536 MB of traced allocation). With fewer observations (e.g. a
+  time-resolved single-trial spectrum with 3 tapers) or with observation
+  weights, only the requested moments are computed, because there the extra
+  moments cost more than re-forming the tiles; on 1199 windows x 3 tapers x
+  32 signals a single phase-lag measure is 1.1-1.3x faster than before with an
+  unchanged peak, and a lone weighted measure on a Hann `MorletWavelet` with
+  `smoothing_time` about 1.2-1.4x faster. Outputs are unchanged: every
+  default measure is bit-identical except
+  `debiased_squared_weighted_phase_lag_index`, which differs only by
+  summation-order rounding in the squared moment (<= 1.4e-17 on the 250- and
+  500-observation benchmark cases; up to 2.5e-13 with three observations,
+  where the debiasing denominator is ill-conditioned).
 - Compact subset spectral-Granger factors only the requested 2-by-2 spectra.
 - Global coherence uses chunked batched eigendecomposition/SVD for modest
   decomposition dimensions and retains a per-bin sparse fallback for large

@@ -12,6 +12,8 @@ from spectral_connectivity._granger import (
     _sanitized_nonnegative_granger,
 )
 from spectral_connectivity.connectivity import (
+    EXPECTATION_AXES,
+    PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS,
     Connectivity,
     DirectedOrientationWarning,
     _bandpass,
@@ -21,7 +23,7 @@ from spectral_connectivity.connectivity import (
     _total_outflow,
 )
 from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import MorletWavelet, Multitaper
 from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
@@ -1756,7 +1758,7 @@ def test_coherency_zero_power_returns_nan():
     assert np.all(np.isnan(imag_coh[..., 1, 0]))
 
 
-@pytest.mark.parametrize("expectation_type", ["trials_tapers", "tapers"])
+@pytest.mark.parametrize("expectation_type", sorted(EXPECTATION_AXES))
 def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     """The tiled phase-lag-index family matches the per-fcn reference path.
 
@@ -1822,65 +1824,366 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
-def test_phase_lag_index_moments_are_computed_lazily():
-    """A single-measure call computes only the moments that measure needs.
+PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
 
-    The reduced imaginary-cross-spectrum moments are computed per key on demand,
-    so a lone ``phase_lag_index`` does not also compute (or retain) the other
-    measures' moments, while the family shares the ones already computed.
+
+def _many_observation_coefficients(rng, n_signals=4):
+    """Coefficients with exactly ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS``
+    averaged observations (trials x 4 tapers), shape (1, n_trials, 4, 16, n_signals).
     """
-    rng = np.random.default_rng(1)
-    shape = (2, 6, 4, 16, 4)
-    fc = (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)).astype(np.complex128)
-
-    pli_only = Connectivity(fc)
-    pli_only.phase_lag_index()
-    # "absolute" is the zero-lag test's scale.
-    assert set(pli_only.__dict__["_imaginary_moment_cache"]) == {"sign", "absolute"}
-
-    wpli_only = Connectivity(fc)
-    wpli_only.weighted_phase_lag_index()
-    assert set(wpli_only.__dict__["_imaginary_moment_cache"]) == {
-        "imaginary",
-        "absolute",
-    }
-
-    # The family accumulates all four moments across measures.
-    family = Connectivity(fc)
-    family.phase_lag_index()
-    family.weighted_phase_lag_index()
-    family.debiased_squared_weighted_phase_lag_index()
-    assert set(family.__dict__["_imaginary_moment_cache"]) == {
-        "sign",
-        "imaginary",
-        "absolute",
-        "squared",
-    }
-
-    # A repeated measure reuses the cached moment object (it is not recomputed).
-    reuse = Connectivity(fc)
-    reuse.phase_lag_index()
-    cached_sign = reuse.__dict__["_imaginary_moment_cache"]["sign"]
-    reuse.phase_lag_index()
-    assert reuse.__dict__["_imaginary_moment_cache"]["sign"] is cached_sign
+    n_trials = -(-PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS // 4)
+    shape = (1, n_trials, 4, 16, n_signals)
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
 
 
-def test_failed_phase_lag_reduction_caches_nothing():
-    """An error partway through the moment reduction must not leave partially
-    filled moments in the cache for a later measure to return."""
+@pytest.mark.parametrize(
+    ("many_observations", "expected_keys"),
+    [(False, {"sign", "absolute"}), (True, set(PHASE_LAG_MOMENTS))],
+)
+def test_lone_phase_lag_index_computes_all_moments_only_with_many_observations(
+    many_observations, expected_keys
+):
+    """Reducing the two moments a later measure might need pays off only when
+    each tile holds many observations per reduced value. With few (a
+    time-resolved single-trial spectrum), a lone PLI computes only its own."""
+    rng = np.random.default_rng(2)
+    if many_observations:
+        fc = _many_observation_coefficients(rng)
+    else:
+        shape = (8, 1, 3, 16, 4)  # 3 observations in each of 8 windows
+        fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(fc)
+    assert (conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS) == many_observations
+
+    pli = conn.phase_lag_index()
+    assert set(conn._imaginary_moment_cache) == expected_keys
+    np.testing.assert_array_equal(pli, Connectivity(fc).phase_lag_index())
+
+
+@pytest.mark.parametrize("offset", [-1, 0], ids=["just_below", "at"])
+def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
+    """A lone PLI reduces all four moments from exactly
+    ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` observations, not one fewer."""
+    n_observations = PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS + offset
+    shape = (1, n_observations, 1, 16, 3)
+    rng = np.random.default_rng(4)
+    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    assert conn.n_observations == n_observations
+
+    conn.phase_lag_index()
+    expected = set(PHASE_LAG_MOMENTS) if offset == 0 else {"sign", "absolute"}
+    assert set(conn._imaginary_moment_cache) == expected
+
+
+def test_reassigning_observation_weights_recomputes_phase_lag_moments():
+    """Weights assigned after a measure has run replace the unweighted moments
+    it cached (all four, with this many observations)."""
+    rng = np.random.default_rng(6)
+    fc = _many_observation_coefficients(rng)
+    weights = rng.uniform(0.2, 1.8, size=(*fc.shape[:-1], 1))
+    conn = Connectivity(fc)
+    unweighted = conn.weighted_phase_lag_index()
+    assert set(conn._imaginary_moment_cache) == set(PHASE_LAG_MOMENTS)
+
+    conn.observation_weights = weights
+    reweighted = conn.weighted_phase_lag_index()
+    expected = Connectivity(fc, observation_weights=weights).weighted_phase_lag_index()
+    assert not np.allclose(unweighted, expected, equal_nan=True)  # premise
+    np.testing.assert_array_equal(reweighted, expected)
+
+
+@pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
+def test_phase_lag_moments_are_computed_together_once(first_measure):
+    """With many observations, any one phase-lag measure caches all four
+    moments from one pass over the tiles, so every later measure of the family
+    reads them without re-forming a tile."""
+    conn = Connectivity(_many_observation_coefficients(np.random.default_rng(1)))
+
+    with patch.object(
+        conn, "_reduce_phase_lag_tile", wraps=conn._reduce_phase_lag_tile
+    ) as reduce_tile:
+        getattr(conn, first_measure)()
+        assert reduce_tile.call_count == 1  # 4 signals fit in one tile
+        cached = dict(conn.__dict__["_imaginary_moment_cache"])
+        assert set(cached) == {"sign", "imaginary", "absolute", "squared"}
+
+        for measure in PHASE_LAG_MEASURES:
+            getattr(conn, measure)()
+        assert reduce_tile.call_count == 1
+    # The cached arrays themselves are reused, not recomputed and replaced.
+    for key, moment in conn.__dict__["_imaginary_moment_cache"].items():
+        assert moment is cached[key]
+
+
+def _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile):
+    """Size the phase-lag tile workspace for ``sources_per_tile`` source signals.
+
+    A tile holds the non-negative bins of every observation for each
+    source-target pair, so one source row of two-sided coefficients of
+    ``shape`` (time, trial, taper, fft bin, signal) takes
+    ``n_time * n_trials * n_tapers * n_nonnegative * n_signals`` elements.
+    """
+    import spectral_connectivity.connectivity as connectivity_module
+
+    n_nonnegative = shape[3] // 2 + 1
+    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        sources_per_tile * elements_per_source,
+    )
+
+
+def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
+    """An error partway through the tile loop must not leave partially filled
+    moments in the cache for a later measure to return."""
     rng = np.random.default_rng(3)
     shape = (1, 4, 3, 8, 3)
     fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     expected = Connectivity(fc).debiased_squared_phase_lag_index()
 
+    # One source signal per tile, and the second tile fails after the first
+    # has been written.
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile=1)
     conn = Connectivity(fc)
+    reduce_tile = conn._reduce_phase_lag_tile
+    calls = []
+
+    def fail_on_second_tile(*args):
+        calls.append(args[3])
+        if len(calls) == 2:
+            raise MemoryError
+        return reduce_tile(*args)
+
     with (
-        patch.object(conn, "_expectation", side_effect=MemoryError),
+        patch.object(conn, "_reduce_phase_lag_tile", side_effect=fail_on_second_tile),
         pytest.raises(MemoryError),
     ):
         conn.phase_lag_index()
+    assert calls == [0, 1]
     assert not conn.__dict__["_imaginary_moment_cache"]
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
+
+
+@pytest.fixture
+def hann_morlet_coefficients():
+    """Morlet coefficients and their non-uniform (Hann) observation weights.
+
+    Returns
+    -------
+    coefficients : ndarray, shape (30, 4, 20, 2, 3)
+        One-sided (time, trial, smoothing sample, frequency, signal): 80
+        observations, enough that without weights a lone measure would reduce
+        all four phase-lag moments.
+    weights : ndarray, shape (30, 4, 20, 2, 1)
+    """
+    rng = np.random.default_rng(11)
+    wavelet = MorletWavelet(
+        rng.standard_normal((600, 4, 3)),
+        200.0,
+        [10.0, 20.0],
+        smoothing_time=0.1,
+        smoothing_kernel="hann",
+    )
+    coefficients = wavelet.fft()
+    weights = np.asarray(wavelet.observation_weights)
+    assert np.ptp(weights) > 0  # the weighted path, not a uniform shortcut
+    return coefficients, weights
+
+
+def test_weighted_phase_lag_moments_are_computed_per_request(hann_morlet_coefficients):
+    """With observation weights each moment is a full weighted expectation, so a
+    lone measure computes only the moments it needs, and a later measure adds
+    only its missing ones."""
+    coefficients, weights = hann_morlet_coefficients
+    conn = Connectivity(coefficients, observation_weights=weights, is_one_sided=True)
+    # Only the weights keep this on the per-request path.
+    assert conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
+    cache = conn._imaginary_moment_cache
+
+    conn.phase_lag_index()
+    assert set(cache) == {"sign", "absolute"}  # "absolute" scales the no-lag test
+    cached_absolute = cache["absolute"]
+
+    conn.weighted_phase_lag_index()
+    assert set(cache) == {"sign", "imaginary", "absolute"}
+    assert cache["absolute"] is cached_absolute  # not recomputed
+
+
+@pytest.mark.parametrize("weighted", [False, True])
+def test_weighted_phase_lag_index_is_exactly_one_at_a_tiny_constant_lag(
+    weighted, hann_morlet_coefficients
+):
+    """At a constant 1e-13 rad lag every observation's Im(X_0 conj X_1) is a
+    tiny positive difference of large products. E[Im] and E[|Im|] average the
+    same per-observation values, so wPLI is exactly 1, not a ratio of two
+    differently rounded estimates."""
+    if weighted:
+        coefficients, weights = hann_morlet_coefficients
+        signal = coefficients[..., 0]
+    else:
+        rng = np.random.default_rng(12)
+        shape = (1, 50, 5, 8)
+        signal = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        weights = None
+    lagged = np.stack([signal, signal * np.exp(-1j * 1e-13)], axis=-1)
+    conn = Connectivity(lagged, observation_weights=weights, is_one_sided=weighted)
+
+    np.testing.assert_array_equal(conn.weighted_phase_lag_index()[..., 0, 1], 1.0)
+    np.testing.assert_array_equal(conn.phase_lag_index()[..., 0, 1], 1.0)
+
+
+def test_phase_lag_moments_match_definition_under_observation_weights(
+    hann_morlet_coefficients,
+):
+    """With observation weights, each moment is the weighted mean over trials
+    and smoothing samples of a function of Im(X_i conj X_j), diagonal zeroed."""
+    coefficients, weights = hann_morlet_coefficients
+    conn = Connectivity(coefficients, observation_weights=weights, is_one_sided=True)
+
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = (
+        imag[..., :, np.newaxis] * real[..., np.newaxis, :]
+        - real[..., :, np.newaxis] * imag[..., np.newaxis, :]
+    )
+    diagonal = np.arange(coefficients.shape[-1])
+    imaginary[..., diagonal, diagonal] = 0
+    pair_weights = weights[..., np.newaxis]  # (time, trial, sample, frequency, 1, 1)
+
+    def weighted_mean(values):
+        return np.sum(pair_weights * values, axis=(1, 2)) / np.sum(pair_weights, axis=(1, 2))
+
+    definitions = {
+        "sign": np.sign,
+        "imaginary": lambda values: values,
+        "absolute": np.abs,
+        "squared": np.square,
+    }
+    moments = conn._imaginary_cross_spectrum_moments(*definitions)
+    for (key, function), moment in zip(definitions.items(), moments, strict=True):
+        np.testing.assert_allclose(
+            moment, weighted_mean(function(imaginary)), rtol=1e-12, atol=1e-12, err_msg=key
+        )
+
+
+def _connectivity_with_one_nan_observation():
+    """Coefficients with one NaN observation at non-negative bin 5, and the
+    (time, non-negative frequency) bins it invalidates."""
+    rng = np.random.default_rng(5)
+    shape = (1, 8, 3, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients[0, 3, 1, 5, 0] = np.nan
+    with pytest.warns(UserWarning, match="NaN or Inf"):
+        conn = Connectivity(coefficients)
+    invalid = np.zeros((1, 9), dtype=bool)
+    invalid[0, 5] = True
+    return conn, invalid
+
+
+def _morlet_connectivity_with_nan_edges():
+    """Morlet ``edge_mode="nan"`` marks its edge bins invalid through zero
+    observation weights; returns those (time, frequency) bins."""
+    rng = np.random.default_rng(6)
+    wavelet = MorletWavelet(
+        rng.standard_normal((600, 4, 2)), 200.0, [10.0, 20.0], edge_mode="nan"
+    )
+    conn = Connectivity.from_transform(wavelet)
+    return conn, ~np.asarray(wavelet.valid_time_frequency)
+
+
+@pytest.mark.parametrize(
+    "make_connectivity",
+    [_connectivity_with_one_nan_observation, _morlet_connectivity_with_nan_edges],
+)
+def test_phase_lag_moments_propagate_nan_observations(make_connectivity):
+    """A bin with a missing observation is NaN in every phase-lag measure, as
+    the mean of sign(Im) is; the sign moment's positive/negative counts alone
+    would treat the NaN as a zero-sign observation."""
+    conn, invalid = make_connectivity()
+    assert invalid.any()
+    assert (~invalid).any()
+    for measure in PHASE_LAG_MEASURES:
+        # Pre-existing: the weighted measures' _divide_where meets NaN / NaN
+        # moments and NumPy may emit "invalid value encountered in divide".
+        quiet_nan_division = (
+            np.errstate(invalid="ignore") if "weighted" in measure else nullcontext()
+        )
+        with quiet_nan_division:
+            value = getattr(conn, measure)()
+        for pair in [(0, 1), (1, 0)]:
+            pair_value = value[..., pair[0], pair[1]]
+            assert np.isnan(pair_value[invalid]).all(), measure
+            assert np.isfinite(pair_value[~invalid]).all(), measure
+
+
+def test_phase_lag_index_away_from_a_nan_observation_is_the_mean_sign():
+    """The bins without the NaN observation keep the plain mean of sign(Im)."""
+    conn, invalid = _connectivity_with_one_nan_observation()
+    coefficients = conn.fourier_coefficients[..., :9, :]
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = imag[..., 0] * real[..., 1] - real[..., 0] * imag[..., 1]
+    expected = np.mean(np.sign(imaginary), axis=(1, 2))
+    np.testing.assert_array_equal(
+        conn.phase_lag_index()[..., 0, 1][~invalid], expected[~invalid]
+    )
+
+
+@pytest.mark.parametrize("n_trials", [4, 20], ids=["few_observations", "many_observations"])
+def test_phase_lag_index_counts_a_real_cross_spectrum_as_zero_sign(n_trials):
+    """An observation whose cross-spectrum is real (a flat trial on one
+    channel) has sign(Im) = 0 and adds nothing to the mean sign, in both
+    moment regimes."""
+    rng = np.random.default_rng(5)
+    shape = (1, n_trials, 4, 16, 3)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    fc[0, 1, :, :, 0] = 0
+    conn = Connectivity(fc)
+    assert (conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS) == (n_trials == 20)
+
+    coefficients = fc[..., :9, :]
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = imag[..., 0] * real[..., 1] - real[..., 0] * imag[..., 1]
+    expected = np.mean(np.sign(imaginary), axis=(1, 2))
+    np.testing.assert_array_equal(conn.phase_lag_index()[..., 0, 1], expected)
+
+
+def test_phase_lag_family_single_measure_matches_batch():
+    """PLI alone equals PLI after the rest of the family filled the cache."""
+    rng = np.random.default_rng(13)
+    shape = (2, 6, 4, 16, 4)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    batch = Connectivity(fc)
+    batch.weighted_phase_lag_index()
+    batch.debiased_squared_phase_lag_index()
+    batch.debiased_squared_weighted_phase_lag_index()
+    np.testing.assert_array_equal(batch.phase_lag_index(), Connectivity(fc).phase_lag_index())
+
+
+@pytest.mark.parametrize("weighted", [False, True])
+def test_phase_lag_moments_partial_last_block(monkeypatch, weighted):
+    """Five signals in tiles of two source rows (2, 2, then a partial 1) give
+    the same moments as one tile, with and without observation weights."""
+    rng = np.random.default_rng(14)
+    shape = (2, 4, 3, 12, 5)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.5, 1.5, (*shape[:-1], 1)) if weighted else None
+    single_block = Connectivity(fc, observation_weights=weights)
+    expected = single_block._imaginary_cross_spectrum_moments(*PHASE_LAG_MOMENTS)
+
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile=2)
+    tiled = Connectivity(fc, observation_weights=weights)
+    with patch.object(
+        tiled, "_reduce_phase_lag_tile", wraps=tiled._reduce_phase_lag_tile
+    ) as reduce_tile:
+        actual = tiled._imaginary_cross_spectrum_moments(*PHASE_LAG_MOMENTS)
+    source_rows = [(call.args[3], call.args[4]) for call in reduce_tile.call_args_list]
+    assert source_rows == [(0, 2), (2, 4), (4, 5)]
+
+    for key, actual_moment, expected_moment in zip(
+        PHASE_LAG_MOMENTS, actual, expected, strict=True
+    ):
+        np.testing.assert_array_equal(actual_moment, expected_moment, err_msg=key)
 
 
 @pytest.mark.parametrize("sources_per_tile", [1, 2])
@@ -1890,25 +2193,15 @@ def test_phase_lag_family_uses_tiled_workspace_not_full_outer_product(
     """Every PLI variant works when the full observation CSM is unavailable,
     and several tiles (including a narrower last one) mirror into the same
     result as a single tile."""
-    import spectral_connectivity.connectivity as connectivity_module
-
     rng = np.random.default_rng(19)
     shape = (2, 5, 3, 12, 5)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     expected_conn = Connectivity(coefficients)
     expected = tuple(getattr(expected_conn, measure)() for measure in PHASE_LAG_MEASURES)
 
-    # Size the workspace for ``sources_per_tile`` source signals per tile (it
-    # holds the non-negative bins of every observation for each source-target
-    # pair), then make any accidental access to the full observation-level outer
-    # product fail loudly.
-    n_nonnegative = shape[3] // 2 + 1
-    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
-    monkeypatch.setattr(
-        connectivity_module,
-        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
-        sources_per_tile * elements_per_source,
-    )
+    # Tile ``sources_per_tile`` source signals at a time, then make any
+    # accidental access to the full observation-level outer product fail loudly.
+    _cap_phase_lag_workspace(monkeypatch, shape, sources_per_tile)
     tiled = Connectivity(coefficients)
     with patch.object(
         Connectivity,

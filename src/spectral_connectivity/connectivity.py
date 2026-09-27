@@ -85,11 +85,12 @@ EXPECTATION_AXES = {
 }
 
 # Per-observation functions of Im(S_ij) averaged by the phase-lag-index family;
-# see Connectivity._imaginary_cross_spectrum_moments.
+# see Connectivity._imaginary_cross_spectrum_moments. They look ``xp`` up when
+# called, not at import, so a swapped backend (the device-emulation tests) applies.
 _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
-    "sign": xp.sign,
+    "sign": lambda imaginary: xp.sign(imaginary),
     "imaginary": lambda imaginary: imaginary,
-    "absolute": xp.abs,
+    "absolute": lambda imaginary: xp.abs(imaginary),
     "squared": lambda imaginary: imaginary**2,
 }
 # Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
@@ -159,9 +160,27 @@ def _validated_rank(rank: int | None) -> int | None:
 
 
 # Peak workspace cap for the phase-lag-index family's observation-level signal
-# tiles. The final reduced signal-by-signal result is unavoidable, but the large
-# trial/taper/time-resolved outer product is never materialized in full.
+# tiles. The tile loop holds two float buffers of this many elements, plus, one
+# at a time, the three boolean comparison temporaries of the same count that
+# each tile's sign and NaN reductions make. The final reduced signal-by-signal
+# result is unavoidable, but the large trial/taper/time-resolved outer product
+# is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
+# Fewest averaged observations (``Connectivity.n_observations``) at which, without
+# observation weights, the first phase-lag measure reduces all four moments from
+# one tile pass instead of only the requested ones. A tile holds n_observations
+# times as many values as each reduced moment, so with many observations the
+# tile formation dominates and two extra reductions are nearly free, while with
+# few (e.g. time-resolved single-trial spectra) writing and retaining two extra
+# window-resolved moments costs more than re-forming the tile for a later
+# measure. Measured on 32 signals, 100 FFT bins, CPU, with windows x
+# observations held near 3600: a lone phase_lag_index computing all four was
+# 1.49x (3 observations), 1.33x (8), 1.23x (16), 1.15x (32), 1.08x (64) and
+# 1.03-1.07x (128-500) the time of computing only its two, while the four
+# phase-lag measures together took 0.80x (3) to 0.42x (500) the time. 64 is
+# the smallest count at which a lone measure costs at most 10% more and is
+# also faster than before one-pass reduction (0.75-0.79 s vs 0.89 s).
+PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS = 64
 # Element cap for the complex coefficients gathered per chunk of channel pairs
 # by ``Connectivity._subset_cross_spectral_matrix``. The gather and its
 # observation-major copy are each at most this size (32 MB at complex128), so
@@ -3492,19 +3511,45 @@ class Connectivity:
         ``debiased_squared_weighted_phase_lag_index``) each average a function --
         ``sign``, identity, ``abs`` or square -- of the imaginary part of the
         per-observation cross-spectral matrix, with the diagonal zeroed. This
-        returns the requested reduced moments, computing (and caching) any not
-        already available from signal-row tiles of the observation-level
+        returns the requested reduced moments from a cache, computing any that
+        are missing from signal-row tiles of the observation-level
         cross-spectrum. Only the non-negative bins are reduced, and each tile
         covers targets from its first row on; the strict lower triangle is then
         filled by pair symmetry (``_IMAGINARY_MOMENT_PAIR_SYMMETRY``).
 
-        Computing only the requested keys keeps a single-measure call
-        (e.g. ``phase_lag_index`` needs only ``"sign"``) from doing the other
-        measures' reductions or retaining their moments. Each tile is reduced
-        immediately, avoiding an observation-resolved ``n_signals**2``
-        intermediate. The reduced ``n_signals**2`` outputs are unavoidable. The
-        cached moments are invalidated with the other cached intermediates and
-        are treated as read-only (callers copy before any in-place edit).
+        Which moments a call computes depends on the regime. Without
+        observation weights and with at least
+        ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` averaged observations,
+        forming the tiles (memory traffic over every observation) dominates the
+        cost and each reduction is a single further pass over a tile, so the
+        first request reduces all four moments from one formation; that costs
+        less than forming the tiles again for a later measure that needs
+        different moments. The four reduced moments (each ``(n_time_windows,
+        n_frequencies, n_signals, n_signals)`` for the default expectation) are
+        then retained until :meth:`clear_cache`. In this regime a single
+        measure is also faster and has a lower peak than before (741 -> 536 MB
+        of traced allocation for one measure on a 100-trial, 5-taper,
+        1001-bin, 32-signal spectrum), because the tiles reuse two buffers
+        instead of fresh temporaries.
+
+        Otherwise only the missing requested moments are computed. With few
+        observations (e.g. a time-resolved single-trial spectrum with 3
+        tapers) each window-resolved moment is nearly as large as the tile, so
+        writing and retaining two extra ones cost more than re-forming the
+        tiles later (a lone ``phase_lag_index`` on 1199 windows x 3 tapers x
+        100 bins x 32 signals took 1.49x as long and 1.5x the peak memory).
+        With observation weights each moment is a full weighted
+        :meth:`_expectation` with tile-sized temporaries; computing all four
+        made a lone weighted measure 7-14% (``phase_lag_index``) and 33-54%
+        (``weighted_phase_lag_index``) slower on a Hann-weighted Morlet
+        transform (4000 samples, 40 trials, 16 signals, 30 frequencies).
+
+        Each tile is reduced immediately (see :meth:`_reduce_phase_lag_tile`)
+        into two workspace buffers allocated once per call, avoiding an
+        observation-resolved ``n_signals**2`` intermediate. The reduced
+        ``n_signals**2`` outputs are unavoidable. The cached moments are
+        invalidated with the other cached intermediates and are treated as
+        read-only (callers copy before any in-place edit).
 
         Parameters
         ----------
@@ -3520,8 +3565,7 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         cache = self._imaginary_moment_cache
-        missing = [key for key in keys if key not in cache]
-        if missing:
+        if any(key not in cache for key in keys):
             coefficients = self._nonnegative_fourier_coefficients()
             n_signals = coefficients.shape[-1]
             kept_observation_axes = [
@@ -3534,9 +3578,22 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
+            # Without weights and with many observations all four moments are
+            # cheap single-pass reductions of the tile, so they are computed
+            # together (see PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS). Otherwise
+            # only the missing requested ones are: with weights each is a full
+            # ``_expectation`` with tile-sized temporaries, and with few
+            # observations the reduced moments are nearly as large as the tile.
             # Filled here and cached only once complete, so an error partway
             # through leaves no uninitialized moments behind.
-            moments = {key: xp.empty(result_shape, dtype=real_dtype) for key in missing}
+            if (
+                self._observation_weights is None
+                and self.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
+            ):
+                computed_keys = list(_IMAGINARY_MOMENTS)
+            else:
+                computed_keys = list(dict.fromkeys(key for key in keys if key not in cache))
+            moments = {key: xp.empty(result_shape, dtype=real_dtype) for key in computed_keys}
 
             observation_frequency_elements = int(np.prod(coefficients.shape[:-1]))
             elements_per_source = max(1, observation_frequency_elements * n_signals)
@@ -3559,18 +3616,46 @@ class Connectivity:
             # makes the tiles' broadcast products stride badly through memory.
             real = xp.ascontiguousarray(coefficients.real)
             imag = xp.ascontiguousarray(coefficients.imag)
+            # Each tile is a contiguous view of the leading part of these flat
+            # buffers, so later (narrower) tiles reuse the first tile's memory.
+            workspace_size = observation_frequency_elements * signals_per_block * n_signals
+            tile_buffer = xp.empty(workspace_size, dtype=real_dtype)
+            scratch_buffer = xp.empty(workspace_size, dtype=real_dtype)
+            observation_frequency_shape = coefficients.shape[:-1]
+            block_diagonal = xp.arange(signals_per_block)
+            # Contracts a tile's observation axes in the squared moment, e.g.
+            # "abcdef,abcdef->adef" (time, trial, taper, frequency, row, column).
+            letters = "abcdef"
+            kept = "".join(
+                letter
+                for axis, letter in enumerate(letters)
+                if axis not in self._expectation_axes
+            )
+            squared_subscripts = f"{letters},{letters}->{kept}"
             for start in range(0, n_signals, signals_per_block):
                 stop = min(n_signals, start + signals_per_block)
-                imaginary = (
-                    imag[..., start:stop, xp.newaxis] * real[..., xp.newaxis, start:]
-                    - real[..., start:stop, xp.newaxis] * imag[..., xp.newaxis, start:]
+                tile_shape = (*observation_frequency_shape, stop - start, n_signals - start)
+                tile_size = (
+                    observation_frequency_elements * (stop - start) * (n_signals - start)
                 )
-                local_diagonal = xp.arange(stop - start)
+                imaginary = tile_buffer[:tile_size].reshape(tile_shape)
+                scratch = scratch_buffer[:tile_size].reshape(tile_shape)
+                xp.multiply(
+                    imag[..., start:stop, xp.newaxis],
+                    real[..., xp.newaxis, start:],
+                    out=imaginary,
+                )
+                xp.multiply(
+                    real[..., start:stop, xp.newaxis],
+                    imag[..., xp.newaxis, start:],
+                    out=scratch,
+                )
+                xp.subtract(imaginary, scratch, out=imaginary)
+                local_diagonal = block_diagonal[: stop - start]
                 imaginary[..., local_diagonal, local_diagonal] = 0
-
-                for key, reduced in moments.items():
-                    moment = _IMAGINARY_MOMENTS[key](imaginary)
-                    reduced[..., start:stop, start:] = self._expectation(moment)
+                self._reduce_phase_lag_tile(
+                    imaginary, scratch, moments, start, stop, squared_subscripts
+                )
 
             # Overwrite the strict lower triangle from the upper one: the pairs
             # each tile skipped and the in-tile lower entries alike.
@@ -3581,6 +3666,74 @@ class Connectivity:
                 )
             cache.update(moments)
         return tuple(cache[key] for key in keys)
+
+    def _reduce_phase_lag_tile(
+        self,
+        imaginary: BackendArray,
+        scratch: BackendArray,
+        moments: dict[str, BackendArray],
+        start: int,
+        stop: int,
+        squared_subscripts: str,
+    ) -> None:
+        """Average the four phase-lag moments of one tile into ``moments``.
+
+        Parameters
+        ----------
+        imaginary : array, shape (n_time_windows, n_trials, n_tapers, n_nonnegative_frequencies, stop - start, n_signals - start)
+            ``Im(X_i conj(X_j))`` per observation for source rows
+            ``start:stop`` and targets ``start:``, with the diagonal zeroed.
+        scratch : array, same shape as ``imaginary``
+            Workspace; overwritten.
+        moments : dict of str to array, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
+            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all four
+            or the requested subset (see :meth:`_imaginary_cross_spectrum_moments`).
+            The block
+            ``[..., start:stop, start:]`` of each is written.
+        start, stop : int
+            The tile's source rows.
+        squared_subscripts : str
+            ``einsum`` subscripts contracting ``imaginary * imaginary`` over the
+            averaged observation axes (used without observation weights).
+
+        Notes
+        -----
+        Without observation weights every moment is a plain mean, reduced in a
+        single pass over the tile. The sign moment is counted from boolean
+        comparisons, which are False for NaN, so bins with any NaN observation
+        are set to NaN explicitly, as the mean of ``sign`` would give. The
+        ``imaginary`` moment is the mean of the same per-observation values as
+        ``absolute`` rather than the imaginary part of the (differently
+        rounded) cross-spectral matrix, so their ratio in
+        ``weighted_phase_lag_index`` is exactly 1 in magnitude at a constant
+        lag above the no-lag guard (:meth:`_has_no_phase_lag`, below which it
+        is defined as 0). With observation weights each moment goes through
+        :meth:`_expectation`, which needs the per-observation values.
+        """
+        block = (..., slice(start, stop), slice(start, None))
+        if self._observation_weights is not None:
+            for key, reduced in moments.items():
+                reduced[block] = self._expectation(_IMAGINARY_MOMENTS[key](imaginary))
+            return
+
+        observation_axes = self._expectation_axes
+        n_observations = self.n_observations
+        if "sign" in moments:
+            positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
+            negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
+            invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
+            moments["sign"][block] = xp.where(
+                invalid, xp.nan, (positive - negative) / n_observations
+            )
+        if "imaginary" in moments:
+            moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
+        if "squared" in moments:
+            # Sum of squares without materializing imaginary * imaginary.
+            squared_sum = xp.einsum(squared_subscripts, imaginary, imaginary)
+            moments["squared"][block] = squared_sum / n_observations
+        if "absolute" in moments:
+            xp.abs(imaginary, out=scratch)
+            moments["absolute"][block] = xp.mean(scratch, axis=observation_axes)
 
     @_asnumpy
     def phase_lag_index(self) -> NDArray[np.floating]:
