@@ -1860,6 +1860,38 @@ def test_lone_phase_lag_index_computes_all_moments_only_with_many_observations(
     np.testing.assert_array_equal(pli, Connectivity(fc).phase_lag_index())
 
 
+@pytest.mark.parametrize("offset", [-1, 0], ids=["just_below", "at"])
+def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
+    """A lone PLI reduces all four moments from exactly
+    ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` observations, not one fewer."""
+    n_observations = PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS + offset
+    shape = (1, n_observations, 1, 16, 3)
+    rng = np.random.default_rng(4)
+    conn = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    assert conn.n_observations == n_observations
+
+    conn.phase_lag_index()
+    expected = set(PHASE_LAG_MOMENTS) if offset == 0 else {"sign", "absolute"}
+    assert set(conn._imaginary_moment_cache) == expected
+
+
+def test_reassigning_observation_weights_recomputes_phase_lag_moments():
+    """Weights assigned after a measure has run replace the unweighted moments
+    it cached (all four, with this many observations)."""
+    rng = np.random.default_rng(6)
+    fc = _many_observation_coefficients(rng)
+    weights = rng.uniform(0.2, 1.8, size=(*fc.shape[:-1], 1))
+    conn = Connectivity(fc)
+    unweighted = conn.weighted_phase_lag_index()
+    assert set(conn._imaginary_moment_cache) == set(PHASE_LAG_MOMENTS)
+
+    conn.observation_weights = weights
+    reweighted = conn.weighted_phase_lag_index()
+    expected = Connectivity(fc, observation_weights=weights).weighted_phase_lag_index()
+    assert not np.allclose(unweighted, expected, equal_nan=True)  # premise
+    np.testing.assert_array_equal(reweighted, expected)
+
+
 @pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
 def test_phase_lag_moments_are_computed_together_once(first_measure):
     """With many observations, any one phase-lag measure caches all four
@@ -1939,13 +1971,15 @@ def hann_morlet_coefficients():
 
     Returns
     -------
-    coefficients : ndarray, shape (30, 3, 20, 2, 3)
-        One-sided (time, trial, smoothing sample, frequency, signal).
-    weights : ndarray, shape (30, 3, 20, 2, 1)
+    coefficients : ndarray, shape (30, 4, 20, 2, 3)
+        One-sided (time, trial, smoothing sample, frequency, signal): 80
+        observations, enough that without weights a lone measure would reduce
+        all four phase-lag moments.
+    weights : ndarray, shape (30, 4, 20, 2, 1)
     """
     rng = np.random.default_rng(11)
     wavelet = MorletWavelet(
-        rng.standard_normal((600, 3, 3)),
+        rng.standard_normal((600, 4, 3)),
         200.0,
         [10.0, 20.0],
         smoothing_time=0.1,
@@ -1963,6 +1997,8 @@ def test_weighted_phase_lag_moments_are_computed_per_request(hann_morlet_coeffic
     only its missing ones."""
     coefficients, weights = hann_morlet_coefficients
     conn = Connectivity(coefficients, observation_weights=weights, is_one_sided=True)
+    # Only the weights keep this on the per-request path.
+    assert conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS
     cache = conn._imaginary_moment_cache
 
     conn.phase_lag_index()
@@ -2090,6 +2126,25 @@ def test_phase_lag_index_away_from_a_nan_observation_is_the_mean_sign():
     np.testing.assert_array_equal(
         conn.phase_lag_index()[..., 0, 1][~invalid], expected[~invalid]
     )
+
+
+@pytest.mark.parametrize("n_trials", [4, 20], ids=["few_observations", "many_observations"])
+def test_phase_lag_index_counts_a_real_cross_spectrum_as_zero_sign(n_trials):
+    """An observation whose cross-spectrum is real (a flat trial on one
+    channel) has sign(Im) = 0 and adds nothing to the mean sign, in both
+    moment regimes."""
+    rng = np.random.default_rng(5)
+    shape = (1, n_trials, 4, 16, 3)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    fc[0, 1, :, :, 0] = 0
+    conn = Connectivity(fc)
+    assert (conn.n_observations >= PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS) == (n_trials == 20)
+
+    coefficients = fc[..., :9, :]
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = imag[..., 0] * real[..., 1] - real[..., 0] * imag[..., 1]
+    expected = np.mean(np.sign(imaginary), axis=(1, 2))
+    np.testing.assert_array_equal(conn.phase_lag_index()[..., 0, 1], expected)
 
 
 def test_phase_lag_family_single_measure_matches_batch():
