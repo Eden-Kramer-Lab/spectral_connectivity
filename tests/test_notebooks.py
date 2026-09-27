@@ -28,7 +28,7 @@ import pytest
 from syrupy.extensions.amber import AmberSnapshotExtension
 
 from spectral_connectivity import Connectivity, Multitaper
-from spectral_connectivity.simulate import simulate_MVAR
+from spectral_connectivity.simulate import simulate_lagged_broadband, simulate_MVAR
 from spectral_connectivity.transforms import prepare_time_series
 
 # Arrays are stored as float32 (its ~1e-7 relative precision matches the
@@ -559,26 +559,6 @@ def test_pairwise_phase_consistency(phase_offset_trials, snapshot):
     assert outputs == snapshot
 
 
-def _lagged_broadband_pair(rng, n_time_samples, lag_samples, leader, noise_sd, n_trials=None):
-    """Two noisy copies of one white-noise source, the leader ``lag_samples`` ahead.
-
-    A broadband source is needed: a pure sinusoid delayed by a whole number of
-    cycles (e.g. 200 Hz by 10 ms) is indistinguishable from the original, so it
-    carries no lag information for group delay or the phase slope index.
-    Returns shape ``(n_time_samples, n_signals)`` or, with ``n_trials``,
-    ``(n_time_samples, n_trials, n_signals)``.
-    """
-    extra = () if n_trials is None else (n_trials,)
-    source = rng.standard_normal((n_time_samples + lag_samples, *extra))
-    ahead, behind = (
-        source[lag_samples:],
-        source[:n_time_samples],
-    )  # behind[t] == ahead[t - lag]
-    pair = [ahead, behind] if leader == 0 else [behind, ahead]
-    signal = np.stack(pair, axis=-1)
-    return signal + rng.normal(0, noise_sd, signal.shape)
-
-
 def test_group_delay_signal1_leads(snapshot):
     """Group delay: Signal #1 leads Signal #2."""
     rng = np.random.default_rng(42)
@@ -588,12 +568,9 @@ def test_group_delay_signal1_leads(snapshot):
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     time_lag = 0.010  # 10 ms = 15 samples
-    signal = _lagged_broadband_pair(
-        rng,
-        n_time_samples,
-        round(time_lag * sampling_frequency),
-        leader=0,
-        noise_sd=0.25,
+    lag_samples = round(time_lag * sampling_frequency)
+    signal = simulate_lagged_broadband(
+        (0, lag_samples), 0.25, n_time_samples, random_state=rng
     )
 
     multitaper = Multitaper(
@@ -623,12 +600,9 @@ def test_group_delay_signal2_leads(snapshot):
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     time_lag = 0.010  # 10 ms = 15 samples
-    signal = _lagged_broadband_pair(
-        rng,
-        n_time_samples,
-        round(time_lag * sampling_frequency),
-        leader=1,
-        noise_sd=0.25,
+    lag_samples = round(time_lag * sampling_frequency)
+    signal = simulate_lagged_broadband(
+        (lag_samples, 0), 0.25, n_time_samples, random_state=rng
     )
 
     multitaper = Multitaper(
@@ -658,14 +632,10 @@ def test_group_delay_signal2_leads_over_time(snapshot):
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     time_lag = 0.010  # 10 ms = 15 samples
+    lag_samples = round(time_lag * sampling_frequency)
     # Signal 2 leads (appears first in time)
-    signal = _lagged_broadband_pair(
-        rng,
-        n_time_samples,
-        round(time_lag * sampling_frequency),
-        leader=1,
-        noise_sd=1.0,
-        n_trials=n_trials,
+    signal = simulate_lagged_broadband(
+        (lag_samples, 0), 1.0, n_time_samples, n_trials, random_state=rng
     )
 
     multitaper = Multitaper(
@@ -697,12 +667,9 @@ def test_phase_slope_index_signal1_leads(snapshot):
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     time_lag = 0.010  # 10 ms = 15 samples
-    signal = _lagged_broadband_pair(
-        rng,
-        n_time_samples,
-        round(time_lag * sampling_frequency),
-        leader=0,
-        noise_sd=0.25,
+    lag_samples = round(time_lag * sampling_frequency)
+    signal = simulate_lagged_broadband(
+        (0, lag_samples), 0.25, n_time_samples, random_state=rng
     )
 
     multitaper = Multitaper(
@@ -732,12 +699,9 @@ def test_phase_slope_index_signal2_leads(snapshot):
     time = np.linspace(time_extent[0], time_extent[1], num=n_time_samples, endpoint=True)
 
     time_lag = 0.010  # 10 ms = 15 samples
-    signal = _lagged_broadband_pair(
-        rng,
-        n_time_samples,
-        round(time_lag * sampling_frequency),
-        leader=1,
-        noise_sd=0.25,
+    lag_samples = round(time_lag * sampling_frequency)
+    signal = simulate_lagged_broadband(
+        (lag_samples, 0), 0.25, n_time_samples, random_state=rng
     )
 
     multitaper = Multitaper(
