@@ -12,6 +12,7 @@ from spectral_connectivity._granger import (
     _sanitized_nonnegative_granger,
 )
 from spectral_connectivity.connectivity import (
+    EXPECTATION_AXES,
     Connectivity,
     DirectedOrientationWarning,
     _bandpass,
@@ -1756,7 +1757,7 @@ def test_coherency_zero_power_returns_nan():
     assert np.all(np.isnan(imag_coh[..., 1, 0]))
 
 
-@pytest.mark.parametrize("expectation_type", ["trials_tapers", "tapers"])
+@pytest.mark.parametrize("expectation_type", sorted(EXPECTATION_AXES))
 def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     """The tiled phase-lag-index family matches the per-fcn reference path.
 
