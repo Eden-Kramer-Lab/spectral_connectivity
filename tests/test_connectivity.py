@@ -21,7 +21,7 @@ from spectral_connectivity.connectivity import (
     _total_outflow,
 )
 from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import MorletWavelet, Multitaper
 from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
@@ -1884,6 +1884,194 @@ def test_failed_phase_lag_reduction_caches_nothing(monkeypatch):
     assert calls == [0, 1]
     assert not conn.__dict__["_imaginary_moment_cache"]
     np.testing.assert_array_equal(conn.debiased_squared_phase_lag_index(), expected)
+
+
+PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
+
+
+@pytest.fixture
+def hann_morlet_coefficients():
+    """Morlet coefficients and their non-uniform (Hann) observation weights.
+
+    Returns
+    -------
+    coefficients : ndarray, shape (30, 3, 20, 2, 3)
+        One-sided (time, trial, smoothing sample, frequency, signal).
+    weights : ndarray, shape (30, 3, 20, 2, 1)
+    """
+    rng = np.random.default_rng(11)
+    wavelet = MorletWavelet(
+        rng.standard_normal((600, 3, 3)),
+        200.0,
+        [10.0, 20.0],
+        smoothing_time=0.1,
+        smoothing_kernel="hann",
+    )
+    coefficients = wavelet.fft()
+    weights = np.asarray(wavelet.observation_weights)
+    assert np.ptp(weights) > 0  # the weighted path, not a uniform shortcut
+    return coefficients, weights
+
+
+@pytest.mark.parametrize("weighted", [False, True])
+def test_weighted_phase_lag_index_is_exactly_one_at_a_tiny_constant_lag(
+    weighted, hann_morlet_coefficients
+):
+    """At a constant 1e-13 rad lag every observation's Im(X_0 conj X_1) is a
+    tiny positive difference of large products. E[Im] and E[|Im|] average the
+    same per-observation values, so wPLI is exactly 1, not a ratio of two
+    differently rounded estimates."""
+    if weighted:
+        coefficients, weights = hann_morlet_coefficients
+        signal = coefficients[..., 0]
+    else:
+        rng = np.random.default_rng(12)
+        shape = (1, 50, 5, 8)
+        signal = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        weights = None
+    lagged = np.stack([signal, signal * np.exp(-1j * 1e-13)], axis=-1)
+    conn = Connectivity(lagged, observation_weights=weights, is_one_sided=weighted)
+
+    np.testing.assert_array_equal(conn.weighted_phase_lag_index()[..., 0, 1], 1.0)
+    np.testing.assert_array_equal(conn.phase_lag_index()[..., 0, 1], 1.0)
+
+
+def test_phase_lag_moments_match_definition_under_observation_weights(
+    hann_morlet_coefficients,
+):
+    """With observation weights, each moment is the weighted mean over trials
+    and smoothing samples of a function of Im(X_i conj X_j), diagonal zeroed."""
+    coefficients, weights = hann_morlet_coefficients
+    conn = Connectivity(coefficients, observation_weights=weights, is_one_sided=True)
+
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = (
+        imag[..., :, np.newaxis] * real[..., np.newaxis, :]
+        - real[..., :, np.newaxis] * imag[..., np.newaxis, :]
+    )
+    diagonal = np.arange(coefficients.shape[-1])
+    imaginary[..., diagonal, diagonal] = 0
+    pair_weights = weights[..., np.newaxis]  # (time, trial, sample, frequency, 1, 1)
+
+    def weighted_mean(values):
+        return np.sum(pair_weights * values, axis=(1, 2)) / np.sum(pair_weights, axis=(1, 2))
+
+    definitions = {
+        "sign": np.sign,
+        "imaginary": lambda values: values,
+        "absolute": np.abs,
+        "squared": np.square,
+    }
+    moments = conn._imaginary_cross_spectrum_moments(*definitions)
+    for (key, function), moment in zip(definitions.items(), moments, strict=True):
+        np.testing.assert_allclose(
+            moment, weighted_mean(function(imaginary)), rtol=1e-12, atol=1e-12, err_msg=key
+        )
+
+
+def _connectivity_with_one_nan_observation():
+    """Coefficients with one NaN observation at non-negative bin 5, and the
+    (time, non-negative frequency) bins it invalidates."""
+    rng = np.random.default_rng(5)
+    shape = (1, 8, 3, 16, 2)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients[0, 3, 1, 5, 0] = np.nan
+    with pytest.warns(UserWarning, match="NaN or Inf"):
+        conn = Connectivity(coefficients)
+    invalid = np.zeros((1, 9), dtype=bool)
+    invalid[0, 5] = True
+    return conn, invalid
+
+
+def _morlet_connectivity_with_nan_edges():
+    """Morlet ``edge_mode="nan"`` marks its edge bins invalid through zero
+    observation weights; returns those (time, frequency) bins."""
+    rng = np.random.default_rng(6)
+    wavelet = MorletWavelet(
+        rng.standard_normal((600, 4, 2)), 200.0, [10.0, 20.0], edge_mode="nan"
+    )
+    conn = Connectivity.from_transform(wavelet)
+    return conn, ~np.asarray(wavelet.valid_time_frequency)
+
+
+@pytest.mark.parametrize(
+    "make_connectivity",
+    [_connectivity_with_one_nan_observation, _morlet_connectivity_with_nan_edges],
+)
+def test_phase_lag_moments_propagate_nan_observations(make_connectivity):
+    """A bin with a missing observation is NaN in every phase-lag measure, as
+    the mean of sign(Im) is; the sign moment's positive/negative counts alone
+    would treat the NaN as a zero-sign observation."""
+    conn, invalid = make_connectivity()
+    assert invalid.any()
+    assert (~invalid).any()
+    for measure in PHASE_LAG_MEASURES:
+        # wPLI's guarded division meets the NaN moments and may flag them.
+        with np.errstate(invalid="ignore"):
+            value = getattr(conn, measure)()
+        for pair in [(0, 1), (1, 0)]:
+            pair_value = value[..., pair[0], pair[1]]
+            assert np.isnan(pair_value[invalid]).all(), measure
+            assert np.isfinite(pair_value[~invalid]).all(), measure
+
+
+def test_phase_lag_index_away_from_a_nan_observation_is_the_mean_sign():
+    """The bins without the NaN observation keep the plain mean of sign(Im)."""
+    conn, invalid = _connectivity_with_one_nan_observation()
+    coefficients = conn.fourier_coefficients[..., :9, :]
+    real, imag = coefficients.real, coefficients.imag
+    imaginary = imag[..., 0] * real[..., 1] - real[..., 0] * imag[..., 1]
+    expected = np.mean(np.sign(imaginary), axis=(1, 2))
+    np.testing.assert_array_equal(
+        conn.phase_lag_index()[..., 0, 1][~invalid], expected[~invalid]
+    )
+
+
+def test_phase_lag_family_single_measure_matches_batch():
+    """PLI alone equals PLI after the rest of the family filled the cache."""
+    rng = np.random.default_rng(13)
+    shape = (2, 6, 4, 16, 4)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    batch = Connectivity(fc)
+    batch.weighted_phase_lag_index()
+    batch.debiased_squared_phase_lag_index()
+    batch.debiased_squared_weighted_phase_lag_index()
+    np.testing.assert_array_equal(batch.phase_lag_index(), Connectivity(fc).phase_lag_index())
+
+
+@pytest.mark.parametrize("weighted", [False, True])
+def test_phase_lag_moments_partial_last_block(monkeypatch, weighted):
+    """Five signals in tiles of two source rows (2, 2, then a partial 1) give
+    the same moments as one tile, with and without observation weights."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    rng = np.random.default_rng(14)
+    shape = (2, 4, 3, 12, 5)
+    fc = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.5, 1.5, (*shape[:-1], 1)) if weighted else None
+    single_block = Connectivity(fc, observation_weights=weights)
+    expected = single_block._imaginary_cross_spectrum_moments(*PHASE_LAG_MOMENTS)
+
+    n_nonnegative = shape[3] // 2 + 1
+    elements_per_source = int(np.prod(shape[:3])) * n_nonnegative * shape[-1]
+    monkeypatch.setattr(
+        connectivity_module,
+        "PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS",
+        2 * elements_per_source,
+    )
+    tiled = Connectivity(fc, observation_weights=weights)
+    with patch.object(
+        tiled, "_reduce_phase_lag_tile", wraps=tiled._reduce_phase_lag_tile
+    ) as reduce_tile:
+        actual = tiled._imaginary_cross_spectrum_moments(*PHASE_LAG_MOMENTS)
+    source_rows = [(call.args[3], call.args[4]) for call in reduce_tile.call_args_list]
+    assert source_rows == [(0, 2), (2, 4), (4, 5)]
+
+    for key, actual_moment, expected_moment in zip(
+        PHASE_LAG_MOMENTS, actual, expected, strict=True
+    ):
+        np.testing.assert_array_equal(actual_moment, expected_moment, err_msg=key)
 
 
 @pytest.mark.parametrize("sources_per_tile", [1, 2])

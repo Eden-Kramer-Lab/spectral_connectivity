@@ -21,6 +21,7 @@ needed to keep these regressions from returning.
 
 import operator
 import types
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -384,3 +385,29 @@ def test_multitaper_transform_runs_on_the_device(xp):
     coherence = Connectivity.from_multitaper(multitaper).coherence_magnitude()
     assert isinstance(coherence, np.ndarray)  # public results come back to the host
     assert np.isfinite(coherence[..., 0, 1]).all()
+
+
+def test_phase_lag_family_runs_on_the_device(xp, monkeypatch):
+    """The phase-lag tile loop (ufunc ``out=``, ``count_nonzero`` over an axis
+    tuple, ``einsum``) runs on device arrays and matches the host result."""
+    measures = (
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "directed_phase_lag_index",
+        "debiased_squared_phase_lag_index",
+        "debiased_squared_weighted_phase_lag_index",
+    )
+    coefficients = _coefficients(np.random.default_rng(9), shape=(1, 4, 3, 16, 3))
+    device = Connectivity(xp.asarray(coefficients))
+    with patch.object(
+        device, "_reduce_phase_lag_tile", wraps=device._reduce_phase_lag_tile
+    ) as reduce_tile:
+        on_device = {measure: getattr(device, measure)() for measure in measures}
+    assert reduce_tile.call_count == 1
+    assert isinstance(reduce_tile.call_args.args[0], xp.ndarray)
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = Connectivity(coefficients)
+    for measure in measures:
+        assert isinstance(on_device[measure], np.ndarray)
+        np.testing.assert_array_equal(on_device[measure], getattr(host, measure)())
