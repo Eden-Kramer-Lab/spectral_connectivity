@@ -4945,12 +4945,14 @@ class Connectivity:
         Returns
         -------
         delay : array, shape (..., n_signals, n_signals)
-            Time delays between signal pairs, in seconds. Positive
-            ``[..., i, j]`` means signal ``i`` leads signal ``j``. The diagonal
-            is NaN.
+            Time delays between signal pairs, in the reciprocal units of
+            ``frequencies``: seconds for Hz, samples for cycles/sample.
+            Positive ``[..., i, j]`` means signal ``i`` leads signal ``j``. The
+            diagonal is NaN.
         slope : array, shape (..., n_signals, n_signals)
-            Slope of the coherence phase vs frequency, in radians per Hz
-            (``delay = slope / (2 * pi)``); same sign convention as ``delay``.
+            Slope of the coherence phase vs frequency, in radians per unit of
+            ``frequencies`` (``delay = slope / (2 * pi)``); same sign
+            convention as ``delay``.
         r_value : array, shape (..., n_signals, n_signals)
             Correlation coefficient of the linear phase-frequency fit, with the
             sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``).
@@ -5080,9 +5082,10 @@ class Connectivity:
             Shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals),
             where ``n_frequencies`` counts only the frequencies inside
             ``frequencies_of_interest``. Candidate ``k`` (index ``k + n_range``)
-            adds ``k`` cycles of phase. Array of possible time delays in
-            seconds; positive ``[..., i, j]`` means signal ``i`` leads signal
-            ``j``. The true delay is the candidate that is consistent
+            adds ``k`` cycles of phase. Array of possible time delays in the
+            reciprocal units of ``frequencies`` (seconds for Hz, samples for
+            cycles/sample); positive ``[..., i, j]`` means signal ``i`` leads
+            signal ``j``. The true delay is the candidate that is consistent
             (frequency-independent) across the band. Frequencies without
             significant coherence, and the 0 Hz (DC) bin, are undefined and
             returned as NaN.

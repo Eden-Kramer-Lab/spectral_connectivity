@@ -3540,6 +3540,42 @@ def test_fourier_connectivity_provided_coordinates_keep_physical_units():
 
 
 @pytest.mark.parametrize(
+    ("sampling_frequency", "delay_units", "slope_units"),
+    [(None, "samples", "rad/(cycles/sample)"), (1000.0, "s", "rad/Hz")],
+    ids=["normalized_frequency", "hz"],
+)
+def test_fourier_connectivity_delay_units_follow_the_frequency_coordinate(
+    sampling_frequency, delay_units, slope_units
+):
+    """A delay is in the reciprocal units of frequency: samples on the default
+    normalized grid (cycles/sample), seconds on a grid in Hz."""
+    from spectral_connectivity.simulate import simulate_lagged_broadband
+
+    time_series = simulate_lagged_broadband(
+        [0, 1], 0.1, n_time_samples=512, n_trials=20, random_state=1
+    )
+    coefficients = np.asarray(Multitaper(time_series, sampling_frequency=1000).fft())
+    frequencies = (
+        None
+        if sampling_frequency is None
+        else np.fft.fftfreq(coefficients.shape[-2], 1 / sampling_frequency)
+    )
+    group = fourier_connectivity(
+        coefficients, frequencies=frequencies, method="group_delay", is_one_sided=False
+    )
+    delay = fourier_connectivity(
+        coefficients, frequencies=frequencies, method="delay", is_one_sided=False
+    )
+
+    one_sample = 1.0 if sampling_frequency is None else 1 / sampling_frequency
+    value = group["group_delay"].sel(source="0", target="1").values.item()
+    assert value == pytest.approx(one_sample, rel=0.01)
+    assert group["group_delay"].attrs["units"] == delay_units
+    assert group["group_delay_slope"].attrs["units"] == slope_units
+    assert delay.attrs["units"] == delay_units
+
+
+@pytest.mark.parametrize(
     "time",
     [
         np.array(["2020-01-01T00:00:00"], "M8[ns]"),
