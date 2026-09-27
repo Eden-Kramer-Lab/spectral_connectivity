@@ -426,7 +426,7 @@ assert at_200_hz[before].mean() > 3 * noise_floor
 assert at_200_hz[after].mean() > 3 * noise_floor
 
 # %% [markdown]
-# #### Decrease frequency resolution by decreasing time_halfbandwidth
+# #### Coarser frequency resolution with a larger time_halfbandwidth_product
 
 # %%
 time_halfbandwidth_product = 3
@@ -563,6 +563,25 @@ assert at_50_hz[after].mean() > 1.5 * noise_floor
 assert at_200_hz[before].mean() > 1.5 * noise_floor
 assert at_200_hz[after].mean() > 1.5 * noise_floor
 
+# The wider band is visible as broadening: 40 Hz from the 200 Hz peak, outside
+# the single-taper band (2W = 33 Hz) but inside this one (2W = 100 Hz), the
+# power is well above the noise floor here and at the floor with one taper.
+single_taper = Connectivity.from_multitaper(
+    Multitaper(
+        data,
+        sampling_frequency=sampling_frequency,
+        time_halfbandwidth_product=1,
+        time_window_duration=0.060,
+        time_window_step=0.060,
+        start_time=time[0],
+    )
+)
+at_240_hz = np.argmin(np.abs(frequencies - 240))
+assert power[:, at_240_hz].mean() > 1.5 * noise_floor
+np.testing.assert_allclose(
+    single_taper.power()[:, at_240_hz, 0].mean(), noise_floor, rtol=0.25
+)
+
 # %% [markdown]
 # ### Coherence
 #
@@ -609,7 +628,6 @@ plt.xlabel("Time")
 plt.ylabel("Amplitude")
 plt.xlim((0.95, 1.05))
 plt.ylim((-10, 10))
-plt.legend()
 
 multitaper = Multitaper(
     signal,
@@ -641,13 +659,17 @@ frequencies = connectivity.frequencies
 peak = np.argmin(np.abs(frequencies - frequency_of_interest))
 off_peak = np.abs(frequencies - frequency_of_interest) > multitaper.frequency_resolution
 assert coherence[peak] > 0.95
-assert np.median(coherence[off_peak]) < 0.1
+# With one trial, each frequency averages only the tapers' estimates; for
+# independent signals the expected coherence is 1 / n_tapers.
+assert np.median(coherence[off_peak]) < 2 / multitaper.n_tapers
 np.testing.assert_allclose(
     connectivity.coherence_phase()[0, peak, 0, 1], -np.pi / 2, atol=0.1
 )
 
 # %% [markdown]
 # #### With trial structure (time x trials), 200 Hz, $\pi / 2$ phase offset
+#
+# In 0.6 s trials this much noise keeps the coherence well below 1, yet the coherence phase still recovers the $\pi / 2$ offset: coherence measures how consistent the phase relation is across trials and tapers, not what that relation is.
 
 # %%
 time_halfbandwidth_product = 5
@@ -655,7 +677,7 @@ frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 0.600)
 n_trials = 100
-noise_level = 0.5  # 0.6 s trials hold less signal than the 50 s recording above
+noise_level = 2
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 # Each trial starts the shared sinusoid at a random phase, but signal 2 always
@@ -689,7 +711,7 @@ plt.plot(time, data[:, 0, :])
 plt.xlabel("Time")
 plt.ylabel("Amplitude")
 plt.xlim(time_extent)
-plt.ylim((-10, 10))
+plt.ylim((-8, 8))
 
 multitaper = Multitaper(
     signal,
@@ -713,25 +735,26 @@ plt.subplot(2, 2, 4)
 plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1])
 
 # %%
-# Coherence is near 1 at 200 Hz and at the noise level away from it. The
-# cross-spectrum [0, 1] is E[X_0 conj(X_1)], so its phase is phase_0 - phase_1:
-# signal 2 leads signal 1 by pi / 2, giving -pi / 2.
+# Coherence at 200 Hz is well below 1 but far above the off-peak chance level,
+# and its phase is still the planted offset. The cross-spectrum [0, 1] is
+# E[X_0 conj(X_1)], so its phase is phase_0 - phase_1: signal 2 leads signal 1
+# by pi / 2, giving -pi / 2.
 coherence = connectivity.coherence_magnitude()[0, :, 0, 1]
 frequencies = connectivity.frequencies
 peak = np.argmin(np.abs(frequencies - frequency_of_interest))
 off_peak = np.abs(frequencies - frequency_of_interest) > multitaper.frequency_resolution
-assert coherence[peak] > 0.95
-assert np.median(coherence[off_peak]) < 0.1
+assert coherence[peak] > 0.5
+assert coherence[peak] > 5 * np.median(coherence[off_peak])
 np.testing.assert_allclose(
     connectivity.coherence_phase()[0, peak, 0, 1], -np.pi / 2, atol=0.1
 )
 
 # %% [markdown]
-# ### Cohereograms
+# ### Coherograms
 #
-# This and the following sections use the same pair of 200 Hz signals. Before 1.5 s, signal 2's phase is drawn independently of signal 1's on every trial, so the pair is uncoupled; from 1.5 s on, both share each trial's phase and signal 2 leads by $\pi / 2$. `simulate_coupling_onset` splices two `simulate_shared_oscillation` calls to build it, and `split_at_onset` picks out a measure at 200 Hz in the windows wholly before and wholly after the onset for the assert cells.
+# This and the following sections use the same pair of 200 Hz signals. Before 1.5 s, signal 2's phase is drawn independently of signal 1's on every trial, so the pair has no consistent phase relation across trials; from 1.5 s on, both share each trial's phase and signal 2 leads by $\pi / 2$. Within a single trial the two sinusoids keep a fixed phase difference even before the onset, so averaging over time instead of over trials (`expectation_type="time"`) would still see locking there; the default average over trials and tapers is what makes the onset visible. `simulate_coupling_onset` splices two `simulate_shared_oscillation` calls to build the pair, and `split_at_onset` picks out a measure at 200 Hz in the windows wholly before and wholly after the onset for the assert cells.
 #
-# A single taper (`time_halfbandwidth_product = 1`) is used: the odd-order Slepian tapers have zero gain at the center frequency of their band, so with several tapers a pure sinusoid contributes only noise to those tapers' phases, which caps the phase-based measures (PLV, PLI, PPC) well below 1.
+# The phase-locking value, phase lag index, debiased squared phase lag index and pairwise phase consistency sections use a single taper (`time_halfbandwidth_product = 1`). These measures normalize every trial-and-taper estimate to unit magnitude, so each taper counts equally. The odd-order Slepian tapers have zero gain at the center of their band: for a narrowband rhythm they carry almost none of it at exactly its frequency, their phases there are noise, and with several tapers the measure dips exactly at the oscillation frequency (with `time_halfbandwidth_product = 2` here, the phase-locking value is about 0.65 at 200 Hz but 0.93 one bin to either side). Coherence, imaginary coherence, the weighted phase lag index and its debiased version weight each estimate by its magnitude, so the near-empty tapers barely count; those sections keep `time_halfbandwidth_product = 2`. The habit: for phase-normalized measures of a narrowband rhythm, use one taper, or use the weighted phase lag index. For broadband signals or real data, multiple tapers remain the right default.
 
 # %%
 def simulate_coupling_onset(
@@ -759,10 +782,11 @@ def simulate_coupling_onset(
         random_state=rng,
     )
     coupled = simulate_shared_oscillation(**simulation, phase_offsets=[0.0, np.pi / 2])
-    uncoupled = simulate_shared_oscillation(**simulation)  # independent trial phases
+    # Its own trial phases: no consistent phase relation to `coupled` across trials.
+    unlocked = simulate_shared_oscillation(**simulation)
     time = np.arange(n_time_samples) / sampling_frequency
     before_onset = (time < onset)[:, np.newaxis, np.newaxis] & (np.arange(2) == 1)
-    return np.where(before_onset, uncoupled, coupled)
+    return np.where(before_onset, unlocked, coupled)
 
 
 def split_at_onset(values, connectivity, multitaper, frequency=200, onset=1.5):
@@ -781,12 +805,12 @@ def split_at_onset(values, connectivity, multitaper, frequency=200, onset=1.5):
 
 
 # %%
-time_halfbandwidth_product = 1
+time_halfbandwidth_product = 2
 frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -806,7 +830,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -904,20 +928,22 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.coherence_magnitude()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.7)  # about 0.8 at this signal-to-noise ratio
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.01 (squared measure).
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
 # ### Imaginary Coherence
 
 # %%
-time_halfbandwidth_product = 1
+time_halfbandwidth_product = 2
 frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -937,7 +963,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1035,8 +1061,10 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.imaginary_coherence()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.8)
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.1.
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
@@ -1048,7 +1076,7 @@ frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1068,7 +1096,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1167,8 +1195,10 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.phase_locking_value()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.9)
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.1.
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
@@ -1180,7 +1210,7 @@ frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1200,7 +1230,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1298,21 +1328,24 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 # 200 Hz, it is near 0.
 values = connectivity.phase_lag_index()
 before, after, off_peak_after = split_at_onset(values[..., 0, 1], connectivity, multitaper)
-assert np.all(after < -0.95)
+assert np.all(after < -0.9)
+# Antisymmetry holds by construction; this line documents the sign convention.
 np.testing.assert_allclose(values[..., 1, 0], -values[..., 0, 1])
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.1.
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
 # ### Weighted Phase Lag Index
 
 # %% pycharm={"is_executing": true}
-time_halfbandwidth_product = 1
+time_halfbandwidth_product = 2
 frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1332,7 +1365,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1431,9 +1464,12 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 # because signal 2 leads; before it, and away from 200 Hz, it is near 0.
 values = connectivity.weighted_phase_lag_index()
 before, after, off_peak_after = split_at_onset(values[..., 0, 1], connectivity, multitaper)
-assert np.all(after < -0.95)
+assert np.all(after < -0.9)
+# Antisymmetry holds by construction; this line documents the sign convention.
 np.testing.assert_allclose(values[..., 1, 0], -values[..., 0, 1])
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.1.
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
@@ -1445,7 +1481,7 @@ frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1465,7 +1501,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1565,20 +1601,22 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.debiased_squared_phase_lag_index()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.9)
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.01 (squared measure).
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
 # ### Debiased Squared Weighted Phase Lag Index
 
 # %% pycharm={"is_executing": true}
-time_halfbandwidth_product = 1
+time_halfbandwidth_product = 2
 frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1598,7 +1636,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1697,8 +1735,10 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.debiased_squared_weighted_phase_lag_index()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.9)
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.01 (squared measure).
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
@@ -1710,7 +1750,7 @@ frequency_of_interest = 200
 sampling_frequency = 1500
 time_extent = (0, 2.400)
 n_trials = 100
-noise_level = 0.5
+noise_level = 1
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 signal = simulate_coupling_onset(sampling_frequency, n_time_samples, n_trials, 0)
@@ -1730,7 +1770,7 @@ axes[0, 1].plot(time, data[:, 0, :])
 axes[0, 1].set_xlabel("Time")
 axes[0, 1].set_ylabel("Amplitude")
 axes[0, 1].set_xlim(time_extent)
-axes[0, 1].set_ylim((-10, 10))
+axes[0, 1].set_ylim((-5, 5))
 
 multitaper = Multitaper(
     signal,
@@ -1830,8 +1870,10 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 before, after, off_peak_after = split_at_onset(
     connectivity.pairwise_phase_consistency()[..., 0, 1], connectivity, multitaper
 )
-assert np.all(after > 0.95)
-assert np.all(np.abs(before) < 0.3)  # chance level for 100 trials is ~0.1 or below
+assert np.all(after > 0.9)
+# Before the onset each trial has its own phase relation, so the chance level
+# is set by the 100 trials: ~0.01 (squared measure).
+assert np.all(np.abs(before) < 0.3)
 assert np.abs(np.median(off_peak_after)) < 0.1
 
 # %% [markdown]
@@ -2090,7 +2132,7 @@ connectivity = Connectivity.from_multitaper(multitaper)
 
 delay, slope, r_value = connectivity.group_delay()
 axis_handles[1, 0].plot(
-    connectivity.time + multitaper.time_window_duration / 2, delay[..., 0, 1]
+    connectivity.time, delay[..., 0, 1]
 )
 axis_handles[1, 0].set_xlim(time_extent)
 
@@ -2106,7 +2148,7 @@ connectivity = Connectivity.from_multitaper(multitaper)
 
 delay, slope, r_value = connectivity.group_delay()
 axis_handles[1, 1].plot(
-    connectivity.time + multitaper.time_window_duration / 2, delay[..., 0, 1]
+    connectivity.time, delay[..., 0, 1]
 )
 axis_handles[1, 1].set_xlim(time_extent)
 
@@ -2213,6 +2255,7 @@ axis_handles[4, 1].axhline(0, color="black")
 # %%
 # Signal 1 leads: the phase slope index [0, 1] is positive and [1, 0] is its negative.
 assert np.all(psi[..., 0, 1] > 0)
+# Antisymmetry holds by construction; this line documents the sign convention.
 np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
 
 # %% [markdown]
@@ -2312,6 +2355,7 @@ axis_handles[4, 1].axhline(0, color="black")
 # %%
 # Signal 2 leads: the phase slope index [0, 1] is negative and [1, 0] is its negative.
 assert np.all(psi[..., 0, 1] < 0)
+# Antisymmetry holds by construction; this line documents the sign convention.
 np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
 
 # %% [markdown]
@@ -2360,9 +2404,9 @@ connectivity = Connectivity.from_multitaper(multitaper)
 
 psi = connectivity.phase_slope_index()
 axis_handles[1, 0].plot(
-    connectivity.time + multitaper.time_window_duration / 2,
+    connectivity.time,
     psi[..., 0, 1],
-    connectivity.time + multitaper.time_window_duration / 2,
+    connectivity.time,
     psi[..., 1, 0],
 )
 axis_handles[1, 0].set_xlim(time_extent)
@@ -2381,9 +2425,9 @@ connectivity = Connectivity.from_multitaper(multitaper)
 
 psi = connectivity.phase_slope_index()
 axis_handles[1, 1].plot(
-    connectivity.time + multitaper.time_window_duration / 2,
+    connectivity.time,
     psi[..., 0, 1],
-    connectivity.time + multitaper.time_window_duration / 2,
+    connectivity.time,
     psi[..., 1, 0],
 )
 axis_handles[1, 1].set_xlim(time_extent)
@@ -2393,6 +2437,7 @@ axis_handles[1, 1].set_ylabel("Phase Slope Index")
 # %%
 # In every window signal 2 leads: the phase slope index [0, 1] is negative.
 assert np.all(psi[..., 0, 1] < 0)
+# Antisymmetry holds by construction; this line documents the sign convention.
 np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
 
 # %% [markdown]
@@ -2400,7 +2445,7 @@ np.testing.assert_allclose(psi[..., 1, 0], -psi[..., 0, 1])
 #
 # The advantage of canonical coherence is that it can be more statistically powerful than coherence because it is combining coherence from groups.
 #
-# Every signal carries a shared 20 Hz rhythm, and only group `b` also carries a private 40 Hz rhythm. The groups are therefore coherent with each other at 20 Hz, while at 40 Hz only the members of group `b` are coherent with one another: canonical coherence between the groups is high at 20 Hz and low at 40 Hz. The private rhythm is a second `simulate_shared_oscillation` call with zero amplitude in group `a`.
+# Every signal carries a shared 20 Hz rhythm, and each group also carries its own 40 Hz rhythm, with trial phases independent of the other group's. The groups are therefore coherent with each other at 20 Hz; at 40 Hz each group is coherent within itself, but the two groups have no consistent phase relation, so canonical coherence between them is high at 20 Hz and at chance at 40 Hz. Each group's 40 Hz rhythm is its own `simulate_shared_oscillation` call, with zero amplitude in the other group, drawn from the same generator.
 
 # %% pycharm={"is_executing": true}
 from itertools import product
@@ -2414,6 +2459,7 @@ noise_level = 0.5
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 group_labels = ["a"] * 2 + ["b"] * 2
+in_group_a = np.array(group_labels) == "a"
 in_group_b = np.array(group_labels) == "b"
 
 rng = np.random.default_rng(0)
@@ -2426,8 +2472,9 @@ simulation = dict(
 shared = simulate_shared_oscillation(
     20, **simulation, amplitudes=[1.0] * n_signals, noise_levels=noise_level
 )
-private = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_b * 1.0)
-data = shared + private  # (n_time_samples, n_trials, n_signals)
+private_a = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_a * 1.0)
+private_b = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_b * 1.0)
+data = shared + private_a + private_b  # (n_time_samples, n_trials, n_signals)
 
 
 multitaper = Multitaper(
@@ -2451,7 +2498,7 @@ for ind1, ind2 in product(range(n_signals), range(n_signals)):
     if ind1 == ind2:
         vmin, vmax = connectivity.power().min(), connectivity.power().max()
     else:
-        vmin, vmax = 0, 0.5
+        vmin, vmax = 0, 1
     mesh = axes[ind1, ind2].pcolormesh(
         time_grid,
         freq_grid,
@@ -2486,7 +2533,7 @@ mesh = plt.pcolormesh(
     freq_grid,
     canonical_coherence[..., 0, 1].squeeze().T,
     vmin=0,
-    vmax=0.5,
+    vmax=1,
     cmap="viridis",
 )
 plt.ylim((0, 100))
@@ -2504,16 +2551,17 @@ cb.outline.set_linewidth(0)
 
 # %%
 # In every window, canonical coherence between the groups is high at the shared
-# 20 Hz and low at group b's private 40 Hz, where group b is nonetheless
-# internally coherent (so the low value is not an absence of signal).
+# 20 Hz and at chance at 40 Hz, where each group is nonetheless coherent within
+# itself: the low value reflects no consistent phase relation between the
+# groups, not an absence of signal.
 frequencies = connectivity.frequencies
 at_20_hz = np.argmin(np.abs(frequencies - 20))
 at_40_hz = np.argmin(np.abs(frequencies - 40))
 assert np.all(canonical_coherence[:, at_20_hz, 0, 1] > 0.95)
-assert np.all(canonical_coherence[:, at_40_hz, 0, 1] < 0.5)
-b_members = np.flatnonzero(in_group_b)
-coherence_in_b = connectivity.coherence_magnitude()[:, at_40_hz, b_members[0], b_members[1]]
-assert np.all(coherence_in_b > 0.8)
+assert np.all(canonical_coherence[:, at_40_hz, 0, 1] < 0.1)
+coherence_at_40_hz = connectivity.coherence_magnitude()[:, at_40_hz]
+for members in (np.flatnonzero(in_group_a), np.flatnonzero(in_group_b)):
+    assert np.all(coherence_at_40_hz[:, members[0], members[1]] >= 0.9)
 
 # %% [markdown]
 # #### More signals, higher noise
@@ -2526,10 +2574,11 @@ sampling_frequency = 500
 time_extent = (0, 2.400)
 n_trials = 100
 n_signals = 6
-noise_level = 0.8
+noise_level = 3
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
 time = np.arange(n_time_samples) / sampling_frequency
 group_labels = ["a"] * 3 + ["b"] * 3
+in_group_a = np.array(group_labels) == "a"
 in_group_b = np.array(group_labels) == "b"
 
 rng = np.random.default_rng(0)
@@ -2542,8 +2591,9 @@ simulation = dict(
 shared = simulate_shared_oscillation(
     20, **simulation, amplitudes=[1.0] * n_signals, noise_levels=noise_level
 )
-private = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_b * 1.0)
-data = shared + private  # (n_time_samples, n_trials, n_signals)
+private_a = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_a * 1.0)
+private_b = simulate_shared_oscillation(40, **simulation, amplitudes=in_group_b * 1.0)
+data = shared + private_a + private_b  # (n_time_samples, n_trials, n_signals)
 
 
 multitaper = Multitaper(
@@ -2567,7 +2617,7 @@ for ind1, ind2 in product(range(n_signals), range(n_signals)):
     if ind1 == ind2:
         vmin, vmax = connectivity.power().min(), connectivity.power().max()
     else:
-        vmin, vmax = 0, 0.5
+        vmin, vmax = 0, 1
     mesh = axes[ind1, ind2].pcolormesh(
         time_grid,
         freq_grid,
@@ -2602,7 +2652,7 @@ mesh = plt.pcolormesh(
     freq_grid,
     canonical_coherence[..., 0, 1].squeeze().T,
     vmin=0,
-    vmax=0.5,
+    vmax=1,
     cmap="viridis",
 )
 plt.xlabel("Time [s]")
@@ -2621,17 +2671,20 @@ cb = fig.colorbar(
 cb.outline.set_linewidth(0)
 
 # %%
-# In every window, canonical coherence between the groups is high at the shared
-# 20 Hz and low at group b's private 40 Hz, where group b is nonetheless
-# internally coherent (so the low value is not an absence of signal).
+# With this much noise, every pairwise coherence between the groups at 20 Hz is
+# modest, and canonical coherence combines the three signals in each group to
+# find a stronger relation. It can never be below the largest pairwise value
+# (a single signal is one of the combinations it maximizes over); the margin
+# is the gain from combining. At 40 Hz the groups stay at chance.
 frequencies = connectivity.frequencies
 at_20_hz = np.argmin(np.abs(frequencies - 20))
 at_40_hz = np.argmin(np.abs(frequencies - 40))
-assert np.all(canonical_coherence[:, at_20_hz, 0, 1] > 0.95)
-assert np.all(canonical_coherence[:, at_40_hz, 0, 1] < 0.5)
-b_members = np.flatnonzero(in_group_b)
-coherence_in_b = connectivity.coherence_magnitude()[:, at_40_hz, b_members[0], b_members[1]]
-assert np.all(coherence_in_b > 0.8)
+between_groups = connectivity.coherence_magnitude()[:, at_20_hz][
+    :, np.flatnonzero(in_group_a)
+][:, :, np.flatnonzero(in_group_b)]  # (n_windows, 3, 3)
+largest_pairwise = between_groups.max(axis=(1, 2))
+assert np.all(canonical_coherence[:, at_20_hz, 0, 1] > largest_pairwise + 0.1)
+assert np.all(canonical_coherence[:, at_40_hz, 0, 1] < 0.1)
 
 # %% [markdown]
 # ## Global Coherence
