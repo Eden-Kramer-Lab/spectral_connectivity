@@ -400,6 +400,9 @@ directly with results from 2.x.
   bin) made every later frequency NaN; the unwrapping now skips such bins.
 - `group_delay`'s `r_value` for the reverse pair `[..., j, i]` had the forward
   pair's sign although the slope is negated; it is now `-r_value[..., i, j]`.
+- `delay`'s reverse-pair candidates were the negated forward candidates in the
+  same order, so reverse candidate `k` held the value for `-k`; every
+  candidate now follows `(phase + 2 pi k) / (2 pi f)` for its own pair.
 - The paper tutorial's Dhamala 2a/2b panels plotted `[..., 0, 1]` under the
   title "x1 -> x2", which in 2.x was the x2 -> x1 entry. The re-executed
   figures are now labeled correctly.

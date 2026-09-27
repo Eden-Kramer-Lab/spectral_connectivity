@@ -1082,6 +1082,29 @@ class TestDelay:
     def setup_rng(self):
         self.rng = np.random.default_rng(3)
 
+    def test_reverse_delay_candidates_follow_the_formula(self):
+        """Candidate k of the reverse pair is (-phase + 2 pi k) / (2 pi f), which
+        is minus the forward pair's candidate -k."""
+        time_series = simulate_lagged_broadband(
+            [0, 3], 0.3, n_time_samples=1000, n_trials=20, random_state=self.rng
+        )
+        conn = Connectivity.from_multitaper(
+            Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
+        )
+        n_range = 2
+        delays = conn.delay(frequencies_of_interest=[20, 100], n_range=n_range)
+        forward, reverse = delays[..., 0, 1], delays[..., 1, 0]
+        assert np.isfinite(forward).any()
+        np.testing.assert_array_equal(reverse, -forward[..., ::-1])
+        # Spelled out for k = +1: the reverse pair's candidate adds one cycle.
+        frequencies = conn.frequencies[(conn.frequencies > 20) & (conn.frequencies < 100)]
+        reverse_phase = -forward[0, :, n_range] * 2 * np.pi * frequencies
+        np.testing.assert_allclose(
+            reverse[0, :, n_range + 1],
+            (reverse_phase + 2 * np.pi) / (2 * np.pi * frequencies),
+            rtol=1e-12,
+        )
+
     def test_delay_recovers_frequency_independent_time_delay(self):
         """A constant physical delay must be frequency-independent (in seconds).
 

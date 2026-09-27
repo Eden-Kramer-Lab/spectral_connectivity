@@ -5139,9 +5139,11 @@ class Connectivity:
         possible_delays[..., signal_combination_ind[:, 0], signal_combination_ind[:, 1]] = (
             delays
         )
+        # The reverse pair's phase is -phase, so its candidate k,
+        # (-phase + 2*pi*k) / (2*pi*f), is minus the forward candidate -k.
         possible_delays[
             ..., signal_combination_ind[:, 1], signal_combination_ind[:, 0]
-        ] = -delays
+        ] = -delays[..., ::-1, :]
 
         return possible_delays
 
