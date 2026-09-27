@@ -276,24 +276,29 @@ For other dimension names, say which dimension plays which role:
 
 ```
 
-The full contract:
+Common cases:
 
-- Common time, trial and signal dimension names are recognized and
-  transposed automatically. Ambiguous dimensions raise instead of falling back
-  to axis position; when a single unrecognized dimension is left for the one
-  remaining role, it is assigned by elimination and a warning names the
-  mapping.
-- Numeric `time` coordinates are elapsed seconds and numeric `sample`
-  coordinates are sample numbers; both label the output window centers. A
-  given `sampling_frequency` is checked against the time index. An omitted one
-  is inferred from a numeric `time` coordinate (a `sample` index has no time
-  scale), which needs enough precision to resolve the rate: pass
-  `sampling_frequency` for low-precision or large-offset time coordinates.
+- Common time, trial and signal dimension names are recognized and transposed
+  automatically; pass `time_dim`, `trial_dim` and `signal_dim` for others.
+- A numeric `time` coordinate is elapsed seconds and supplies
+  `sampling_frequency`. A numeric `sample` coordinate is sample numbers, which
+  have no time scale, so pass `sampling_frequency` with it. Either one labels
+  the output window centers, and a `sampling_frequency` you pass is checked
+  against it.
 - A 1-D index on the signal dimension, including its label type, becomes the
-  `source`/`target` coordinates unless `signal_names` is passed. Labels must be
-  unique, non-missing, NetCDF-compatible scalar strings, real numbers,
-  datetimes or timedeltas; integer labels must fit the signed 32-bit range for
-  portable NetCDF3 files.
+  `source`/`target` coordinates unless you pass `signal_names`.
+
+If you hit an error or a warning:
+
+- Ambiguous dimension names raise instead of falling back to axis position:
+  name the roles with `time_dim`, `trial_dim` and `signal_dim`. When a single
+  unrecognized dimension is left for the one remaining role, it is assigned by
+  elimination and a warning names the mapping.
+- Inferring the rate needs enough coordinate precision: pass
+  `sampling_frequency` for low-precision or large-offset time coordinates.
+- Signal labels must be unique, non-missing, NetCDF-compatible scalars
+  (strings, real numbers, datetimes or timedeltas); integer labels must fit the
+  signed 32-bit range for portable NetCDF3 files.
 - Datetime, timedelta and object-valued time coordinates are not supported
   yet; convert them to elapsed seconds as below. (Datetime and timedelta
   *signal labels* are fine.)
