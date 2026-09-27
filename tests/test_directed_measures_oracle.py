@@ -37,9 +37,10 @@ import numpy as np
 import pytest
 from scipy.linalg import solve_discrete_are
 
-from spectral_connectivity import Connectivity, DirectedOrientationWarning
+from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
 from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+from spectral_connectivity.simulate import simulate_MVAR
 
 
 def _analytic_var(coefficients, noise_covariance, n_fft):
@@ -330,6 +331,84 @@ def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
     np.testing.assert_array_equal(labels, [0, 1])
     np.testing.assert_allclose(blockwise, pairwise, atol=1e-6, equal_nan=True)
     np.testing.assert_allclose(conditional, pairwise, atol=1e-6, equal_nan=True)
+
+
+def _companion_spectral_radius(coefficients):
+    """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
+    n_lags, n_signals, _ = coefficients.shape
+    companion = np.zeros((n_lags * n_signals, n_lags * n_signals))
+    companion[:n_signals] = np.concatenate(list(coefficients), axis=1)
+    companion[n_signals:, :-n_signals] = np.eye((n_lags - 1) * n_signals)
+    return np.max(np.abs(np.linalg.eigvals(companion)))
+
+
+# Two-channel blocks {0, 1} -> {2, 3}: block {2, 3} never feeds back into
+# {0, 1}, so H_XY == 0 and the reverse block direction is analytically zero.
+_BLOCK_A1 = np.array(
+    [
+        [0.5, 0.1, 0.0, 0.0],
+        [0.1, 0.5, 0.0, 0.0],
+        [0.4, 0.2, 0.5, 0.1],
+        [0.3, 0.3, 0.1, 0.5],
+    ]
+)
+_BLOCK_COEFFICIENTS = np.stack([_BLOCK_A1, -0.6 * np.eye(4)])
+_BLOCK_NOISE = np.eye(4)
+_BLOCK_LABELS = [0, 0, 1, 1]
+_BLOCK_N_FFT = 256
+
+
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+def test_blockwise_granger_matches_geweke_block_closed_form(conjugate_symmetric):
+    """Blockwise Granger equals Geweke's block measure for uncorrelated innovations.
+
+    With X = {0, 1} and Y = {2, 3}, ``F_{X->Y}(f) = log det S_YY(f) -
+    log det(S_YY(f) - H_YX(f) Sigma_XX H_YX(f)^H)``, and ``F_{Y->X}`` is 0
+    because ``H_XY == 0``. Group 0 is X and group 1 is Y, so ``[..., 0, 1]``
+    is ``X -> Y``.
+    """
+    assert _companion_spectral_radius(_BLOCK_COEFFICIENTS) < 1
+    _, H, S = _analytic_var(_BLOCK_COEFFICIENTS, _BLOCK_NOISE, _BLOCK_N_FFT)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            S, conjugate_symmetric=conjugate_symmetric
+        )
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction(_BLOCK_LABELS)
+
+    n_non_negative = _BLOCK_N_FFT // 2 + 1
+    source, target = [0, 1], [2, 3]
+    S_yy = S[:n_non_negative][:, target][:, :, target]
+    H_yx = H[:n_non_negative][:, target][:, :, source]
+    sigma_xx = _BLOCK_NOISE[np.ix_(source, source)]
+    intrinsic = S_yy - H_yx @ sigma_xx @ H_yx.conj().swapaxes(-1, -2)
+    geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
+
+    np.testing.assert_array_equal(labels, [0, 1])
+    assert geweke.max() > 1.0  # premise: a strong planted block influence
+    np.testing.assert_allclose(blockwise[0, :, 0, 1], geweke, rtol=0, atol=1e-5)
+    assert np.max(np.abs(blockwise[0, :, 1, 0])) < 1e-5
+
+
+def test_blockwise_granger_direction_on_simulated_var():
+    """On data simulated from the block VAR, {0, 1} -> {2, 3} dominates the
+    reverse direction (analytically zero) by more than 5x on average."""
+    time_series = simulate_MVAR(
+        _BLOCK_COEFFICIENTS, n_time_samples=2000, n_trials=30, random_state=0
+    )
+    connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=200))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        blockwise, _ = connectivity.blockwise_spectral_granger_prediction(_BLOCK_LABELS)
+
+    planted, reverse = blockwise[0, :, 0, 1], blockwise[0, :, 1, 0]
+    assert np.isfinite(planted).all()
+    assert np.isfinite(reverse).all()
+    assert planted.mean() > 5 * reverse.mean()
 
 
 def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
