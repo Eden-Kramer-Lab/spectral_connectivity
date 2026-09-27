@@ -109,19 +109,22 @@ def test_coherence_matches_nitime(nitime_series):
 
 
 _MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
-_MNE_MEASURES = (
-    "coh",
-    "imcoh",
-    "psi",
-    "cacoh",
-    "plv",
-    "ciplv",
-    "ppc",
-    "pli",
-    "dpli",
-    "wpli",
-    "wpli2_debiased",
-)
+# MNE method: (Connectivity method, element-wise transform, NW, atol). The
+# comparison uses these values, and the fixture must record the same ones, so a
+# regenerated fixture cannot loosen a tolerance or move a measure to another NW.
+_MNE_EXPECTED = {
+    "coh": ("coherence_magnitude", "sqrt", 3, 1e-12),
+    "imcoh": ("imaginary_coherency", "identity", 3, 1e-12),
+    "psi": ("phase_slope_index", "identity", 3, 1e-12),
+    "cacoh": ("canonical_coherency", "abs", 3, 1e-7),
+    "plv": ("phase_locking_value", "identity", 1, 1e-12),
+    "ciplv": ("corrected_imaginary_phase_locking_value", "identity", 1, 1e-12),
+    "ppc": ("pairwise_phase_consistency", "identity", 1, 1e-12),
+    "pli": ("phase_lag_index", "abs", 1, 1e-12),
+    "dpli": ("directed_phase_lag_index", "identity", 1, 1e-12),
+    "wpli": ("weighted_phase_lag_index", "abs", 1, 1e-12),
+    "wpli2_debiased": ("debiased_squared_weighted_phase_lag_index", "identity", 1, 1e-12),
+}
 _MNE_UNMATCHED = tuple(
     f"{measure} (NW 3)"
     for measure in ("plv", "ciplv", "ppc", "pli", "dpli", "wpli", "wpli2_debiased")
@@ -180,14 +183,14 @@ def mne_matched_connectivity(mne_reference):
     }
 
 
-@pytest.mark.parametrize("measure", _MNE_MEASURES)
+@pytest.mark.parametrize("measure", list(_MNE_EXPECTED))
 def test_measures_match_mne_connectivity_reference(
     measure, mne_reference, mne_matched_connectivity
 ):
     """Each measure equals mne-connectivity 0.9's on the same data and tapers.
 
-    The fixture records, per MNE method, the ``Connectivity`` method, the
-    element-wise transform, the ``NW`` and the tolerance (see
+    Per MNE method, the ``Connectivity`` method, element-wise transform,
+    ``NW`` and tolerance (``_MNE_EXPECTED``; the fixture records the same, see
     ``tests/reference/generate_mne_connectivity_reference.py``):
 
     ============== ============================================= ==== =====
@@ -223,12 +226,9 @@ def test_measures_match_mne_connectivity_reference(
     every trial x taper as an observation. With one taper (NW 1) both reduce to
     the same per-epoch estimator, which is what is compared.
     """
-    index = mne_reference["measures"].tolist().index(measure)
-    method = str(mne_reference["our_methods"][index])
-    transform = _TRANSFORMS[str(mne_reference["our_transforms"][index])]
-    connectivity = mne_matched_connectivity[
-        int(mne_reference["time_halfbandwidth_products"][index])
-    ]
+    method, transform_name, time_halfbandwidth_product, atol = _MNE_EXPECTED[measure]
+    transform = _TRANSFORMS[transform_name]
+    connectivity = mne_matched_connectivity[time_halfbandwidth_product]
     frequency_index = np.searchsorted(connectivity.frequencies, mne_reference["freqs"])
     np.testing.assert_allclose(
         connectivity.frequencies[frequency_index], mne_reference["freqs"]
@@ -249,18 +249,35 @@ def test_measures_match_mne_connectivity_reference(
         transform(ours),
         mne_reference[measure],
         rtol=0,
-        atol=float(mne_reference["atol"][index]),
+        atol=atol,
     )
 
 
-def test_mne_connectivity_reference_lists_unmatched_measures(mne_reference):
-    """Every recorded measure is compared, and the unmatched ones are named.
+def test_mne_connectivity_reference_records_expected_mapping_and_unmatched(mne_reference):
+    """The fixture records the mapping, ``NW`` and tolerance the comparison uses,
+    and names exactly the unmatched measures, each with a reason.
 
-    The unmatched entries are exactly those the comparison test's docstring
-    lists, each with a reason, and none of them is among the compared keys, so
-    nothing is skipped silently.
+    Every recorded measure is compared. Each unmatched ``"<measure> (NW 3)"``
+    is a phase measure the fixture records at NW 1 instead, so nothing is
+    skipped silently.
     """
-    assert mne_reference["measures"].tolist() == list(_MNE_MEASURES)
+    measures = mne_reference["measures"].tolist()
+    assert measures == list(_MNE_EXPECTED)
+    recorded = zip(
+        measures,
+        mne_reference["our_methods"].tolist(),
+        mne_reference["our_transforms"].tolist(),
+        mne_reference["time_halfbandwidth_products"].tolist(),
+        mne_reference["atol"].tolist(),
+        strict=True,
+    )
+    for measure, method, transform, nw, atol in recorded:
+        assert (method, transform, nw, atol) == _MNE_EXPECTED[measure], measure
+
     assert mne_reference["unmatched"].tolist() == list(_MNE_UNMATCHED)
-    assert set(_MNE_UNMATCHED).isdisjoint(_MNE_MEASURES)
+    for unmatched in _MNE_UNMATCHED:
+        measure = unmatched.removesuffix(" (NW 3)")
+        assert _MNE_EXPECTED[measure][2] == 1, unmatched
+        index = measures.index(measure)
+        assert mne_reference["time_halfbandwidth_products"][index] == 1, unmatched
     assert all(reason.strip() for reason in mne_reference["unmatched_reasons"].tolist())
