@@ -1476,6 +1476,45 @@ def test_directed_coherence_is_bounded_and_normalized():
         assert np.allclose(np.squeeze(dc), expected)
 
 
+@pytest.fixture(scope="module")
+def three_signal_var_connectivity():
+    """Connectivity of a three-signal VAR(1) with uncorrelated innovations."""
+    from spectral_connectivity import Multitaper
+    from spectral_connectivity.simulate import simulate_MVAR
+
+    coefficients = np.array([[[0.5, 0.3, 0.4], [-0.5, 0.3, 1.0], [0.0, -0.3, -0.2]]])
+    time_series = simulate_MVAR(
+        coefficients,
+        noise_covariance=np.eye(3),
+        n_time_samples=500,
+        n_trials=20,
+        random_state=0,
+    )
+    return Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=2)
+    )
+
+
+@pytest.mark.parametrize(
+    ("measure", "axis"),
+    [
+        # Inflow-normalized: each target's values sum to 1 over sources.
+        ("directed_transfer_function", -2),
+        ("directed_coherence", -2),
+        # Outflow-normalized: each source's values sum to 1 over targets.
+        ("partial_directed_coherence", -1),
+        ("generalized_partial_directed_coherence", -1),
+    ],
+)
+def test_directed_transfer_family_is_normalized(three_signal_var_connectivity, measure, axis):
+    """The [..., source, target] result sums to 1 along its normalized axis,
+    and not along the other one."""
+    result = getattr(three_signal_var_connectivity, measure)()
+    assert np.allclose(result.sum(axis=axis), 1)
+    other_axis = -1 if axis == -2 else -2
+    assert not np.allclose(result.sum(axis=other_axis), 1)
+
+
 def test_max_psd_discrepancy():
     """The helper reports the relative gap between the diagonal and true PSD."""
     # Diagonal covariance: the diagonal denominator equals the true PSD.

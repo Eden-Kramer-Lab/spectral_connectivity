@@ -18,15 +18,17 @@ stable, the Wilson minimum-phase factorization inside the package recovers
 match the analytic ones.
 
 Direction convention (matching the package): a measure's ``[i, j]`` entry is the
-influence ``i -> j``. ``A(f)`` and ``H(f)`` keep their native ``[target, source]``
-layout. A **unidirectional, lower-triangular** VAR (signal 0 drives signal 1,
-never the reverse) has an exactly lower-triangular ``A(f)`` and ``H(f)``, so the
-non-causal ``1 -> 0`` entry ``[1, 0]`` is analytically zero for every directed
-measure -- a strong oracle for direction (a flipped implementation would put the
-energy in the wrong triangle). A 3-node chain ``0 -> 1 -> 2`` with
-unequal innovation variances additionally separates the normalizations: its
-indirect path is visible to DTF but not PDC, and the unequal variances make the
-noise-weighted DC and gPDC differ from DTF and PDC.
+influence ``i -> j``. ``A(f)``, ``H(f)`` and the analytic closed-form measures
+below keep the native ``[target, source]`` layout (``[i, j]`` is ``j -> i``), so
+they are transposed before comparison. A **unidirectional, lower-triangular**
+VAR (signal 0 drives signal 1, never the reverse) has an exactly
+lower-triangular ``A(f)`` and ``H(f)``, so the non-causal ``1 -> 0`` entry
+``[1, 0]`` is analytically zero for every directed measure -- a strong oracle
+for direction (a flipped implementation would put the energy in the wrong
+triangle). A 3-node chain ``0 -> 1 -> 2`` with unequal innovation variances
+additionally separates the normalizations: its indirect path is visible to DTF
+but not PDC, and the unequal variances make the noise-weighted DC and gPDC
+differ from DTF and PDC.
 """
 
 import warnings
@@ -178,11 +180,10 @@ _CHAIN_N_FFT = 256
 def _analytic_directed_measures(A, H, noise_covariance):
     """Closed-form directed measures of a VAR on the non-negative FFT grid.
 
-    The results keep the transfer function's native ``[target, source]``
-    layout, in which ``[..., i, j]`` is the influence ``j -> i``; the public
-    methods return the transpose. ``A`` and ``H`` are on the full FFT grid;
-    ``noise_covariance`` must be diagonal (variances ``sigma``). Returns
-    squared DTF, PDC, DC, gPDC, and dDTF.
+    Results are in the native ``[target, source]`` layout (see the module
+    docstring). ``A`` and ``H`` are on the full FFT grid; ``noise_covariance``
+    must be diagonal (variances ``sigma``). Returns squared DTF, PDC, DC, gPDC,
+    and dDTF.
     """
     n_non_negative = A.shape[0] // 2 + 1
     A, H = A[:n_non_negative], H[:n_non_negative]
@@ -262,11 +263,8 @@ def test_chain_oracle_distinguishes_the_measures(chain_oracle):
     ],
 )
 def test_directed_measure_matches_analytic_closed_form(chain_oracle, measure):
-    """Every entry (diagonal included) equals the closed form of the known VAR.
-
-    The closed forms are ``[target, source]``; the method returns
-    ``[source, target]``.
-    """
+    """Every entry (diagonal included) equals the closed form of the known VAR,
+    transposed from its native layout (see the module docstring)."""
     connectivity = chain_oracle["connectivity"]
     with warnings.catch_warnings():
         warnings.simplefilter("error")
