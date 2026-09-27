@@ -18,11 +18,12 @@ stable, the Wilson minimum-phase factorization inside the package recovers
 match the analytic ones.
 
 Direction convention (matching the package): a measure's ``[i, j]`` entry is the
-influence ``j -> i``. A **unidirectional, lower-triangular** VAR (signal 0 drives
-signal 1, never the reverse) has an exactly lower-triangular ``A(f)`` and
-``H(f)``, so the non-causal ``[0, 1]`` entry is analytically zero for every
-directed measure -- a strong oracle for direction (a flipped implementation
-would put the energy in the wrong triangle). A 3-node chain ``0 -> 1 -> 2`` with
+influence ``i -> j``. ``A(f)`` and ``H(f)`` keep their native ``[target, source]``
+layout. A **unidirectional, lower-triangular** VAR (signal 0 drives signal 1,
+never the reverse) has an exactly lower-triangular ``A(f)`` and ``H(f)``, so the
+non-causal ``1 -> 0`` entry ``[1, 0]`` is analytically zero for every directed
+measure -- a strong oracle for direction (a flipped implementation would put the
+energy in the wrong triangle). A 3-node chain ``0 -> 1 -> 2`` with
 unequal innovation variances additionally separates the normalizations: its
 indirect path is visible to DTF but not PDC, and the unequal variances make the
 noise-weighted DC and gPDC differ from DTF and PDC.
@@ -139,19 +140,19 @@ def test_injected_cross_spectrum_matches_analytic(var_oracle):
     ],
 )
 def test_non_causal_direction_is_zero(var_oracle, measure):
-    """The non-causal [0, 1] entry must be ~0 for a unidirectional VAR.
+    """The non-causal [1, 0] entry (1 -> 0) must be ~0 for a unidirectional VAR.
 
     Signal 1 does not influence signal 0, so A(f) and H(f) are exactly
-    lower-triangular and every directed measure's [0, 1] entry is analytically
-    zero. The causal [1, 0] entry must be clearly positive.
+    lower-triangular and every directed measure's [1, 0] entry is analytically
+    zero. The causal [0, 1] entry (0 -> 1) must be clearly positive.
     """
     c = var_oracle["connectivity"]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = np.asarray(getattr(c, measure)())[0]  # (n_fft, n, n)
 
-    non_causal = result[..., 0, 1]
-    causal = result[..., 1, 0]
+    non_causal = result[..., 1, 0]
+    causal = result[..., 0, 1]
     # Both directions are defined at every frequency: NaN is not "zero".
     assert np.isfinite(non_causal).all(), measure
     assert np.isfinite(causal).all(), measure
@@ -166,8 +167,8 @@ def test_non_causal_direction_is_zero(var_oracle, measure):
 
 
 # A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with unequal, uncorrelated
-# innovation variances. The indirect path makes DTF[2, 0] > 0 while PDC[2, 0] == 0,
-# and the unequal variances make DC differ from DTF and gPDC differ from PDC, so
+# innovation variances. The indirect path makes the analytic (native
+# [target, source]) DTF[2, 0] > 0 while PDC[2, 0] == 0, and the unequal variances make DC differ from DTF and gPDC differ from PDC, so
 # each measure's normalization (row vs column, noise weighting) is identifiable.
 _CHAIN_NOISE = np.diag([1.0, 2.0, 0.5])
 _CHAIN_N_FFT = 256
@@ -176,8 +177,9 @@ _CHAIN_N_FFT = 256
 def _analytic_directed_measures(A, H, noise_covariance):
     """Closed-form directed measures of a VAR on the non-negative FFT grid.
 
-    ``[..., i, j]`` is the influence ``j -> i``. ``A`` and ``H`` are on the full
-    FFT grid; ``noise_covariance`` must be diagonal (variances ``sigma``).
+    The results keep the transfer function's native ``[target, source]``
+    layout, ``[..., i, j]`` is the influence ``j -> i``; the public methods
+    return the transpose. ``A`` and ``H`` are on the full FFT grid; ``noise_covariance`` must be diagonal (variances ``sigma``).
     Returns squared DTF, PDC, DC, gPDC, and dDTF.
     """
     n_non_negative = A.shape[0] // 2 + 1
@@ -258,12 +260,17 @@ def test_chain_oracle_distinguishes_the_measures(chain_oracle):
     ],
 )
 def test_directed_measure_matches_analytic_closed_form(chain_oracle, measure):
-    """Every entry (diagonal included) equals the closed form of the known VAR."""
+    """Every entry (diagonal included) equals the closed form of the known VAR.
+
+    The closed forms are ``[target, source]``; the method returns
+    ``[source, target]``.
+    """
     connectivity = chain_oracle["connectivity"]
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         result = np.asarray(getattr(connectivity, measure)())[0]
-    np.testing.assert_allclose(result, chain_oracle["measures"][measure], rtol=0, atol=1e-9)
+    expected = np.swapaxes(chain_oracle["measures"][measure], -1, -2)
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-9)
 
 
 def test_dtf_peak_matches_analytic_transfer_function_peak(chain_oracle):
@@ -274,18 +281,20 @@ def test_dtf_peak_matches_analytic_transfer_function_peak(chain_oracle):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         dtf = np.asarray(connectivity.directed_transfer_function())[0]
-    assert np.argmax(dtf[:, 2, 0]) == np.argmax(np.abs(H[:n_non_negative, 2, 0]))
+    # dtf is [source, target]; H is [target, source].
+    assert np.argmax(dtf[:, 0, 2]) == np.argmax(np.abs(H[:n_non_negative, 2, 0]))
 
 
 def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
     """The xarray wrapper must label directed measures source -> target.
 
-    The ``Connectivity`` layer returns ``[i, j] = j -> i``; the wrapper
-    transposes directed measures so that ``sel(source=driver, target=receiver)``
-    reads out the causal entry. For this unidirectional VAR (signal 0 drives
-    signal 1), the causal entry is ``sel(source="0", target="1")`` and the
-    anti-causal ``sel(source="1", target="0")`` is analytically zero. A wrapper
-    that forgot the transpose would swap these two.
+    The ``Connectivity`` layer returns ``[i, j] = i -> j`` and the wrapper labels
+    those axes ``source`` and ``target`` without reordering them, so
+    ``sel(source=driver, target=receiver)`` reads out the causal entry. For this
+    unidirectional VAR (signal 0 drives signal 1), the causal entry is
+    ``sel(source="0", target="1")`` and the anti-causal
+    ``sel(source="1", target="0")`` is analytically zero. A wrapper that
+    transposed the array would swap these two.
     """
     connectivity = var_oracle["connectivity"]
     with warnings.catch_warnings():
@@ -297,11 +306,14 @@ def test_wrapper_source_target_labels_follow_causal_direction(var_oracle):
             False,
             {},
         )
+        granger = connectivity.pairwise_spectral_granger_prediction()
 
     causal = result.sel(source="0", target="1").values  # 0 -> 1
     anti_causal = result.sel(source="1", target="0").values  # 1 -> 0
     assert np.nanmax(causal) > 0.05, np.nanmax(causal)
     assert np.nanmax(np.abs(anti_causal)) < 1e-8, np.nanmax(np.abs(anti_causal))
+    np.testing.assert_array_equal(causal, granger[..., 0, 1])
+    np.testing.assert_array_equal(anti_causal, granger[..., 1, 0])
 
 
 def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
@@ -321,7 +333,7 @@ def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
 def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
     """A truly absent causal direction returns 0 (like the block path), not NaN.
 
-    For the unidirectional oracle (0 -> 1) the [0, 1] direction (1 -> 0) has no
+    For the unidirectional oracle (0 -> 1) the [1, 0] direction (1 -> 0) has no
     causal influence. Roundoff can drive the log-ratio slightly negative there;
     it must be clipped to 0 rather than discarded as NaN, matching the
     conditional/block Granger convention.
@@ -331,7 +343,7 @@ def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):
         warnings.simplefilter("ignore")
         granger = connectivity.pairwise_spectral_granger_prediction()[0]
 
-    non_causal = granger[..., 0, 1]
+    non_causal = granger[..., 1, 0]
     # No NaN masquerading as "no result"; the absent direction is a finite ~0
     # at every frequency.
     assert np.isfinite(non_causal).all()
@@ -358,7 +370,7 @@ def test_pairwise_granger_matches_geweke_closed_form(var_oracle):
             S[:n_non_negative, target, target].real
             / (_NOISE[target, target] * np.abs(H[:n_non_negative, target, target]) ** 2)
         )
-        np.testing.assert_allclose(granger[:, target, source], geweke, rtol=0, atol=1e-5)
+        np.testing.assert_allclose(granger[:, source, target], geweke, rtol=0, atol=1e-5)
 
 
 def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, target, source):
@@ -460,7 +472,7 @@ def test_conditional_granger_matches_state_space_oracle(
                 coefficients, noise_covariance, n_fft, target, source
             )
             np.testing.assert_allclose(
-                conditional[:, target, source], oracle, atol=atol, rtol=0
+                conditional[:, source, target], oracle, atol=atol, rtol=0
             )
 
 
@@ -487,8 +499,8 @@ def test_conditional_granger_removes_mediated_influence():
         pairwise = connectivity.pairwise_spectral_granger_prediction()[0]
         conditional = connectivity.conditional_spectral_granger_prediction()[0]
 
-    # Unconditional 0 -> 2 (row 2, col 0) is clearly non-zero via the mediator.
-    assert np.nanmax(pairwise[..., 2, 0]) > 0.05
+    # Unconditional 0 -> 2 ([0, 2]) is clearly non-zero via the mediator.
+    assert np.nanmax(pairwise[..., 0, 2]) > 0.05
     # The analytic spectrum is well conditioned, so every off-diagonal entry is
     # a finite, non-negative value; a true-null direction must not degrade into
     # NaN through roundoff-negative estimates.
@@ -496,9 +508,9 @@ def test_conditional_granger_removes_mediated_influence():
     assert np.isfinite(conditional[..., off_diagonal]).all()
     assert (conditional[..., off_diagonal] >= 0).all()
     # Conditioning on signal 1 removes it: 0 -> 2 | 1 collapses toward zero.
-    assert conditional[..., 2, 0].max() < 1e-8
+    assert conditional[..., 0, 2].max() < 1e-8
     # The genuine direct link 1 -> 2 | 0 survives conditioning.
-    assert conditional[..., 2, 1].max() > 0.05
+    assert conditional[..., 1, 2].max() > 0.05
 
 
 def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
@@ -508,8 +520,8 @@ def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
         warnings.simplefilter("ignore")
         reversed_gc = connectivity.time_reversed_spectral_granger_prediction()[0]
 
-    # Original system is 0 -> 1 ([1, 0]); after reversal the [0, 1] direction
-    # must dominate strongly, even though correlated reversed innovations can
-    # leave a small residual in the original direction.
-    assert np.nanmax(reversed_gc[..., 0, 1]) > 0.5
-    assert np.nanmax(reversed_gc[..., 0, 1]) > 10 * np.nanmax(reversed_gc[..., 1, 0])
+    # Original system is 0 -> 1 ([0, 1]); after reversal the 1 -> 0 direction
+    # ([1, 0]) must dominate strongly, even though correlated reversed
+    # innovations can leave a small residual in the original direction.
+    assert np.nanmax(reversed_gc[..., 1, 0]) > 0.5
+    assert np.nanmax(reversed_gc[..., 1, 0]) > 10 * np.nanmax(reversed_gc[..., 0, 1])
