@@ -42,6 +42,8 @@ MIN_EIGENVALUE_THRESHOLD = 0.9
 # - The -1 ensures we stay within the well-concentrated region
 # - Reference: Slepian (1978), "Prolate spheroidal wave functions"
 TAPER_MULTIPLIER = 2.0
+# Smallest NW that gives two tapers: floor(TAPER_MULTIPLIER * 1.5) - 1 = 2.
+MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS = 1.5
 
 
 def _resolve_sample_count(
@@ -407,24 +409,6 @@ def suggest_parameters(
             time_halfbandwidth_product = desired_freq_resolution * time_window_duration / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
-            n_tapers_left = estimate_n_tapers(time_halfbandwidth_product)
-            if n_tapers_left < 2:
-                # Two tapers need NW >= 1.5, i.e. windows of 3 / resolution seconds.
-                min_window_two_tapers = 3.0 / desired_freq_resolution
-                warnings.warn(
-                    f"A {desired_freq_resolution} Hz resolution with at least "
-                    f"{min_n_windows} time windows of a {signal_duration} s signal "
-                    f"leaves {n_tapers_left} taper (time_halfbandwidth_product="
-                    f"{time_halfbandwidth_product:.2f}), so the estimate is not "
-                    "averaged across tapers and will be noisy.\n"
-                    "For at least 2 tapers, use either:\n"
-                    f"  - a longer signal (at least "
-                    f"{min_n_windows * min_window_two_tapers:.2f} s), or\n"
-                    f"  - a coarser frequency resolution (at least "
-                    f"{3.0 * min_n_windows / signal_duration:.2f} Hz).",
-                    UserWarning,
-                    stacklevel=2,
-                )
 
     # User wants specific number of tapers
     elif desired_n_tapers is not None:
@@ -444,6 +428,25 @@ def suggest_parameters(
 
     # Calculate derived parameters
     n_tapers = estimate_n_tapers(time_halfbandwidth_product)
+    if desired_freq_resolution is not None and n_tapers < 2:
+        # Only the shortened-window path above can leave one taper. Two tapers
+        # need resolution * window >= this bandwidth product (delta_f = 2 NW / T).
+        two_taper_bandwidth = TAPER_MULTIPLIER * MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS
+        warnings.warn(
+            f"A {desired_freq_resolution} Hz resolution with at least "
+            f"{min_n_windows} time windows of a {signal_duration} s signal "
+            f"leaves {n_tapers} taper (time_halfbandwidth_product="
+            f"{time_halfbandwidth_product:.2f}), so the estimate is not "
+            "averaged across tapers and will be noisy.\n"
+            "For at least 2 tapers, use either:\n"
+            f"  - a longer signal (at least "
+            f"{min_n_windows * two_taper_bandwidth / desired_freq_resolution:.2f} s), "
+            "or\n"
+            f"  - a coarser frequency resolution (at least "
+            f"{two_taper_bandwidth * min_n_windows / signal_duration:.2f} Hz).",
+            UserWarning,
+            stacklevel=2,
+        )
     frequency_resolution = estimate_frequency_resolution(
         sampling_frequency, time_window_duration, time_halfbandwidth_product
     )
