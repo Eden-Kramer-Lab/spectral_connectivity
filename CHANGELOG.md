@@ -573,7 +573,7 @@ directly with results from 2.x.
   time-resolved single-trial spectrum with 3 tapers) or with observation
   weights, only the requested moments are computed, because there the extra
   moments cost more than re-forming the tiles; on 1199 windows x 3 tapers x
-  32 signals a single phase-lag measure is 1.2-1.3x faster than before with an
+  32 signals a single phase-lag measure is 1.1-1.3x faster than before with an
   unchanged peak, and a lone weighted measure on a Hann `MorletWavelet` with
   `smoothing_time` about 1.2-1.4x faster. Outputs are unchanged: every
   default measure is bit-identical except
