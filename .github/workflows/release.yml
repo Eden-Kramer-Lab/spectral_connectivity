@@ -98,7 +98,7 @@ jobs:
       - name: Run notebook snapshot tests
         # Snapshot (syrupy) comparisons use a tight rtol, so run them on a single
         # reference platform to avoid cross-platform float-precision flakiness.
-        # The two notebook-execution checks are covered by the "Test notebooks"
+        # The notebook-execution checks are covered by the "Test notebooks"
         # step below and are deselected here. --no-cov keeps this run from
         # overwriting the full suite's .coverage, which the Codecov upload reads.
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
@@ -113,7 +113,7 @@ jobs:
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         run: |
           pip install jupyter nbconvert
-          for nb in examples/Tutorial_On_Simulated_Examples.ipynb examples/Tutorial_Using_Paper_Examples.ipynb; do
+          for nb in examples/Intro_tutorial.ipynb examples/Tutorial_On_Simulated_Examples.ipynb examples/Tutorial_Using_Paper_Examples.ipynb; do
             echo "Executing $nb"
             jupyter nbconvert --to notebook --ExecutePreprocessor.kernel_name=python3 --ExecutePreprocessor.timeout=1800 --execute "$nb"
           done
