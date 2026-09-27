@@ -424,12 +424,14 @@ def _requires_two_sided(method: str) -> bool:
 
 
 def _is_group_measure(method: str) -> bool:
-    """Whether a registered measure compares groups of signals (takes ``group_labels``)."""
-    spec = _MEASURE_SPECS.get(method)
-    return spec is not None and spec.output_kind in {
-        "group_pairwise",
-        "multivariate_components",
-    }
+    """Whether a measure compares groups of signals, i.e. takes ``group_labels``.
+
+    Decided from the ``Connectivity`` method's signature rather than the
+    registry, so an unregistered extension measure that takes ``group_labels``
+    counts too.
+    """
+    measure = getattr(Connectivity, method, None)
+    return callable(measure) and "group_labels" in inspect.signature(measure).parameters
 
 
 def _requested_methods(

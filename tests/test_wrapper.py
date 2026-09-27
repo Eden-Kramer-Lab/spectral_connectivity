@@ -1716,13 +1716,50 @@ def four_signal_noise():
 
 
 def test_is_group_measure_matches_the_measures_that_take_group_labels():
-    takes_group_labels = {
+    """The signature rule agrees with the registry's group output kinds."""
+    registered_group = {
         name
-        for name in _MEASURE_SPECS
-        if "group_labels" in inspect.signature(getattr(Connectivity, name)).parameters
+        for name, spec in _MEASURE_SPECS.items()
+        if spec.output_kind in {"group_pairwise", "multivariate_components"}
     }
-    assert takes_group_labels
-    assert {name for name in _MEASURE_SPECS if _is_group_measure(name)} == takes_group_labels
+    assert registered_group
+    assert {name for name in _MEASURE_SPECS if _is_group_measure(name)} == registered_group
+
+
+@pytest.fixture
+def extension_group_measure(monkeypatch):
+    """An unregistered ``Connectivity`` extension that takes ``group_labels``.
+
+    Returns the list of labels each call received.
+    """
+    received = []
+
+    def custom_group_power(self, group_labels=None):
+        received.append(group_labels)
+        return np.zeros(
+            (len(self.time), len(self.frequencies), self.n_signals, self.n_signals)
+        )
+
+    monkeypatch.setattr(Connectivity, "custom_group_power", custom_group_power, raising=False)
+    return received
+
+
+@pytest.mark.parametrize(
+    ("method", "label_kwargs"),
+    [
+        ("custom_group_power", {"group_labels": [0, 0, 1, 1]}),
+        ("custom_group_power", {"connectivity_kwargs": {"group_labels": [0, 0, 1, 1]}}),
+        (["canonical_coherence", "custom_group_power"], {"group_labels": [0, 0, 1, 1]}),
+    ],
+    ids=["named_argument", "dict_form", "mixed_batch"],
+)
+def test_extension_measure_taking_group_labels_receives_them(
+    four_signal_noise, extension_group_measure, method, label_kwargs
+):
+    multitaper_connectivity(
+        four_signal_noise, sampling_frequency=1000, method=method, **label_kwargs
+    )
+    assert extension_group_measure == [[0, 0, 1, 1]]
 
 
 def test_group_measure_without_group_labels_explains_the_argument(four_signal_noise):
