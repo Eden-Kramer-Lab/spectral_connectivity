@@ -58,8 +58,15 @@ directly with results from 2.x.
   3.2) emitted by the seven `Connectivity` methods whose arrays were target
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
   when they compute pairwise or subset spectral Granger prediction (the 2.x
-  wrapper rejected the transfer-function measures). It points at the calling line, so Python's
-  default filter shows it once per call site.
+  wrapper rejected the transfer-function measures). It points at the calling
+  line, so Python's default filter shows it once per call site.
+- Public simulators with planted, known structure in
+  `spectral_connectivity.simulate`: `simulate_lagged_broadband` (noisy copies of
+  one white-noise source, each delayed by a whole number of samples, for a known
+  lead/lag) and `simulate_shared_oscillation` (one sinusoid shared by several
+  signals with per-signal amplitude, phase offset, and noise, optionally with a
+  random phase per trial). The simulated-examples tutorial builds every case
+  with them and asserts what each plot shows, so executing it checks the plots.
 - Spectral primitives and pairwise measures: one-sided
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
   corrected imaginary PLV, and directed PLI.
