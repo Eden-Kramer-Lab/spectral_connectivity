@@ -6,6 +6,7 @@ import pytest
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity._multivariate import _optimize_canonical_coherency_phase, _reshape
 from spectral_connectivity.simulate import simulate_shared_oscillation
+from tests._var_oracle import _fourier_coefficients_with_cross_spectrum
 
 
 def _cacoh_phase_objective(whitened, phase):
@@ -189,6 +190,41 @@ def test_mic_recovers_lagged_between_group_source():
     # whitened matrix); the informative check is that they nearly coincide
     # (measured 1.009 vs 0.997).
     assert abs(mim[peak] - mic[peak] ** 2) < 0.05
+
+
+@pytest.mark.parametrize(
+    ("phase", "power"),
+    [(np.pi / 3, 0.3), (np.pi / 2, 1.0), (-np.pi / 4, 0.5)],
+)
+def test_mic_and_mim_match_rank_one_closed_form(phase, power):
+    """For the exact spectrum ``S = power a a^H + I`` of one source seen by
+    both groups, with group B's loadings rotated by ``phase``, the whitened
+    imaginary cross-spectrum has one singular value,
+    ``MIC = |sin(phase)| sqrt(rho_A rho_B)`` with ``rho = r / (1 + r)`` and
+    ``r = power |a_group|^2``, and ``MIM = MIC**2``. Unlike the planted
+    simulations, these values are far from 1, so squaring or rooting either
+    measure changes it."""
+    a_group_a = np.array([1.0, 0.8, 1.2])
+    a_group_b = np.array([1.0, 1.1, 0.9])
+    loadings = np.concatenate([a_group_a, a_group_b * np.exp(1j * phase)])
+    n_fft = 8
+    S = np.broadcast_to(
+        power * np.outer(loadings, loadings.conj()) + np.eye(6), (n_fft, 6, 6)
+    ).copy()
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S)
+    )
+    mic, _ = connectivity.maximized_imaginary_coherency(_GROUP_LABELS)
+    mim, _ = connectivity.multivariate_interaction_measure(_GROUP_LABELS)
+
+    def rho(group_loadings):
+        r = power * np.sum(group_loadings**2)
+        return r / (1 + r)
+
+    expected_mic = np.abs(np.sin(phase)) * np.sqrt(rho(a_group_a) * rho(a_group_b))
+    assert 0.2 < expected_mic < 0.8  # premise: away from 0 and saturation
+    np.testing.assert_allclose(mic[0, :, 0, 1], expected_mic, rtol=1e-8)
+    np.testing.assert_allclose(mim[0, :, 0, 1], expected_mic**2, rtol=1e-8)
 
 
 def test_mic_rejects_zero_lag_shared_source():
