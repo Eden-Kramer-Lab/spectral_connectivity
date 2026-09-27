@@ -174,8 +174,9 @@ def _two_group_oscillation(group_1_phase):
 
 def test_mic_recovers_lagged_between_group_source():
     """A pi / 2 lag between the groups is an imaginary-axis interaction: MIC
-    reaches it at 20 Hz and stays at its bias level elsewhere, and MIM (the sum
-    of squared singular values) is at least MIC squared (the largest)."""
+    reaches it at 20 Hz and stays at its bias level elsewhere. The source is
+    rank one, so MIM (the sum of squared singular values) at 20 Hz is about
+    MIC squared (the largest one): the other components add only noise."""
     connectivity, peak, off_peak = _two_group_oscillation(np.pi / 2)
     mic, labels = connectivity.maximized_imaginary_coherency(_GROUP_LABELS)
     mim, _ = connectivity.multivariate_interaction_measure(_GROUP_LABELS)
@@ -184,7 +185,10 @@ def test_mic_recovers_lagged_between_group_source():
 
     assert mic[peak] > 0.9
     assert np.median(mic[off_peak]) < 0.15
-    assert np.all(mim >= mic**2 - 1e-9)
+    # MIM >= MIC**2 holds for any data (Frobenius vs spectral norm of the same
+    # whitened matrix); the informative check is that they nearly coincide
+    # (measured 1.009 vs 0.997).
+    assert abs(mim[peak] - mic[peak] ** 2) < 0.05
 
 
 def test_mic_rejects_zero_lag_shared_source():
