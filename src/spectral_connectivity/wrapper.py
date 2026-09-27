@@ -38,6 +38,7 @@ from spectral_connectivity._result_formatting import (
 )
 from spectral_connectivity.connectivity import (
     _MIGRATION_GUIDE_URL,
+    _ORIENTATION_WARNING_PREFIX,
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
@@ -298,8 +299,8 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
     changed = sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods))
     if changed:
         warnings.warn(
-            f"For {', '.join(changed)}, sel(source=a, target=b) is a -> b since "
-            "spectral_connectivity 3.0; 2.x returned b -> a. Review code written "
+            f"{_ORIENTATION_WARNING_PREFIX}sel(source=a, target=b) of "
+            f"{', '.join(changed)} is a -> b; 2.x returned b -> a. Review code written "
             "for 2.x that selects these results. See the migration guide: "
             f"{_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
             DirectedOrientationWarning,

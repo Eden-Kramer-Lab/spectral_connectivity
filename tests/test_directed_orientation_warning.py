@@ -69,6 +69,8 @@ def test_changed_measure_warns_at_the_callers_line(connectivity, method):
         getattr(connectivity, method)(**_KWARGS.get(method, {}))
     (warning,) = _orientation_warnings(record)
     message = str(warning.message)
+    # pyproject.toml filters the warning for the rest of the suite by this prefix.
+    assert message.startswith("Since spectral_connectivity 3.0, ")
     assert method in message
     assert "[..., source, target]" in message
     assert "migration-guide" in message
@@ -118,10 +120,11 @@ def test_wrapper_warns_once_about_its_labels(time_series):
         multitaper_connectivity(time_series, sampling_frequency=100, method=methods)
     (warning,) = _orientation_warnings(record)
     message = str(warning.message)
-    assert "sel(source=a, target=b) is a -> b" in message
     # The 2.x wrapper rejected the transfer-function measures, so only Granger's
     # labels changed.
-    assert "For pairwise_spectral_granger_prediction, sel" in message
+    assert (
+        "sel(source=a, target=b) of pairwise_spectral_granger_prediction is a -> b" in message
+    )
     assert "[..., source, target]" not in message
     assert warning.filename == __file__
 

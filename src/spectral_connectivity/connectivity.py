@@ -260,6 +260,10 @@ _MIGRATION_GUIDE_URL = (
     "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/"
     "CHANGELOG.md#migration-guide"
 )
+# Every DirectedOrientationWarning message starts with this, so pyproject.toml
+# can filter it by message: a category filter would import the package while
+# pytest reads its configuration, before coverage starts.
+_ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
 _SILENCE_ORIENTATION_WARNING = (
     'Silence with warnings.filterwarnings("ignore", '
     "category=spectral_connectivity.DirectedOrientationWarning)."
@@ -299,8 +303,8 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
         result = connectivity_measure(*args, **kwargs)
         if _warn_orientation_change.get():
             warnings.warn(
-                f"{connectivity_measure.__name__} returns [..., source, target] "
-                "since spectral_connectivity 3.0: [..., i, j] is i -> j. 2.x "
+                f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
+                "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
                 "returned [..., target, source]; review the indexing and "
                 "normalization axes of code written for 2.x. See the migration "
                 f"guide: {_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
