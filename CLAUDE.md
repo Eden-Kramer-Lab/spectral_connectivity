@@ -72,6 +72,14 @@ uv run ruff check --fix src/ tests/
 uv run mypy src/
 ```
 
+### Benchmarking
+```bash
+# Time the default measures and save their outputs; re-run with --compare after
+# any connectivity.py change to cached intermediates (fails above 1e-12)
+uv run python benchmarks/bench_default_measures.py --save baseline.npz
+uv run python benchmarks/bench_default_measures.py --compare baseline.npz
+```
+
 ### Building and Release
 ```bash
 # Build sdist and wheel into dist/ (hatchling + hatch-vcs; hatch itself is not installed)
