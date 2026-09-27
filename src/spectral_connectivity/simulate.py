@@ -35,6 +35,19 @@ def _per_signal(
     return np.broadcast_to(values_array.reshape(-1), (n_signals,))
 
 
+def _add_noise(
+    time_series: NDArray[np.floating],
+    noise_levels: NDArray[np.floating],
+    rng: np.random.Generator,
+) -> NDArray[np.floating]:
+    """Add independent Gaussian noise of per-signal standard deviation ``noise_levels``.
+
+    ``noise_levels`` has shape ``(n_signals,)`` and scales the last axis. The
+    noise is drawn in one call of shape ``time_series.shape``.
+    """
+    return time_series + noise_levels * rng.standard_normal(time_series.shape)
+
+
 def simulate_MVAR(
     coefficients: NDArray[np.floating],
     noise_covariance: NDArray[np.floating] | None = None,
@@ -198,7 +211,7 @@ def simulate_lagged_broadband(
         [source[max_lag - lag : max_lag - lag + n_time_samples] for lag in lags_array],
         axis=-1,
     )
-    return time_series + noise_array * rng.standard_normal(time_series.shape)
+    return _add_noise(time_series, noise_array, rng)
 
 
 def simulate_shared_oscillation(
@@ -312,4 +325,4 @@ def simulate_shared_oscillation(
         + phase_offsets_array
     )  # (n_time_samples, n_trials, n_signals)
     time_series: NDArray[np.floating] = amplitudes_array * np.sin(phase)
-    return time_series + noise_array * rng.standard_normal(time_series.shape)
+    return _add_noise(time_series, noise_array, rng)

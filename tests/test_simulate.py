@@ -169,14 +169,6 @@ def test_lagged_broadband_noise_free_is_shifted_source():
     np.testing.assert_array_equal(time_series[8:, :, 2], time_series[:-8, :, 0])
 
 
-def test_lagged_broadband_seed_determinism():
-    """The same seed reproduces the output; a different seed changes it."""
-    kwargs = {"lags": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64, "n_trials": 2}
-    first = simulate_lagged_broadband(**kwargs, random_state=3)
-    np.testing.assert_array_equal(first, simulate_lagged_broadband(**kwargs, random_state=3))
-    assert not np.allclose(first, simulate_lagged_broadband(**kwargs, random_state=4))
-
-
 _SAMPLING_FREQUENCY = 1000
 _N_TIME_SAMPLES = 1000  # 1 s, so ``frequency`` below falls exactly on an FFT bin
 _FREQUENCY = 40
@@ -273,19 +265,32 @@ def test_shared_oscillation_zero_amplitude_is_flat():
     assert np.any(time_series[..., 0] != 0)
 
 
-def test_shared_oscillation_seed_determinism():
+@pytest.mark.parametrize(
+    ("simulate", "kwargs"),
+    [
+        (
+            simulate_lagged_broadband,
+            {"lags": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64, "n_trials": 2},
+        ),
+        (
+            simulate_shared_oscillation,
+            {
+                "frequency": _FREQUENCY,
+                "sampling_frequency": _SAMPLING_FREQUENCY,
+                "n_time_samples": 100,
+                "n_trials": 3,
+                "amplitudes": [1.0, 0.5],
+                "noise_levels": 0.3,
+            },
+        ),
+    ],
+    ids=["lagged_broadband", "shared_oscillation"],
+)
+def test_simulator_seed_determinism(simulate, kwargs):
     """The same seed reproduces the output; a different seed changes it."""
-    kwargs = {
-        "frequency": _FREQUENCY,
-        "sampling_frequency": _SAMPLING_FREQUENCY,
-        "n_time_samples": 100,
-        "n_trials": 3,
-        "amplitudes": [1.0, 0.5],
-        "noise_levels": 0.3,
-    }
-    first = simulate_shared_oscillation(**kwargs, random_state=5)
-    np.testing.assert_array_equal(first, simulate_shared_oscillation(**kwargs, random_state=5))
-    assert not np.allclose(first, simulate_shared_oscillation(**kwargs, random_state=6))
+    first = simulate(**kwargs, random_state=3)
+    np.testing.assert_array_equal(first, simulate(**kwargs, random_state=3))
+    assert not np.allclose(first, simulate(**kwargs, random_state=4))
 
 
 def test_shared_oscillation_parameters_apply_per_signal():
