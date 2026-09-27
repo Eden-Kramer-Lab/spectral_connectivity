@@ -446,4 +446,7 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(
         expected = getattr(zero_drives_one_connectivity, measure.name)(**kwargs)
 
     assert result.dims[-2:] == ("source", "target")
-    np.testing.assert_array_equal(result.values, expected, strict=True)
+    assert result.shape == expected.shape
+    # The two computations agree only to roundoff (it varies with the BLAS);
+    # swapped axes would differ by orders of magnitude, since 0 -> 1 dominates.
+    np.testing.assert_allclose(result.values, expected, rtol=1e-9, atol=1e-12)
