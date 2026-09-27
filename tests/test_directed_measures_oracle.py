@@ -304,24 +304,43 @@ _BLOCK_A1 = np.array(
     ]
 )
 _BLOCK_COEFFICIENTS = np.stack([_BLOCK_A1, -0.6 * np.eye(4)])
-_BLOCK_NOISE = np.eye(4)
+# Correlated innovations, within and across the blocks (positive definite).
+_CORRELATED_BLOCK_NOISE = np.array(
+    [
+        [1.0, 0.3, 0.5, 0.2],
+        [0.3, 1.0, 0.1, 0.4],
+        [0.5, 0.1, 1.0, 0.3],
+        [0.2, 0.4, 0.3, 1.0],
+    ]
+)
 _BLOCK_LABELS = [0, 0, 1, 1]
 _BLOCK_N_FFT = 256
 
 
 @pytest.mark.parametrize(
+    "noise_covariance",
+    [np.eye(4), _CORRELATED_BLOCK_NOISE],
+    ids=["uncorrelated", "correlated"],
+)
+@pytest.mark.parametrize(
     "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
 )
-def test_blockwise_granger_matches_geweke_block_closed_form(conjugate_symmetric):
-    """Blockwise Granger equals Geweke's block measure for uncorrelated innovations.
+def test_blockwise_granger_matches_geweke_block_closed_form(
+    conjugate_symmetric, noise_covariance
+):
+    """Blockwise Granger equals Geweke's block measure.
 
     With X = {0, 1} and Y = {2, 3}, ``F_{X->Y}(f) = log det S_YY(f) -
-    log det(S_YY(f) - H_YX(f) Sigma_XX H_YX(f)^H)``, and ``F_{Y->X}`` is 0
-    because ``H_XY == 0``. Group 0 is X and group 1 is Y, so ``[..., 0, 1]``
-    is ``X -> Y``.
+    log det(S_YY(f) - H_YX(f) Sigma_{X|Y} H_YX(f)^H)``, where
+    ``Sigma_{X|Y} = Sigma_XX - Sigma_XY Sigma_YY^-1 Sigma_YX`` removes the
+    instantaneous (innovation) correlation (equal to ``Sigma_XX`` when the
+    blocks' innovations are uncorrelated). ``F_{Y->X}`` is 0 because
+    ``H_XY == 0``. Group 0 is X and group 1 is Y, so ``[..., 0, 1]`` is
+    ``X -> Y``.
     """
     assert _companion_spectral_radius(_BLOCK_COEFFICIENTS) < 1
-    _, H, S = _analytic_var(_BLOCK_COEFFICIENTS, _BLOCK_NOISE, _BLOCK_N_FFT)
+    assert np.all(np.linalg.eigvalsh(noise_covariance) > 0)
+    _, H, S = _analytic_var(_BLOCK_COEFFICIENTS, noise_covariance, _BLOCK_N_FFT)
     connectivity = Connectivity(
         fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
             S, conjugate_symmetric=conjugate_symmetric
@@ -335,8 +354,11 @@ def test_blockwise_granger_matches_geweke_block_closed_form(conjugate_symmetric)
     source, target = [0, 1], [2, 3]
     S_yy = S[:n_non_negative][:, target][:, :, target]
     H_yx = H[:n_non_negative][:, target][:, :, source]
-    sigma_xx = _BLOCK_NOISE[np.ix_(source, source)]
-    intrinsic = S_yy - H_yx @ sigma_xx @ H_yx.conj().swapaxes(-1, -2)
+    sigma = noise_covariance
+    sigma_x_given_y = sigma[np.ix_(source, source)] - sigma[
+        np.ix_(source, target)
+    ] @ np.linalg.solve(sigma[np.ix_(target, target)], sigma[np.ix_(target, source)])
+    intrinsic = S_yy - H_yx @ sigma_x_given_y @ H_yx.conj().swapaxes(-1, -2)
     geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
 
     np.testing.assert_array_equal(labels, [0, 1])
