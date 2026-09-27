@@ -16,7 +16,7 @@
 # %% [markdown]
 # # Tutorial
 #
-# The `spectral_connectivity` package has one entry point, `multitaper_connectivity`, which runs the multitaper transform, computes the connectivity measures you ask for, and returns a labeled array that is convenient for understanding the output and plotting. Underneath it are two classes:
+# The `spectral_connectivity` package's main entry point for time series is `multitaper_connectivity`, which runs the multitaper transform, computes the connectivity measures you ask for, and returns a labeled array that is convenient for understanding the output and plotting (if you already have Fourier coefficients, `fourier_connectivity` takes those instead). Underneath it are two classes:
 # + `Multitaper` computes the multitaper Fourier transform.
 # + `Connectivity` computes frequency-domain measures from the Fourier coefficients.
 #
@@ -50,7 +50,7 @@ signal[:, 1] = np.sin((2 * np.pi * time * frequency_of_interest) + phase_offset)
 noise = rng.normal(0, 4, signal.shape)
 
 # %% [markdown]
-# `multitaper_connectivity` takes the noisy signals as a 2-D `(n_time_samples, n_signals)` array (a 3-D `(n_time_samples, n_trials, n_signals)` array adds trials), the sampling frequency, and the name of the measure. With a single trial, the estimate is averaged over tapers only, so we ask for more of them with `time_halfbandwidth_product` (explained below):
+# `multitaper_connectivity` takes the noisy signals as a 2-D `(n_time_samples, n_signals)` array (a 3-D `(n_time_samples, n_trials, n_signals)` array adds trials), the sampling frequency, and the name of the measure. With a single trial, the estimate is averaged over tapers only, so we ask for more tapers with `time_halfbandwidth_product=10`: more averaging, at the cost of coarser frequency resolution (the tradeoff is explained below).
 
 # %%
 from spectral_connectivity import list_measures, multitaper_connectivity
@@ -64,10 +64,10 @@ coherence = multitaper_connectivity(
 coherence
 
 # %% [markdown]
-# The result is labeled by `time`, `frequency`, `source`, and `target`, so we can select the pair of signals by name and plot it against frequency. The coherence peaks at the simulated 200 Hz:
+# The result is labeled by `time`, `frequency`, `source`, and `target`. There is a single `time` value because the transform used one window covering the whole recording, labeled by its center; time resolution comes later. We select the pair of signals by name, crop to 100-300 Hz, and plot against frequency. The coherence peaks at the simulated 200 Hz:
 
 # %%
-coherence.sel(source="0", target="1").plot(x="frequency")
+coherence.sel(source="0", target="1", frequency=slice(100, 300)).plot(x="frequency")
 
 # %% [markdown]
 # `list_measures` enumerates the valid `method` names. With `default_only=True` it returns the measures computed when `method` is omitted:
