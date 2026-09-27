@@ -271,6 +271,18 @@ directly with results from 2.x.
 - `suggest_parameters` warns when keeping the requested frequency resolution
   with at least three time windows leaves a single taper, and says how much
   longer the signal or how much coarser the resolution must be for two.
+- Planted-structure and cross-package checks for measures that previously had
+  only property tests: the cross-spectral density recovers a planted amplitude
+  and phase, MIC/MIM find a lagged between-group source and reject a zero-lag
+  one, blockwise Granger with two-channel blocks matches Geweke's closed form,
+  and partial coherence matches the inverse-spectrum oracle and removes a
+  mediated link. Coherence and CSD agree with nitime's non-adaptive multitaper
+  estimate (`taper_weighting="eigen"`), and eleven measures agree with a
+  recorded mne-connectivity 0.9 reference. The seven phase measures (PLV,
+  ciPLV, PPC, PLI, dPLI, wPLI, debiased wPLI²) agree in the single-taper
+  setting: mne-connectivity combines each epoch's tapers before the phase step
+  while this package treats every trial x taper as an observation, so with
+  several tapers the two estimators differ by design.
 
 ### Changed
 

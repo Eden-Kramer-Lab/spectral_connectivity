@@ -37,54 +37,15 @@ import numpy as np
 import pytest
 from scipy.linalg import solve_discrete_are
 
-from spectral_connectivity import Connectivity, DirectedOrientationWarning
+from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
 from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
-
-
-def _analytic_var(coefficients, noise_covariance, n_fft):
-    """Return (A(f), H(f), S(f)) on the full FFT grid for a VAR.
-
-    coefficients : (n_lags, n_signals, n_signals) with the convention
-    ``x(t) = sum_k coefficients[k] x(t - (k + 1)) + e(t)`` (matching
-    ``simulate.simulate_MVAR``).
-    """
-    n_lags, n_signals, _ = coefficients.shape
-    omega = 2 * np.pi * np.arange(n_fft) / n_fft
-    A = np.tile(np.eye(n_signals, dtype=complex), (n_fft, 1, 1))
-    for lag in range(n_lags):
-        A -= coefficients[lag][None] * np.exp(-1j * omega * (lag + 1))[:, None, None]
-    H = np.linalg.inv(A)
-    S = H @ noise_covariance.astype(complex) @ H.conj().swapaxes(-1, -2)
-    return A, H, S
-
-
-def _fourier_coefficients_with_cross_spectrum(S, conjugate_symmetric=False):
-    """Fourier coefficients whose expected cross-spectrum is exactly ``S``.
-
-    With ``S = L L^H`` (Cholesky) and ``n_tapers = n_signals``, taper ``k`` set to
-    ``sqrt(n_signals) * L[:, k]`` makes the taper-mean of the outer products equal
-    ``L L^H = S`` exactly. Shape: (1, 1, n_signals, n_fft, n_signals).
-
-    The analytic ``S`` is conjugate-symmetric only up to rounding, so the Wilson
-    factorization takes its two-sided path. With ``conjugate_symmetric=True`` the
-    coefficients are instead mirrored from the non-negative frequencies, with a
-    real zero and Nyquist frequency, as for real-valued signals; the
-    cross-spectrum is then exactly conjugate-symmetric and the factorization
-    takes its half-spectrum path.
-    """
-    n_fft, n_signals, _ = S.shape
-    L = np.linalg.cholesky(S)  # (n_fft, n_signals, n_signals), lower-triangular
-    # taper axis <- columns of L; scale so the taper-mean reproduces S.
-    fc = np.sqrt(n_signals) * np.moveaxis(L, -1, -2)  # (n_fft, taper, signal)
-    fc = np.moveaxis(fc, 0, 1)  # (taper, n_fft, signal)
-    if conjugate_symmetric:
-        fc[:, 0] = fc[:, 0].real
-        if n_fft % 2 == 0:
-            fc[:, n_fft // 2] = fc[:, n_fft // 2].real
-        fc[:, n_fft // 2 + 1 :] = fc[:, 1 : (n_fft + 1) // 2][:, ::-1].conj()
-    return fc[None, None]  # (1, 1, n_tapers, n_fft, n_signals)
-
+from spectral_connectivity.simulate import simulate_MVAR
+from tests._var_oracle import (
+    _analytic_var,
+    _companion_spectral_radius,
+    _fourier_coefficients_with_cross_spectrum,
+)
 
 # A unidirectional VAR: signal 0 drives signal 1 (lower-triangular coefficients),
 # each an AR(2) with complex-conjugate poles for a genuine spectral peak.
@@ -330,6 +291,97 @@ def test_scalar_blockwise_and_conditional_granger_match_pairwise(var_oracle):
     np.testing.assert_array_equal(labels, [0, 1])
     np.testing.assert_allclose(blockwise, pairwise, atol=1e-6, equal_nan=True)
     np.testing.assert_allclose(conditional, pairwise, atol=1e-6, equal_nan=True)
+
+
+# Two-channel blocks {0, 1} -> {2, 3}: block {2, 3} never feeds back into
+# {0, 1}, so H_XY == 0 and the reverse block direction is analytically zero.
+_BLOCK_A1 = np.array(
+    [
+        [0.5, 0.1, 0.0, 0.0],
+        [0.1, 0.5, 0.0, 0.0],
+        [0.4, 0.2, 0.5, 0.1],
+        [0.3, 0.3, 0.1, 0.5],
+    ]
+)
+_BLOCK_COEFFICIENTS = np.stack([_BLOCK_A1, -0.6 * np.eye(4)])
+# Correlated innovations, within and across the blocks (positive definite).
+_CORRELATED_BLOCK_NOISE = np.array(
+    [
+        [1.0, 0.3, 0.5, 0.2],
+        [0.3, 1.0, 0.1, 0.4],
+        [0.5, 0.1, 1.0, 0.3],
+        [0.2, 0.4, 0.3, 1.0],
+    ]
+)
+_BLOCK_LABELS = [0, 0, 1, 1]
+_BLOCK_N_FFT = 256
+
+
+@pytest.mark.parametrize(
+    "noise_covariance",
+    [np.eye(4), _CORRELATED_BLOCK_NOISE],
+    ids=["uncorrelated", "correlated"],
+)
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+def test_blockwise_granger_matches_geweke_block_closed_form(
+    conjugate_symmetric, noise_covariance
+):
+    """Blockwise Granger equals Geweke's block measure.
+
+    With X = {0, 1} and Y = {2, 3}, ``F_{X->Y}(f) = log det S_YY(f) -
+    log det(S_YY(f) - H_YX(f) Sigma_{X|Y} H_YX(f)^H)``, where
+    ``Sigma_{X|Y} = Sigma_XX - Sigma_XY Sigma_YY^-1 Sigma_YX`` removes the
+    instantaneous (innovation) correlation (equal to ``Sigma_XX`` when the
+    blocks' innovations are uncorrelated). ``F_{Y->X}`` is 0 because
+    ``H_XY == 0``. Group 0 is X and group 1 is Y, so ``[..., 0, 1]`` is
+    ``X -> Y``.
+    """
+    assert _companion_spectral_radius(_BLOCK_COEFFICIENTS) < 1
+    assert np.all(np.linalg.eigvalsh(noise_covariance) > 0)
+    _, H, S = _analytic_var(_BLOCK_COEFFICIENTS, noise_covariance, _BLOCK_N_FFT)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            S, conjugate_symmetric=conjugate_symmetric
+        )
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction(_BLOCK_LABELS)
+
+    n_non_negative = _BLOCK_N_FFT // 2 + 1
+    source, target = [0, 1], [2, 3]
+    S_yy = S[:n_non_negative][:, target][:, :, target]
+    H_yx = H[:n_non_negative][:, target][:, :, source]
+    sigma = noise_covariance
+    sigma_x_given_y = sigma[np.ix_(source, source)] - sigma[
+        np.ix_(source, target)
+    ] @ np.linalg.solve(sigma[np.ix_(target, target)], sigma[np.ix_(target, source)])
+    intrinsic = S_yy - H_yx @ sigma_x_given_y @ H_yx.conj().swapaxes(-1, -2)
+    geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
+
+    np.testing.assert_array_equal(labels, [0, 1])
+    assert geweke.max() > 1.0  # premise: a strong planted block influence
+    np.testing.assert_allclose(blockwise[0, :, 0, 1], geweke, rtol=0, atol=1e-5)
+    assert np.max(np.abs(blockwise[0, :, 1, 0])) < 1e-5
+
+
+def test_blockwise_granger_direction_on_simulated_var():
+    """On data simulated from the block VAR, {0, 1} -> {2, 3} dominates the
+    reverse direction (analytically zero) by more than 5x on average."""
+    time_series = simulate_MVAR(
+        _BLOCK_COEFFICIENTS, n_time_samples=2000, n_trials=30, random_state=0
+    )
+    connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=200))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        blockwise, _ = connectivity.blockwise_spectral_granger_prediction(_BLOCK_LABELS)
+
+    planted, reverse = blockwise[0, :, 0, 1], blockwise[0, :, 1, 0]
+    assert np.isfinite(planted).all()
+    assert np.isfinite(reverse).all()
+    assert planted.mean() > 5 * reverse.mean()
 
 
 def test_pairwise_granger_zero_influence_is_zero_not_nan(var_oracle):

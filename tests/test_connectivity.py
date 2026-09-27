@@ -5,6 +5,7 @@ from unittest.mock import PropertyMock, patch
 import numpy as np
 import pytest
 import scipy.stats
+from scipy.integrate import trapezoid
 from scipy.ndimage import label
 
 from spectral_connectivity._granger import (
@@ -18,6 +19,14 @@ from spectral_connectivity.connectivity import (
     _max_psd_discrepancy,
     _total_inflow,
     _total_outflow,
+)
+from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
+from spectral_connectivity.transforms import Multitaper
+from tests._var_oracle import (
+    _STRONG_CHAIN_COEFFICIENTS,
+    _analytic_var,
+    _companion_spectral_radius,
+    _fourier_coefficients_with_cross_spectrum,
 )
 
 PHASE_LAG_MEASURES = (
@@ -225,6 +234,43 @@ def test_cross_spectral_density_is_one_sided_and_matches_power_diagonal(
     np.testing.assert_allclose(diagonal, conn.power())
 
 
+def test_cross_spectral_density_recovers_planted_amplitude_and_phase():
+    """Two coherent 40 Hz sinusoids: the CSD peaks there with their phase and power.
+
+    Signal 1 (amplitude 2) leads signal 0 (amplitude 1) by pi / 3. The CSD's
+    ``[..., i, j]`` is ``E[X_i conj(X_j)]``, so ``[..., 1, 0]`` has angle
+    ``+pi / 3``, with the sign ``coherence_phase`` documents for "``i`` leads
+    ``j``". Integrated over the peak, the one-sided cross-power of two
+    coherent sinusoids is ``A0 * A1 / 2 = 1``.
+    """
+    sampling_frequency = 500
+    time_series = simulate_shared_oscillation(
+        40,
+        sampling_frequency,
+        1000,
+        n_trials=50,
+        amplitudes=[1.0, 2.0],
+        phase_offsets=[0.0, np.pi / 3],
+        noise_levels=0.5,
+        random_state=0,
+    )
+    multitaper = Multitaper(
+        time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=2
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    frequencies = connectivity.frequencies
+    csd = connectivity.cross_spectral_density()[0]  # (n_frequencies, n_signals, n_signals)
+
+    peak = np.argmax(np.abs(csd[:, 0, 1]))
+    assert frequencies[peak] == 40.0
+    assert np.angle(csd[peak, 1, 0]) == pytest.approx(np.pi / 3, abs=0.05)
+    assert connectivity.coherence_phase()[0, peak, 1, 0] > 0
+
+    band = np.abs(frequencies - frequencies[peak]) <= 2 * multitaper.frequency_resolution
+    cross_power = trapezoid(csd[band, 0, 1], frequencies[band])
+    assert np.abs(cross_power) == pytest.approx(1.0, rel=0.05)
+
+
 @pytest.mark.parametrize(
     ("expectation_type", "expected_shape"),
     [("trials_tapers", (1, 4, 5)), ("trials", (1, 3, 4, 5)), ("tapers", (1, 2, 4, 5))],
@@ -359,6 +405,81 @@ def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     expected[..., index, index] = np.nan
 
     np.testing.assert_allclose(actual, expected[..., :3, :, :], equal_nan=True)
+
+
+def _analytic_partial_coherence(n_fft):
+    """Partial coherence and coherence of the strong chain 0 -> 1 -> 2.
+
+    From the analytic spectrum ``S`` of ``_STRONG_CHAIN_COEFFICIENTS`` with
+    identity innovations: ``P = inv(S)``, partial coherence
+    ``|P_ij|^2 / (P_ii P_jj)`` and coherence ``|S_ij|^2 / (S_ii S_jj)``, each of
+    shape ``(n_nonnegative_frequencies, 3, 3)``. Also returns ``S`` on the full
+    FFT grid.
+    """
+    _, _, spectrum = _analytic_var(_STRONG_CHAIN_COEFFICIENTS, np.eye(3), n_fft)
+    non_negative = spectrum[: n_fft // 2 + 1]
+
+    def normalized(matrix):
+        diagonal = np.real(np.diagonal(matrix, axis1=-2, axis2=-1))
+        return np.abs(matrix) ** 2 / (diagonal[..., :, None] * diagonal[..., None, :])
+
+    return normalized(np.linalg.inv(non_negative)), normalized(non_negative), spectrum
+
+
+def test_partial_coherence_matches_inverse_spectrum_oracle_on_chain():
+    """Fed the exact spectrum of the chain, partial coherence is the analytic
+    one: the direct links are non-zero and the mediated 0-2 link is zero while
+    its pairwise coherence is large."""
+    assert _companion_spectral_radius(_STRONG_CHAIN_COEFFICIENTS) < 1
+    expected, coherence, spectrum = _analytic_partial_coherence(256)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(spectrum)
+    )
+    actual = connectivity.partial_coherence(regularization=1e-12)[0]
+
+    off_diagonal = ~np.eye(3, dtype=bool)
+    np.testing.assert_allclose(
+        actual[:, off_diagonal], expected[:, off_diagonal], rtol=0, atol=1e-8
+    )
+    # Premise: the oracle separates the direct links from the mediated one.
+    assert expected[:, 0, 1].max() == pytest.approx(0.250, abs=1e-3)
+    assert expected[:, 1, 2].max() == pytest.approx(0.817, abs=1e-3)
+    assert expected[:, 0, 2].max() < 1e-12
+    assert coherence[:, 0, 2].max() == pytest.approx(0.785, abs=1e-3)
+
+
+def test_partial_coherence_removes_mediated_link_on_simulated_chain():
+    """On data simulated from the chain, each partial-coherence curve tracks
+    the analytic one, and the mediated 0-2 link stays near zero although the
+    pairwise 0-2 coherence is large.
+
+    The multitaper estimate is positively biased, so its peak overshoots the
+    analytic peak; the mean absolute deviation over frequency is compared
+    instead. The FFT length equals the window so both share one grid.
+    """
+    n_time_samples = 2000
+    time_series = simulate_MVAR(
+        _STRONG_CHAIN_COEFFICIENTS,
+        n_time_samples=n_time_samples,
+        n_trials=60,
+        random_state=0,
+    )
+    connectivity = Connectivity.from_transform(
+        Multitaper(
+            time_series,
+            sampling_frequency=200,
+            time_halfbandwidth_product=3,
+            n_fft_samples=n_time_samples,
+        )
+    )
+    partial = connectivity.partial_coherence()[0]
+    expected, _, _ = _analytic_partial_coherence(n_time_samples)
+
+    for i, j in [(0, 1), (1, 2), (0, 2)]:
+        deviation = np.mean(np.abs(partial[:, i, j] - expected[:, i, j]))
+        assert deviation < 0.05, ((i, j), deviation)
+    assert partial[:, 0, 2].max() < 0.05
+    assert connectivity.coherence_magnitude()[0, :, 0, 2].max() > 0.5
 
 
 @pytest.mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])

@@ -111,6 +111,10 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
   `tests/test_cookbook.py`
 - Tests include both CPU and GPU code paths when available (GPU paths run only
   where CuPy is installed)
+- `tests/test_cross_package.py` compares against mne-connectivity outputs recorded in
+  `tests/reference/mne_connectivity_reference.npz` (mne is not a dependency);
+  regenerate it only when its generator changes, with
+  `uv run --with mne-connectivity==0.9.0 python tests/reference/generate_mne_connectivity_reference.py`
 
 ## File Structure
 
