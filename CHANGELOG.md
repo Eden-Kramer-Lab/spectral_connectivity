@@ -278,7 +278,11 @@ directly with results from 2.x.
   and partial coherence matches the inverse-spectrum oracle and removes a
   mediated link. Coherence and CSD agree with nitime's non-adaptive multitaper
   estimate (`taper_weighting="eigen"`), and eleven measures agree with a
-  recorded mne-connectivity 0.9 reference.
+  recorded mne-connectivity 0.9 reference. The seven phase measures (PLV,
+  ciPLV, PPC, PLI, dPLI, wPLI, debiased wPLI²) agree in the single-taper
+  setting: mne-connectivity combines each epoch's tapers before the phase step
+  while this package treats every trial x taper as an observation, so with
+  several tapers the two estimators differ by design.
 
 ### Changed
 
