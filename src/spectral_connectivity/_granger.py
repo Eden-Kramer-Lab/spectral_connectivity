@@ -5,8 +5,11 @@ factors (sub-)spectra with the Wilson minimum-phase decomposition, reads off the
 transfer function and noise covariance, and decomposes predictive power by
 frequency (Geweke 1982; Dhamala, Rangarajan & Ding 2008).
 
-Every kernel here returns ``[..., target, source]``; the public
-:class:`Connectivity` methods return the transpose.
+Signal-by-signal arrays here (the transfer function and the pairwise, subset,
+conditional, and blockwise Granger matrices) are indexed
+``[..., target, source]``: ``[..., i, j]`` is ``j -> i``. Per-pair kernels
+return ``(..., n_frequencies)`` values whose direction their docstrings name.
+The public :class:`Connectivity` methods return ``[..., source, target]``.
 """
 
 import warnings
