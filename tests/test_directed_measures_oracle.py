@@ -513,6 +513,13 @@ _CHAIN_COEFFICIENTS = np.stack(
         -0.6 * np.eye(3),
     ]
 )
+# The same chain with 0.8 couplings, strong enough for simulated-data
+# thresholds: analytic partial coherence peaks at 0.250 for (0, 1) and 0.817
+# for (1, 2) and is exactly 0 for the mediated (0, 2), whose pairwise
+# coherence peaks at 0.785. Companion-matrix spectral radius 0.775.
+_STRONG_CHAIN_COEFFICIENTS = np.stack(
+    [np.array([[0.5, 0.0, 0.0], [0.8, 0.5, 0.0], [0.0, 0.8, 0.5]]), -0.6 * np.eye(3)]
+)
 
 
 @pytest.mark.parametrize(
