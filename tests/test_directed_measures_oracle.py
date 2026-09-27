@@ -37,7 +37,7 @@ import numpy as np
 import pytest
 from scipy.linalg import solve_discrete_are
 
-from spectral_connectivity import Connectivity
+from spectral_connectivity import Connectivity, DirectedOrientationWarning
 from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
 
@@ -268,6 +268,7 @@ def test_directed_measure_matches_analytic_closed_form(chain_oracle, measure):
     connectivity = chain_oracle["connectivity"]
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         result = np.asarray(getattr(connectivity, measure)())[0]
     expected = np.swapaxes(chain_oracle["measures"][measure], -1, -2)
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-9)
@@ -280,6 +281,7 @@ def test_dtf_peak_matches_analytic_transfer_function_peak(chain_oracle):
     n_non_negative = H.shape[0] // 2 + 1
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         dtf = np.asarray(connectivity.directed_transfer_function())[0]
     # dtf is [source, target]; H is [target, source].
     assert np.argmax(dtf[:, 0, 2]) == np.argmax(np.abs(H[:n_non_negative, 2, 0]))

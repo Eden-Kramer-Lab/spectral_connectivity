@@ -3,6 +3,7 @@
 import inspect
 import warnings
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property, wraps
 from itertools import combinations
@@ -235,6 +236,76 @@ def _source_first(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         native = connectivity_measure(*args, **kwargs)
         return cast(_R, np.swapaxes(cast(NDArray[Any], native), -1, -2))
+
+    return wrapper
+
+
+class DirectedOrientationWarning(UserWarning):
+    """A directed measure's orientation differs from spectral_connectivity 2.x.
+
+    Emitted by the ``Connectivity`` methods that returned
+    ``[..., target, source]`` in 2.x and now return ``[..., source, target]``,
+    and by :func:`~spectral_connectivity.multitaper_connectivity` and
+    :func:`~spectral_connectivity.connectivity_to_xarray` when they compute one
+    of those measures, whose ``sel(source=a, target=b)`` was ``b -> a`` in 2.x.
+    Code written for 2.x keeps running but reads the opposite direction. This
+    warning is temporary; silence it, without hiding other warnings, with
+    ``warnings.filterwarnings("ignore", category=DirectedOrientationWarning)``.
+    """
+
+
+_MIGRATION_GUIDE_URL = (
+    "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/"
+    "CHANGELOG.md#migration-guide"
+)
+_SILENCE_ORIENTATION_WARNING = (
+    'Silence with warnings.filterwarnings("ignore", '
+    "category=spectral_connectivity.DirectedOrientationWarning)."
+)
+
+# The methods that returned [..., target, source] arrays in 2.x. The Granger
+# measures added in 3.0 and the lead/lag measures were never target first.
+_ORIENTATION_CHANGED_MEASURES = frozenset(
+    {
+        "pairwise_spectral_granger_prediction",
+        "subset_pairwise_spectral_granger_prediction",
+        "directed_transfer_function",
+        "directed_coherence",
+        "partial_directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+    }
+)
+
+# False while the labeled wrapper or a jackknife replicate runs a measure: the
+# wrapper warns about its source/target labels instead, and a jackknife warns
+# once, for its full estimate.
+_warn_orientation_change: ContextVar[bool] = ContextVar(
+    "_warn_orientation_change", default=True
+)
+
+
+def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Warn that a measure's array is source first, unlike in 2.x.
+
+    Applied to the methods in ``_ORIENTATION_CHANGED_MEASURES``; remove it with
+    the warning in 3.2.
+    """
+
+    @wraps(connectivity_measure)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        result = connectivity_measure(*args, **kwargs)
+        if _warn_orientation_change.get():
+            warnings.warn(
+                f"{connectivity_measure.__name__} returns [..., source, target] "
+                "since spectral_connectivity 3.0: [..., i, j] is i -> j. 2.x "
+                "returned [..., target, source]; review the indexing and "
+                "normalization axes of code written for 2.x. See the migration "
+                f"guide: {_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
+                DirectedOrientationWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return result
 
     return wrapper
 
@@ -1848,7 +1919,11 @@ class Connectivity:
                 observations_are_independent=self._observations_are_independent,
                 _adopt_fourier_coefficients=True,
             )
-            replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+            token = _warn_orientation_change.set(False)
+            try:
+                replicate = getattr(replicate_connectivity, method)(**method_kwargs)
+            finally:
+                _warn_orientation_change.reset(token)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                 msg = f"jackknife requires a real array result from {method!r}."
                 raise TypeError(msg)
@@ -3878,6 +3953,7 @@ class Connectivity:
         )
         return ppc.real
 
+    @_orientation_changed
     @_source_first
     @_asnumpy
     def pairwise_spectral_granger_prediction(self) -> NDArray[np.floating]:
@@ -3961,6 +4037,7 @@ class Connectivity:
         _warn_nan_granger_pairs(result, measure)
         return result
 
+    @_orientation_changed
     @_source_first
     @_asnumpy
     def subset_pairwise_spectral_granger_prediction(
@@ -4239,6 +4316,7 @@ class Connectivity:
         # Swap on the host, like _source_first: [..., target, source] -> source first.
         return np.swapaxes(to_numpy(result), -1, -2), to_numpy(labels)
 
+    @_orientation_changed
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
@@ -4297,6 +4375,7 @@ class Connectivity:
             self._transfer_function / _total_inflow(self._transfer_function)
         )
 
+    @_orientation_changed
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
@@ -4399,6 +4478,7 @@ class Connectivity:
             self._MVAR_Fourier_coefficients / _total_outflow(self._MVAR_Fourier_coefficients)
         )
 
+    @_orientation_changed
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
@@ -4456,6 +4536,7 @@ class Connectivity:
         """
         return self._partial_directed_coherence()
 
+    @_orientation_changed
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
@@ -4522,6 +4603,7 @@ class Connectivity:
             / _total_outflow(self._MVAR_Fourier_coefficients, noise_variance)
         )
 
+    @_orientation_changed
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy

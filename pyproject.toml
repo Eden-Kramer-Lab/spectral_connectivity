@@ -121,6 +121,9 @@ filterwarnings = [
     # backend sets ndarray.shape in place, which NumPy 2.5 deprecates.
     "ignore:numpy.ndarray size changed:RuntimeWarning",
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
+    # The temporary 3.x notice that directed arrays are source first; its own
+    # tests enable it explicitly.
+    "ignore::spectral_connectivity.DirectedOrientationWarning",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

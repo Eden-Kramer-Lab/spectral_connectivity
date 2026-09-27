@@ -19,6 +19,7 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
     _frequencies_in_band,
+    _warn_orientation_change,
 )
 from spectral_connectivity.utils import stacklevel_outside_package
 
@@ -109,7 +110,13 @@ def _connectivity_result_to_xarray(
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
     _check_method_accepts_kwargs(method, measure, kwargs)
-    numerical_result = measure(**kwargs)
+    # The labeled result's source/target coordinates state its orientation, so
+    # the wrapper warns about those labels instead of the array (see wrapper.py).
+    token = _warn_orientation_change.set(False)
+    try:
+        numerical_result = measure(**kwargs)
+    finally:
+        _warn_orientation_change.reset(token)
 
     pairwise_shape = (
         len(connectivity.time),

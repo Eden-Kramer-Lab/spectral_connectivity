@@ -12,6 +12,7 @@ from spectral_connectivity._granger import (
 )
 from spectral_connectivity.connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     _bandpass,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
@@ -2082,9 +2083,11 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
     with pytest.warns(UserWarning, match="source -> target") as record:
         result = getattr(connectivity, measure)()
     assert np.isnan(result).all()
-    assert len(record) == 1
-    assert measure in str(record[0].message)
-    assert "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1" in str(record[0].message)
+    (nan_warning,) = [
+        w for w in record if not issubclass(w.category, DirectedOrientationWarning)
+    ]
+    assert measure in str(nan_warning.message)
+    assert "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1" in str(nan_warning.message)
 
 
 def _granger_connectivity(defect=None):
@@ -2180,6 +2183,7 @@ def test_granger_is_silent_on_well_conditioned_signals(measure):
     connectivity = _granger_connectivity()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         result = _GRANGER_MEASURES[measure](connectivity)
     off_diagonal = ~np.eye(result.shape[-1], dtype=bool)
     if measure == "subset_pairwise_spectral_granger_prediction":
@@ -3138,6 +3142,7 @@ def test_directed_measures_finite_on_ordinary_correlated_data(measure):
     conn = Connectivity.from_multitaper(_correlated_fixture())
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)  # no non-convergence warning
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         result = getattr(conn, measure)()
     assert np.isfinite(result).mean() > 0.5
 
@@ -3153,6 +3158,7 @@ def test_minimum_phase_max_iterations_is_configurable():
     conn_high = Connectivity.from_multitaper(m, minimum_phase_max_iterations=500)
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         dtf_high = conn_high.directed_transfer_function()
     assert np.isfinite(dtf_high).mean() > 0.5
 

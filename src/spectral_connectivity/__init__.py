@@ -30,6 +30,7 @@ Examples
 
 from spectral_connectivity.connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     MultivariateConnectivityResult,
 )
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -74,6 +75,7 @@ except ImportError:
 __all__ = [
     "DEFAULT_METHODS",
     "Connectivity",
+    "DirectedOrientationWarning",
     "JackknifeResult",
     "MeasureInfo",
     "MorletWavelet",

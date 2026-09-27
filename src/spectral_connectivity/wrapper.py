@@ -37,7 +37,11 @@ from spectral_connectivity._result_formatting import (
     _connectivity_result_to_xarray,
 )
 from spectral_connectivity.connectivity import (
+    _MIGRATION_GUIDE_URL,
+    _ORIENTATION_CHANGED_MEASURES,
+    _SILENCE_ORIENTATION_WARNING,
     Connectivity,
+    DirectedOrientationWarning,
     _frequencies_in_band,
     _validated_flag,
 )
@@ -279,6 +283,23 @@ def frequency_band_reduce(
     )
 
 
+def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
+    """Warn that ``sel(source, target)`` of the 2.x target-first measures flipped.
+
+    Remove with :class:`DirectedOrientationWarning` in 3.2.
+    """
+    changed = sorted(_ORIENTATION_CHANGED_MEASURES.intersection(methods))
+    if changed:
+        warnings.warn(
+            f"For {', '.join(changed)}, sel(source=a, target=b) is a -> b since "
+            "spectral_connectivity 3.0; 2.x returned b -> a. Review code written "
+            "for 2.x that selects these results. See the migration guide: "
+            f"{_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
+            DirectedOrientationWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
 def connectivity_to_xarray(
     m: Any,
     method: str = "coherence_magnitude",
@@ -383,6 +404,7 @@ def connectivity_to_xarray(
                 frequency_index = _frequencies_in_band(frequencies, frequency_band)
             valid_time = validity[:, frequency_index].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
+    _warn_label_orientation_changed([method])
     return result
 
 
@@ -786,7 +808,7 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    return _format_and_reduce_measures(
+    result = _format_and_reduce_measures(
         shared_connectivity,
         method,
         return_dataarray=return_dataarray,
@@ -800,6 +822,8 @@ def multitaper_connectivity(
         frequency_reduction=frequency_reduction,
         signal_metadata=signal_metadata,
     )
+    _warn_label_orientation_changed(method)
+    return result
 
 
 def fourier_connectivity(
