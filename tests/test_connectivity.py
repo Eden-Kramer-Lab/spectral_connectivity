@@ -12,6 +12,7 @@ from spectral_connectivity._granger import (
 )
 from spectral_connectivity.connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     _bandpass,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
@@ -1415,13 +1416,14 @@ def test__total_outflow():
 
 
 def test_directed_transfer_function():
-    """DTF_ij = |H_ij|**2 / sum_k |H_ik|**2 (normalized over sources)."""
+    """DTF of j -> i is |H_ij|**2 / sum_k |H_ik|**2, returned at [j, i]."""
     # The coefficients are unused: the transfer function is patched below.
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
     # |H|**2 = [[1, 4], [9, 25]] ([target, source]); the complex entries check
-    # that the squared magnitude, not the real part, is used.
+    # that the squared magnitude, not the real part, is used. The result is
+    # [source, target], so each target's column sums to 1 over sources.
     transfer_function = np.array([[1.0, 2.0j], [3.0, 4.0 - 3.0j]])
-    expected = np.array([[1 / 5, 4 / 5], [9 / 34, 25 / 34]])
+    expected = np.array([[1 / 5, 9 / 34], [4 / 5, 25 / 34]])
     with patch.object(
         Connectivity, "_transfer_function", new_callable=PropertyMock
     ) as mock_prop:
@@ -1431,12 +1433,13 @@ def test_directed_transfer_function():
 
 
 def test_partial_directed_coherence():
-    """PDC_ij = |A_ij|**2 / sum_k |A_kj|**2 (normalized over targets)."""
+    """PDC of j -> i is |A_ij|**2 / sum_k |A_kj|**2, returned at [j, i]."""
     # The coefficients are unused: the MVAR coefficients are patched below.
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
-    # |A|**2 = [[1, 4], [9, 25]] ([target, source]).
+    # |A|**2 = [[1, 4], [9, 25]] ([target, source]). The result is
+    # [source, target], so each source's row sums to 1 over targets.
     mvar_coefficients = np.array([[1.0, 2.0j], [3.0, 4.0 - 3.0j]])
-    expected = np.array([[1 / 10, 4 / 29], [9 / 10, 25 / 29]])
+    expected = np.array([[1 / 10, 9 / 10], [4 / 29, 25 / 29]])
     with patch.object(
         Connectivity, "_MVAR_Fourier_coefficients", new_callable=PropertyMock
     ) as mock_prop:
@@ -1451,7 +1454,8 @@ def test_directed_coherence_is_bounded_and_normalized():
     Regression test for a noise-variance broadcasting bug: the source noise
     variance was applied on the target axis (-2) instead of the source axis
     (-1), producing values > 1 whenever channels had unequal noise variances.
-    The squared directed coherence sums to 1 over sources (like DTF).
+    The squared directed coherence sums to 1 over sources (like DTF), axis -2
+    of the returned ``[source, target]`` array.
     """
     c = Connectivity(fourier_coefficients=np.ones((1, 1, 1, 1, 2), dtype=complex))
     transfer_function = np.arange(1, 5).reshape((2, 2)).astype(float)  # [target, src]
@@ -1468,9 +1472,48 @@ def test_directed_coherence_is_bounded_and_normalized():
         mock_noise.return_value = noise_covariance
         dc = c.directed_coherence()
         assert np.all((dc >= 0.0) & (dc <= 1.0))
-        assert np.allclose(dc.sum(axis=-1), 1.0)
-        expected = np.array([[10 / 14, 4 / 14], [90 / 106, 16 / 106]])
+        assert np.allclose(dc.sum(axis=-2), 1.0)
+        expected = np.array([[10 / 14, 90 / 106], [4 / 14, 16 / 106]])
         assert np.allclose(np.squeeze(dc), expected)
+
+
+@pytest.fixture(scope="module")
+def three_signal_var_connectivity():
+    """Connectivity of a three-signal VAR(1) with uncorrelated innovations."""
+    from spectral_connectivity import Multitaper
+    from spectral_connectivity.simulate import simulate_MVAR
+
+    coefficients = np.array([[[0.5, 0.3, 0.4], [-0.5, 0.3, 1.0], [0.0, -0.3, -0.2]]])
+    time_series = simulate_MVAR(
+        coefficients,
+        noise_covariance=np.eye(3),
+        n_time_samples=500,
+        n_trials=20,
+        random_state=0,
+    )
+    return Connectivity.from_transform(
+        Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=2)
+    )
+
+
+@pytest.mark.parametrize(
+    ("measure", "axis"),
+    [
+        # Inflow-normalized: each target's values sum to 1 over sources.
+        ("directed_transfer_function", -2),
+        ("directed_coherence", -2),
+        # Outflow-normalized: each source's values sum to 1 over targets.
+        ("partial_directed_coherence", -1),
+        ("generalized_partial_directed_coherence", -1),
+    ],
+)
+def test_directed_transfer_family_is_normalized(three_signal_var_connectivity, measure, axis):
+    """The [..., source, target] result sums to 1 along its normalized axis,
+    and not along the other one."""
+    result = getattr(three_signal_var_connectivity, measure)()
+    assert np.allclose(result.sum(axis=axis), 1)
+    other_axis = -1 if axis == -2 else -2
+    assert not np.allclose(result.sum(axis=other_axis), 1)
 
 
 def test_max_psd_discrepancy():
@@ -1810,8 +1853,8 @@ def test_subset_pairwise_granger_prediction():
     pairs = np.array([[0, 1]])
     gp_subset = c.subset_pairwise_spectral_granger_prediction(pairs)
     gp_all = c.pairwise_spectral_granger_prediction()
-    # Output [i, j] is j -> i: the x -> y influence dominates y -> x.
-    assert np.nanmean(gp_all[..., 1, 0]) > 10 * np.nanmean(gp_all[..., 0, 1])
+    # Output [i, j] is i -> j: the x -> y influence dominates y -> x.
+    assert np.nanmean(gp_all[..., 0, 1]) > 10 * np.nanmean(gp_all[..., 1, 0])
     assert gp_subset.shape == gp_all.shape
     for i, j in pairs:
         assert np.allclose(gp_subset[..., i, j], gp_all[..., i, j], equal_nan=True)
@@ -2040,9 +2083,11 @@ def test_pairwise_granger_warns_when_a_pair_factorization_fails(measure, monkeyp
     with pytest.warns(UserWarning, match="source -> target") as record:
         result = getattr(connectivity, measure)()
     assert np.isnan(result).all()
-    assert len(record) == 1
-    assert measure in str(record[0].message)
-    assert "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1" in str(record[0].message)
+    (nan_warning,) = [
+        w for w in record if not issubclass(w.category, DirectedOrientationWarning)
+    ]
+    assert measure in str(nan_warning.message)
+    assert "0 -> 1, 0 -> 2, 1 -> 0, 1 -> 2, 2 -> 0, 2 -> 1" in str(nan_warning.message)
 
 
 def _granger_connectivity(defect=None):
@@ -2138,6 +2183,7 @@ def test_granger_is_silent_on_well_conditioned_signals(measure):
     connectivity = _granger_connectivity()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         result = _GRANGER_MEASURES[measure](connectivity)
     off_diagonal = ~np.eye(result.shape[-1], dtype=bool)
     if measure == "subset_pairwise_spectral_granger_prediction":
@@ -3096,6 +3142,7 @@ def test_directed_measures_finite_on_ordinary_correlated_data(measure):
     conn = Connectivity.from_multitaper(_correlated_fixture())
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)  # no non-convergence warning
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         result = getattr(conn, measure)()
     assert np.isfinite(result).mean() > 0.5
 
@@ -3111,6 +3158,7 @@ def test_minimum_phase_max_iterations_is_configurable():
     conn_high = Connectivity.from_multitaper(m, minimum_phase_max_iterations=500)
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         dtf_high = conn_high.directed_transfer_function()
     assert np.isfinite(dtf_high).mean() > 0.5
 

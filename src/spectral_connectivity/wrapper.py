@@ -37,7 +37,11 @@ from spectral_connectivity._result_formatting import (
     _connectivity_result_to_xarray,
 )
 from spectral_connectivity.connectivity import (
+    _MIGRATION_GUIDE_URL,
+    _ORIENTATION_WARNING_PREFIX,
+    _SILENCE_ORIENTATION_WARNING,
     Connectivity,
+    DirectedOrientationWarning,
     _frequencies_in_band,
     _validated_flag,
 )
@@ -106,13 +110,6 @@ class MeasureInfo:
         band reduction or squeezing. Rich results (``canonical_coherency``,
         ``global_coherence``, ...) are Datasets whose variable named ``name``
         has these dimensions.
-    array_orientation : {"target_source", "source_target"} or None
-        Index order of a directed measure's signal axes in the arrays returned
-        by the lower-level ``Connectivity`` method. ``"target_source"`` means
-        ``result[..., i, j]`` is the influence ``j -> i``; ``"source_target"``
-        means it describes ``i`` relative to ``j`` (e.g. ``i`` leads ``j``).
-        ``None`` for non-directed measures. The wrapper's results are always
-        labeled: ``result.sel(source=a, target=b)`` is ``a -> b``.
     interpretation : str
         How to read the values, including the sign convention where one exists.
     """
@@ -128,7 +125,6 @@ class MeasureInfo:
     value_range: tuple[float, float]
     is_complex: bool
     dims: tuple[str, ...]
-    array_orientation: Literal["target_source", "source_target"] | None
     interpretation: str
 
 
@@ -202,7 +198,6 @@ def list_measures(
                 value_range=spec.value_range,
                 is_complex=spec.is_complex,
                 dims=spec.dims,
-                array_orientation=spec.array_orientation,
                 interpretation=spec.interpretation,
             )
         )
@@ -288,6 +283,31 @@ def frequency_band_reduce(
     )
 
 
+# The directed measures whose 2.x wrapper labels were transposed. The 2.x
+# wrapper rejected every method named "directed", so the transfer-function
+# measures had no 2.x labels to flip.
+_LABEL_ORIENTATION_CHANGED_MEASURES = frozenset(
+    {"pairwise_spectral_granger_prediction", "subset_pairwise_spectral_granger_prediction"}
+)
+
+
+def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
+    """Warn that ``sel(source, target)`` of the 2.x Granger measures flipped.
+
+    Remove with :class:`DirectedOrientationWarning` in 3.2.
+    """
+    changed = sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods))
+    if changed:
+        warnings.warn(
+            f"{_ORIENTATION_WARNING_PREFIX}sel(source=a, target=b) of "
+            f"{', '.join(changed)} is a -> b; 2.x returned b -> a. Review code written "
+            "for 2.x that selects these results. See the migration guide: "
+            f"{_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
+            DirectedOrientationWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
 def connectivity_to_xarray(
     m: Any,
     method: str = "coherence_magnitude",
@@ -299,6 +319,13 @@ def connectivity_to_xarray(
 
     Ordinary pairwise measures return a DataArray; component-resolved or
     multi-quantity measures return a Dataset with explicit semantic axes.
+
+    .. versionchanged:: 3.0
+       For ``pairwise_spectral_granger_prediction`` and
+       ``subset_pairwise_spectral_granger_prediction``,
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
+       2.x wrapper rejected the transfer-function measures, and
+       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters
     ----------
@@ -385,6 +412,7 @@ def connectivity_to_xarray(
                 frequency_index = _frequencies_in_band(frequencies, frequency_band)
             valid_time = validity[:, frequency_index].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
+    _warn_label_orientation_changed([method])
     return result
 
 
@@ -523,6 +551,13 @@ def multitaper_connectivity(
     This is the main high-level function for connectivity analysis. It performs
     multitaper spectral analysis on the input time series and computes the
     requested connectivity measures, returning results as labeled xarray objects.
+
+    .. versionchanged:: 3.0
+       For ``pairwise_spectral_granger_prediction`` and
+       ``subset_pairwise_spectral_granger_prediction``,
+       ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
+       2.x wrapper rejected the transfer-function measures, and
+       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
 
     Parameters
     ----------
@@ -676,10 +711,9 @@ def multitaper_connectivity(
 
     For directed measures (e.g. ``pairwise_spectral_granger_prediction``) the
     ``source`` and ``target`` axes are oriented so that
-    ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``.
-    (The underlying ``Connectivity`` methods use the transposed convention
-    ``output[i, j] = influence j -> i``; the wrapper transposes to the intuitive
-    source -> target layout.) Signed undirected phase measures
+    ``result.sel(source=a, target=b)`` is the influence *from* ``a`` *to* ``b``,
+    the same order as the underlying ``Connectivity`` arrays, where
+    ``result[..., i, j]`` is ``i -> j``. Signed undirected phase measures
     (``coherence_phase``, ``imaginary_coherency``, ``phase_lag_index``,
     ``weighted_phase_lag_index``) are positive at ``sel(source=a, target=b)``
     when ``a`` leads ``b``.
@@ -782,7 +816,7 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    return _format_and_reduce_measures(
+    result = _format_and_reduce_measures(
         shared_connectivity,
         method,
         return_dataarray=return_dataarray,
@@ -796,6 +830,8 @@ def multitaper_connectivity(
         frequency_reduction=frequency_reduction,
         signal_metadata=signal_metadata,
     )
+    _warn_label_orientation_changed(method)
+    return result
 
 
 def fourier_connectivity(

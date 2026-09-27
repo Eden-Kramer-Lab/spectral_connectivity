@@ -18,6 +18,28 @@
 | [**License**](#license)
 | [**Citation**](#citation)
 
+> [!WARNING]
+> **Upgrading from 2.x: the Granger and transfer-function measures changed
+> direction.** `result[..., i, j]` from the `Connectivity` methods of the
+> spectral Granger family, directed transfer function, directed coherence,
+> (generalized) partial directed coherence, and direct directed transfer
+> function is now `i -> j` (2.x returned `j -> i`). For pairwise and subset
+> spectral Granger prediction, the directed measures the 2.x wrapper accepted,
+> `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
+> (2.x returned `b -> a`). Indexing code written for 2.x still runs but reads
+> the opposite direction: swap its indices and recompute stored results.
+> `phase_slope_index`, `group_delay`, and `delay` were already source first and
+> are unchanged; do not swap them. `directed_phase_lag_index` is new in 3.0 and
+> also source first. Until 3.2 the `Connectivity` methods that existed in 2.x
+> (pairwise and subset spectral Granger, directed transfer function, directed
+> coherence, (generalized) partial directed coherence, and direct directed
+> transfer function) emit a `DirectedOrientationWarning` as a reminder, as do
+> `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and subset
+> spectral Granger prediction; silence it with
+> `warnings.filterwarnings("ignore",
+> category=spectral_connectivity.DirectedOrientationWarning)`. See the
+> [migration guide](CHANGELOG.md#migration-guide).
+
 ## What is spectral_connectivity?
 
 `spectral_connectivity` is a Python software package that computes multitaper spectral estimates and frequency-domain brain connectivity measures such as coherence, spectral granger causality, and the phase lag index using the multitaper Fourier transform. Although there are other Python packages that do this (see [nitime](https://github.com/nipy/nitime) and [MNE-Python](https://github.com/mne-tools/mne-python)), `spectral_connectivity` has several differences:
@@ -134,15 +156,12 @@ datetime and timedelta **signal labels** remain valid.
 A dask-backed DataArray is rejected; materialize it first with
 `DataArray.compute()` (or `.load()`) and pass the result.
 
-For directed measures, `result.sel(source="a", target="b")` means influence
-from `a` to `b` (for phase measures, positive means `a` leads `b`). The
-directed-transfer-function family is available by name as an opt-in method.
-The lower-level `Connectivity` methods return plain arrays in one of two
-orders: for the Granger and directed-transfer-function families
-`result[..., i, j]` is `j -> i`, while for `directed_phase_lag_index`,
-`phase_slope_index`, `delay`, and `group_delay` a positive `result[..., i, j]`
-means `i` leads `j`. `list_measures()` reports each measure's
-`array_orientation`, value range, units, and interpretation; see
+For directed measures, `result.sel(source="a", target="b")` is the influence
+from `a` to `b`, and the lower-level `Connectivity` arrays use the same order:
+`result[..., i, j]` is `i -> j`. For lead/lag measures a positive value means
+the source leads. The directed-transfer-function family is available by name
+as an opt-in method. `list_measures()` reports each measure's value range,
+units, and interpretation; see
 [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
 
 #### Choosing parameters

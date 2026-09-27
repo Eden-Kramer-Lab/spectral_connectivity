@@ -31,7 +31,7 @@ def test_every_public_connectivity_measure_is_registered():
 
     An unregistered method would be invisible to ``list_measures()`` and, when
     requested by name, would fall back to the undirected pairwise contract
-    (no source/target transpose, no two-sided-spectrum requirement).
+    (not directed, no two-sided-spectrum requirement).
     """
     import inspect
 
@@ -343,6 +343,14 @@ def zero_drives_one():
     return simulate_MVAR(coefficients, n_time_samples=1000, n_trials=40, random_state=0)
 
 
+@pytest.fixture(scope="module")
+def zero_drives_one_connectivity(zero_drives_one):
+    """``Connectivity`` of ``zero_drives_one`` with the settings used below."""
+    return Connectivity.from_transform(
+        Multitaper(zero_drives_one, sampling_frequency=200, time_halfbandwidth_product=3)
+    )
+
+
 _BAND = [5.0, 60.0]
 _ORIENTATION_KWARGS = {
     "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1, 2])},
@@ -353,35 +361,51 @@ _ORIENTATION_KWARGS = {
 }
 
 
-def _entries(values):
-    """``(values[..., 0, 1], values[..., 1, 0])`` summarized by their medians."""
-    return np.nanmedian(values[..., 0, 1]), np.nanmedian(values[..., 1, 0])
+# Lead/lag measures: a value above this at [..., i, j] means signal i leads j.
+_LEADS_ABOVE = {
+    "directed_phase_lag_index": 0.5,
+    "phase_slope_index": 0.0,
+    "delay": 0.0,
+    "group_delay": 0.0,
+}
 
 
-def _low_level_entries(connectivity, name):
-    """Band summaries of a directed measure's native ``[0, 1]`` and ``[1, 0]``."""
-    result = getattr(connectivity, name)(**_ORIENTATION_KWARGS.get(name, {}))
-    if name == "blockwise_spectral_granger_prediction":
-        result = result[0]
-    elif name == "group_delay":
-        return _entries(result[0])
-    elif name == "phase_slope_index":
-        return _entries(result)
-    elif name == "delay":
-        # (..., frequency, candidate, n, n): the zero-wrap candidate over the band.
-        return _entries(result[..., result.shape[-3] // 2, :, :])
+def _in_band(connectivity, result):
+    """A frequency-resolved ``(..., frequency, n, n)`` result within the band."""
     frequencies = connectivity.frequencies
     in_band = (frequencies >= _BAND[0]) & (frequencies <= _BAND[1])
-    return _entries(np.asarray(result)[..., in_band, :, :])
+    return np.asarray(result)[..., in_band, :, :]
+
+
+# How each measure's output becomes (..., n, n) values over the band; the
+# default is the frequency slice.
+_BAND_MATRICES = {
+    # (values, labels)
+    "blockwise_spectral_granger_prediction": lambda c, result: _in_band(c, result[0]),
+    # (delay, slope, r_value), already fit over the band
+    "group_delay": lambda c, result: result[0],
+    # (..., frequency, candidate, n, n): the zero-wrap candidate
+    "delay": lambda c, result: result[..., result.shape[-3] // 2, :, :],
+    # already summed over the band
+    "phase_slope_index": lambda c, result: result,
+}
+
+
+def _zero_one_and_one_zero(connectivity, name):
+    """A directed measure's ``[..., 0, 1]`` and ``[..., 1, 0]`` over the band."""
+    result = getattr(connectivity, name)(**_ORIENTATION_KWARGS.get(name, {}))
+    result = _BAND_MATRICES.get(name, _in_band)(connectivity, result)
+    return result[..., 0, 1], result[..., 1, 0]
 
 
 @pytest.mark.parametrize(
     "measure", list_measures(directed=True), ids=lambda measure: measure.name
 )
-def test_array_orientation_matches_the_computed_direction(zero_drives_one, measure):
-    """Signal 0 drives signal 1, so the 0 -> 1 entry must dominate the 1 -> 0
-    entry at the position ``array_orientation`` names. Time reversal flips the
-    apparent direction, so the time-reversed measure is given reversed data."""
+def test_directed_measures_place_source_first(zero_drives_one, measure):
+    """Signal 0 drives and leads signal 1, so every directed ``Connectivity``
+    array holds ``0 -> 1`` at ``[..., 0, 1]``. Time reversal flips the apparent
+    direction, so the time-reversed measure is given reversed data, on which the
+    planted ``0 -> 1`` again lands at ``[..., 0, 1]``."""
     time_series = zero_drives_one
     if measure.name == "time_reversed_spectral_granger_prediction":
         time_series = time_series[::-1]
@@ -390,16 +414,36 @@ def test_array_orientation_matches_the_computed_direction(zero_drives_one, measu
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        entry_01, entry_10 = _low_level_entries(connectivity, measure.name)
+        zero_to_one, one_to_zero = _zero_one_and_one_zero(connectivity, measure.name)
 
-    if measure.array_orientation == "target_source":
-        zero_to_one, one_to_zero = entry_10, entry_01
+    if measure.name in _LEADS_ABOVE:
+        assert np.nanmedian(zero_to_one) > _LEADS_ABOVE[measure.name]
     else:
-        assert measure.array_orientation == "source_target"
-        zero_to_one, one_to_zero = entry_01, entry_10
-    assert zero_to_one > one_to_zero
+        assert np.nanmax(zero_to_one) > 10 * np.nanmax(one_to_zero)
 
 
-def test_only_directed_measures_have_an_array_orientation():
-    for measure in list_measures():
-        assert (measure.array_orientation is not None) == measure.is_directed
+@pytest.mark.parametrize(
+    "measure",
+    [measure for measure in list_measures(directed=True) if measure.category == "pairwise"],
+    ids=lambda measure: measure.name,
+)
+def test_wrapper_returns_directed_connectivity_arrays_unchanged(
+    zero_drives_one, zero_drives_one_connectivity, measure
+):
+    """The wrapper labels a directed ``Connectivity`` array's last two axes
+    ``source`` and ``target`` without reordering them, so its values equal the
+    ``Connectivity`` method's output exactly."""
+    kwargs = _ORIENTATION_KWARGS.get(measure.name, {})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        result = multitaper_connectivity(
+            zero_drives_one,
+            sampling_frequency=200,
+            time_halfbandwidth_product=3,
+            method=measure.name,
+            connectivity_kwargs=kwargs,
+        )
+        expected = getattr(zero_drives_one_connectivity, measure.name)(**kwargs)
+
+    assert result.dims[-2:] == ("source", "target")
+    np.testing.assert_array_equal(result.values, expected, strict=True)

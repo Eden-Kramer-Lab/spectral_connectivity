@@ -13,12 +13,6 @@ DOCUMENT = Path(__file__).with_name("CONNECTIVITY_METRIC_RANGES.md")
 START = "<!-- measure-table:start -->"
 END = "<!-- measure-table:end -->"
 
-_ORIENTATION = {
-    "target_source": "`[..., i, j]` is `j -> i`",
-    "source_target": "`[..., i, j]` is `i` relative to `j`",
-    None: "",
-}
-
 
 def _bound(value: float) -> str:
     if math.isinf(value):
@@ -38,14 +32,13 @@ def _range(lower: float, upper: float, is_complex: bool) -> str:
 def measure_table() -> str:
     """The Markdown table of every measure's range, units, and meaning."""
     rows = [
-        "| Measure | Range | Units | Low-level orientation | Interpretation |",
-        "|---|---|---|---|---|",
+        "| Measure | Range | Units | Interpretation |",
+        "|---|---|---|---|",
     ]
     rows.extend(
         f"| `{measure.name}` "
         f"| {_range(*measure.value_range, measure.is_complex)} "
         f"| {measure.units} "
-        f"| {_ORIENTATION[measure.array_orientation]} "
         f"| {measure.interpretation} |"
         for measure in list_measures()
     )

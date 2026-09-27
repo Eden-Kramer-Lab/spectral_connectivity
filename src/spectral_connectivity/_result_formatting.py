@@ -19,6 +19,7 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
     _frequencies_in_band,
+    _warn_orientation_change,
 )
 from spectral_connectivity.utils import stacklevel_outside_package
 
@@ -109,7 +110,13 @@ def _connectivity_result_to_xarray(
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
     _check_method_accepts_kwargs(method, measure, kwargs)
-    numerical_result = measure(**kwargs)
+    # The labeled result's source/target coordinates state its orientation, so
+    # the wrapper warns about those labels instead of the array (see wrapper.py).
+    token = _warn_orientation_change.set(False)
+    try:
+        numerical_result = measure(**kwargs)
+    finally:
+        _warn_orientation_change.reset(token)
 
     pairwise_shape = (
         len(connectivity.time),
@@ -127,11 +134,9 @@ def _connectivity_result_to_xarray(
                 "Register its output contract or use Connectivity directly."
             )
             raise UnsupportedMeasureError(msg)
-        # A proven-pairwise extension keeps its native, untransposed orientation.
-        output_kind, transpose_output = "pairwise", False
+        output_kind = "pairwise"
     else:
         output_kind = measure_spec.output_kind
-        transpose_output = measure_spec.transpose_output
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
@@ -182,8 +187,6 @@ def _connectivity_result_to_xarray(
                 f"its wrapper contract requires {expected_shape}."
             )
             raise ValueError(msg)
-        if transpose_output:
-            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates = {
             **base_coordinates,
             "source": signal_coordinates["source"],
@@ -246,8 +249,6 @@ def _connectivity_result_to_xarray(
                 f"its group-pairwise contract requires {expected_shape}."
             )
             raise ValueError(msg)
-        if transpose_output:
-            connectivity_mat = np.swapaxes(connectivity_mat, -1, -2)
         coordinates.update(
             {
                 "source_group": ("source_group", group_labels, {"long_name": "Source group"}),

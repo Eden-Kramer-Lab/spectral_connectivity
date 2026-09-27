@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+**The Granger and transfer-function measures changed direction.** `result[...,
+i, j]` from the `Connectivity` methods of the spectral Granger family, directed
+transfer function, directed coherence, (generalized) partial directed coherence,
+and direct directed transfer function is now `i -> j` (2.x returned `j -> i`).
+For pairwise and subset spectral Granger prediction, the directed measures the
+2.x wrapper accepted, `multitaper_connectivity(...).sel(source="a", target="b")`
+is now `a -> b` (2.x returned `b -> a`). Indexing code written for 2.x still
+runs but reads the opposite direction; see the first two rows of the migration
+guide below. `phase_slope_index`, `group_delay`, and `delay` were already source
+first and are unchanged; do not swap them. Until 3.2 the `Connectivity` methods
+that existed in 2.x (pairwise and subset spectral Granger, directed transfer
+function, directed coherence, (generalized) partial directed coherence, and
+direct directed transfer function) emit a `DirectedOrientationWarning` as a
+reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
+pairwise and subset spectral Granger prediction; silence it with
+`warnings.filterwarnings("ignore",
+category=spectral_connectivity.DirectedOrientationWarning)`.
+
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
 directly with results from 2.x.
@@ -14,13 +32,14 @@ directly with results from 2.x.
 
 | Previous behavior | New behavior / required action |
 | --- | --- |
+| `multitaper_connectivity` labeled pairwise and subset spectral Granger prediction with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); it rejected the transfer-function measures and labeled `phase_slope_index`, `group_delay`, and `delay` correctly | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
+| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1); `np.swapaxes(old, -1, -2)` converts stored 2.x arrays. |
 | `global_coherence` returned raw squared singular values | Returns the scale-invariant fraction of total coherent power in `[0, 1]` |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
 | `delay` returned cycles | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
 | `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
-| `multitaper_connectivity` labeled directed measures with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`) | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
@@ -34,6 +53,12 @@ directly with results from 2.x.
 
 ### Added
 
+- `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
+  3.2) emitted by the seven `Connectivity` methods whose arrays were target
+  first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
+  when they compute pairwise or subset spectral Granger prediction (the 2.x
+  wrapper rejected the transfer-function measures). It points at the calling line, so Python's
+  default filter shows it once per call site.
 - Spectral primitives and pairwise measures: one-sided
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,
   corrected imaginary PLV, and directed PLI.
@@ -137,10 +162,9 @@ directly with results from 2.x.
   most common tasks (functional and directed connectivity, reading the labeled
   output, frequency bands, and bringing your own Fourier coefficients).
 - `MeasureInfo` records what each measure's values mean: `long_name`, `units`,
-  `value_range`, `is_complex`, the result's `dims`, an `interpretation` that
-  includes the sign convention, and `array_orientation`, the index order of a
-  directed measure in the lower-level `Connectivity` arrays. The measure table
-  in `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
+  `value_range`, `is_complex`, the result's `dims`, and an `interpretation`
+  that includes the sign convention. The measure table in
+  `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
 - Every `Connectivity` measure's docstring has a runnable example, and every
   directed measure states its array orientation.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
@@ -227,6 +251,13 @@ directly with results from 2.x.
 
 ### Changed
 
+- Every directed `Connectivity` array is indexed `[..., source, target]`:
+  `result[..., i, j]` is the influence `i -> j`, the same order as the
+  wrapper's `sel(source=i, target=j)` and the lead/lag measures. The spectral
+  Granger family, directed transfer function, directed coherence,
+  (generalized) partial directed coherence, and direct directed transfer
+  function previously returned `[..., target, source]`. Convert stored 2.x
+  arrays with `np.swapaxes(old, -1, -2)`.
 - The array backend is selected once, in `spectral_connectivity._backend`,
   instead of in each module: an unrecognized `SPECTRAL_CONNECTIVITY_ENABLE_GPU`
   value warns, and the "Using CPU/GPU" message is logged, once at import rather
@@ -327,6 +358,9 @@ directly with results from 2.x.
 
 ### Fixed
 
+- The paper tutorial's Dhamala 2a/2b panels plotted `[..., 0, 1]` under the
+  title "x1 -> x2", which in 2.x was the x2 -> x1 entry. The re-executed
+  figures are now labeled correctly.
 - Warnings from `Connectivity` measures, the spectral Granger kernels, and the
   Wilson factorization now name the user's line. Several pointed inside the
   package instead (e.g. `coherence_magnitude`'s single-observation warning, and
@@ -336,12 +370,6 @@ directly with results from 2.x.
   decomposes bins one at a time (many signals and estimates). SciPy's `svds`
   started from a random vector, so the values varied at rounding level and the
   component vectors' phase was arbitrary between runs.
-- The documentation said every lower-level `Connectivity` result uses
-  `result[..., i, j]` for `j -> i`. That holds for the Granger and
-  directed-transfer-function families only; `directed_phase_lag_index`,
-  `phase_slope_index`, `delay`, and `group_delay` use `[..., i, j]` for `i`
-  relative to `j` (positive means `i` leads). The wrapper's `source`/`target`
-  labels were already correct.
 - xarray results: every result now writes with netCDF4 and h5netcdf as well
   as SciPy (boolean attributes are stored as 0/1); `frequency_band_reduce`'s
   integral covers the whole band (off-grid edges, one-bin bands, additive
@@ -392,13 +420,12 @@ directly with results from 2.x.
 - The documentation build installs the current checkout on Read the Docs,
   confines generated sources to ignored directories, and the introductory
   tutorial no longer uses the removed `blocks` argument.
-- The xarray wrapper now labels directed measures (e.g.
-  `pairwise_spectral_granger_prediction`) so that `sel(source=a, target=b)` is
-  the influence *from* `a` *to* `b`; previously the `source`/`target` axes were
-  transposed, silently returning the reverse direction. Recompute any directed
-  results obtained through `multitaper_connectivity`. The underlying
-  `Connectivity` methods are unchanged (they keep the `output[i, j] = j -> i`
-  convention).
+- The xarray wrapper now labels pairwise and subset spectral Granger
+  prediction so that `sel(source=a, target=b)` is the influence *from* `a` *to*
+  `b`; previously the `source`/`target` axes were transposed, silently
+  returning the reverse direction. Recompute any Granger results obtained
+  through `multitaper_connectivity`. The underlying
+  `Connectivity` arrays now use the same source-first order (see Changed).
 - The wrapper rejects an empty `method` list, duplicate `signal_names`, and
   requests where no method yields a compatible result, instead of silently
   returning an empty or mislabeled `Dataset`.

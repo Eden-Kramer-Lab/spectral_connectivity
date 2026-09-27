@@ -119,7 +119,7 @@ def test_group_pairwise_directed_orientation_is_source_to_target(monkeypatch):
 
     def blockwise(self, group_labels):
         values = np.zeros((len(self.time), len(self.frequencies), 2, 2))
-        values[..., 1, 0] = 7.0  # native convention: group 0 -> group 1
+        values[..., 0, 1] = 7.0  # Connectivity's [..., source, target]: group 0 -> group 1
         return values, np.array([10, 20])
 
     monkeypatch.setattr(Connectivity, "blockwise_spectral_granger_prediction", blockwise)
@@ -788,18 +788,14 @@ def test_dataarray_non_scalar_start_time_is_rejected():
         multitaper_connectivity(data, sampling_frequency=64, method="power", start_time=[0, 1])
 
 
-def test_measure_spec_rejects_inconsistent_field_combinations():
-    """Illegal capability combinations are unrepresentable, not merely unused."""
+def test_measure_spec_labels_are_keyword_only():
+    """The labels cannot be passed positionally, so a mix-up cannot pass silently."""
     labels = {
         "long_name": "Label",
         "units": "1",
         "value_range": (0.0, 1.0),
         "interpretation": "Interpretation.",
     }
-    with pytest.raises(ValueError, match="transpose_output requires pairwise"):
-        _MeasureSpec("power", **labels, is_directed=True, transpose_output=True)
-    with pytest.raises(ValueError, match="requires a directional measure"):
-        _MeasureSpec("pairwise", **labels, transpose_output=True)
     with pytest.raises(TypeError, match="positional"):
         _MeasureSpec("pairwise", *labels.values())  # labels must be named
 
@@ -1969,8 +1965,9 @@ def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
 
 
 def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
-    """A pairwise extension containing 'directed' is neither rejected nor
-    transposed (treated as a directed measure) because of its name."""
+    """A pairwise extension containing 'directed' is not given a directed
+    measure's two-sided-spectrum requirement because of its name, and is
+    labeled exactly as returned."""
     rng = np.random.default_rng(8)
     m = Multitaper(rng.standard_normal((128, 3, 2)), sampling_frequency=128)
     # Non-symmetric native matrix: entry [i, j] = 10 * i + j.
@@ -1987,7 +1984,7 @@ def test_wrapper_capabilities_do_not_use_method_name_substrings(monkeypatch):
 
     data_array = connectivity_to_xarray(m, method="undirected_similarity")
     assert data_array.dims == ("time", "frequency", "source", "target")
-    # An unregistered extension keeps its native [source, target] orientation.
+    # An unregistered extension is labeled as returned: [i, j] is (source i, target j).
     np.testing.assert_array_equal(data_array.sel(source="0", target="1"), 1.0)
     np.testing.assert_array_equal(data_array.sel(source="1", target="0"), 10.0)
 
@@ -2334,7 +2331,7 @@ def test_directed_measures_are_oriented_source_to_target(method, unidirectional_
 
     For a unidirectional VAR (signal 0 drives 1), the causal entry is
     sel(source=0, target=1); it must dominate the anti-causal sel(source=1,
-    target=0). Without the wrapper's directed transpose these two are swapped.
+    target=0). A Connectivity array left target first would swap them.
     """
     da = multitaper_connectivity(
         unidirectional_var,
@@ -2961,10 +2958,8 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
     assert result.dims == ("time", "frequency", "source", "target")
     assert not result.attrs["fourier_is_one_sided"]
     assert not result.attrs["fourier_one_sided_inferred"]
-    # The core's [..., i, j] is the influence j -> i; the wrapper labels source -> target.
-    np.testing.assert_allclose(
-        result.values, np.swapaxes(np.asarray(expected), -1, -2), equal_nan=True
-    )
+    # The core's [..., i, j] is the influence i -> j, the wrapper's source -> target.
+    np.testing.assert_allclose(result.values, np.asarray(expected), equal_nan=True)
     driven = result.sel(source="0", target="1").values
     driver = result.sel(source="1", target="0").values
     assert np.nanmax(driven) > np.nanmax(driver)

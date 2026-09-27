@@ -8,8 +8,8 @@ Start with :func:`multitaper_connectivity`, which takes a time series shaped
 and :func:`list_measures`, which lists every valid ``method`` with its units,
 value range, and interpretation. In the wrapper's results,
 ``result.sel(source="a", target="b")`` is the influence of ``a`` on ``b``. The
-lower-level :class:`Connectivity` methods return plain arrays whose signal axes
-come in two orders; ``MeasureInfo.array_orientation`` names each measure's.
+lower-level :class:`Connectivity` methods return plain arrays in the same
+order: for directed measures ``result[..., i, j]`` is ``i -> j``.
 
 Guide for AI coding assistants:
 https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html
@@ -30,6 +30,7 @@ Examples
 
 from spectral_connectivity.connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     MultivariateConnectivityResult,
 )
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -74,6 +75,7 @@ except ImportError:
 __all__ = [
     "DEFAULT_METHODS",
     "Connectivity",
+    "DirectedOrientationWarning",
     "JackknifeResult",
     "MeasureInfo",
     "MorletWavelet",
