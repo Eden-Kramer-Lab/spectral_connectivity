@@ -16,6 +16,8 @@ from scipy.signal.windows import dpss
 
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity.simulate import simulate_lagged_broadband
+from tests.reference._mne_measures import MEASURES as _MNE_EXPECTED
+from tests.reference._mne_measures import UNMATCHED as _MNE_UNMATCHED
 
 _NITIME_SAMPLING_FREQUENCY = 200.0
 _NITIME_NW = 3
@@ -107,26 +109,6 @@ def test_coherence_matches_nitime(nitime_series):
 
 
 _MNE_REFERENCE = Path(__file__).parent / "reference" / "mne_connectivity_reference.npz"
-# MNE method: (Connectivity method, element-wise transform, NW, atol). The
-# comparison uses these values, and the fixture must record the same ones, so a
-# regenerated fixture cannot loosen a tolerance or move a measure to another NW.
-_MNE_EXPECTED = {
-    "coh": ("coherence_magnitude", "sqrt", 3, 1e-12),
-    "imcoh": ("imaginary_coherency", "identity", 3, 1e-12),
-    "psi": ("phase_slope_index", "identity", 3, 1e-12),
-    "cacoh": ("canonical_coherency", "abs", 3, 1e-7),
-    "plv": ("phase_locking_value", "identity", 1, 1e-12),
-    "ciplv": ("corrected_imaginary_phase_locking_value", "identity", 1, 1e-12),
-    "ppc": ("pairwise_phase_consistency", "identity", 1, 1e-12),
-    "pli": ("phase_lag_index", "abs", 1, 1e-12),
-    "dpli": ("directed_phase_lag_index", "identity", 1, 1e-12),
-    "wpli": ("weighted_phase_lag_index", "abs", 1, 1e-12),
-    "wpli2_debiased": ("debiased_squared_weighted_phase_lag_index", "identity", 1, 1e-12),
-}
-_MNE_UNMATCHED = tuple(
-    f"{measure} (NW 3)"
-    for measure in ("plv", "ciplv", "ppc", "pli", "dpli", "wpli", "wpli2_debiased")
-)
 _TRANSFORMS = {"identity": np.asarray, "sqrt": np.sqrt, "abs": np.abs}
 
 
@@ -188,8 +170,8 @@ def test_measures_match_mne_connectivity_reference(
     """Each measure equals mne-connectivity 0.9's on the same data and tapers.
 
     Per MNE method, the ``Connectivity`` method, element-wise transform,
-    ``NW`` and tolerance (``_MNE_EXPECTED``; the fixture records the same, see
-    ``tests/reference/generate_mne_connectivity_reference.py``):
+    ``NW`` and tolerance, from ``tests/reference/_mne_measures.py``, which the
+    generator also records into the fixture:
 
     ============== ============================================= ==== =====
     MNE            this package                                  NW   atol
@@ -252,12 +234,14 @@ def test_measures_match_mne_connectivity_reference(
 
 
 def test_mne_connectivity_reference_records_expected_mapping_and_unmatched(mne_reference):
-    """The fixture records the mapping, ``NW`` and tolerance the comparison uses,
-    and names exactly the unmatched measures, each with a reason.
+    """The checked-in fixture was generated from the current shared table.
 
-    Every recorded measure is compared. Each unmatched ``"<measure> (NW 3)"``
-    is a phase measure the fixture records at NW 1 instead, so nothing is
-    skipped silently.
+    The comparison takes each measure's mapping, ``NW`` and tolerance from
+    ``tests/reference/_mne_measures.py``; this fails when that table is edited
+    (a tolerance loosened, a measure moved to another NW) without regenerating
+    the fixture. Every recorded measure is compared, and each unmatched
+    ``"<measure> (NW 3)"`` is a phase measure the fixture records at NW 1, so
+    nothing is skipped silently.
     """
     measures = mne_reference["measures"].tolist()
     assert measures == list(_MNE_EXPECTED)
@@ -273,9 +257,8 @@ def test_mne_connectivity_reference_records_expected_mapping_and_unmatched(mne_r
         assert (method, transform, nw, atol) == _MNE_EXPECTED[measure], measure
 
     assert mne_reference["unmatched"].tolist() == list(_MNE_UNMATCHED)
+    assert mne_reference["unmatched_reasons"].tolist() == list(_MNE_UNMATCHED.values())
+    assert _MNE_UNMATCHED  # the multitaper phase measures are named, not dropped
     for unmatched in _MNE_UNMATCHED:
-        measure = unmatched.removesuffix(" (NW 3)")
-        assert _MNE_EXPECTED[measure][2] == 1, unmatched
-        index = measures.index(measure)
+        index = measures.index(unmatched.removesuffix(" (NW 3)"))
         assert mne_reference["time_halfbandwidth_products"][index] == 1, unmatched
-    assert all(reason.strip() for reason in mne_reference["unmatched_reasons"].tolist())

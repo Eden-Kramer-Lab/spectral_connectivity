@@ -36,6 +36,7 @@ both packages), and ``cacoh`` as the first component's magnitude, shape
 ``(n_freqs,)``, for the groups ``CACOH_GROUP_LABELS``.
 """
 
+import sys
 from pathlib import Path
 
 import mne
@@ -44,6 +45,10 @@ import numpy as np
 import scipy
 
 from spectral_connectivity.simulate import simulate_lagged_broadband
+
+# Run as a script: make the repository root importable for the shared table.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tests.reference._mne_measures import MEASURES, UNMATCHED
 
 OUTPUT = Path(__file__).with_name("mne_connectivity_reference.npz")
 MAX_BYTES = 200_000
@@ -56,33 +61,6 @@ LAGS = (0, 3, 6)
 NOISE_LEVEL = 0.5
 PSI_BAND = (10.0, 60.0)
 CACOH_GROUP_LABELS = (0, 0, 1)
-
-# MNE method: (NW, Connectivity method, element-wise transform, atol). The
-# bivariate measures agree to roundoff (measured <= 2e-15). CaCoh maximizes
-# over a phase with an iterative optimizer in each package (measured 5e-9).
-MEASURES = {
-    "coh": (3, "coherence_magnitude", "sqrt", 1e-12),
-    "imcoh": (3, "imaginary_coherency", "identity", 1e-12),
-    "psi": (3, "phase_slope_index", "identity", 1e-12),
-    "cacoh": (3, "canonical_coherency", "abs", 1e-7),
-    "plv": (1, "phase_locking_value", "identity", 1e-12),
-    "ciplv": (1, "corrected_imaginary_phase_locking_value", "identity", 1e-12),
-    "ppc": (1, "pairwise_phase_consistency", "identity", 1e-12),
-    "pli": (1, "phase_lag_index", "abs", 1e-12),
-    "dpli": (1, "directed_phase_lag_index", "identity", 1e-12),
-    "wpli": (1, "weighted_phase_lag_index", "abs", 1e-12),
-    "wpli2_debiased": (1, "debiased_squared_weighted_phase_lag_index", "identity", 1e-12),
-}
-PHASE_MEASURES = ("plv", "ciplv", "ppc", "pli", "dpli", "wpli", "wpli2_debiased")
-UNMATCHED = {
-    f"{measure} (NW 3)": (
-        "mne-connectivity sums each epoch's tapers into one cross-spectrum before "
-        "the phase non-linearity, while this package treats every trial x taper "
-        "as an observation, so the estimators differ with more than one taper; "
-        "recorded with NW 1 (one taper) instead"
-    )
-    for measure in PHASE_MEASURES
-}
 
 
 def _mt_kwargs(time_halfbandwidth_product: float) -> dict:
@@ -110,7 +88,7 @@ def main() -> None:
     for time_halfbandwidth_product in (3, 1):
         bivariate = [
             name
-            for name, (nw, *_) in MEASURES.items()
+            for name, (_, _, nw, _) in MEASURES.items()
             if nw == time_halfbandwidth_product and name not in ("psi", "cacoh")
         ]
         results = mne_connectivity.spectral_connectivity_epochs(
@@ -129,7 +107,7 @@ def main() -> None:
         indices=(seeds, targets),
         fmin=PSI_BAND[0],
         fmax=PSI_BAND[1],
-        **_mt_kwargs(MEASURES["psi"][0]),
+        **_mt_kwargs(MEASURES["psi"][2]),
     )
     arrays["psi"] = psi.get_data()[:, 0]  # (n_connections,)
 
@@ -139,7 +117,7 @@ def main() -> None:
         method="cacoh",
         indices=([np.flatnonzero(groups == 0)], [np.flatnonzero(groups == 1)]),
         faverage=False,
-        **_mt_kwargs(MEASURES["cacoh"][0]),
+        **_mt_kwargs(MEASURES["cacoh"][2]),
     )
     arrays["cacoh"] = np.abs(cacoh.get_data()[0])  # (n_freqs,)
     freqs.append(np.asarray(cacoh.freqs))
@@ -155,9 +133,9 @@ def main() -> None:
         OUTPUT,
         **arrays,
         measures=np.array(names),
-        our_methods=np.array([MEASURES[name][1] for name in names]),
-        our_transforms=np.array([MEASURES[name][2] for name in names]),
-        time_halfbandwidth_products=np.array([MEASURES[name][0] for name in names]),
+        our_methods=np.array([MEASURES[name][0] for name in names]),
+        our_transforms=np.array([MEASURES[name][1] for name in names]),
+        time_halfbandwidth_products=np.array([MEASURES[name][2] for name in names]),
         atol=np.array([MEASURES[name][3] for name in names]),
         unmatched=np.array(list(UNMATCHED)),
         unmatched_reasons=np.array(list(UNMATCHED.values())),
