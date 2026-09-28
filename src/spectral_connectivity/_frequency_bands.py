@@ -219,15 +219,25 @@ def _reduce_frequency_bands(
             if "valid_time_frequency" in selected.coords:
                 band_validity.append(selected.coords["valid_time_frequency"].all("frequency"))
 
-        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band_names)
-        edge_attrs = {
+        reduced = xr.concat(reduced_bands, dim="band").assign_coords(
+            band=("band", band_names, {"long_name": "Frequency band"})
+        )
+        units = {
             key: value
             for key, value in data.coords["frequency"].attrs.items()
             if key == "units"
         }
         reduced = reduced.assign_coords(
-            band_lower=("band", [low for _, (low, _) in band_masks_and_bounds], edge_attrs),
-            band_upper=("band", [high for _, (_, high) in band_masks_and_bounds], edge_attrs),
+            band_lower=(
+                "band",
+                [low for _, (low, _) in band_masks_and_bounds],
+                {"long_name": "Lower edge of the frequency band", **units},
+            ),
+            band_upper=(
+                "band",
+                [high for _, (_, high) in band_masks_and_bounds],
+                {"long_name": "Upper edge of the frequency band", **units},
+            ),
         )
         if band_validity:
             reduced = reduced.assign_coords(
