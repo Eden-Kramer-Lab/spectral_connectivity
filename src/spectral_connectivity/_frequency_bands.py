@@ -197,6 +197,11 @@ def _reduce_frequency_bands(
             # average a different set of bins per time point.
             if reduction == "integral":
                 reduced = xr.dot(selected, xr.DataArray(weights[used], dims="frequency"))
+                # Some xarray versions (e.g. 2025.6) drop coordinate attrs in
+                # xr.dot; restore them from the input's coordinates.
+                for name, coordinate in reduced.coords.items():
+                    if name in selected.coords:
+                        coordinate.attrs.update(selected.coords[name].attrs)
             elif (
                 circular
                 if circular is not None
