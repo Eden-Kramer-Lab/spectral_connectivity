@@ -270,7 +270,6 @@ _DEFAULT_MEASURES = {
     "debiased_squared_weighted_phase_lag_index",
     "imaginary_coherence",
     "pairwise_phase_consistency",
-    "pairwise_spectral_granger_prediction",
     "phase_lag_index",
     "phase_locking_value",
     "power",
