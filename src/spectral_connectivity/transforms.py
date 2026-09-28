@@ -1124,10 +1124,14 @@ class Multitaper:
         self._n_fft_samples = n_fft_samples
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
-        # Reject a fractional n_tapers at construction so the reported
-        # n_tapers metadata cannot disagree with the (integer) taper count used.
-        if n_tapers is not None and (not np.isfinite(n_tapers) or int(n_tapers) != n_tapers):
-            msg = f"n_tapers must be an integer, got {n_tapers}."
+        # Reject a fractional (or boolean) n_tapers at construction so the
+        # reported n_tapers metadata cannot disagree with the taper count used.
+        if n_tapers is not None and (
+            isinstance(n_tapers, (bool, np.bool_))
+            or not np.isfinite(n_tapers)
+            or int(n_tapers) != n_tapers
+        ):
+            msg = f"n_tapers must be an integer, got {n_tapers!r}."
             raise ValueError(msg)
         self._n_tapers = n_tapers
         # A duration and a sample count for the same window or step must name
@@ -1167,6 +1171,22 @@ class Multitaper:
                 msg = (
                     f"tapers must have shape ({window}, n_tapers) -- one column per "
                     f"taper, n_time_samples_per_window rows -- got {self._tapers.shape}."
+                )
+                raise ValueError(msg)
+        if n_tapers is not None:
+            # Check the count now that the window is known, so an impossible
+            # value fails here rather than inside fft().
+            window = self.n_time_samples_per_window
+            if not 1 <= n_tapers <= window:
+                msg = (
+                    f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
+                    f"(= {window}), got {n_tapers}."
+                )
+                raise ValueError(msg)
+            if self._tapers is not None and self._tapers.shape[1] != n_tapers:
+                msg = (
+                    f"n_tapers ({n_tapers}) disagrees with the {self._tapers.shape[1]} "
+                    "columns of tapers; pass one or make them agree."
                 )
                 raise ValueError(msg)
         object.__setattr__(self, "_initialized", True)

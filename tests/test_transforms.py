@@ -1065,6 +1065,35 @@ def test_multitaper_warns_on_step_larger_than_duration():
         )
 
 
+@pytest.mark.parametrize(
+    "n_tapers",
+    [0, -1, True, np.True_, 51],
+    ids=["zero", "negative", "bool", "numpy_bool", "above_window"],
+)
+def test_multitaper_rejects_an_invalid_taper_count_at_construction(n_tapers):
+    """An impossible n_tapers fails when the transform is built, not later
+    inside fft(); a bool is not a count. The window here is 50 samples."""
+    with pytest.raises(ValueError, match="n_tapers"):
+        Multitaper(
+            np.zeros((500, 2, 2)),
+            sampling_frequency=100,
+            time_window_duration=0.5,
+            n_tapers=n_tapers,
+        )
+
+
+def test_multitaper_rejects_n_tapers_that_disagrees_with_the_tapers():
+    with pytest.raises(ValueError, match="n_tapers"):
+        Multitaper(
+            np.zeros((100, 1, 2)), sampling_frequency=100, n_tapers=2, tapers=np.ones((100, 3))
+        )
+    # Agreeing counts, or n_tapers omitted, are accepted.
+    Multitaper(
+        np.zeros((100, 1, 2)), sampling_frequency=100, n_tapers=3, tapers=np.ones((100, 3))
+    )
+    Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100, tapers=np.ones((100, 3)))
+
+
 def test_multitaper_configuration_and_array_snapshots_are_immutable():
     """Derived state cannot become stale through public mutation."""
     source = np.arange(200.0).reshape(100, 1, 2)

@@ -397,6 +397,10 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
+  negative, larger than the window, a boolean, or disagreeing with the columns
+  of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with
+  an opaque SciPy `select_range` error, or used `True` as one taper.
 - `group_delay` and `delay` unwrapped the coherence phase before excluding
   undefined bins, so one bin without a defined phase (e.g. a zero-power DC
   bin) made every later frequency NaN; the unwrapping now skips such bins.
