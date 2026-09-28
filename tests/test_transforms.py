@@ -73,7 +73,8 @@ def test_stft_describes_itself_as_a_hann_stft():
 
     summary = stft.summarize_parameters()
     assert summary.startswith("Short-Time Fourier Transform Configuration")
-    assert "Window:" in summary and "Hann" in summary
+    assert "Window:" in summary
+    assert "Hann" in summary
     assert "Equivalent noise bandwidth: 3.0 Hz" in summary  # 1.5 / 0.5 s
     assert "Window step:      0.250 s (50% overlap)" in summary
     for multitaper_only in ("Multitaper", "halfbandwidth", "tapers", "Frequency resolution"):
