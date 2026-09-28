@@ -1293,7 +1293,26 @@ class Multitaper:
         estimate_frequency_resolution : Estimate frequency resolution
         estimate_n_tapers : Estimate number of tapers
         """
-        # Calculate time windows info
+        return self._summary(
+            "Multitaper Spectral Analysis Configuration",
+            [
+                ("Time-halfbandwidth product", self.time_halfbandwidth_product),
+                ("Number of tapers", self.n_tapers),
+            ],
+            ("Frequency resolution", f"{self.frequency_resolution:.1f} Hz"),
+        )
+
+    def _summary(
+        self,
+        title: str,
+        spectral_rows: list[tuple[str, Any]],
+        bandwidth_row: tuple[str, str],
+    ) -> str:
+        """Human-readable configuration summary shared by the windowed transforms.
+
+        ``spectral_rows`` follow the sampling frequency in "Spectral Parameters";
+        ``bandwidth_row`` heads "Frequency Analysis".
+        """
         n_time_samples = self._time_series.shape[0]
         signal_duration = n_time_samples / self.sampling_frequency
         n_windows = int(
@@ -1315,8 +1334,25 @@ class Multitaper:
             )
             overlap_desc = f"({overlap_percent:.0f}% overlap)"
 
-        return f"""Multitaper Spectral Analysis Configuration
-===========================================
+        spectral = "\n".join(
+            f"{label + ':':<31}{value}"
+            for label, value in [
+                ("Sampling frequency", f"{self.sampling_frequency:g} Hz"),
+                *spectral_rows,
+            ]
+        )
+        frequency_rows = [
+            bandwidth_row,
+            ("Nyquist frequency", f"{self.nyquist_frequency:.1f} Hz"),
+            ("Frequency range", f"0.0 - {self.nyquist_frequency:.1f} Hz"),
+            ("FFT samples", f"{self.n_fft_samples}"),
+        ]
+        width = max(22, max(len(label) + 2 for label, _ in frequency_rows))
+        frequency = "\n".join(
+            f"{label + ':':<{width}}{value}" for label, value in frequency_rows
+        )
+        return f"""{title}
+{"=" * (len(title) + 1)}
 
 Data Shape
 ----------
@@ -1326,9 +1362,7 @@ Trials:          {self.n_trials}
 
 Spectral Parameters
 -------------------
-Sampling frequency:            {self.sampling_frequency:g} Hz
-Time-halfbandwidth product:    {self.time_halfbandwidth_product}
-Number of tapers:              {self.n_tapers}
+{spectral}
 
 Time Windowing
 --------------
@@ -1338,10 +1372,7 @@ Number of windows: {n_windows}
 
 Frequency Analysis
 ------------------
-Frequency resolution: {self.frequency_resolution:.1f} Hz
-Nyquist frequency:    {self.nyquist_frequency:.1f} Hz
-Frequency range:      0.0 - {self.nyquist_frequency:.1f} Hz
-FFT samples:          {self.n_fft_samples}
+{frequency}
 """
 
     @property
@@ -1860,6 +1891,42 @@ class ShortTimeFourierTransform(Multitaper):
     def frequency_resolution(self) -> float:
         """Equivalent-noise bandwidth of the periodic Hann window in Hz."""
         return 1.5 / self.time_window_duration
+
+    def __repr__(self) -> str:
+        """Return the STFT's settings; its single Hann window has no NW or tapers."""
+        return (
+            "ShortTimeFourierTransform("
+            f"sampling_frequency={self.sampling_frequency!r}, window='hann_periodic',\n"
+            f"                          time_window_duration={self.time_window_duration!r}, "
+            f"time_window_step={self.time_window_step!r},\n"
+            f"                          detrend_type={self.detrend_type!r}, "
+            f"start_time={self.start_time})"
+        )
+
+    def summarize_parameters(self) -> str:
+        """Human-readable summary of the STFT's settings.
+
+        Returns
+        -------
+        summary : str
+            Data shape, the Hann window, time windowing, and the window's
+            equivalent noise bandwidth, Nyquist frequency, and FFT length.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity.transforms import ShortTimeFourierTransform
+        >>> stft = ShortTimeFourierTransform(
+        ...     np.zeros((1000, 1, 2)), sampling_frequency=100, time_window_duration=0.5
+        ... )
+        >>> print(stft.summarize_parameters().splitlines()[0])
+        Short-Time Fourier Transform Configuration
+        """
+        return self._summary(
+            "Short-Time Fourier Transform Configuration",
+            [("Window", "Hann (periodic, L2-normalized)")],
+            ("Equivalent noise bandwidth", f"{self.frequency_resolution:.1f} Hz"),
+        )
 
     def _provenance_metadata(self) -> dict[str, Any]:
         metadata = super()._provenance_metadata()

@@ -56,6 +56,30 @@ def test_dpss_and_stft_observations_are_independent():
     assert stft.observations_are_independent is True
 
 
+def test_stft_describes_itself_as_a_hann_stft():
+    """repr and summarize_parameters name the Hann STFT, its window and step,
+    and its equivalent noise bandwidth, not inherited Multitaper settings."""
+    stft = ShortTimeFourierTransform(
+        np.zeros((1000, 2, 3)),
+        sampling_frequency=100,
+        time_window_duration=0.5,
+        time_window_step=0.25,
+    )
+    description = repr(stft)
+    assert description.startswith("ShortTimeFourierTransform(")
+    assert "time_window_duration=0.5" in description
+    assert "time_window_step=0.25" in description
+    assert "hann" in description
+
+    summary = stft.summarize_parameters()
+    assert summary.startswith("Short-Time Fourier Transform Configuration")
+    assert "Window:" in summary and "Hann" in summary
+    assert "Equivalent noise bandwidth: 3.0 Hz" in summary  # 1.5 / 0.5 s
+    assert "Window step:      0.250 s (50% overlap)" in summary
+    for multitaper_only in ("Multitaper", "halfbandwidth", "tapers", "Frequency resolution"):
+        assert multitaper_only not in description + summary, multitaper_only
+
+
 @pytest.mark.parametrize(
     ("segment_overlap", "expected"),
     [(0.0, True), (0.25, True), (0.5, True), (0.75, False), (0.9, False)],
