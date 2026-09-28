@@ -80,6 +80,44 @@ def test_stft_describes_itself_as_a_hann_stft():
         assert multitaper_only not in description + summary, multitaper_only
 
 
+def test_welch_exposes_its_resolved_settings_read_only():
+    """Welch reports the settings it computes with: the segment length rounded
+    to whole samples, the realized step, and its FFT options; none can be
+    reassigned out of step with the computation."""
+    welch = Welch(
+        np.zeros((1000, 2, 2)),
+        sampling_frequency=100,
+        segment_duration=0.123,  # 12.3 samples -> 12
+        segment_overlap=0.3,  # realized step round(12 * 0.7) = 8 samples
+        detrend_type="linear",
+        start_time=2.0,
+        n_fft_samples=16,
+        fft_workers=1,
+    )
+    assert welch.n_time_samples_per_segment == 12
+    assert welch.segment_duration == pytest.approx(0.12)
+    assert welch.segment_overlap == 0.3  # the requested fraction
+    assert welch.n_time_samples_per_step == 8
+    assert welch.sampling_frequency == 100.0
+    assert welch.detrend_type == "linear"
+    assert float(welch.start_time) == 2.0
+    assert welch.n_fft_samples == 16
+    assert welch.fft_workers == 1
+    for name in (
+        "sampling_frequency",
+        "segment_duration",
+        "segment_overlap",
+        "n_time_samples_per_segment",
+        "n_time_samples_per_step",
+        "detrend_type",
+        "start_time",
+        "n_fft_samples",
+        "fft_workers",
+    ):
+        with pytest.raises(AttributeError):
+            setattr(welch, name, 1)
+
+
 @pytest.mark.parametrize(
     ("segment_overlap", "expected"),
     [(0.0, True), (0.25, True), (0.5, True), (0.75, False), (0.9, False)],

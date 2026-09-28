@@ -2044,10 +2044,58 @@ class Welch:
             n_time_samples_per_step=step_samples,
             fft_workers=fft_workers,
         )
-        self.sampling_frequency = sampling_frequency
-        self.segment_overlap = float(segment_overlap)
-        self.n_time_samples_per_segment = segment_samples
-        self.n_time_samples_per_step = step_samples
+        self._segment_overlap = float(segment_overlap)
+
+    # The settings below are read from the internal STFT that does the
+    # computation, so they cannot be reassigned out of step with it.
+    @property
+    def sampling_frequency(self) -> float:
+        """Samples per second, in Hz."""
+        return self._stft.sampling_frequency
+
+    @property
+    def n_time_samples_per_segment(self) -> int:
+        """Segment length in samples."""
+        return int(self._stft.n_time_samples_per_window)
+
+    @property
+    def segment_duration(self) -> float:
+        """Segment length in seconds, after rounding to whole samples."""
+        return self.n_time_samples_per_segment / self.sampling_frequency
+
+    @property
+    def segment_overlap(self) -> float:
+        """Requested overlap between segments, as a fraction of a segment.
+
+        The realized step, ``n_time_samples_per_step``, is this fraction's
+        complement of a segment rounded to whole samples (at least one).
+        """
+        return self._segment_overlap
+
+    @property
+    def n_time_samples_per_step(self) -> int:
+        """Realized step between segment starts, in samples."""
+        return int(self._stft.n_time_samples_per_step)
+
+    @property
+    def detrend_type(self) -> str | None:
+        """Detrending applied to each segment before the FFT."""
+        return self._stft.detrend_type
+
+    @property
+    def start_time(self) -> Any:
+        """Time of the first sample, in seconds."""
+        return self._stft.start_time
+
+    @property
+    def n_fft_samples(self) -> int:
+        """FFT length of each segment."""
+        return int(self._stft.n_fft_samples)
+
+    @property
+    def fft_workers(self) -> int | None:
+        """Worker threads for SciPy's CPU FFT (``None`` uses SciPy's default)."""
+        return self._stft.fft_workers
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
