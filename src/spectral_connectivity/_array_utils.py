@@ -155,5 +155,10 @@ def _complex_inner_product(
         Complex inner product.
 
     """
-    product: NDArray[np.complexfloating] = xp.matmul(a, _conjugate_transpose(b), dtype=dtype)
+    # Cast the operands, not just the output: CuPy's matmul(dtype=) multiplies
+    # in the input precision and only casts the product, so complex64 inputs
+    # would lose precision there (NumPy casts first).
+    product: NDArray[np.complexfloating] = xp.matmul(
+        a.astype(dtype, copy=False), _conjugate_transpose(b).astype(dtype, copy=False)
+    )
     return product

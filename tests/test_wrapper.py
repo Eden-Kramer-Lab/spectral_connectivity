@@ -33,6 +33,7 @@ from spectral_connectivity.wrapper import (
     list_measures,
     multitaper_connectivity,
 )
+from tests._backend_helpers import to_host
 
 # Shared window-grid case: 2.4 s at 500 Hz plus one sample, so most window
 # durations leave a trailing partial window that must be dropped.
@@ -1479,7 +1480,7 @@ def test_fft_workers_does_not_change_results():
     reference = Multitaper(time_series, sampling_frequency=500).fft()
     for workers in (1, 2, -1):
         result = Multitaper(time_series, sampling_frequency=500, fft_workers=workers).fft()
-        np.testing.assert_allclose(result, reference, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(to_host(result), to_host(reference), rtol=1e-10, atol=1e-12)
 
     # The wrapper forwards fft_workers via **kwargs; results are equivalent.
     baseline = multitaper_connectivity(
@@ -1524,6 +1525,9 @@ def test_fft_workers_valid_values_accepted(good):
     assert mt.fft_workers == good
 
 
+@pytest.mark.cpu_only(
+    reason="spies on scipy.fft workers forwarding; the CuPy FFT takes no workers argument"
+)
 def test_fft_workers_is_actually_forwarded_to_scipy():
     """`fft_workers` must reach SciPy's FFT (and only on the CPU backend).
 
@@ -1659,7 +1663,7 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
         frequencies=np.array([4.0, 8.0, 16.0]),
         edge_mode="nan",
     )
-    host_mask = np.asarray(transform.valid_time_frequency)
+    host_mask = to_host(transform.valid_time_frequency)
 
     class DeviceMaskTransform:
         def __init__(self, inner):
@@ -2126,8 +2130,10 @@ def test_from_transform_subclass_overriding_init_keeps_transform_contract():
     base = Connectivity.from_transform(mw)
     assert sub.is_one_sided is True
     assert sub.observation_weights is not None
-    np.testing.assert_array_equal(sub.observation_weights, base.observation_weights)
-    np.testing.assert_array_equal(sub.frequencies, base.frequencies)
+    np.testing.assert_array_equal(
+        to_host(sub.observation_weights), to_host(base.observation_weights)
+    )
+    np.testing.assert_array_equal(to_host(sub.frequencies), to_host(base.frequencies))
     np.testing.assert_allclose(sub.power(), base.power())
     np.testing.assert_allclose(
         sub.coherence_magnitude(), base.coherence_magnitude(), equal_nan=True
@@ -2879,7 +2885,7 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
     mean = frequency_band_reduce(coherence, bands)
     integral = frequency_band_reduce(power, bands, reduction="integral")
 
-    validity = np.asarray(transform.valid_time_frequency)
+    validity = to_host(transform.valid_time_frequency)
     expected_valid = np.stack([validity[:, :2].all(axis=1), validity.all(axis=1)], 1)
     assert not expected_valid.all()
     assert expected_valid.any()
@@ -3485,7 +3491,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     assert phase_slope.dims == ("time", "source", "target")
     assert phase_slope.valid_time.dims == ("time",)
     np.testing.assert_array_equal(
-        phase_slope.valid_time, transform.valid_time_frequency.all(axis=1)
+        phase_slope.valid_time, to_host(transform.valid_time_frequency).all(axis=1)
     )
 
     band = (5.0, 15.0)
@@ -3500,7 +3506,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
     np.testing.assert_array_equal(
         delay.valid_time_frequency,
-        transform.valid_time_frequency[:, [1, 2]],
+        to_host(transform.valid_time_frequency)[:, [1, 2]],
     )
 
     with pytest.warns(UserWarning, match="assumes independent observations"):
@@ -3513,7 +3519,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     assert group_delay.valid_time.dims == ("time",)
     np.testing.assert_array_equal(
         group_delay.valid_time,
-        transform.valid_time_frequency[:, [1, 2]].all(axis=1),
+        to_host(transform.valid_time_frequency)[:, [1, 2]].all(axis=1),
     )
 
 
@@ -3560,7 +3566,7 @@ def test_fourier_connectivity_delay_units_follow_the_frequency_coordinate(
     time_series = simulate_lagged_broadband(
         [0, 1], 0.1, n_time_samples=512, n_trials=20, random_state=1
     )
-    coefficients = np.asarray(Multitaper(time_series, sampling_frequency=1000).fft())
+    coefficients = to_host(Multitaper(time_series, sampling_frequency=1000).fft())
     frequencies = (
         None
         if sampling_frequency is None

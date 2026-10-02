@@ -11,20 +11,21 @@ import numpy as np
 import pytest
 
 from spectral_connectivity.transforms import detrend
+from tests._backend_helpers import to_host
 
 
 def test_linear_detrend_removes_linear_trend():
     """A pure linear trend is removed to ~0."""
     t = np.linspace(0.0, 1.0, 200)
     x = 3.0 + 2.0 * t
-    np.testing.assert_allclose(detrend(x, type="linear"), 0.0, atol=1e-10)
+    np.testing.assert_allclose(to_host(detrend(x, type="linear")), 0.0, atol=1e-10)
 
 
 def test_constant_detrend_removes_mean():
     """Constant detrend subtracts the mean and nothing else."""
     rng = np.random.default_rng(0)
     x = 5.0 + rng.standard_normal(200)
-    result = detrend(x, type="constant")
+    result = to_host(detrend(x, type="constant"))
     assert abs(result.mean()) < 1e-10
     np.testing.assert_allclose(result, x - x.mean(), atol=1e-12)
 
@@ -39,7 +40,9 @@ def test_short_type_aliases_match_full_names(alias, full):
     """
     rng = np.random.default_rng(1)
     x = 2.0 + 0.5 * np.linspace(0.0, 1.0, 150) + rng.standard_normal(150)
-    np.testing.assert_array_equal(detrend(x, type=alias), detrend(x, type=full))
+    np.testing.assert_array_equal(
+        to_host(detrend(x, type=alias)), to_host(detrend(x, type=full))
+    )
 
 
 def test_linear_detrend_with_breakpoints():
@@ -52,11 +55,11 @@ def test_linear_detrend_with_breakpoints():
     x[100:] = -5.0 + 0.1 * (t[100:] - 100)
 
     # A single global linear fit leaves large residuals at the kink.
-    single = detrend(x, type="linear")
+    single = to_host(detrend(x, type="linear"))
     assert np.abs(single).max() > 1.0
 
     # A breakpoint at the join detrends each segment separately -> ~0.
-    segmented = detrend(x, type="linear", bp=[100])
+    segmented = to_host(detrend(x, type="linear", bp=[100]))
     np.testing.assert_allclose(segmented, 0.0, atol=1e-8)
 
 
@@ -79,7 +82,7 @@ def test_detrend_along_explicit_axis(axis):
     intercepts = np.array([10.0, -2.0, 0.0])
     data = intercepts[:, None] + slopes[:, None] * t + rng.standard_normal((3, 50))
 
-    result = detrend(data, axis=axis, type="linear")
+    result = to_host(detrend(data, axis=axis, type="linear"))
 
     expected = np.stack([_polyfit_linear_residual(row) for row in data])
     np.testing.assert_allclose(result, expected, atol=1e-10)
@@ -93,7 +96,7 @@ def test_detrend_along_axis_zero_detrends_columns():
     t = np.arange(40, dtype=float)
     data = np.array([1.0, -4.0])[None, :] * t[:, None] + rng.standard_normal((40, 2))
 
-    result = detrend(data, axis=0, type="linear")
+    result = to_host(detrend(data, axis=0, type="linear"))
 
     expected = np.stack([_polyfit_linear_residual(column) for column in data.T], axis=1)
     np.testing.assert_allclose(result, expected, atol=1e-10)

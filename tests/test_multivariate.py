@@ -6,6 +6,7 @@ import pytest
 from spectral_connectivity import Connectivity, Multitaper
 from spectral_connectivity._multivariate import _optimize_canonical_coherency_phase, _reshape
 from spectral_connectivity.simulate import simulate_shared_oscillation
+from tests._backend_helpers import ON_GPU, to_device, to_host
 from tests._var_oracle import _fourier_coefficients_with_cross_spectrum
 
 
@@ -32,8 +33,9 @@ def test_cacoh_phase_optimizer_resolves_near_equal_lobes():
     coarse_scores = [_cacoh_phase_objective(whitened, phase) for phase in grid]
     assert np.argmax(coarse_scores) == 27  # premise: the coarse grid prefers lobe 2
 
-    magnitude, phase, left, right = _optimize_canonical_coherency_phase(
-        whitened[np.newaxis], n_grid=n_grid
+    magnitude, phase, left, right = map(
+        to_host,
+        _optimize_canonical_coherency_phase(to_device(whitened[np.newaxis]), n_grid=n_grid),
     )
 
     dense_best = max(
@@ -74,7 +76,10 @@ def test_cacoh_phase_optimizer_refines_every_coarse_grid_lobe():
         lobe_peaks = [max(coarse[k], coarse[k + 1]) for k in lobe_grid_indices]
         assert np.argmin(lobe_peaks) == true_lobe
 
-    magnitude, phase, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
+    magnitude, phase, _, _ = _optimize_canonical_coherency_phase(
+        to_device(whitened), n_grid=n_grid
+    )
+    magnitude, phase = to_host(magnitude), to_host(phase)
 
     np.testing.assert_allclose(magnitude, 0.80, rtol=0, atol=1e-9)
     # The phase is defined modulo pi; it must be the true lobe's.
@@ -89,8 +94,10 @@ def test_cacoh_phase_optimizer_never_returns_below_the_coarse_grid():
     coarse_best = np.array(
         [max(_cacoh_phase_objective(matrix, phase) for phase in grid) for matrix in whitened]
     )
-    magnitude, _, _, _ = _optimize_canonical_coherency_phase(whitened, n_grid=n_grid)
-    assert np.all(magnitude >= coarse_best - 1e-12)
+    magnitude, _, _, _ = _optimize_canonical_coherency_phase(
+        to_device(whitened), n_grid=n_grid
+    )
+    assert np.all(to_host(magnitude) >= coarse_best - 1e-12)
 
 
 def test__reshape():
@@ -99,7 +106,7 @@ def test__reshape():
         (n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals), dtype=complex
     )
     expected_shape = (n_time_samples, n_fft_samples, n_signals, n_trials * n_tapers)
-    assert np.allclose(_reshape(fourier_coefficients).shape, expected_shape)
+    assert np.allclose(_reshape(to_device(fourier_coefficients)).shape, expected_shape)
 
 
 def test_global_coherence_weighted_per_bin_path_matches_batched(monkeypatch):
@@ -108,7 +115,9 @@ def test_global_coherence_weighted_per_bin_path_matches_batched(monkeypatch):
     from spectral_connectivity import Connectivity, _multivariate
 
     rng = np.random.default_rng(13)
-    shape = (2, 5, 3, 8, 4)
+    # Six signals: with four, max_rank=2 is n_components - 2, where CuPy's svds
+    # (Lanczos eigsh) raises IndexError on the GPU backend.
+    shape = (2, 5, 3, 8, 6)
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     weights = rng.uniform(0.2, 1.0, (*shape[:-1], 1))
 
@@ -137,8 +146,15 @@ def test_global_coherence_per_bin_path_is_reproducible(monkeypatch):
     first = Connectivity(coefficients).global_coherence(max_rank=2)
     second = Connectivity(coefficients).global_coherence(max_rank=2)
 
-    np.testing.assert_array_equal(first[0], second[0])
-    np.testing.assert_array_equal(first[1], second[1])
+    if ON_GPU:
+        # CuPy's svds takes no start vector (see _multivariate._global_coherence_components),
+        # so on the GPU only the values agree run to run, at rounding level, and the
+        # singular vectors only up to phase.
+        np.testing.assert_allclose(first[0], second[0], rtol=1e-12)
+        np.testing.assert_allclose(np.abs(first[1]), np.abs(second[1]), rtol=1e-10)
+    else:
+        np.testing.assert_array_equal(first[0], second[0])
+        np.testing.assert_array_equal(first[1], second[1])
 
 
 _GROUP_LABELS = [0, 0, 0, 1, 1, 1]

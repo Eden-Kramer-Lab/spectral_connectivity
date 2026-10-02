@@ -457,3 +457,24 @@ def test_fourier_connectivity_accepts_device_frequencies_and_time(xp, monkeypatc
     )
     np.testing.assert_array_equal(on_device.time, time)
     np.testing.assert_allclose(on_device.values, host.values, rtol=1e-12)
+
+
+def test_minimum_phase_functions_accept_host_arrays(xp, monkeypatch):
+    """The module-level Wilson functions take a host (NumPy) cross-spectrum on
+    the device backend, as the Connectivity entry points do."""
+    rng = np.random.default_rng(12)
+    mixing = rng.standard_normal((2, 2))
+    cross_spectrum = np.tile(mixing @ mixing.T + 2 * np.eye(2), (1, 32, 1, 1)).astype(complex)
+    factor = minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum)
+    error = minimum_phase_decomposition.minimum_phase_reconstruction_error(
+        cross_spectrum, factor.get()
+    )
+    assert isinstance(factor, xp.ndarray)
+    assert float(error.max()) < 1e-6
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    np.testing.assert_allclose(
+        factor.get(),
+        minimum_phase_decomposition.minimum_phase_decomposition(cross_spectrum),
+        rtol=1e-12,
+    )

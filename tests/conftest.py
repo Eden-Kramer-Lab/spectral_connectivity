@@ -6,9 +6,14 @@ import numpy as np
 import pytest
 
 import spectral_connectivity
+from spectral_connectivity._backend import ON_GPU
 
 
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "cpu_only(reason): tests NumPy-backend-only behavior; skipped on the GPU backend",
+    )
     # NumPy < 2.3.1 with macOS Accelerate emits divide-by-zero/overflow/invalid
     # RuntimeWarnings from some matmul shapes, e.g. (1000, 3) @ (3, 3), although
     # the product is finite and exact. Python 3.10 cannot install a fixed NumPy.
@@ -16,6 +21,19 @@ def pytest_configure(config):
         config.addinivalue_line(
             "filterwarnings", "ignore:.*encountered in matmul:RuntimeWarning"
         )
+
+
+def pytest_collection_modifyitems(config, items):
+    if not ON_GPU:
+        return
+    for item in items:
+        marker = item.get_closest_marker("cpu_only")
+        if marker is not None:
+            reason = marker.kwargs.get("reason")
+            if not reason:
+                msg = f"{item.nodeid}: cpu_only needs reason=... saying what is NumPy-only"
+                raise pytest.UsageError(msg)
+            item.add_marker(pytest.mark.skip(reason=f"cpu_only: {reason}"))
 
 
 @pytest.fixture(scope="session")

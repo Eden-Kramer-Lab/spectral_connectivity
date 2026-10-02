@@ -404,6 +404,15 @@ directly with results from 2.x.
 - `fourier_connectivity` raised `TypeError: Implicit conversion to a NumPy
   array` when given the device (CuPy) `frequencies` or `time` that
   `Multitaper` returns on the GPU; they are now moved to the host.
+- On the GPU, complex64 Fourier coefficients gave cross-spectral matrices with
+  single-precision error (~1e-7 relative) although they are documented to be
+  accumulated at the requested `dtype` (complex128 by default): CuPy's
+  `matmul(..., dtype=)` multiplies in the input precision and casts only the
+  product. The operands are now cast first, as NumPy does. NumPy results are
+  unchanged.
+- `minimum_phase_reconstruction_error` and `minimum_phase_decomposition`
+  raised `TypeError` on the GPU for a NumPy cross-spectral matrix; they now
+  accept host arrays (results are CuPy arrays on the GPU).
 - `group_delay` and `delay` unwrapped the coherence phase before excluding
   undefined bins, so one bin without a defined phase (e.g. a zero-power DC
   bin) made every later frequency NaN; the unwrapping now skips such bins.

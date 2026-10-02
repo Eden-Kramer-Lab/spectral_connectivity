@@ -1482,10 +1482,10 @@ class Connectivity:
             observations = observations * xp.sqrt(weights)[..., xp.newaxis]
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
+        # Cast before multiplying (see _complex_inner_product).
+        observations = observations.astype(self._dtype, copy=False)
         cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
-            xp.swapaxes(observations, -1, -2),
-            xp.conj(observations),
-            dtype=self._dtype,
+            xp.swapaxes(observations, -1, -2), xp.conj(observations)
         )
         if weights is None:
             return cross_spectral_matrix / n_observations
