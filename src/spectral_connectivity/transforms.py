@@ -10,7 +10,7 @@ from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity._array_utils import _divide_where
-from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, xp
+from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, rfft, xp
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
@@ -2855,9 +2855,42 @@ def _multitaper_fft(
     fft_kwargs: dict[str, Any] = {}
     if workers is not None and not ON_GPU:
         fft_kwargs["workers"] = workers
-    coefficients: NDArray[np.complexfloating] = fft(
-        projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs
-    )
+    if ON_GPU and not xp.iscomplexobj(projected_time_series):
+        # cuFFT's complex FFT of real input is conjugate-symmetric only to
+        # rounding (~1e-16), which makes minimum_phase_decomposition's exact
+        # symmetry check fail and run the Wilson iteration on the full two-sided
+        # spectrum. Transform the non-negative frequencies with rfft (half the
+        # FFT work) and write the negative ones as their exact conjugate mirror,
+        # X[n - k] = conj(X[k]). SciPy's complex FFT of real input is already
+        # exactly symmetric (and was faster than rfft + mirror), so the CPU keeps
+        # the plain FFT.
+        half_spectrum: NDArray[np.complexfloating] = rfft(
+            projected_time_series, n=n_fft_samples, axis=axis
+        )
+        n_non_negative = half_spectrum.shape[axis]
+        shape = list(half_spectrum.shape)
+        shape[axis] = n_fft_samples
+        coefficients: NDArray[np.complexfloating] = xp.empty(shape, dtype=half_spectrum.dtype)
+        coefficients_last = xp.moveaxis(coefficients, axis, -1)
+        xp.divide(
+            xp.moveaxis(half_spectrum, axis, -1),
+            sampling_frequency,
+            out=coefficients_last[..., :n_non_negative],
+        )
+        # The zero and (even n) Nyquist bins are their own mirrors and exactly
+        # real, but cuFFT's rfft can leave ~1e-15 in the Nyquist imaginary part
+        # for some lengths (e.g. 250, 300). Zero it through the ``imag`` view:
+        # CuPy 14 silently drops ``x[..., k] = x[..., k].real`` for some
+        # strided layouts, because the source aliases the destination.
+        self_mirrored_bins = [0] if n_fft_samples % 2 else [0, n_fft_samples // 2]
+        for bin_index in self_mirrored_bins:
+            coefficients_last[..., bin_index].imag[...] = 0
+        xp.conjugate(
+            coefficients_last[..., n_fft_samples - n_non_negative : 0 : -1],
+            out=coefficients_last[..., n_non_negative:],
+        )
+        return coefficients
+    coefficients = fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
     return coefficients / sampling_frequency
 
 
