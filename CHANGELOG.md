@@ -649,6 +649,24 @@ directly with results from 2.x.
   FFT. `multitaper_connectivity` with the default measures is about 2.2x faster
   for 32 signals x 50 trials, 2.7x for 64 signals x 100 trials, and 1.5x for 16
   signals in 117 sliding windows, where pairwise Granger still dominates.
+- On the GPU, `Multitaper` (and `ShortTimeFourierTransform`/`Welch`, which share
+  its FFT) transforms real-valued data with a real FFT and writes the negative
+  frequencies as the exact conjugate mirror. cuFFT's complex FFT of real input
+  was conjugate-symmetric only to rounding (~1e-16), so the Wilson
+  factorization's exact symmetry check never passed on the GPU and every
+  spectral Granger, DTF, and PDC computation iterated on the full two-sided
+  spectrum; it now takes the half-spectrum path, as on the CPU. On one shared
+  GPU, `directed_transfer_function` is 1.7x faster (0.161 -> 0.093 s for 30
+  windows x 10 trials x 5 tapers x 1000 frequencies x 16 signals; 0.095 ->
+  0.054 s for 100 trials x 5 tapers x 2000 frequencies x 32 signals) and
+  `Multitaper.fft` 1.1-1.2x faster; pairwise spectral Granger is unchanged
+  within timing noise. GPU outputs change at rounding level (<= 1.8e-14) and
+  stay as close to the CPU's; the Nyquist bin is now exactly real, so
+  `coherence_phase` there is +pi as on the CPU instead of a rounding-dependent
+  -pi. Complex-valued input keeps the full FFT. The CPU keeps SciPy's complex
+  FFT, which is already exactly symmetric for real input and was faster than a
+  real FFT plus mirror (0.31 vs 0.35 s on the first size); its outputs are
+  bit-identical.
 
 ## [2.0.1] - 2026-05-12
 
