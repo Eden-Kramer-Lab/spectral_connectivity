@@ -218,6 +218,47 @@ def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
     assert np.isnan(square_root[2:]).all()
 
 
+def _chunks_of_three(monkeypatch, n_signals):
+    """Shrink the eigh workspace budget so batches split into chunks of 3."""
+    monkeypatch.setattr(mpd_module, "_EIGH_WORKSPACE_BUDGET", 3 * (2 * n_signals**2 + 1024))
+
+
+def test_hermitian_square_root_in_chunks_matches_a_single_batch(monkeypatch):
+    """Splitting the batched eigh into chunks gives the single-call result exactly.
+
+    Regression: CuPy's batched eigh fails (CUSOLVER_STATUS_INVALID_VALUE) above
+    about 2**21 matrices, which a long recording or subset pairwise Granger
+    reaches. The batch is split into chunks; here the budget is shrunk so 20
+    matrices (including a non-finite and an indefinite one) take 7 chunks, the
+    last one partial.
+    """
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((4, 5, 2, 2)) + 1j * rng.standard_normal((4, 5, 2, 2))
+    matrices = a @ _conjugate_transpose(a)
+    matrices[1, 2] = [[np.nan, 0.0], [0.0, 1.0]]
+    matrices[3, 4] = [[1.0, 0.0], [0.0, -1.0]]
+    single = to_host(_hermitian_square_root(to_device(matrices)))
+
+    _chunks_of_three(monkeypatch, n_signals=2)
+    chunked = to_host(_hermitian_square_root(to_device(matrices)))
+
+    np.testing.assert_array_equal(chunked, single)
+    assert np.isnan(chunked[1, 2]).all()
+    assert np.isnan(chunked[3, 4]).all()
+
+
+def test_minimum_phase_decomposition_with_chunked_eigh_matches(monkeypatch):
+    """The Wilson factor is unchanged when the square root of S is chunked."""
+    signals = _lagged_signals(64, np.random.default_rng(0))
+    spectrum = to_device(_cross_spectrum_of(signals))
+    single = to_host(minimum_phase_decomposition(spectrum))
+
+    _chunks_of_three(monkeypatch, n_signals=spectrum.shape[-1])
+    chunked = to_host(minimum_phase_decomposition(spectrum))
+
+    np.testing.assert_array_equal(chunked, single)
+
+
 def test_near_collinear_channels_converge():
     """Near-duplicate channels converge instead of stalling above the tolerance.
 

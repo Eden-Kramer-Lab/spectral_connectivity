@@ -397,6 +397,16 @@ directly with results from 2.x.
 
 ### Fixed
 
+- On the GPU, the Wilson factorization behind spectral Granger, DTF, PDC, and
+  directed coherence crashed with `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE`
+  once a decomposition held more than about two million signal-by-signal
+  matrices (windows x frequencies x pairs; e.g. subset pairwise Granger over all
+  120 pairs of 16 signals for 30 windows of 1000-sample FFTs). CuPy's batched
+  `eigh` (cuSOLVER `syevjBatched`) rejects such batches: the largest that
+  worked was 2,078,879 matrices for 2 signals and 1,016,319 for 32 (CuPy 14.2,
+  CUDA 12.9). The square root of the cross-spectral matrix is now computed in
+  chunks well below that limit, which gives the same result as one call.
+  NumPy results are unchanged.
 - With CuPy 14, importing the package on the GPU emitted a `FutureWarning` from
   CuPy's own `cupyx.scipy.signal` (`cupyx.jit.rawkernel is experimental`),
   which failed `pytest -W error` runs, including the GPU release gate. That
@@ -580,6 +590,12 @@ directly with results from 2.x.
 
 ### Performance
 
+- On the GPU, each Wilson iteration synchronizes the device once (the
+  convergence check) instead of twice: the lower-triangle indices of the causal
+  projection, whose CuPy implementation synchronizes, are computed once per
+  factorization. Directed transfer function on 239 windows x 250 frequencies x
+  8 signals takes 0.096 s instead of 0.102 s (best of 7); pairwise Granger over
+  all 28 pairs of the same data is unchanged within noise (0.91 s).
 - Reduced cross-spectral matrices use a batched matrix multiplication rather
   than materializing the observation-level signal-by-signal outer product.
 - Phase locking uses unit-normalized coefficients with the same batched
