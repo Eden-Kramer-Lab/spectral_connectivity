@@ -311,6 +311,22 @@ class TestCanonicalCoherence:
         n_freq = result.shape[1]
         np.testing.assert_allclose(result[..., 0, 1], expected[:, :n_freq], rtol=1e-9)
 
+    @pytest.mark.parametrize("scale", [1e-9, 1e9])
+    def test_canonical_coherence_is_invariant_to_channel_scale(self, scale):
+        """Rescaling one channel (e.g. mixed units, V vs nV) leaves the group's
+        row space, and so its canonical coherence, unchanged: a small but
+        independent channel must not be dropped as rank-deficient."""
+        shape = (2, 10, 3, 7, 4)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 2:] += 0.5 * coefficients[..., :2]
+        labels = np.array([0, 0, 1, 1])
+        expected, _ = Connectivity(coefficients).canonical_coherence(labels)
+
+        rescaled = coefficients.copy()
+        rescaled[..., 1] *= scale
+        result, _ = Connectivity(rescaled).canonical_coherence(labels)
+        np.testing.assert_allclose(result, expected, rtol=1e-9, atol=1e-12, equal_nan=True)
+
 
 class TestGlobalCoherence:
     """Test global_coherence() method."""
