@@ -709,6 +709,25 @@ directly with results from 2.x.
   (CPU) for 20 windows x 40 tapers. Results agree with the SVD to rounding
   (relative differences <= 5e-14 here; vectors equal up to phase) except for
   rank-deficient groups (see Fixed).
+- On the GPU, pairwise, time-reversed, and blockwise spectral Granger factor
+  many signal (or same-sized group) pairs per Wilson call instead of one pair
+  at a time. One pair's factorization there is bound by kernel launches and
+  synchronizations rather than arithmetic. Chunks hold at most
+  `GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS` (2**22) spectral elements, which
+  bounds working memory and keeps CuPy's batched eigendecomposition under its
+  batch limit. Subset spectral Granger factors in the same bounded chunks, and
+  its per-pair scatter, a boolean-mask assignment in the predictive power, and
+  conditional Granger's per-pair warning check no longer synchronize the
+  device. Measured on one GPU (best of 3): pairwise spectral Granger in
+  `benchmarks/bench_default_measures.py` takes 0.36 s instead of 12.8 s for
+  2000 samples x 100 trials x 32 signals, and 0.076 s instead of 1.05 s for 10
+  windows x 50 trials x 8 signals. For 30 windows x 10 trials x 5 tapers x 1000
+  FFT bins x 16 signals, pairwise and time-reversed take 1.6 s instead of
+  3.4-4.5 s, and blockwise (8 groups of 2) 0.7 s instead of 1.1-1.4 s.
+  Conditional Granger, dominated by its 15-signal reduced factorizations, is
+  unchanged. Each pair still converges on its own, so results match the
+  pair-by-pair factorization to rounding (<= 3.6e-15 in the tests). The CPU
+  keeps one pair per call, which measured faster than batching there.
 
 ## [2.0.1] - 2026-05-12
 
