@@ -2639,6 +2639,70 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     assert np.isnan(result).any()
 
 
+@pytest.mark.parametrize("defect", [None, "duplicated", "dead"])
+@pytest.mark.parametrize("measure", list(_GRANGER_MEASURES))
+def test_batched_granger_factorization_matches_one_pair_at_a_time(
+    measure, defect, monkeypatch
+):
+    """The GPU path factors several signal (or group) pairs per Wilson call.
+
+    Convergence is tracked per sub-spectrum, so stacking pairs must reproduce
+    the pair-by-pair values, NaN pattern and pair-naming warning. Forced here on
+    any backend, with chunks of two pairs so that a partial chunk occurs.
+    """
+    from spectral_connectivity import _granger
+
+    def compute():
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            result = _GRANGER_MEASURES[measure](_granger_connectivity(defect))
+        named = [str(w.message) for w in record if "source -> target" in str(w.message)]
+        return result, named
+
+    monkeypatch.setattr(_granger, "ON_GPU", False)
+    expected, expected_named = compute()
+    monkeypatch.setattr(_granger, "ON_GPU", True)
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 2)
+    result, named = compute()
+
+    np.testing.assert_array_equal(np.isnan(result), np.isnan(expected))
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12, equal_nan=True)
+    assert named == expected_named
+
+
+def test_batched_pairwise_granger_retries_pairs_alone_after_linalg_error(monkeypatch):
+    """A LinAlgError in a stack of pairs must not leave the other pairs NaN."""
+    from spectral_connectivity import _granger
+
+    expected = _granger_connectivity().pairwise_spectral_granger_prediction()
+    original = _granger._pair_spectral_granger
+
+    def fail_on_stacks(pair_power, pair_csm, **kwargs):
+        if pair_csm.shape[-4] > 1:
+            error_message = "Singular matrix"
+            raise np.linalg.LinAlgError(error_message)
+        return original(pair_power, pair_csm, **kwargs)
+
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 3)
+    monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_on_stacks)
+    result = _granger_connectivity().pairwise_spectral_granger_prediction()
+    # Equal up to rounding: device kernels may round differently by batch size.
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
+
+
+def test_subset_granger_repeated_pair_keeps_its_last_occurrence():
+    """Pairs are written in one scatter; a pair requested in both orders must
+    still report the later request's values, as a pair-by-pair write would."""
+    connectivity = _granger_connectivity()
+    both = connectivity.subset_pairwise_spectral_granger_prediction([(0, 1), (2, 0), (1, 0)])
+    last = connectivity.subset_pairwise_spectral_granger_prediction([(1, 0)])
+    # The two request orders differ by far more than this tolerance (~1e-5;
+    # each order converges to the Wilson tolerance separately).
+    np.testing.assert_allclose(
+        both[..., [0, 1], [1, 0]], last[..., [0, 1], [1, 0]], rtol=0, atol=1e-12
+    )
+
+
 @pytest.mark.parametrize("measure", list(_GRANGER_MEASURES))
 def test_granger_is_silent_on_well_conditioned_signals(measure):
     connectivity = _granger_connectivity()
