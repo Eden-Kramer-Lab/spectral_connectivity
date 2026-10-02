@@ -181,6 +181,7 @@ def _get_initial_conditions(
 def _get_causal_signal(
     linear_predictor: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
+    lower_triangular_ind: tuple[NDArray[np.intp], NDArray[np.intp]] | None = None,
 ) -> NDArray[np.complexfloating]:
     """Extract causal part of linear predictor (plus operator).
 
@@ -203,6 +204,10 @@ def _get_causal_signal(
         a conjugate-symmetric spectrum of this two-sided length. Its lag
         coefficients are then real, so real FFTs replace the complex ones and
         the result is again the non-negative half.
+    lower_triangular_ind : tuple of two index arrays, optional
+        ``xp.tril_indices(n_signals, k=-1)``, computed here if not given. CuPy's
+        ``tril_indices`` synchronizes the device (it calls ``nonzero``), so the
+        Wilson iteration computes it once and passes it to every call.
 
     Returns
     -------
@@ -232,7 +237,8 @@ def _get_causal_signal(
     # Make the unit circle roots upper triangular. Use xp (not np) so the
     # index arrays match the array backend (mixing a NumPy index array with a
     # CuPy array is a GPU-only footgun).
-    lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
+    if lower_triangular_ind is None:
+        lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
@@ -516,6 +522,50 @@ def _solve_isolating_singular(
         return xp.where(broadcast, xp.nan, solved)
 
 
+# Workspace budget (in elements) for one batched ``eigh`` call. CuPy runs every
+# batched eigh through cuSOLVER's ``syevjBatched``, whose workspace-size query
+# fails with CUSOLVER_STATUS_INVALID_VALUE for large batches (CuPy 14.2, CUDA
+# 12.9): the largest batch that worked was 2,078,879 matrices at n_signals=2,
+# 1,016,319 at 32 and 342,023 at 64, consistent with a workspace of about 2**31
+# elements. Chunks of ``_EIGH_WORKSPACE_BUDGET // (2 * n_signals**2 + 1024)``
+# matrices stay a factor of 4 (n_signals=2) to 6 below the measured limit
+# for 2 to 64 signals. Batched cholesky, solve and svd worked at 2**21 and more.
+_EIGH_WORKSPACE_BUDGET = 2**29
+
+
+def _batched_eigh(
+    matrices: NDArray[np.complexfloating],
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    """``xp.linalg.eigh`` over a batch, split into chunks the GPU can handle.
+
+    Batches within :data:`_EIGH_WORKSPACE_BUDGET` (all but the largest) take a
+    single call. Each matrix is decomposed independently, so the chunked result
+    is identical to a single call's.
+
+    Parameters
+    ----------
+    matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched Hermitian matrices.
+
+    Returns
+    -------
+    eigenvalues : NDArray[floating], shape (..., n_signals)
+    eigenvectors : NDArray[complexfloating], shape (..., n_signals, n_signals)
+    """
+    n_signals = matrices.shape[-1]
+    chunk_size = max(1, _EIGH_WORKSPACE_BUDGET // (2 * n_signals**2 + 1024))
+    flat = matrices.reshape(-1, n_signals, n_signals)
+    if flat.shape[0] <= chunk_size:
+        eigenvalues, eigenvectors = xp.linalg.eigh(matrices)
+        return eigenvalues, eigenvectors
+    eigenvalues = xp.empty(flat.shape[:-1], dtype=np.finfo(flat.dtype).dtype)
+    eigenvectors = xp.empty_like(flat)
+    for start in range(0, flat.shape[0], chunk_size):
+        chunk = slice(start, start + chunk_size)
+        eigenvalues[chunk], eigenvectors[chunk] = xp.linalg.eigh(flat[chunk])
+    return eigenvalues.reshape(matrices.shape[:-1]), eigenvectors.reshape(matrices.shape)
+
+
 def _hermitian_square_root(
     matrices: NDArray[np.complexfloating],
 ) -> NDArray[np.complexfloating]:
@@ -542,7 +592,7 @@ def _hermitian_square_root(
     """
     n_signals = matrices.shape[-1]
     is_finite = xp.isfinite(matrices).all(axis=(-2, -1), keepdims=True)
-    eigenvalues, eigenvectors = xp.linalg.eigh(xp.where(is_finite, matrices, 0))
+    eigenvalues, eigenvectors = _batched_eigh(xp.where(is_finite, matrices, 0))
     rounding = (
         n_signals
         * xp.finfo(eigenvalues.dtype).eps
@@ -742,6 +792,8 @@ def minimum_phase_decomposition(
         working_cross_spectral_matrix, half_spectrum_n_fft
     ).astype(working_dtype, copy=False)
     minimum_phase_factor = xp.broadcast_to(initial, working_cross_spectral_matrix.shape).copy()
+    # Computed once: CuPy's tril_indices synchronizes the device.
+    lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
 
     for iteration in range(max_iterations):
         # ``int(is_converged.sum())`` would sync the device (and reduce on CPU)
@@ -766,7 +818,8 @@ def minimum_phase_decomposition(
             identity_matrix,
         )
         minimum_phase_factor = xp.matmul(
-            minimum_phase_factor, _get_causal_signal(linear_predictor, half_spectrum_n_fft)
+            minimum_phase_factor,
+            _get_causal_signal(linear_predictor, half_spectrum_n_fft, lower_triangular_ind),
         )
 
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
@@ -780,8 +833,8 @@ def minimum_phase_decomposition(
         # treat such units as finished so a single rank-deficient window does not
         # force the whole batch to exhaust the iteration budget. Combine the
         # "all finished" and "all converged" tests so the loop reduces the device
-        # to a Python bool once per iteration (a GPU synchronization; a no-op
-        # difference on CPU).
+        # to a Python bool once per iteration: on CuPy this is the iteration's
+        # only device synchronization, needed for the early exit.
         singular_units = ~_all_finite_units(minimum_phase_factor, batch_shape)
         if xp.all(is_converged | singular_units):
             break
