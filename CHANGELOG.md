@@ -397,6 +397,13 @@ directly with results from 2.x.
 
 ### Fixed
 
+- With CuPy 14, importing the package on the GPU emitted a `FutureWarning` from
+  CuPy's own `cupyx.scipy.signal` (`cupyx.jit.rawkernel is experimental`),
+  which failed `pytest -W error` runs, including the GPU release gate. That
+  warning is now suppressed at the import.
+- `fourier_connectivity` raised `TypeError: Implicit conversion to a NumPy
+  array` when given the device (CuPy) `frequencies` or `time` that
+  `Multitaper` returns on the GPU; they are now moved to the host.
 - `group_delay` and `delay` unwrapped the coherence phase before excluding
   undefined bins, so one bin without a defined phase (e.g. a zero-power DC
   bin) made every later frequency NaN; the unwrapping now skips such bins.
