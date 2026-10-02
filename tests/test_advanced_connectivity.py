@@ -252,6 +252,65 @@ class TestCanonicalCoherence:
             canonical_coh, conn.coherence_magnitude(), rtol=0, atol=1e-12, equal_nan=True
         )
 
+    @pytest.mark.parametrize("extra", ["duplicate", "scaled_duplicate", "dead"])
+    def test_canonical_coherence_ignores_rank_deficient_channel(self, extra):
+        """A dead or duplicated channel adds no direction to its group.
+
+        The group's canonical coherence must equal that of its independent
+        channels alone (an SVD-based whitening would instead give the null
+        direction an arbitrary unit-norm vector, which can inflate the value).
+        """
+        shape = (2, 6, 3, 9, 4)  # 18 observations
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 2:] += 0.7 * coefficients[..., :2]
+        added = {
+            "duplicate": coefficients[..., :1],
+            "scaled_duplicate": (2 - 1j) * coefficients[..., :1],
+            "dead": np.zeros_like(coefficients[..., :1]),
+        }[extra]
+        with_extra = np.concatenate([coefficients, added], axis=-1)
+
+        expected, _ = Connectivity(coefficients).canonical_coherence(np.array([0, 0, 1, 1]))
+        result, _ = Connectivity(with_extra).canonical_coherence(np.array([0, 0, 1, 1, 0]))
+        np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12, equal_nan=True)
+
+    @pytest.mark.parametrize(
+        ("n_signals", "n_trials", "condition"),
+        [(4, 10, 1.0), (4, 10, 1e5), (5, 1, 1.0)],  # last: more signals than observations
+        ids=["wide", "ill_conditioned", "tall"],
+    )
+    def test_canonical_coherence_matches_svd_whitening(self, n_signals, n_trials, condition):
+        """Canonical coherence equals the SVD (polar-factor) computation.
+
+        Covers an ill-conditioned group, where whitening through the Gram
+        matrix alone loses accuracy, and a group with more signals than
+        trial x taper observations, where the smaller Gram matrix is used.
+        """
+        import warnings
+
+        shape = (2, n_trials, 3, 7, n_signals + 2)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        # Signal 1 differs from signal 0 by a 1/condition-sized component.
+        coefficients[..., 1] = coefficients[..., 0] + coefficients[..., 1] / condition
+        coefficients[..., n_signals:] += 0.5 * coefficients[..., :2]
+
+        def polar(x):
+            left, _, right_h = np.linalg.svd(x, full_matrices=False)
+            return left @ right_h
+
+        observations = _observations(coefficients)
+        cross = polar(observations[..., :n_signals, :]) @ polar(
+            observations[..., n_signals:, :]
+        ).conj().swapaxes(-1, -2)
+        expected = np.linalg.svd(cross, compute_uv=False)[..., 0] ** 2
+
+        labels = np.array([0] * n_signals + [1, 1])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # tall: forced-to-1 warning
+            result, _ = Connectivity(coefficients).canonical_coherence(labels)
+        n_freq = result.shape[1]
+        np.testing.assert_allclose(result[..., 0, 1], expected[:, :n_freq], rtol=1e-9)
+
 
 class TestGlobalCoherence:
     """Test global_coherence() method."""
@@ -1155,3 +1214,26 @@ class TestDelay:
         reverse = possible_delays[0, :, n_range, 1, 0]
         np.testing.assert_allclose(reverse[is_estimated], -expected_delay, rtol=0, atol=5e-4)
         assert np.std(zero_wrap[is_estimated]) < 1e-3
+
+
+def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
+    """Thin path (fewer estimates than signals) with a repeated estimate.
+
+    Duplicating one trial makes every bin's coefficient matrix rank 3 of 4
+    estimates, so the weakest component carries (numerically) zero power: its
+    fraction is ~0 (not NaN) and, having no resolvable direction, its vector
+    is zero, while the strong components still match the singular value
+    decomposition and have unit-norm vectors.
+    """
+    rng = np.random.default_rng(3)
+    shape = (1, 3, 1, 6, 8)  # 3 estimates for 8 signals
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients = np.concatenate([coefficients, coefficients[:, :1]], axis=1)  # 4 estimates
+    fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
+
+    observations = _observations(coefficients)
+    singular_values = np.linalg.svd(observations, compute_uv=False)
+    expected = singular_values**2 / np.sum(singular_values**2, axis=-1, keepdims=True)
+    np.testing.assert_allclose(fractions, expected, rtol=1e-10, atol=1e-12)
+    np.testing.assert_array_equal(vectors[..., 3], 0)
+    np.testing.assert_allclose(np.linalg.norm(vectors[..., :3], axis=-2), 1.0, rtol=1e-12)

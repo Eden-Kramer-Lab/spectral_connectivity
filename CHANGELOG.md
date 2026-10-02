@@ -397,6 +397,15 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `canonical_coherence` overstated the coherence of a group containing a dead,
+  duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
+  SVD-based whitening turned each zero singular direction into an arbitrary
+  unit-norm null-space direction, whose value depended on the LAPACK build. A
+  direction with singular value below about 1e-7 of the group's largest is now
+  dropped, so the value equals that of the group's independent channels. For
+  condition numbers above about 3e7 a real but tiny independent component is
+  treated as collinear. Likewise a numerically zero-power component on the thin
+  path of `global_coherence` now has a zero vector instead of an arbitrary one.
 - On the GPU, the Wilson factorization behind spectral Granger, DTF, PDC, and
   directed coherence crashed with `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE`
   once a decomposition held more than about two million signal-by-signal
@@ -683,6 +692,23 @@ directly with results from 2.x.
   FFT, which is already exactly symmetric for real input and was faster than a
   real FFT plus mirror (0.31 vs 0.35 s on the first size); its outputs are
   bit-identical.
+- `canonical_coherence` and the thin path of `global_coherence` (fewer
+  trial x taper estimates than signals) no longer call `svd` on matrices with a
+  dimension above 32, which CuPy decomposes one bin at a time. Canonical
+  coherence whitens each group with the pseudo-inverse square root of the
+  smaller Gram matrix (`eigh`), applied twice so the second pass restores SVD
+  accuracy up to condition numbers of about 1e7; global coherence
+  diagonalizes the `(n_estimates, n_estimates)` Gram matrix and maps its
+  eigenvectors to the left singular vectors. Best of 3-5 interleaved runs:
+  canonical coherence on `(30 windows, 10 trials, 5 tapers, 1000 frequencies,
+  16 signals)` in four groups of four takes 0.32 s instead of 37.8 s on the GPU
+  (A100) and 1.34 s instead of 1.85 s on the CPU; global coherence
+  (`max_rank=3`, 64 signals) takes 0.12 s instead of 22.5 s on the GPU and
+  1.03 s instead of 1.59 s on the CPU for 100 windows x 5 tapers x 500
+  frequencies, and 1.13 s instead of 38.3 s (GPU) and 3.85 s instead of 7.38 s
+  (CPU) for 20 windows x 40 tapers. Results agree with the SVD to rounding
+  (relative differences <= 5e-14 here; vectors equal up to phase) except for
+  rank-deficient groups (see Fixed).
 
 ## [2.0.1] - 2026-05-12
 
