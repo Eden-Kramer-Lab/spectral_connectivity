@@ -2607,7 +2607,7 @@ class Connectivity:
             observation_weights = self._observation_weights[..., non_negative_frequencies, :]
             # Canonical correlation is computed from observation covariance
             # matrices. Multiplying every observation by sqrt(weight) gives the
-            # weighted covariance while retaining the existing SVD whitening
+            # weighted covariance while retaining the existing whitening
             # implementation. A shared normalization by sum(weight) cancels
             # from the canonical correlation and is therefore unnecessary.
             fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
@@ -3246,7 +3246,11 @@ class Connectivity:
         cross-spectral matrix (near-duplicate channels) the *weakest* returned
         components (large ``max_rank``) may lose relative precision. The dominant
         component(s) — the usual use of this measure — are unaffected. A thin
-        matrix (fewer estimates than signals) uses the economy SVD directly.
+        matrix (fewer estimates than signals) diagonalizes the smaller
+        ``(n_estimates, n_estimates)`` matrix ``Aᴴ @ A`` in the same way and maps
+        each eigenvector ``v`` to the vector ``A v / |A v|``, with the same
+        precision caveat; a component with (numerically) zero power, at most
+        ``eps * n_estimates`` times the strongest, gets a zero vector.
 
         References
         ----------

@@ -27,7 +27,7 @@ GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS = 16_000_000
 # the (n_signals, n_estimates) coefficient matrix. When the decomposition
 # dimension min(n_signals, n_estimates) is modest these are found with a single
 # batched decomposition over all bins (eigh of the cross-spectral matrix when
-# n_estimates >= n_signals, otherwise the economy SVD of the thin matrix),
+# n_estimates >= n_signals, otherwise eigh of the thin matrix's Gram matrix),
 # replacing a Python loop over bins and its per-bin device syncs on GPU. Above
 # this dimension the per-bin path is used (it finds only the requested top
 # components via svds when max_rank is small), where forming every component of
@@ -340,6 +340,26 @@ def _normalize_fourier_coefficients(
 ) -> NDArray[np.complexfloating]:
     """Normalize fourier coefficients by power within group.
 
+    Returns the polar (phase) factor ``U Vᴴ`` of each per-bin coefficient
+    matrix ``A = U S Vᴴ`` (signals x observations), whose singular values are
+    all one, so the canonical correlations of two groups are the singular
+    values of ``N1 N2ᴴ``.
+
+    The factor is formed as ``(A Aᴴ)^(-1/2) A`` (or ``A (Aᴴ A)^(-1/2)`` when
+    there are more signals than observations, so the eigendecomposition is
+    always of the smaller Gram matrix) rather than from an SVD of ``A``: CuPy
+    batches ``eigh`` but loops over bins in ``svd`` once either dimension
+    exceeds 32. Forming the Gram matrix squares the condition number, so the
+    factor is computed twice -- the second pass re-orthonormalizes the nearly
+    orthonormal first-pass result, recovering SVD accuracy for condition
+    numbers up to about 1e7. Directions whose Gram eigenvalue is below
+    ``eps * n * largest`` (singular value below about ``1e-7`` of the largest:
+    a dead, duplicated, or numerically collinear channel, or fewer valid
+    observations than signals) are dropped. An SVD instead keeps an arbitrary
+    unit-norm null-space direction for each, which can inflate the canonical
+    coherence; dropping them gives the value of the group's independent
+    signals.
+
     Parameters
     ----------
     fourier_coefficients : array
@@ -353,9 +373,48 @@ def _normalize_fourier_coefficients(
         Normalized Fourier coefficients.
 
     """
-    U, _, V_transpose = xp.linalg.svd(_reshape(fourier_coefficients), full_matrices=False)
-    phase_factor: NDArray[np.complexfloating] = xp.matmul(U, V_transpose)
-    return phase_factor
+    coefficients = _reshape(fourier_coefficients)
+    n_signals, n_observations = coefficients.shape[-2:]
+    # Orthonormalize the shorter side: rows when n_signals <= n_observations,
+    # else the columns (via the conjugate transpose, as polar(Aᴴ) = polar(A)ᴴ).
+    transpose = n_signals > n_observations
+    if transpose:
+        coefficients = _conjugate_transpose(coefficients)
+    for _ in range(2):
+        coefficients = _left_polar_factor(coefficients)
+    return _conjugate_transpose(coefficients) if transpose else coefficients
+
+
+def _left_polar_factor(
+    matrices: NDArray[np.complexfloating],
+) -> NDArray[np.complexfloating]:
+    """``((A Aᴴ)^+)^(1/2) A`` per bin: the polar factor of a wide matrix ``A``.
+
+    Uses the pseudo-inverse square root of the Hermitian Gram matrix, dropping
+    eigenvalues at or below ``eps * n * largest`` (numerically rank-deficient
+    directions).
+
+    Parameters
+    ----------
+    matrices : array, shape (..., n, m)
+        Batched matrices with ``n <= m``.
+
+    Returns
+    -------
+    polar_factor : array, shape (..., n, m)
+        ``U Vᴴ`` over the retained singular directions of each matrix.
+
+    """
+    eigenvalues, eigenvectors = xp.linalg.eigh(matrices @ _conjugate_transpose(matrices))
+    largest = xp.maximum(eigenvalues[..., -1:], 0.0)
+    keep = eigenvalues > xp.finfo(eigenvalues.dtype).eps * matrices.shape[-2] * largest
+    inverse_root = xp.where(keep, 1.0 / xp.sqrt(xp.where(keep, eigenvalues, 1.0)), 0.0)
+    # Form the small (n, n) transform first: one (n, n) @ (n, m) product per bin.
+    transform = (eigenvectors * inverse_root[..., xp.newaxis, :]) @ _conjugate_transpose(
+        eigenvectors
+    )
+    polar_factor: NDArray[np.complexfloating] = transform @ matrices
+    return polar_factor
 
 
 def _estimate_canonical_coherence(
@@ -402,9 +461,9 @@ def _global_coherence_components(
     use_eigh : bool
         If True (``n_estimates >= n_signals``), diagonalize the
         ``(n_signals, n_signals)`` cross-spectral matrix with ``eigh``. If False
-        (a *thin* matrix), use the economy SVD, which computes only the
-        ``n_estimates`` non-trivial components rather than a large rank-deficient
-        cross-spectral matrix.
+        (a *thin* matrix), diagonalize the ``(n_estimates, n_estimates)`` Gram
+        matrix ``Aᴴ A`` instead, which has only the ``n_estimates`` non-trivial
+        components, and map its eigenvectors to left singular vectors.
 
     Returns
     -------
@@ -434,17 +493,31 @@ def _global_coherence_components(
         component_power = xp.flip(eigenvalues, axis=-1)[..., :max_rank]
         vectors = xp.flip(eigenvectors, axis=-1)[..., :max_rank]
     else:
-        # Thin matrix: the economy SVD returns descending singular values and the
-        # left singular vectors directly, computing only n_estimates components.
-        left_vectors, singular_values, _ = xp.linalg.svd(scaled, full_matrices=False)
-        component_power = singular_values[..., :max_rank] ** 2
-        vectors = left_vectors[..., :max_rank]
+        # Thin matrix: diagonalize the small (n_estimates, n_estimates) Gram
+        # matrix for the right singular vectors v, then map each to its left
+        # singular vector A v / |A v|. (CuPy loops over bins in svd once a
+        # dimension exceeds 32 but batches eigh.) |A v|^2 is the component power,
+        # computed from A itself rather than from the squared-conditioned
+        # eigenvalue. A component whose power is at most eps * n_estimates times
+        # the strongest (a rank-deficient bin) has no resolvable direction, as v
+        # is accurate only to about eps times the condition number squared; it
+        # gets a zero vector.
+        _, right_vectors = xp.linalg.eigh(xp.matmul(_conjugate_transpose(scaled), scaled))
+        left = xp.matmul(scaled, xp.flip(right_vectors, axis=-1)[..., :max_rank])
+        component_power = xp.sum(xp.abs(left) ** 2, axis=-2)
+        resolved = component_power > (
+            xp.finfo(component_power.dtype).eps * scaled.shape[-1] * component_power[..., :1]
+        )
+        inverse_norms = xp.where(
+            resolved, 1.0 / xp.sqrt(xp.where(resolved, component_power, 1.0)), 0.0
+        )
+        vectors = left * inverse_norms[..., xp.newaxis, :]
 
     safe_total = xp.where(total_power == 0, 1, total_power)
     # The cross-spectral matrix is PSD by construction (``scaled @ scaledᴴ``), so
-    # any negative eigenvalue is round-off in eigh and is clipped to 0. (The SVD
-    # path returns squared singular values, which are non-negative already, so
-    # the clip is a no-op there.)
+    # any negative eigenvalue is round-off in eigh and is clipped to 0. (The thin
+    # path's squared norms are non-negative already, so the clip is a no-op
+    # there.)
     fractions = xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
 
     undefined = is_zero_power[..., 0, 0]
@@ -495,7 +568,7 @@ def _batched_global_coherence(
     # Size the frequency chunk from the per-bin peak working set so memory stays
     # bounded regardless of the number of bins. Several coefficient-sized arrays
     # are live at once (the rearranged block, its rescaled copy, the conjugate
-    # transpose fed to matmul, and the SVD's U/Vh factors on the thin path), plus
+    # transpose fed to matmul, and the mapped left vectors on the thin path), plus
     # the decomposition of a min(n_signals, n_estimates)-square matrix and its
     # vectors; the 4x / 2x factors approximate that simultaneous footprint.
     decomposition_dim = min(n_signals, n_estimates)
