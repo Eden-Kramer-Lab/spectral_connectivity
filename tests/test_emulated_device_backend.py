@@ -433,3 +433,27 @@ def test_weighted_phase_lag_family_runs_on_the_device(xp, monkeypatch):
     for measure in measures:
         assert isinstance(on_device[measure], np.ndarray)
         np.testing.assert_allclose(on_device[measure], getattr(host, measure)(), rtol=1e-12)
+
+
+def test_fourier_connectivity_accepts_device_frequencies_and_time(xp, monkeypatch):
+    """On the GPU, ``Multitaper.frequencies`` and ``.time`` are device arrays;
+    passing them straight to ``fourier_connectivity`` must not convert them
+    implicitly to NumPy."""
+    from spectral_connectivity import fourier_connectivity
+
+    coefficients = _coefficients(np.random.default_rng(11), shape=(2, 4, 3, 16, 3))
+    frequencies = np.fft.fftfreq(16, d=1 / 100.0)
+    time = np.array([0.0, 0.5])
+    on_device = fourier_connectivity(
+        xp.asarray(coefficients),
+        frequencies=xp.asarray(frequencies),
+        time=xp.asarray(time),
+        method="coherence_magnitude",
+    )
+
+    monkeypatch.undo()  # back to the NumPy backend for the reference
+    host = fourier_connectivity(
+        coefficients, frequencies=frequencies, time=time, method="coherence_magnitude"
+    )
+    np.testing.assert_array_equal(on_device.time, time)
+    np.testing.assert_allclose(on_device.values, host.values, rtol=1e-12)
