@@ -406,6 +406,8 @@ directly with results from 2.x.
   condition numbers above about 3e7 a real but tiny independent component is
   treated as collinear. Likewise a numerically zero-power component on the thin
   path of `global_coherence` now has a zero vector instead of an arbitrary one.
+  Each channel is scaled to unit norm before this check, so the value does not
+  depend on channel units.
 - On the GPU, the Wilson factorization behind spectral Granger, DTF, PDC, and
   directed coherence crashed with `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE`
   once a decomposition held more than about two million signal-by-signal
@@ -727,7 +729,11 @@ directly with results from 2.x.
   Conditional Granger, dominated by its 15-signal reduced factorizations, is
   unchanged. Each pair still converges on its own, so results match the
   pair-by-pair factorization to rounding (<= 3.6e-15 in the tests). The CPU
-  keeps one pair per call, which measured faster than batching there.
+  keeps one pair per call, which measured faster than batching there. Warnings
+  change shape accordingly: conditional Granger's degenerate-bins warning is
+  issued once per call instead of once per pair, and on the GPU the Wilson
+  non-convergence warning counts sub-spectra per chunk ("k of N") rather than
+  per pair.
 
 ## [2.0.1] - 2026-05-12
 

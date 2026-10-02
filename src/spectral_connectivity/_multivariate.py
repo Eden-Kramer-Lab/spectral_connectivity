@@ -352,7 +352,9 @@ def _normalize_fourier_coefficients(
     exceeds 32. Forming the Gram matrix squares the condition number, so the
     factor is computed twice -- the second pass re-orthonormalizes the nearly
     orthonormal first-pass result, recovering SVD accuracy for condition
-    numbers up to about 1e7. Directions whose Gram eigenvalue is below
+    numbers up to about 1e7. Each signal is first scaled to unit norm, which
+    leaves the canonical correlations unchanged, so the result does not depend
+    on channel units. Directions whose Gram eigenvalue is then below
     ``eps * n * largest`` (singular value below about ``1e-7`` of the largest:
     a dead, duplicated, or numerically collinear channel, or fewer valid
     observations than signals) are dropped. An SVD instead keeps an arbitrary
@@ -374,6 +376,15 @@ def _normalize_fourier_coefficients(
 
     """
     coefficients = _reshape(fourier_coefficients)
+    # Give every signal (row) unit norm first. A left diagonal scaling keeps the
+    # row space, so it changes the polar factor only by a unitary that cancels
+    # in the canonical correlations, but it keeps the rank threshold below from
+    # dropping a real channel that is merely small (e.g. in different units).
+    # A dead channel stays zero and is still dropped.
+    row_norms = xp.sqrt(xp.sum(xp.abs(coefficients) ** 2, axis=-1, keepdims=True))
+    coefficients = coefficients * xp.where(
+        row_norms > 0, 1.0 / xp.where(row_norms > 0, row_norms, 1.0), 0.0
+    )
     n_signals, n_observations = coefficients.shape[-2:]
     # Orthonormalize the shorter side: rows when n_signals <= n_observations,
     # else the columns (via the conjugate transpose, as polar(Aᴴ) = polar(A)ᴴ).
