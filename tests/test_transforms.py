@@ -2138,3 +2138,18 @@ def test_morlet_fft_peak_memory_stays_near_twice_output_size():
         if not was_tracing:
             tracemalloc.stop()
     assert peak - baseline < 2.5 * coefficients.nbytes
+
+
+def test_default_frequency_grid_matches_scipy_on_every_backend():
+    """The default FFT length is SciPy's next_fast_len on CPU and GPU alike, so the
+    same data gives the same frequency grid on both. CuPy's own rule differs for
+    3601 samples (3645 rather than 3630, as SciPy treats 11 as a fast factor)."""
+    import scipy.fft
+
+    multitaper = Multitaper(
+        np.zeros((3601, 1, 1)), sampling_frequency=1000, time_halfbandwidth_product=1
+    )
+    assert multitaper.n_fft_samples == scipy.fft.next_fast_len(3601) == 3630
+    np.testing.assert_allclose(
+        to_host(multitaper.frequencies), np.fft.fftfreq(3630, d=1 / 1000), rtol=1e-12
+    )

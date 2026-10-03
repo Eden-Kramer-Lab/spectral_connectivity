@@ -10,7 +10,16 @@ from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity._array_utils import _divide_where
-from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, rfft, xp
+from spectral_connectivity._backend import (
+    ON_GPU,
+    default_fft_length,
+    fft,
+    fftfreq,
+    ifft,
+    next_fast_len,
+    rfft,
+    xp,
+)
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
@@ -705,8 +714,8 @@ class Multitaper:
         one-dimensional, so per-trial start times are not supported.
     n_fft_samples : int, optional
         Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
-        to be fast for the FFT algorithm. The value is determined by
-        scipy.fft.next_fast_len (or cupy.fft.next_fast_len when GPU is enabled).
+        to be fast for the FFT algorithm: scipy.fft.next_fast_len, on the GPU
+        backend too, so the default frequency grid is the same on CPU and GPU.
     n_time_samples_per_window : int, optional
         Number of samples per time window. Computed (to the nearest sample)
         from time_window_duration if not provided; when both are given they
@@ -1490,7 +1499,7 @@ FFT samples:          {self.n_fft_samples}
 
         """
         if self._n_fft_samples is None:
-            self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
+            self._n_fft_samples = default_fft_length(self.n_time_samples_per_window)
         elif self._n_fft_samples < self.n_time_samples_per_window:
             # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
             # a too-small n_fft_samples silently discards most of each window.
