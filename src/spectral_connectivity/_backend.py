@@ -61,14 +61,9 @@ else:
     from scipy.signal import detrend
     from scipy.sparse.linalg import svds
 
-# The default FFT length, which sets the default frequency grid, follows
-# SciPy's rule on both backends so the same data gives the same frequencies on
-# CPU and GPU. CuPy's next_fast_len differs for many lengths (SciPy treats 11 as
-# a fast factor: 3601 samples pad to 3630 rather than 3645); cuFFT is no slower
-# at SciPy's lengths overall (median raw-FFT time ratio 1.00 over sampled
-# lengths; 0.84x end to end for the default measures at 3601 samples).
-# ``next_fast_len`` stays backend-specific for internal padding that never
-# reaches the output grid.
+# Default FFT length (sets the default frequency grid): SciPy's rule on both
+# backends, so CPU and GPU grids match (see CHANGELOG). Use ``next_fast_len``
+# only for internal padding that never reaches the output grid.
 from scipy.fft import next_fast_len as default_fft_length  # noqa: E402
 
 __all__ = [

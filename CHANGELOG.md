@@ -290,14 +290,10 @@ directly with results from 2.x.
   `Multitaper`, `ShortTimeFourierTransform`, and `Welch` now follows SciPy's
   `next_fast_len`, as on the CPU, so the same data gives the same frequencies
   on both backends. CuPy's rule differed for 8258 of the lengths from 64 to
-  19999 (SciPy treats 11 as a fast factor: 3601 samples padded to 3645 rather
-  than 3630). CPU results are unchanged; on the GPU, analyses that relied on the
-  default length get the CPU's grid. cuFFT is no slower at SciPy's lengths
-  overall (median raw-FFT time ratio 1.00, range 0.56-1.71 over 25 sampled
-  lengths); at the 3601-sample case whose raw FFT was slowest, the multitaper
-  FFT plus the default measures took 309 ms instead of 366 ms (20 windows x 10
-  trials x 16 signals, A100). Pass `n_fft_samples` to choose a length
-  explicitly.
+  19999: SciPy treats 11 as a fast factor, so 3601 samples padded to 3630 on
+  the CPU but 3645 on the GPU. CPU results are unchanged. cuFFT is no slower at
+  SciPy's lengths (median raw-FFT time ratio 1.00 over 25 sampled lengths).
+  Pass `n_fft_samples` to choose a length explicitly.
 - Every directed `Connectivity` array is indexed `[..., source, target]`:
   `result[..., i, j]` is the influence `i -> j`, the same order as the
   wrapper's `sel(source=i, target=j)` and the lead/lag measures. The spectral
