@@ -311,7 +311,10 @@ def _scatter_pairwise_granger(
     except np.linalg.LinAlgError:
         # A lone pair is left NaN; the calling measure names the NaN pairs
         # (_warn_nan_granger_pairs). Retry a stack pair by pair so one failing
-        # pair does not take the others with it.
+        # pair does not take the others with it. Warnings the failed stack
+        # already issued can repeat. Only NumPy raises LinAlgError here, and
+        # the CPU factors one pair per call, so a stack fails only when the
+        # batch size is forced (tests).
         if pairs.shape[0] > 1:
             for pair in pairs:
                 _scatter_pairwise_granger(

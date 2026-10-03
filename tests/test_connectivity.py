@@ -2690,6 +2690,105 @@ def test_batched_pairwise_granger_retries_pairs_alone_after_linalg_error(monkeyp
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
 
 
+@pytest.mark.parametrize(
+    ("measure", "group_labels"),
+    [
+        # Three pairs in chunks of two: the subset result is concatenated
+        # across chunks, the last one partial.
+        ("subset", None),
+        # Groups of sizes 2, 2 and 1: pairs are batched per block-size class,
+        # (2, 2) with one pair and (2, 1) with two.
+        ("blockwise", ["a", "a", "b", "c", "b"]),
+    ],
+)
+def test_batched_granger_matches_across_chunks_and_block_sizes(
+    measure, group_labels, monkeypatch
+):
+    """Batched subset and blockwise Granger reproduce the one-pair-at-a-time
+    values when results are assembled from several chunks or size classes."""
+    from spectral_connectivity import Multitaper, _granger
+
+    signals = np.random.default_rng(3).standard_normal((512, 10, 5))
+    signals[1:, :, 1] += 0.6 * signals[:-1, :, 0]
+    signals[2:, :, 3] += 0.4 * signals[:-2, :, 4]
+
+    def compute():
+        connectivity = Connectivity.from_multitaper(
+            Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
+        )
+        if measure == "subset":
+            return connectivity.subset_pairwise_spectral_granger_prediction(
+                [(0, 2), (0, 1), (2, 1)]
+            )
+        return connectivity.blockwise_spectral_granger_prediction(group_labels)[0]
+
+    monkeypatch.setattr(_granger, "ON_GPU", False)
+    expected = compute()
+    monkeypatch.setattr(_granger, "ON_GPU", True)
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 2)
+    result = compute()
+
+    np.testing.assert_array_equal(np.isnan(result), np.isnan(expected))
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12, equal_nan=True)
+
+
+def test_batched_pairwise_granger_leaves_only_a_pair_that_fails_alone_nan(monkeypatch):
+    """A pair whose factorization fails even on its own ends up NaN and named in
+    the warning; the batch retry leaves every other pair exact."""
+    from spectral_connectivity import _granger
+
+    expected = _granger_connectivity().pairwise_spectral_granger_prediction()
+    original_scatter = _granger._scatter_pairwise_granger
+    original_pair = _granger._pair_spectral_granger
+    current_pairs = []
+
+    def tracking_scatter(predictive_power, total_power, csm, pairs, **kwargs):
+        current_pairs[:] = [tuple(pair) for pair in np.asarray(pairs).tolist()]
+        return original_scatter(predictive_power, total_power, csm, pairs, **kwargs)
+
+    def fail_with_pair_0_2(pair_power, pair_csm, **kwargs):
+        if (0, 2) in current_pairs:
+            error_message = "Singular matrix"
+            raise np.linalg.LinAlgError(error_message)
+        return original_pair(pair_power, pair_csm, **kwargs)
+
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 3)
+    monkeypatch.setattr(_granger, "_scatter_pairwise_granger", tracking_scatter)
+    monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_with_pair_0_2)
+    with pytest.warns(UserWarning, match=r": 0 -> 2, 2 -> 0 \("):
+        result = _granger_connectivity().pairwise_spectral_granger_prediction()
+
+    assert np.isnan(result[..., 0, 2]).all()
+    assert np.isnan(result[..., 2, 0]).all()
+    others = np.ones(result.shape[-2:], dtype=bool)
+    others[[0, 2], [2, 0]] = False
+    np.testing.assert_allclose(
+        result[..., others], expected[..., others], rtol=0, atol=1e-12, equal_nan=True
+    )
+
+
+def test_conditional_granger_warns_when_only_one_early_pair_is_degenerate(monkeypatch):
+    """The degenerate-spectrum flags of all pairs are combined before the single
+    warning, so a degenerate first pair is reported even if later ones are not."""
+    from spectral_connectivity import _granger
+
+    original = _granger._estimate_conditional_spectral_granger_prediction
+
+    def first_pair_degenerate(*args, **kwargs):
+        value, _ = original(*args, **kwargs)
+        reduced_indices, target = args[3], args[4]
+        source = (set(range(len(reduced_indices) + 1)) - set(reduced_indices)).pop()
+        return value, _granger.xp.asarray((source, target) == (0, 1))
+
+    monkeypatch.setattr(
+        _granger, "_estimate_conditional_spectral_granger_prediction", first_pair_degenerate
+    )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _granger_connectivity().conditional_spectral_granger_prediction()
+    assert sum("was not positive" in str(w.message) for w in record) == 1
+
+
 def test_subset_granger_repeated_pair_keeps_its_last_occurrence():
     """Pairs are written in one scatter; a pair requested in both orders must
     still report the later request's values, as a pair-by-pair write would."""

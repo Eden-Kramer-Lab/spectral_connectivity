@@ -271,7 +271,8 @@ class TestCanonicalCoherence:
         with_extra = np.concatenate([coefficients, added], axis=-1)
 
         expected, _ = Connectivity(coefficients).canonical_coherence(np.array([0, 0, 1, 1]))
-        result, _ = Connectivity(with_extra).canonical_coherence(np.array([0, 0, 1, 1, 0]))
+        with pytest.warns(UserWarning, match=r"group\(s\) \[0\] contain linearly dependent"):
+            result, _ = Connectivity(with_extra).canonical_coherence(np.array([0, 0, 1, 1, 0]))
         np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12, equal_nan=True)
 
     @pytest.mark.parametrize(
@@ -326,6 +327,54 @@ class TestCanonicalCoherence:
         rescaled[..., 1] *= scale
         result, _ = Connectivity(rescaled).canonical_coherence(labels)
         np.testing.assert_allclose(result, expected, rtol=1e-9, atol=1e-12, equal_nan=True)
+
+    def test_complex64_canonical_coherence_keeps_near_collinear_channels(self):
+        """complex64 coefficients are whitened at complex128.
+
+        Regression: whitening through the Gram matrix squares the condition
+        number, so at complex64 precision a real but nearly collinear channel
+        (here 1e-4 of its partner) fell below the rank threshold and the value
+        collapsed to ~0 instead of ~0.92.
+        """
+        shape = (1, 50, 5, 6, 1)
+        x, y, w, noise = (
+            self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+            for _ in range(4)
+        )
+        coefficients = np.concatenate([x, x + 1e-4 * y, y + 0.3 * noise, w], axis=-1)
+        labels = np.array([0, 0, 1, 1])
+        expected, _ = Connectivity(coefficients).canonical_coherence(labels)
+        result, _ = Connectivity(coefficients.astype(np.complex64)).canonical_coherence(labels)
+        np.testing.assert_allclose(result, expected, atol=1e-3, equal_nan=True)
+        assert np.nanmin(expected[..., 0, 1]) > 0.5
+
+    def test_canonical_coherence_of_a_powerless_group_is_nan(self):
+        """A group whose signals are all zero has 0/0 canonical coherence: NaN
+        with a warning naming the group, like coherency, not a confident 0."""
+        shape = (1, 8, 3, 6, 4)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 3] = 0
+        with pytest.warns(UserWarning, match=r"group\(s\) \['c'\] have no power"):
+            result, _ = Connectivity(coefficients).canonical_coherence(
+                np.array(["a", "a", "b", "c"])
+            )
+        assert np.isnan(result[..., :, 2]).all()
+        assert np.isnan(result[..., 2, :]).all()
+        assert np.isfinite(result[..., 0, 1]).all()
+
+    def test_canonical_coherence_with_chunked_eigh_matches(self, monkeypatch):
+        """The whitening eigh is chunked (CuPy's batched eigh fails on very
+        large batches); chunked and single-call results are identical."""
+        from spectral_connectivity import _array_utils
+
+        shape = (2, 6, 3, 9, 6)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        labels = np.array([0, 0, 0, 1, 1, 1])
+        single, _ = Connectivity(coefficients).canonical_coherence(labels)
+        # 3x3 Gram matrices in chunks of 4 (18 bins per group: a partial last chunk).
+        monkeypatch.setattr(_array_utils, "_EIGH_WORKSPACE_BUDGET", 4 * (2 * 3**2 + 1024))
+        chunked, _ = Connectivity(coefficients).canonical_coherence(labels)
+        np.testing.assert_array_equal(chunked, single)
 
 
 class TestGlobalCoherence:
@@ -1253,3 +1302,8 @@ def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
     np.testing.assert_allclose(fractions, expected, rtol=1e-10, atol=1e-12)
     np.testing.assert_array_equal(vectors[..., 3], 0)
     np.testing.assert_allclose(np.linalg.norm(vectors[..., :3], axis=-2), 1.0, rtol=1e-12)
+    # Directions, not just norms: each strong vector is the SVD's left singular
+    # vector up to a phase (|<u, v>| = 1 for unit vectors).
+    left_vectors = np.linalg.svd(observations, full_matrices=False)[0]
+    overlap = np.abs(np.sum(left_vectors[..., :3].conj() * vectors[..., :3], axis=-2))
+    np.testing.assert_allclose(overlap, 1.0, rtol=1e-10)

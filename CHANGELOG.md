@@ -400,23 +400,29 @@ directly with results from 2.x.
 - `canonical_coherence` overstated the coherence of a group containing a dead,
   duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
   SVD-based whitening turned each zero singular direction into an arbitrary
-  unit-norm null-space direction, whose value depended on the LAPACK build. A
-  direction with singular value below about 1e-7 of the group's largest is now
-  dropped, so the value equals that of the group's independent channels. For
-  condition numbers above about 3e7 a real but tiny independent component is
-  treated as collinear. Likewise a numerically zero-power component on the thin
-  path of `global_coherence` now has a zero vector instead of an arbitrary one.
-  Each channel is scaled to unit norm before this check, so the value does not
-  depend on channel units.
+  unit-norm null-space direction, whose value depended on the LAPACK build.
+  After each channel is scaled to unit norm (so the value does not depend on
+  channel units), a direction with singular value below `sqrt(n * eps)` of the
+  group's largest (about 3e-8 for 4 signals, 1.2e-7 for 64) is now dropped, so
+  the value equals that of the group's independent channels, and a warning names
+  the group. A real but tiny independent component beyond that condition number
+  is treated as collinear. A group with no power at a bin (every signal zero)
+  now gives NaN there, with a warning, as coherency does, instead of an
+  arbitrary value. The whitening runs at complex128 or better, so complex64
+  coefficients give the same value as complex128. Likewise a numerically
+  zero-power component on the thin path of `global_coherence` now has a zero
+  vector instead of an arbitrary one.
 - On the GPU, the Wilson factorization behind spectral Granger, DTF, PDC, and
-  directed coherence crashed with `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE`
-  once a decomposition held more than about two million signal-by-signal
-  matrices (windows x frequencies x pairs; e.g. subset pairwise Granger over all
-  120 pairs of 16 signals for 30 windows of 1000-sample FFTs). CuPy's batched
+  directed coherence, and the whitening in `canonical_coherence`, crashed with
+  `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE` once a decomposition held more
+  than about 2**21 2-by-2 matrices (about 1M for 32 signals; windows x
+  frequencies x pairs, e.g. subset pairwise Granger over all 120 pairs of 16
+  signals for 30 windows of 1000-sample FFTs, or canonical coherence over 4000
+  windows x 551 frequencies). CuPy's batched
   `eigh` (cuSOLVER `syevjBatched`) rejects such batches: the largest that
   worked was 2,078,879 matrices for 2 signals and 1,016,319 for 32 (CuPy 14.2,
-  CUDA 12.9). The square root of the cross-spectral matrix is now computed in
-  chunks well below that limit, which gives the same result as one call.
+  CUDA 12.9). These eigendecompositions now run in chunks well below that
+  limit, which gives the same result as one call.
   NumPy results are unchanged.
 - With CuPy 14, importing the package on the GPU emitted a `FutureWarning` from
   CuPy's own `cupyx.scipy.signal` (`cupyx.jit.rawkernel is experimental`),
@@ -689,7 +695,7 @@ directly with results from 2.x.
   `Multitaper.fft` 1.1-1.2x faster; pairwise spectral Granger is unchanged
   within timing noise. GPU outputs change at rounding level (<= 1.8e-14) and
   stay as close to the CPU's; the Nyquist bin is now exactly real, so
-  `coherence_phase` there is +pi as on the CPU instead of a rounding-dependent
+  `coherence_phase` there is 0 or +pi as on the CPU, never a rounding-dependent
   -pi. Complex-valued input keeps the full FFT. The CPU keeps SciPy's complex
   FFT, which is already exactly symmetric for real input and was faster than a
   real FFT plus mirror (0.31 vs 0.35 s on the first size); its outputs are
@@ -698,8 +704,9 @@ directly with results from 2.x.
   trial x taper estimates than signals) no longer call `svd` on matrices with a
   dimension above 32, which CuPy decomposes one bin at a time. Canonical
   coherence whitens each group with the pseudo-inverse square root of the
-  smaller Gram matrix (`eigh`), applied twice so the second pass restores SVD
-  accuracy up to condition numbers of about 1e7; global coherence
+  smaller Gram matrix (`eigh`) at complex128, applied twice so the second pass
+  restores SVD accuracy up to the rank threshold's condition number (about 3e7
+  for 4 signals, 8e6 for 64); global coherence
   diagonalizes the `(n_estimates, n_estimates)` Gram matrix and maps its
   eigenvectors to the left singular vectors. Best of 3-5 interleaved runs:
   canonical coherence on `(30 windows, 10 trials, 5 tapers, 1000 frequencies,
@@ -717,7 +724,7 @@ directly with results from 2.x.
   synchronizations rather than arithmetic. Chunks hold at most
   `GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS` (2**22) spectral elements, which
   bounds working memory and keeps CuPy's batched eigendecomposition under its
-  batch limit. Subset spectral Granger factors in the same bounded chunks, and
+  batch limit (a single pair larger than that is factored on its own). Subset spectral Granger factors in the same bounded chunks, and
   its per-pair scatter, a boolean-mask assignment in the predictive power, and
   conditional Granger's per-pair warning check no longer synchronize the
   device. Measured on one GPU (best of 3): pairwise spectral Granger in
@@ -728,12 +735,11 @@ directly with results from 2.x.
   3.4-4.5 s, and blockwise (8 groups of 2) 0.7 s instead of 1.1-1.4 s.
   Conditional Granger, dominated by its 15-signal reduced factorizations, is
   unchanged. Each pair still converges on its own, so results match the
-  pair-by-pair factorization to rounding (<= 3.6e-15 in the tests). The CPU
-  keeps one pair per call, which measured faster than batching there. Warnings
-  change shape accordingly: conditional Granger's degenerate-bins warning is
-  issued once per call instead of once per pair, and on the GPU the Wilson
-  non-convergence warning counts sub-spectra per chunk ("k of N") rather than
-  per pair.
+  pair-by-pair factorization to rounding (<= 3.6e-15 in the tests). On the
+  CPU, pairwise, time-reversed, and blockwise Granger keep one pair per call,
+  which measured faster than batching there (subset Granger factors all its
+  pairs in one call, as before). Conditional Granger's degenerate-bins warning
+  is now issued once per call instead of once per pair.
 
 ## [2.0.1] - 2026-05-12
 
