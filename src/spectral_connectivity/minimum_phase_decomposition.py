@@ -106,8 +106,10 @@ def _get_initial_conditions(
     (``n_signals * I``); the healthy sub-spectra keep their Cholesky start. The
     fallback start is now deterministic instead of a random draw, so the result
     for such a pathological sub-spectrum no longer depends on the global NumPy
-    random state. This is a NumPy-backend detail: on CuPy the batched Cholesky
-    above returns NaN rather than raising, so this branch is never taken.
+    random state. This is a NumPy-backend detail: CuPy's batched Cholesky never
+    raises, so this branch is never taken there. For a bad unit CuPy returns NaN
+    (indefinite matrix) or a finite factor with a zero diagonal entry
+    (rank-deficient positive-semidefinite matrix) instead.
     """
     if n_fft_samples is None:
         zero_lag = ifft(cross_spectral_matrix, axis=-3)[..., 0:1, :, :].real
@@ -148,8 +150,8 @@ def _get_initial_conditions(
         # scaling -- e.g. a valid float32 ``diag([1, 1e-7])`` sits below
         # ``n * eps(float32)``), so a per-unit attempt is the only reliable way
         # to preserve every successfully-factorable unit. This runs only on the
-        # NumPy backend: CuPy's cholesky returns NaN for the bad unit instead of
-        # raising, so the batched call above already isolates it there.
+        # NumPy backend: CuPy's cholesky never raises (a bad unit gets NaN or a
+        # zero-diagonal factor), so the batched call above isolates it there.
         flat_zero_lag = zero_lag.reshape((-1, *zero_lag.shape[-2:]))
         not_positive_definite = xp.zeros(flat_zero_lag.shape[0], dtype=bool)
         for index in range(flat_zero_lag.shape[0]):
@@ -277,11 +279,12 @@ def _check_convergence(
     Examples
     --------
     >>> import numpy as np
+    >>> from spectral_connectivity._backend import xp
     >>> rng = np.random.default_rng(0)
     >>> shape = (10, 8, 5, 5)
     >>> current = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     >>> old = current + 1e-10 * rng.standard_normal(shape)
-    >>> converged = _check_convergence(current, old, tolerance=1e-8)
+    >>> converged = _check_convergence(xp.asarray(current), xp.asarray(old), tolerance=1e-8)
     >>> converged.shape
     (10,)
     """
@@ -373,11 +376,15 @@ def minimum_phase_reconstruction_error(
         Entrywise max-abs relative reconstruction error per sub-spectrum (the
         leading batch dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN``
         where the factor is non-finite (the factorization did not converge).
+        An array of the active backend: CuPy on the GPU, even for NumPy input.
     """
+    # Accept host (NumPy) arrays on the GPU backend; a no-op for device arrays.
+    cross_spectral_matrix = xp.asarray(cross_spectral_matrix)
     if minimum_phase_factor is None:
         minimum_phase_factor = minimum_phase_decomposition(
             cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
         )
+    minimum_phase_factor = xp.asarray(minimum_phase_factor)
     batch_shape = cross_spectral_matrix.shape[:-3]
     reconstructed = xp.matmul(minimum_phase_factor, _conjugate_transpose(minimum_phase_factor))
     reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
@@ -476,11 +483,11 @@ def _solve_isolating_singular(
     batched stack is exactly singular, which would otherwise abort the whole
     Wilson iteration for every sub-spectrum sharing the batch. CuPy instead
     returns NaN/Inf for the offending matrices and solves the rest. This helper
-    gives the NumPy path the same behavior: singular (or already non-finite)
+    gives the NumPy path the same isolation: singular (or already non-finite)
     sub-matrices resolve to NaN while the remaining ones are solved normally, so
     a single rank-deficient window (e.g. duplicated channels) does not poison
-    the entire batch, and exactly singular sub-matrices resolve to NaN on both
-    backends. 2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats
+    the entire batch. Exactly singular sub-matrices are non-finite on both
+    backends: all NaN on NumPy, a mix of NaN and +/-Inf on CuPy. 2x2 systems bypass LAPACK via :func:`_solve_2x2`, which treats
     only an exactly zero determinant as singular.
 
     Parameters
@@ -629,7 +636,8 @@ def minimum_phase_decomposition(
     minimum_phase_factor : NDArray[complexfloating],
         shape (n_time_samples, ..., n_fft_samples, n_signals, n_signals)
         Minimum phase square root of cross_spectral_matrix. All eigenvalues
-        have negative real parts (minimum phase property).
+        have negative real parts (minimum phase property). An array of the
+        active backend: CuPy on the GPU, even for NumPy input.
 
     Examples
     --------
@@ -643,9 +651,8 @@ def minimum_phase_decomposition(
     >>> cross_spec = np.tile(spd, (n_times, n_freqs, 1, 1))
     >>> min_phase = minimum_phase_decomposition(cross_spec)
     >>> # The factor reconstructs the input: G @ G^H == S.
-    >>> reconstructed = np.matmul(min_phase, min_phase.conj().swapaxes(-1, -2))
-    >>> error = np.abs(reconstructed - cross_spec).max()
-    >>> bool(error < 1e-6)
+    >>> error = minimum_phase_reconstruction_error(cross_spec, min_phase)
+    >>> bool(error.max() < 1e-6)
     True
 
     Notes
@@ -697,6 +704,8 @@ def minimum_phase_decomposition(
     ):
         msg = f"max_iterations must be a positive integer, got {max_iterations}."
         raise ValueError(msg)
+    # Accept host (NumPy) arrays on the GPU backend; a no-op for device arrays.
+    cross_spectral_matrix = xp.asarray(cross_spectral_matrix)
     n_signals = cross_spectral_matrix.shape[-1]
     # Wilson's default relative tolerance (1e-8) is below float32 epsilon. A
     # complex64 iteration therefore stalls at its rounding floor and otherwise

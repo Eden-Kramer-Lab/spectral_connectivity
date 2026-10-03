@@ -17,7 +17,13 @@ Code contributions are always welcome, from simple bug fixes to new features. To
 3. Add tests for bugs/new features and make sure existing tests pass. Tests will run through GitHub Actions.
    Changes to backend-specific code must also pass the real-device smoke test on
    a CUDA machine: `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu
-   pytest -m gpu`. Device-like mocks do not replace this release gate.
+   pytest -m gpu`. Device-like mocks do not replace this release gate. The
+   whole suite also runs on the GPU backend
+   (`SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest`); keep it
+   passing there. Tests that call private kernels pass device arrays with
+   `to_device` and compare results after `to_host` (`tests/_backend_helpers.py`);
+   tests of NumPy-only behavior take `@pytest.mark.cpu_only(reason=...)`, which
+   is skipped on the GPU.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
 5. Add references if you are adding a connectivity measure.
 6. Submit a pull request.

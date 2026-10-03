@@ -10,6 +10,7 @@ import pytest
 
 from spectral_connectivity import Multitaper
 from spectral_connectivity.connectivity import Connectivity
+from tests._backend_helpers import ON_GPU, to_device, to_host
 
 
 def test_transfer_function_is_cached():
@@ -176,12 +177,13 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
     # loudly rather than silently vanishing against a discarded object.
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy, not a view of the snapshot
-    assert returned.flags.writeable is False
-    with pytest.raises(ValueError, match="read-only"):
-        returned[...] = 0.0
-    # Even re-enabling writeability (permitted on an owning copy) and mutating it
-    # cannot reach the instance: the copy shares no buffer with the snapshot.
-    returned.flags.writeable = True
+    if not ON_GPU:  # CuPy arrays have no writeable flag; the copy alone isolates them
+        assert returned.flags.writeable is False
+        with pytest.raises(ValueError, match="read-only"):
+            returned[...] = 0.0
+        # Even re-enabling writeability (permitted on an owning copy) and mutating
+        # it cannot reach the instance: the copy shares no buffer with the snapshot.
+        returned.flags.writeable = True
     returned[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
     np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
@@ -205,14 +207,15 @@ def test_fourier_coefficients_getter_returns_fresh_independent_copy():
     assert first is not c._fourier_coefficients
     assert first.base is None
     assert second.base is None
-    np.testing.assert_array_equal(first, c._fourier_coefficients)
+    np.testing.assert_array_equal(to_host(first), to_host(c._fourier_coefficients))
 
     # Re-enable and mutate one copy; the other copy, the snapshot, and the cache
-    # are all untouched (independent buffers).
-    first.flags.writeable = True
+    # are all untouched (independent buffers). CuPy arrays have no writeable flag.
+    if not ON_GPU:
+        first.flags.writeable = True
     first[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
-    assert not np.array_equal(first, second)
+    assert not np.array_equal(to_host(first), to_host(second))
 
 
 def test_direct_construction_copies_and_is_isolated_from_caller_mutation():
@@ -249,6 +252,8 @@ def test_from_multitaper_adopts_without_copying():
     stored = c._fourier_coefficients
     # Adopted (a view of fft() output), not an owning copy.
     assert stored.base is not None
+    if ON_GPU:
+        return  # CuPy arrays have no writeable flag to freeze; the rest is NumPy-only
 
     # The whole base chain is read-only, so the writable backing buffer of the
     # swapaxes view is unreachable for mutation.
@@ -270,7 +275,7 @@ def test_from_multitaper_adopts_without_copying():
     "make",
     [
         lambda m: Connectivity.from_multitaper(m),  # adoption path (frozen view)
-        lambda m: Connectivity(np.asarray(m.fft())),  # defensive-copy path
+        lambda m: Connectivity(to_device(m.fft())),  # defensive-copy path
     ],
     ids=["adopt", "copy"],
 )
@@ -291,18 +296,19 @@ def test_getter_copy_defeats_base_reenable_attack(make):
         time_halfbandwidth_product=3,
     )
     c = make(m)
-    internal_before = np.asarray(c._fourier_coefficients).copy()
+    internal_before = to_host(c._fourier_coefficients).copy()
     power_before = c.power().copy()
 
     returned = c.fourier_coefficients
     assert returned.base is None  # an owning copy: no reachable snapshot base
 
     # Mutating the copy itself leaves the instance untouched, because the copy
-    # shares no buffer with the snapshot.
-    returned.flags.writeable = True
+    # shares no buffer with the snapshot. CuPy arrays have no writeable flag.
+    if not ON_GPU:
+        returned.flags.writeable = True
     returned[...] = 0.0
 
-    np.testing.assert_array_equal(c._fourier_coefficients, internal_before)
+    np.testing.assert_array_equal(to_host(c._fourier_coefficients), internal_before)
     np.testing.assert_array_equal(c.power(), power_before)
 
 
@@ -315,7 +321,7 @@ def test_from_multitaper_adoption_matches_copy_numerically():
         time_halfbandwidth_product=3,
     )
     adopted = Connectivity.from_multitaper(m)
-    copied = Connectivity(np.asarray(m.fft()))  # forces the copy path
+    copied = Connectivity(to_device(m.fft()))  # forces the copy path
 
     np.testing.assert_array_equal(adopted.power(), copied.power())
     for measure in ("coherence_magnitude", "imaginary_coherence"):
@@ -336,7 +342,7 @@ def test_from_multitaper_adoption_invalidates_cache_on_reassignment():
     c = Connectivity.from_multitaper(m)
     _ = c.power()
     assert "_power" in c.__dict__  # cached
-    c.fourier_coefficients = np.asarray(m.fft()) * 2.0
+    c.fourier_coefficients = to_device(m.fft()) * 2.0
     assert "_power" not in c.__dict__  # cleared
     # New power reflects the reassigned (4x) data.
     np.testing.assert_allclose(c.power(), 4.0 * Connectivity.from_multitaper(m).power())

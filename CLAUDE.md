@@ -119,7 +119,11 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
   stale; `docs/cookbook.md` and `docs/llm_guide.md` are doctested by
   `tests/test_cookbook.py`
 - Tests include both CPU and GPU code paths when available (GPU paths run only
-  where CuPy is installed)
+  where CuPy is installed). The whole suite runs on either backend:
+  `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest` (pick an idle
+  GPU with `CUDA_VISIBLE_DEVICES`). Tests calling private kernels wrap inputs with
+  `to_device` and results with `to_host` from `tests/_backend_helpers.py`; tests
+  of NumPy-only behavior use `@pytest.mark.cpu_only(reason=...)`
 - `tests/test_cross_package.py` compares against mne-connectivity outputs recorded in
   `tests/reference/mne_connectivity_reference.npz` (mne is not a dependency);
   regenerate it only when its generator changes, with

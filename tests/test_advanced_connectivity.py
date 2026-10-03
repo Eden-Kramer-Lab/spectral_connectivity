@@ -8,6 +8,7 @@ from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
 )
+from tests._backend_helpers import to_host
 
 
 @pytest.mark.parametrize("method", ["group_delay", "delay"])
@@ -19,7 +20,7 @@ def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkey
         """Minimal CuPy-like object that rejects implicit NumPy conversion."""
 
         def __init__(self, array):
-            self._array = np.asarray(array)
+            self._array = to_host(array)
 
         def __array__(self, *args, **kwargs):
             msg = "implicit device-to-host conversion is forbidden"
@@ -160,7 +161,7 @@ class TestCanonicalCoherence:
         np.testing.assert_array_equal(canonical_coh[..., 0, 1], canonical_coh[..., 1, 0])
 
         # Values equal the squared largest canonical correlation.
-        fourier_coefficients = m.fft()[..., :n_non_negative_freqs, :]
+        fourier_coefficients = to_host(m.fft())[..., :n_non_negative_freqs, :]
         np.testing.assert_allclose(
             canonical_coh[..., 0, 1],
             _canonical_coherence_oracle(fourier_coefficients, [0, 1, 2], [3, 4, 5]),
@@ -168,7 +169,7 @@ class TestCanonicalCoherence:
             atol=1e-12,
         )
 
-        frequencies = m.frequencies[:n_non_negative_freqs]
+        frequencies = to_host(m.frequencies)[:n_non_negative_freqs]
         at_20_hz = canonical_coh[0, np.argmin(np.abs(frequencies - 20)), 0, 1]
         at_40_hz = canonical_coh[0, np.argmin(np.abs(frequencies - 40)), 0, 1]
         # Beyond the 20 Hz peak's multitaper bandwidth (W = NW / T = 5 Hz).
@@ -215,7 +216,7 @@ class TestCanonicalCoherence:
         assert canonical_coh.shape == (m.time.size, n_non_negative_freqs, n_groups, n_groups)
         np.testing.assert_array_equal(labels, expected_labels)
 
-        fourier_coefficients = m.fft()[..., :n_non_negative_freqs, :]
+        fourier_coefficients = to_host(m.fft())[..., :n_non_negative_freqs, :]
         for i, label_i in enumerate(expected_labels):
             assert np.all(np.isnan(canonical_coh[..., i, i]))
             for j, label_j in enumerate(expected_labels):
@@ -293,10 +294,13 @@ class TestGlobalCoherence:
         assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
         assert global_coh_vectors.shape == (m.time.size, m.frequencies.size, n_signals, 1)
         np.testing.assert_allclose(
-            global_coh, _global_coherence_oracle(m.fft())[..., :1], rtol=1e-10, atol=1e-12
+            global_coh,
+            _global_coherence_oracle(to_host(m.fft()))[..., :1],
+            rtol=1e-10,
+            atol=1e-12,
         )
 
-        frequencies = np.abs(m.frequencies)
+        frequencies = np.abs(to_host(m.frequencies))
         at_target = global_coh[0, np.argmin(np.abs(frequencies - 30)), 0]
         # Beyond the peak's multitaper bandwidth (W = NW / T = 5 Hz).
         off_peak = global_coh[0, np.abs(frequencies - 30) > 10, 0]
@@ -326,7 +330,7 @@ class TestGlobalCoherence:
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(m.fft())[..., :max_rank],
+            _global_coherence_oracle(to_host(m.fft()))[..., :max_rank],
             rtol=1e-10,
             atol=1e-12,
         )
@@ -387,7 +391,7 @@ class TestGlobalCoherence:
             max_rank=n_signals
         )
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(m.fft()), rtol=1e-10, atol=1e-12
+            gc, _global_coherence_oracle(to_host(m.fft())), rtol=1e-10, atol=1e-12
         )
         # The fractions of every component sum to the whole (trace) power.
         np.testing.assert_allclose(gc.sum(axis=-1), 1.0, rtol=1e-12)
@@ -416,7 +420,7 @@ class TestGlobalCoherence:
         )
         gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=3)
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(m.fft())[..., :3], rtol=1e-8, atol=1e-12
+            gc, _global_coherence_oracle(to_host(m.fft()))[..., :3], rtol=1e-8, atol=1e-12
         )
         assert np.all(gc >= 0)
         assert np.all(gc <= 1.0 + 1e-12)
@@ -433,7 +437,7 @@ class TestGlobalCoherence:
             time_halfbandwidth_product=1,
         )
         conn = Connectivity.from_multitaper(m)
-        expected = _global_coherence_oracle(m.fft())
+        expected = _global_coherence_oracle(to_host(m.fft()))
 
         for max_rank in (n_signals, n_signals - 1):
             global_coh, _ = conn.global_coherence(max_rank=max_rank)
@@ -457,7 +461,7 @@ class TestGlobalCoherence:
         )
         global_coh, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
 
-        x = _observations(m.fft())
+        x = _observations(to_host(m.fft()))
         a = np.sum(np.abs(x[..., 0, :]) ** 2, axis=-1)
         b = np.sum(np.abs(x[..., 1, :]) ** 2, axis=-1)
         c = np.sum(x[..., 0, :] * x[..., 1, :].conj(), axis=-1)
@@ -483,7 +487,7 @@ class TestGlobalCoherence:
             max_rank=2
         )
 
-        singular_values = np.linalg.svd(_observations(m.fft()), compute_uv=False)
+        singular_values = np.linalg.svd(_observations(to_host(m.fft())), compute_uv=False)
         power = singular_values**2
         expected = power / power.sum(axis=-1, keepdims=True)
         np.testing.assert_allclose(global_coh, expected[..., :2], rtol=1e-10, atol=1e-12)
@@ -948,7 +952,7 @@ class TestGroupDelay:
         multitaper = Multitaper(
             time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=3
         )
-        coefficients = np.array(multitaper.fft())
+        coefficients = to_host(multitaper.fft()).copy()
         coefficients[..., 0, :] = 0  # the DC bin of every signal
         frequencies = np.fft.fftfreq(coefficients.shape[-2], 1 / sampling_frequency)
         conn = Connectivity(coefficients, frequencies=frequencies)
@@ -996,7 +1000,7 @@ class TestAdvancedConnectivityIntegration:
             time_halfbandwidth_product=3,
         )
         conn = Connectivity.from_multitaper(m)
-        fourier_coefficients = m.fft()
+        fourier_coefficients = to_host(m.fft())
 
         # Canonical coherence
         group_labels = np.array([0, 0, 0, 1, 1, 1])
@@ -1030,7 +1034,7 @@ class TestAdvancedConnectivityIntegration:
         )
         # One shared source: the leading component dominates at low frequencies,
         # where the lags barely rotate the phases.
-        low = np.abs(m.frequencies) <= 50
+        low = np.abs(to_host(m.frequencies)) <= 50
         assert np.all(global_coh[:, low, 0] > 0.8)
 
         # Group delay recovers the signed lags: [i, j] = (lags[j] - lags[i]) / fs.

@@ -19,6 +19,7 @@ from spectral_connectivity.transforms import (
     detrend,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._backend_helpers import to_host
 
 
 class TestDetrendErrorMessages:
@@ -249,7 +250,7 @@ def test_numpy_scalar_sampling_frequency_is_accepted(rate):
     transform = Multitaper(ts, sampling_frequency=rate)
     assert type(transform.sampling_frequency) is float
     expected = Multitaper(ts, sampling_frequency=500.0)
-    np.testing.assert_allclose(transform.frequencies, expected.frequencies)
+    np.testing.assert_allclose(to_host(transform.frequencies), to_host(expected.frequencies))
 
     result = multitaper_connectivity(ts, sampling_frequency=rate, method="coherence_magnitude")
     baseline = multitaper_connectivity(
