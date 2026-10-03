@@ -1133,10 +1133,14 @@ class Multitaper:
         self._n_fft_samples = n_fft_samples
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
-        # Reject a fractional n_tapers at construction so the reported
-        # n_tapers metadata cannot disagree with the (integer) taper count used.
-        if n_tapers is not None and (not np.isfinite(n_tapers) or int(n_tapers) != n_tapers):
-            msg = f"n_tapers must be an integer, got {n_tapers}."
+        # Reject a fractional (or boolean) n_tapers at construction so the
+        # reported n_tapers metadata cannot disagree with the taper count used.
+        if n_tapers is not None and (
+            isinstance(n_tapers, (bool, np.bool_))
+            or not np.isfinite(n_tapers)
+            or int(n_tapers) != n_tapers
+        ):
+            msg = f"n_tapers must be an integer, got {n_tapers!r}."
             raise ValueError(msg)
         self._n_tapers = n_tapers
         # A duration and a sample count for the same window or step must name
@@ -1176,6 +1180,22 @@ class Multitaper:
                 msg = (
                     f"tapers must have shape ({window}, n_tapers) -- one column per "
                     f"taper, n_time_samples_per_window rows -- got {self._tapers.shape}."
+                )
+                raise ValueError(msg)
+        if n_tapers is not None:
+            # Check the count now that the window is known, so an impossible
+            # value fails here rather than inside fft().
+            window = self.n_time_samples_per_window
+            if not 1 <= n_tapers <= window:
+                msg = (
+                    f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
+                    f"(= {window}), got {n_tapers}."
+                )
+                raise ValueError(msg)
+            if self._tapers is not None and self._tapers.shape[1] != n_tapers:
+                msg = (
+                    f"n_tapers ({n_tapers}) disagrees with the {self._tapers.shape[1]} "
+                    "columns of tapers; pass one or make them agree."
                 )
                 raise ValueError(msg)
         object.__setattr__(self, "_initialized", True)
@@ -1302,7 +1322,26 @@ class Multitaper:
         estimate_frequency_resolution : Estimate frequency resolution
         estimate_n_tapers : Estimate number of tapers
         """
-        # Calculate time windows info
+        return self._summary(
+            "Multitaper Spectral Analysis Configuration",
+            [
+                ("Time-halfbandwidth product", self.time_halfbandwidth_product),
+                ("Number of tapers", self.n_tapers),
+            ],
+            ("Frequency resolution", f"{self.frequency_resolution:.1f} Hz"),
+        )
+
+    def _summary(
+        self,
+        title: str,
+        spectral_rows: list[tuple[str, Any]],
+        bandwidth_row: tuple[str, str],
+    ) -> str:
+        """Human-readable configuration summary shared by the windowed transforms.
+
+        ``spectral_rows`` follow the sampling frequency in "Spectral Parameters";
+        ``bandwidth_row`` heads "Frequency Analysis".
+        """
         n_time_samples = self._time_series.shape[0]
         signal_duration = n_time_samples / self.sampling_frequency
         n_windows = int(
@@ -1324,8 +1363,25 @@ class Multitaper:
             )
             overlap_desc = f"({overlap_percent:.0f}% overlap)"
 
-        return f"""Multitaper Spectral Analysis Configuration
-===========================================
+        spectral = "\n".join(
+            f"{label + ':':<31}{value}"
+            for label, value in [
+                ("Sampling frequency", f"{self.sampling_frequency:g} Hz"),
+                *spectral_rows,
+            ]
+        )
+        frequency_rows = [
+            bandwidth_row,
+            ("Nyquist frequency", f"{self.nyquist_frequency:.1f} Hz"),
+            ("Frequency range", f"0.0 - {self.nyquist_frequency:.1f} Hz"),
+            ("FFT samples", f"{self.n_fft_samples}"),
+        ]
+        width = max(22, max(len(label) + 2 for label, _ in frequency_rows))
+        frequency = "\n".join(
+            f"{label + ':':<{width}}{value}" for label, value in frequency_rows
+        )
+        return f"""{title}
+{"=" * (len(title) + 1)}
 
 Data Shape
 ----------
@@ -1335,9 +1391,7 @@ Trials:          {self.n_trials}
 
 Spectral Parameters
 -------------------
-Sampling frequency:            {self.sampling_frequency:g} Hz
-Time-halfbandwidth product:    {self.time_halfbandwidth_product}
-Number of tapers:              {self.n_tapers}
+{spectral}
 
 Time Windowing
 --------------
@@ -1347,10 +1401,7 @@ Number of windows: {n_windows}
 
 Frequency Analysis
 ------------------
-Frequency resolution: {self.frequency_resolution:.1f} Hz
-Nyquist frequency:    {self.nyquist_frequency:.1f} Hz
-Frequency range:      0.0 - {self.nyquist_frequency:.1f} Hz
-FFT samples:          {self.n_fft_samples}
+{frequency}
 """
 
     @property
@@ -1870,6 +1921,42 @@ class ShortTimeFourierTransform(Multitaper):
         """Equivalent-noise bandwidth of the periodic Hann window in Hz."""
         return 1.5 / self.time_window_duration
 
+    def __repr__(self) -> str:
+        """Return the STFT's settings; its single Hann window has no NW or tapers."""
+        return (
+            "ShortTimeFourierTransform("
+            f"sampling_frequency={self.sampling_frequency!r}, window='hann_periodic',\n"
+            f"                          time_window_duration={self.time_window_duration!r}, "
+            f"time_window_step={self.time_window_step!r},\n"
+            f"                          detrend_type={self.detrend_type!r}, "
+            f"start_time={self.start_time})"
+        )
+
+    def summarize_parameters(self) -> str:
+        """Human-readable summary of the STFT's settings.
+
+        Returns
+        -------
+        summary : str
+            Data shape, the Hann window, time windowing, and the window's
+            equivalent noise bandwidth, Nyquist frequency, and FFT length.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity.transforms import ShortTimeFourierTransform
+        >>> stft = ShortTimeFourierTransform(
+        ...     np.zeros((1000, 1, 2)), sampling_frequency=100, time_window_duration=0.5
+        ... )
+        >>> print(stft.summarize_parameters().splitlines()[0])
+        Short-Time Fourier Transform Configuration
+        """
+        return self._summary(
+            "Short-Time Fourier Transform Configuration",
+            [("Window", "Hann (periodic, L2-normalized)")],
+            ("Equivalent noise bandwidth", f"{self.frequency_resolution:.1f} Hz"),
+        )
+
     def _provenance_metadata(self) -> dict[str, Any]:
         metadata = super()._provenance_metadata()
         for key in (
@@ -1986,10 +2073,58 @@ class Welch:
             n_time_samples_per_step=step_samples,
             fft_workers=fft_workers,
         )
-        self.sampling_frequency = sampling_frequency
-        self.segment_overlap = float(segment_overlap)
-        self.n_time_samples_per_segment = segment_samples
-        self.n_time_samples_per_step = step_samples
+        self._segment_overlap = float(segment_overlap)
+
+    # The settings below are read from the internal STFT that does the
+    # computation, so they cannot be reassigned out of step with it.
+    @property
+    def sampling_frequency(self) -> float:
+        """Samples per second, in Hz."""
+        return self._stft.sampling_frequency
+
+    @property
+    def n_time_samples_per_segment(self) -> int:
+        """Segment length in samples."""
+        return int(self._stft.n_time_samples_per_window)
+
+    @property
+    def segment_duration(self) -> float:
+        """Segment length in seconds, after rounding to whole samples."""
+        return self.n_time_samples_per_segment / self.sampling_frequency
+
+    @property
+    def segment_overlap(self) -> float:
+        """Requested overlap between segments, as a fraction of a segment.
+
+        The realized step, ``n_time_samples_per_step``, is this fraction's
+        complement of a segment rounded to whole samples (at least one).
+        """
+        return self._segment_overlap
+
+    @property
+    def n_time_samples_per_step(self) -> int:
+        """Realized step between segment starts, in samples."""
+        return int(self._stft.n_time_samples_per_step)
+
+    @property
+    def detrend_type(self) -> str | None:
+        """Detrending applied to each segment before the FFT."""
+        return self._stft.detrend_type
+
+    @property
+    def start_time(self) -> Any:
+        """Time of the first sample, in seconds."""
+        return self._stft.start_time
+
+    @property
+    def n_fft_samples(self) -> int:
+        """FFT length of each segment."""
+        return int(self._stft.n_fft_samples)
+
+    @property
+    def fft_workers(self) -> int | None:
+        """Worker threads for SciPy's CPU FFT (``None`` uses SciPy's default)."""
+        return self._stft.fft_workers
 
     @property
     def frequencies(self) -> NDArray[np.floating]:

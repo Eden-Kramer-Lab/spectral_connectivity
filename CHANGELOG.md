@@ -405,6 +405,10 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
+  negative, larger than the window, a boolean, or disagreeing with the columns
+  of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with
+  an opaque SciPy `select_range` error, or used `True` as one taper.
 - `canonical_coherence` overstated the coherence of a group containing a dead,
   duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
   SVD-based whitening turned each zero singular direction into an arbitrary

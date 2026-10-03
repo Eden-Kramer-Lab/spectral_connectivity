@@ -3476,6 +3476,34 @@ def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
     np.testing.assert_array_equal(result.isnull().all("source"), ~result.valid_time_frequency)
 
 
+@pytest.mark.parametrize("method", ["coherence_magnitude", "power", "delay"])
+def test_morlet_results_keep_their_coordinate_labels(method, tmp_path):
+    """Attaching the validity mask must not strip the time and frequency
+    coordinates' long_name and units, and they survive a NetCDF round trip."""
+    data = np.random.default_rng(320).standard_normal((192, 5, 2))
+    morlet = connectivity_to_xarray(
+        MorletWavelet(data, 64, np.array([4.0, 8.0, 12.0, 16.0])),
+        method=method,
+    )
+    reference = connectivity_to_xarray(Multitaper(data, sampling_frequency=64), method="power")
+    assert "valid_time_frequency" in morlet.coords
+    assert (
+        morlet.time.attrs
+        == reference.time.attrs
+        == {
+            "long_name": "Window center time",
+            "units": "s",
+        }
+    )
+    assert morlet.frequency.attrs == reference.frequency.attrs
+
+    path = tmp_path / "morlet.nc"
+    morlet.to_netcdf(path)
+    with xr.open_dataarray(path) as reloaded:
+        assert reloaded.time.attrs == morlet.time.attrs
+        assert reloaded.frequency.attrs == morlet.frequency.attrs
+
+
 def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     data = np.random.default_rng(319).standard_normal((192, 5, 2))
     # Adjacent-bin measures require a uniform grid; the band below still
@@ -3742,6 +3770,48 @@ def test_per_signal_input_coordinates_follow_source_and_target(labeled_channels)
     )
     assert squeezed.source_region.item() == "CA1"
     assert squeezed.target_region.item() == "PFC"
+
+
+def test_every_result_coordinate_is_described():
+    """Band names and edges and per-connection group labels carry a long_name
+    (and units where they have them); a channel coordinate copied from the
+    input keeps the input's own attrs, which the package does not invent."""
+    rng = np.random.default_rng(51)
+    data = xr.DataArray(
+        rng.standard_normal((1000, 4, 4)),
+        dims=("time", "trial", "channel"),
+        coords={
+            "time": np.arange(1000) / 500,
+            "channel": ["a", "b", "c", "d"],
+            "region": ("channel", ["CA1", "CA1", "PFC", "PFC"], {"long_name": "Brain region"}),
+            "depth": ("channel", [1.0, 2.0, 3.0, 4.0], {"units": "mm"}),
+        },
+    )
+    power = multitaper_connectivity(
+        data,
+        method="power",
+        frequency_bands={"theta": (4.0, 8.0)},
+        frequency_reduction="integral",
+    )
+    assert power.band.attrs["long_name"] == "Frequency band"
+    for edge in ("band_lower", "band_upper"):
+        assert power[edge].attrs["units"] == "Hz"
+        assert power[edge].attrs["long_name"]
+    assert power.source_region.attrs == {"long_name": "Brain region"}
+    assert power.source_depth.attrs == {"units": "mm"}
+
+    coherence = multitaper_connectivity(data, method="coherence_magnitude")
+    assert coherence.target_region.attrs == {"long_name": "Brain region"}
+
+    components = multitaper_connectivity(
+        data, method="canonical_coherency", group_labels=["x", "x", "y", "y"]
+    )
+    copied = {"signal_region", "signal_depth"}  # the input's own attrs, as given
+    assert components.signal_region.attrs == {"long_name": "Brain region"}
+    assert components.signal_depth.attrs == {"units": "mm"}
+    for name, coordinate in components.coords.items():
+        if name not in copied:
+            assert coordinate.attrs.get("long_name"), name
 
 
 def test_spectral_densities_carry_units_derived_from_the_input(labeled_channels):

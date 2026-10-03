@@ -399,7 +399,15 @@ def connectivity_to_xarray(
             # attaching the transform's full frequency axis to the result.
             result_frequencies = np.asarray(result.coords["frequency"])
             aligned_validity = full_validity.sel(frequency=result_frequencies)
-            result = result.assign_coords(valid_time_frequency=aligned_validity)
+            # Attach the values alone: a DataArray would bring its own, unlabeled
+            # time and frequency coordinates and replace the result's.
+            result = result.assign_coords(
+                valid_time_frequency=(
+                    ("time", "frequency"),
+                    aligned_validity.values,
+                    validity_attrs,
+                )
+            )
         elif "time" in result.dims:
             # PSI and group delay aggregate a frequency band. They have no
             # frequency dimension on which a 2-D coordinate can live, so expose

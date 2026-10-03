@@ -51,9 +51,10 @@ class _TimeAxis(NamedTuple):
 class _SignalMetadata(NamedTuple):
     """What an input DataArray says about its signals, carried into results."""
 
-    # 1-D non-index coordinates on the signal dimension (e.g. brain region);
-    # each becomes ``<axis>_<name>`` on the result's source/target/signal axis.
-    coordinates: Mapping[str, NDArray[Any]]
+    # 1-D non-index coordinates on the signal dimension (e.g. brain region), as
+    # ``(values, attrs)``; each becomes ``<axis>_<name>`` on the result's
+    # source/target/signal axis, keeping its attrs.
+    coordinates: Mapping[str, tuple[NDArray[Any], dict[Hashable, Any]]]
     # The input's ``units`` attribute; spectral densities report (units)^2/Hz.
     units: str | None
 
@@ -601,10 +602,11 @@ def _signal_labels_from_dataarray(
 
 def _signal_coordinates_from_dataarray(
     data_array: xr.DataArray, signal_dimension: Hashable
-) -> dict[str, NDArray[Any]]:
-    """1-D non-index coordinates along the signal dimension (e.g. brain region)."""
+) -> dict[str, tuple[NDArray[Any], dict[Hashable, Any]]]:
+    """1-D non-index coordinates along the signal dimension (e.g. brain region),
+    as ``(values, attrs)``."""
     return {
-        str(name): np.asarray(coordinate.to_numpy())
+        str(name): (np.asarray(coordinate.to_numpy()), dict(coordinate.attrs))
         for name, coordinate in data_array.coords.items()
         if name != signal_dimension and coordinate.dims == (signal_dimension,)
     }
