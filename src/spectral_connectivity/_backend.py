@@ -61,8 +61,14 @@ else:
     from scipy.signal import detrend
     from scipy.sparse.linalg import svds
 
+# Default FFT length (sets the default frequency grid): SciPy's rule on both
+# backends, so CPU and GPU grids match (see CHANGELOG). Use ``next_fast_len``
+# only for internal padding that never reaches the output grid.
+from scipy.fft import next_fast_len as default_fft_length  # noqa: E402
+
 __all__ = [
     "ON_GPU",
+    "default_fft_length",
     "detrend",
     "fft",
     "fftfreq",
