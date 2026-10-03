@@ -356,14 +356,16 @@ def _normalize_fourier_coefficients(
     either dimension exceeds 32. Forming the Gram matrix squares the condition
     number, so the work is done at complex128 (or better) and the factor is
     computed twice: the second pass re-orthonormalizes the nearly orthonormal
-    first-pass result, recovering SVD accuracy. A direction whose Gram
-    eigenvalue is at most ``eps * n * largest`` -- singular value below
-    ``sqrt(n * eps)`` of the largest, about 3e-8 for 4 signals and 1.2e-7 for
-    64 -- is dropped: a dead, duplicated, or numerically collinear channel, or
-    fewer valid observations than signals. An SVD instead keeps an arbitrary
-    unit-norm null-space direction for each, which can inflate the canonical
-    coherence; dropping them gives the value of the group's independent
-    signals.
+    first-pass result, recovering SVD accuracy. That squaring hides a
+    direction whose singular value is below about ``sqrt(n * eps)`` of the
+    largest (about 1e-7), so bins where the Gram step drops a direction are
+    recomputed with an SVD, which keeps every direction above
+    ``eps * max(n, m)`` of the largest -- the usual numerical-rank threshold.
+    A direction below that is dropped: a dead or exactly duplicated channel,
+    or fewer valid observations than signals. A plain polar factor ``U Vᴴ``
+    would instead keep an arbitrary unit-norm null-space direction for each,
+    which can inflate the canonical coherence; dropping them gives the value
+    of the group's independent signals.
 
     Parameters
     ----------
@@ -392,9 +394,30 @@ def _normalize_fourier_coefficients(
     transpose = n_signals > n_observations
     if transpose:
         coefficients = _conjugate_transpose(coefficients)
-    coefficients, rank = _left_polar_factor(coefficients)
+    row_normalized = coefficients
+    coefficients, rank = _left_polar_factor(row_normalized)
     # The second pass re-orthonormalizes; its input has the same rank.
     coefficients, _ = _left_polar_factor(coefficients)
+    # The Gram threshold cannot tell a dependent signal from a real but weak
+    # direction below about sqrt(n * eps); redo only the bins where it dropped
+    # one with an SVD, which resolves singular values down to eps * max(n, m).
+    dropped = rank < row_normalized.shape[-2]
+    if bool(xp.any(dropped)):
+        # SVD of the (n, n) R factor of Aᴴ = Q R rather than of the (n, m) A:
+        # A = Rᴴ Qᴴ, so A's right singular vectors are Q times R's left ones.
+        # CuPy batches svd only when both dimensions are at most 32 (6x faster
+        # for 4 signals and 50 observations).
+        q, r = xp.linalg.qr(_conjugate_transpose(row_normalized[dropped]))
+        left, singular_values, right_h = xp.linalg.svd(_conjugate_transpose(r))
+        right_h = right_h @ _conjugate_transpose(q)
+        tolerance = (
+            xp.finfo(singular_values.dtype).eps
+            * max(row_normalized.shape[-2:])
+            * singular_values[..., :1]
+        )
+        keep = singular_values > tolerance
+        coefficients[dropped] = (left * keep[..., xp.newaxis, :]) @ right_h
+        rank[dropped] = keep.sum(-1)
     normalized = _conjugate_transpose(coefficients) if transpose else coefficients
     return normalized, rank
 
