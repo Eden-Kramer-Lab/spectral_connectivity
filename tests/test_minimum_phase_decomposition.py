@@ -6,6 +6,7 @@ import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity import _array_utils
 from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -20,7 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
 )
-from tests._backend_helpers import ON_GPU, to_device, to_host
+from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -216,6 +217,52 @@ def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
         square_root[:2] @ _conjugate_transpose(square_root[:2]), matrices[:2], atol=1e-14
     )
     assert np.isnan(square_root[2:]).all()
+
+
+def _tril(matrices):
+    """Strictly-lower-triangle indices of ``matrices``' trailing square axes."""
+    return xp.tril_indices(matrices.shape[-1], k=-1)
+
+
+def _chunks_of_three(monkeypatch):
+    """Split batched eigh calls into chunks of 3 matrices."""
+    monkeypatch.setattr(_array_utils, "_eigh_chunk_size", lambda n_signals: 3)
+
+
+def test_hermitian_square_root_in_chunks_matches_a_single_batch(monkeypatch):
+    """Splitting the batched eigh into chunks gives the single-call result exactly.
+
+    Regression: CuPy's batched eigh fails (CUSOLVER_STATUS_INVALID_VALUE) above
+    about 2**21 2x2 matrices (about 1M at 32 signals), which a long recording or
+    subset pairwise Granger reaches. The batch is split into chunks; here the budget is shrunk so 20
+    matrices (including a non-finite and an indefinite one) take 7 chunks, the
+    last one partial.
+    """
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((4, 5, 2, 2)) + 1j * rng.standard_normal((4, 5, 2, 2))
+    matrices = a @ _conjugate_transpose(a)
+    matrices[1, 2] = [[np.nan, 0.0], [0.0, 1.0]]
+    matrices[3, 4] = [[1.0, 0.0], [0.0, -1.0]]
+    single = to_host(_hermitian_square_root(to_device(matrices)))
+
+    _chunks_of_three(monkeypatch)
+    chunked = to_host(_hermitian_square_root(to_device(matrices)))
+
+    np.testing.assert_array_equal(chunked, single)
+    assert np.isnan(chunked[1, 2]).all()
+    assert np.isnan(chunked[3, 4]).all()
+
+
+def test_minimum_phase_decomposition_with_chunked_eigh_matches(monkeypatch):
+    """The Wilson factor is unchanged when the square root of S is chunked."""
+    signals = _lagged_signals(64, np.random.default_rng(0))
+    spectrum = to_device(_cross_spectrum_of(signals))
+    single = to_host(minimum_phase_decomposition(spectrum))
+
+    _chunks_of_three(monkeypatch)
+    chunked = to_host(minimum_phase_decomposition(spectrum))
+
+    np.testing.assert_array_equal(chunked, single)
 
 
 def test_near_collinear_channels_converge():
@@ -615,7 +662,11 @@ def test__get_causal_signal_removes_roots_outside_unit_circle():
 
     expected_causal_signal = np.ones((1, n_fft_samples, n_signals, n_signals), dtype=complex)
 
-    causal_signal = to_host(_get_causal_signal(to_device(linear_predictor)))
+    causal_signal = to_host(
+        _get_causal_signal(
+            to_device(linear_predictor), lower_triangular_ind=_tril(linear_predictor)
+        )
+    )
 
     assert np.allclose(causal_signal, expected_causal_signal)
 
@@ -634,7 +685,11 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     expected_causal_signal = np.zeros((1, n_fft_samples, n_signals, n_signals), dtype=complex)
     expected_causal_signal[0, :, 0, 0] = fft(linear_coef)
 
-    causal_signal = to_host(_get_causal_signal(to_device(linear_predictor)))
+    causal_signal = to_host(
+        _get_causal_signal(
+            to_device(linear_predictor), lower_triangular_ind=_tril(linear_predictor)
+        )
+    )
 
     assert np.allclose(causal_signal, expected_causal_signal)
 
@@ -809,8 +864,13 @@ def test_get_causal_signal_on_the_half_spectrum_matches_the_two_sided_projection
     linear_predictor = to_device(_real_signal_spectrum(n_fft))
     n_nonnegative = n_fft // 2 + 1
 
-    half = to_host(_get_causal_signal(linear_predictor[..., :n_nonnegative, :, :], n_fft))
-    full = to_host(_get_causal_signal(linear_predictor))
+    tril = _tril(linear_predictor)
+    half = to_host(
+        _get_causal_signal(
+            linear_predictor[..., :n_nonnegative, :, :], n_fft, lower_triangular_ind=tril
+        )
+    )
+    full = to_host(_get_causal_signal(linear_predictor, lower_triangular_ind=tril))
 
     assert half.shape == (2, n_nonnegative, 3, 3)
     np.testing.assert_allclose(half, full[..., :n_nonnegative, :, :], rtol=0, atol=1e-13)

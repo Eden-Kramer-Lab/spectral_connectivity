@@ -26,7 +26,7 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
 
 
 def _divide_where(
-    numerator: BackendArray,
+    numerator: BackendArray | float,
     denominator: BackendArray,
     condition: BackendArray,
     fill: float,
@@ -88,29 +88,35 @@ def _regularized_inverse(
 
 
 def _batched_inverse_square_root(
-    matrices: NDArray[np.floating], *, rank: int | None, regularization: float
-) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
-    """Inverse square root of batched real symmetric matrices, with kept rank.
+    matrices: BackendArray,
+    *,
+    rank: int | None = None,
+    regularization: float = 0.0,
+) -> tuple[BackendArray, BackendArray]:
+    """Pseudo-inverse square root of batched Hermitian matrices, with kept rank.
 
-    ``matrices`` has shape ``(..., n, n)``; the eigendecomposition, rank mask and
-    regularization are applied independently per leading (time/frequency) bin on
-    the active ``xp`` backend. Returns ``(T, kept_rank)`` where ``kept_rank`` is
-    the number of retained (numerically non-zero, rank-capped) directions per
-    bin -- used to detect null-space "phantom" components scale-invariantly.
+    ``matrices`` has shape ``(..., n, n)`` (real symmetric or complex
+    Hermitian); the eigendecomposition, rank mask and regularization are
+    applied independently per leading (time/frequency) bin on the active ``xp``
+    backend. An eigenvalue at or below ``eps * n * largest`` is dropped (a
+    numerically null direction); ``rank`` additionally keeps only the largest
+    ``rank``. Returns ``(T, kept_rank)`` where ``kept_rank`` is the number of
+    retained directions per bin -- used to detect null-space "phantom"
+    components scale-invariantly.
     """
-    symmetric = (matrices + matrices.swapaxes(-1, -2)) / 2
-    eigenvalues, eigenvectors = xp.linalg.eigh(symmetric)
+    hermitian = (matrices + _conjugate_transpose(matrices)) / 2
+    eigenvalues, eigenvectors = _batched_eigh(hermitian)
     largest = xp.maximum(eigenvalues[..., -1:], 0.0)
     tolerance = xp.finfo(eigenvalues.dtype).eps * matrices.shape[-1] * largest
     keep = eigenvalues > tolerance
     n_channels = matrices.shape[-1]
     if rank is not None and rank < n_channels:
         keep = keep & (xp.arange(n_channels) >= (n_channels - rank))
-    matrix_rms = xp.sqrt(xp.mean(symmetric**2, axis=(-2, -1)))[..., xp.newaxis]
+    matrix_rms = xp.sqrt(xp.mean(xp.abs(hermitian) ** 2, axis=(-2, -1)))[..., xp.newaxis]
     safe_values = xp.where(keep, eigenvalues + regularization * matrix_rms, 1.0)
-    inverse_values = xp.where(keep, 1.0 / xp.sqrt(safe_values), 0.0)
-    transform = (eigenvectors * inverse_values[..., xp.newaxis, :]) @ eigenvectors.swapaxes(
-        -1, -2
+    inverse_values = _divide_where(1.0, xp.sqrt(safe_values), keep, 0.0)
+    transform = (eigenvectors * inverse_values[..., xp.newaxis, :]) @ _conjugate_transpose(
+        eigenvectors
     )
     return transform, keep.sum(-1)
 
@@ -162,3 +168,70 @@ def _complex_inner_product(
         a.astype(dtype, copy=False), _conjugate_transpose(b).astype(dtype, copy=False)
     )
     return product
+
+
+# CuPy's batched eigh/eigvalsh (cuSOLVER syevjBatched) fail with
+# CUSOLVER_STATUS_INVALID_VALUE above about 2**21 2x2 matrices (about 1M at 32
+# signals, CuPy 14.2); chunks of this workspace budget stay 4-6x below that.
+_EIGH_WORKSPACE_BUDGET = 2**29
+
+
+def _eigh_chunk_size(n_signals: int) -> int:
+    """Matrices per batched ``eigh``/``eigvalsh`` call for ``n_signals``-square input."""
+    return max(1, _EIGH_WORKSPACE_BUDGET // (2 * n_signals**2 + 1024))
+
+
+def _batched_eigh(matrices: BackendArray) -> tuple[BackendArray, BackendArray]:
+    """``xp.linalg.eigh`` over a batch, in chunks small enough for CuPy.
+
+    Batches within :func:`_eigh_chunk_size` take a single call. Chunking
+    applies on either backend; each matrix is decomposed independently, so the
+    chunked result is identical to a single call's.
+
+    Parameters
+    ----------
+    matrices : array, shape (..., n_signals, n_signals)
+        Batched Hermitian (or real symmetric) matrices.
+
+    Returns
+    -------
+    eigenvalues : array, shape (..., n_signals)
+    eigenvectors : array, shape (..., n_signals, n_signals)
+    """
+    n_signals = matrices.shape[-1]
+    chunk_size = _eigh_chunk_size(n_signals)
+    flat = matrices.reshape(-1, n_signals, n_signals)
+    if flat.shape[0] <= chunk_size:
+        eigenvalues, eigenvectors = xp.linalg.eigh(matrices)
+        return eigenvalues, eigenvectors
+    eigenvalues = xp.empty(flat.shape[:-1], dtype=np.finfo(flat.dtype).dtype)
+    eigenvectors = xp.empty_like(flat)
+    for start in range(0, flat.shape[0], chunk_size):
+        chunk = slice(start, start + chunk_size)
+        eigenvalues[chunk], eigenvectors[chunk] = xp.linalg.eigh(flat[chunk])
+    return eigenvalues.reshape(matrices.shape[:-1]), eigenvectors.reshape(matrices.shape)
+
+
+def _batched_eigvalsh(matrices: BackendArray) -> BackendArray:
+    """``xp.linalg.eigvalsh`` over a batch, chunked like :func:`_batched_eigh`.
+
+    Parameters
+    ----------
+    matrices : array, shape (..., n_signals, n_signals)
+        Batched Hermitian (or real symmetric) matrices.
+
+    Returns
+    -------
+    eigenvalues : array, shape (..., n_signals)
+        Ascending eigenvalues.
+    """
+    n_signals = matrices.shape[-1]
+    chunk_size = _eigh_chunk_size(n_signals)
+    flat = matrices.reshape(-1, n_signals, n_signals)
+    if flat.shape[0] <= chunk_size:
+        return xp.linalg.eigvalsh(matrices)
+    eigenvalues = xp.empty(flat.shape[:-1], dtype=np.finfo(flat.dtype).dtype)
+    for start in range(0, flat.shape[0], chunk_size):
+        chunk = slice(start, start + chunk_size)
+        eigenvalues[chunk] = xp.linalg.eigvalsh(flat[chunk])
+    return eigenvalues.reshape(matrices.shape[:-1])

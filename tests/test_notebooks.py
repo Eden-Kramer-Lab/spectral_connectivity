@@ -25,7 +25,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import scipy.fft
 from syrupy.extensions.amber import AmberSnapshotExtension
 
 from spectral_connectivity import Connectivity, Multitaper
@@ -467,9 +466,6 @@ def phase_offset_trials():
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=1,
         start_time=time[0],
-        # Pin SciPy's FFT length: CuPy's next_fast_len pads to a different length
-        # (3645 rather than 3630), which changes the frequency grid.
-        n_fft_samples=scipy.fft.next_fast_len(n_time_samples),
     )
     return Connectivity.from_multitaper(multitaper)
 

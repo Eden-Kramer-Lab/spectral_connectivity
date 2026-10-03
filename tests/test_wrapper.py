@@ -1545,7 +1545,7 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     time_series = rng.standard_normal((256, 3, 2))
     real_fft = transforms.fft
 
-    def spying_fft(recorded):
+    def spying_fft(recorded, real_fft=real_fft):
         def _fft(*args, **kwargs):
             recorded.append(kwargs.get("workers", "MISSING"))
             return real_fft(*args, **kwargs)
@@ -1582,13 +1582,15 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
     assert 2 in recorded  # the taper-projection FFT received workers=2
 
     # On the GPU backend `workers` is not forwarded (cupyx's FFT has no such
-    # parameter). Simulate GPU on the CPU by patching the imported backend.
+    # parameter). Simulate GPU on the CPU by patching the imported backend. The
+    # GPU transforms real input with rfft (see _multitaper_fft), so spy on both.
     gpu_multitaper = Multitaper(time_series, sampling_frequency=500, fft_workers=-1)
     _ = gpu_multitaper.tapers
     recorded = []
     with (
         patch.object(transforms, "ON_GPU", True),
         patch.object(transforms, "fft", spying_fft(recorded)),
+        patch.object(transforms, "rfft", spying_fft(recorded, transforms.rfft)),
     ):
         gpu_multitaper.fft()
     assert recorded == ["MISSING"]

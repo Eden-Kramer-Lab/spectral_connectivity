@@ -2544,6 +2544,12 @@ class Connectivity:
         than observations has intersecting observation subspaces, which forces
         its value to 1 for any data; this case warns.
 
+        Only a group's linearly independent signals contribute: a dead,
+        duplicated, or numerically collinear channel (relative singular value
+        below ``sqrt(n_signals * eps)`` after each channel is scaled to unit
+        norm) is ignored, with a warning naming the group. A group with no power
+        at a bin gives NaN for its pairs there, also with a warning.
+
         References
         ----------
         .. [1] Stephen, E.P. (2015). Characterizing dynamically evolving
@@ -2607,7 +2613,7 @@ class Connectivity:
             observation_weights = self._observation_weights[..., non_negative_frequencies, :]
             # Canonical correlation is computed from observation covariance
             # matrices. Multiplying every observation by sqrt(weight) gives the
-            # weighted covariance while retaining the existing SVD whitening
+            # weighted covariance while retaining the existing whitening
             # implementation. A shared normalization by sum(weight) cancels
             # from the canonical correlation and is therefore unnecessary.
             fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
@@ -2615,10 +2621,13 @@ class Connectivity:
         # (one ascending index array per sorted label); index the device
         # coefficients with device index arrays, as ``xp.isin`` over host labels
         # fails on CuPy.
-        normalized_fourier_coefficients = [
-            _normalize_fourier_coefficients(fourier_coefficients[..., xp.asarray(indices)])
-            for indices in group_indices
-        ]
+        normalized_fourier_coefficients, ranks = zip(
+            *(
+                _normalize_fourier_coefficients(fourier_coefficients[..., xp.asarray(indices)])
+                for indices in group_indices
+            ),
+            strict=True,
+        )
 
         n_groups = len(labels)
         new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
@@ -2633,18 +2642,61 @@ class Connectivity:
                 axis=-1,
             )
         )
+        # (n_time_windows, n_frequencies) bins already reported as undefined.
+        no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
         if observation_weights is not None:
             no_valid_observations = xp.sum(observation_weights[..., 0], axis=(1, 2)) <= 0
-            magnitude = xp.where(no_valid_observations[..., xp.newaxis], xp.nan, magnitude)
+        # A group with no power at a bin has no direction left after whitening;
+        # its canonical coherence there is 0/0, so report NaN (as coherency does)
+        # rather than the 0 the empty projection would give.
+        rank = xp.stack(ranks, axis=-1)  # (n_time_windows, n_frequencies, n_groups)
+        no_power = rank == 0
+        pair_indices = np.array(list(combinations(range(n_groups), 2)))
+        firsts, seconds = xp.asarray(pair_indices[:, 0]), xp.asarray(pair_indices[:, 1])
+        magnitude = xp.where(
+            no_power[..., firsts] | no_power[..., seconds] | no_valid_observations[..., None],
+            xp.nan,
+            magnitude,
+        )
+        full_rank = xp.asarray(
+            [min(len(indices), n_observations) for indices in group_indices]
+        )
+        reported = ~no_valid_observations[..., xp.newaxis]
+        # One host synchronization for both warnings: (2, n_groups) flags.
+        flags = to_numpy(
+            xp.stack(
+                [
+                    xp.any(no_power & reported, axis=(0, 1)),
+                    xp.any((rank > 0) & (rank < full_rank) & reported, axis=(0, 1)),
+                ]
+            )
+        )
+        label_values = np.asarray(to_numpy(labels)).tolist()
+        groups_without_power = [label_values[group] for group in np.flatnonzero(flags[0])]
+        if groups_without_power:
+            warnings.warn(
+                f"canonical_coherence: group(s) {groups_without_power} have no power at "
+                "some time-frequency bins (every signal in the group is zero there), so "
+                "their canonical coherence is undefined and returned as NaN at those bins.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        groups_with_dependent_signals = [
+            label_values[group] for group in np.flatnonzero(flags[1])
+        ]
+        if groups_with_dependent_signals:
+            warnings.warn(
+                f"canonical_coherence: group(s) {groups_with_dependent_signals} contain "
+                "linearly dependent signals at some time-frequency bins (a dead, "
+                "duplicated, or collinear channel); only the group's independent "
+                "signals contribute there.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
 
         canonical_coherence_magnitude = xp.full(new_shape, xp.nan)
-        group_combination_ind = xp.array(list(combinations(xp.arange(n_groups), 2)))
-        canonical_coherence_magnitude[
-            ..., group_combination_ind[:, 0], group_combination_ind[:, 1]
-        ] = magnitude
-        canonical_coherence_magnitude[
-            ..., group_combination_ind[:, 1], group_combination_ind[:, 0]
-        ] = magnitude
+        canonical_coherence_magnitude[..., firsts, seconds] = magnitude
+        canonical_coherence_magnitude[..., seconds, firsts] = magnitude
 
         return to_numpy(canonical_coherence_magnitude), to_numpy(labels)
 
@@ -3246,7 +3298,11 @@ class Connectivity:
         cross-spectral matrix (near-duplicate channels) the *weakest* returned
         components (large ``max_rank``) may lose relative precision. The dominant
         component(s) — the usual use of this measure — are unaffected. A thin
-        matrix (fewer estimates than signals) uses the economy SVD directly.
+        matrix (fewer estimates than signals) diagonalizes the smaller
+        ``(n_estimates, n_estimates)`` matrix ``Aᴴ @ A`` in the same way and maps
+        each eigenvector ``v`` to the vector ``A v / |A v|``, with the same
+        precision caveat; a component with (numerically) zero power, at most
+        ``eps * n_estimates`` times the strongest, gets a zero vector.
 
         References
         ----------

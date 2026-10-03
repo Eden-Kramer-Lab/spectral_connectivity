@@ -4,6 +4,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import pytest
+import scipy.fft
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
 from spectral_connectivity import _backend
@@ -19,7 +20,7 @@ from spectral_connectivity.transforms import (
     dpss_windows,
 )
 from spectral_connectivity.wrapper import multitaper_connectivity
-from tests._backend_helpers import ON_GPU, to_device, to_host
+from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 
 
 def _short_smoothing_window():
@@ -728,6 +729,106 @@ def test__multitaper_fft():
         ),
         atol=1e-12,
     )
+
+
+@pytest.mark.parametrize(
+    ("n_time_samples", "n_fft_samples"), [(100, 100), (101, 101), (100, 128), (100, 257)]
+)
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_multitaper_fft_real_input_rfft_path(
+    monkeypatch, n_time_samples, n_fft_samples, dtype
+):
+    """The GPU branch (rfft + exact conjugate mirror) matches the full FFT.
+
+    ``ON_GPU`` is forced on so the branch also runs on the CPU backend. Its
+    output must equal the complex FFT up to rounding, keep the dtype, and be
+    exactly conjugate-symmetric so minimum_phase_decomposition's exact check
+    takes the half-spectrum path. Odd and even lengths and zero padding cover
+    the Nyquist bin and the mirror's slice bounds.
+    """
+    from spectral_connectivity import transforms
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((2, 3, 2, n_time_samples)).astype(dtype)
+    tapers = rng.standard_normal((n_time_samples, 3)).astype(dtype)
+    expected = np.fft.fft(time_series[..., np.newaxis] * tapers, n=n_fft_samples, axis=-2)
+    expected /= 1000.0
+
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    coefficients = to_host(
+        _multitaper_fft(to_device(tapers), to_device(time_series), n_fft_samples, 1000.0)
+    )
+
+    assert coefficients.dtype == np.result_type(dtype, np.complex64)
+    assert coefficients.shape == expected.shape
+    rtol = 1e-5 if dtype == np.float32 else 1e-12
+    np.testing.assert_allclose(coefficients, expected, rtol=rtol, atol=rtol * 1e-2)
+    mirrored = np.conj(coefficients[..., (-np.arange(n_fft_samples)) % n_fft_samples, :])
+    np.testing.assert_array_equal(coefficients, mirrored)
+
+
+@pytest.mark.parametrize("n_fft_samples", [100, 101])
+def test_multitaper_fft_rfft_path_zeroes_self_mirrored_imaginary_parts(
+    monkeypatch, n_fft_samples
+):
+    """cuFFT's rfft can leave ~1e-15 in the imaginary part of the zero and
+    Nyquist bins, which are their own mirrors; they must come out exactly real so
+    the spectrum stays exactly conjugate-symmetric (else the Wilson factorization
+    silently falls back to its slower two-sided path)."""
+    from spectral_connectivity import transforms
+    from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+
+    real_rfft = transforms.rfft
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    monkeypatch.setattr(
+        transforms, "rfft", lambda *args, **kwargs: real_rfft(*args, **kwargs) + 1e-15j
+    )
+    rng = np.random.default_rng(2)
+    time_series = to_device(rng.standard_normal((1, 2, 3, n_fft_samples)))
+    tapers = to_device(rng.standard_normal((n_fft_samples, 2)))
+    coefficients = _multitaper_fft(tapers, time_series, n_fft_samples, 1000.0)
+
+    host = to_host(coefficients)
+    assert (host[..., 0, :].imag == 0).all()
+    if n_fft_samples % 2 == 0:
+        assert (host[..., n_fft_samples // 2, :].imag == 0).all()
+    # (..., n_fft, n_tapers, 1): frequency on axis -3, where the check expects it.
+    assert _is_conjugate_symmetric(coefficients[..., xp.newaxis])
+
+
+def test_multitaper_fft_complex_input_keeps_full_fft(monkeypatch):
+    """Complex input has no conjugate symmetry, so it must take the full FFT."""
+    from spectral_connectivity import transforms
+
+    rng = np.random.default_rng(1)
+    time_series = rng.standard_normal((1, 2, 2, 64)) + 1j * rng.standard_normal((1, 2, 2, 64))
+    tapers = rng.standard_normal((64, 2))
+    expected = np.fft.fft(time_series[..., np.newaxis] * tapers, axis=-2) / 500.0
+
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    coefficients = to_host(
+        _multitaper_fft(to_device(tapers), to_device(time_series), 64, 500.0)
+    )
+    np.testing.assert_allclose(coefficients, expected, rtol=1e-12, atol=1e-15)
+
+
+def test_multitaper_real_input_is_exactly_conjugate_symmetric():
+    """On either backend, real input gives exactly conjugate-symmetric coefficients.
+
+    cuFFT's complex FFT is symmetric only to rounding, which used to send every
+    GPU Wilson factorization down the slower two-sided path.
+    """
+    from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+
+    rng = np.random.default_rng(2)
+    multitaper = Multitaper(
+        rng.standard_normal((1000, 3, 4)),
+        sampling_frequency=1000,
+        time_window_duration=0.25,
+        n_fft_samples=300,
+    )
+    connectivity = Connectivity.from_multitaper(multitaper)
+    assert _is_conjugate_symmetric(connectivity._expectation_cross_spectral_matrix())
 
 
 def test_fft():
@@ -2038,3 +2139,14 @@ def test_morlet_fft_peak_memory_stays_near_twice_output_size():
         if not was_tracing:
             tracemalloc.stop()
     assert peak - baseline < 2.5 * coefficients.nbytes
+
+
+def test_default_frequency_grid_matches_scipy_on_every_backend():
+    """The default grid follows SciPy on every backend (CuPy's rule gives 3645)."""
+    multitaper = Multitaper(
+        np.zeros((3601, 1, 1)), sampling_frequency=1000, time_halfbandwidth_product=1
+    )
+    assert multitaper.n_fft_samples == scipy.fft.next_fast_len(3601) == 3630
+    np.testing.assert_allclose(
+        to_host(multitaper.frequencies), np.fft.fftfreq(3630, d=1 / 1000), rtol=1e-12
+    )
