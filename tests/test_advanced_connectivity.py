@@ -371,8 +371,8 @@ class TestCanonicalCoherence:
         coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
         labels = np.array([0, 0, 0, 1, 1, 1])
         single, _ = Connectivity(coefficients).canonical_coherence(labels)
-        # 3x3 Gram matrices in chunks of 4 (18 bins per group: a partial last chunk).
-        monkeypatch.setattr(_array_utils, "_EIGH_WORKSPACE_BUDGET", 4 * (2 * 3**2 + 1024))
+        # Chunks of 4 of the 18 bins per group: a partial last chunk.
+        monkeypatch.setattr(_array_utils, "_eigh_chunk_size", lambda n_signals: 4)
         chunked, _ = Connectivity(coefficients).canonical_coherence(labels)
         np.testing.assert_array_equal(chunked, single)
 

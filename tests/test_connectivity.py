@@ -2650,24 +2650,34 @@ def test_batched_granger_factorization_matches_one_pair_at_a_time(
     the pair-by-pair values, NaN pattern and pair-naming warning. Forced here on
     any backend, with chunks of two pairs so that a partial chunk occurs.
     """
-    from spectral_connectivity import _granger
+    named_per_run = []
 
     def compute():
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
             result = _GRANGER_MEASURES[measure](_granger_connectivity(defect))
-        named = [str(w.message) for w in record if "source -> target" in str(w.message)]
-        return result, named
+        named_per_run.append(
+            [str(w.message) for w in record if "source -> target" in str(w.message)]
+        )
+        return result
+
+    _assert_batched_granger_matches(compute, monkeypatch)
+    assert named_per_run[1] == named_per_run[0]
+
+
+def _assert_batched_granger_matches(compute, monkeypatch):
+    """Run ``compute`` one pair per Wilson call, then with the GPU batching path
+    forced on any backend (chunks of two pairs), and check that the values and
+    NaN pattern agree."""
+    from spectral_connectivity import _granger
 
     monkeypatch.setattr(_granger, "ON_GPU", False)
-    expected, expected_named = compute()
+    expected = compute()
     monkeypatch.setattr(_granger, "ON_GPU", True)
-    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 2)
-    result, named = compute()
-
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 2)
+    result = compute()
     np.testing.assert_array_equal(np.isnan(result), np.isnan(expected))
     np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12, equal_nan=True)
-    assert named == expected_named
 
 
 def test_batched_pairwise_granger_retries_pairs_alone_after_linalg_error(monkeypatch):
@@ -2683,7 +2693,7 @@ def test_batched_pairwise_granger_retries_pairs_alone_after_linalg_error(monkeyp
             raise np.linalg.LinAlgError(error_message)
         return original(pair_power, pair_csm, **kwargs)
 
-    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 3)
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 3)
     monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_on_stacks)
     result = _granger_connectivity().pairwise_spectral_granger_prediction()
     # Equal up to rounding: device kernels may round differently by batch size.
@@ -2706,7 +2716,7 @@ def test_batched_granger_matches_across_chunks_and_block_sizes(
 ):
     """Batched subset and blockwise Granger reproduce the one-pair-at-a-time
     values when results are assembled from several chunks or size classes."""
-    from spectral_connectivity import Multitaper, _granger
+    from spectral_connectivity import Multitaper
 
     signals = np.random.default_rng(3).standard_normal((512, 10, 5))
     signals[1:, :, 1] += 0.6 * signals[:-1, :, 0]
@@ -2722,14 +2732,7 @@ def test_batched_granger_matches_across_chunks_and_block_sizes(
             )
         return connectivity.blockwise_spectral_granger_prediction(group_labels)[0]
 
-    monkeypatch.setattr(_granger, "ON_GPU", False)
-    expected = compute()
-    monkeypatch.setattr(_granger, "ON_GPU", True)
-    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 2)
-    result = compute()
-
-    np.testing.assert_array_equal(np.isnan(result), np.isnan(expected))
-    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12, equal_nan=True)
+    _assert_batched_granger_matches(compute, monkeypatch)
 
 
 def test_batched_pairwise_granger_leaves_only_a_pair_that_fails_alone_nan(monkeypatch):
@@ -2752,7 +2755,7 @@ def test_batched_pairwise_granger_leaves_only_a_pair_that_fails_alone_nan(monkey
             raise np.linalg.LinAlgError(error_message)
         return original_pair(pair_power, pair_csm, **kwargs)
 
-    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda elements_per_pair: 3)
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 3)
     monkeypatch.setattr(_granger, "_scatter_pairwise_granger", tracking_scatter)
     monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_with_pair_0_2)
     with pytest.warns(UserWarning, match=r": 0 -> 2, 2 -> 0 \("):

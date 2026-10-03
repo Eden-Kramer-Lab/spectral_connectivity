@@ -2649,24 +2649,30 @@ class Connectivity:
         # A group with no power at a bin has no direction left after whitening;
         # its canonical coherence there is 0/0, so report NaN (as coherency does)
         # rather than the 0 the empty projection would give.
-        no_power = xp.stack([rank == 0 for rank in ranks], axis=-1)
-        pair_has_no_power = xp.stack(
-            [
-                no_power[..., first] | no_power[..., second]
-                for first, second in combinations(range(n_groups), 2)
-            ],
-            axis=-1,
-        )
+        rank = xp.stack(ranks, axis=-1)  # (n_time_windows, n_frequencies, n_groups)
+        no_power = rank == 0
+        pair_indices = np.array(list(combinations(range(n_groups), 2)))
+        firsts, seconds = xp.asarray(pair_indices[:, 0]), xp.asarray(pair_indices[:, 1])
         magnitude = xp.where(
-            pair_has_no_power | no_valid_observations[..., xp.newaxis], xp.nan, magnitude
+            no_power[..., firsts] | no_power[..., seconds] | no_valid_observations[..., None],
+            xp.nan,
+            magnitude,
         )
-        reported = ~no_valid_observations
+        full_rank = xp.asarray(
+            [min(len(indices), n_observations) for indices in group_indices]
+        )
+        reported = ~no_valid_observations[..., xp.newaxis]
+        # One host synchronization for both warnings: (2, n_groups) flags.
+        flags = to_numpy(
+            xp.stack(
+                [
+                    xp.any(no_power & reported, axis=(0, 1)),
+                    xp.any((rank > 0) & (rank < full_rank) & reported, axis=(0, 1)),
+                ]
+            )
+        )
         label_values = np.asarray(to_numpy(labels)).tolist()
-        groups_without_power = [
-            label_values[group]
-            for group in range(n_groups)
-            if bool(xp.any(no_power[..., group] & reported))
-        ]
+        groups_without_power = [label_values[group] for group in np.flatnonzero(flags[0])]
         if groups_without_power:
             warnings.warn(
                 f"canonical_coherence: group(s) {groups_without_power} have no power at "
@@ -2676,9 +2682,7 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
         groups_with_dependent_signals = [
-            label_values[group]
-            for group, (rank, indices) in enumerate(zip(ranks, group_indices, strict=True))
-            if bool(xp.any((rank > 0) & (rank < min(len(indices), n_observations)) & reported))
+            label_values[group] for group in np.flatnonzero(flags[1])
         ]
         if groups_with_dependent_signals:
             warnings.warn(
@@ -2691,13 +2695,8 @@ class Connectivity:
             )
 
         canonical_coherence_magnitude = xp.full(new_shape, xp.nan)
-        group_combination_ind = xp.array(list(combinations(xp.arange(n_groups), 2)))
-        canonical_coherence_magnitude[
-            ..., group_combination_ind[:, 0], group_combination_ind[:, 1]
-        ] = magnitude
-        canonical_coherence_magnitude[
-            ..., group_combination_ind[:, 1], group_combination_ind[:, 0]
-        ] = magnitude
+        canonical_coherence_magnitude[..., firsts, seconds] = magnitude
+        canonical_coherence_magnitude[..., seconds, firsts] = magnitude
 
         return to_numpy(canonical_coherence_magnitude), to_numpy(labels)
 

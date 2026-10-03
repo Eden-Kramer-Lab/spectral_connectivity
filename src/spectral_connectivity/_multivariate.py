@@ -385,24 +385,15 @@ def _normalize_fourier_coefficients(
     coefficients = coefficients.astype(
         xp.result_type(coefficients.dtype, xp.complex128), copy=False
     )
-    # Give every signal (row) unit norm first. A left diagonal scaling keeps the
-    # row space, so it changes the factor only by a unitary that cancels in the
-    # canonical correlations, but it keeps the rank threshold below from
-    # dropping a real channel that is merely small (e.g. in different units).
-    # A dead channel stays zero and is still dropped.
     row_norms = xp.sqrt(xp.sum(xp.abs(coefficients) ** 2, axis=-1, keepdims=True))
-    coefficients = coefficients * xp.where(
-        row_norms > 0, 1.0 / xp.where(row_norms > 0, row_norms, 1.0), 0.0
-    )
+    coefficients = coefficients * _divide_where(1.0, row_norms, row_norms > 0, 0.0)
     n_signals, n_observations = coefficients.shape[-2:]
-    # Orthonormalize the shorter side: rows when n_signals <= n_observations,
-    # else the columns (via the conjugate transpose, as polar(Aᴴ) = polar(A)ᴴ).
+    # polar(Aᴴ) = polar(A)ᴴ, so a tall matrix is orthonormalized by its columns.
     transpose = n_signals > n_observations
     if transpose:
         coefficients = _conjugate_transpose(coefficients)
     coefficients, rank = _left_polar_factor(coefficients)
-    # The second pass sees orthonormal rows plus zero rows for the dropped
-    # directions, so it keeps the same rank.
+    # The second pass re-orthonormalizes; its input has the same rank.
     coefficients, _ = _left_polar_factor(coefficients)
     normalized = _conjugate_transpose(coefficients) if transpose else coefficients
     return normalized, rank
@@ -413,11 +404,6 @@ def _left_polar_factor(
 ) -> tuple[NDArray[np.complexfloating], NDArray[np.integer]]:
     """``((A Aᴴ)^+)^(1/2) A`` per bin: the polar factor of a wide matrix ``A``.
 
-    Uses the pseudo-inverse square root of the Hermitian Gram matrix, dropping
-    eigenvalues at or below ``eps * n * largest`` (numerically rank-deficient
-    directions). The batched ``eigh`` is chunked (:func:`_batched_eigh`), as
-    CuPy's fails on very large batches.
-
     Parameters
     ----------
     matrices : array, shape (..., n, m)
@@ -426,21 +412,15 @@ def _left_polar_factor(
     Returns
     -------
     polar_factor : array, shape (..., n, m)
-        ``U Vᴴ`` over the retained singular directions of each matrix.
+        ``U Vᴴ`` over the retained singular directions of each matrix (see
+        :func:`_batched_inverse_square_root` for the rank threshold).
     rank : array of int, shape (...)
         Number of retained directions of each matrix.
 
     """
-    eigenvalues, eigenvectors = _batched_eigh(matrices @ _conjugate_transpose(matrices))
-    largest = xp.maximum(eigenvalues[..., -1:], 0.0)
-    keep = eigenvalues > xp.finfo(eigenvalues.dtype).eps * matrices.shape[-2] * largest
-    inverse_root = xp.where(keep, 1.0 / xp.sqrt(xp.where(keep, eigenvalues, 1.0)), 0.0)
-    # Form the small (n, n) transform first: one (n, n) @ (n, m) product per bin.
-    transform = (eigenvectors * inverse_root[..., xp.newaxis, :]) @ _conjugate_transpose(
-        eigenvectors
-    )
+    transform, rank = _batched_inverse_square_root(matrices @ _conjugate_transpose(matrices))
+    # The small (n, n) transform is formed first: one (n, n) @ (n, m) product.
     polar_factor: NDArray[np.complexfloating] = transform @ matrices
-    rank: NDArray[np.integer] = xp.sum(keep, axis=-1)
     return polar_factor, rank
 
 
@@ -515,7 +495,7 @@ def _global_coherence_components(
         # Eigenvalues of the Hermitian PSD cross-spectral matrix are the squared
         # singular values; eigenvectors are the left singular vectors.
         cross_spectral_matrix = xp.matmul(scaled, _conjugate_transpose(scaled))
-        eigenvalues, eigenvectors = xp.linalg.eigh(cross_spectral_matrix)
+        eigenvalues, eigenvectors = _batched_eigh(cross_spectral_matrix)
         # eigh returns ascending order; take the strongest components first.
         component_power = xp.flip(eigenvalues, axis=-1)[..., :max_rank]
         vectors = xp.flip(eigenvectors, axis=-1)[..., :max_rank]
@@ -529,15 +509,13 @@ def _global_coherence_components(
         # the strongest (a rank-deficient bin) has no resolvable direction, as v
         # is accurate only to about eps times the condition number squared; it
         # gets a zero vector.
-        _, right_vectors = xp.linalg.eigh(xp.matmul(_conjugate_transpose(scaled), scaled))
+        _, right_vectors = _batched_eigh(xp.matmul(_conjugate_transpose(scaled), scaled))
         left = xp.matmul(scaled, xp.flip(right_vectors, axis=-1)[..., :max_rank])
         component_power = xp.sum(xp.abs(left) ** 2, axis=-2)
         resolved = component_power > (
             xp.finfo(component_power.dtype).eps * scaled.shape[-1] * component_power[..., :1]
         )
-        inverse_norms = xp.where(
-            resolved, 1.0 / xp.sqrt(xp.where(resolved, component_power, 1.0)), 0.0
-        )
+        inverse_norms = _divide_where(1.0, xp.sqrt(component_power), resolved, 0.0)
         vectors = left * inverse_norms[..., xp.newaxis, :]
 
     safe_total = xp.where(total_power == 0, 1, total_power)

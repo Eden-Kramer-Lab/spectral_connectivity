@@ -21,6 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from spectral_connectivity._array_utils import (
+    _batched_eigvalsh,
     _conjugate_transpose,
     _regularized_inverse,
     _squared_magnitude,
@@ -208,19 +209,13 @@ def _remove_instantaneous_causality(
     return variance.swapaxes(-1, -2) - noise_covariance**2 / variance
 
 
-# Most spectral elements (sub-spectra x FFT bins x signals**2) that one Wilson
-# factorization of the pairwise or blockwise Granger measures stacks on the GPU.
-# Factoring one signal (or group) pair there is bound by kernel launches and
-# synchronizations rather than arithmetic, so pairs of the same size are factored
-# together in chunks. The cap bounds the working memory (64 MiB per complex128
-# working array) and, at 2**20 matrices for the smallest (2-by-2) sub-spectra,
-# keeps CuPy's batched eigh (syevjBatched) well below the ~2**21-matrix batch at
-# which it fails. On the CPU each pair is factored alone, which measured faster
-# than batching.
+# Most spectral elements (sub-spectra x FFT bins x signals**2) one GPU Wilson
+# factorization stacks across signal (or group) pairs, bounding working memory
+# (64 MiB per complex128 working array). One pair alone is launch-bound there.
 GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS = 2**22
 
 
-def _pairs_per_wilson_batch(elements_per_pair: int) -> int:
+def _pairs_per_wilson_batch(elements_per_pair: int, *, cpu_pairs: int = 1) -> int:
     """Number of signal or group pairs to Wilson-factorize per call.
 
     Parameters
@@ -228,15 +223,18 @@ def _pairs_per_wilson_batch(elements_per_pair: int) -> int:
     elements_per_pair : int
         Spectral elements one pair's sub-spectrum holds (leading batch axes x
         FFT bins x sub-system signals squared).
+    cpu_pairs : int, default 1
+        Pairs per call on the CPU, where factoring one pair at a time measured
+        fastest for the pairwise and blockwise measures.
 
     Returns
     -------
     int
-        1 on the CPU; on the GPU as many pairs as fit in
+        ``cpu_pairs`` on the CPU; on the GPU as many pairs as fit in
         ``GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS``, and at least 1.
     """
     if not ON_GPU:
-        return 1
+        return cpu_pairs
     return max(1, GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS // elements_per_pair)
 
 
@@ -311,10 +309,9 @@ def _scatter_pairwise_granger(
     except np.linalg.LinAlgError:
         # A lone pair is left NaN; the calling measure names the NaN pairs
         # (_warn_nan_granger_pairs). Retry a stack pair by pair so one failing
-        # pair does not take the others with it. Warnings the failed stack
-        # already issued can repeat. Only NumPy raises LinAlgError here, and
-        # the CPU factors one pair per call, so a stack fails only when the
-        # batch size is forced (tests).
+        # pair does not take the others with it (warnings the failed stack
+        # already issued can repeat). NumPy raises LinAlgError, as does CuPy
+        # under ``cupyx.errstate(linalg="raise")``.
         if pairs.shape[0] > 1:
             for pair in pairs:
                 _scatter_pairwise_granger(
@@ -720,9 +717,7 @@ def _estimate_blockwise_spectral_granger(
         n_sub = n_first + n_second
         per_chunk = _pairs_per_wilson_batch(int(np.prod(spectrum.shape[:-2])) * n_sub * n_sub)
         for start in range(0, len(group_pairs), per_chunk):
-            chunk = group_pairs[start : start + per_chunk]
-            firsts = np.array([first for first, _ in chunk])
-            seconds = np.array([second for _, second in chunk])
+            firsts, seconds = np.array(group_pairs[start : start + per_chunk]).T
             first_from_second, second_from_first = _estimate_block_spectral_granger_prediction(
                 spectrum,
                 np.stack([group_indices[first] for first in firsts]),
@@ -863,8 +858,8 @@ def _block_spectral_granger_from_model(
     # Return NaN (and warn) rather than a plausible but wrong finite influence.
     # A value that is already NaN (a failed factorization, or a target with no
     # power) is reported by pair by the calling measure, so it is not counted.
-    smallest_total_eigenvalue = xp.linalg.eigvalsh(hermitian_total_target_spectrum)[..., 0]
-    smallest_intrinsic_eigenvalue = xp.linalg.eigvalsh(intrinsic)[..., 0]
+    smallest_total_eigenvalue = _batched_eigvalsh(hermitian_total_target_spectrum)[..., 0]
+    smallest_intrinsic_eigenvalue = _batched_eigvalsh(intrinsic)[..., 0]
     positive_definite = (smallest_total_eigenvalue > 0) & (smallest_intrinsic_eigenvalue > 0)
     if bool(xp.any(~positive_definite & ~xp.isnan(value))):
         warnings.warn(
@@ -903,7 +898,7 @@ def _estimate_subset_spectral_granger_prediction(
 
     # All pairs in one factorization on the CPU; bounded chunks on the GPU.
     n_pairs = pair_csm.shape[-4]
-    pairs_per_chunk = _pairs_per_wilson_batch(pair_csm.size // n_pairs) if ON_GPU else n_pairs
+    pairs_per_chunk = _pairs_per_wilson_batch(pair_csm.size // n_pairs, cpu_pairs=n_pairs)
     pair_predictive_power = xp.concatenate(
         [
             _pair_spectral_granger(
@@ -919,7 +914,7 @@ def _estimate_subset_spectral_granger_prediction(
 
     # A pair requested more than once, in either order, writes the same
     # entries; keep its last occurrence, which a pair-by-pair write would leave.
-    host_pairs = to_numpy(pair_indices)
+    host_pairs = to_numpy(pairs)
     _, last_in_reversed = np.unique(
         np.sort(host_pairs, axis=1)[::-1], axis=0, return_index=True
     )
@@ -928,8 +923,10 @@ def _estimate_subset_spectral_granger_prediction(
 
     output_shape = (*one_sided_power.shape, n_signals)
     predictive_power = xp.full(output_shape, xp.nan)
+    if kept.size < n_pairs:
+        pair_predictive_power = xp.take(pair_predictive_power, xp.asarray(kept), axis=-4)
     predictive_power[..., kept_pairs[:, :, xp.newaxis], kept_pairs[:, xp.newaxis, :]] = (
-        xp.moveaxis(xp.take(pair_predictive_power, xp.asarray(kept), axis=-4), -4, -3)
+        xp.moveaxis(pair_predictive_power, -4, -3)
     )
     diagonal_indices = xp.diag_indices(n_signals)
     predictive_power[..., diagonal_indices[0], diagonal_indices[1]] = xp.nan

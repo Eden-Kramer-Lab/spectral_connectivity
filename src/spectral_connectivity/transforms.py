@@ -2866,13 +2866,9 @@ def _multitaper_fft(
         fft_kwargs["workers"] = workers
     if ON_GPU and not xp.iscomplexobj(projected_time_series):
         # cuFFT's complex FFT of real input is conjugate-symmetric only to
-        # rounding (~1e-16), which makes minimum_phase_decomposition's exact
-        # symmetry check fail and run the Wilson iteration on the full two-sided
-        # spectrum. Transform the non-negative frequencies with rfft (half the
-        # FFT work) and write the negative ones as their exact conjugate mirror,
-        # X[n - k] = conj(X[k]). SciPy's complex FFT of real input is already
-        # exactly symmetric (and was faster than rfft + mirror), so the CPU keeps
-        # the plain FFT.
+        # rounding, which fails the Wilson factorization's exact symmetry check.
+        # rfft plus the exact mirror X[n - k] = conj(X[k]) is exactly symmetric.
+        # (SciPy's complex FFT already is, and is faster on the CPU.)
         half_spectrum: NDArray[np.complexfloating] = rfft(
             projected_time_series, n=n_fft_samples, axis=axis
         )
@@ -2886,11 +2882,10 @@ def _multitaper_fft(
             sampling_frequency,
             out=coefficients_last[..., :n_non_negative],
         )
-        # The zero and (even n) Nyquist bins are their own mirrors and exactly
-        # real, but cuFFT's rfft can leave ~1e-15 in the Nyquist imaginary part
-        # for some lengths (e.g. 250, 300). Zero it through the ``imag`` view:
-        # CuPy 14 silently drops ``x[..., k] = x[..., k].real`` for some
-        # strided layouts, because the source aliases the destination.
+        # The zero and (even n) Nyquist bins are their own mirrors, but cuFFT
+        # can leave ~1e-15 in their imaginary part. Zero it through the ``imag``
+        # view: CuPy 14 drops ``x[..., k] = x[..., k].real`` for some strided
+        # layouts (the source aliases the destination).
         self_mirrored_bins = [0] if n_fft_samples % 2 else [0, n_fft_samples // 2]
         for bin_index in self_mirrored_bins:
             coefficients_last[..., bin_index].imag[...] = 0

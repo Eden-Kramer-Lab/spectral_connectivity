@@ -181,7 +181,8 @@ def _get_initial_conditions(
 def _get_causal_signal(
     linear_predictor: NDArray[np.complexfloating],
     n_fft_samples: int | None = None,
-    lower_triangular_ind: tuple[NDArray[np.intp], NDArray[np.intp]] | None = None,
+    *,
+    lower_triangular_ind: tuple[NDArray[np.intp], NDArray[np.intp]],
 ) -> NDArray[np.complexfloating]:
     """Extract causal part of linear predictor (plus operator).
 
@@ -204,10 +205,10 @@ def _get_causal_signal(
         a conjugate-symmetric spectrum of this two-sided length. Its lag
         coefficients are then real, so real FFTs replace the complex ones and
         the result is again the non-negative half.
-    lower_triangular_ind : tuple of two index arrays, optional
-        ``xp.tril_indices(n_signals, k=-1)``, computed here if not given. CuPy's
-        ``tril_indices`` synchronizes the device (it calls ``nonzero``), so the
-        Wilson iteration computes it once and passes it to every call.
+    lower_triangular_ind : tuple of two index arrays
+        ``xp.tril_indices(n_signals, k=-1)``. CuPy's ``tril_indices``
+        synchronizes the device (it calls ``nonzero``), so the Wilson iteration
+        computes it once and passes it to every call.
 
     Returns
     -------
@@ -223,7 +224,6 @@ def _get_causal_signal(
     negative lag components and enforcing upper triangular structure
     at zero lag.
     """
-    n_signals = linear_predictor.shape[-1]
     if n_fft_samples is None:
         n_lags = linear_predictor.shape[-3]
         linear_predictor_coefficients = ifft(linear_predictor, axis=-3)
@@ -237,8 +237,6 @@ def _get_causal_signal(
     # Make the unit circle roots upper triangular. Use xp (not np) so the
     # index arrays match the array backend (mixing a NumPy index array with a
     # CuPy array is a GPU-only footgun).
-    if lower_triangular_ind is None:
-        lower_triangular_ind = xp.tril_indices(n_signals, k=-1)
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
     # Take only the roots inside the unit circle (positive lags)
@@ -775,7 +773,11 @@ def minimum_phase_decomposition(
         )
         minimum_phase_factor = xp.matmul(
             minimum_phase_factor,
-            _get_causal_signal(linear_predictor, half_spectrum_n_fft, lower_triangular_ind),
+            _get_causal_signal(
+                linear_predictor,
+                half_spectrum_n_fft,
+                lower_triangular_ind=lower_triangular_ind,
+            ),
         )
 
         # Freeze sub-spectra that already converged (broadcast the per-unit mask
