@@ -286,6 +286,14 @@ directly with results from 2.x.
 
 ### Changed
 
+- On the GPU, the default FFT length (and so the default frequency grid) of
+  `Multitaper`, `ShortTimeFourierTransform`, and `Welch` now follows SciPy's
+  `next_fast_len`, as on the CPU, so the same data gives the same frequencies
+  on both backends. CuPy's rule differed for 8258 of the lengths from 64 to
+  19999: SciPy treats 11 as a fast factor, so 3601 samples padded to 3630 on
+  the CPU but 3645 on the GPU. CPU results are unchanged. cuFFT is no slower at
+  SciPy's lengths (median raw-FFT time ratio 1.00 over 25 sampled lengths).
+  Pass `n_fft_samples` to choose a length explicitly.
 - Every directed `Connectivity` array is indexed `[..., source, target]`:
   `result[..., i, j]` is the influence `i -> j`, the same order as the
   wrapper's `sel(source=i, target=j)` and the lead/lag measures. The spectral
@@ -401,6 +409,49 @@ directly with results from 2.x.
   negative, larger than the window, a boolean, or disagreeing with the columns
   of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with
   an opaque SciPy `select_range` error, or used `True` as one taper.
+- `canonical_coherence` overstated the coherence of a group containing a dead,
+  duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
+  SVD-based whitening turned each zero singular direction into an arbitrary
+  unit-norm null-space direction, whose value depended on the LAPACK build.
+  After each channel is scaled to unit norm (so the value does not depend on
+  channel units), a direction with singular value below `sqrt(n * eps)` of the
+  group's largest (about 3e-8 for 4 signals, 1.2e-7 for 64) is now dropped, so
+  the value equals that of the group's independent channels, and a warning names
+  the group. A real but tiny independent component beyond that condition number
+  is treated as collinear. A group with no power at a bin (every signal zero)
+  now gives NaN there, with a warning, as coherency does, instead of an
+  arbitrary value. The whitening runs at complex128 or better, so complex64
+  coefficients give the same value as complex128. Likewise a numerically
+  zero-power component on the thin path of `global_coherence` now has a zero
+  vector instead of an arbitrary one.
+- On the GPU, the Wilson factorization behind spectral Granger, DTF, PDC, and
+  directed coherence, and the whitening in `canonical_coherence`, crashed with
+  `CUSOLVERError: CUSOLVER_STATUS_INVALID_VALUE` once a decomposition held more
+  than about 2**21 2-by-2 matrices (about 1M for 32 signals; windows x
+  frequencies x pairs, e.g. subset pairwise Granger over all 120 pairs of 16
+  signals for 30 windows of 1000-sample FFTs, or canonical coherence over 4000
+  windows x 551 frequencies). CuPy's batched
+  `eigh` (cuSOLVER `syevjBatched`) rejects such batches: the largest that
+  worked was 2,078,879 matrices for 2 signals and 1,016,319 for 32 (CuPy 14.2,
+  CUDA 12.9). These eigendecompositions now run in chunks well below that
+  limit, which gives the same result as one call.
+  NumPy results are unchanged.
+- With CuPy 14, importing the package on the GPU emitted a `FutureWarning` from
+  CuPy's own `cupyx.scipy.signal` (`cupyx.jit.rawkernel is experimental`),
+  which failed `pytest -W error` runs, including the GPU release gate. That
+  warning is now suppressed at the import.
+- `fourier_connectivity` raised `TypeError: Implicit conversion to a NumPy
+  array` when given the device (CuPy) `frequencies` or `time` that
+  `Multitaper` returns on the GPU; they are now moved to the host.
+- On the GPU, complex64 Fourier coefficients gave cross-spectral matrices with
+  single-precision error (~1e-7 relative) although they are documented to be
+  accumulated at the requested `dtype` (complex128 by default): CuPy's
+  `matmul(..., dtype=)` multiplies in the input precision and casts only the
+  product. The operands are now cast first, as NumPy does. NumPy results are
+  unchanged.
+- `minimum_phase_reconstruction_error` and `minimum_phase_decomposition`
+  raised `TypeError` on the GPU for a NumPy cross-spectral matrix; they now
+  accept host arrays (results are CuPy arrays on the GPU).
 - `group_delay` and `delay` unwrapped the coherence phase before excluding
   undefined bins, so one bin without a defined phase (e.g. a zero-power DC
   bin) made every later frequency NaN; the unwrapping now skips such bins.
@@ -568,6 +619,12 @@ directly with results from 2.x.
 
 ### Performance
 
+- On the GPU, each Wilson iteration synchronizes the device once (the
+  convergence check) instead of twice: the lower-triangle indices of the causal
+  projection, whose CuPy implementation synchronizes, are computed once per
+  factorization. Directed transfer function on 239 windows x 250 frequencies x
+  8 signals takes 0.096 s instead of 0.102 s (best of 7); pairwise Granger over
+  all 28 pairs of the same data is unchanged within noise (0.91 s).
 - Reduced cross-spectral matrices use a batched matrix multiplication rather
   than materializing the observation-level signal-by-signal outer product.
 - Phase locking uses unit-normalized coefficients with the same batched
@@ -637,6 +694,64 @@ directly with results from 2.x.
   FFT. `multitaper_connectivity` with the default measures is about 2.2x faster
   for 32 signals x 50 trials, 2.7x for 64 signals x 100 trials, and 1.5x for 16
   signals in 117 sliding windows, where pairwise Granger still dominates.
+- On the GPU, `Multitaper` (and `ShortTimeFourierTransform`/`Welch`, which share
+  its FFT) transforms real-valued data with a real FFT and writes the negative
+  frequencies as the exact conjugate mirror. cuFFT's complex FFT of real input
+  was conjugate-symmetric only to rounding (~1e-16), so the Wilson
+  factorization's exact symmetry check never passed on the GPU and every
+  spectral Granger, DTF, and PDC computation iterated on the full two-sided
+  spectrum; it now takes the half-spectrum path, as on the CPU. On one shared
+  GPU, `directed_transfer_function` is 1.7x faster (0.161 -> 0.093 s for 30
+  windows x 10 trials x 5 tapers x 1000 frequencies x 16 signals; 0.095 ->
+  0.054 s for 100 trials x 5 tapers x 2000 frequencies x 32 signals) and
+  `Multitaper.fft` 1.1-1.2x faster; pairwise spectral Granger is unchanged
+  within timing noise. GPU outputs change at rounding level (<= 1.8e-14) and
+  stay as close to the CPU's; the Nyquist bin is now exactly real, so
+  `coherence_phase` there is 0 or +pi as on the CPU, never a rounding-dependent
+  -pi. Complex-valued input keeps the full FFT. The CPU keeps SciPy's complex
+  FFT, which is already exactly symmetric for real input and was faster than a
+  real FFT plus mirror (0.31 vs 0.35 s on the first size); its outputs are
+  bit-identical.
+- `canonical_coherence` and the thin path of `global_coherence` (fewer
+  trial x taper estimates than signals) no longer call `svd` on matrices with a
+  dimension above 32, which CuPy decomposes one bin at a time. Canonical
+  coherence whitens each group with the pseudo-inverse square root of the
+  smaller Gram matrix (`eigh`) at complex128, applied twice so the second pass
+  restores SVD accuracy up to the rank threshold's condition number (about 3e7
+  for 4 signals, 8e6 for 64); global coherence
+  diagonalizes the `(n_estimates, n_estimates)` Gram matrix and maps its
+  eigenvectors to the left singular vectors. Best of 3-5 interleaved runs:
+  canonical coherence on `(30 windows, 10 trials, 5 tapers, 1000 frequencies,
+  16 signals)` in four groups of four takes 0.32 s instead of 37.8 s on the GPU
+  (A100) and 1.34 s instead of 1.85 s on the CPU; global coherence
+  (`max_rank=3`, 64 signals) takes 0.12 s instead of 22.5 s on the GPU and
+  1.03 s instead of 1.59 s on the CPU for 100 windows x 5 tapers x 500
+  frequencies, and 1.13 s instead of 38.3 s (GPU) and 3.85 s instead of 7.38 s
+  (CPU) for 20 windows x 40 tapers. Results agree with the SVD to rounding
+  (relative differences <= 5e-14 here; vectors equal up to phase) except for
+  rank-deficient groups (see Fixed).
+- On the GPU, pairwise, time-reversed, and blockwise spectral Granger factor
+  many signal (or same-sized group) pairs per Wilson call instead of one pair
+  at a time. One pair's factorization there is bound by kernel launches and
+  synchronizations rather than arithmetic. Chunks hold at most
+  `GRANGER_GPU_BATCH_MAX_WORKSPACE_ELEMENTS` (2**22) spectral elements, which
+  bounds working memory and keeps CuPy's batched eigendecomposition under its
+  batch limit (a single pair larger than that is factored on its own). Subset spectral Granger factors in the same bounded chunks, and
+  its per-pair scatter, a boolean-mask assignment in the predictive power, and
+  conditional Granger's per-pair warning check no longer synchronize the
+  device. Measured on one GPU (best of 3): pairwise spectral Granger in
+  `benchmarks/bench_default_measures.py` takes 0.36 s instead of 12.8 s for
+  2000 samples x 100 trials x 32 signals, and 0.076 s instead of 1.05 s for 10
+  windows x 50 trials x 8 signals. For 30 windows x 10 trials x 5 tapers x 1000
+  FFT bins x 16 signals, pairwise and time-reversed take 1.6 s instead of
+  3.4-4.5 s, and blockwise (8 groups of 2) 0.7 s instead of 1.1-1.4 s.
+  Conditional Granger, dominated by its 15-signal reduced factorizations, is
+  unchanged. Each pair still converges on its own, so results match the
+  pair-by-pair factorization to rounding (<= 3.6e-15 in the tests). On the
+  CPU, pairwise, time-reversed, and blockwise Granger keep one pair per call,
+  which measured faster than batching there (subset Granger factors all its
+  pairs in one call, as before). Conditional Granger's degenerate-bins warning
+  is now issued once per call instead of once per pair.
 
 ## [2.0.1] - 2026-05-12
 

@@ -1089,6 +1089,12 @@ def fourier_connectivity(
         frequency_dim=frequency_dim,
         signal_dim=signal_dim,
     )
+    # Coordinates are validated on the host; on the GPU, Multitaper's
+    # frequencies and time are device arrays that reject np.asarray.
+    if frequencies is not None:
+        frequencies = to_numpy(frequencies)
+    if time is not None:
+        time = to_numpy(time)
     if time is not None and not _is_real_numeric_dtype(np.asarray(time).dtype):
         msg = (
             "time must contain numeric elapsed seconds (window centers); "

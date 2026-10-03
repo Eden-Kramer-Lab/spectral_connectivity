@@ -7,6 +7,7 @@ from spectral_connectivity._granger import (
     _remove_instantaneous_causality,
     _sanitized_nonnegative_granger,
 )
+from tests._backend_helpers import to_device, to_host
 
 
 def test__remove_instantaneous_causality():
@@ -27,7 +28,7 @@ def test__remove_instantaneous_causality():
     expected_rotated_noise_covariance[1, 1, 0] = x2[0, 0] - (x2[1, 0] ** 2 / x2[1, 1])
 
     assert np.allclose(
-        _remove_instantaneous_causality(noise_covariance),
+        to_host(_remove_instantaneous_causality(to_device(noise_covariance))),
         expected_rotated_noise_covariance,
     )
 
@@ -40,7 +41,7 @@ def test_sanitized_nonnegative_granger_enforces_invariant(dtype):
     material_negative = -1e-3  # far outside the roundoff band
     value = np.array([0.0, 0.5, tiny_negative, material_negative, np.nan], dtype=dtype)
 
-    sanitized = _sanitized_nonnegative_granger(value)
+    sanitized = to_host(_sanitized_nonnegative_granger(to_device(value)))
 
     # Exact zero (no causality) is preserved, not discarded as NaN.
     assert sanitized[0] == 0.0

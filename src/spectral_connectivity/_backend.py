@@ -8,6 +8,7 @@ rather than the environment variable (which may change after import), so they
 cannot disagree about the backend.
 """
 
+import warnings
 from logging import getLogger
 from typing import TYPE_CHECKING
 
@@ -31,8 +32,14 @@ if not TYPE_CHECKING and is_gpu_enabled():
     try:
         # cupyx.scipy.signal.detrend was added in CuPy 13; a CuPy-12 install
         # imports cupy fine but fails here, which must not be reported as
-        # "CuPy is not installed".
-        from cupyx.scipy.signal import detrend
+        # "CuPy is not installed". CuPy 14's cupyx.scipy.signal warns on import
+        # that its internal use of cupyx.jit.rawkernel is experimental, which
+        # users cannot act on (and which fails test runs with warnings as errors).
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", "cupyx.jit.rawkernel is experimental", FutureWarning
+            )
+            from cupyx.scipy.signal import detrend
     except ImportError as exc:
         msg = (
             f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
@@ -54,8 +61,14 @@ else:
     from scipy.signal import detrend
     from scipy.sparse.linalg import svds
 
+# Default FFT length (sets the default frequency grid): SciPy's rule on both
+# backends, so CPU and GPU grids match (see CHANGELOG). Use ``next_fast_len``
+# only for internal padding that never reaches the output grid.
+from scipy.fft import next_fast_len as default_fft_length  # noqa: E402
+
 __all__ = [
     "ON_GPU",
+    "default_fft_length",
     "detrend",
     "fft",
     "fftfreq",

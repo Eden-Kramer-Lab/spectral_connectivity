@@ -41,6 +41,7 @@ from spectral_connectivity import Connectivity, DirectedOrientationWarning, Mult
 from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
 from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
 from spectral_connectivity.simulate import simulate_MVAR
+from tests._backend_helpers import to_host
 from tests._var_oracle import (
     _analytic_var,
     _companion_spectral_radius,
@@ -86,8 +87,8 @@ def test_injected_cross_spectrum_matches_analytic(var_oracle):
     covers the path it is meant to.
     """
     c = var_oracle["connectivity"]
-    csm = np.asarray(c._expectation_cross_spectral_matrix())[0]  # (n_fft, n, n)
-    np.testing.assert_allclose(csm, var_oracle["S"], atol=1e-8)
+    csm = c._expectation_cross_spectral_matrix()[0]  # (n_fft, n, n)
+    np.testing.assert_allclose(to_host(csm), var_oracle["S"], atol=1e-8)
     assert _is_conjugate_symmetric(csm) == var_oracle["conjugate_symmetric"]
 
 

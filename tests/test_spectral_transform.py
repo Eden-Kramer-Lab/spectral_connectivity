@@ -20,6 +20,7 @@ from spectral_connectivity import (
     SpectralTransform,
     Welch,
 )
+from tests._backend_helpers import to_host
 
 N_TIME_WINDOWS, N_TRIALS, N_TAPERS, N_FFT_SAMPLES, N_SIGNALS = 2, 4, 3, 16, 2
 FFT_FREQUENCIES = np.fft.fftfreq(N_FFT_SAMPLES, d=1 / 500)
@@ -112,7 +113,7 @@ def test_optional_capability_attributes_are_honored(coefficients):
 
     assert connectivity.is_one_sided is True
     np.testing.assert_array_equal(connectivity.frequencies, frequencies)
-    np.testing.assert_array_equal(connectivity.observation_weights, weights)
+    np.testing.assert_array_equal(to_host(connectivity.observation_weights), weights)
     assert connectivity.observations_are_independent is False
     assert connectivity.time_bins_are_independent is False
 

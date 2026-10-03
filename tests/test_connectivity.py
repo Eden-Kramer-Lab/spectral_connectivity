@@ -24,6 +24,7 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.simulate import simulate_MVAR, simulate_shared_oscillation
 from spectral_connectivity.transforms import MorletWavelet, Multitaper
+from tests._backend_helpers import ON_GPU, to_device, to_host
 from tests._var_oracle import (
     _STRONG_CHAIN_COEFFICIENTS,
     _analytic_var,
@@ -396,7 +397,7 @@ def test_partial_coherence_matches_inverse_spectral_matrix_definition():
     conn = Connectivity(coefficients)
     actual = conn.partial_coherence(regularization=1e-10)
 
-    spectrum = conn._expectation_cross_spectral_matrix()
+    spectrum = to_host(conn._expectation_cross_spectral_matrix())
     scale = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=(-2, -1), keepdims=True))
     identity = np.eye(3)
     precision = np.linalg.solve(spectrum + 1e-10 * scale * identity, identity)
@@ -610,7 +611,7 @@ def test_scalar_mic_mim_handle_edge_masked_morlet_data():
     mic, _ = connectivity.maximized_imaginary_coherency(labels)
     mim, _ = connectivity.multivariate_interaction_measure(labels)
 
-    validity = np.asarray(wavelet.valid_time_frequency)  # (time, frequency)
+    validity = to_host(wavelet.valid_time_frequency)  # (time, frequency)
     for value in (mic, mim):
         off_diagonal = value[..., 0, 1]
         assert np.all(np.isnan(off_diagonal[~validity]))  # invalid bins are NaN
@@ -653,7 +654,7 @@ def test_exact_cacoh_reduces_to_scalar_complex_coherency():
 
     result = connectivity.canonical_coherency([0, 1])
     score = result.scores.squeeze()
-    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    csd = to_host(connectivity._expectation_cross_spectral_matrix()).squeeze()
     coherency = csd[0, 1] / np.sqrt(csd[0, 0].real * csd[1, 1].real)
 
     assert abs(score) == pytest.approx(abs(coherency), rel=1e-9)
@@ -698,7 +699,7 @@ def test_exact_cacoh_matches_dense_phase_grid_oracle():
     )
     connectivity = Connectivity(coefficients)
     result = connectivity.canonical_coherency([0, 0, 1, 1], regularization=0.0)
-    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    csd = to_host(connectivity._expectation_cross_spectral_matrix()).squeeze()
 
     def inverse_sqrt(matrix):
         values, vectors = np.linalg.eigh((matrix + matrix.T) / 2)
@@ -782,7 +783,7 @@ def test_rich_cacoh_filters_and_patterns_match_definition():
     )
     connectivity = Connectivity(coefficients)
     result = connectivity.canonical_coherency([0, 0, 1, 1], regularization=0.0)
-    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    csd = to_host(connectivity._expectation_cross_spectral_matrix()).squeeze()
     score = result.scores.squeeze()
     filters = result.filters.squeeze()  # (side, signal)
     patterns = result.patterns.squeeze()
@@ -865,7 +866,7 @@ def test_multicomponent_cacoh_components_are_uncorrelated_within_each_group():
     )
     connectivity = Connectivity(coefficients)
     result = connectivity.canonical_coherency([0, 0, 0, 1, 1, 1], n_components=3)
-    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    csd = to_host(connectivity._expectation_cross_spectral_matrix()).squeeze()
     filters = result.filters.squeeze()  # (component, side, signal)
 
     for side, indices in enumerate((slice(0, 3), slice(3, 6))):
@@ -1102,7 +1103,7 @@ def test_cacoh_components_stay_uncorrelated_for_zero_cross_spectrum():
     coefficients[0, :, 0, 0, :] = np.eye(6)
     connectivity = Connectivity(coefficients, is_one_sided=True, frequencies=np.array([1.0]))
     result = connectivity.canonical_coherency([0, 0, 0, 1, 1, 1], n_components=3)
-    csd = connectivity._expectation_cross_spectral_matrix().squeeze()
+    csd = to_host(connectivity._expectation_cross_spectral_matrix()).squeeze()
     filters = result.filters.squeeze()  # (component, side, signal)
 
     np.testing.assert_array_equal(result.scores, 0.0)
@@ -1526,7 +1527,8 @@ def test__total_inflow():
     noise_variance = [4, 2, 3]
     expected_total_inflow = 3 * np.ones((2, 3, 1))
 
-    assert np.allclose(_total_inflow(transfer_function, noise_variance), expected_total_inflow)
+    total_inflow = _total_inflow(to_device(transfer_function), to_device(noise_variance))
+    assert np.allclose(to_host(total_inflow), expected_total_inflow)
 
 
 def test__total_outflow():
@@ -1535,7 +1537,9 @@ def test__total_outflow():
     expected_total_outflow = np.ones((2, 1, 3)) * np.sqrt(1.0 / noise_variance * 3)
 
     assert np.allclose(
-        _total_outflow(MVAR_Fourier_coefficients, noise_variance),
+        to_host(
+            _total_outflow(to_device(MVAR_Fourier_coefficients), to_device(noise_variance))
+        ),
         expected_total_outflow,
     )
 
@@ -1552,7 +1556,7 @@ def test_directed_transfer_function():
     with patch.object(
         Connectivity, "_transfer_function", new_callable=PropertyMock
     ) as mock_prop:
-        mock_prop.return_value = transfer_function
+        mock_prop.return_value = to_device(transfer_function)
         dtf = c.directed_transfer_function()
     np.testing.assert_allclose(dtf, expected, rtol=1e-12)
 
@@ -1568,7 +1572,7 @@ def test_partial_directed_coherence():
     with patch.object(
         Connectivity, "_MVAR_Fourier_coefficients", new_callable=PropertyMock
     ) as mock_prop:
-        mock_prop.return_value = mvar_coefficients
+        mock_prop.return_value = to_device(mvar_coefficients)
         pdc = c.partial_directed_coherence()
     np.testing.assert_allclose(pdc, expected, rtol=1e-12)
 
@@ -1593,8 +1597,8 @@ def test_directed_coherence_is_bounded_and_normalized():
             Connectivity, "_noise_covariance", new_callable=PropertyMock
         ) as mock_noise,
     ):
-        mock_transfer.return_value = transfer_function
-        mock_noise.return_value = noise_covariance
+        mock_transfer.return_value = to_device(transfer_function)
+        mock_noise.return_value = to_device(noise_covariance)
         dc = c.directed_coherence()
         assert np.all((dc >= 0.0) & (dc <= 1.0))
         assert np.allclose(dc.sum(axis=-2), 1.0)
@@ -1643,26 +1647,30 @@ def test_directed_transfer_family_is_normalized(three_signal_var_connectivity, m
 
 def test_max_psd_discrepancy():
     """The helper reports the relative gap between the diagonal and true PSD."""
+
+    def discrepancy(transfer_function, noise_covariance):
+        return _max_psd_discrepancy(to_device(transfer_function), to_device(noise_covariance))
+
     # Diagonal covariance: the diagonal denominator equals the true PSD.
     dense_H = np.arange(1, 5).reshape((1, 1, 2, 2)).astype(float)
-    assert _max_psd_discrepancy(dense_H, np.diag([1.0, 2.0])[np.newaxis]) == 0.0
+    assert discrepancy(dense_H, np.diag([1.0, 2.0])[np.newaxis]) == 0.0
     # Single signal: not assessable.
-    assert _max_psd_discrepancy(np.ones((1, 1, 1, 1)), np.array([[[3.0]]])) == 0.0
+    assert discrepancy(np.ones((1, 1, 1, 1)), np.array([[[3.0]]])) == 0.0
     # Aggregate cross-power a pairwise-correlation threshold would miss: 20
     # equicorrelated sources at rho=0.09 (every pair < 0.1) with an all-ones
     # transfer row omit ~63% of the true PSD.
     n, rho = 20, 0.09
     equicorrelated = ((1 - rho) * np.eye(n) + rho * np.ones((n, n)))[np.newaxis]
     all_ones = np.ones((1, 1, n, n))
-    assert np.isclose(_max_psd_discrepancy(all_ones, equicorrelated), 0.631, atol=0.01)
+    assert np.isclose(discrepancy(all_ones, equicorrelated), 0.631, atol=0.01)
     # True power exactly 0 (a rank-deficient but valid PSD covariance) with
     # nonzero diagonal power: the diagonal formula is infinitely wrong, so the
     # discrepancy is +inf and must not be dropped as unassessable.
     singular_cov = np.array([[1.0, -1.0], [-1.0, 1.0]])[np.newaxis]
     invertible_H = np.array([[1.0, 1.0], [1.0, 0.0]])[np.newaxis, np.newaxis]
-    assert _max_psd_discrepancy(invertible_H, singular_cov) == np.inf
+    assert discrepancy(invertible_H, singular_cov) == np.inf
     # No power at all (0/0) is genuinely unassessable and stays 0.
-    assert _max_psd_discrepancy(np.zeros((1, 1, 2, 2)), np.eye(2)[np.newaxis]) == 0.0
+    assert discrepancy(np.zeros((1, 1, 2, 2)), np.eye(2)[np.newaxis]) == 0.0
 
 
 def test_directed_coherence_warns_on_material_cross_power():
@@ -1703,8 +1711,8 @@ def test_directed_coherence_warns_on_material_cross_power():
                 Connectivity, "_noise_covariance", new_callable=PropertyMock
             ) as mock_noise,
         ):
-            mock_transfer.return_value = transfer_function
-            mock_noise.return_value = noise_covariance
+            mock_transfer.return_value = to_device(transfer_function)
+            mock_noise.return_value = to_device(noise_covariance)
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 c.directed_coherence()
@@ -1786,13 +1794,18 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
 
     conn = Connectivity(fc, expectation_type=expectation_type)
     n_observations = conn.n_observations
+
     # Reference moments computed independently by averaging a transform of the
     # per-observation cross-spectral matrix (a fresh matrix per call, since
     # zero_diagonal_imag mutates the imaginary view in place).
-    mean_sign = conn._expectation(np.sign(zero_diagonal_imag(conn._cross_spectral_matrix)))
-    mean_imag = conn._expectation(zero_diagonal_imag(conn._cross_spectral_matrix))
-    mean_abs = conn._expectation(np.abs(zero_diagonal_imag(conn._cross_spectral_matrix)))
-    mean_sq = conn._expectation(zero_diagonal_imag(conn._cross_spectral_matrix) ** 2)
+    def moment(transform):
+        imag = zero_diagonal_imag(to_host(conn._cross_spectral_matrix))
+        return to_host(conn._expectation(to_device(transform(imag))))
+
+    mean_sign = moment(np.sign)
+    mean_imag = moment(lambda imag: imag)
+    mean_abs = moment(np.abs)
+    mean_sq = moment(np.square)
 
     expected_pli = non_negative(mean_sign.real)
     weights = mean_abs.copy()
@@ -1985,8 +1998,8 @@ def hann_morlet_coefficients():
         smoothing_time=0.1,
         smoothing_kernel="hann",
     )
-    coefficients = wavelet.fft()
-    weights = np.asarray(wavelet.observation_weights)
+    coefficients = to_host(wavelet.fft())
+    weights = to_host(wavelet.observation_weights)
     assert np.ptp(weights) > 0  # the weighted path, not a uniform shortcut
     return coefficients, weights
 
@@ -2062,7 +2075,11 @@ def test_phase_lag_moments_match_definition_under_observation_weights(
     moments = conn._imaginary_cross_spectrum_moments(*definitions)
     for (key, function), moment in zip(definitions.items(), moments, strict=True):
         np.testing.assert_allclose(
-            moment, weighted_mean(function(imaginary)), rtol=1e-12, atol=1e-12, err_msg=key
+            to_host(moment),
+            weighted_mean(function(imaginary)),
+            rtol=1e-12,
+            atol=1e-12,
+            err_msg=key,
         )
 
 
@@ -2088,7 +2105,7 @@ def _morlet_connectivity_with_nan_edges():
         rng.standard_normal((600, 4, 2)), 200.0, [10.0, 20.0], edge_mode="nan"
     )
     conn = Connectivity.from_transform(wavelet)
-    return conn, ~np.asarray(wavelet.valid_time_frequency)
+    return conn, ~to_host(wavelet.valid_time_frequency)
 
 
 @pytest.mark.parametrize(
@@ -2119,7 +2136,7 @@ def test_phase_lag_moments_propagate_nan_observations(make_connectivity):
 def test_phase_lag_index_away_from_a_nan_observation_is_the_mean_sign():
     """The bins without the NaN observation keep the plain mean of sign(Im)."""
     conn, invalid = _connectivity_with_one_nan_observation()
-    coefficients = conn.fourier_coefficients[..., :9, :]
+    coefficients = to_host(conn.fourier_coefficients)[..., :9, :]
     real, imag = coefficients.real, coefficients.imag
     imaginary = imag[..., 0] * real[..., 1] - real[..., 0] * imag[..., 1]
     expected = np.mean(np.sign(imaginary), axis=(1, 2))
@@ -2183,7 +2200,19 @@ def test_phase_lag_moments_partial_last_block(monkeypatch, weighted):
     for key, actual_moment, expected_moment in zip(
         PHASE_LAG_MOMENTS, actual, expected, strict=True
     ):
-        np.testing.assert_array_equal(actual_moment, expected_moment, err_msg=key)
+        if ON_GPU:
+            # cuBLAS picks its reduction order by tile shape: ~1 ulp apart.
+            np.testing.assert_allclose(
+                to_host(actual_moment),
+                to_host(expected_moment),
+                rtol=1e-14,
+                atol=1e-15,
+                err_msg=key,
+            )
+        else:
+            np.testing.assert_array_equal(
+                to_host(actual_moment), to_host(expected_moment), err_msg=key
+            )
 
 
 @pytest.mark.parametrize("sources_per_tile", [1, 2])
@@ -2453,15 +2482,17 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     """CuPy ufuncs reject the public ``where=`` keyword, so no backend call may
     use it. Emulate that restriction by swapping every module's ``xp`` namespace
     for one whose ufuncs raise on ``where=``, then exercise every path that
-    divides under a mask: weighted expectations, adaptive tapers, CaCoh."""
+    divides under a mask: weighted expectations, adaptive tapers, CaCoh. On the
+    GPU backend the real CuPy ufuncs enforce the restriction, so no emulation."""
     from spectral_connectivity import MorletWavelet, Multitaper
 
-    strict_namespace = _UfuncWhereRejectingNamespace()
-    for module in backend_modules:
-        assert module.xp is np  # the CPU backend this emulation replaces
-        monkeypatch.setattr(module, "xp", strict_namespace)
-    with pytest.raises(TypeError, match="where"):
-        strict_namespace.divide(np.ones(2), np.ones(2), where=np.ones(2, dtype=bool))
+    if not ON_GPU:
+        strict_namespace = _UfuncWhereRejectingNamespace()
+        for module in backend_modules:
+            assert module.xp is np  # the CPU backend this emulation replaces
+            monkeypatch.setattr(module, "xp", strict_namespace)
+        with pytest.raises(TypeError, match="where"):
+            strict_namespace.divide(np.ones(2), np.ones(2), where=np.ones(2, dtype=bool))
 
     rng = np.random.default_rng(7)
     data = rng.standard_normal((600, 3, 3))
@@ -2472,7 +2503,7 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     assert np.isfinite(weighted.power()).any()
     assert np.isfinite(weighted.coherence_magnitude()).any()
     adaptive = Multitaper(data, 200.0, taper_weighting="adaptive")
-    assert np.isfinite(adaptive.fft()).all()
+    assert np.isfinite(to_host(adaptive.fft())).all()
     conn = Connectivity.from_multitaper(Multitaper(data, 200.0))
     assert np.isfinite(conn.canonical_coherency(np.array([0, 0, 1])).scores).any()
 
@@ -2537,6 +2568,18 @@ _GRANGER_MEASURES = {
 }
 
 
+# On CuPy the batched Cholesky of a rank-deficient zero-lag matrix returns NaN
+# instead of raising, so no deterministic fallback start is used and the whole
+# pair with a dead channel is NaN, not only the influences on the dead channel
+# (see ``minimum_phase_decomposition._get_initial_conditions``).
+_GPU_DEAD_CHANNEL_NAMED_PAIRS = {
+    "pairwise_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
+    "time_reversed_spectral_granger_prediction": "0 -> 2, 1 -> 2, 2 -> 0, 2 -> 1",
+    "subset_pairwise_spectral_granger_prediction": "0 -> 2, 2 -> 0",
+    "blockwise_spectral_granger_prediction": "'a' -> 'c', 'b' -> 'c', 'c' -> 'a', 'c' -> 'b'",
+}
+
+
 @pytest.mark.parametrize(
     ("measure", "defect", "named_pairs"),
     [
@@ -2568,6 +2611,8 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     for a dead channel) without naming the pair, and the advice mentioned a
     regularization parameter no Granger method has.
     """
+    if ON_GPU and defect == "dead":
+        named_pairs = _GPU_DEAD_CHANNEL_NAMED_PAIRS[measure]
     connectivity = _granger_connectivity(defect)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
@@ -2592,6 +2637,172 @@ def test_granger_warns_once_naming_the_nan_pairs(measure, defect, named_pairs):
     assert not any("not positive-definite" in message for message in messages), messages
     assert not any(issubclass(warning.category, RuntimeWarning) for warning in record)
     assert np.isnan(result).any()
+
+
+@pytest.mark.parametrize("defect", [None, "duplicated", "dead"])
+@pytest.mark.parametrize("measure", list(_GRANGER_MEASURES))
+def test_batched_granger_factorization_matches_one_pair_at_a_time(
+    measure, defect, monkeypatch
+):
+    """The GPU path factors several signal (or group) pairs per Wilson call.
+
+    Convergence is tracked per sub-spectrum, so stacking pairs must reproduce
+    the pair-by-pair values, NaN pattern and pair-naming warning. Forced here on
+    any backend, with chunks of two pairs so that a partial chunk occurs.
+    """
+    named_per_run = []
+
+    def compute():
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            result = _GRANGER_MEASURES[measure](_granger_connectivity(defect))
+        named_per_run.append(
+            [str(w.message) for w in record if "source -> target" in str(w.message)]
+        )
+        return result
+
+    _assert_batched_granger_matches(compute, monkeypatch)
+    assert named_per_run[1] == named_per_run[0]
+
+
+def _assert_batched_granger_matches(compute, monkeypatch):
+    """Run ``compute`` one pair per Wilson call, then with the GPU batching path
+    forced on any backend (chunks of two pairs), and check that the values and
+    NaN pattern agree."""
+    from spectral_connectivity import _granger
+
+    monkeypatch.setattr(_granger, "ON_GPU", False)
+    expected = compute()
+    monkeypatch.setattr(_granger, "ON_GPU", True)
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 2)
+    result = compute()
+    np.testing.assert_array_equal(np.isnan(result), np.isnan(expected))
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12, equal_nan=True)
+
+
+def test_batched_pairwise_granger_retries_pairs_alone_after_linalg_error(monkeypatch):
+    """A LinAlgError in a stack of pairs must not leave the other pairs NaN."""
+    from spectral_connectivity import _granger
+
+    expected = _granger_connectivity().pairwise_spectral_granger_prediction()
+    original = _granger._pair_spectral_granger
+
+    def fail_on_stacks(pair_power, pair_csm, **kwargs):
+        if pair_csm.shape[-4] > 1:
+            error_message = "Singular matrix"
+            raise np.linalg.LinAlgError(error_message)
+        return original(pair_power, pair_csm, **kwargs)
+
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_on_stacks)
+    result = _granger_connectivity().pairwise_spectral_granger_prediction()
+    # Equal up to rounding: device kernels may round differently by batch size.
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("measure", "group_labels"),
+    [
+        # Three pairs in chunks of two: the subset result is concatenated
+        # across chunks, the last one partial.
+        ("subset", None),
+        # Groups of sizes 2, 2 and 1: pairs are batched per block-size class,
+        # (2, 2) with one pair and (2, 1) with two.
+        ("blockwise", ["a", "a", "b", "c", "b"]),
+    ],
+)
+def test_batched_granger_matches_across_chunks_and_block_sizes(
+    measure, group_labels, monkeypatch
+):
+    """Batched subset and blockwise Granger reproduce the one-pair-at-a-time
+    values when results are assembled from several chunks or size classes."""
+    from spectral_connectivity import Multitaper
+
+    signals = np.random.default_rng(3).standard_normal((512, 10, 5))
+    signals[1:, :, 1] += 0.6 * signals[:-1, :, 0]
+    signals[2:, :, 3] += 0.4 * signals[:-2, :, 4]
+
+    def compute():
+        connectivity = Connectivity.from_multitaper(
+            Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
+        )
+        if measure == "subset":
+            return connectivity.subset_pairwise_spectral_granger_prediction(
+                [(0, 2), (0, 1), (2, 1)]
+            )
+        return connectivity.blockwise_spectral_granger_prediction(group_labels)[0]
+
+    _assert_batched_granger_matches(compute, monkeypatch)
+
+
+def test_batched_pairwise_granger_leaves_only_a_pair_that_fails_alone_nan(monkeypatch):
+    """A pair whose factorization fails even on its own ends up NaN and named in
+    the warning; the batch retry leaves every other pair exact."""
+    from spectral_connectivity import _granger
+
+    expected = _granger_connectivity().pairwise_spectral_granger_prediction()
+    original_scatter = _granger._scatter_pairwise_granger
+    original_pair = _granger._pair_spectral_granger
+    current_pairs = []
+
+    def tracking_scatter(predictive_power, total_power, csm, pairs, **kwargs):
+        current_pairs[:] = [tuple(pair) for pair in np.asarray(pairs).tolist()]
+        return original_scatter(predictive_power, total_power, csm, pairs, **kwargs)
+
+    def fail_with_pair_0_2(pair_power, pair_csm, **kwargs):
+        if (0, 2) in current_pairs:
+            error_message = "Singular matrix"
+            raise np.linalg.LinAlgError(error_message)
+        return original_pair(pair_power, pair_csm, **kwargs)
+
+    monkeypatch.setattr(_granger, "_pairs_per_wilson_batch", lambda *args, **kwargs: 3)
+    monkeypatch.setattr(_granger, "_scatter_pairwise_granger", tracking_scatter)
+    monkeypatch.setattr(_granger, "_pair_spectral_granger", fail_with_pair_0_2)
+    with pytest.warns(UserWarning, match=r": 0 -> 2, 2 -> 0 \("):
+        result = _granger_connectivity().pairwise_spectral_granger_prediction()
+
+    assert np.isnan(result[..., 0, 2]).all()
+    assert np.isnan(result[..., 2, 0]).all()
+    others = np.ones(result.shape[-2:], dtype=bool)
+    others[[0, 2], [2, 0]] = False
+    np.testing.assert_allclose(
+        result[..., others], expected[..., others], rtol=0, atol=1e-12, equal_nan=True
+    )
+
+
+def test_conditional_granger_warns_when_only_one_early_pair_is_degenerate(monkeypatch):
+    """The degenerate-spectrum flags of all pairs are combined before the single
+    warning, so a degenerate first pair is reported even if later ones are not."""
+    from spectral_connectivity import _granger
+
+    original = _granger._estimate_conditional_spectral_granger_prediction
+
+    def first_pair_degenerate(*args, **kwargs):
+        value, _ = original(*args, **kwargs)
+        reduced_indices, target = args[3], args[4]
+        source = (set(range(len(reduced_indices) + 1)) - set(reduced_indices)).pop()
+        return value, _granger.xp.asarray((source, target) == (0, 1))
+
+    monkeypatch.setattr(
+        _granger, "_estimate_conditional_spectral_granger_prediction", first_pair_degenerate
+    )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _granger_connectivity().conditional_spectral_granger_prediction()
+    assert sum("was not positive" in str(w.message) for w in record) == 1
+
+
+def test_subset_granger_repeated_pair_keeps_its_last_occurrence():
+    """Pairs are written in one scatter; a pair requested in both orders must
+    still report the later request's values, as a pair-by-pair write would."""
+    connectivity = _granger_connectivity()
+    both = connectivity.subset_pairwise_spectral_granger_prediction([(0, 1), (2, 0), (1, 0)])
+    last = connectivity.subset_pairwise_spectral_granger_prediction([(1, 0)])
+    # The two request orders differ by far more than this tolerance (~1e-5;
+    # each order converges to the Wilson tolerance separately).
+    np.testing.assert_allclose(
+        both[..., [0, 1], [1, 0]], last[..., [0, 1], [1, 0]], rtol=0, atol=1e-12
+    )
 
 
 @pytest.mark.parametrize("measure", list(_GRANGER_MEASURES))
@@ -2710,8 +2921,8 @@ def test_subset_cross_spectral_matrix_is_compact_and_fully_initialized():
     conn = Connectivity(coefficients)
     pairs = np.array([[0, 3], [2, 4]])
 
-    compact = conn._subset_cross_spectral_matrix(pairs)
-    full = conn._expectation_cross_spectral_matrix()
+    compact = to_host(conn._subset_cross_spectral_matrix(pairs))
+    full = to_host(conn._expectation_cross_spectral_matrix())
     assert compact.shape == (2, 2, 8, 2, 2)
     for pair_number, pair in enumerate(pairs):
         expected = full[..., pair[:, None], pair[None, :]]
@@ -2739,8 +2950,8 @@ def test_compact_subset_cross_spectrum_preserves_every_expectation(expectation_t
     conn = Connectivity(coefficients, expectation_type=expectation_type)
     pairs = np.array([[0, 3], [2, 4]])
 
-    compact = conn._subset_cross_spectral_matrix(pairs)
-    full = conn._expectation(conn._cross_spectral_matrix)
+    compact = to_host(conn._subset_cross_spectral_matrix(pairs))
+    full = to_host(conn._expectation(conn._cross_spectral_matrix))
     for pair_number, pair in enumerate(pairs):
         expected = full[..., pair[:, None], pair[None, :]]
         actual = np.take(compact, pair_number, axis=-4)
@@ -2766,8 +2977,8 @@ def test_subset_cross_spectral_matrix_matches_weighted_full_expectation(
         2 * int(np.prod(shape[:-1])),
     )
 
-    compact = conn._subset_cross_spectral_matrix(pairs)
-    full = conn._expectation_cross_spectral_matrix()
+    compact = to_host(conn._subset_cross_spectral_matrix(pairs))
+    full = to_host(conn._expectation_cross_spectral_matrix())
     for pair_number, pair in enumerate(pairs):
         expected = full[..., pair[:, None], pair[None, :]]
         np.testing.assert_allclose(np.take(compact, pair_number, axis=-4), expected)
@@ -2948,11 +3159,13 @@ def test_mvar_rank_deficient_fails_gracefully_without_linalg_error():
 
     With near-identical channels the cross-spectral matrix is singular and the
     Wilson decomposition cannot converge; the result is NaN (with a convergence
-    warning), but the regularized solve must not crash.
+    warning), but the regularized solve must not crash. On CuPy the batched
+    Cholesky returns NaN instead of raising, so only NumPy warns that it failed
+    (see ``minimum_phase_decomposition._get_initial_conditions``).
     """
     conn = Connectivity(fourier_coefficients=_near_singular_fourier(1e-10))
     with (
-        pytest.warns(UserWarning, match="Cholesky failed"),
+        nullcontext() if ON_GPU else pytest.warns(UserWarning, match="Cholesky failed"),
         pytest.warns(UserWarning, match="did not converge"),
     ):
         mvar_coeffs = conn._MVAR_Fourier_coefficients  # must not raise LinAlgError
@@ -2960,7 +3173,7 @@ def test_mvar_rank_deficient_fails_gracefully_without_linalg_error():
     # input that fails to converge they propagate NaN rather than raising (the
     # failure was already reported by the warnings above, so none repeat here).
     dtf = conn.directed_transfer_function()
-    assert np.isnan(mvar_coeffs).all()
+    assert np.isnan(to_host(mvar_coeffs)).all()
     assert np.isnan(dtf).all()
 
 
@@ -3121,8 +3334,8 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
             fourier_coefficients=fourier_coefficients,
             expectation_type=expectation_type,
         )
-        reduced = conn._expectation_cross_spectral_matrix()
-        reference = conn._expectation(conn._cross_spectral_matrix)
+        reduced = to_host(conn._expectation_cross_spectral_matrix())
+        reference = to_host(conn._expectation(conn._cross_spectral_matrix))
         assert reduced.shape == reference.shape, expectation_type
         np.testing.assert_allclose(
             reduced, reference, rtol=1e-10, atol=1e-12, err_msg=expectation_type
@@ -3136,8 +3349,8 @@ def test_reduced_cross_spectral_matrix_matches_outer_product():
         conn = Connectivity(
             fourier_coefficients=nan_coefficients, expectation_type="trials_tapers"
         )
-    reduced = conn._expectation_cross_spectral_matrix()
-    reference = conn._expectation(conn._cross_spectral_matrix)
+    reduced = to_host(conn._expectation_cross_spectral_matrix())
+    reference = to_host(conn._expectation(conn._cross_spectral_matrix))
     np.testing.assert_array_equal(np.isnan(reduced), np.isnan(reference))
 
 
@@ -3154,7 +3367,9 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
         np.sum(outer * weights[..., np.newaxis], axis=(1, 2))
         / np.sum(weights, axis=(1, 2))[..., np.newaxis]
     )
-    np.testing.assert_allclose(connectivity._expectation_cross_spectral_matrix(), expected)
+    np.testing.assert_allclose(
+        to_host(connectivity._expectation_cross_spectral_matrix()), expected
+    )
 
 
 def _weighted_two_sided_spectrum(n_fft_samples, seed):
@@ -3238,12 +3453,12 @@ def _reference_normalized_cross_spectrum(conn):
     magnitude and averages, then restricts to non-negative frequencies -- the
     original implementation the factorized ``_phase_locking_value`` replaced.
     """
-    csm = np.asarray(conn._cross_spectral_matrix)
+    csm = to_host(conn._cross_spectral_matrix)
     magnitude = np.abs(csm)
     with np.errstate(invalid="ignore", divide="ignore"):
         normalized = csm / magnitude
     normalized[magnitude == 0] = np.nan
-    reduced = np.asarray(conn._expectation(normalized))
+    reduced = to_host(conn._expectation(to_device(normalized)))
     return reduced[..., : reduced.shape[-3] // 2 + 1, :, :]
 
 
@@ -3293,7 +3508,7 @@ def test_phase_locking_value_matches_per_observation_reference(dtype, dead, expe
 
     with expect_dead_channel_warning():
         plv = conn.phase_locking_value()
-        raw = np.asarray(conn._phase_locking_value())
+        raw = to_host(conn._phase_locking_value())
 
     # NaN placement identical, values equal off the NaNs.
     np.testing.assert_array_equal(np.isnan(plv), np.isnan(ref_plv))
@@ -3407,7 +3622,7 @@ def test_power_one_sided_preserves_total_power():
         assert multitaper.n_fft_samples == n_time
         conn = Connectivity.from_multitaper(multitaper)
         one_sided = conn.power()  # non-negative frequencies, interior doubled
-        two_sided = conn._power  # full spectrum
+        two_sided = to_host(conn._power)  # full spectrum
         np.testing.assert_allclose(one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10)
 
 
@@ -3440,7 +3655,7 @@ def test_power_one_sided_integrates_to_signal_power():
         recovered = conn.power()[0].sum(axis=0) * frequency_step  # (n_signals,)
 
         # Multitaper scales its tapers to energy fs; undo that for the identity.
-        unit_tapers = np.asarray(multitaper.tapers) / np.sqrt(sampling_frequency)
+        unit_tapers = to_host(multitaper.tapers) / np.sqrt(sampling_frequency)
         assert unit_tapers.shape[0] == n_time
         tapered = unit_tapers[:, :, np.newaxis, np.newaxis] * time_series[:, np.newaxis]
         expected = (tapered**2).sum(axis=0).mean(axis=(0, 1))  # over tapers, trials

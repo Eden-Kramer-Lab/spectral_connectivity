@@ -10,7 +10,16 @@ from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
 
 from spectral_connectivity._array_utils import _divide_where
-from spectral_connectivity._backend import ON_GPU, fft, fftfreq, ifft, next_fast_len, xp
+from spectral_connectivity._backend import (
+    ON_GPU,
+    default_fft_length,
+    fft,
+    fftfreq,
+    ifft,
+    next_fast_len,
+    rfft,
+    xp,
+)
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
     BackendArray,
@@ -705,8 +714,8 @@ class Multitaper:
         one-dimensional, so per-trial start times are not supported.
     n_fft_samples : int, optional
         Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
-        to be fast for the FFT algorithm. The value is determined by
-        scipy.fft.next_fast_len (or cupy.fft.next_fast_len when GPU is enabled).
+        to be fast for the FFT algorithm: scipy.fft.next_fast_len, on the GPU
+        backend too, so the default frequency grid is the same on CPU and GPU.
     n_time_samples_per_window : int, optional
         Number of samples per time window. Computed (to the nearest sample)
         from time_window_duration if not provided; when both are given they
@@ -1541,7 +1550,7 @@ Frequency Analysis
 
         """
         if self._n_fft_samples is None:
-            self._n_fft_samples = next_fast_len(self.n_time_samples_per_window)
+            self._n_fft_samples = default_fft_length(self.n_time_samples_per_window)
         elif self._n_fft_samples < self.n_time_samples_per_window:
             # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
             # a too-small n_fft_samples silently discards most of each window.
@@ -2990,9 +2999,37 @@ def _multitaper_fft(
     fft_kwargs: dict[str, Any] = {}
     if workers is not None and not ON_GPU:
         fft_kwargs["workers"] = workers
-    coefficients: NDArray[np.complexfloating] = fft(
-        projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs
-    )
+    if ON_GPU and not xp.iscomplexobj(projected_time_series):
+        # cuFFT's complex FFT of real input is conjugate-symmetric only to
+        # rounding, which fails the Wilson factorization's exact symmetry check.
+        # rfft plus the exact mirror X[n - k] = conj(X[k]) is exactly symmetric.
+        # (SciPy's complex FFT already is, and is faster on the CPU.)
+        half_spectrum: NDArray[np.complexfloating] = rfft(
+            projected_time_series, n=n_fft_samples, axis=axis
+        )
+        n_non_negative = half_spectrum.shape[axis]
+        shape = list(half_spectrum.shape)
+        shape[axis] = n_fft_samples
+        coefficients: NDArray[np.complexfloating] = xp.empty(shape, dtype=half_spectrum.dtype)
+        coefficients_last = xp.moveaxis(coefficients, axis, -1)
+        xp.divide(
+            xp.moveaxis(half_spectrum, axis, -1),
+            sampling_frequency,
+            out=coefficients_last[..., :n_non_negative],
+        )
+        # The zero and (even n) Nyquist bins are their own mirrors, but cuFFT
+        # can leave ~1e-15 in their imaginary part. Zero it through the ``imag``
+        # view: CuPy 14 drops ``x[..., k] = x[..., k].real`` for some strided
+        # layouts (the source aliases the destination).
+        self_mirrored_bins = [0] if n_fft_samples % 2 else [0, n_fft_samples // 2]
+        for bin_index in self_mirrored_bins:
+            coefficients_last[..., bin_index].imag[...] = 0
+        xp.conjugate(
+            coefficients_last[..., n_fft_samples - n_non_negative : 0 : -1],
+            out=coefficients_last[..., n_non_negative:],
+        )
+        return coefficients
+    coefficients = fft(projected_time_series, n=n_fft_samples, axis=axis, **fft_kwargs)
     return coefficients / sampling_frequency
 
 

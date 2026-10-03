@@ -6,6 +6,7 @@ import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity import _array_utils
 from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -20,6 +21,7 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_decomposition,
     minimum_phase_reconstruction_error,
 )
+from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
@@ -62,8 +64,8 @@ def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
     coefficients = np.array([[[0.9, 0.0], [0.8, 0.9]]])  # (1 lag, 2, 2)
     noise = np.eye(2)
 
-    resolved = _analytic_var_spectrum(coefficients, noise, n_fft=1024)
-    coarse = _analytic_var_spectrum(coefficients, noise, n_fft=64)
+    resolved = to_device(_analytic_var_spectrum(coefficients, noise, n_fft=1024))
+    coarse = to_device(_analytic_var_spectrum(coefficients, noise, n_fft=64))
 
     resolved_error = float(minimum_phase_reconstruction_error(resolved)[0])
     coarse_error = float(minimum_phase_reconstruction_error(coarse)[0])
@@ -75,11 +77,13 @@ def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
 
 def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():
     coefficients = np.array([[[0.5, 0.0], [0.4, 0.5]]])
-    spectrum = _analytic_var_spectrum(coefficients, np.eye(2), n_fft=512)
+    spectrum = to_device(_analytic_var_spectrum(coefficients, np.eye(2), n_fft=512))
     factor = minimum_phase_decomposition(spectrum)
     from_factor = minimum_phase_reconstruction_error(spectrum, factor)
     recomputed = minimum_phase_reconstruction_error(spectrum)
-    np.testing.assert_allclose(from_factor, recomputed, rtol=1e-6, atol=1e-10)
+    np.testing.assert_allclose(
+        to_host(from_factor), to_host(recomputed), rtol=1e-6, atol=1e-10
+    )
 
 
 @pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
@@ -106,10 +110,11 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals
     )
     cross_spectral_matrix = _cross_spectrum_of(signals)
     cross_spectral_matrix[0] = np.diag([2.0, 0.5])
+    cross_spectral_matrix = to_device(cross_spectral_matrix)
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
     with pytest.warns(UserWarning, match="did not converge for 2 of 3"):
-        factor = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=1)
+        factor = to_host(minimum_phase_decomposition(cross_spectral_matrix, max_iterations=1))
     assert factor.shape == cross_spectral_matrix.shape
     np.testing.assert_allclose(
         factor[0], np.broadcast_to(np.diag([np.sqrt(2.0), np.sqrt(0.5)]), factor[0].shape)
@@ -122,7 +127,9 @@ def test_minimum_phase_decomposition_non_convergence_warns_and_nans(real_signals
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        converged = minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
+        converged = to_host(
+            minimum_phase_decomposition(cross_spectral_matrix, max_iterations=500)
+        )
     assert not np.isnan(converged).any()
     np.testing.assert_array_equal(converged[0], factor[0])
 
@@ -147,9 +154,16 @@ def test_solve_isolating_singular_isolates_bad_units():
     with pytest.raises(np.linalg.LinAlgError):
         np.linalg.solve(coefficient, right_hand_side)
 
-    solved = _solve_isolating_singular(coefficient, right_hand_side, identity)
+    solved = to_host(
+        _solve_isolating_singular(
+            to_device(coefficient), to_device(right_hand_side), to_device(identity)
+        )
+    )
     assert np.allclose(solved[0], np.linalg.inv(good))
-    assert np.isnan(solved[1]).all()
+    if ON_GPU:  # CuPy's solve does not raise; it returns NaN/Inf for the singular unit.
+        assert not np.isfinite(solved[1]).any()
+    else:
+        assert np.isnan(solved[1]).all()
     assert np.allclose(solved[2], np.linalg.inv(good))
 
 
@@ -171,8 +185,12 @@ def test_solve_2x2_marks_exactly_singular_and_non_finite_systems_nan():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
-        solution = _solve_isolating_singular(
-            matrices, right_hand_side, np.eye(2, dtype=complex)
+        solution = to_host(
+            _solve_isolating_singular(
+                to_device(matrices),
+                to_device(right_hand_side),
+                to_device(np.eye(2, dtype=complex)),
+            )
         )
 
     np.testing.assert_allclose(solution[0], np.linalg.inv(good))
@@ -193,12 +211,58 @@ def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
     indefinite = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
     matrices = np.stack([positive_definite, singular, non_finite, indefinite])
 
-    square_root = _hermitian_square_root(matrices)
+    square_root = to_host(_hermitian_square_root(to_device(matrices)))
 
     np.testing.assert_allclose(
         square_root[:2] @ _conjugate_transpose(square_root[:2]), matrices[:2], atol=1e-14
     )
     assert np.isnan(square_root[2:]).all()
+
+
+def _tril(matrices):
+    """Strictly-lower-triangle indices of ``matrices``' trailing square axes."""
+    return xp.tril_indices(matrices.shape[-1], k=-1)
+
+
+def _chunks_of_three(monkeypatch):
+    """Split batched eigh calls into chunks of 3 matrices."""
+    monkeypatch.setattr(_array_utils, "_eigh_chunk_size", lambda n_signals: 3)
+
+
+def test_hermitian_square_root_in_chunks_matches_a_single_batch(monkeypatch):
+    """Splitting the batched eigh into chunks gives the single-call result exactly.
+
+    Regression: CuPy's batched eigh fails (CUSOLVER_STATUS_INVALID_VALUE) above
+    about 2**21 2x2 matrices (about 1M at 32 signals), which a long recording or
+    subset pairwise Granger reaches. The batch is split into chunks; here the budget is shrunk so 20
+    matrices (including a non-finite and an indefinite one) take 7 chunks, the
+    last one partial.
+    """
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((4, 5, 2, 2)) + 1j * rng.standard_normal((4, 5, 2, 2))
+    matrices = a @ _conjugate_transpose(a)
+    matrices[1, 2] = [[np.nan, 0.0], [0.0, 1.0]]
+    matrices[3, 4] = [[1.0, 0.0], [0.0, -1.0]]
+    single = to_host(_hermitian_square_root(to_device(matrices)))
+
+    _chunks_of_three(monkeypatch)
+    chunked = to_host(_hermitian_square_root(to_device(matrices)))
+
+    np.testing.assert_array_equal(chunked, single)
+    assert np.isnan(chunked[1, 2]).all()
+    assert np.isnan(chunked[3, 4]).all()
+
+
+def test_minimum_phase_decomposition_with_chunked_eigh_matches(monkeypatch):
+    """The Wilson factor is unchanged when the square root of S is chunked."""
+    signals = _lagged_signals(64, np.random.default_rng(0))
+    spectrum = to_device(_cross_spectrum_of(signals))
+    single = to_host(minimum_phase_decomposition(spectrum))
+
+    _chunks_of_three(monkeypatch)
+    chunked = to_host(minimum_phase_decomposition(spectrum))
+
+    np.testing.assert_array_equal(chunked, single)
 
 
 def test_near_collinear_channels_converge():
@@ -215,7 +279,7 @@ def test_near_collinear_channels_converge():
     signals = _lagged_signals(64, np.random.default_rng(0))
     near_duplicate = signals.copy()
     near_duplicate[..., 2] = signals[..., 0] + 3e-5 * signals[..., 2]
-    spectrum = _cross_spectrum_of(near_duplicate)
+    spectrum = to_device(_cross_spectrum_of(near_duplicate))
 
     import warnings
 
@@ -223,9 +287,12 @@ def test_near_collinear_channels_converge():
         warnings.simplefilter("error")
         factor = minimum_phase_decomposition(spectrum)
 
-    reference_error = minimum_phase_reconstruction_error(_cross_spectrum_of(signals))
+    reference_error = minimum_phase_reconstruction_error(
+        to_device(_cross_spectrum_of(signals))
+    )
     np.testing.assert_array_less(
-        minimum_phase_reconstruction_error(spectrum, factor), 2 * reference_error
+        to_host(minimum_phase_reconstruction_error(spectrum, factor)),
+        2 * to_host(reference_error),
     )
 
 
@@ -245,7 +312,11 @@ def test_solve_isolating_singular_matches_lapack(n_signals):
     matrices[3, 4, 0] *= 1e-6
     identity = np.eye(n_signals, dtype=complex)
 
-    solution = _solve_isolating_singular(matrices, right_hand_side, identity)
+    solution = to_host(
+        _solve_isolating_singular(
+            to_device(matrices), to_device(right_hand_side), to_device(identity)
+        )
+    )
 
     singular = np.zeros(shape[:2], dtype=bool)
     singular[1, 2] = True
@@ -265,11 +336,15 @@ def test_singular_matrix_mask_flags_singular_and_nonfinite():
     singular = np.array([[1.0, 2.0], [2.0, 4.0]])
     non_finite = np.array([[np.nan, 0.0], [0.0, 1.0]])
 
-    mask = _singular_matrix_mask(np.stack([good, singular, good]), identity)
+    mask = _singular_matrix_mask(
+        to_device(np.stack([good, singular, good])), to_device(identity)
+    )
     assert mask.tolist() == [False, True, False]
 
     # Non-finite matrices are flagged without the SVD choking on NaN/Inf input.
-    mask_nan = _singular_matrix_mask(np.stack([good, non_finite]), identity)
+    mask_nan = _singular_matrix_mask(
+        to_device(np.stack([good, non_finite])), to_device(identity)
+    )
     assert mask_nan.tolist() == [False, True]
 
 
@@ -320,16 +395,18 @@ def test_minimum_phase_decomposition_isolates_one_singular_subspectrum(real_sign
     is NaN, and the warning reports the correct count. ``_warn_on_failure=False``
     (used by spectral Granger) returns the same factor without the warning.
     """
-    cross_spectral_matrix = _spectra_with_one_duplicated_channel(real_signals)
+    cross_spectral_matrix = to_device(_spectra_with_one_duplicated_channel(real_signals))
     assert _is_conjugate_symmetric(cross_spectral_matrix) == real_signals
 
     with _ignoring_cholesky_start_warning():
         with pytest.warns(UserWarning, match="did not converge for 1 of 3"):
-            factor = minimum_phase_decomposition(cross_spectral_matrix)
-        silent = minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
+            factor = to_host(minimum_phase_decomposition(cross_spectral_matrix))
+        silent = to_host(
+            minimum_phase_decomposition(cross_spectral_matrix, _warn_on_failure=False)
+        )
     assert factor.shape == cross_spectral_matrix.shape
     assert np.isnan(factor[1]).all()  # rank-deficient window isolated
-    healthy = minimum_phase_decomposition(cross_spectral_matrix[[0, 2]])
+    healthy = to_host(minimum_phase_decomposition(cross_spectral_matrix[[0, 2]]))
     np.testing.assert_allclose(factor[[0, 2]], healthy, rtol=1e-12)
     np.testing.assert_array_equal(silent, factor)
 
@@ -345,7 +422,9 @@ def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
 
     rng = np.random.default_rng(0)
     coeffs = rng.standard_normal((1, 8, 2, 2)) + 1j * rng.standard_normal((1, 8, 2, 2))
-    cross_spectral_matrix = np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2)) + 2 * np.eye(2)
+    cross_spectral_matrix = to_device(
+        np.matmul(coeffs, coeffs.conj().swapaxes(-1, -2)) + 2 * np.eye(2)
+    )
 
     import warnings
 
@@ -361,8 +440,26 @@ def test_minimum_phase_decomposition_runs_with_debug_logging(caplog):
         logging.DEBUG, logger="spectral_connectivity.minimum_phase_decomposition"
     ):
         factor_debug = minimum_phase_decomposition(cross_spectral_matrix)
-    np.testing.assert_array_equal(factor_debug, factor_default)
+    np.testing.assert_array_equal(to_host(factor_debug), to_host(factor_default))
     assert any("converged" in message for message in caplog.messages)
+
+
+@contextlib.contextmanager
+def _expect_cholesky_fallback_warning():
+    """Expect the Cholesky-fallback warning on NumPy, and no such warning on CuPy.
+
+    NumPy's batched Cholesky raises for a non-positive-definite unit, which takes
+    the per-unit fallback and warns. CuPy's returns without raising, so there is
+    no fallback and no warning (see ``_get_initial_conditions``).
+    """
+    if not ON_GPU:
+        with pytest.warns(UserWarning, match="Cholesky failed"):
+            yield
+        return
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        yield
+    assert not [w for w in caught if "Cholesky failed" in str(w.message)]
 
 
 def test_get_initial_conditions_isolates_non_positive_definite_units():
@@ -386,9 +483,9 @@ def test_get_initial_conditions_isolates_non_positive_definite_units():
         (v @ v.T).astype(complex), (n_freq, n_signals, n_signals)
     ).copy()
 
-    solo = _get_initial_conditions(healthy[np.newaxis])
-    with pytest.warns(UserWarning, match="Cholesky failed"):
-        batched = _get_initial_conditions(np.stack([healthy, rank_one]))
+    solo = to_host(_get_initial_conditions(to_device(healthy[np.newaxis])))
+    with _expect_cholesky_fallback_warning():
+        batched = to_host(_get_initial_conditions(to_device(np.stack([healthy, rank_one]))))
     # The healthy unit's deterministic Cholesky start is identical whether or not
     # the singular unit shares the batch.
     np.testing.assert_allclose(batched[0], solo[0])
@@ -416,9 +513,11 @@ def test_get_initial_conditions_keeps_valid_ill_conditioned_units(dtype, small):
     np.linalg.cholesky(ill_conditioned[0])
     singular = np.broadcast_to(np.diag([1.0, 0.0]).astype(dtype), (4, 2, 2)).copy()
 
-    solo = _get_initial_conditions(ill_conditioned[np.newaxis])
-    with pytest.warns(UserWarning, match="Cholesky failed"):
-        batched = _get_initial_conditions(np.stack([ill_conditioned, singular]))
+    solo = to_host(_get_initial_conditions(to_device(ill_conditioned[np.newaxis])))
+    with _expect_cholesky_fallback_warning():
+        batched = to_host(
+            _get_initial_conditions(to_device(np.stack([ill_conditioned, singular])))
+        )
     np.testing.assert_allclose(batched[0], solo[0])
     assert np.isfinite(batched[0]).all()
     # The singular-unit fallback must not promote the initialization dtype.
@@ -442,14 +541,15 @@ def test_initial_conditions_fallback_is_deterministic():
     ).copy()
 
     # The fallback start draws no random numbers, so repeated calls agree.
-    with pytest.warns(UserWarning, match="Cholesky failed"):
-        first = _get_initial_conditions(singular[np.newaxis])
-    with pytest.warns(UserWarning, match="Cholesky failed"):
-        second = _get_initial_conditions(singular[np.newaxis])
+    with _expect_cholesky_fallback_warning():
+        first = to_host(_get_initial_conditions(to_device(singular[np.newaxis])))
+    with _expect_cholesky_fallback_warning():
+        second = to_host(_get_initial_conditions(to_device(singular[np.newaxis])))
 
     np.testing.assert_array_equal(first, second)
-    # The fixed start n_signals * I has Cholesky sqrt(n_signals) * I.
-    np.testing.assert_allclose(first[0, 0], np.sqrt(n_signals) * np.eye(n_signals))
+    if not ON_GPU:  # CuPy's Cholesky does not raise, so it takes no fallback start.
+        # The fixed start n_signals * I has Cholesky sqrt(n_signals) * I.
+        np.testing.assert_allclose(first[0, 0], np.sqrt(n_signals) * np.eye(n_signals))
 
 
 def test__check_convergence():
@@ -468,7 +568,7 @@ def test__check_convergence():
 
     expected_is_converged = np.array([True, False, True, False, False])
 
-    is_converged = _check_convergence(current, old, tolerance)
+    is_converged = to_host(_check_convergence(to_device(current), to_device(old), tolerance))
 
     assert is_converged.shape == (n_time_points,)
     assert np.all(is_converged == expected_is_converged)
@@ -487,9 +587,10 @@ def test__check_convergence_is_scale_invariant():
     # A ~1e-6 relative perturbation per element.
     old = current * (1 + 1e-6 * rng.standard_normal(shape))
 
-    baseline = _check_convergence(current, old, tolerance=1e-4)
+    current, old = to_device(current), to_device(old)
+    baseline = to_host(_check_convergence(current, old, tolerance=1e-4))
     for scale in (1e-8, 1e-3, 1e3, 1e8):
-        scaled = _check_convergence(scale * current, scale * old, tolerance=1e-4)
+        scaled = to_host(_check_convergence(scale * current, scale * old, tolerance=1e-4))
         assert np.all(scaled == baseline)
 
 
@@ -506,7 +607,7 @@ def test__check_convergence_tracks_extra_batch_dims():
     old = np.zeros((n_time, n_trials, n_fft, n_signals, n_signals))
     current[0, 1] = 1.0  # only (time=0, trial=1) fails to converge
 
-    is_converged = _check_convergence(current, old, tolerance)
+    is_converged = to_host(_check_convergence(to_device(current), to_device(old), tolerance))
 
     assert is_converged.shape == (n_time, n_trials)
     expected = np.ones((n_time, n_trials), dtype=bool)
@@ -537,7 +638,7 @@ def test__get_initial_conditions():
         cross_spectral_matrix, _conjugate_transpose(cross_spectral_matrix)
     )
 
-    minimum_phase_factor = _get_initial_conditions(cross_spectral_matrix)
+    minimum_phase_factor = to_host(_get_initial_conditions(to_device(cross_spectral_matrix)))
 
     assert minimum_phase_factor.shape == (n_time_samples, 1, n_signals, n_signals)
     expected = np.linalg.cholesky(zero_lag).swapaxes(-1, -2)[:, np.newaxis]
@@ -561,7 +662,11 @@ def test__get_causal_signal_removes_roots_outside_unit_circle():
 
     expected_causal_signal = np.ones((1, n_fft_samples, n_signals, n_signals), dtype=complex)
 
-    causal_signal = _get_causal_signal(linear_predictor)
+    causal_signal = to_host(
+        _get_causal_signal(
+            to_device(linear_predictor), lower_triangular_ind=_tril(linear_predictor)
+        )
+    )
 
     assert np.allclose(causal_signal, expected_causal_signal)
 
@@ -580,7 +685,11 @@ def test__get_causal_signal_preserves_roots_inside_unit_circle():
     expected_causal_signal = np.zeros((1, n_fft_samples, n_signals, n_signals), dtype=complex)
     expected_causal_signal[0, :, 0, 0] = fft(linear_coef)
 
-    causal_signal = _get_causal_signal(linear_predictor)
+    causal_signal = to_host(
+        _get_causal_signal(
+            to_device(linear_predictor), lower_triangular_ind=_tril(linear_predictor)
+        )
+    )
 
     assert np.allclose(causal_signal, expected_causal_signal)
 
@@ -602,7 +711,9 @@ def test_minimum_phase_decomposition():
         expected_minimum_phase_factor,
         _conjugate_transpose(expected_minimum_phase_factor),
     )
-    minimum_phase_factor = minimum_phase_decomposition(expected_cross_spectral_matrix)
+    minimum_phase_factor = to_host(
+        minimum_phase_decomposition(to_device(expected_cross_spectral_matrix))
+    )
     cross_spectral_matrix = np.matmul(
         minimum_phase_factor, _conjugate_transpose(minimum_phase_factor)
     )
@@ -634,7 +745,7 @@ def test_minimum_phase_decomposition_recovers_matrix_factor():
     expected_factor = (g0 + g1 * np.exp(-1j * omega)[:, np.newaxis, np.newaxis])[np.newaxis]
     cross_spectral_matrix = np.matmul(expected_factor, _conjugate_transpose(expected_factor))
 
-    factor = minimum_phase_decomposition(cross_spectral_matrix)
+    factor = to_host(minimum_phase_decomposition(to_device(cross_spectral_matrix)))
 
     np.testing.assert_allclose(factor, expected_factor, atol=1e-6)
     np.testing.assert_allclose(
@@ -662,7 +773,7 @@ def test_minimum_phase_decomposition_promotes_complex64_working_precision():
     """The 1e-8 convergence target requires precision above complex64."""
     factor = np.ones((8, 1, 1), dtype=np.complex64)
     csm = factor @ factor.swapaxes(-1, -2).conj()
-    result = minimum_phase_decomposition(csm)
+    result = minimum_phase_decomposition(to_device(csm))
     assert result.dtype == np.complex128
 
 
@@ -673,8 +784,8 @@ def test_is_conjugate_symmetric_detects_real_valued_signals(n_fft):
     real_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng))
     complex_spectrum = _cross_spectrum_of(_lagged_signals(n_fft, rng, dtype=complex))
 
-    assert _is_conjugate_symmetric(real_spectrum)
-    assert not _is_conjugate_symmetric(complex_spectrum)
+    assert _is_conjugate_symmetric(to_device(real_spectrum))
+    assert not _is_conjugate_symmetric(to_device(complex_spectrum))
 
 
 def test_is_conjugate_symmetric_requires_a_real_zero_frequency():
@@ -682,7 +793,7 @@ def test_is_conjugate_symmetric_requires_a_real_zero_frequency():
     spectrum = _real_signal_spectrum()
     spectrum[..., 0, 0, 1] += 1e-3j
     spectrum[..., 0, 1, 0] -= 1e-3j
-    assert not _is_conjugate_symmetric(spectrum)
+    assert not _is_conjugate_symmetric(to_device(spectrum))
 
 
 def test_is_conjugate_symmetric_requires_conjugated_imaginary_parts():
@@ -694,25 +805,25 @@ def test_is_conjugate_symmetric_requires_conjugated_imaginary_parts():
     spectrum = _real_signal_spectrum()
     spectrum[..., -1, :, :] = spectrum[..., 1, :, :]
     assert np.any(spectrum[..., 1, :, :].imag != 0)
-    assert not _is_conjugate_symmetric(spectrum)
+    assert not _is_conjugate_symmetric(to_device(spectrum))
 
 
 def test_is_conjugate_symmetric_is_exact():
     """A one-ulp change to one negative-frequency real part breaks symmetry."""
     spectrum = _real_signal_spectrum()
     spectrum[..., -1, 0, 0] = np.nextafter(spectrum[..., -1, 0, 0].real, np.inf)
-    assert not _is_conjugate_symmetric(spectrum)
+    assert not _is_conjugate_symmetric(to_device(spectrum))
 
 
 def test_is_conjugate_symmetric_accepts_mirrored_nan():
     """NaN mirrored at the conjugate frequency keeps the fast path; unpaired NaN does not."""
     spectrum = _real_signal_spectrum()
     spectrum[1] = np.nan  # a dead window
-    assert _is_conjugate_symmetric(spectrum)
+    assert _is_conjugate_symmetric(to_device(spectrum))
 
     spectrum = _real_signal_spectrum()
     spectrum[0, 1, 0, 0] = np.nan
-    assert not _is_conjugate_symmetric(spectrum)
+    assert not _is_conjugate_symmetric(to_device(spectrum))
 
 
 @pytest.mark.parametrize("n_signals", [2, 3])
@@ -724,16 +835,17 @@ def test_nan_window_leaves_the_other_windows_unchanged(n_signals):
     """
     spectrum = _real_signal_spectrum(n_signals=n_signals)
     spectrum[1] = np.nan
+    spectrum = to_device(spectrum)
 
     with _ignoring_cholesky_start_warning():
         warnings.simplefilter("error", RuntimeWarning)
         with pytest.warns(UserWarning, match="did not converge for 1 of 2"):
-            factor = minimum_phase_decomposition(spectrum)
+            factor = to_host(minimum_phase_decomposition(spectrum))
 
     assert factor.shape == spectrum.shape
     assert np.isnan(factor[1]).all()
     np.testing.assert_allclose(
-        factor[:1], minimum_phase_decomposition(spectrum[:1]), rtol=1e-12
+        factor[:1], to_host(minimum_phase_decomposition(spectrum[:1])), rtol=1e-12
     )
 
 
@@ -741,18 +853,24 @@ def test_nan_window_leaves_the_other_windows_unchanged(n_signals):
 def test_to_two_sided_restores_the_negative_frequencies(n_fft):
     spectrum = _real_signal_spectrum(n_fft)
     np.testing.assert_array_equal(
-        _to_two_sided(spectrum[..., : n_fft // 2 + 1, :, :], n_fft), spectrum
+        to_host(_to_two_sided(to_device(spectrum[..., : n_fft // 2 + 1, :, :]), n_fft)),
+        spectrum,
     )
 
 
 @pytest.mark.parametrize("n_fft", [16, 17])
 def test_get_causal_signal_on_the_half_spectrum_matches_the_two_sided_projection(n_fft):
     """Real FFTs on the non-negative half give the two-sided projection's half."""
-    linear_predictor = _real_signal_spectrum(n_fft)
+    linear_predictor = to_device(_real_signal_spectrum(n_fft))
     n_nonnegative = n_fft // 2 + 1
 
-    half = _get_causal_signal(linear_predictor[..., :n_nonnegative, :, :], n_fft)
-    full = _get_causal_signal(linear_predictor)
+    tril = _tril(linear_predictor)
+    half = to_host(
+        _get_causal_signal(
+            linear_predictor[..., :n_nonnegative, :, :], n_fft, lower_triangular_ind=tril
+        )
+    )
+    full = to_host(_get_causal_signal(linear_predictor, lower_triangular_ind=tril))
 
     assert half.shape == (2, n_nonnegative, 3, 3)
     np.testing.assert_allclose(half, full[..., :n_nonnegative, :, :], rtol=0, atol=1e-13)
@@ -768,13 +886,13 @@ def test_real_signal_factorization_matches_full_spectrum_iteration(monkeypatch, 
     factor up to rounding. Two leading batch axes check that the mirroring and
     per-unit convergence handle extra dimensions.
     """
-    spectrum = np.stack(
-        [_real_signal_spectrum(n_fft, seed) for seed in (1, 2)], axis=1
+    spectrum = to_device(
+        np.stack([_real_signal_spectrum(n_fft, seed) for seed in (1, 2)], axis=1)
     )  # (window, batch, frequency, signal, signal)
 
-    half_spectrum_factor = minimum_phase_decomposition(spectrum)
+    half_spectrum_factor = to_host(minimum_phase_decomposition(spectrum))
     monkeypatch.setattr(mpd_module, "_is_conjugate_symmetric", lambda _: False)
-    full_spectrum_factor = minimum_phase_decomposition(spectrum)
+    full_spectrum_factor = to_host(minimum_phase_decomposition(spectrum))
 
     assert half_spectrum_factor.shape == full_spectrum_factor.shape
     np.testing.assert_allclose(

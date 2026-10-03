@@ -4,6 +4,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import pytest
+import scipy.fft
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
 from spectral_connectivity import _backend
@@ -19,6 +20,7 @@ from spectral_connectivity.transforms import (
     dpss_windows,
 )
 from spectral_connectivity.wrapper import multitaper_connectivity
+from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 
 
 def _short_smoothing_window():
@@ -488,7 +490,7 @@ def test_time_window_step_reports_the_step_actually_used(
     actual_step = expected_samples / sampling_frequency
     assert m.n_time_samples_per_step == expected_samples
     assert m.time_window_step == actual_step
-    np.testing.assert_allclose(np.diff(m.time), actual_step)
+    np.testing.assert_allclose(np.diff(to_host(m.time)), actual_step)
     result = multitaper_connectivity(
         time_series,
         sampling_frequency=sampling_frequency,
@@ -593,7 +595,9 @@ def test_stft_explicit_step_is_not_re_truncated():
     assert n_windows == 16
     assert transform.fft().shape[0] == n_windows
     assert len(transform.time) == n_windows
-    np.testing.assert_allclose(transform.time, (np.arange(n_windows) * 57 + 49.5) / 100)
+    np.testing.assert_allclose(
+        to_host(transform.time), (np.arange(n_windows) * 57 + 49.5) / 100
+    )
     assert transform._provenance_metadata()["n_time_samples_per_step"] == 57
     assert f"Number of windows: {n_windows}" in transform.summarize_parameters()
     assert "Window step:      0.570 s" in transform.summarize_parameters()
@@ -654,7 +658,7 @@ def test_start_time_offsets_window_centers_and_accepts_numpy_scalars():
             start_time=start_time,
         )
         assert m.time.shape == (2,)
-        np.testing.assert_allclose(m.time, expected, rtol=1e-6)
+        np.testing.assert_allclose(to_host(m.time), expected, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -698,7 +702,7 @@ def test_morlet_accepts_pandas_series_parameters(argument):
     as_list = MorletWavelet(time_series, 250, **values).fft()
     values[argument] = pd.Series(values[argument])
     as_series = MorletWavelet(time_series, 250, **values).fft()
-    np.testing.assert_array_equal(as_series, as_list)
+    np.testing.assert_array_equal(to_host(as_series), to_host(as_list))
 
 
 def test_morlet_start_time_accepts_a_single_element_array():
@@ -711,7 +715,7 @@ def test_morlet_start_time_accepts_a_single_element_array():
         start_time=np.array([2.5]),
     )
     assert morlet.start_time == 2.5
-    np.testing.assert_allclose(morlet.time[0], 2.5)
+    np.testing.assert_allclose(to_host(morlet.time)[0], 2.5)
 
 
 def test_tapers():
@@ -723,7 +727,7 @@ def test_tapers():
     # Custom tapers span the whole (100-sample) window and are used as given.
     custom_tapers = np.random.default_rng(303).standard_normal((n_time_samples, 3))
     m = Multitaper(time_series, sampling_frequency=1000, tapers=custom_tapers)
-    np.testing.assert_array_equal(m.tapers, custom_tapers)
+    np.testing.assert_array_equal(to_host(m.tapers), custom_tapers)
     assert m.fft().shape == (1, n_trials, 3, m.n_fft_samples, n_signals)
 
 
@@ -742,9 +746,11 @@ def test__get_low_bias_tapers(eigenvalues, expected_kept):
     falls_back = not np.any(eigenvalues > 0.9)
     # The fallback keeps a poorly concentrated taper, so it must be announced.
     with pytest.warns(UserWarning, match="lowest-bias taper") if falls_back else nullcontext():
-        filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(tapers, eigenvalues)
-    np.testing.assert_array_equal(filtered_tapers, tapers[expected_kept])
-    np.testing.assert_array_equal(filtered_eigenvalues, eigenvalues[expected_kept])
+        filtered_tapers, filtered_eigenvalues = _get_low_bias_tapers(
+            to_device(tapers), to_device(eigenvalues)
+        )
+    np.testing.assert_array_equal(to_host(filtered_tapers), tapers[expected_kept])
+    np.testing.assert_array_equal(to_host(filtered_eigenvalues), eigenvalues[expected_kept])
 
 
 @pytest.mark.parametrize(
@@ -769,8 +775,10 @@ def test__multitaper_fft():
     time_series = np.ones((n_windows, n_trials, n_time_samples))
     tapers = np.ones((n_time_samples, n_tapers))
 
-    fourier_coefficients = _multitaper_fft(
-        tapers, time_series, n_fft_samples, sampling_frequency
+    fourier_coefficients = to_host(
+        _multitaper_fft(
+            to_device(tapers), to_device(time_series), n_fft_samples, sampling_frequency
+        )
     )
     assert fourier_coefficients.shape == (n_windows, n_trials, n_fft_samples, n_tapers)
     # All-ones data under all-ones tapers is a constant, so every window, trial
@@ -786,11 +794,111 @@ def test__multitaper_fft():
     )
 
 
+@pytest.mark.parametrize(
+    ("n_time_samples", "n_fft_samples"), [(100, 100), (101, 101), (100, 128), (100, 257)]
+)
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+def test_multitaper_fft_real_input_rfft_path(
+    monkeypatch, n_time_samples, n_fft_samples, dtype
+):
+    """The GPU branch (rfft + exact conjugate mirror) matches the full FFT.
+
+    ``ON_GPU`` is forced on so the branch also runs on the CPU backend. Its
+    output must equal the complex FFT up to rounding, keep the dtype, and be
+    exactly conjugate-symmetric so minimum_phase_decomposition's exact check
+    takes the half-spectrum path. Odd and even lengths and zero padding cover
+    the Nyquist bin and the mirror's slice bounds.
+    """
+    from spectral_connectivity import transforms
+
+    rng = np.random.default_rng(0)
+    time_series = rng.standard_normal((2, 3, 2, n_time_samples)).astype(dtype)
+    tapers = rng.standard_normal((n_time_samples, 3)).astype(dtype)
+    expected = np.fft.fft(time_series[..., np.newaxis] * tapers, n=n_fft_samples, axis=-2)
+    expected /= 1000.0
+
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    coefficients = to_host(
+        _multitaper_fft(to_device(tapers), to_device(time_series), n_fft_samples, 1000.0)
+    )
+
+    assert coefficients.dtype == np.result_type(dtype, np.complex64)
+    assert coefficients.shape == expected.shape
+    rtol = 1e-5 if dtype == np.float32 else 1e-12
+    np.testing.assert_allclose(coefficients, expected, rtol=rtol, atol=rtol * 1e-2)
+    mirrored = np.conj(coefficients[..., (-np.arange(n_fft_samples)) % n_fft_samples, :])
+    np.testing.assert_array_equal(coefficients, mirrored)
+
+
+@pytest.mark.parametrize("n_fft_samples", [100, 101])
+def test_multitaper_fft_rfft_path_zeroes_self_mirrored_imaginary_parts(
+    monkeypatch, n_fft_samples
+):
+    """cuFFT's rfft can leave ~1e-15 in the imaginary part of the zero and
+    Nyquist bins, which are their own mirrors; they must come out exactly real so
+    the spectrum stays exactly conjugate-symmetric (else the Wilson factorization
+    silently falls back to its slower two-sided path)."""
+    from spectral_connectivity import transforms
+    from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+
+    real_rfft = transforms.rfft
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    monkeypatch.setattr(
+        transforms, "rfft", lambda *args, **kwargs: real_rfft(*args, **kwargs) + 1e-15j
+    )
+    rng = np.random.default_rng(2)
+    time_series = to_device(rng.standard_normal((1, 2, 3, n_fft_samples)))
+    tapers = to_device(rng.standard_normal((n_fft_samples, 2)))
+    coefficients = _multitaper_fft(tapers, time_series, n_fft_samples, 1000.0)
+
+    host = to_host(coefficients)
+    assert (host[..., 0, :].imag == 0).all()
+    if n_fft_samples % 2 == 0:
+        assert (host[..., n_fft_samples // 2, :].imag == 0).all()
+    # (..., n_fft, n_tapers, 1): frequency on axis -3, where the check expects it.
+    assert _is_conjugate_symmetric(coefficients[..., xp.newaxis])
+
+
+def test_multitaper_fft_complex_input_keeps_full_fft(monkeypatch):
+    """Complex input has no conjugate symmetry, so it must take the full FFT."""
+    from spectral_connectivity import transforms
+
+    rng = np.random.default_rng(1)
+    time_series = rng.standard_normal((1, 2, 2, 64)) + 1j * rng.standard_normal((1, 2, 2, 64))
+    tapers = rng.standard_normal((64, 2))
+    expected = np.fft.fft(time_series[..., np.newaxis] * tapers, axis=-2) / 500.0
+
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    coefficients = to_host(
+        _multitaper_fft(to_device(tapers), to_device(time_series), 64, 500.0)
+    )
+    np.testing.assert_allclose(coefficients, expected, rtol=1e-12, atol=1e-15)
+
+
+def test_multitaper_real_input_is_exactly_conjugate_symmetric():
+    """On either backend, real input gives exactly conjugate-symmetric coefficients.
+
+    cuFFT's complex FFT is symmetric only to rounding, which used to send every
+    GPU Wilson factorization down the slower two-sided path.
+    """
+    from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+
+    rng = np.random.default_rng(2)
+    multitaper = Multitaper(
+        rng.standard_normal((1000, 3, 4)),
+        sampling_frequency=1000,
+        time_window_duration=0.25,
+        n_fft_samples=300,
+    )
+    connectivity = Connectivity.from_multitaper(multitaper)
+    assert _is_conjugate_symmetric(connectivity._expectation_cross_spectral_matrix())
+
+
 def test_fft():
     n_time_samples, n_trials, n_signals, n_windows = 100, 10, 2, 1
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     m = Multitaper(sampling_frequency=1000, time_series=time_series)
-    coefficients = m.fft()
+    coefficients = to_host(m.fft())
     assert coefficients.shape == (
         n_windows,
         n_trials,
@@ -802,13 +910,15 @@ def test_fft():
 
     # An all-ones input is pure DC, which the default constant detrend removes...
     ones = np.ones((n_time_samples, n_trials, n_signals))
-    np.testing.assert_allclose(Multitaper(ones, sampling_frequency=1000).fft(), 0, atol=1e-12)
+    np.testing.assert_allclose(
+        to_host(Multitaper(ones, sampling_frequency=1000).fft()), 0, atol=1e-12
+    )
     # ...and without detrending each taper's coefficients are the taper's own
     # transform over 1 / sampling_frequency, identical for every trial and signal.
     sampling_frequency = 1000
     m = Multitaper(ones, sampling_frequency=sampling_frequency, detrend_type=None)
-    expected = np.fft.fft(m.tapers, n=m.n_fft_samples, axis=0).T / sampling_frequency
-    coefficients = m.fft()
+    expected = np.fft.fft(to_host(m.tapers), n=m.n_fft_samples, axis=0).T / sampling_frequency
+    coefficients = to_host(m.fft())
     np.testing.assert_allclose(
         coefficients,
         np.broadcast_to(
@@ -1112,16 +1222,21 @@ def test_multitaper_configuration_and_array_snapshots_are_immutable():
     assert m.time_series[0, 0, 0] == 0
     assert m.tapers[0, 0] == 1
 
-    with pytest.raises(ValueError, match="read-only"):
-        m.time_series[0, 0, 0] = 5
-    with pytest.raises(ValueError, match="read-only"):
-        m.tapers[0, 0] = 5
-    exposed_time_series = m.time_series
-    exposed_time_series.flags.writeable = True
-    exposed_time_series[0, 0, 0] = 99
-    exposed_tapers = m.tapers
-    exposed_tapers.flags.writeable = True
-    exposed_tapers[0, 0] = 99
+    if ON_GPU:
+        # CuPy has no read-only flag; the properties still return detached copies.
+        m.time_series[0, 0, 0] = 99
+        m.tapers[0, 0] = 99
+    else:
+        with pytest.raises(ValueError, match="read-only"):
+            m.time_series[0, 0, 0] = 5
+        with pytest.raises(ValueError, match="read-only"):
+            m.tapers[0, 0] = 5
+        exposed_time_series = m.time_series
+        exposed_time_series.flags.writeable = True
+        exposed_time_series[0, 0, 0] = 99
+        exposed_tapers = m.tapers
+        exposed_tapers.flags.writeable = True
+        exposed_tapers[0, 0] = 99
     assert m.time_series[0, 0, 0] == 0
     assert m.tapers[0, 0] == 1
     with pytest.raises(AttributeError, match="immutable after construction"):
@@ -1156,10 +1271,10 @@ def test_short_time_fourier_transform_hann_shape_and_peak():
         time_window_step=0.5,
     )
 
-    coefficients = transform.fft()
+    coefficients = to_host(transform.fft())
     assert coefficients.shape == (3, 1, 1, 128, 2)
     positive_power = np.abs(coefficients[0, 0, 0, :65, 0]) ** 2
-    assert transform.frequencies[np.argmax(positive_power)] == pytest.approx(16)
+    assert to_host(transform.frequencies)[np.argmax(positive_power)] == pytest.approx(16)
     assert transform.frequency_resolution == pytest.approx(1.5)
 
     # Per-window one-sided PSD must equal SciPy's periodic-Hann STFT with PSD
@@ -1232,14 +1347,14 @@ def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
             smoothing_time=0.25,
         )
 
-    coefficients = transform.fft()
+    coefficients = to_host(transform.fft())
     assert coefficients.shape == (8, 1, 32, 3, 2)
     mean_power = np.mean(np.abs(coefficients[..., 0]) ** 2, axis=(0, 1, 2))
-    assert transform.frequencies[np.argmax(mean_power)] == pytest.approx(16)
+    assert to_host(transform.frequencies)[np.argmax(mean_power)] == pytest.approx(16)
 
     connectivity = Connectivity.from_transform(transform)
     assert connectivity.power().shape[-2] == 3
-    np.testing.assert_array_equal(connectivity.frequencies, transform.frequencies)
+    np.testing.assert_array_equal(connectivity.frequencies, to_host(transform.frequencies))
     canonical, _ = connectivity.canonical_coherence([0, 1])
     mic, _ = connectivity.maximized_imaginary_coherency([0, 1])
     assert canonical.shape[-3] == 3
@@ -1388,7 +1503,7 @@ def test_morlet_default_zero_padding_matches_same_convolution():
     _, kernel = _reference_morlet_kernel(8.0, n_cycles=4, sampling_frequency=64)
     expected = fftconvolve(data, kernel, mode="same", axes=0)
 
-    np.testing.assert_allclose(transform.fft()[:, :, 0, 0], expected)
+    np.testing.assert_allclose(to_host(transform.fft())[:, :, 0, 0], expected)
 
 
 @pytest.mark.parametrize("padding_mode", ["reflect", "edge"])
@@ -1400,7 +1515,7 @@ def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     data = rng.standard_normal((96, 3, 2))
     frequencies = np.array([6.0, 8.0, 16.0])
     transform = MorletWavelet(data, 64, frequencies, n_cycles=4, padding_mode=padding_mode)
-    coefficients = transform.fft()
+    coefficients = to_host(transform.fft())
 
     for frequency_index, frequency in enumerate(frequencies):
         half_width, kernel = _reference_morlet_kernel(
@@ -1444,25 +1559,30 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
         edge_mode="trim",
     )
 
-    np.testing.assert_array_equal(kept.valid_time_frequency, masked.valid_time_frequency)
-    assert not np.all(masked.valid_time_frequency)
+    masked_valid = to_host(masked.valid_time_frequency)
+    np.testing.assert_array_equal(to_host(kept.valid_time_frequency), masked_valid)
+    assert not np.all(masked_valid)
     masked_power = Connectivity.from_transform(masked).power()
-    np.testing.assert_array_equal(np.isnan(masked_power[..., 0]), ~masked.valid_time_frequency)
+    np.testing.assert_array_equal(np.isnan(masked_power[..., 0]), ~masked_valid)
     assert np.all(np.isfinite(Connectivity.from_transform(kept).power()))
-    assert np.all(trimmed.valid_time_frequency)
-    assert trimmed.time[0] >= trimmed.edge_half_width.max()
-    assert trimmed.time[-1] <= (len(data) - 1) / 128 - trimmed.edge_half_width.max()
+    assert np.all(to_host(trimmed.valid_time_frequency))
+    trimmed_time = to_host(trimmed.time)
+    edge_half_width = to_host(trimmed.edge_half_width).max()
+    assert trimmed_time[0] >= edge_half_width
+    assert trimmed_time[-1] <= (len(data) - 1) / 128 - edge_half_width
 
 
 def test_morlet_hann_kernel_has_nonzero_endpoints():
     """A Hann smoothing kernel must weight every sample in the window; a
     symmetric Hann of the window size would zero its endpoints, so a size-3
     kernel would not smooth at all."""
-    np.testing.assert_allclose(MorletWavelet._kernel_values(3, "hann"), [0.5, 1.0, 0.5])
     np.testing.assert_allclose(
-        MorletWavelet._kernel_values(5, "hann"), [0.25, 0.75, 1.0, 0.75, 0.25]
+        to_host(MorletWavelet._kernel_values(3, "hann")), [0.5, 1.0, 0.5]
     )
-    assert np.all(MorletWavelet._kernel_values(2, "hann") > 0)
+    np.testing.assert_allclose(
+        to_host(MorletWavelet._kernel_values(5, "hann")), [0.25, 0.75, 1.0, 0.75, 0.25]
+    )
+    assert np.all(to_host(MorletWavelet._kernel_values(2, "hann")) > 0)
 
 
 @pytest.mark.parametrize("measure", ["phase_slope_index", "delay", "group_delay"])
@@ -1538,7 +1658,7 @@ def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
         smoothing_frequency=3,
         smoothing_kernel="boxcar",
     )
-    raw_coefficients = raw.fft()[:, :, 0]
+    raw_coefficients = to_host(raw.fft())[:, :, 0]
     # Reflection maps the first frequency neighborhood to [12, 8, 12] Hz.
     expected = np.mean(
         raw_coefficients[:, :, [1, 0, 1], :][..., :, :, np.newaxis]
@@ -1562,7 +1682,7 @@ def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
         smoothing_frequency=5,
         smoothing_kernel="hann",
     )
-    raw_coefficients = raw.fft()[:, :, 0]  # (time, trial, frequency, signal)
+    raw_coefficients = to_host(raw.fft())[:, :, 0]  # (time, trial, frequency, signal)
     weights = np.array([0.25, 0.75, 1.0, 0.75, 0.25])  # interior of hann(7)
 
     # Centre frequency (index 2): neighborhood [0, 1, 2, 3, 4], no reflection.
@@ -1643,13 +1763,14 @@ def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
         scores, _ = connectivity.global_coherence()
     canonical, _ = connectivity.canonical_coherence(np.array([0, 0, 1, 1]))
 
-    invalid = ~transform.valid_time_frequency
+    valid = to_host(transform.valid_time_frequency)
+    invalid = ~valid
     assert np.isnan(scores[..., 0][invalid]).all()
     assert np.isnan(canonical[..., 0, 1][invalid]).all()
 
-    time_index, frequency_index = np.argwhere(transform.valid_time_frequency)[0]
-    coefficients = transform.fft()[time_index, :, :, frequency_index, :]
-    weights = transform.observation_weights[time_index, :, :, frequency_index, 0]
+    time_index, frequency_index = np.argwhere(valid)[0]
+    coefficients = to_host(transform.fft())[time_index, :, :, frequency_index, :]
+    weights = to_host(transform.observation_weights)[time_index, :, :, frequency_index, 0]
     weighted = coefficients.reshape(-1, 4).T * np.sqrt(weights.reshape(-1))[None, :]
 
     singular_values = np.linalg.svd(weighted, compute_uv=False)
@@ -1713,12 +1834,12 @@ def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
         taper_weighting="adaptive",
     )
 
-    np.testing.assert_array_equal(default.fft(), uniform.fft())
+    np.testing.assert_array_equal(to_host(default.fft()), to_host(uniform.fft()))
     assert eigen.taper_eigenvalues is not None
     assert len(eigen.taper_eigenvalues) == eigen.fft().shape[2]
-    assert np.all(np.isfinite(eigen.fft()))
-    assert np.all(np.isfinite(adaptive.fft()))
-    assert not np.allclose(adaptive.fft(), uniform.fft())
+    assert np.all(np.isfinite(to_host(eigen.fft())))
+    assert np.all(np.isfinite(to_host(adaptive.fft())))
+    assert not np.allclose(to_host(adaptive.fft()), to_host(uniform.fft()))
 
     # Eigen weighting scales each taper's coefficients by sqrt(eigenvalue),
     # normalized to unit mean-square weight. Keep all 2 * NW tapers so the last
@@ -1732,8 +1853,8 @@ def test_multitaper_weighting_modes_are_finite_and_default_is_stable():
     _, eigenvalues = scipy_dpss(256, 3, 6, return_ratios=True)
     assert eigenvalues.min() < 0.75
     weights = np.sqrt(eigenvalues) / np.sqrt(np.mean(eigenvalues))
-    uniform_all = Multitaper(data, taper_weighting="uniform", **all_tapers).fft()
-    eigen_all = Multitaper(data, taper_weighting="eigen", **all_tapers).fft()
+    uniform_all = to_host(Multitaper(data, taper_weighting="uniform", **all_tapers).fft())
+    eigen_all = to_host(Multitaper(data, taper_weighting="eigen", **all_tapers).fft())
     np.testing.assert_allclose(
         eigen_all, uniform_all * weights[np.newaxis, np.newaxis, :, np.newaxis, np.newaxis]
     )
@@ -1770,12 +1891,14 @@ def test_adaptive_weighting_is_invariant_to_input_scale():
     data = np.random.default_rng(914).standard_normal((1024, 1, 2))
 
     def transform(values, weighting):
-        return Multitaper(
-            values,
-            sampling_frequency=256,
-            time_halfbandwidth_product=3,
-            taper_weighting=weighting,
-        ).fft()
+        return to_host(
+            Multitaper(
+                values,
+                sampling_frequency=256,
+                time_halfbandwidth_product=3,
+                taper_weighting=weighting,
+            ).fft()
+        )
 
     uniform = transform(data, "uniform")
     adaptive = transform(data, "adaptive")
@@ -1796,13 +1919,15 @@ def test_adaptive_weighting_isolates_nan_windows():
     data = rng.standard_normal((4096, 5, 1))
 
     def adaptive(values):
-        return Multitaper(
-            values,
-            sampling_frequency=256,
-            time_halfbandwidth_product=3,
-            taper_weighting="adaptive",
-            time_window_duration=8.0,  # two 2048-sample windows
-        ).fft()
+        return to_host(
+            Multitaper(
+                values,
+                sampling_frequency=256,
+                time_halfbandwidth_product=3,
+                taper_weighting="adaptive",
+                time_window_duration=8.0,  # two 2048-sample windows
+            ).fft()
+        )
 
     clean = adaptive(data)
     assert clean.shape[0] == 2  # two windows
@@ -1887,7 +2012,7 @@ def test_adaptive_power_matches_nitime_thomson_estimate():
         transform = Multitaper(
             x[:, np.newaxis, np.newaxis], taper_weighting=weighting, **_ADAPTIVE_ORACLE_KWARGS
         )
-        return np.mean(np.abs(transform.fft()[0, 0, :, :, 0]) ** 2, axis=0)
+        return np.mean(np.abs(to_host(transform.fft())[0, 0, :, :, 0]) ** 2, axis=0)
 
     _, expected, _ = multi_taper_psd(
         x,
@@ -1923,8 +2048,10 @@ def test_adaptive_coherence_is_joint_estimate_shrunk_by_weight_cosine_similarity
     uniform = Multitaper(data, taper_weighting="uniform", **_ADAPTIVE_ORACLE_KWARGS)
     adaptive = Multitaper(data, taper_weighting="adaptive", **_ADAPTIVE_ORACLE_KWARGS)
 
-    coefficients = uniform.fft()[0, 0]  # (n_tapers, n_fft, 2): unweighted Y_k
-    weights = np.abs(adaptive.fft()[0, 0] / coefficients)  # RMS-normalized d_k per signal
+    coefficients = to_host(uniform.fft())[0, 0]  # (n_tapers, n_fft, 2): unweighted Y_k
+    weights = np.abs(
+        to_host(adaptive.fft())[0, 0] / coefficients
+    )  # RMS-normalized d_k per signal
     assert np.all(np.isfinite(weights))
     d_x, d_y = weights[..., 0], weights[..., 1]
     y_x, y_y = coefficients[..., 0], coefficients[..., 1]
@@ -1998,7 +2125,7 @@ def test_morlet_time_and_weights_follow_smoothing_step_for_one_sample_window():
     n_time = wavelet.fft().shape[0]
     assert n_time == 400
     # Each one-sample window is its own sample time, stepped by 5 samples.
-    np.testing.assert_allclose(wavelet.time, np.arange(0, 2000, 5) / 1000.0)
+    np.testing.assert_allclose(to_host(wavelet.time), np.arange(0, 2000, 5) / 1000.0)
     assert wavelet.observation_weights.shape[0] == n_time
     assert wavelet.valid_time_frequency.shape[0] == n_time
     Connectivity.from_transform(wavelet)
@@ -2041,8 +2168,8 @@ def test_morlet_accepts_device_arrays_for_frequencies_and_n_cycles():
         frequencies=DeviceLike([4.0, 8.0]),
         n_cycles=DeviceLike([3.0, 5.0]),
     )
-    np.testing.assert_array_equal(transform.frequencies, [4.0, 8.0])
-    np.testing.assert_array_equal(transform.n_cycles, [3.0, 5.0])
+    np.testing.assert_array_equal(to_host(transform.frequencies), [4.0, 8.0])
+    np.testing.assert_array_equal(to_host(transform.n_cycles), [3.0, 5.0])
 
 
 def test_morlet_rejects_frequencies_at_or_above_nyquist():
@@ -2104,3 +2231,14 @@ def test_morlet_fft_peak_memory_stays_near_twice_output_size():
         if not was_tracing:
             tracemalloc.stop()
     assert peak - baseline < 2.5 * coefficients.nbytes
+
+
+def test_default_frequency_grid_matches_scipy_on_every_backend():
+    """The default grid follows SciPy on every backend (CuPy's rule gives 3645)."""
+    multitaper = Multitaper(
+        np.zeros((3601, 1, 1)), sampling_frequency=1000, time_halfbandwidth_product=1
+    )
+    assert multitaper.n_fft_samples == scipy.fft.next_fast_len(3601) == 3630
+    np.testing.assert_allclose(
+        to_host(multitaper.frequencies), np.fft.fftfreq(3630, d=1 / 1000), rtol=1e-12
+    )

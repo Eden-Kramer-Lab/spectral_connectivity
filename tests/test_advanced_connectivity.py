@@ -8,6 +8,7 @@ from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
 )
+from tests._backend_helpers import to_host
 
 
 @pytest.mark.parametrize("method", ["group_delay", "delay"])
@@ -19,7 +20,7 @@ def test_delay_methods_explicitly_transfer_device_results_to_host(method, monkey
         """Minimal CuPy-like object that rejects implicit NumPy conversion."""
 
         def __init__(self, array):
-            self._array = np.asarray(array)
+            self._array = to_host(array)
 
         def __array__(self, *args, **kwargs):
             msg = "implicit device-to-host conversion is forbidden"
@@ -160,7 +161,7 @@ class TestCanonicalCoherence:
         np.testing.assert_array_equal(canonical_coh[..., 0, 1], canonical_coh[..., 1, 0])
 
         # Values equal the squared largest canonical correlation.
-        fourier_coefficients = m.fft()[..., :n_non_negative_freqs, :]
+        fourier_coefficients = to_host(m.fft())[..., :n_non_negative_freqs, :]
         np.testing.assert_allclose(
             canonical_coh[..., 0, 1],
             _canonical_coherence_oracle(fourier_coefficients, [0, 1, 2], [3, 4, 5]),
@@ -168,7 +169,7 @@ class TestCanonicalCoherence:
             atol=1e-12,
         )
 
-        frequencies = m.frequencies[:n_non_negative_freqs]
+        frequencies = to_host(m.frequencies)[:n_non_negative_freqs]
         at_20_hz = canonical_coh[0, np.argmin(np.abs(frequencies - 20)), 0, 1]
         at_40_hz = canonical_coh[0, np.argmin(np.abs(frequencies - 40)), 0, 1]
         # Beyond the 20 Hz peak's multitaper bandwidth (W = NW / T = 5 Hz).
@@ -215,7 +216,7 @@ class TestCanonicalCoherence:
         assert canonical_coh.shape == (m.time.size, n_non_negative_freqs, n_groups, n_groups)
         np.testing.assert_array_equal(labels, expected_labels)
 
-        fourier_coefficients = m.fft()[..., :n_non_negative_freqs, :]
+        fourier_coefficients = to_host(m.fft())[..., :n_non_negative_freqs, :]
         for i, label_i in enumerate(expected_labels):
             assert np.all(np.isnan(canonical_coh[..., i, i]))
             for j, label_j in enumerate(expected_labels):
@@ -250,6 +251,130 @@ class TestCanonicalCoherence:
         np.testing.assert_allclose(
             canonical_coh, conn.coherence_magnitude(), rtol=0, atol=1e-12, equal_nan=True
         )
+
+    @pytest.mark.parametrize("extra", ["duplicate", "scaled_duplicate", "dead"])
+    def test_canonical_coherence_ignores_rank_deficient_channel(self, extra):
+        """A dead or duplicated channel adds no direction to its group.
+
+        The group's canonical coherence must equal that of its independent
+        channels alone (an SVD-based whitening would instead give the null
+        direction an arbitrary unit-norm vector, which can inflate the value).
+        """
+        shape = (2, 6, 3, 9, 4)  # 18 observations
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 2:] += 0.7 * coefficients[..., :2]
+        added = {
+            "duplicate": coefficients[..., :1],
+            "scaled_duplicate": (2 - 1j) * coefficients[..., :1],
+            "dead": np.zeros_like(coefficients[..., :1]),
+        }[extra]
+        with_extra = np.concatenate([coefficients, added], axis=-1)
+
+        expected, _ = Connectivity(coefficients).canonical_coherence(np.array([0, 0, 1, 1]))
+        with pytest.warns(UserWarning, match=r"group\(s\) \[0\] contain linearly dependent"):
+            result, _ = Connectivity(with_extra).canonical_coherence(np.array([0, 0, 1, 1, 0]))
+        np.testing.assert_allclose(result, expected, rtol=1e-10, atol=1e-12, equal_nan=True)
+
+    @pytest.mark.parametrize(
+        ("n_signals", "n_trials", "condition"),
+        [(4, 10, 1.0), (4, 10, 1e5), (5, 1, 1.0)],  # last: more signals than observations
+        ids=["wide", "ill_conditioned", "tall"],
+    )
+    def test_canonical_coherence_matches_svd_whitening(self, n_signals, n_trials, condition):
+        """Canonical coherence equals the SVD (polar-factor) computation.
+
+        Covers an ill-conditioned group, where whitening through the Gram
+        matrix alone loses accuracy, and a group with more signals than
+        trial x taper observations, where the smaller Gram matrix is used.
+        """
+        import warnings
+
+        shape = (2, n_trials, 3, 7, n_signals + 2)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        # Signal 1 differs from signal 0 by a 1/condition-sized component.
+        coefficients[..., 1] = coefficients[..., 0] + coefficients[..., 1] / condition
+        coefficients[..., n_signals:] += 0.5 * coefficients[..., :2]
+
+        def polar(x):
+            left, _, right_h = np.linalg.svd(x, full_matrices=False)
+            return left @ right_h
+
+        observations = _observations(coefficients)
+        cross = polar(observations[..., :n_signals, :]) @ polar(
+            observations[..., n_signals:, :]
+        ).conj().swapaxes(-1, -2)
+        expected = np.linalg.svd(cross, compute_uv=False)[..., 0] ** 2
+
+        labels = np.array([0] * n_signals + [1, 1])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # tall: forced-to-1 warning
+            result, _ = Connectivity(coefficients).canonical_coherence(labels)
+        n_freq = result.shape[1]
+        np.testing.assert_allclose(result[..., 0, 1], expected[:, :n_freq], rtol=1e-9)
+
+    @pytest.mark.parametrize("scale", [1e-9, 1e9])
+    def test_canonical_coherence_is_invariant_to_channel_scale(self, scale):
+        """Rescaling one channel (e.g. mixed units, V vs nV) leaves the group's
+        row space, and so its canonical coherence, unchanged: a small but
+        independent channel must not be dropped as rank-deficient."""
+        shape = (2, 10, 3, 7, 4)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 2:] += 0.5 * coefficients[..., :2]
+        labels = np.array([0, 0, 1, 1])
+        expected, _ = Connectivity(coefficients).canonical_coherence(labels)
+
+        rescaled = coefficients.copy()
+        rescaled[..., 1] *= scale
+        result, _ = Connectivity(rescaled).canonical_coherence(labels)
+        np.testing.assert_allclose(result, expected, rtol=1e-9, atol=1e-12, equal_nan=True)
+
+    def test_complex64_canonical_coherence_keeps_near_collinear_channels(self):
+        """complex64 coefficients are whitened at complex128.
+
+        Regression: whitening through the Gram matrix squares the condition
+        number, so at complex64 precision a real but nearly collinear channel
+        (here 1e-4 of its partner) fell below the rank threshold and the value
+        collapsed to ~0 instead of ~0.92.
+        """
+        shape = (1, 50, 5, 6, 1)
+        x, y, w, noise = (
+            self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+            for _ in range(4)
+        )
+        coefficients = np.concatenate([x, x + 1e-4 * y, y + 0.3 * noise, w], axis=-1)
+        labels = np.array([0, 0, 1, 1])
+        expected, _ = Connectivity(coefficients).canonical_coherence(labels)
+        result, _ = Connectivity(coefficients.astype(np.complex64)).canonical_coherence(labels)
+        np.testing.assert_allclose(result, expected, atol=1e-3, equal_nan=True)
+        assert np.nanmin(expected[..., 0, 1]) > 0.5
+
+    def test_canonical_coherence_of_a_powerless_group_is_nan(self):
+        """A group whose signals are all zero has 0/0 canonical coherence: NaN
+        with a warning naming the group, like coherency, not a confident 0."""
+        shape = (1, 8, 3, 6, 4)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        coefficients[..., 3] = 0
+        with pytest.warns(UserWarning, match=r"group\(s\) \['c'\] have no power"):
+            result, _ = Connectivity(coefficients).canonical_coherence(
+                np.array(["a", "a", "b", "c"])
+            )
+        assert np.isnan(result[..., :, 2]).all()
+        assert np.isnan(result[..., 2, :]).all()
+        assert np.isfinite(result[..., 0, 1]).all()
+
+    def test_canonical_coherence_with_chunked_eigh_matches(self, monkeypatch):
+        """The whitening eigh is chunked (CuPy's batched eigh fails on very
+        large batches); chunked and single-call results are identical."""
+        from spectral_connectivity import _array_utils
+
+        shape = (2, 6, 3, 9, 6)
+        coefficients = self.rng.standard_normal(shape) + 1j * self.rng.standard_normal(shape)
+        labels = np.array([0, 0, 0, 1, 1, 1])
+        single, _ = Connectivity(coefficients).canonical_coherence(labels)
+        # Chunks of 4 of the 18 bins per group: a partial last chunk.
+        monkeypatch.setattr(_array_utils, "_eigh_chunk_size", lambda n_signals: 4)
+        chunked, _ = Connectivity(coefficients).canonical_coherence(labels)
+        np.testing.assert_array_equal(chunked, single)
 
 
 class TestGlobalCoherence:
@@ -293,10 +418,13 @@ class TestGlobalCoherence:
         assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
         assert global_coh_vectors.shape == (m.time.size, m.frequencies.size, n_signals, 1)
         np.testing.assert_allclose(
-            global_coh, _global_coherence_oracle(m.fft())[..., :1], rtol=1e-10, atol=1e-12
+            global_coh,
+            _global_coherence_oracle(to_host(m.fft()))[..., :1],
+            rtol=1e-10,
+            atol=1e-12,
         )
 
-        frequencies = np.abs(m.frequencies)
+        frequencies = np.abs(to_host(m.frequencies))
         at_target = global_coh[0, np.argmin(np.abs(frequencies - 30)), 0]
         # Beyond the peak's multitaper bandwidth (W = NW / T = 5 Hz).
         off_peak = global_coh[0, np.abs(frequencies - 30) > 10, 0]
@@ -326,7 +454,7 @@ class TestGlobalCoherence:
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(m.fft())[..., :max_rank],
+            _global_coherence_oracle(to_host(m.fft()))[..., :max_rank],
             rtol=1e-10,
             atol=1e-12,
         )
@@ -387,7 +515,7 @@ class TestGlobalCoherence:
             max_rank=n_signals
         )
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(m.fft()), rtol=1e-10, atol=1e-12
+            gc, _global_coherence_oracle(to_host(m.fft())), rtol=1e-10, atol=1e-12
         )
         # The fractions of every component sum to the whole (trace) power.
         np.testing.assert_allclose(gc.sum(axis=-1), 1.0, rtol=1e-12)
@@ -416,7 +544,7 @@ class TestGlobalCoherence:
         )
         gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=3)
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(m.fft())[..., :3], rtol=1e-8, atol=1e-12
+            gc, _global_coherence_oracle(to_host(m.fft()))[..., :3], rtol=1e-8, atol=1e-12
         )
         assert np.all(gc >= 0)
         assert np.all(gc <= 1.0 + 1e-12)
@@ -433,7 +561,7 @@ class TestGlobalCoherence:
             time_halfbandwidth_product=1,
         )
         conn = Connectivity.from_multitaper(m)
-        expected = _global_coherence_oracle(m.fft())
+        expected = _global_coherence_oracle(to_host(m.fft()))
 
         for max_rank in (n_signals, n_signals - 1):
             global_coh, _ = conn.global_coherence(max_rank=max_rank)
@@ -457,7 +585,7 @@ class TestGlobalCoherence:
         )
         global_coh, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
 
-        x = _observations(m.fft())
+        x = _observations(to_host(m.fft()))
         a = np.sum(np.abs(x[..., 0, :]) ** 2, axis=-1)
         b = np.sum(np.abs(x[..., 1, :]) ** 2, axis=-1)
         c = np.sum(x[..., 0, :] * x[..., 1, :].conj(), axis=-1)
@@ -483,7 +611,7 @@ class TestGlobalCoherence:
             max_rank=2
         )
 
-        singular_values = np.linalg.svd(_observations(m.fft()), compute_uv=False)
+        singular_values = np.linalg.svd(_observations(to_host(m.fft())), compute_uv=False)
         power = singular_values**2
         expected = power / power.sum(axis=-1, keepdims=True)
         np.testing.assert_allclose(global_coh, expected[..., :2], rtol=1e-10, atol=1e-12)
@@ -948,7 +1076,7 @@ class TestGroupDelay:
         multitaper = Multitaper(
             time_series, sampling_frequency=sampling_frequency, time_halfbandwidth_product=3
         )
-        coefficients = np.array(multitaper.fft())
+        coefficients = to_host(multitaper.fft()).copy()
         coefficients[..., 0, :] = 0  # the DC bin of every signal
         frequencies = np.fft.fftfreq(coefficients.shape[-2], 1 / sampling_frequency)
         conn = Connectivity(coefficients, frequencies=frequencies)
@@ -996,7 +1124,7 @@ class TestAdvancedConnectivityIntegration:
             time_halfbandwidth_product=3,
         )
         conn = Connectivity.from_multitaper(m)
-        fourier_coefficients = m.fft()
+        fourier_coefficients = to_host(m.fft())
 
         # Canonical coherence
         group_labels = np.array([0, 0, 0, 1, 1, 1])
@@ -1030,7 +1158,7 @@ class TestAdvancedConnectivityIntegration:
         )
         # One shared source: the leading component dominates at low frequencies,
         # where the lags barely rotate the phases.
-        low = np.abs(m.frequencies) <= 50
+        low = np.abs(to_host(m.frequencies)) <= 50
         assert np.all(global_coh[:, low, 0] > 0.8)
 
         # Group delay recovers the signed lags: [i, j] = (lags[j] - lags[i]) / fs.
@@ -1151,3 +1279,31 @@ class TestDelay:
         reverse = possible_delays[0, :, n_range, 1, 0]
         np.testing.assert_allclose(reverse[is_estimated], -expected_delay, rtol=0, atol=5e-4)
         assert np.std(zero_wrap[is_estimated]) < 1e-3
+
+
+def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
+    """Thin path (fewer estimates than signals) with a repeated estimate.
+
+    Duplicating one trial makes every bin's coefficient matrix rank 3 of 4
+    estimates, so the weakest component carries (numerically) zero power: its
+    fraction is ~0 (not NaN) and, having no resolvable direction, its vector
+    is zero, while the strong components still match the singular value
+    decomposition and have unit-norm vectors.
+    """
+    rng = np.random.default_rng(3)
+    shape = (1, 3, 1, 6, 8)  # 3 estimates for 8 signals
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    coefficients = np.concatenate([coefficients, coefficients[:, :1]], axis=1)  # 4 estimates
+    fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
+
+    observations = _observations(coefficients)
+    singular_values = np.linalg.svd(observations, compute_uv=False)
+    expected = singular_values**2 / np.sum(singular_values**2, axis=-1, keepdims=True)
+    np.testing.assert_allclose(fractions, expected, rtol=1e-10, atol=1e-12)
+    np.testing.assert_array_equal(vectors[..., 3], 0)
+    np.testing.assert_allclose(np.linalg.norm(vectors[..., :3], axis=-2), 1.0, rtol=1e-12)
+    # Directions, not just norms: each strong vector is the SVD's left singular
+    # vector up to a phase (|<u, v>| = 1 for unit vectors).
+    left_vectors = np.linalg.svd(observations, full_matrices=False)[0]
+    overlap = np.abs(np.sum(left_vectors[..., :3].conj() * vectors[..., :3], axis=-2))
+    np.testing.assert_allclose(overlap, 1.0, rtol=1e-10)
