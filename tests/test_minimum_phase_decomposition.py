@@ -6,6 +6,7 @@ import pytest
 from scipy.fft import fft, ifft
 from scipy.signal import freqz_zpk
 
+from spectral_connectivity import _array_utils
 from spectral_connectivity import minimum_phase_decomposition as mpd_module
 from spectral_connectivity._array_utils import _conjugate_transpose
 from spectral_connectivity.minimum_phase_decomposition import (
@@ -220,15 +221,15 @@ def test_hermitian_square_root_factors_psd_and_rejects_invalid_matrices():
 
 def _chunks_of_three(monkeypatch, n_signals):
     """Shrink the eigh workspace budget so batches split into chunks of 3."""
-    monkeypatch.setattr(mpd_module, "_EIGH_WORKSPACE_BUDGET", 3 * (2 * n_signals**2 + 1024))
+    monkeypatch.setattr(_array_utils, "_EIGH_WORKSPACE_BUDGET", 3 * (2 * n_signals**2 + 1024))
 
 
 def test_hermitian_square_root_in_chunks_matches_a_single_batch(monkeypatch):
     """Splitting the batched eigh into chunks gives the single-call result exactly.
 
     Regression: CuPy's batched eigh fails (CUSOLVER_STATUS_INVALID_VALUE) above
-    about 2**21 matrices, which a long recording or subset pairwise Granger
-    reaches. The batch is split into chunks; here the budget is shrunk so 20
+    about 2**21 2x2 matrices (about 1M at 32 signals), which a long recording or
+    subset pairwise Granger reaches. The batch is split into chunks; here the budget is shrunk so 20
     matrices (including a non-finite and an indefinite one) take 7 chunks, the
     last one partial.
     """

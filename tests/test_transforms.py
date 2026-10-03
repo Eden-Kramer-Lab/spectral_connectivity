@@ -19,7 +19,7 @@ from spectral_connectivity.transforms import (
     dpss_windows,
 )
 from spectral_connectivity.wrapper import multitaper_connectivity
-from tests._backend_helpers import ON_GPU, to_device, to_host
+from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 
 
 def _short_smoothing_window():
@@ -764,6 +764,35 @@ def test_multitaper_fft_real_input_rfft_path(
     np.testing.assert_allclose(coefficients, expected, rtol=rtol, atol=rtol * 1e-2)
     mirrored = np.conj(coefficients[..., (-np.arange(n_fft_samples)) % n_fft_samples, :])
     np.testing.assert_array_equal(coefficients, mirrored)
+
+
+@pytest.mark.parametrize("n_fft_samples", [100, 101])
+def test_multitaper_fft_rfft_path_zeroes_self_mirrored_imaginary_parts(
+    monkeypatch, n_fft_samples
+):
+    """cuFFT's rfft can leave ~1e-15 in the imaginary part of the zero and
+    Nyquist bins, which are their own mirrors; they must come out exactly real so
+    the spectrum stays exactly conjugate-symmetric (else the Wilson factorization
+    silently falls back to its slower two-sided path)."""
+    from spectral_connectivity import transforms
+    from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symmetric
+
+    real_rfft = transforms.rfft
+    monkeypatch.setattr(transforms, "ON_GPU", True)
+    monkeypatch.setattr(
+        transforms, "rfft", lambda *args, **kwargs: real_rfft(*args, **kwargs) + 1e-15j
+    )
+    rng = np.random.default_rng(2)
+    time_series = to_device(rng.standard_normal((1, 2, 3, n_fft_samples)))
+    tapers = to_device(rng.standard_normal((n_fft_samples, 2)))
+    coefficients = _multitaper_fft(tapers, time_series, n_fft_samples, 1000.0)
+
+    host = to_host(coefficients)
+    assert (host[..., 0, :].imag == 0).all()
+    if n_fft_samples % 2 == 0:
+        assert (host[..., n_fft_samples // 2, :].imag == 0).all()
+    # (..., n_fft, n_tapers, 1): frequency on axis -3, where the check expects it.
+    assert _is_conjugate_symmetric(coefficients[..., xp.newaxis])
 
 
 def test_multitaper_fft_complex_input_keeps_full_fft(monkeypatch):

@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from spectral_connectivity._array_utils import (
+    _batched_eigh,
     _batched_inverse_square_root,
     _complex_inner_product,
     _conjugate_transpose,
@@ -337,27 +338,29 @@ def _reshape(
 
 def _normalize_fourier_coefficients(
     fourier_coefficients: NDArray[np.complexfloating],
-) -> NDArray[np.complexfloating]:
-    """Normalize fourier coefficients by power within group.
+) -> tuple[NDArray[np.complexfloating], NDArray[np.integer]]:
+    """Orthonormalize each group's per-bin coefficients for canonical coherence.
 
-    Returns the polar (phase) factor ``U Vᴴ`` of each per-bin coefficient
-    matrix ``A = U S Vᴴ`` (signals x observations), whose singular values are
-    all one, so the canonical correlations of two groups are the singular
-    values of ``N1 N2ᴴ``.
+    Returns a matrix ``N`` with orthonormal rows spanning the row space of each
+    per-bin coefficient matrix ``A`` (signals x observations): the polar factor
+    of the row-normalized ``A`` over its retained directions. It differs from
+    the polar factor ``U Vᴴ`` of ``A`` only by a unitary, so the canonical
+    correlations of two groups are still the singular values of ``N1 N2ᴴ``.
 
-    The factor is formed as ``(A Aᴴ)^(-1/2) A`` (or ``A (Aᴴ A)^(-1/2)`` when
-    there are more signals than observations, so the eigendecomposition is
-    always of the smaller Gram matrix) rather than from an SVD of ``A``: CuPy
-    batches ``eigh`` but loops over bins in ``svd`` once either dimension
-    exceeds 32. Forming the Gram matrix squares the condition number, so the
-    factor is computed twice -- the second pass re-orthonormalizes the nearly
-    orthonormal first-pass result, recovering SVD accuracy for condition
-    numbers up to about 1e7. Each signal is first scaled to unit norm, which
-    leaves the canonical correlations unchanged, so the result does not depend
-    on channel units. Directions whose Gram eigenvalue is then below
-    ``eps * n * largest`` (singular value below about ``1e-7`` of the largest:
-    a dead, duplicated, or numerically collinear channel, or fewer valid
-    observations than signals) are dropped. An SVD instead keeps an arbitrary
+    Each signal is first scaled to unit norm, which leaves the row space (and
+    so the canonical correlations) unchanged and makes the result independent
+    of channel units. The factor is then formed as ``(A Aᴴ)^(-1/2) A`` (or
+    ``A (Aᴴ A)^(-1/2)`` when there are more signals than observations, so the
+    eigendecomposition is always of the smaller Gram matrix) rather than from
+    an SVD of ``A``: CuPy batches ``eigh`` but loops over bins in ``svd`` once
+    either dimension exceeds 32. Forming the Gram matrix squares the condition
+    number, so the work is done at complex128 (or better) and the factor is
+    computed twice: the second pass re-orthonormalizes the nearly orthonormal
+    first-pass result, recovering SVD accuracy. A direction whose Gram
+    eigenvalue is at most ``eps * n * largest`` -- singular value below
+    ``sqrt(n * eps)`` of the largest, about 3e-8 for 4 signals and 1.2e-7 for
+    64 -- is dropped: a dead, duplicated, or numerically collinear channel, or
+    fewer valid observations than signals. An SVD instead keeps an arbitrary
     unit-norm null-space direction for each, which can inflate the canonical
     coherence; dropping them gives the value of the group's independent
     signals.
@@ -372,13 +375,19 @@ def _normalize_fourier_coefficients(
     -------
     normalized_fourier_coefficients : array
         Shape (n_time_windows, n_fft_samples, n_signals, n_trials * n_tapers).
-        Normalized Fourier coefficients.
+        Orthonormalized Fourier coefficients (zero rows for dropped directions).
+    rank : array of int
+        Shape (n_time_windows, n_fft_samples). Number of retained directions
+        per bin; 0 where the group has no power.
 
     """
     coefficients = _reshape(fourier_coefficients)
+    coefficients = coefficients.astype(
+        xp.result_type(coefficients.dtype, xp.complex128), copy=False
+    )
     # Give every signal (row) unit norm first. A left diagonal scaling keeps the
-    # row space, so it changes the polar factor only by a unitary that cancels
-    # in the canonical correlations, but it keeps the rank threshold below from
+    # row space, so it changes the factor only by a unitary that cancels in the
+    # canonical correlations, but it keeps the rank threshold below from
     # dropping a real channel that is merely small (e.g. in different units).
     # A dead channel stays zero and is still dropped.
     row_norms = xp.sqrt(xp.sum(xp.abs(coefficients) ** 2, axis=-1, keepdims=True))
@@ -391,19 +400,23 @@ def _normalize_fourier_coefficients(
     transpose = n_signals > n_observations
     if transpose:
         coefficients = _conjugate_transpose(coefficients)
-    for _ in range(2):
-        coefficients = _left_polar_factor(coefficients)
-    return _conjugate_transpose(coefficients) if transpose else coefficients
+    coefficients, rank = _left_polar_factor(coefficients)
+    # The second pass sees orthonormal rows plus zero rows for the dropped
+    # directions, so it keeps the same rank.
+    coefficients, _ = _left_polar_factor(coefficients)
+    normalized = _conjugate_transpose(coefficients) if transpose else coefficients
+    return normalized, rank
 
 
 def _left_polar_factor(
     matrices: NDArray[np.complexfloating],
-) -> NDArray[np.complexfloating]:
+) -> tuple[NDArray[np.complexfloating], NDArray[np.integer]]:
     """``((A Aᴴ)^+)^(1/2) A`` per bin: the polar factor of a wide matrix ``A``.
 
     Uses the pseudo-inverse square root of the Hermitian Gram matrix, dropping
     eigenvalues at or below ``eps * n * largest`` (numerically rank-deficient
-    directions).
+    directions). The batched ``eigh`` is chunked (:func:`_batched_eigh`), as
+    CuPy's fails on very large batches.
 
     Parameters
     ----------
@@ -414,9 +427,11 @@ def _left_polar_factor(
     -------
     polar_factor : array, shape (..., n, m)
         ``U Vᴴ`` over the retained singular directions of each matrix.
+    rank : array of int, shape (...)
+        Number of retained directions of each matrix.
 
     """
-    eigenvalues, eigenvectors = xp.linalg.eigh(matrices @ _conjugate_transpose(matrices))
+    eigenvalues, eigenvectors = _batched_eigh(matrices @ _conjugate_transpose(matrices))
     largest = xp.maximum(eigenvalues[..., -1:], 0.0)
     keep = eigenvalues > xp.finfo(eigenvalues.dtype).eps * matrices.shape[-2] * largest
     inverse_root = xp.where(keep, 1.0 / xp.sqrt(xp.where(keep, eigenvalues, 1.0)), 0.0)
@@ -425,7 +440,8 @@ def _left_polar_factor(
         eigenvectors
     )
     polar_factor: NDArray[np.complexfloating] = transform @ matrices
-    return polar_factor
+    rank: NDArray[np.integer] = xp.sum(keep, axis=-1)
+    return polar_factor, rank
 
 
 def _estimate_canonical_coherence(

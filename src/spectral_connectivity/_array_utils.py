@@ -162,3 +162,47 @@ def _complex_inner_product(
         a.astype(dtype, copy=False), _conjugate_transpose(b).astype(dtype, copy=False)
     )
     return product
+
+
+# Workspace budget (in elements) for one batched ``eigh`` call. CuPy runs every
+# batched eigh through cuSOLVER's ``syevjBatched``, whose workspace-size query
+# fails with CUSOLVER_STATUS_INVALID_VALUE for large batches (CuPy 14.2, CUDA
+# 12.9): the largest batch that worked was 2,078,879 matrices at n_signals=2,
+# 1,016,319 at 32 and 342,023 at 64, consistent with a workspace limit of about
+# 2**31 (n_signals=2) to 1.5 * 2**31 (32-64) elements. Chunks of ``_EIGH_WORKSPACE_BUDGET // (2 * n_signals**2 + 1024)``
+# matrices stay a factor of 4 (n_signals=2) to 6 below the measured limit
+# for 2 to 64 signals. Batched cholesky, solve and svd worked at 2**21 and more.
+_EIGH_WORKSPACE_BUDGET = 2**29
+
+
+def _batched_eigh(
+    matrices: NDArray[np.complexfloating],
+) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
+    """``xp.linalg.eigh`` over a batch, in chunks small enough for CuPy's batched eigh.
+
+    Batches within :data:`_EIGH_WORKSPACE_BUDGET` (all but the largest) take a
+    single call. Chunking applies on either backend; each matrix is decomposed
+    independently, so the chunked result is identical to a single call's.
+
+    Parameters
+    ----------
+    matrices : NDArray[complexfloating], shape (..., n_signals, n_signals)
+        Batched Hermitian matrices.
+
+    Returns
+    -------
+    eigenvalues : NDArray[floating], shape (..., n_signals)
+    eigenvectors : NDArray[complexfloating], shape (..., n_signals, n_signals)
+    """
+    n_signals = matrices.shape[-1]
+    chunk_size = max(1, _EIGH_WORKSPACE_BUDGET // (2 * n_signals**2 + 1024))
+    flat = matrices.reshape(-1, n_signals, n_signals)
+    if flat.shape[0] <= chunk_size:
+        eigenvalues, eigenvectors = xp.linalg.eigh(matrices)
+        return eigenvalues, eigenvectors
+    eigenvalues = xp.empty(flat.shape[:-1], dtype=np.finfo(flat.dtype).dtype)
+    eigenvectors = xp.empty_like(flat)
+    for start in range(0, flat.shape[0], chunk_size):
+        chunk = slice(start, start + chunk_size)
+        eigenvalues[chunk], eigenvectors[chunk] = xp.linalg.eigh(flat[chunk])
+    return eigenvalues.reshape(matrices.shape[:-1]), eigenvectors.reshape(matrices.shape)
