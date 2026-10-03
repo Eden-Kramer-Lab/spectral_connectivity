@@ -410,11 +410,12 @@ directly with results from 2.x.
   SVD-based whitening turned each zero singular direction into an arbitrary
   unit-norm null-space direction, whose value depended on the LAPACK build.
   After each channel is scaled to unit norm (so the value does not depend on
-  channel units), a direction with singular value below `sqrt(n * eps)` of the
-  group's largest (about 3e-8 for 4 signals, 1.2e-7 for 64) is now dropped, so
+  channel units), a direction with singular value at most `eps * max(n, m)` of
+  the group's largest (the usual numerical-rank threshold) is now dropped, so
   the value equals that of the group's independent channels, and a warning names
-  the group. A real but tiny independent component beyond that condition number
-  is treated as collinear. A group with no power at a bin (every signal zero)
+  the group. Weak but real directions above that threshold are kept, so the
+  value is unchanged by invertible within-group mixing up to condition number
+  1e8 (tested). A group with no power at a bin (every signal zero)
   now gives NaN there, with a warning, as coherency does, instead of an
   arbitrary value. The whitening runs at complex128 or better, so complex64
   coefficients give the same value as complex128. Likewise a numerically
@@ -713,8 +714,14 @@ directly with results from 2.x.
   dimension above 32, which CuPy decomposes one bin at a time. Canonical
   coherence whitens each group with the pseudo-inverse square root of the
   smaller Gram matrix (`eigh`) at complex128, applied twice so the second pass
-  restores SVD accuracy up to the rank threshold's condition number (about 3e7
-  for 4 signals, 8e6 for 64); global coherence
+  restores SVD accuracy; bins where that whitening drops a direction (singular
+  value below about 1e-7 of the largest, which the Gram matrix cannot resolve)
+  are recomputed with an SVD (of the small R factor of a QR decomposition, which
+  CuPy batches for groups of up to 32 signals). A group with a dead or
+  duplicated channel takes that path at every bin: on the benchmark case below
+  1.21 s instead of 0.32 s on the GPU and 1.73 s instead of 1.51 s on the CPU,
+  and for two groups of 40 signals (`(10, 10, 5, 500, 80)`) 14.6 s instead of
+  5.5 s on the GPU and 5.0 s instead of 3.6 s on the CPU; global coherence
   diagonalizes the `(n_estimates, n_estimates)` Gram matrix and maps its
   eigenvectors to the left singular vectors. Best of 3-5 interleaved runs:
   canonical coherence on `(30 windows, 10 trials, 5 tapers, 1000 frequencies,

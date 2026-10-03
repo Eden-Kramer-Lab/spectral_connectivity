@@ -328,6 +328,33 @@ class TestCanonicalCoherence:
         result, _ = Connectivity(rescaled).canonical_coherence(labels)
         np.testing.assert_allclose(result, expected, rtol=1e-9, atol=1e-12, equal_nan=True)
 
+    @pytest.mark.parametrize("n_signals", [2, 16])
+    def test_canonical_coherence_is_invariant_to_ill_conditioned_mixing(self, n_signals):
+        """Invertible mixing leaves a group's row space, and so its canonical
+        coherence, unchanged, however ill-conditioned the mixing.
+
+        Regression: whitening through the Gram matrix alone dropped directions
+        with singular value below about 1e-7 of the largest, so a mixing of
+        condition number 1e8 changed the value by up to 0.66.
+        """
+        shape = (2, 3 * n_signals, 1, 6)
+        signals = self.rng.standard_normal(
+            (*shape, n_signals)
+        ) + 1j * self.rng.standard_normal((*shape, n_signals))
+        other = 0.6 * signals[..., :2] + self.rng.standard_normal((*shape, 2))
+        rotation1, _ = np.linalg.qr(self.rng.standard_normal((n_signals, n_signals)))
+        rotation2, _ = np.linalg.qr(self.rng.standard_normal((n_signals, n_signals)))
+        mixing = rotation1 @ np.diag(np.logspace(0, -8, n_signals)) @ rotation2
+        labels = np.array([0] * n_signals + [1, 1])
+
+        expected, _ = Connectivity(np.concatenate([signals, other], -1)).canonical_coherence(
+            labels
+        )
+        result, _ = Connectivity(
+            np.concatenate([signals @ mixing.T, other], -1)
+        ).canonical_coherence(labels)
+        np.testing.assert_allclose(result, expected, rtol=0, atol=1e-6, equal_nan=True)
+
     def test_complex64_canonical_coherence_keeps_near_collinear_channels(self):
         """complex64 coefficients are whitened at complex128.
 
