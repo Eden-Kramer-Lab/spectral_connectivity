@@ -224,9 +224,8 @@ def _reduce_frequency_bands(
             if "valid_time_frequency" in selected.coords:
                 band_validity.append(selected.coords["valid_time_frequency"].all("frequency"))
 
-        reduced = xr.concat(reduced_bands, dim="band").assign_coords(
-            band=("band", band_names, {"long_name": "Frequency band"})
-        )
+        band = ("band", band_names, {"long_name": "Frequency band"})
+        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band)
         units = {
             key: value
             for key, value in data.coords["frequency"].attrs.items()
@@ -247,7 +246,8 @@ def _reduce_frequency_bands(
         if band_validity:
             reduced = reduced.assign_coords(
                 valid_time_band=xr.concat(band_validity, dim="band")
-                .assign_coords(band=band_names)
+                # The same labeled band coordinate, so the merge keeps its attrs.
+                .assign_coords(band=band)
                 # Any surviving non-frequency axes (typically "time", but none
                 # if the caller already selected a single time point) come
                 # first; "band" is placed last without naming "time" explicitly.

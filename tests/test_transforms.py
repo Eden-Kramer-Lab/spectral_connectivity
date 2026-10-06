@@ -1193,6 +1193,14 @@ def test_multitaper_rejects_an_invalid_taper_count_at_construction(n_tapers):
         )
 
 
+def test_multitaper_reports_the_supplied_taper_count():
+    """With custom tapers and no explicit n_tapers, n_tapers is the number of
+    taper columns used, not the count NW would imply."""
+    mt = Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100, tapers=np.ones((100, 3)))
+    assert mt.n_tapers == 3
+    assert mt._provenance_metadata()["n_tapers"] == 3
+
+
 def test_multitaper_rejects_n_tapers_that_disagrees_with_the_tapers():
     with pytest.raises(ValueError, match="n_tapers"):
         Multitaper(

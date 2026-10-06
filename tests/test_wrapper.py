@@ -3504,6 +3504,18 @@ def test_morlet_results_keep_their_coordinate_labels(method, tmp_path):
         assert reloaded.frequency.attrs == morlet.frequency.attrs
 
 
+def test_band_label_survives_the_validity_mask():
+    """Reducing a Morlet result into bands also reduces its validity mask; that
+    must not replace the labeled band coordinate with an unlabeled one."""
+    data = np.random.default_rng(321).standard_normal((192, 5, 2))
+    power = connectivity_to_xarray(
+        MorletWavelet(data, 64, np.array([4.0, 8.0, 12.0, 16.0])), method="power"
+    )
+    reduced = frequency_band_reduce(power, {"theta": (4.0, 12.0)})
+    assert "valid_time_band" in reduced.coords
+    assert reduced.band.attrs == {"long_name": "Frequency band"}
+
+
 def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     data = np.random.default_rng(319).standard_normal((192, 5, 2))
     # Adjacent-bin measures require a uniform grid; the band below still

@@ -830,8 +830,10 @@ def multitaper_connectivity(
     Every variable has ``long_name`` and ``units`` attrs (``"1"`` for
     dimensionless scores, ``"rad"`` for phase, ``"s"`` for delay; spectral
     densities are ``"(<units>)^2/Hz"`` when an input DataArray states its
-    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index coordinates on an input DataArray's signal dimension
-    (e.g. ``region``) are carried as ``source_<name>``/``target_<name>``.
+    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index
+    coordinates on an input DataArray's signal dimension (e.g. ``region``) are
+    carried as ``source_<name>``/``target_<name>`` with their attrs unchanged,
+    so those attrs must be NetCDF-serializable to save the result.
 
     Real-valued results write with any NetCDF engine (booleans are stored as
     0/1). Complex results (``coherency``, ``cross_spectral_density``,

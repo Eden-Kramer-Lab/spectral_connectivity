@@ -1474,6 +1474,8 @@ Frequency Analysis
     def n_tapers(self) -> int:
         """Return number of desired tapers.
 
+        The explicit ``n_tapers``, else the number of columns of custom
+        ``tapers``, else the count implied by ``time_halfbandwidth_product``.
         Note that the number of tapers may be less than this number if
         the bias of the tapers is too high (eigenvalues > MIN_EIGENVALUE_THRESHOLD = 0.9).
 
@@ -1483,9 +1485,12 @@ Frequency Analysis
             Number of tapers to use.
 
         """
-        if self._n_tapers is None:
-            return estimate_n_tapers(self.time_halfbandwidth_product)
-        return self._n_tapers
+        if self._n_tapers is not None:
+            return self._n_tapers
+        if self._tapers is not None:
+            # Custom tapers set the count; NW's estimate would misreport it.
+            return int(self._tapers.shape[1])
+        return estimate_n_tapers(self.time_halfbandwidth_product)
 
     @property
     def n_time_samples_per_window(self) -> int:
