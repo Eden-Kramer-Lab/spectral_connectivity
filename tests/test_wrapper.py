@@ -2186,6 +2186,29 @@ def test_result_carries_provenance_metadata():
     assert da.attrs["mt_frequency_resolution"] == pytest.approx(3.90625)
 
 
+@pytest.mark.parametrize("n_tapers", [None, 31])
+def test_low_bias_taper_filtering_keeps_requested_count_and_provenance(n_tapers):
+    """Caching filtered DPSS tapers must not change the requested taper count
+    or the provenance of repeated computations with the same transform."""
+    data = np.random.default_rng(123).standard_normal((1000, 2, 2))
+    with pytest.warns(UserWarning, match="unusually large"):
+        mt = Multitaper(
+            data,
+            sampling_frequency=100,
+            time_halfbandwidth_product=16,
+            n_tapers=n_tapers,
+        )
+    assert mt.n_tapers == 31
+
+    first = connectivity_to_xarray(mt, method="power")
+    assert mt.tapers.shape[1] < 31  # Low-bias filtering actually removed tapers.
+    assert mt.n_tapers == 31
+    second = connectivity_to_xarray(mt, method="power")
+    assert first.attrs["mt_n_tapers"] == 31
+    assert second.attrs["mt_n_tapers"] == 31
+    xr.testing.assert_identical(first, second)
+
+
 def test_provenance_records_measure_kwargs(tmp_path, stub_measure):
     """Measure keyword arguments are recorded as ``arg_<key>``.
 

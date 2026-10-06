@@ -1476,8 +1476,9 @@ Frequency Analysis
 
         The explicit ``n_tapers``, else the number of columns of custom
         ``tapers``, else the count implied by ``time_halfbandwidth_product``.
-        Note that the number of tapers may be less than this number if
-        the bias of the tapers is too high (eigenvalues > MIN_EIGENVALUE_THRESHOLD = 0.9).
+        The actual DPSS count may be lower when low-bias filtering removes
+        tapers with concentration ratios at or below 0.9. Computing the
+        transform does not change the desired count reported here.
 
         Returns
         -------
@@ -1487,8 +1488,9 @@ Frequency Analysis
         """
         if self._n_tapers is not None:
             return self._n_tapers
-        if self._tapers is not None:
-            # Custom tapers set the count; NW's estimate would misreport it.
+        if self._tapers is not None and self._taper_eigenvalues is None:
+            # Custom tapers have no concentration ratios. Cached DPSS tapers
+            # may have been filtered and must not override the desired count.
             return int(self._tapers.shape[1])
         return estimate_n_tapers(self.time_halfbandwidth_product)
 

@@ -412,6 +412,9 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `Multitaper` reports the supplied column count for custom tapers. For DPSS,
+  `n_tapers` keeps describing the requested count after low-bias filtering,
+  so repeated wrapper calls retain the same taper-count provenance.
 - `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
   negative, larger than the window, a boolean, or disagreeing with the columns
   of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with

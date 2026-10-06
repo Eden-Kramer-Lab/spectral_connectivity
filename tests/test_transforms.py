@@ -1199,6 +1199,9 @@ def test_multitaper_reports_the_supplied_taper_count():
     mt = Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100, tapers=np.ones((100, 3)))
     assert mt.n_tapers == 3
     assert mt._provenance_metadata()["n_tapers"] == 3
+    assert mt.fft().shape[2] == 3
+    assert mt.n_tapers == 3
+    assert mt._provenance_metadata()["n_tapers"] == 3
 
 
 def test_multitaper_rejects_n_tapers_that_disagrees_with_the_tapers():
