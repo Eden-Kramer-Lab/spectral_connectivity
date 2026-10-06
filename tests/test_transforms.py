@@ -58,6 +58,69 @@ def test_dpss_and_stft_observations_are_independent():
     assert stft.observations_are_independent is True
 
 
+def test_stft_describes_itself_as_a_hann_stft():
+    """repr and summarize_parameters name the Hann STFT, its window and step,
+    and its equivalent noise bandwidth, not inherited Multitaper settings."""
+    stft = ShortTimeFourierTransform(
+        np.zeros((1000, 2, 3)),
+        sampling_frequency=100,
+        time_window_duration=0.5,
+        time_window_step=0.25,
+    )
+    description = repr(stft)
+    assert description.startswith("ShortTimeFourierTransform(")
+    assert "time_window_duration=0.5" in description
+    assert "time_window_step=0.25" in description
+    assert "hann" in description
+
+    summary = stft.summarize_parameters()
+    assert summary.startswith("Short-Time Fourier Transform Configuration")
+    assert "Window:" in summary
+    assert "Hann" in summary
+    assert "Equivalent noise bandwidth: 3.0 Hz" in summary  # 1.5 / 0.5 s
+    assert "Window step:      0.250 s (50% overlap)" in summary
+    for multitaper_only in ("Multitaper", "halfbandwidth", "tapers", "Frequency resolution"):
+        assert multitaper_only not in description + summary, multitaper_only
+
+
+def test_welch_exposes_its_resolved_settings_read_only():
+    """Welch reports the settings it computes with: the segment length rounded
+    to whole samples, the realized step, and its FFT options; none can be
+    reassigned out of step with the computation."""
+    welch = Welch(
+        np.zeros((1000, 2, 2)),
+        sampling_frequency=100,
+        segment_duration=0.123,  # 12.3 samples -> 12
+        segment_overlap=0.3,  # realized step round(12 * 0.7) = 8 samples
+        detrend_type="linear",
+        start_time=2.0,
+        n_fft_samples=16,
+        fft_workers=1,
+    )
+    assert welch.n_time_samples_per_segment == 12
+    assert welch.segment_duration == pytest.approx(0.12)
+    assert welch.segment_overlap == 0.3  # the requested fraction
+    assert welch.n_time_samples_per_step == 8
+    assert welch.sampling_frequency == 100.0
+    assert welch.detrend_type == "linear"
+    assert float(welch.start_time) == 2.0
+    assert welch.n_fft_samples == 16
+    assert welch.fft_workers == 1
+    for name in (
+        "sampling_frequency",
+        "segment_duration",
+        "segment_overlap",
+        "n_time_samples_per_segment",
+        "n_time_samples_per_step",
+        "detrend_type",
+        "start_time",
+        "n_fft_samples",
+        "fft_workers",
+    ):
+        with pytest.raises(AttributeError):
+            setattr(welch, name, 1)
+
+
 @pytest.mark.parametrize(
     ("segment_overlap", "expected"),
     [(0.0, True), (0.25, True), (0.5, True), (0.75, False), (0.9, False)],
@@ -1111,6 +1174,46 @@ def test_multitaper_warns_on_step_larger_than_duration():
             time_window_duration=0.5,
             time_window_step=1.0,
         )
+
+
+@pytest.mark.parametrize(
+    "n_tapers",
+    [0, -1, True, np.True_, 51],
+    ids=["zero", "negative", "bool", "numpy_bool", "above_window"],
+)
+def test_multitaper_rejects_an_invalid_taper_count_at_construction(n_tapers):
+    """An impossible n_tapers fails when the transform is built, not later
+    inside fft(); a bool is not a count. The window here is 50 samples."""
+    with pytest.raises(ValueError, match="n_tapers"):
+        Multitaper(
+            np.zeros((500, 2, 2)),
+            sampling_frequency=100,
+            time_window_duration=0.5,
+            n_tapers=n_tapers,
+        )
+
+
+def test_multitaper_reports_the_supplied_taper_count():
+    """With custom tapers and no explicit n_tapers, n_tapers is the number of
+    taper columns used, not the count NW would imply."""
+    mt = Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100, tapers=np.ones((100, 3)))
+    assert mt.n_tapers == 3
+    assert mt._provenance_metadata()["n_tapers"] == 3
+    assert mt.fft().shape[2] == 3
+    assert mt.n_tapers == 3
+    assert mt._provenance_metadata()["n_tapers"] == 3
+
+
+def test_multitaper_rejects_n_tapers_that_disagrees_with_the_tapers():
+    with pytest.raises(ValueError, match="n_tapers"):
+        Multitaper(
+            np.zeros((100, 1, 2)), sampling_frequency=100, n_tapers=2, tapers=np.ones((100, 3))
+        )
+    # Agreeing counts, or n_tapers omitted, are accepted.
+    Multitaper(
+        np.zeros((100, 1, 2)), sampling_frequency=100, n_tapers=3, tapers=np.ones((100, 3))
+    )
+    Multitaper(np.zeros((100, 1, 2)), sampling_frequency=100, tapers=np.ones((100, 3)))
 
 
 def test_multitaper_configuration_and_array_snapshots_are_immutable():

@@ -197,6 +197,11 @@ def _reduce_frequency_bands(
             # average a different set of bins per time point.
             if reduction == "integral":
                 reduced = xr.dot(selected, xr.DataArray(weights[used], dims="frequency"))
+                # Some xarray versions (e.g. 2025.6) drop coordinate attrs in
+                # xr.dot; restore them from the input's coordinates.
+                for name, coordinate in reduced.coords.items():
+                    if name in selected.coords:
+                        coordinate.attrs.update(selected.coords[name].attrs)
             elif (
                 circular
                 if circular is not None
@@ -219,20 +224,30 @@ def _reduce_frequency_bands(
             if "valid_time_frequency" in selected.coords:
                 band_validity.append(selected.coords["valid_time_frequency"].all("frequency"))
 
-        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band_names)
-        edge_attrs = {
+        band = ("band", band_names, {"long_name": "Frequency band"})
+        reduced = xr.concat(reduced_bands, dim="band").assign_coords(band=band)
+        units = {
             key: value
             for key, value in data.coords["frequency"].attrs.items()
             if key == "units"
         }
         reduced = reduced.assign_coords(
-            band_lower=("band", [low for _, (low, _) in band_masks_and_bounds], edge_attrs),
-            band_upper=("band", [high for _, (_, high) in band_masks_and_bounds], edge_attrs),
+            band_lower=(
+                "band",
+                [low for _, (low, _) in band_masks_and_bounds],
+                {"long_name": "Lower edge of the frequency band", **units},
+            ),
+            band_upper=(
+                "band",
+                [high for _, (_, high) in band_masks_and_bounds],
+                {"long_name": "Upper edge of the frequency band", **units},
+            ),
         )
         if band_validity:
             reduced = reduced.assign_coords(
                 valid_time_band=xr.concat(band_validity, dim="band")
-                .assign_coords(band=band_names)
+                # The same labeled band coordinate, so the merge keeps its attrs.
+                .assign_coords(band=band)
                 # Any surviving non-frequency axes (typically "time", but none
                 # if the caller already selected a single time point) come
                 # first; "band" is placed last without naming "time" explicitly.

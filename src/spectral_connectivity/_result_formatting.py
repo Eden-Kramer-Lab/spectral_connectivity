@@ -187,12 +187,12 @@ def _connectivity_result_to_xarray(
         {} if signal_metadata is None else dict(signal_metadata.coordinates)
     )
     source_extras = {
-        f"source_{name}": ("source", values)
-        for name, values in extra_signal_coordinates.items()
+        f"source_{name}": ("source", values, attrs)
+        for name, (values, attrs) in extra_signal_coordinates.items()
     }
     target_extras = {
-        f"target_{name}": ("target", values)
-        for name, values in extra_signal_coordinates.items()
+        f"target_{name}": ("target", values, attrs)
+        for name, (values, attrs) in extra_signal_coordinates.items()
     }
     signal_coordinates.update(source_extras)
     signal_coordinates.update(target_extras)
@@ -454,18 +454,20 @@ def _connectivity_result_to_xarray(
             "connection_seed_group": (
                 "connection",
                 numerical_result.connections[:, 0],
+                {"long_name": "Seed group of the connection"},
             ),
             "connection_target_group": (
                 "connection",
                 numerical_result.connections[:, 1],
+                {"long_name": "Target group of the connection"},
             ),
             "side": ("side", ["seed", "target"], {"long_name": "Side of the connection"}),
             "signal": ("signal", signal_labels, {"long_name": "Signal"}),
             "group": ("group", numerical_result.group_labels, {"long_name": "Signal group"}),
         }
         signal_extras = {
-            f"signal_{name}": ("signal", values)
-            for name, values in extra_signal_coordinates.items()
+            f"signal_{name}": ("signal", values, attrs)
+            for name, (values, attrs) in extra_signal_coordinates.items()
         }
         data_vars = {
             method: xr.DataArray(

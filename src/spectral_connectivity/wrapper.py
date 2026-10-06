@@ -399,7 +399,15 @@ def connectivity_to_xarray(
             # attaching the transform's full frequency axis to the result.
             result_frequencies = np.asarray(result.coords["frequency"])
             aligned_validity = full_validity.sel(frequency=result_frequencies)
-            result = result.assign_coords(valid_time_frequency=aligned_validity)
+            # Attach the values alone: a DataArray would bring its own, unlabeled
+            # time and frequency coordinates and replace the result's.
+            result = result.assign_coords(
+                valid_time_frequency=(
+                    ("time", "frequency"),
+                    aligned_validity.values,
+                    validity_attrs,
+                )
+            )
         elif "time" in result.dims:
             # PSI and group delay aggregate a frequency band. They have no
             # frequency dimension on which a 2-D coordinate can live, so expose
@@ -822,8 +830,10 @@ def multitaper_connectivity(
     Every variable has ``long_name`` and ``units`` attrs (``"1"`` for
     dimensionless scores, ``"rad"`` for phase, ``"s"`` for delay; spectral
     densities are ``"(<units>)^2/Hz"`` when an input DataArray states its
-    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index coordinates on an input DataArray's signal dimension
-    (e.g. ``region``) are carried as ``source_<name>``/``target_<name>``.
+    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index
+    coordinates on an input DataArray's signal dimension (e.g. ``region``) are
+    carried as ``source_<name>``/``target_<name>`` with their attrs unchanged,
+    so those attrs must be NetCDF-serializable to save the result.
 
     Real-valued results write with any NetCDF engine (booleans are stored as
     0/1). Complex results (``coherency``, ``cross_spectral_density``,

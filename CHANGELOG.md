@@ -99,12 +99,17 @@ directly with results from 2.x.
   measures, which require a full two-sided spectrum. Morlet coefficients are
   scaled so that `power()` is the one-sided PSD in signal²/Hz, on the same
   scale as `Multitaper` (FieldTrip's convention; MNE's wavelet power is
-  `2 * sampling_frequency` times larger).
+  `2 * sampling_frequency` times larger). `ShortTimeFourierTransform`'s `repr`
+  and `summarize_parameters()` describe its Hann window and equivalent noise
+  bandwidth; `Welch` exposes its resolved settings (segment duration and step,
+  overlap, detrending, start time, FFT length, workers) as read-only
+  properties.
 - Morlet transforms now expose strict time-frequency edge validity and support
   constant/reflect/edge convolution padding, keep/NaN/trim edge policies,
   adjacent-frequency smoothing, and boxcar or Hann time-frequency kernels.
   Connectivity expectations consume the local weights directly, and xarray
-  results carry the `valid_time_frequency` mask.
+  results carry the `valid_time_frequency` mask alongside their labeled time
+  and frequency coordinates.
 - `SpectralTransform`, a public, runtime-checkable `typing.Protocol` for the
   transforms `Connectivity.from_transform` and `Connectivity.from_multitaper`
   accept: `fft()`, `frequencies`, and `time` are required, and the optional
@@ -310,7 +315,9 @@ directly with results from 2.x.
 - xarray results carry `long_name` and `units` on every variable (spectral
   densities in `(<input units>)^2/Hz` when the input states its units),
   `band_lower`/`band_upper` coordinates after band reduction, and an input
-  DataArray's per-signal coordinates as `source_<name>`/`target_<name>`.
+  DataArray's per-signal coordinates, with their attrs, as
+  `source_<name>`/`target_<name>`. The package's coordinates (including band
+  names and edges and component connection labels) carry a `long_name`.
   `frequency_band_reduce` takes `circular=` and infers circular averaging
   from `units="rad"`. Large array input attributes are summarized by shape.
 
@@ -405,6 +412,13 @@ directly with results from 2.x.
 
 ### Fixed
 
+- `Multitaper` reports the supplied column count for custom tapers. For DPSS,
+  `n_tapers` keeps describing the requested count after low-bias filtering,
+  so repeated wrapper calls retain the same taper-count provenance.
+- `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
+  negative, larger than the window, a boolean, or disagreeing with the columns
+  of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with
+  an opaque SciPy `select_range` error, or used `True` as one taper.
 - `canonical_coherence` overstated the coherence of a group containing a dead,
   duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
   SVD-based whitening turned each zero singular direction into an arbitrary
