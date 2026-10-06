@@ -1,6 +1,6 @@
 # 3.0 API and result consistency decisions
 
-**Status: step 1 merged; step 2 prepared for implementation.**
+**Status: step 1 merged; step 2 implemented and validated locally.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -248,14 +248,24 @@ remain supported. Publish a short schema reference and migration table alongside
 implementation. Keep this planning sheet updated with accepted decisions and
 implementation status.
 
-## Step 2 implementation preparation
+## Step 2 implementation
 
 **Scope:** D1–D3, D19, D21, and D28. **Branch:**
 `refactor/metadata-and-bandwidths`, based on merged `master` at `138f3f7`.
 Step 1, including its custom-taper and band-label follow-ups, is complete.
+Step 2 is implemented on this branch and ready for PR review.
 
 **Merged-base validation:** the full local CPU suite passed with 1,801 tests
 and 16 skips on `138f3f7`. This is the baseline for step 2.
+
+**Step 2 validation (2026-10-06):** 1,840 tests passed with 16 skips on the
+main CPU environment; 1,723 passed with 103 skips on Python 3.10 with the exact
+NumPy/SciPy/xarray/Matplotlib floors. The floor run uses CI's `-p no:warnings`
+for third-party deprecations and excludes notebook tests; optional NetCDF
+engines are checked in the main environment. All 70 source doctests, Ruff
+formatting/lint, mypy, and NumPy docstring checks for both new bandwidth
+properties passed. The singular-solver regression fixture uses identical rows
+to trigger an exact zero pivot consistently across LAPACK builds.
 
 ### Implementation order and affected code
 
@@ -299,25 +309,26 @@ and 16 skips on `138f3f7`. This is the baseline for step 2.
 
 ### Acceptance checklist
 
-- [ ] Multitaper, STFT, Welch, Morlet, and external Fourier results have the
+- [x] Multitaper, STFT, Welch, Morlet, and external Fourier results have the
   common schema on DataArrays and Datasets. There are no unreleased transform
   prefixes or unapproved `mt_*` keys; the released compatibility keys agree.
-- [ ] An equal FFT grid can report different estimator bandwidths: at 100 Hz
+- [x] An equal FFT grid can report different estimator bandwidths: at 100 Hz
   with a 0.5-second window and NW=2, DPSS concentration bandwidth is 8 Hz and
   Hann equivalent noise bandwidth is 3 Hz. Decimation changes reported bin
   spacing without changing the estimator bandwidth.
-- [ ] Multitaper's frequency-resolution property, helper names, keyword, and
+- [x] Multitaper's frequency-resolution property, helper names, keyword, and
   returned key retain their values and positional order without warnings or
   synonym spellings. STFT exposes `equivalent_noise_bandwidth` and does not
   inherit Multitaper's `frequency_resolution` property.
-- [ ] Metadata does not depend on whether tapers/FFT have already been cached;
+- [x] Metadata does not depend on whether tapers/FFT have already been cached;
   custom tapers and low-bias DPSS counts retain step 1's regression coverage.
-- [ ] Structured settings decode as canonical JSON, including optional `null`
+- [x] Structured settings decode as canonical JSON, including optional `null`
   values, and ordinary results round-trip with scipy, netCDF4, and h5netcdf.
   External normalized/irregular grids, band reductions, and extracted Dataset
   variables retain accurate units and applicable provenance.
-- [ ] Update tests in `test_parameter_helpers.py`, `test_transforms.py`,
-  `test_wrapper.py`, and `test_wrapper_netcdf.py`, plus doctested documentation
+- [x] Existing parameter-helper and NetCDF coverage passes, and schema regressions
+  are covered in `test_result_schema.py`, `test_transforms.py`, and `test_wrapper.py`,
+  plus doctested documentation
   and tutorials covering the clarified names and STFT's renamed property.
   Run the full suite, source doctests, Ruff formatting/lint, mypy, and CI's
   minimum-dependency checks.

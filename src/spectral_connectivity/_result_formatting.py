@@ -2,7 +2,7 @@
 
 import inspect
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from typing import Any
 
 import numpy as np
@@ -85,18 +85,23 @@ def _frequency_band_attrs(
 
 def _coordinate_attrs(
     shared_attrs: Mapping[str, Any],
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[dict[Hashable, Any], dict[Hashable, Any]]:
     """``(time_attrs, frequency_attrs)`` metadata for a result's coordinates.
 
     ``fourier_connectivity`` records when it filled in a coordinate: the default
     frequency grid is normalized (cycles/sample) and the default time is the
     window index, so those must not be labeled Hz and seconds.
     """
-    if shared_attrs.get("fourier_frequency_coordinate") == "normalized":
+    frequency_attrs: dict[Hashable, Any]
+    time_attrs: dict[Hashable, Any]
+    if (
+        shared_attrs.get("frequency_units") == "cycles/sample"
+        or shared_attrs.get("frequency_coordinate") == "normalized"
+    ):
         frequency_attrs = {"long_name": "Normalized frequency", "units": "cycles/sample"}
     else:
         frequency_attrs = {"long_name": "Frequency", "units": "Hz"}
-    if shared_attrs.get("fourier_time_coordinate") == "index":
+    if shared_attrs.get("time_coordinate") == "index":
         time_attrs = {"long_name": "Window index"}
     else:
         time_attrs = {"long_name": "Window center time", "units": "s"}
@@ -109,7 +114,10 @@ def _delay_units(shared_attrs: Mapping[str, Any]) -> tuple[str, str]:
     A delay is in the reciprocal units of frequency, so on the normalized grid
     ``fourier_connectivity`` fills in (cycles/sample) it is in samples.
     """
-    if shared_attrs.get("fourier_frequency_coordinate") == "normalized":
+    if (
+        shared_attrs.get("frequency_units") == "cycles/sample"
+        or shared_attrs.get("frequency_coordinate") == "normalized"
+    ):
         return "samples", "rad/(cycles/sample)"
     return "s", "rad/Hz"
 
@@ -171,6 +179,11 @@ def _connectivity_result_to_xarray(
         _store_provenance_item(attrs, "arg_", key, value)
 
     time_attrs, frequency_attrs = _coordinate_attrs(shared_attrs)
+    if signal_metadata is not None:
+        if signal_metadata.frequency_coordinate_attrs:
+            frequency_attrs.update(signal_metadata.frequency_coordinate_attrs)
+        if signal_metadata.time_coordinate_attrs:
+            time_attrs.update(signal_metadata.time_coordinate_attrs)
     base_coordinates: dict[str, Any] = {
         "time": ("time", connectivity.time, time_attrs),
         "frequency": (
@@ -494,7 +507,7 @@ def _connectivity_result_to_xarray(
                     **signal_extras,
                 },
                 dims=("group", "signal"),
-                attrs={"long_name": "Signal belongs to group"},
+                attrs={**attrs, "long_name": "Signal belongs to group"},
             ),
         }
         projection_dims = (

@@ -145,7 +145,10 @@ def test_solve_isolating_singular_isolates_bad_units():
     """
     identity = np.eye(3)
     good = np.diag([2.0, 3.0, 4.0])
-    singular = np.outer([1.0, 2.0, 3.0], [1.0, 2.0, 4.0])  # rank 1
+    # Identical rows produce an exact zero pivot across LAPACK builds. With
+    # proportional rows, NumPy 1.24 on macOS can round elimination into tiny
+    # nonzero pivots and miss the singularity, bypassing the recovery path.
+    singular = np.ones((3, 3))  # rank 1
     rhs = np.eye(3)
     coefficient = np.stack([good, singular, good])
     right_hand_side = np.stack([rhs, rhs, rhs])
