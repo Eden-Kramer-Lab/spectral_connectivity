@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
+import xarray as xr
 
 from spectral_connectivity._backend import ON_GPU
 from spectral_connectivity.connectivity import Connectivity
@@ -119,33 +120,95 @@ def _package_version() -> str:
         return "unknown"
 
 
+_LEGACY_MULTITAPER_FIELDS = frozenset(
+    {
+        "detrend_type",
+        "is_low_bias",
+        "sampling_frequency",
+        "start_time",
+        "time_halfbandwidth_product",
+        "n_fft_samples",
+        "n_signals",
+        "n_tapers",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "time_window_duration",
+        "time_window_step",
+        "frequency_resolution",
+        "nyquist_frequency",
+    }
+)
+
+_COMMON_TRANSFORM_FIELDS = frozenset(
+    {
+        "transform",
+        "sampling_frequency",
+        "n_trials",
+        "n_signals",
+        "n_observations",
+        "expectation_type",
+        "observations_are_independent",
+        "time_bins_are_independent",
+        "frequency_coordinate",
+        "time_coordinate",
+        "nyquist_frequency",
+        "spectral_bandwidth",
+        "spectral_bandwidth_definition",
+        "spectral_bandwidth_units",
+        "is_one_sided",
+        "frequency_units",
+        "backend",
+    }
+)
+
+
 def _shared_provenance_attrs(
     connectivity: Connectivity,
     transform_metadata: Mapping[str, Any],
     input_attrs: Mapping[Any, Any] | None = None,
-    *,
-    transform_prefix: str = "mt_",
 ) -> dict[str, Any]:
     """Provenance shared by every measure computed from one transform.
 
-    Covers the package/version, the imported backend, the expectation type, and
-    the multitaper parameters (``mt_*``) -- everything that does not depend on
-    the specific measure. The per-measure attributes (``measure``,
-    ``measure_kwargs_json``, and the convenient ``arg_*`` views) are added by
-    the caller. Attributes on an input ``xarray.DataArray`` are carried through
-    as one canonical JSON record so arbitrary keys cannot collide or produce
-    invalid NetCDF attribute names.
+    Common facts are top-level attributes. Remaining native settings live in
+    one JSON record separating estimator and execution settings. Only the
+    scalar ``mt_*`` fields released in 2.0.1 are retained as compatibility copies.
     """
-    # Namespace transform settings so they cannot collide with measure-level or
-    # package-level provenance attributes.
     attrs: dict[str, Any] = {
-        transform_prefix + attr: _netcdf_provenance_value(value)
-        for attr, value in transform_metadata.items()
+        key: _netcdf_provenance_value(value)
+        for key, value in transform_metadata.items()
+        if key in _COMMON_TRANSFORM_FIELDS and value is not None
     }
-    attrs["package"] = "spectral_connectivity"
-    attrs["package_version"] = _package_version()
-    attrs["backend"] = "GPU" if ON_GPU else "CPU"
-    attrs["expectation_type"] = connectivity.expectation_type
+    attrs.update(
+        package="spectral_connectivity",
+        package_version=_package_version(),
+        output_schema_version=1,
+        backend="gpu" if ON_GPU else "cpu",
+        expectation_type=connectivity.expectation_type,
+        n_signals=connectivity.n_signals,
+        n_observations=connectivity.n_observations,
+        is_one_sided=int(connectivity.is_one_sided),
+        observations_are_independent=int(connectivity.observations_are_independent),
+        time_bins_are_independent=int(connectivity.time_bins_are_independent),
+    )
+    estimator = {
+        key: value
+        for key, value in transform_metadata.items()
+        if key not in _COMMON_TRANSFORM_FIELDS
+        and key not in {"fft_workers", "frequency_resolution"}
+    }
+    execution = {
+        key: value for key, value in transform_metadata.items() if key == "fft_workers"
+    }
+    attrs["transform_parameters_json"] = _canonical_json(
+        {"estimator": estimator, "execution": execution}
+    )
+    if transform_metadata.get("transform") == "multitaper":
+        for key in sorted(_LEGACY_MULTITAPER_FIELDS):
+            value = transform_metadata[key]
+            if isinstance(value, np.ndarray) and value.ndim == 0:
+                value = value.item()
+            attrs["mt_" + key] = _netcdf_provenance_value("None" if value is None else value)
     # A single fixed key is both collision-proof and a valid NetCDF attribute
     # name. Flattening arbitrary user keys would make unlike keys such as 1 and
     # "1" collide, make a structured ``x`` collide with a literal ``x_json``,
@@ -155,6 +218,43 @@ def _shared_provenance_attrs(
             {key: _summarized_if_large(value) for key, value in input_attrs.items()}
         )
     return attrs
+
+
+def _with_frequency_grid_metadata(
+    result: xr.DataArray | xr.Dataset,
+) -> xr.DataArray | xr.Dataset:
+    """Describe each returned frequency grid, clearing stale spacing after reduction."""
+
+    def grid_attrs(data: xr.DataArray | xr.Dataset) -> dict[str, Any]:
+        attrs = dict(data.attrs)
+        attrs.pop("frequency_bin_spacing", None)
+        attrs.pop("frequency_bin_spacing_units", None)
+        if "frequency" not in data.dims:
+            return attrs
+        frequency = data.coords["frequency"]
+        values = np.asarray(frequency.values)
+        if values.size >= 2:
+            differences = np.diff(values)
+            spacing = float(differences[0])
+            if (
+                np.isfinite(spacing)
+                and spacing > 0
+                and np.allclose(differences, spacing, rtol=1e-10, atol=0)
+            ):
+                attrs["frequency_bin_spacing"] = spacing
+                if "units" in frequency.attrs:
+                    attrs["frequency_bin_spacing_units"] = frequency.attrs["units"]
+        return attrs
+
+    if isinstance(result, xr.DataArray):
+        updated_array = result.copy(deep=False)
+        updated_array.attrs = grid_attrs(result)
+        return updated_array
+    updated = result.copy(deep=False)
+    updated.attrs = grid_attrs(result)
+    for name, variable in result.data_vars.items():
+        updated[name].attrs = grid_attrs(variable)
+    return updated
 
 
 # Input attrs are copied onto every result variable, so an array attribute

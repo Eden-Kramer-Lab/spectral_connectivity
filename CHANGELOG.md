@@ -185,9 +185,25 @@ directly with results from 2.x.
   documentation site serves an `llms.txt` index, and the package docstring
   (`help(spectral_connectivity)`) points to both.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
-  provenance (package, version, backend, expectation type, and the `mt_*`
-  multitaper parameters) as top-level `Dataset.attrs`, not only on each
+  provenance (package, version, transform, backend, expectation type, observation
+  counts, and transform settings) as top-level `Dataset.attrs`, not only on each
   variable.
+- Result schema version 1 uses common known facts across Multitaper, STFT,
+  Welch, Morlet, and external Fourier inputs, lowercase `backend="cpu"`/`"gpu"`,
+  and one canonical `transform_parameters_json` record separating estimator
+  and execution settings. Optional structured settings use JSON `null`.
+  Only the 15 scalar `mt_*` attributes released in 2.0.1 remain as deprecated
+  compatibility copies until 4.0; unreleased transform-prefixed copies are gone.
+  Multitaper's `frequency_resolution`, its helper names, and the helper's
+  returned key remain supported. STFT/Welch expose `equivalent_noise_bandwidth`;
+  STFT no longer inherits Multitaper's differently defined property. The
+  two-sample Hann window's bandwidth is computed from its actual window.
+- Results distinguish qualified estimator `spectral_bandwidth` from uniform
+  returned-grid `frequency_bin_spacing`, refreshed after crop/decimation and
+  omitted after band reduction or on singleton/irregular grids. External
+  normalized grids retain `cycles/sample` units without inventing a physical
+  sampling rate or trial count. Scalar recording coordinates retain their attrs;
+  trial labels averaged across conditions are omitted.
 - The xarray interfaces now expose every built-in nonstandard result contract:
   group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
   and membership, delay candidates, global-coherence scores/vectors,
@@ -312,8 +328,9 @@ directly with results from 2.x.
   than once per module. `Multitaper`'s `fft_workers` and the xarray `backend`
   attribute follow the imported backend instead of re-reading the variable
   after import.
-- xarray results carry `long_name` and `units` on every variable (spectral
-  densities in `(<input units>)^2/Hz` when the input states its units),
+- xarray measure results carry `long_name` and known `units` (spectral
+  densities in `(<input units>)^2/Hz` when the input states its units; omitted
+  when unknown),
   `band_lower`/`band_upper` coordinates after band reduction, and an input
   DataArray's per-signal coordinates, with their attrs, as
   `source_<name>`/`target_<name>`. The package's coordinates (including band
@@ -558,8 +575,8 @@ directly with results from 2.x.
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
   data is no longer short by half the DC cell. The Nyquist bin is the bin at half
-  the result's recorded sampling rate (`mt_sampling_frequency`, and
-  `fourier_sampling_frequency` for two-sided coefficients), so an odd-length
+  the result's recorded `sampling_frequency` (with `mt_sampling_frequency`
+  retained for released compatibility), so an odd-length
   FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,

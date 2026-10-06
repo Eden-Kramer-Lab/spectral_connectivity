@@ -57,6 +57,11 @@ class _SignalMetadata(NamedTuple):
     coordinates: Mapping[str, tuple[NDArray[Any], dict[Hashable, Any]]]
     # The input's ``units`` attribute; spectral densities report (units)^2/Hz.
     units: str | None
+    # Dimension-free recording identifiers remain meaningful after averaging.
+    recording_coordinates: Mapping[str, tuple[NDArray[Any], dict[Hashable, Any]]] | None = None
+    frequency_coordinate_attrs: Mapping[Hashable, Any] | None = None
+    time_coordinate_attrs: Mapping[Hashable, Any] | None = None
+    n_trials: int | None = None
 
 
 class _UnwrappedInput(NamedTuple):
@@ -612,6 +617,17 @@ def _signal_coordinates_from_dataarray(
     }
 
 
+def _scalar_coordinates_from_dataarray(
+    data_array: xr.DataArray,
+) -> dict[str, tuple[NDArray[Any], dict[Hashable, Any]]]:
+    """Scalar recording coordinates, excluding labels along averaged axes."""
+    return {
+        str(name): (np.asarray(coordinate.to_numpy()), dict(coordinate.attrs))
+        for name, coordinate in data_array.coords.items()
+        if not coordinate.dims
+    }
+
+
 def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
     """Reject a lazy backing array the positional spectral math cannot consume.
 
@@ -686,6 +702,7 @@ def _unwrap_xarray_input(
         _SignalMetadata(
             _signal_coordinates_from_dataarray(time_series, signal_dimension),
             units if isinstance(units, str) and units else None,
+            _scalar_coordinates_from_dataarray(time_series),
         ),
     )
 
@@ -864,6 +881,7 @@ def _unwrap_fourier_input(
         msg = "frequencies conflicts with the DataArray frequency coordinate."
         raise ValueError(msg)
 
+    time_coordinate_attrs = None
     if "time" in role_to_dimension:
         time_dimension = role_to_dimension["time"]
         coordinate_time = (
@@ -877,15 +895,27 @@ def _unwrap_fourier_input(
         elif coordinate_time is not None and not _coordinates_agree(time, coordinate_time):
             msg = "time conflicts with the DataArray time coordinate."
             raise ValueError(msg)
+        if coordinate_time is not None:
+            time_coordinate_attrs = dict(coefficient_array.coords[time_dimension].attrs)
 
     if signal_names is None:
         signal_names = _signal_labels_from_dataarray(
             coefficient_array, role_to_dimension["signal"]
         )
     # Coefficient units are not time-series units, so no density units follow.
+    trial_dimension = role_to_dimension.get("trial")
+    known_trials = trial_dimension is not None and (
+        trial_dim is not None or str(trial_dimension).lower() in _ROLE_SYNONYMS["trial"]
+    )
     signal_metadata = _SignalMetadata(
         _signal_coordinates_from_dataarray(coefficient_array, role_to_dimension["signal"]),
         None,
+        _scalar_coordinates_from_dataarray(coefficient_array),
+        dict(coefficient_array.coords[frequency_dimension].attrs)
+        if frequency_coordinate_is_1d
+        else None,
+        time_coordinate_attrs,
+        int(coefficient_array.sizes[trial_dimension]) if known_trials else None,
     )
     return (
         data,
