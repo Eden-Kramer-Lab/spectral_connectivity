@@ -92,9 +92,11 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 - `time_window_duration` defaults to the whole recording (one window). Set it,
   and `time_window_step`, for a time-resolved result.
-- Frequency resolution is `2 * time_halfbandwidth_product / time_window_duration`
-  Hz, and there are `2 * time_halfbandwidth_product - 1` tapers (rounded
-  down).
+- Multitaper frequency resolution is the full DPSS concentration bandwidth,
+  `2 * time_halfbandwidth_product / time_window_duration` Hz. It describes
+  spectral smoothing; FFT bin spacing also depends on the FFT length and
+  zero-padding. There are `2 * time_halfbandwidth_product - 1` requested tapers
+  (rounded down), with fewer retained if low-bias filtering removes some.
 - `suggest_parameters` picks these from the sampling rate, recording length,
   and the resolution you need:
 
@@ -112,6 +114,13 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 ## Pitfalls
 
+- **Use the shared result schema.** Common attrs include `transform`,
+  `sampling_frequency` when known, `n_observations`, independence flags, and
+  `output_schema_version=1`. Remaining settings are in
+  `transform_parameters_json`, with `estimator`/`execution` records. The 15
+  released `mt_*` attributes are compatibility copies scheduled for removal
+  in 4.0. Multitaper's `frequency_resolution` property and helper names remain
+  supported. See the [schema reference](cookbook.md#result-schema-and-transform-bandwidth).
 - **Normalized measures need several observations.** Coherence, phase locking,
   and similar measures average over trials × tapers. With one trial and one
   taper, coherence is exactly 1 at every frequency whatever the data (the

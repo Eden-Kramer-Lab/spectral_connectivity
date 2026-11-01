@@ -116,9 +116,10 @@ def estimate_frequency_resolution(
     """
     Estimate the frequency resolution for given multitaper parameters.
 
-    The frequency resolution (Δf) represents the bandwidth over which spectral
-    energy is averaged. It is determined by the time-frequency trade-off inherent
-    in spectral analysis.
+    Frequency resolution here is the full DPSS concentration bandwidth,
+    ``2 * time_halfbandwidth_product / time_window_duration``, in Hz. It
+    describes spectral smoothing and is distinct from FFT bin spacing;
+    zero-padding changes the grid without narrowing this bandwidth.
 
     Parameters
     ----------
@@ -261,6 +262,10 @@ def suggest_parameters(
     This helper function recommends parameters based on your data characteristics
     and analysis goals. It helps answer the common question: "What parameters
     should I use for my data?"
+
+    ``desired_freq_resolution`` and the returned ``frequency_resolution``
+    refer to full DPSS concentration bandwidth in Hz, rather than FFT bin
+    spacing. These familiar names remain supported without deprecation.
 
     Parameters
     ----------
@@ -836,6 +841,7 @@ class Multitaper:
     #: Multitaper returns the full two-sided FFT spectrum (both positive and
     #: negative frequencies), so consumers must not assume a one-sided layout.
     is_one_sided = False
+    _transform_name = "multitaper"
 
     _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
         {
@@ -849,7 +855,7 @@ class Multitaper:
             "adaptive_tolerance",
         }
     )
-    _PROVENANCE_FIELDS = (
+    _PROVENANCE_FIELDS: tuple[str, ...] = (
         "detrend_type",
         "fft_workers",
         "frequency_resolution",
@@ -1232,31 +1238,31 @@ class Multitaper:
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
-        """Public scalar parameters of this transform, for provenance metadata.
-
-        Collects the public, non-callable attributes whose values NetCDF can
-        store (strings, numbers, bools, and real numeric/string arrays),
-        encoding ``None`` as ``"None"`` and skipping the large coordinate/data
-        arrays (``time_series``, ``fft``, ``tapers``, ``frequencies``,
-        ``time``). Used to label results with ``mt_*`` attributes in
-        :func:`spectral_connectivity.wrapper.connectivity_to_xarray`.
-        """
-        metadata: dict[str, Any] = {}
+        """Native transform settings, serialized by the shared provenance builder."""
+        metadata: dict[str, Any] = {"transform": self._transform_name}
         for attr in self._PROVENANCE_FIELDS:
             value = getattr(self, attr)
-            if value is None:
-                value = "None"
-            else:
-                value = to_numpy(value) if hasattr(value, "shape") else value
+            value = to_numpy(value) if hasattr(value, "shape") else value
             if isinstance(value, np.ndarray):
                 if value.dtype.kind not in "biufSU":  # exclude complex/object
                     continue
-            elif not isinstance(
+            elif value is not None and not isinstance(
                 value,
                 (str, bytes, bool, int, float, np.integer, np.floating, np.bool_),
             ):
                 continue
             metadata[attr] = value
+        if self._transform_name == "multitaper":
+            # Generated DPSS tapers carry concentration ratios once cached;
+            # custom tapers never do. Inspecting provenance must not generate them.
+            dpss = self._tapers is None or self._taper_eigenvalues is not None
+            metadata["taper_kind"] = "dpss" if dpss else "custom"
+            if dpss:
+                metadata.update(
+                    spectral_bandwidth=self.frequency_resolution,
+                    spectral_bandwidth_definition="full_dpss_concentration_bandwidth",
+                    spectral_bandwidth_units="Hz",
+                )
         return metadata
 
     def summarize_parameters(self) -> str:
@@ -1673,9 +1679,13 @@ Frequency Analysis
 
     @property
     def frequency_resolution(self) -> float:
-        """Return range of frequencies the transform is able to resolve.
+        """Return frequency resolution (full DPSS concentration bandwidth).
 
-        Given the time-frequency tradeoff.
+        This is ``2 * time_halfbandwidth_product / time_window_duration``,
+        using the resolved window duration. It describes spectral smoothing,
+        independently of the FFT bin spacing and any zero-padding. For custom
+        tapers the property retains the nominal DPSS value specified by NW;
+        their actual bandwidth requires a definition for the supplied tapers.
 
         Returns
         -------
@@ -1845,7 +1855,21 @@ class ShortTimeFourierTransform(Multitaper):
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
 
-    _provenance_prefix = "stft_"
+    _transform_name = "stft"
+    _PROVENANCE_FIELDS = tuple(
+        field
+        for field in Multitaper._PROVENANCE_FIELDS
+        if field
+        not in {
+            "frequency_resolution",
+            "time_halfbandwidth_product",
+            "is_low_bias",
+            "taper_weighting",
+            "adaptive_max_iterations",
+            "adaptive_tolerance",
+            "n_tapers",
+        }
+    )
     is_one_sided = False
 
     def __init__(
@@ -1925,8 +1949,45 @@ class ShortTimeFourierTransform(Multitaper):
 
     @property
     def frequency_resolution(self) -> float:
-        """Equivalent-noise bandwidth of the periodic Hann window in Hz."""
-        return 1.5 / self.time_window_duration
+        """STFT uses the estimator-specific ``equivalent_noise_bandwidth``."""
+        msg = "STFT exposes equivalent_noise_bandwidth; frequency_resolution is a Multitaper property."
+        raise AttributeError(msg)
+
+    @property
+    def equivalent_noise_bandwidth(self) -> float:
+        """
+        Return periodic Hann equivalent noise bandwidth in Hz.
+
+        The resolved window determines the bandwidth independently of FFT
+        zero-padding and frequency-grid spacing.
+
+        Returns
+        -------
+        float
+            Equivalent noise bandwidth of the resolved window, in Hz.
+
+        See Also
+        --------
+        Welch.equivalent_noise_bandwidth : Equivalent noise bandwidth of Welch segments.
+
+        Notes
+        -----
+        ``sampling_frequency * sum(window**2) / sum(window)**2`` equals
+        ``1.5 / time_window_duration`` for windows of at least three samples.
+        The two-sample Hann window has bandwidth ``sampling_frequency``.
+
+        Examples
+        --------
+        >>> stft = ShortTimeFourierTransform(
+        ...     np.zeros((100, 1, 1)), 100, time_window_duration=0.5
+        ... )
+        >>> round(stft.equivalent_noise_bandwidth, 6)
+        3.0
+        """
+        window = self._tapers_for_fft()[:, 0]
+        return float(
+            to_numpy(self.sampling_frequency * xp.sum(window**2) / xp.sum(window) ** 2)
+        )
 
     def __repr__(self) -> str:
         """Return the STFT's settings; its single Hann window has no NW or tapers."""
@@ -1961,20 +2022,17 @@ class ShortTimeFourierTransform(Multitaper):
         return self._summary(
             "Short-Time Fourier Transform Configuration",
             [("Window", "Hann (periodic, L2-normalized)")],
-            ("Equivalent noise bandwidth", f"{self.frequency_resolution:.1f} Hz"),
+            ("Equivalent noise bandwidth", f"{self.equivalent_noise_bandwidth:.1f} Hz"),
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
         metadata = super()._provenance_metadata()
-        for key in (
-            "time_halfbandwidth_product",
-            "is_low_bias",
-            "taper_weighting",
-            "adaptive_max_iterations",
-            "adaptive_tolerance",
-        ):
-            metadata.pop(key, None)
         metadata["window"] = "hann_periodic"
+        metadata.update(
+            spectral_bandwidth=self.equivalent_noise_bandwidth,
+            spectral_bandwidth_definition="equivalent_noise_bandwidth",
+            spectral_bandwidth_units="Hz",
+        )
         return metadata
 
 
@@ -2012,7 +2070,7 @@ class Welch:
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
 
-    _provenance_prefix = "welch_"
+    _transform_name = "welch"
     is_one_sided = False
 
     def __init__(
@@ -2134,6 +2192,31 @@ class Welch:
         return self._stft.fft_workers
 
     @property
+    def equivalent_noise_bandwidth(self) -> float:
+        """
+        Return the segment's periodic Hann equivalent noise bandwidth.
+
+        Uses the actual rounded segment length and the same Hann-window
+        definition as :class:`ShortTimeFourierTransform`.
+
+        Returns
+        -------
+        float
+            Equivalent noise bandwidth of the resolved segment, in Hz.
+
+        See Also
+        --------
+        ShortTimeFourierTransform.equivalent_noise_bandwidth : Hann-window bandwidth.
+
+        Examples
+        --------
+        >>> welch = Welch(np.zeros((100, 1, 1)), 100, segment_duration=0.5)
+        >>> round(welch.equivalent_noise_bandwidth, 6)
+        3.0
+        """
+        return self._stft.equivalent_noise_bandwidth
+
+    @property
     def frequencies(self) -> NDArray[np.floating]:
         """Frequency of each FFT bin in Hz, in standard FFT order.
 
@@ -2209,10 +2292,10 @@ class Welch:
 
     def _provenance_metadata(self) -> dict[str, Any]:
         return {
-            "detrend_type": self._stft.detrend_type or "None",
-            "fft_workers": self._stft.fft_workers
-            if self._stft.fft_workers is not None
-            else "None",
+            "transform": self._transform_name,
+            "detrend_type": self.detrend_type,
+            "fft_workers": self.fft_workers,
+            "start_time": to_numpy(self.start_time),
             "n_fft_samples": self._stft.n_fft_samples,
             "n_segments": self.n_segments,
             "n_signals": self.n_signals,
@@ -2220,8 +2303,13 @@ class Welch:
             "n_time_samples_per_step": self.n_time_samples_per_step,
             "n_trials": self.n_trials,
             "sampling_frequency": self.sampling_frequency,
+            "nyquist_frequency": self.sampling_frequency / 2,
+            "segment_duration": self.segment_duration,
             "segment_overlap": self.segment_overlap,
             "window": "hann_periodic",
+            "spectral_bandwidth": self.equivalent_noise_bandwidth,
+            "spectral_bandwidth_definition": "equivalent_noise_bandwidth",
+            "spectral_bandwidth_units": "Hz",
         }
 
 
@@ -2291,7 +2379,7 @@ class MorletWavelet:
         Time of the first sample, in seconds.
     """
 
-    _provenance_prefix = "morlet_"
+    _transform_name = "morlet"
     # Coefficients are already on the one-sided PSD scale (see fft), so
     # Connectivity must not double them again.
     is_one_sided = True
@@ -2739,22 +2827,21 @@ class MorletWavelet:
 
     def _provenance_metadata(self) -> dict[str, Any]:
         return {
+            "transform": self._transform_name,
             "decimation": self.decimation,
-            "frequencies_json": str(to_numpy(self._frequencies).tolist()),
-            "n_cycles_json": str(to_numpy(self._n_cycles).tolist()),
+            "frequencies": to_numpy(self._frequencies),
+            "n_cycles": to_numpy(self._n_cycles),
             "n_signals": self.n_signals,
             "n_trials": self.n_trials,
             "sampling_frequency": self.sampling_frequency,
+            "start_time": self.start_time,
+            "nyquist_frequency": self.sampling_frequency / 2,
             "edge_mode": self.edge_mode,
             "padding_mode": self.padding_mode,
             "smoothing_frequency": self.smoothing_frequency,
             "smoothing_kernel": self.smoothing_kernel,
-            "smoothing_step": self.smoothing_step
-            if self.smoothing_step is not None
-            else "None",
-            "smoothing_time": self.smoothing_time
-            if self.smoothing_time is not None
-            else "None",
+            "smoothing_step": self.smoothing_step,
+            "smoothing_time": self.smoothing_time,
             "zero_mean": self.zero_mean,
         }
 

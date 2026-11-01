@@ -2171,7 +2171,7 @@ def test_result_carries_provenance_metadata():
     assert da.attrs["measure_kwargs_json"] == "{}"
     assert da.attrs["package"] == "spectral_connectivity"
     assert da.attrs["package_version"] == version("spectral_connectivity")
-    assert da.attrs["backend"] in ("CPU", "GPU")
+    assert da.attrs["backend"] in ("cpu", "gpu")
     assert da.attrs["expectation_type"] == "trials_tapers"
     # The multitaper parameters are recorded under the mt_ prefix. Expected
     # values follow from the inputs: the default window spans all 512 samples
@@ -2416,11 +2416,11 @@ def test_metadata_survives_netcdf_round_trip(tmp_path):
         assert reloaded.coords["frequency"].attrs["units"] == "Hz"
         var = reloaded["coherence_magnitude"]
         assert var.attrs["package"] == "spectral_connectivity"
-        assert var.attrs["backend"] in ("CPU", "GPU")
+        assert var.attrs["backend"] in ("cpu", "gpu")
         assert var.attrs["expectation_type"] == "trials_tapers"
         # The shared provenance attached at the Dataset level also round-trips.
         assert reloaded.attrs["package"] == "spectral_connectivity"
-        assert reloaded.attrs["backend"] in ("CPU", "GPU")
+        assert reloaded.attrs["backend"] in ("cpu", "gpu")
         assert reloaded.attrs["expectation_type"] == "trials_tapers"
         assert reloaded.attrs["mt_sampling_frequency"] == 500
     finally:
@@ -2443,7 +2443,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     )
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
-    assert da.attrs["backend"] == ("GPU" if _backend.ON_GPU else "CPU")
+    assert da.attrs["backend"] == ("gpu" if _backend.ON_GPU else "cpu")
 
 
 def test_multitaper_connectivity_rejects_empty_method_list():
@@ -2753,7 +2753,7 @@ def test_multitaper_connectivity_dataset_carries_shared_provenance():
     rng = np.random.default_rng(0)
     ds = multitaper_connectivity(rng.standard_normal((512, 5, 3)), sampling_frequency=500)
     assert ds.attrs["package"] == "spectral_connectivity"
-    assert ds.attrs["backend"] in ("CPU", "GPU")
+    assert ds.attrs["backend"] in ("cpu", "gpu")
     assert ds.attrs["expectation_type"] == "trials_tapers"
     assert ds.attrs["mt_sampling_frequency"] == 500
     # The shared attrs must not include per-measure fields.
@@ -2782,7 +2782,7 @@ def test_fourier_connectivity_matches_multitaper_adapter():
     )
 
     xr.testing.assert_allclose(actual, expected)
-    assert actual.attrs["fourier_source"] == "external_fourier_coefficients"
+    assert actual.attrs["transform"] == "external_fourier"
 
 
 def test_fourier_connectivity_infers_and_transposes_labeled_dimensions():
@@ -3259,8 +3259,10 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
     expected = Connectivity.from_multitaper(multitaper).pairwise_spectral_granger_prediction()
 
     assert result.dims == ("time", "frequency", "source", "target")
-    assert not result.attrs["fourier_is_one_sided"]
-    assert not result.attrs["fourier_one_sided_inferred"]
+    assert not result.attrs["is_one_sided"]
+    assert not json.loads(result.attrs["transform_parameters_json"])["estimator"][
+        "one_sided_inferred"
+    ]
     # The core's [..., i, j] is the influence i -> j, the wrapper's source -> target.
     np.testing.assert_allclose(result.values, np.asarray(expected), equal_nan=True)
     driven = result.sel(source="0", target="1").values
@@ -3337,8 +3339,10 @@ def test_fourier_connectivity_accepts_one_sided_functional_input():
 
     assert result.dims == ("time", "frequency", "source", "target")
     np.testing.assert_array_equal(result.frequency, np.linspace(0, 40, 9))
-    assert result.attrs["fourier_is_one_sided"]
-    assert result.attrs["fourier_one_sided_inferred"]
+    assert result.attrs["is_one_sided"]
+    assert json.loads(result.attrs["transform_parameters_json"])["estimator"][
+        "one_sided_inferred"
+    ]
 
 
 def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
@@ -3394,8 +3398,10 @@ def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
     coefficients = rng.standard_normal((5, 1, 2)) + 1j * rng.standard_normal((5, 1, 2))
     result = fourier_connectivity(coefficients, frequencies=np.array([10.0]))
 
-    assert result.attrs["fourier_is_one_sided"]
-    assert result.attrs["fourier_one_sided_inferred"]
+    assert result.attrs["is_one_sided"]
+    assert json.loads(result.attrs["transform_parameters_json"])["estimator"][
+        "one_sided_inferred"
+    ]
     assert "pairwise_spectral_granger_prediction" not in result
 
     with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
@@ -3442,8 +3448,8 @@ def test_fourier_connectivity_explicit_one_sided_without_frequencies():
     # normalized cycles per sample from 0 to Nyquist (0.5).
     assert result.sizes["frequency"] == 9
     np.testing.assert_allclose(result.frequency, np.arange(9) / 16)
-    assert result.attrs["fourier_frequency_coordinate"] == "normalized"
-    assert result.attrs["fourier_is_one_sided"]
+    assert result.attrs["frequency_coordinate"] == "normalized"
+    assert result.attrs["is_one_sided"]
 
 
 def test_fourier_connectivity_rejects_fftshifted_coordinate():
@@ -3466,7 +3472,7 @@ def test_fourier_connectivity_rejects_a_non_bool_sidedness(value):
         )
 
 
-def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
+def test_connectivity_to_xarray_shares_alternative_transform_provenance():
     data = np.random.default_rng(304).standard_normal((128, 3, 2))
     welch = connectivity_to_xarray(
         Welch(data, sampling_frequency=64, n_time_samples_per_segment=32),
@@ -3477,12 +3483,16 @@ def test_connectivity_to_xarray_namespaces_alternative_transform_provenance():
         method="coherence_magnitude",
     )
 
-    assert welch.attrs["welch_window"] == "hann_periodic"
-    assert morlet.attrs["morlet_decimation"] == 1
+    assert welch.attrs["transform"] == "welch"
+    assert morlet.attrs["transform"] == "morlet"
+    welch_parameters = json.loads(welch.attrs["transform_parameters_json"])["estimator"]
+    morlet_parameters = json.loads(morlet.attrs["transform_parameters_json"])["estimator"]
+    assert welch_parameters["window"] == "hann_periodic"
+    assert morlet_parameters["decimation"] == 1
     assert morlet.frequency.values.tolist() == [4.0, 8.0, 16.0]
     assert morlet.valid_time_frequency.dims == ("time", "frequency")
-    assert morlet.attrs["morlet_edge_mode"] == "keep"
-    assert morlet.attrs["morlet_smoothing_kernel"] == "boxcar"
+    assert morlet_parameters["edge_mode"] == "keep"
+    assert morlet_parameters["smoothing_kernel"] == "boxcar"
 
 
 def test_connectivity_to_xarray_exposes_morlet_invalid_edges():

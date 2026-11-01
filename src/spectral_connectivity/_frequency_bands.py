@@ -7,7 +7,7 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity._provenance import _canonical_json
+from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
 from spectral_connectivity.utils import is_positive_integer
 
 
@@ -86,10 +86,6 @@ def _band_integration_weights(
     return weights
 
 
-# Provenance prefixes of the transforms whose results record ``sampling_frequency``.
-_TRANSFORM_PROVENANCE_PREFIXES = ("mt_", "stft_", "welch_", "morlet_", "fourier_")
-
-
 def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
     """The Nyquist frequency of ``result``'s one-sided spectrum, if known.
 
@@ -99,10 +95,13 @@ def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
     spectrum whose last bin is Nyquist. Only the grid as computed can say so:
     cropping or decimating it makes an interior bin the last one.
     """
-    for prefix in _TRANSFORM_PROVENANCE_PREFIXES:
-        sampling_frequency = result.attrs.get(prefix + "sampling_frequency")
-        if sampling_frequency is not None:
-            return float(sampling_frequency) / 2
+    sampling_frequency = result.attrs.get(
+        "sampling_frequency", result.attrs.get("mt_sampling_frequency")
+    )
+    if sampling_frequency is not None:
+        return float(sampling_frequency) / 2
+    if "nyquist_frequency" in result.attrs:
+        return float(result.attrs["nyquist_frequency"])
     if "frequency" not in result.coords:
         return None
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -273,7 +272,7 @@ def _reduce_frequency_bands(
         return reduced
 
     if isinstance(result, xr.DataArray):
-        return _reduce_dataarray(result)
+        return _with_frequency_grid_metadata(_reduce_dataarray(result))
 
     non_reducible_variables = sorted(
         str(name)
@@ -298,7 +297,7 @@ def _reduce_frequency_bands(
     # The band record lives on each reduced variable (see _reduce_dataarray).
     # Start from the attrs and coordinates on no frequency axis, then re-add every
     # variable in its original order.
-    return (
+    reduced_dataset = (
         result.drop_vars(list(result.data_vars))
         .drop_dims("frequency")
         .assign(
@@ -308,6 +307,7 @@ def _reduce_frequency_bands(
             }
         )
     )
+    return _with_frequency_grid_metadata(reduced_dataset)
 
 
 def _with_frequency_attrs(
@@ -383,4 +383,4 @@ def _select_and_reduce_frequencies(
             circular=None,
             nyquist_frequency=nyquist_frequency,
         )
-    return selected
+    return _with_frequency_grid_metadata(selected)

@@ -32,7 +32,10 @@ from spectral_connectivity._measure_registry import (
     _requires_two_sided,
     _validate_method_names,
 )
-from spectral_connectivity._provenance import _canonical_json, _shared_provenance_attrs
+from spectral_connectivity._provenance import (
+    _shared_provenance_attrs,
+    _with_frequency_grid_metadata,
+)
 from spectral_connectivity._result_formatting import (
     UnsupportedMeasureError,
     _connectivity_result_to_xarray,
@@ -271,7 +274,9 @@ def frequency_band_reduce(
     every bin of the band had full support.
 
     The Nyquist frequency is half the sampling rate recorded in ``result``'s
-    provenance attrs (e.g. ``mt_sampling_frequency``). If none is recorded,
+    ``sampling_frequency`` provenance attr (or the released
+    ``mt_sampling_frequency`` compatibility attr). Normalized Fourier grids
+    record a Nyquist coordinate of 0.5 cycles/sample. If neither is recorded,
     the last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
     reduce such a result before cropping it.
     """
@@ -365,11 +370,7 @@ def connectivity_to_xarray(
     metadata = m._provenance_metadata()
     connectivity = Connectivity.from_transform(m)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
-    shared_attrs = _shared_provenance_attrs(
-        connectivity,
-        metadata,
-        transform_prefix=getattr(m, "_provenance_prefix", "mt_"),
-    )
+    shared_attrs = _shared_provenance_attrs(connectivity, metadata)
     result = _connectivity_result_to_xarray(
         connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
     )
@@ -422,7 +423,7 @@ def connectivity_to_xarray(
             valid_time = validity[:, frequency_index].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
-    return result
+    return _with_frequency_grid_metadata(result)
 
 
 def _combine_formatted_results(
@@ -608,6 +609,19 @@ def _format_and_reduce_measures(
             raise UnsupportedMeasureError(msg)
         result = _combine_formatted_results(formatted_results, shared_attrs)
 
+    if signal_metadata is not None and signal_metadata.recording_coordinates:
+        reserved = set(result.coords) | set(result.dims)
+        if isinstance(result, xr.Dataset):
+            reserved.update(result.data_vars)
+        elif result.name is not None:
+            reserved.add(result.name)
+        result = result.assign_coords(
+            {
+                name: ((), values, attrs)
+                for name, (values, attrs) in signal_metadata.recording_coordinates.items()
+                if name not in reserved
+            }
+        )
     return _select_and_reduce_frequencies(
         result,
         frequency_range=frequency_range,
@@ -827,10 +841,12 @@ def multitaper_connectivity(
     ``weighted_phase_lag_index``) are positive at ``sel(source=a, target=b)``
     when ``a`` leads ``b``.
 
-    Every variable has ``long_name`` and ``units`` attrs (``"1"`` for
+    Every measure variable has a ``long_name``. Known units are recorded as
+    ``units`` (``"1"`` for
     dimensionless scores, ``"rad"`` for phase, ``"s"`` for delay; spectral
     densities are ``"(<units>)^2/Hz"`` when an input DataArray states its
-    ``units``, and ``"(<units>)^2"`` once integrated over a band). Non-index
+    ``units``, and ``"(<units>)^2"`` once integrated over a band). Power and
+    cross-spectral density omit ``units`` when input units are unknown. Non-index
     coordinates on an input DataArray's signal dimension (e.g. ``region``) are
     carried as ``source_<name>``/``target_<name>`` with their attrs unchanged,
     so those attrs must be NetCDF-serializable to save the result.
@@ -846,7 +862,20 @@ def multitaper_connectivity(
     The result records provenance as NetCDF-safe attributes so a saved file is
     self-describing:
 
-    - ``mt_*`` -- the Multitaper transform parameters.
+    - ``output_schema_version=1``, ``transform``, ``sampling_frequency``,
+      ``n_trials``, ``n_signals``, ``n_observations``, and independence flags --
+      common known facts. ``n_observations`` is the actual raw expectation count,
+      not an effective independent sample size.
+    - ``transform_parameters_json`` -- remaining settings in ``estimator`` and
+      ``execution`` records, with optional values stored as JSON ``null``.
+    - ``spectral_bandwidth`` with its definition and units -- full DPSS
+      concentration bandwidth when using generated DPSS tapers. It is distinct
+      from ``frequency_bin_spacing`` on a uniform returned grid; cropping and
+      decimation update spacing, and band reduction removes it.
+    - The 15 scalar ``mt_*`` attributes released in 2.0.1 -- deprecated
+      compatibility copies through 3.x, removed in 4.0. The supported
+      ``Multitaper.frequency_resolution`` property and parameter helpers retain
+      their names and values. New transform/execution settings get no copies.
     - ``measure`` and ``measure_kwargs_json`` -- the measure name and a canonical,
       JSON-normalized representation of its keyword arguments.
     - ``arg_<key>`` / ``arg_<key>_json`` -- each measure keyword argument
@@ -855,11 +884,14 @@ def multitaper_connectivity(
       string under ``arg_<key>_json`` (parse with ``json.loads``;
       ``measure_kwargs_json`` is the canonical record).
     - ``package``, ``package_version``, ``backend``, ``expectation_type`` --
-      software provenance.
+      software provenance; ``backend`` is ``"cpu"`` or ``"gpu"``.
     - ``input_attrs_json`` -- a canonical, JSON-normalized record of attributes
       carried over from an input ``xarray.DataArray`` (e.g. subject or session
       metadata). Keeping the complete mapping in one record preserves arbitrary
       keys without collisions or invalid NetCDF attribute names.
+
+    Unambiguous scalar recording coordinates (e.g. ``subject``/``session``)
+    retain their values and attrs. Labels along averaged trial axes are omitted.
 
     JSON records are canonical for scalar, numpy, mapping, and sequence values.
     A value outside those kinds is recorded best-effort via its ``repr``, which
@@ -1201,16 +1233,34 @@ def fourier_connectivity(
                     stacklevel=stacklevel_outside_package(),
                 )
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
+    frequency_units = "cycles/sample" if frequencies is None else "Hz"
+    if signal_metadata is not None and signal_metadata.frequency_coordinate_attrs:
+        frequency_units = signal_metadata.frequency_coordinate_attrs.get(
+            "units", frequency_units
+        )
+        if not isinstance(frequency_units, str) or frequency_units not in {
+            "Hz",
+            "cycles/sample",
+        }:
+            msg = "External Fourier frequencies must be in Hz or cycles/sample; convert the coordinate before calling fourier_connectivity."
+            raise ValueError(msg)
     metadata: dict[str, Any] = {
-        "source": "external_fourier_coefficients",
-        "coefficient_shape_json": _canonical_json(tuple(coefficient_data.shape)),
+        "transform": "external_fourier",
+        "coefficient_shape": tuple(coefficient_data.shape),
         "frequency_coordinate": "provided" if frequencies is not None else "normalized",
         "time_coordinate": "provided" if time is not None else "index",
+        "frequency_units": frequency_units,
         "is_one_sided": one_sided,
         "one_sided_inferred": is_one_sided is None and inferred_one_sided,
     }
     all_frequencies = connectivity.all_frequencies
-    if not one_sided and all_frequencies.size > 1:
+    if signal_metadata is not None and signal_metadata.n_trials is not None:
+        metadata["n_trials"] = signal_metadata.n_trials
+    if frequency_units == "cycles/sample":
+        # The normalized grid establishes a Nyquist coordinate, not a physical
+        # sampling rate in Hz. Retain it for integration after cropping.
+        metadata["nyquist_frequency"] = 0.5
+    elif not one_sided and all_frequencies.size > 1:
         # FFT-order bins are sampling_frequency / n_fft apart (bin 1 is -spacing
         # when n_fft == 2), so the rate follows and places the Nyquist bin,
         # which only an even n_fft has.
@@ -1219,7 +1269,6 @@ def fourier_connectivity(
         connectivity,
         metadata,
         input_attrs=input_attrs,
-        transform_prefix="fourier_",
     )
     return _format_and_reduce_measures(
         connectivity,
