@@ -2,7 +2,16 @@
 
 import warnings
 from logging import getLogger
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NoReturn,
+    Protocol,
+    TypedDict,
+    TypeVar,
+    runtime_checkable,
+)
 
 import numpy as np
 from numpy.typing import NDArray
@@ -265,7 +274,7 @@ def suggest_parameters(
 
     ``desired_freq_resolution`` and the returned ``frequency_resolution``
     refer to full DPSS concentration bandwidth in Hz, rather than FFT bin
-    spacing. These familiar names remain supported without deprecation.
+    spacing.
 
     Parameters
     ----------
@@ -1252,18 +1261,21 @@ class Multitaper:
             ):
                 continue
             metadata[attr] = value
-        if self._transform_name == "multitaper":
-            # Generated DPSS tapers carry concentration ratios once cached;
-            # custom tapers never do. Inspecting provenance must not generate them.
-            dpss = self._tapers is None or self._taper_eigenvalues is not None
-            metadata["taper_kind"] = "dpss" if dpss else "custom"
-            if dpss:
-                metadata.update(
-                    spectral_bandwidth=self.frequency_resolution,
-                    spectral_bandwidth_definition="full_dpss_concentration_bandwidth",
-                    spectral_bandwidth_units="Hz",
-                )
+        metadata.update(self._spectral_bandwidth_metadata())
         return metadata
+
+    def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
+        """Taper kind and, for generated DPSS tapers, their qualified bandwidth."""
+        # Generated DPSS tapers carry concentration ratios once cached; custom
+        # tapers never do. Inspecting provenance must not generate them.
+        if self._tapers is not None and self._taper_eigenvalues is None:
+            return {"taper_kind": "custom"}
+        return {
+            "taper_kind": "dpss",
+            "spectral_bandwidth": self.frequency_resolution,
+            "spectral_bandwidth_definition": "full_dpss_concentration_bandwidth",
+            "spectral_bandwidth_units": "Hz",
+        }
 
     def summarize_parameters(self) -> str:
         """
@@ -1856,19 +1868,21 @@ class ShortTimeFourierTransform(Multitaper):
     """
 
     _transform_name = "stft"
-    _PROVENANCE_FIELDS = tuple(
-        field
-        for field in Multitaper._PROVENANCE_FIELDS
-        if field
-        not in {
-            "frequency_resolution",
-            "time_halfbandwidth_product",
-            "is_low_bias",
-            "taper_weighting",
-            "adaptive_max_iterations",
-            "adaptive_tolerance",
-            "n_tapers",
-        }
+    # Listed, not filtered from Multitaper's, so a multitaper-only setting added
+    # there cannot leak into STFT provenance.
+    _PROVENANCE_FIELDS = (
+        "detrend_type",
+        "fft_workers",
+        "n_fft_samples",
+        "n_signals",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "nyquist_frequency",
+        "sampling_frequency",
+        "start_time",
+        "time_window_duration",
+        "time_window_step",
     )
     is_one_sided = False
 
@@ -1948,8 +1962,8 @@ class ShortTimeFourierTransform(Multitaper):
         )
 
     @property
-    def frequency_resolution(self) -> float:
-        """STFT uses the estimator-specific ``equivalent_noise_bandwidth``."""
+    def frequency_resolution(self) -> NoReturn:
+        """Raise AttributeError: STFT uses ``equivalent_noise_bandwidth`` instead."""
         msg = "STFT exposes equivalent_noise_bandwidth; frequency_resolution is a Multitaper property."
         raise AttributeError(msg)
 
@@ -2028,12 +2042,14 @@ class ShortTimeFourierTransform(Multitaper):
     def _provenance_metadata(self) -> dict[str, Any]:
         metadata = super()._provenance_metadata()
         metadata["window"] = "hann_periodic"
-        metadata.update(
-            spectral_bandwidth=self.equivalent_noise_bandwidth,
-            spectral_bandwidth_definition="equivalent_noise_bandwidth",
-            spectral_bandwidth_units="Hz",
-        )
         return metadata
+
+    def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
+        return {
+            "spectral_bandwidth": self.equivalent_noise_bandwidth,
+            "spectral_bandwidth_definition": "equivalent_noise_bandwidth",
+            "spectral_bandwidth_units": "Hz",
+        }
 
 
 class Welch:
@@ -2303,13 +2319,11 @@ class Welch:
             "n_time_samples_per_step": self.n_time_samples_per_step,
             "n_trials": self.n_trials,
             "sampling_frequency": self.sampling_frequency,
-            "nyquist_frequency": self.sampling_frequency / 2,
+            "nyquist_frequency": self._stft.nyquist_frequency,
             "segment_duration": self.segment_duration,
             "segment_overlap": self.segment_overlap,
             "window": "hann_periodic",
-            "spectral_bandwidth": self.equivalent_noise_bandwidth,
-            "spectral_bandwidth_definition": "equivalent_noise_bandwidth",
-            "spectral_bandwidth_units": "Hz",
+            **self._stft._spectral_bandwidth_metadata(),
         }
 
 

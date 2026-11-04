@@ -175,6 +175,8 @@ def test_connectivity_to_xarray_exposes_rich_multivariate_components():
     assert result.connection_seed_group.values.tolist() == [10]
     assert result.connection_target_group.values.tolist() == [20]
     assert result.group_membership.sel(group=10, signal="a").item()
+    assert result.group_membership.attrs["output_schema_version"] == 1
+    assert result.group_membership.attrs["transform"] == "multitaper"
 
 
 def test_connectivity_to_xarray_exposes_global_components():
@@ -3259,10 +3261,9 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
     expected = Connectivity.from_multitaper(multitaper).pairwise_spectral_granger_prediction()
 
     assert result.dims == ("time", "frequency", "source", "target")
-    assert not result.attrs["is_one_sided"]
-    assert not json.loads(result.attrs["transform_parameters_json"])["estimator"][
-        "one_sided_inferred"
-    ]
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["is_one_sided"] is False
+    assert not estimator["one_sided_inferred"]
     # The core's [..., i, j] is the influence i -> j, the wrapper's source -> target.
     np.testing.assert_allclose(result.values, np.asarray(expected), equal_nan=True)
     driven = result.sel(source="0", target="1").values
@@ -3339,10 +3340,9 @@ def test_fourier_connectivity_accepts_one_sided_functional_input():
 
     assert result.dims == ("time", "frequency", "source", "target")
     np.testing.assert_array_equal(result.frequency, np.linspace(0, 40, 9))
-    assert result.attrs["is_one_sided"]
-    assert json.loads(result.attrs["transform_parameters_json"])["estimator"][
-        "one_sided_inferred"
-    ]
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["is_one_sided"]
+    assert estimator["one_sided_inferred"]
 
 
 def test_fourier_connectivity_one_sided_default_skips_two_sided_methods():
@@ -3398,10 +3398,9 @@ def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
     coefficients = rng.standard_normal((5, 1, 2)) + 1j * rng.standard_normal((5, 1, 2))
     result = fourier_connectivity(coefficients, frequencies=np.array([10.0]))
 
-    assert result.attrs["is_one_sided"]
-    assert json.loads(result.attrs["transform_parameters_json"])["estimator"][
-        "one_sided_inferred"
-    ]
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["is_one_sided"]
+    assert estimator["one_sided_inferred"]
     assert "pairwise_spectral_granger_prediction" not in result
 
     with pytest.raises(ValueError, match="requires a full two-sided spectrum"):
@@ -3449,7 +3448,7 @@ def test_fourier_connectivity_explicit_one_sided_without_frequencies():
     assert result.sizes["frequency"] == 9
     np.testing.assert_allclose(result.frequency, np.arange(9) / 16)
     assert result.attrs["frequency_coordinate"] == "normalized"
-    assert result.attrs["is_one_sided"]
+    assert json.loads(result.attrs["transform_parameters_json"])["estimator"]["is_one_sided"]
 
 
 def test_fourier_connectivity_rejects_fftshifted_coordinate():

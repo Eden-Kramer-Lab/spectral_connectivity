@@ -101,7 +101,11 @@ directly with results from 2.x.
   scale as `Multitaper` (FieldTrip's convention; MNE's wavelet power is
   `2 * sampling_frequency` times larger). `ShortTimeFourierTransform`'s `repr`
   and `summarize_parameters()` describe its Hann window and equivalent noise
-  bandwidth; `Welch` exposes its resolved settings (segment duration and step,
+  bandwidth. `ShortTimeFourierTransform` and `Welch` expose
+  `equivalent_noise_bandwidth`, computed from the actual window (so a
+  two-sample window gives `sampling_frequency`);
+  `ShortTimeFourierTransform.frequency_resolution` raises `AttributeError`
+  instead of inheriting Multitaper's DPSS definition. `Welch` exposes its resolved settings (segment duration and step,
   overlap, detrending, start time, FFT length, workers) as read-only
   properties.
 - Morlet transforms now expose strict time-frequency edge validity and support
@@ -192,18 +196,16 @@ directly with results from 2.x.
   Welch, Morlet, and external Fourier inputs, lowercase `backend="cpu"`/`"gpu"`,
   and one canonical `transform_parameters_json` record separating estimator
   and execution settings. Optional structured settings use JSON `null`.
-  Only the 15 scalar `mt_*` attributes released in 2.0.1 remain as deprecated
-  compatibility copies until 4.0; unreleased transform-prefixed copies are gone.
-  Multitaper's `frequency_resolution`, its helper names, and the helper's
-  returned key remain supported. STFT/Welch expose `equivalent_noise_bandwidth`;
-  STFT no longer inherits Multitaper's differently defined property. The
-  two-sample Hann window's bandwidth is computed from its actual window.
+  Only the 15 scalar `mt_*` attributes released in 2.0.1 remain, as deprecated
+  compatibility copies until 4.0. Multitaper's `frequency_resolution`, its
+  helper names, and the helper's returned key remain supported.
 - Results distinguish qualified estimator `spectral_bandwidth` from uniform
   returned-grid `frequency_bin_spacing`, refreshed after crop/decimation and
-  omitted after band reduction or on singleton/irregular grids. External
-  normalized grids retain `cycles/sample` units without inventing a physical
-  sampling rate or trial count. Scalar recording coordinates retain their attrs;
-  trial labels averaged across conditions are omitted.
+  omitted after band reduction or on singleton/irregular grids. Normalized
+  external grids keep `cycles/sample` units and record no physical sampling
+  rate; an external observation axis not named or declared as trials records no
+  `n_trials`. Scalar recording coordinates keep their attrs; coordinates along
+  averaged dimensions, such as per-trial labels, are not carried over.
 - The xarray interfaces now expose every built-in nonstandard result contract:
   group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
   and membership, delay candidates, global-coherence scores/vectors,
@@ -574,10 +576,9 @@ directly with results from 2.x.
 - `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
-  data is no longer short by half the DC cell. The Nyquist bin is the bin at half
-  the result's recorded `sampling_frequency` (with `mt_sampling_frequency`
-  retained for released compatibility), so an odd-length
-  FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
+  data is no longer short by half the DC cell. The Nyquist bin is the bin at the
+  result's recorded `nyquist_frequency` (or a 2.x result's
+  `mt_nyquist_frequency`), so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
   a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`

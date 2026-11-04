@@ -273,19 +273,21 @@ def frequency_band_reduce(
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
 
-    The Nyquist frequency is half the sampling rate recorded in ``result``'s
-    ``sampling_frequency`` provenance attr (or the released
-    ``mt_sampling_frequency`` compatibility attr). Normalized Fourier grids
-    record a Nyquist coordinate of 0.5 cycles/sample. If neither is recorded,
-    the last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
-    reduce such a result before cropping it.
+    The Nyquist frequency is ``result``'s ``nyquist_frequency`` provenance attr
+    (0.5 cycles/sample on normalized Fourier grids), or the released
+    ``mt_nyquist_frequency`` compatibility attr. If neither is recorded, the last bin of a grid starting at 0 Hz is
+    taken to be the Nyquist bin, so reduce such a result before cropping it.
+    Existing ``band``, ``band_lower``, ``band_upper``, or ``valid_time_band``
+    coordinates are replaced, with a warning.
     """
-    return _reduce_frequency_bands(
-        result,
-        bands,
-        reduction=reduction,
-        circular=circular,
-        nyquist_frequency=_nyquist_frequency(result),
+    return _with_frequency_grid_metadata(
+        _reduce_frequency_bands(
+            result,
+            bands,
+            reduction=reduction,
+            circular=circular,
+            nyquist_frequency=_nyquist_frequency(result),
+        )
     )
 
 
@@ -610,11 +612,21 @@ def _format_and_reduce_measures(
         result = _combine_formatted_results(formatted_results, shared_attrs)
 
     if signal_metadata is not None and signal_metadata.recording_coordinates:
+        # Band reduction warns itself before replacing a band coordinate.
         reserved = set(result.coords) | set(result.dims)
         if isinstance(result, xr.Dataset):
             reserved.update(result.data_vars)
         elif result.name is not None:
             reserved.add(result.name)
+        dropped = sorted(set(signal_metadata.recording_coordinates) & reserved)
+        if dropped:
+            warnings.warn(
+                f"Input scalar coordinates {dropped} share names with coordinates "
+                "or variables of the result and were not carried over. Rename them "
+                "before the call to keep them.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
         result = result.assign_coords(
             {
                 name: ((), values, attrs)
@@ -871,7 +883,10 @@ def multitaper_connectivity(
     - ``spectral_bandwidth`` with its definition and units -- full DPSS
       concentration bandwidth when using generated DPSS tapers. It is distinct
       from ``frequency_bin_spacing`` on a uniform returned grid; cropping and
-      decimation update spacing, and band reduction removes it.
+      decimation update spacing, and band reduction removes
+      ``frequency_bin_spacing``. Selecting bins
+      afterward with xarray keeps the attribute unchanged, so recompute spacing
+      from the ``frequency`` coordinate after such a selection.
     - The 15 scalar ``mt_*`` attributes released in 2.0.1 -- deprecated
       compatibility copies through 3.x, removed in 4.0. The supported
       ``Multitaper.frequency_resolution`` property and parameter helpers retain
@@ -891,7 +906,9 @@ def multitaper_connectivity(
       keys without collisions or invalid NetCDF attribute names.
 
     Unambiguous scalar recording coordinates (e.g. ``subject``/``session``)
-    retain their values and attrs. Labels along averaged trial axes are omitted.
+    retain their values and attrs; one named like a result coordinate or
+    variable (e.g. ``band``) is not carried over, with a warning. Labels along
+    averaged trial axes are omitted.
 
     JSON records are canonical for scalar, numpy, mapping, and sequence values.
     A value outside those kinds is recorded best-effort via its ``repr``, which
@@ -986,6 +1003,18 @@ def multitaper_connectivity(
     return result
 
 
+# Case-insensitive spellings of the frequency units fourier_connectivity accepts
+# without conversion, mapped to the canonical ``frequency_units`` attribute.
+_FREQUENCY_UNIT_SPELLINGS = {
+    "hz": "Hz",
+    "hertz": "Hz",
+    "1/s": "Hz",
+    "s^-1": "Hz",
+    "cycles/sample": "cycles/sample",
+    "cycle/sample": "cycles/sample",
+}
+
+
 def fourier_connectivity(
     fourier_coefficients: NDArray[np.complexfloating] | xr.DataArray,
     frequencies: NDArray[np.floating] | None = None,
@@ -1029,7 +1058,9 @@ def fourier_connectivity(
         Frequency of each bin in Hz. A two-sided coordinate must be in standard
         FFT order; a non-negative, strictly increasing coordinate is treated as
         one-sided when ``is_one_sided`` is omitted. Taken from the DataArray
-        coordinate when not given.
+        coordinate when not given; that coordinate may instead declare
+        ``units="cycles/sample"``. Without either, bins are labeled in
+        normalized cycles/sample.
     time : array, shape (n_time,), optional
         Center time of each window in seconds; defaults to window indices.
     method : str or list of str, optional
@@ -1234,16 +1265,21 @@ def fourier_connectivity(
                 )
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     frequency_units = "cycles/sample" if frequencies is None else "Hz"
-    if signal_metadata is not None and signal_metadata.frequency_coordinate_attrs:
-        frequency_units = signal_metadata.frequency_coordinate_attrs.get(
-            "units", frequency_units
+    coordinate_units = (signal_metadata.frequency_coordinate_attrs or {}).get("units")
+    if coordinate_units is not None:
+        canonical_units = (
+            _FREQUENCY_UNIT_SPELLINGS.get(coordinate_units.strip().lower())
+            if isinstance(coordinate_units, str)
+            else None
         )
-        if not isinstance(frequency_units, str) or frequency_units not in {
-            "Hz",
-            "cycles/sample",
-        }:
-            msg = "External Fourier frequencies must be in Hz or cycles/sample; convert the coordinate before calling fourier_connectivity."
+        if canonical_units is None:
+            msg = (
+                "External Fourier frequencies must be in Hz or cycles/sample, got "
+                f"units={coordinate_units!r}; convert the coordinate before calling "
+                "fourier_connectivity."
+            )
             raise ValueError(msg)
+        frequency_units = canonical_units
     metadata: dict[str, Any] = {
         "transform": "external_fourier",
         "coefficient_shape": tuple(coefficient_data.shape),
@@ -1254,7 +1290,7 @@ def fourier_connectivity(
         "one_sided_inferred": is_one_sided is None and inferred_one_sided,
     }
     all_frequencies = connectivity.all_frequencies
-    if signal_metadata is not None and signal_metadata.n_trials is not None:
+    if signal_metadata.n_trials is not None:
         metadata["n_trials"] = signal_metadata.n_trials
     if frequency_units == "cycles/sample":
         # The normalized grid establishes a Nyquist coordinate, not a physical
@@ -1265,6 +1301,7 @@ def fourier_connectivity(
         # when n_fft == 2), so the rate follows and places the Nyquist bin,
         # which only an even n_fft has.
         metadata["sampling_frequency"] = float(all_frequencies.size * abs(all_frequencies[1]))
+        metadata["nyquist_frequency"] = metadata["sampling_frequency"] / 2
     shared_attrs = _shared_provenance_attrs(
         connectivity,
         metadata,

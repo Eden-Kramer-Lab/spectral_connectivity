@@ -414,6 +414,16 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
     )
 
 
+def _frequency_grid_rtol(values: NDArray[Any]) -> float:
+    """Relative tolerance for a frequency grid to count as uniformly spaced.
+
+    Allows for the coordinate's own rounding (e.g. float32 from netCDF), which
+    the grid step inherits, but is never less strict than 1e-9.
+    """
+    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
+    return max(1e-9, 8 * float(np.finfo(precision).eps))
+
+
 def _require_fft_order(frequencies: Any) -> None:
     """Raise unless two-sided ``frequencies`` are uniformly spaced in FFT order.
 
@@ -423,10 +433,7 @@ def _require_fft_order(frequencies: Any) -> None:
     mislabel frequencies.
     """
     values = to_numpy(frequencies)
-    # Allow for the coordinate's own rounding (e.g. float32 from netCDF), which
-    # the grid step inherits, but never less strictly than 1e-9.
-    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
-    rtol = max(1e-9, 8 * float(np.finfo(precision).eps))
+    rtol = _frequency_grid_rtol(values)
     values = values.astype(float)
     if values.size == 0:
         return

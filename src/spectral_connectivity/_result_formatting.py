@@ -88,16 +88,13 @@ def _coordinate_attrs(
 ) -> tuple[dict[Hashable, Any], dict[Hashable, Any]]:
     """``(time_attrs, frequency_attrs)`` metadata for a result's coordinates.
 
-    ``fourier_connectivity`` records when it filled in a coordinate: the default
-    frequency grid is normalized (cycles/sample) and the default time is the
-    window index, so those must not be labeled Hz and seconds.
+    ``fourier_connectivity`` records normalized (cycles/sample) frequencies,
+    whether filled in or declared by the input coordinate, and when it filled
+    in window-index time, so those must not be labeled Hz and seconds.
     """
     frequency_attrs: dict[Hashable, Any]
     time_attrs: dict[Hashable, Any]
-    if (
-        shared_attrs.get("frequency_units") == "cycles/sample"
-        or shared_attrs.get("frequency_coordinate") == "normalized"
-    ):
+    if shared_attrs.get("frequency_units") == "cycles/sample":
         frequency_attrs = {"long_name": "Normalized frequency", "units": "cycles/sample"}
     else:
         frequency_attrs = {"long_name": "Frequency", "units": "Hz"}
@@ -111,13 +108,10 @@ def _coordinate_attrs(
 def _delay_units(shared_attrs: Mapping[str, Any]) -> tuple[str, str]:
     """``(delay_units, slope_units)`` for the result's frequency coordinate.
 
-    A delay is in the reciprocal units of frequency, so on the normalized grid
-    ``fourier_connectivity`` fills in (cycles/sample) it is in samples.
+    A delay is in the reciprocal units of frequency, so on a normalized
+    (cycles/sample) grid it is in samples.
     """
-    if (
-        shared_attrs.get("frequency_units") == "cycles/sample"
-        or shared_attrs.get("frequency_coordinate") == "normalized"
-    ):
+    if shared_attrs.get("frequency_units") == "cycles/sample":
         return "samples", "rad/(cycles/sample)"
     return "s", "rad/Hz"
 

@@ -78,13 +78,12 @@ multitaper transform. Options for the measure itself go in
 `connectivity_kwargs`, and group measures take `group_labels` (see the
 [group-measures recipe](cookbook.md#group-measures-canonical-coherence-between-areas)).
 
-The `3` above is a common default. To pick values from your recording's length
-and the frequency resolution you need, use `suggest_parameters`:
-
 Multitaper's frequency resolution means full DPSS concentration bandwidth,
 `2 * NW / window_duration` Hz. It describes smoothing independently of FFT
-bin spacing and zero-padding; the existing property and helper names remain
-supported.
+bin spacing and zero-padding.
+
+The `3` above is a common default. To pick values from your recording's length
+and the frequency resolution you need, use `suggest_parameters`:
 
 ```python
 from spectral_connectivity import suggest_parameters

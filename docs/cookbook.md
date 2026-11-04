@@ -256,7 +256,10 @@ facts needed to interpret it. Settings use one JSON record:
 | `backend` | `cpu` or `gpu`, reflecting the imported backend. |
 | `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
 | `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |
-| `frequency_bin_spacing`, `frequency_bin_spacing_units` | Spacing of the uniform returned frequency grid, after cropping and decimation. Omitted for irregular/singleton grids and outputs without a frequency axis. |
+| `frequency_bin_spacing`, `frequency_bin_spacing_units` | Spacing of the uniform frequency grid as returned, after the wrapper's cropping and decimation. Omitted for irregular/singleton grids and outputs without a frequency axis. xarray selections such as `.isel`/`.sel` keep attrs unchanged, so recompute spacing from the `frequency` coordinate after selecting bins yourself. |
+| `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
+| `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs. |
+| `frequency_coordinate`, `time_coordinate` | External Fourier inputs only: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). |
 
 ```python
 >>> schema_result = multitaper_connectivity(
@@ -289,17 +292,24 @@ For example, a 0.5-second window with NW=2 has 8 Hz DPSS concentration bandwidth
 and 3 Hz Hann equivalent noise bandwidth. Zero-padding or frequency decimation
 changes grid spacing while preserving estimator bandwidth.
 
-Custom tapers and Morlet outputs omit `spectral_bandwidth` until its width
-convention is defined. Power and cross-spectral density omit `units` when input
+Custom tapers and Morlet outputs omit `spectral_bandwidth`: no width
+convention is defined for them. Power and cross-spectral density omit `units` when input
 units are unknown. External Fourier defaults use `cycles/sample` frequencies
 and window-index time; these do not establish a physical sampling rate.
 Supplied Fourier coordinates preserve their attrs; a DataArray frequency
 coordinate declaring `units="cycles/sample"` also stays normalized. Supported
-frequency units are `Hz` and `cycles/sample`; convert other units before calling
-the wrapper. A labeled or explicitly declared trial axis supplies `n_trials`,
-while an arbitrary observation axis supplies only the raw observation count.
+frequency units are `Hz` (also spelled `hz`, `Hertz`, `1/s`, or `s^-1`, in any
+case) and `cycles/sample` (or `cycle/sample`); convert other units before
+calling the wrapper. The top-level `frequency_units` is the canonical spelling,
+while the returned `frequency` coordinate keeps the supplied attrs as given.
+Whether external coefficients were one-sided is an input setting, recorded as
+`is_one_sided` in `transform_parameters_json`; it does not describe the
+returned frequency grid. A labeled or explicitly declared trial axis, or the
+trial axis of a 4-D/5-D NumPy array, supplies `n_trials`, while an arbitrary
+observation axis supplies only the raw observation count.
 Unambiguous scalar recording coordinates such as `subject`/`session` keep
-their attrs. Labels along averaged trial axes are omitted.
+their attrs; one named like a result coordinate (e.g. `band`) is dropped with
+a warning. Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
 helper names:
@@ -307,10 +317,8 @@ helper names:
 | Previous metadata | Schema version 1 |
 | --- | --- |
 | `mt_sampling_frequency`, `mt_n_trials`, `mt_n_signals` | `sampling_frequency`, `n_trials`, `n_signals`. |
-| `mt_frequency_resolution` | `spectral_bandwidth`, qualified as `full_dpss_concentration_bandwidth`. |
-| Unreleased `stft_*`, `welch_*`, `morlet_*`, `fourier_*` copies | Shared facts plus `transform_parameters_json`. |
-| `backend="CPU"` / `"GPU"` | `backend="cpu"` / `"gpu"`. |
-| Transform-setting `"None"` sentinels | JSON `null` for optional settings; unknown optional scalar facts are omitted. |
+| `mt_frequency_resolution` | `spectral_bandwidth`, qualified as `full_dpss_concentration_bandwidth`, for generated DPSS tapers. Custom tapers have no `spectral_bandwidth`; their `mt_frequency_resolution` stays the nominal NW-based value. |
+| Other scalar `mt_*` settings | `transform_parameters_json`, with optional settings as JSON `null`. |
 
 The 15 scalar `mt_*` attributes released in 2.0.1 remain compatibility copies
 through 3.x and will be removed in 4.0: `mt_detrend_type`, `mt_is_low_bias`,
@@ -319,7 +327,8 @@ through 3.x and will be removed in 4.0: `mt_detrend_type`, `mt_is_low_bias`,
 `mt_n_time_samples_per_window`, `mt_n_trials`, `mt_time_window_duration`,
 `mt_time_window_step`, `mt_frequency_resolution`, and `mt_nyquist_frequency`.
 Attribute dictionaries cannot warn on access. These keys are documented as
-deprecated and retain historical sentinel strings where needed. New settings
+deprecated; a `None` setting is stored as the string `"None"`, which NetCDF
+can save. New settings
 such as FFT workers or adaptive weighting do not get legacy copies.
 
 ## Pass a labeled DataArray

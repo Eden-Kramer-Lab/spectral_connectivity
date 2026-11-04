@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from spectral_connectivity._backend import ON_GPU
-from spectral_connectivity.connectivity import Connectivity
+from spectral_connectivity.connectivity import Connectivity, _frequency_grid_rtol
 from spectral_connectivity.utils import to_numpy
 
 
@@ -140,27 +140,28 @@ _LEGACY_MULTITAPER_FIELDS = frozenset(
     }
 )
 
+# Transform facts recorded as attributes in their own right; the remaining
+# common facts come from the Connectivity object.
 _COMMON_TRANSFORM_FIELDS = frozenset(
     {
         "transform",
         "sampling_frequency",
         "n_trials",
         "n_signals",
-        "n_observations",
-        "expectation_type",
-        "observations_are_independent",
-        "time_bins_are_independent",
         "frequency_coordinate",
         "time_coordinate",
         "nyquist_frequency",
         "spectral_bandwidth",
         "spectral_bandwidth_definition",
         "spectral_bandwidth_units",
-        "is_one_sided",
         "frequency_units",
-        "backend",
     }
 )
+# Transform settings that affect how, not what, is computed.
+_EXECUTION_FIELDS = frozenset({"fft_workers"})
+# Recorded by Multitaper only for its 2.x ``mt_*`` copy; ``spectral_bandwidth``
+# is the qualified schema fact.
+_LEGACY_ONLY_FIELDS = frozenset({"frequency_resolution"})
 
 
 def _shared_provenance_attrs(
@@ -170,9 +171,11 @@ def _shared_provenance_attrs(
 ) -> dict[str, Any]:
     """Provenance shared by every measure computed from one transform.
 
-    Common facts are top-level attributes. Remaining native settings live in
-    one JSON record separating estimator and execution settings. Only the
-    scalar ``mt_*`` fields released in 2.0.1 are retained as compatibility copies.
+    Common facts are attributes in their own right, on the Dataset and each
+    measure variable. Remaining native settings live in one JSON record
+    separating estimator and execution settings; ``frequency_resolution`` is
+    recorded only as the qualified ``spectral_bandwidth``. Only the scalar
+    ``mt_*`` fields released in 2.0.1 are retained as compatibility copies.
     """
     attrs: dict[str, Any] = {
         key: _netcdf_provenance_value(value)
@@ -187,24 +190,24 @@ def _shared_provenance_attrs(
         expectation_type=connectivity.expectation_type,
         n_signals=connectivity.n_signals,
         n_observations=connectivity.n_observations,
-        is_one_sided=int(connectivity.is_one_sided),
         observations_are_independent=int(connectivity.observations_are_independent),
         time_bins_are_independent=int(connectivity.time_bins_are_independent),
     )
     estimator = {
         key: value
         for key, value in transform_metadata.items()
-        if key not in _COMMON_TRANSFORM_FIELDS
-        and key not in {"fft_workers", "frequency_resolution"}
+        if key not in _COMMON_TRANSFORM_FIELDS | _EXECUTION_FIELDS | _LEGACY_ONLY_FIELDS
     }
     execution = {
-        key: value for key, value in transform_metadata.items() if key == "fft_workers"
+        key: value for key, value in transform_metadata.items() if key in _EXECUTION_FIELDS
     }
     attrs["transform_parameters_json"] = _canonical_json(
         {"estimator": estimator, "execution": execution}
     )
     if transform_metadata.get("transform") == "multitaper":
-        for key in sorted(_LEGACY_MULTITAPER_FIELDS):
+        # A field the transform's metadata omits (e.g. trimmed by a subclass)
+        # gets no compatibility copy.
+        for key in sorted(_LEGACY_MULTITAPER_FIELDS & transform_metadata.keys()):
             value = transform_metadata[key]
             if isinstance(value, np.ndarray) and value.ndim == 0:
                 value = value.item()
@@ -224,36 +227,42 @@ def _with_frequency_grid_metadata(
     result: xr.DataArray | xr.Dataset,
 ) -> xr.DataArray | xr.Dataset:
     """Describe each returned frequency grid, clearing stale spacing after reduction."""
-
-    def grid_attrs(data: xr.DataArray | xr.Dataset) -> dict[str, Any]:
-        attrs = dict(data.attrs)
-        attrs.pop("frequency_bin_spacing", None)
-        attrs.pop("frequency_bin_spacing_units", None)
-        if "frequency" not in data.dims:
-            return attrs
-        frequency = data.coords["frequency"]
+    grid: dict[str, Any] = {}
+    if "frequency" in result.dims:
+        frequency = result.coords["frequency"]
         values = np.asarray(frequency.values)
         if values.size >= 2:
-            differences = np.diff(values)
-            spacing = float(differences[0])
+            # Compare against the fitted linear grid with the tolerance external
+            # FFT grids are accepted under.
+            rtol = _frequency_grid_rtol(values)
+            values = values.astype(float)
+            spacing = float((values[-1] - values[0]) / (values.size - 1))
+            expected = values[0] + spacing * np.arange(values.size)
             if (
                 np.isfinite(spacing)
                 and spacing > 0
-                and np.allclose(differences, spacing, rtol=1e-10, atol=0)
+                and np.allclose(values, expected, rtol=rtol, atol=spacing * rtol)
             ):
-                attrs["frequency_bin_spacing"] = spacing
-                if "units" in frequency.attrs:
-                    attrs["frequency_bin_spacing_units"] = frequency.attrs["units"]
+                grid["frequency_bin_spacing"] = spacing
+                units = result.attrs.get("frequency_units", frequency.attrs.get("units"))
+                if units is not None:
+                    grid["frequency_bin_spacing_units"] = units
+
+    def grid_attrs(data: xr.DataArray | xr.Dataset) -> dict[str, Any]:
+        attrs = {
+            key: value
+            for key, value in data.attrs.items()
+            if key not in {"frequency_bin_spacing", "frequency_bin_spacing_units"}
+        }
+        if "frequency" in data.dims:
+            attrs.update(grid)
         return attrs
 
-    if isinstance(result, xr.DataArray):
-        updated_array = result.copy(deep=False)
-        updated_array.attrs = grid_attrs(result)
-        return updated_array
     updated = result.copy(deep=False)
     updated.attrs = grid_attrs(result)
-    for name, variable in result.data_vars.items():
-        updated[name].attrs = grid_attrs(variable)
+    if isinstance(result, xr.Dataset):
+        for name, variable in result.data_vars.items():
+            updated[name].attrs = grid_attrs(variable)
     return updated
 
 

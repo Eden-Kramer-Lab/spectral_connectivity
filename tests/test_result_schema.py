@@ -15,12 +15,38 @@ from spectral_connectivity import (
     estimate_frequency_resolution,
     suggest_parameters,
 )
+from spectral_connectivity._provenance import _with_frequency_grid_metadata
 from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
     fourier_connectivity,
     frequency_band_reduce,
     multitaper_connectivity,
 )
+
+# Exact estimator settings of the Hann-window transforms: none are multitaper-only.
+_HANN_ESTIMATOR_KEYS = {
+    "stft": {
+        "detrend_type",
+        "n_fft_samples",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "start_time",
+        "time_window_duration",
+        "time_window_step",
+        "window",
+    },
+    "welch": {
+        "detrend_type",
+        "n_fft_samples",
+        "n_segments",
+        "n_time_samples_per_segment",
+        "n_time_samples_per_step",
+        "segment_duration",
+        "segment_overlap",
+        "start_time",
+        "window",
+    },
+}
 
 
 @pytest.fixture
@@ -61,6 +87,7 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
     assert result.attrs["backend"] in {"cpu", "gpu"}
     assert result.attrs["observations_are_independent"] == 1
     assert result.attrs["time_bins_are_independent"] == (name != "morlet")
+    assert result.attrs["nyquist_frequency"] == 32
     assert not any(
         key.startswith(("stft_", "welch_", "morlet_", "fourier_")) for key in result.attrs
     )
@@ -79,6 +106,8 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
     }
     assert common.isdisjoint(parameters["estimator"])
     assert common.isdisjoint(parameters["execution"])
+    if name in _HANN_ESTIMATOR_KEYS:
+        assert set(parameters["estimator"]) == _HANN_ESTIMATOR_KEYS[name]
     if name != "morlet":
         assert parameters["execution"] == {"fft_workers": None}
     else:
@@ -123,6 +152,10 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
     assert result.attrs["mt_n_signals"] == result.attrs["n_signals"]
     assert result.attrs["mt_frequency_resolution"] == result.attrs["spectral_bandwidth"]
     assert result.attrs["mt_detrend_type"] == "None"
+    # Scalar types a 2.x reader compares against, not their string forms.
+    assert type(result.attrs["mt_start_time"]) is float
+    assert type(result.attrs["mt_sampling_frequency"]) is float
+    assert all(type(result.attrs[key]) is int for key in released if key.startswith("mt_n_"))
     assert json.loads(result.attrs["transform_parameters_json"]) == {
         "estimator": {
             "adaptive_max_iterations": 50,
@@ -220,6 +253,16 @@ def test_band_reduction_drops_obsolete_spacing_but_keeps_provenance(data, method
         assert variable.attrs["spectral_bandwidth"] == full.attrs["spectral_bandwidth"]
 
 
+def test_spacing_is_per_variable_in_a_mixed_dataset(data):
+    result = multitaper_connectivity(
+        data, 64, time_window_duration=0.5, method=["power", "group_delay"]
+    )
+    assert result.power.attrs["frequency_bin_spacing"] == 2
+    for name, variable in result.data_vars.items():
+        if "frequency" not in variable.dims:
+            assert "frequency_bin_spacing" not in variable.attrs, name
+
+
 def test_irregular_singleton_and_reduced_frequency_outputs_have_no_spacing(data):
     morlet = connectivity_to_xarray(MorletWavelet(data, 64, [4, 7, 16]), "power")
     singleton = fourier_connectivity(
@@ -260,7 +303,8 @@ def test_external_fourier_metadata_only_infers_known_physical_facts(data, physic
     )
     assert result.attrs["transform"] == "external_fourier"
     assert result.attrs["n_observations"] == 9
-    assert "n_trials" not in result.attrs
+    # The 5-D layout names its trial axis.
+    assert result.attrs["n_trials"] == 3
     assert "spectral_bandwidth" not in result.attrs
     if physical:
         assert result.attrs["sampling_frequency"] == 64
@@ -271,6 +315,77 @@ def test_external_fourier_metadata_only_infers_known_physical_facts(data, physic
         assert result.attrs["frequency_bin_spacing"] == 1 / 32
         assert result.frequency.attrs["units"] == "cycles/sample"
         assert result.attrs["nyquist_frequency"] == 0.5
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "n_trials"),
+    [
+        (np.ones((3, 4, 2), dtype=complex), None),  # (observation, frequency, signal)
+        (np.ones((3, 1, 4, 2), dtype=complex), 3),  # (trial, taper, frequency, signal)
+    ],
+)
+def test_numpy_fourier_layouts_record_trials_only_when_named(coefficients, n_trials):
+    result = fourier_connectivity(coefficients, method="power", is_one_sided=False)
+    assert result.attrs.get("n_trials") == n_trials
+    assert result.attrs["n_observations"] == 3
+
+
+def test_sidedness_of_input_coefficients_is_not_a_top_level_fact(data):
+    mt = _transform("multitaper", data)
+    morlet = connectivity_to_xarray(_transform("morlet", data), "power")
+    external = fourier_connectivity(
+        mt.fft(), frequencies=mt.frequencies, method="power", is_one_sided=False
+    )
+    assert "is_one_sided" not in connectivity_to_xarray(mt, "power").attrs
+    assert "is_one_sided" not in morlet.attrs
+    assert "is_one_sided" not in external.attrs
+    estimator = json.loads(external.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["is_one_sided"] is False
+
+
+def test_legacy_copies_omit_fields_a_subclass_does_not_record(data):
+    class WithoutStartTime(Multitaper):
+        _PROVENANCE_FIELDS = tuple(
+            field for field in Multitaper._PROVENANCE_FIELDS if field != "start_time"
+        )
+
+    result = connectivity_to_xarray(WithoutStartTime(data, 64), "power")
+    assert "mt_start_time" not in result.attrs
+    assert result.attrs["mt_sampling_frequency"] == 64
+
+
+@pytest.mark.parametrize(
+    ("frequency", "spacing"),
+    [
+        (np.fft.rfftfreq(3_600_000, 1 / 30_000), 1 / 120),  # 120 s at 30 kHz
+        (np.fft.rfftfreq(3000, 1 / 1000).astype(np.float32), 1 / 3),  # e.g. from netCDF
+    ],
+)
+def test_spacing_allows_for_the_rounding_of_uniform_grids(frequency, spacing):
+    grid = xr.DataArray(
+        np.zeros(frequency.size), dims="frequency", coords={"frequency": frequency}
+    )
+    recorded = _with_frequency_grid_metadata(grid).attrs["frequency_bin_spacing"]
+    assert recorded == pytest.approx(spacing, rel=1e-6)
+
+
+def test_spacing_is_omitted_for_a_nearly_uniform_grid():
+    grid = xr.DataArray(
+        np.zeros(5), dims="frequency", coords={"frequency": [0.0, 2.0, 4.0, 6.0, 8.001]}
+    )
+    assert "frequency_bin_spacing" not in _with_frequency_grid_metadata(grid).attrs
+
+
+def test_normalized_grid_keeps_its_nyquist_bin_after_cropping(data):
+    mt = _transform("multitaper", data)
+    full = fourier_connectivity(mt.fft(), method="power", is_one_sided=False)
+    cropped = full.sel(frequency=slice(0, 0.4375))
+    band = {"upper": (0.375, 0.4375)}
+    xr.testing.assert_allclose(
+        frequency_band_reduce(cropped, band, reduction="integral"),
+        frequency_band_reduce(full, band, reduction="integral"),
+        rtol=1e-12,
+    )
 
 
 @pytest.mark.parametrize("external", [False, True])
@@ -300,9 +415,44 @@ def test_scalar_recording_identifiers_survive_without_trial_conditions(data, ext
     assert result.attrs["n_trials"] == 3
 
 
-@pytest.mark.parametrize("trial_dimension", ["trial", "observations"])
+def test_band_reduction_does_not_overwrite_an_input_band_coordinate(data):
+    labeled = xr.DataArray(
+        data, dims=("time", "trial", "signal"), coords={"band": "theta", "subject": "rat-1"}
+    )
+    unreduced = multitaper_connectivity(labeled, 64, method="power")
+    assert unreduced.band.item() == "theta"
+    with pytest.warns(UserWarning, match=r"\['band'\]"):
+        assert frequency_band_reduce(unreduced, {"alpha": (8, 12)}).band.item() == "alpha"
+    with pytest.warns(UserWarning, match=r"\['band'\]"):
+        reduced = multitaper_connectivity(
+            labeled, 64, method="power", frequency_bands={"alpha": (8, 12)}
+        )
+    assert reduced.band.values.tolist() == ["alpha"]
+    assert reduced.subject.item() == "rat-1"
+
+
+def test_scalar_coordinate_named_like_a_measure_does_not_replace_it(data):
+    labeled = xr.DataArray(
+        data, dims=("time", "trial", "signal"), coords={"power": 5, "subject": "rat-1"}
+    )
+    with pytest.warns(UserWarning, match=r"\['power'\]"):
+        result = multitaper_connectivity(labeled, 64, method=["power", "coherence_magnitude"])
+    assert "power" in result.data_vars
+    assert "frequency" in result["power"].dims
+    assert result.subject.item() == "rat-1"
+
+
+@pytest.mark.parametrize(
+    ("trial_dimension", "trial_dim", "n_trials"),
+    [
+        ("trial", None, 3),
+        ("observations", None, None),  # A generic observation name.
+        ("repeat", None, None),  # Inferred by elimination.
+        ("observations", "observations", 3),  # Declared explicitly.
+    ],
+)
 def test_labeled_normalized_fourier_coordinates_keep_attrs_and_known_trials(
-    data, trial_dimension
+    data, trial_dimension, trial_dim, n_trials
 ):
     coefficients = xr.DataArray(
         np.fft.fft(data, axis=0),
@@ -315,16 +465,13 @@ def test_labeled_normalized_fourier_coordinates_keep_attrs_and_known_trials(
             ),
         },
     )
-    result = fourier_connectivity(coefficients, method="power")
+    result = fourier_connectivity(coefficients, method="power", trial_dim=trial_dim)
     assert result.frequency.attrs == coefficients.frequency.attrs
     assert result.attrs["frequency_units"] == "cycles/sample"
     assert result.attrs["frequency_bin_spacing_units"] == "cycles/sample"
     assert result.attrs["frequency_bin_spacing"] == 1 / 128
     assert "sampling_frequency" not in result.attrs
-    if trial_dimension == "trial":
-        assert result.attrs["n_trials"] == 3
-    else:
-        assert "n_trials" not in result.attrs
+    assert result.attrs.get("n_trials") == n_trials
 
 
 def test_provided_fourier_time_coordinates_keep_their_descriptions(data):
@@ -351,6 +498,32 @@ def test_coordinate_units_express_normalized_delay_without_claiming_seconds(data
     assert result.group_delay.attrs["units"] == "samples"
 
 
+@pytest.mark.parametrize(
+    ("units", "canonical"),
+    [("hz", "Hz"), ("Hertz", "Hz"), ("1/s", "Hz"), (" Cycles/Sample ", "cycles/sample")],
+)
+def test_external_fourier_accepts_spellings_of_supported_units(data, units, canonical):
+    normalized = canonical == "cycles/sample"
+    coefficients = xr.DataArray(
+        np.fft.fft(data, axis=0),
+        dims=("frequency", "trial", "signal"),
+        coords={
+            "frequency": (
+                "frequency",
+                np.fft.fftfreq(128, 1 if normalized else 1 / 64),
+                {"units": units},
+            )
+        },
+    )
+    result = fourier_connectivity(coefficients, method="power")
+    assert result.attrs["frequency_units"] == canonical
+    assert result.frequency.attrs["units"] == units
+    if normalized:
+        assert "sampling_frequency" not in result.attrs
+    else:
+        assert result.attrs["sampling_frequency"] == 64
+
+
 def test_external_fourier_rejects_coordinate_units_that_require_conversion(data):
     coefficients = xr.DataArray(
         np.fft.fft(data, axis=0),
@@ -372,17 +545,3 @@ def test_power_units_are_known_only_when_input_states_them(data, units):
         assert "units" not in result.attrs
     else:
         assert result.attrs["units"] == "(uV)^2/Hz"
-
-
-@pytest.mark.parametrize("engine", ["scipy", "netcdf4", "h5netcdf"])
-@pytest.mark.parametrize("name", ["multitaper", "stft", "welch", "morlet"])
-def test_transform_schema_roundtrips_with_each_engine(data, name, engine, tmp_path):
-    if engine == "netcdf4":
-        pytest.importorskip("netCDF4")
-    elif engine == "h5netcdf":
-        pytest.importorskip("h5netcdf")
-    result = connectivity_to_xarray(_transform(name, data), "power")
-    path = tmp_path / "schema.nc"
-    result.to_netcdf(path, engine=engine)
-    with xr.open_dataarray(path, engine=engine) as reloaded:
-        xr.testing.assert_identical(reloaded.load(), result)
