@@ -13,7 +13,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from spectral_connectivity import MorletWavelet, fourier_connectivity, multitaper_connectivity
+from spectral_connectivity import (
+    MorletWavelet,
+    ShortTimeFourierTransform,
+    Welch,
+    fourier_connectivity,
+    multitaper_connectivity,
+)
 from spectral_connectivity._measure_registry import _MEASURE_SPECS
 from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
@@ -133,6 +139,12 @@ def composite_results(time_series):
             method=["power", "coherence_magnitude"],
         ),
         "morlet_band": frequency_band_reduce(morlet, {"lo": (4, 8)}),
+        "stft": connectivity_to_xarray(
+            ShortTimeFourierTransform(time_series, 500, time_window_duration=0.5), "power"
+        ),
+        "welch": connectivity_to_xarray(
+            Welch(time_series, 500, segment_duration=0.5), "power"
+        ),
     }
 
 
@@ -159,6 +171,8 @@ def test_every_measure_roundtrips(measure_results, method, engine, tmp_path):
         "morlet_validity",
         "morlet_band",
         "labeled_input",
+        "stft",
+        "welch",
     ],
 )
 def test_composite_results_roundtrip(composite_results, name, engine, tmp_path):

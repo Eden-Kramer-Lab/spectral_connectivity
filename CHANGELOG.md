@@ -101,7 +101,11 @@ directly with results from 2.x.
   scale as `Multitaper` (FieldTrip's convention; MNE's wavelet power is
   `2 * sampling_frequency` times larger). `ShortTimeFourierTransform`'s `repr`
   and `summarize_parameters()` describe its Hann window and equivalent noise
-  bandwidth; `Welch` exposes its resolved settings (segment duration and step,
+  bandwidth. `ShortTimeFourierTransform` and `Welch` expose
+  `equivalent_noise_bandwidth`, computed from the actual window (so a
+  two-sample window gives `sampling_frequency`);
+  `ShortTimeFourierTransform.frequency_resolution` raises `AttributeError`
+  instead of inheriting Multitaper's DPSS definition. `Welch` exposes its resolved settings (segment duration and step,
   overlap, detrending, start time, FFT length, workers) as read-only
   properties.
 - Morlet transforms now expose strict time-frequency edge validity and support
@@ -185,9 +189,23 @@ directly with results from 2.x.
   documentation site serves an `llms.txt` index, and the package docstring
   (`help(spectral_connectivity)`) points to both.
 - A multi-measure `multitaper_connectivity` `Dataset` now carries the shared
-  provenance (package, version, backend, expectation type, and the `mt_*`
-  multitaper parameters) as top-level `Dataset.attrs`, not only on each
+  provenance (package, version, transform, backend, expectation type, observation
+  counts, and transform settings) as top-level `Dataset.attrs`, not only on each
   variable.
+- Result schema version 1 uses common known facts across Multitaper, STFT,
+  Welch, Morlet, and external Fourier inputs, lowercase `backend="cpu"`/`"gpu"`,
+  and one canonical `transform_parameters_json` record separating estimator
+  and execution settings. Optional structured settings use JSON `null`.
+  Only the 15 scalar `mt_*` attributes released in 2.0.1 remain, as deprecated
+  compatibility copies until 4.0. Multitaper's `frequency_resolution`, its
+  helper names, and the helper's returned key remain supported.
+- Results distinguish qualified estimator `spectral_bandwidth` from uniform
+  returned-grid `frequency_bin_spacing`, refreshed after crop/decimation and
+  omitted after band reduction or on singleton/irregular grids. Normalized
+  external grids keep `cycles/sample` units and record no physical sampling
+  rate; an external observation axis not named or declared as trials records no
+  `n_trials`. Scalar recording coordinates keep their attrs; coordinates along
+  averaged dimensions, such as per-trial labels, are not carried over.
 - The xarray interfaces now expose every built-in nonstandard result contract:
   group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
   and membership, delay candidates, global-coherence scores/vectors,
@@ -312,8 +330,9 @@ directly with results from 2.x.
   than once per module. `Multitaper`'s `fft_workers` and the xarray `backend`
   attribute follow the imported backend instead of re-reading the variable
   after import.
-- xarray results carry `long_name` and `units` on every variable (spectral
-  densities in `(<input units>)^2/Hz` when the input states its units),
+- xarray measure results carry `long_name` and known `units` (spectral
+  densities in `(<input units>)^2/Hz` when the input states its units; omitted
+  when unknown),
   `band_lower`/`band_upper` coordinates after band reduction, and an input
   DataArray's per-signal coordinates, with their attrs, as
   `source_<name>`/`target_<name>`. The package's coordinates (including band
@@ -557,10 +576,9 @@ directly with results from 2.x.
 - `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
-  data is no longer short by half the DC cell. The Nyquist bin is the bin at half
-  the result's recorded sampling rate (`mt_sampling_frequency`, and
-  `fourier_sampling_frequency` for two-sided coefficients), so an odd-length
-  FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
+  data is no longer short by half the DC cell. The Nyquist bin is the bin at the
+  result's recorded `nyquist_frequency` (or a 2.x result's
+  `mt_nyquist_frequency`), so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
   a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`

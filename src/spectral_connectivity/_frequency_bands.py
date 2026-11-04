@@ -1,5 +1,6 @@
 """Frequency cropping, decimation, and band reduction of labeled results."""
 
+import warnings
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -7,8 +8,8 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity._provenance import _canonical_json
-from spectral_connectivity.utils import is_positive_integer
+from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
+from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
 
 
 def _inclusive_frequency_mask(
@@ -86,23 +87,20 @@ def _band_integration_weights(
     return weights
 
 
-# Provenance prefixes of the transforms whose results record ``sampling_frequency``.
-_TRANSFORM_PROVENANCE_PREFIXES = ("mt_", "stft_", "welch_", "morlet_", "fourier_")
-
-
 def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
     """The Nyquist frequency of ``result``'s one-sided spectrum, if known.
 
-    A result records its transform's sampling rate, so its Nyquist frequency is
-    half of it; the grid has a bin there only for an even FFT length. Without a
-    recorded rate, a grid anchored at 0 Hz is taken to be a complete one-sided
-    spectrum whose last bin is Nyquist. Only the grid as computed can say so:
+    A result records ``nyquist_frequency`` (or, from 2.x, ``mt_nyquist_frequency``)
+    when its sampling rate or normalized grid is known; the grid has a bin there
+    only for an even FFT length. Without it, a grid anchored at 0 is taken to be
+    a complete one-sided spectrum whose last bin is Nyquist. Only the grid as computed can say so:
     cropping or decimating it makes an interior bin the last one.
     """
-    for prefix in _TRANSFORM_PROVENANCE_PREFIXES:
-        sampling_frequency = result.attrs.get(prefix + "sampling_frequency")
-        if sampling_frequency is not None:
-            return float(sampling_frequency) / 2
+    nyquist_frequency = result.attrs.get(
+        "nyquist_frequency", result.attrs.get("mt_nyquist_frequency")
+    )
+    if nyquist_frequency is not None:
+        return float(nyquist_frequency)
     if "frequency" not in result.coords:
         return None
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -164,6 +162,19 @@ def _reduce_frequency_bands(
         _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)
         for name, bounds in bands.items()
     ]
+    replaced = [
+        name
+        for name in ("band", "band_lower", "band_upper", "valid_time_band")
+        if name in result.coords
+    ]
+    if replaced:
+        warnings.warn(
+            f"Band reduction replaces the existing coordinates {replaced} of the "
+            "result (e.g. scalar recording coordinates carried from the input). "
+            "Rename them before reducing to keep them.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
     if reduction == "integral" and frequencies.size < 2:
         msg = "reduction='integral' needs at least two frequency bins to know their widths."
         raise ValueError(msg)
@@ -383,4 +394,4 @@ def _select_and_reduce_frequencies(
             circular=None,
             nyquist_frequency=nyquist_frequency,
         )
-    return selected
+    return _with_frequency_grid_metadata(selected)

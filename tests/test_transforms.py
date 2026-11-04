@@ -1262,9 +1262,16 @@ def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
     m.unrelated_extension_attribute = 42
     metadata = m._provenance_metadata()
 
-    assert tuple(metadata) == m._PROVENANCE_FIELDS
+    assert set(metadata) == set(m._PROVENANCE_FIELDS) | {
+        "transform",
+        "taper_kind",
+        "spectral_bandwidth",
+        "spectral_bandwidth_definition",
+        "spectral_bandwidth_units",
+    }
     assert "unrelated_extension_attribute" not in metadata
     assert isinstance(metadata["start_time"], np.ndarray)
+    assert metadata["fft_workers"] is None
 
 
 def test_short_time_fourier_transform_hann_shape_and_peak():
@@ -1286,7 +1293,7 @@ def test_short_time_fourier_transform_hann_shape_and_peak():
     assert coefficients.shape == (3, 1, 1, 128, 2)
     positive_power = np.abs(coefficients[0, 0, 0, :65, 0]) ** 2
     assert to_host(transform.frequencies)[np.argmax(positive_power)] == pytest.approx(16)
-    assert transform.frequency_resolution == pytest.approx(1.5)
+    assert transform.equivalent_noise_bandwidth == pytest.approx(1.5)
 
     # Per-window one-sided PSD must equal SciPy's periodic-Hann STFT with PSD
     # scaling (|Z|**2 is the two-sided density; interior bins are doubled).

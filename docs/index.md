@@ -78,6 +78,10 @@ multitaper transform. Options for the measure itself go in
 `connectivity_kwargs`, and group measures take `group_labels` (see the
 [group-measures recipe](cookbook.md#group-measures-canonical-coherence-between-areas)).
 
+Multitaper's frequency resolution means full DPSS concentration bandwidth,
+`2 * NW / window_duration` Hz. It describes smoothing independently of FFT
+bin spacing and zero-padding.
+
 The `3` above is a common default. To pick values from your recording's length
 and the frequency resolution you need, use `suggest_parameters`:
 
@@ -107,6 +111,10 @@ complex-vector mean, and integration is limited to power/cross-spectral density.
 Use `fourier_connectivity` when coefficients were computed elsewhere. It accepts
 NumPy arrays or labeled DataArrays, preserves their time/frequency/signal
 coordinates, and uses the same result and provenance contract.
+
+Results use `output_schema_version=1`, common transform/observation facts,
+qualified estimator bandwidth, and one `transform_parameters_json` settings
+record. See the [result-schema reference and migration examples](cookbook.md#result-schema-and-transform-bandwidth).
 
 `time_series` may also be an `xarray.DataArray`. Dimension names, not
 positions, define the roles: common names for time, trial and signal dimensions

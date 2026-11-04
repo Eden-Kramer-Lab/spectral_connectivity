@@ -57,6 +57,15 @@ class _SignalMetadata(NamedTuple):
     coordinates: Mapping[str, tuple[NDArray[Any], dict[Hashable, Any]]]
     # The input's ``units`` attribute; spectral densities report (units)^2/Hz.
     units: str | None
+    # Dimension-free recording identifiers remain meaningful after averaging.
+    recording_coordinates: Mapping[str, tuple[NDArray[Any], dict[Hashable, Any]]] | None = None
+    # Attrs of an external Fourier input's frequency/time coordinates, kept on
+    # the result's coordinates.
+    frequency_coordinate_attrs: Mapping[Hashable, Any] | None = None
+    time_coordinate_attrs: Mapping[Hashable, Any] | None = None
+    # Number of trials, when the input's layout or labels say an axis is trials;
+    # None when unknown.
+    n_trials: int | None = None
 
 
 class _UnwrappedInput(NamedTuple):
@@ -612,6 +621,17 @@ def _signal_coordinates_from_dataarray(
     }
 
 
+def _scalar_coordinates_from_dataarray(
+    data_array: xr.DataArray,
+) -> dict[str, tuple[NDArray[Any], dict[Hashable, Any]]]:
+    """Dimension-free coordinates; any coordinate along a dimension is excluded."""
+    return {
+        str(name): (np.asarray(coordinate.to_numpy()), dict(coordinate.attrs))
+        for name, coordinate in data_array.coords.items()
+        if not coordinate.dims
+    }
+
+
 def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
     """Reject a lazy backing array the positional spectral math cannot consume.
 
@@ -686,13 +706,17 @@ def _unwrap_xarray_input(
         _SignalMetadata(
             _signal_coordinates_from_dataarray(time_series, signal_dimension),
             units if isinstance(units, str) and units else None,
+            _scalar_coordinates_from_dataarray(time_series),
         ),
     )
 
 
+# Names of an observation axis averaged like trials but not known to be trials.
+_FOURIER_OBSERVATION_NAMES = frozenset({"observation", "observations"})
+
 _FOURIER_ROLE_SYNONYMS: dict[str, frozenset[str]] = {
     "time": frozenset({"time", "times", "window", "windows", "time_window", "time_windows"}),
-    "trial": _ROLE_SYNONYMS["trial"] | frozenset({"observation", "observations"}),
+    "trial": _ROLE_SYNONYMS["trial"] | _FOURIER_OBSERVATION_NAMES,
     "taper": frozenset({"taper", "tapers"}),
     "frequency": _FREQUENCY_DIM_NAMES,
     "signal": _ROLE_SYNONYMS["signal"],
@@ -728,7 +752,7 @@ def _unwrap_fourier_input(
     NDArray[np.floating] | None,
     Sequence[_SignalLabel] | None,
     Mapping[Any, Any] | None,
-    _SignalMetadata | None,
+    _SignalMetadata,
 ]:
     """Normalize external coefficients to the core's five-dimensional layout."""
     dimension_arguments = {
@@ -757,7 +781,17 @@ def _unwrap_fourier_input(
                 "signal), or (time, trial, taper, frequency, signal)."
             )
             raise ValueError(msg)
-        return data, frequencies, time, signal_names, None, None
+        # The 4-D and 5-D layouts name their second-to-last observation axis
+        # as trials; the 3-D layout's observation axis is not known to be one.
+        n_trials = int(data.shape[1]) if ndim != 3 else None
+        return (
+            data,
+            frequencies,
+            time,
+            signal_names,
+            None,
+            _SignalMetadata({}, None, n_trials=n_trials),
+        )
 
     coefficient_array = fourier_coefficients
     if coefficient_array.ndim < 3 or coefficient_array.ndim > 5:
@@ -782,6 +816,10 @@ def _unwrap_fourier_input(
         role_to_dimension[role] = dimension
         claimed_dimensions.add(dimension)
 
+    # An explicit trial_dim, or a trial name other than a generic observation
+    # name, makes the trial count known; a dimension inferred by elimination
+    # below does not.
+    trials_are_labeled = trial_dim is not None
     for role, synonyms in _FOURIER_ROLE_SYNONYMS.items():
         if role in role_to_dimension:
             continue
@@ -799,6 +837,10 @@ def _unwrap_fourier_input(
         if candidates:
             role_to_dimension[role] = candidates[0]
             claimed_dimensions.add(candidates[0])
+            if role == "trial":
+                trials_are_labeled = (
+                    str(candidates[0]).lower() not in _FOURIER_OBSERVATION_NAMES
+                )
 
     for required_role in ("frequency", "signal"):
         if required_role not in role_to_dimension:
@@ -813,7 +855,8 @@ def _unwrap_fourier_input(
         for dimension in coefficient_array.dims
         if dimension not in claimed_dimensions
     ]
-    # A lone coefficient-observation dimension is unambiguously a trial axis.
+    # A lone unnamed coefficient-observation dimension is unambiguously averaged
+    # in the trial slot, though its count is not known to be a trial count.
     # More than one unnamed observation axis could be time/trial/taper in several
     # scientifically different ways, so require the caller to label it.
     if len(unclaimed) == 1 and "trial" not in role_to_dimension:
@@ -864,6 +907,7 @@ def _unwrap_fourier_input(
         msg = "frequencies conflicts with the DataArray frequency coordinate."
         raise ValueError(msg)
 
+    time_coordinate_attrs = None
     if "time" in role_to_dimension:
         time_dimension = role_to_dimension["time"]
         coordinate_time = (
@@ -877,6 +921,8 @@ def _unwrap_fourier_input(
         elif coordinate_time is not None and not _coordinates_agree(time, coordinate_time):
             msg = "time conflicts with the DataArray time coordinate."
             raise ValueError(msg)
+        if coordinate_time is not None:
+            time_coordinate_attrs = dict(coefficient_array.coords[time_dimension].attrs)
 
     if signal_names is None:
         signal_names = _signal_labels_from_dataarray(
@@ -886,6 +932,14 @@ def _unwrap_fourier_input(
     signal_metadata = _SignalMetadata(
         _signal_coordinates_from_dataarray(coefficient_array, role_to_dimension["signal"]),
         None,
+        _scalar_coordinates_from_dataarray(coefficient_array),
+        dict(coefficient_array.coords[frequency_dimension].attrs)
+        if frequency_coordinate_is_1d
+        else None,
+        time_coordinate_attrs,
+        int(coefficient_array.sizes[role_to_dimension["trial"]])
+        if trials_are_labeled
+        else None,
     )
     return (
         data,
