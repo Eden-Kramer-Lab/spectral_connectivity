@@ -603,6 +603,25 @@ def test_both_spellings_are_rejected(lagged_connectivity, measure):
         )
 
 
+@pytest.mark.parametrize(
+    ("band", "message"),
+    [
+        pytest.param((5.0, 5.0), "low < high", id="equal-bounds"),
+        pytest.param((20.0, 10.0), "low < high", id="reversed"),
+        pytest.param((10.0, 12.0), "contains no frequency bin", id="between-adjacent-bins"),
+        pytest.param((300.0, 400.0), "contains no frequency bin", id="beyond-nyquist"),
+    ],
+)
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_deprecated_bands_without_a_bin_inside_raise_where_2x_returned_empty_results(
+    lagged_connectivity, measure, band, message
+):
+    """As the CHANGELOG states: 2.x returned all-NaN or empty results for
+    these bands; the deprecated keyword now validates them."""
+    with pytest.raises(ValueError, match=message):
+        getattr(lagged_connectivity, measure)(frequencies_of_interest=band)
+
+
 def _measure_variables(result):
     """The result's measure variables (all three of group delay's)."""
     return list(result.data_vars.values()) if isinstance(result, xr.Dataset) else [result]

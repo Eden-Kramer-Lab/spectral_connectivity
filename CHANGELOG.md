@@ -448,10 +448,8 @@ directly with results from 2.x.
   time axis is accepted as one start time.
 - `phase_slope_index`, `delay`, and `group_delay` take
   `frequency_range=(low, high)`, which includes both endpoints, to choose the
-  bins they consume. It is validated (two finite values, lower <= upper, at
-  least one frequency bin selected): a band with no bin, such as one beyond
-  Nyquist or between two adjacent bins, previously gave all-NaN `group_delay`
-  results and an empty `delay` frequency axis. Their xarray results record the
+  bins they consume. It is validated: two finite values, lower <= upper, and
+  at least one frequency bin selected. Their xarray results record the
   requested bounds (`requested_frequency_lower`/`_upper`, omitted when every
   bin is used), the lowest and highest bins in the interval
   (`selected_frequency_lower`/`_upper`, before any `frequency_resolution`
@@ -490,17 +488,25 @@ directly with results from 2.x.
 
 ### Deprecated
 
-Each deprecated spelling keeps its 2.x numerical meaning through 3.x, warns
-with a `DeprecationWarning` that names its replacement, and is removed in 4.0.
+Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
+where noted), warns with a `DeprecationWarning` that names its replacement, and
+is removed in 4.0.
 
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
-  keyword-only `frequency_range`. The deprecated form still excludes bins on
-  both edges, exactly as in 2.x, and its results record
+  keyword-only `frequency_range`. The deprecated form excludes bins on both
+  edges and selects the bins 2.x selected for every band 2.x accepted with a
+  bin inside it, including on float32 grids: it evaluates 2.x's
+  `band[0] < frequencies < band[1]` on the band as given. Its results record
   `frequency_interval_closed="neither"`. Its warning names the
   `frequency_range` that reproduces the same bins, e.g. on a 2 Hz grid
   `frequencies_of_interest=(10, 50)` is `frequency_range=(12.0, 48.0)`.
-  Giving both raises `ValueError`.
+  Unlike 2.x it is validated: a band that is not two finite values with
+  lower < upper, or that holds no bin strictly inside (one beyond Nyquist,
+  between two adjacent bins, or `(5, 5)`), raises `ValueError` where 2.x
+  returned all-NaN `group_delay` results, an empty `delay` frequency axis, or
+  a `phase_slope_index` computed from no bins. Giving both spellings raises
+  `ValueError`.
 
 ### Fixed
 
