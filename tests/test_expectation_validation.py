@@ -52,7 +52,7 @@ def test_expectation_type_reduces_the_named_axes(fourier_coefficients, expectati
     assert conn.expectation_type == expectation_type
     assert conn.n_observations == math.prod(AXIS_SIZES[word] for word in words)
 
-    coherence = conn.coherence_magnitude()
+    coherence = conn.magnitude_squared_coherence()
     assert coherence.shape == (
         *kept_sizes,
         N_NONNEGATIVE_FREQUENCIES,

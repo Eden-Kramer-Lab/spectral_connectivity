@@ -67,7 +67,7 @@ from spectral_connectivity import multitaper_connectivity
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     time_halfbandwidth_product=3,
 )
 # -> DataArray with dims (time, frequency, source, target)
@@ -97,7 +97,7 @@ params = suggest_parameters(
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     time_halfbandwidth_product=params["time_halfbandwidth_product"],
     time_window_duration=params["time_window_duration"],
 )
@@ -157,7 +157,7 @@ c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
 power = c.power()  # spectral power
-coherence = c.coherence_magnitude()
+coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
@@ -204,7 +204,7 @@ Functional
 
 1. coherency
 2. cross_spectral_density
-3. coherence_magnitude and coherence_phase
+3. magnitude_squared_coherence and coherence_phase
 4. imaginary_coherence and signed imaginary_coherency
 5. partial_coherence
 6. canonical_coherence and exact complex canonical_coherency (CaCoh)

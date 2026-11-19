@@ -264,7 +264,7 @@ def test_jackknife_refusal_names_remedies_that_keep_the_averaged_measure():
         MorletWavelet(series, 200, frequencies=[20.0, 40.0], n_cycles=5, smoothing_time=0.5)
     )
     with pytest.raises(ValueError, match="observations_are_independent") as error:
-        smoothed.jackknife("coherence_magnitude")
+        smoothed.jackknife("magnitude_squared_coherence")
     message = str(error.value)
     assert "segment_overlap <= 0.5" in message
     assert "Multitaper" in message
@@ -278,8 +278,8 @@ def test_jackknife_refusal_names_remedies_that_keep_the_averaged_measure():
     ]
     for transform in remedies:
         conn = Connectivity.from_transform(transform)
-        result = conn.jackknife("coherence_magnitude")
-        assert result.estimate.shape == conn.coherence_magnitude().shape
+        result = conn.jackknife("magnitude_squared_coherence")
+        assert result.estimate.shape == conn.magnitude_squared_coherence().shape
 
 
 def test_welch_overlap_above_half_marks_observations_correlated_end_to_end():

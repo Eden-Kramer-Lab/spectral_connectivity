@@ -96,33 +96,33 @@ def composite_results(time_series):
         smoothing_time=0.2,
         edge_mode="nan",
     )
-    morlet = connectivity_to_xarray(morlet_transform, "coherence_magnitude")
+    morlet = connectivity_to_xarray(morlet_transform, "magnitude_squared_coherence")
     return {
         "default_dataset": multitaper_connectivity(time_series, sampling_frequency=500),
         "band_reduced": multitaper_connectivity(
             time_series,
             sampling_frequency=500,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
         ),
         "squeezed": multitaper_connectivity(
             time_series[..., :2],
             sampling_frequency=500,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             squeeze=True,
         ),
         "fourier_two_sided": fourier_connectivity(
             two_sided,
             frequencies=np.fft.fftfreq(64, 1 / 100),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         ),
         "fourier_one_sided": fourier_connectivity(
             one_sided,
             frequencies=np.fft.rfftfreq(64, 1 / 100),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         ),
         "fourier_unlabeled": fourier_connectivity(
-            two_sided, method="coherence_magnitude", is_one_sided=False
+            two_sided, method="magnitude_squared_coherence", is_one_sided=False
         ),
         "morlet_validity": morlet,
         "labeled_input": multitaper_connectivity(
@@ -136,7 +136,7 @@ def composite_results(time_series):
                 attrs={"units": "uV", "subject": "rat-1"},
             ),
             sampling_frequency=500,
-            method=["power", "coherence_magnitude"],
+            method=["power", "magnitude_squared_coherence"],
         ),
         "morlet_band": frequency_band_reduce(morlet, {"lo": (4, 8)}),
         "stft": connectivity_to_xarray(

@@ -231,7 +231,7 @@ def test_wrapper_and_direct_paths_select_the_same_bins_on_irregular_and_drifting
     or drifting coordinate keeps the bins its decimal bounds name."""
     coefficients, connectivity = _fourier_input(grid, seed=8)
     cropped = fourier_connectivity(
-        coefficients, method="coherence_magnitude", frequency_range=bounds
+        coefficients, method="magnitude_squared_coherence", frequency_range=bounds
     )
     mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(cropped.frequency.values, grid[mask])
@@ -256,9 +256,10 @@ _ONE_BIN_RANGES = [
     "methods",
     [
         pytest.param("delay", id="delay"),
-        pytest.param(["delay", "coherence_magnitude"], id="delay-and-coherence"),
+        pytest.param(["delay", "magnitude_squared_coherence"], id="delay-and-coherence"),
         pytest.param(
-            ["coherence_magnitude", "delay", "group_delay"], id="mixed-with-group-delay"
+            ["magnitude_squared_coherence", "delay", "group_delay"],
+            id="mixed-with-group-delay",
         ),
     ],
 )
@@ -276,7 +277,7 @@ def test_a_one_bin_range_on_a_drifting_grid_selects_the_same_bin_everywhere(meth
     np.testing.assert_array_equal(delay.frequency.values, [grid[142]])
     np.testing.assert_array_equal(delay.values, direct)
     if isinstance(result, xr.Dataset):
-        assert result.coherence_magnitude.sizes["frequency"] == 1
+        assert result.magnitude_squared_coherence.sizes["frequency"] == 1
 
 
 def test_a_one_bin_range_through_multitaper_connectivity_matches_the_direct_call():
@@ -286,7 +287,7 @@ def test_a_one_bin_range_through_multitaper_connectivity_matches_the_direct_call
     for bounds in [(10.0, 10.0), (9.5, 10.0)]:
         result = multitaper_connectivity(
             time_series,
-            method=["delay", "coherence_magnitude"],
+            method=["delay", "magnitude_squared_coherence"],
             frequency_range=bounds,
             **settings,
         )
@@ -540,7 +541,7 @@ def test_invalid_or_empty_intervals_raise_naming_the_argument(bounds, message):
 
 def test_wrapper_crop_and_bands_include_bins_on_their_bounds():
     time_series = np.random.default_rng(4).standard_normal((512, 3, 2))
-    kwargs = {"sampling_frequency": 128, "method": "coherence_magnitude"}
+    kwargs = {"sampling_frequency": 128, "method": "magnitude_squared_coherence"}
     full = multitaper_connectivity(time_series, **kwargs)
     assert np.isin([8.0, 12.0], full.frequency.values).all()
 
@@ -898,13 +899,13 @@ def test_the_wrapper_records_its_frequency_range_on_every_variable_it_applied_to
         "selected_frequency_upper": 50.0,
         "frequency_interval_closed": "both",
     }
-    methods = ["phase_slope_index", "coherence_magnitude", "delay", "group_delay"]
+    methods = ["phase_slope_index", "magnitude_squared_coherence", "delay", "group_delay"]
     result = multitaper_connectivity(
         lagged_time_series, method=methods, frequency_range=(10.0, 50.0), **_LAGGED_TRANSFORM
     )
     assert set(result.data_vars) == {
         "phase_slope_index",
-        "coherence_magnitude",
+        "magnitude_squared_coherence",
         "delay",
         "group_delay",
         "group_delay_slope",
@@ -926,12 +927,12 @@ def test_the_wrapper_records_its_frequency_range_on_every_variable_it_applied_to
     assert decimated.frequency.values[-1] == 46.0
     for name, variable in decimated.data_vars.items():
         assert {key: variable.attrs.get(key) for key in interval} == interval, name
-    assert decimated.coherence_magnitude.attrs["frequency_decimation"] == 3
+    assert decimated.magnitude_squared_coherence.attrs["frequency_decimation"] == 3
     assert "frequency_decimation" not in decimated.phase_slope_index.attrs
 
     banded = multitaper_connectivity(
         lagged_time_series,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         frequency_range=(10.0, 50.0),
         frequency_bands={"low": (10.0, 20.0)},
         **_LAGGED_TRANSFORM,
@@ -947,23 +948,23 @@ def test_one_frequency_range_crops_and_selects_the_same_bins_in_a_dataset(
     returns, and the bins phase_slope_index sums are the same."""
     result = multitaper_connectivity(
         lagged_time_series,
-        method=["coherence_magnitude", "delay", "phase_slope_index"],
+        method=["magnitude_squared_coherence", "delay", "phase_slope_index"],
         frequency_range=(10.0, 50.0),
         **_LAGGED_TRANSFORM,
     )
     frequencies = lagged_connectivity.frequencies
     expected = frequencies[(frequencies >= 10) & (frequencies <= 50)]
     np.testing.assert_array_equal(result.frequency.values, expected)
-    assert result.coherence_magnitude.sizes["frequency"] == expected.size
+    assert result.magnitude_squared_coherence.sizes["frequency"] == expected.size
     assert result.delay.sizes["frequency"] == expected.size
     np.testing.assert_array_equal(
         result.phase_slope_index.values,
         lagged_connectivity.phase_slope_index(frequency_range=(10.0, 50.0)),
     )
     assert result.phase_slope_index.attrs["selected_frequency_lower"] == 10.0
-    assert result.coherence_magnitude.attrs["selected_frequency_lower"] == 10.0
+    assert result.magnitude_squared_coherence.attrs["selected_frequency_lower"] == 10.0
     # The crop is recorded as an interval; only the estimators got the keyword.
-    assert json.loads(result.coherence_magnitude.attrs["measure_kwargs_json"]) == {}
+    assert json.loads(result.magnitude_squared_coherence.attrs["measure_kwargs_json"]) == {}
 
 
 @pytest.mark.parametrize(
@@ -1012,11 +1013,14 @@ def test_frequency_reduced_variables_of_a_dataset_are_not_reduced_again(
     and records none of them."""
     kwargs = {"frequency_range": (10.0, 50.0), **_LAGGED_TRANSFORM}
     result = multitaper_connectivity(
-        lagged_time_series, method=["coherence_magnitude", measure], **operation, **kwargs
+        lagged_time_series,
+        method=["magnitude_squared_coherence", measure],
+        **operation,
+        **kwargs,
     )
     alone = multitaper_connectivity(lagged_time_series, method=[measure], **kwargs)
     if "frequency_bands" in operation:
-        assert result.coherence_magnitude.dims == ("time", "band", "source", "target")
+        assert result.magnitude_squared_coherence.dims == ("time", "band", "source", "target")
     else:  # every other bin of 10, 12, ..., 50 Hz
         np.testing.assert_array_equal(result.frequency.values, np.arange(10.0, 51.0, 4.0))
     xr.testing.assert_identical(result[measure], alone[measure])

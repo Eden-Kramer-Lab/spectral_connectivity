@@ -31,7 +31,7 @@ something the wrapper does not expose.
 >>> coherence = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     signal_names=["a", "b"],
 ... )
 >>> coherence.dims
@@ -154,7 +154,7 @@ Prefer the wrapper's labeled results so you never index these by hand.
 >>> bands = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method=["coherence_magnitude", "coherence_phase"],
+...     method=["magnitude_squared_coherence", "coherence_phase"],
 ...     signal_names=["a", "b"],
 ...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
 ... )
@@ -175,7 +175,7 @@ error, and confidence interval by leaving out one trial or taper at a time:
 >>> connectivity = Connectivity.from_transform(
 ...     Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=2)
 ... )
->>> result = connectivity.jackknife("coherence_magnitude")
+>>> result = connectivity.jackknife("magnitude_squared_coherence")
 >>> result.estimate.shape == result.standard_error.shape
 True
 

@@ -578,7 +578,7 @@ is removed in 4.0.
   figures are now labeled correctly.
 - Warnings from `Connectivity` measures, the spectral Granger kernels, and the
   Wilson factorization now name the user's line. Several pointed inside the
-  package instead (e.g. `coherence_magnitude`'s single-observation warning, and
+  package instead (e.g. `magnitude_squared_coherence`'s single-observation warning, and
   every Granger NaN-pair warning reached through `multitaper_connectivity`),
   which also defeated per-module warning filters.
 - The input warnings raised while `multitaper_connectivity` builds its

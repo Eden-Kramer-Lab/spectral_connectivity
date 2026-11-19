@@ -23,10 +23,10 @@ def test_time_halfbandwidth_product_kwarg_passthrough():
     result = multitaper_connectivity(
         time_series,
         sampling_frequency=1000,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         time_halfbandwidth_product=4,
     )
-    assert result.name == "coherence_magnitude"
+    assert result.name == "magnitude_squared_coherence"
     assert result.attrs["mt_time_halfbandwidth_product"] == 4
     assert result.attrs["mt_n_tapers"] == 7
     assert np.isclose(result.attrs["mt_frequency_resolution"], 40.0)
@@ -38,7 +38,7 @@ def test_time_halfbandwidth_product_kwarg_passthrough():
         multitaper_connectivity(
             time_series,
             sampling_frequency=1000,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             time_bandwidth_product=3,
         )
 
@@ -55,12 +55,12 @@ def test_connectivity_injection_is_rejected():
     connectivity = Connectivity.from_multitaper(m)
 
     with pytest.raises(TypeError, match="multiple values for argument 'connectivity'"):
-        connectivity_to_xarray(m, "coherence_magnitude", connectivity=connectivity)
+        connectivity_to_xarray(m, "magnitude_squared_coherence", connectivity=connectivity)
     with pytest.raises(
         TypeError,
-        match=r"coherence_magnitude does not accept keyword argument\(s\) '_connectivity'",
+        match=r"magnitude_squared_coherence does not accept keyword argument\(s\) '_connectivity'",
     ):
-        connectivity_to_xarray(m, "coherence_magnitude", _connectivity=connectivity)
+        connectivity_to_xarray(m, "magnitude_squared_coherence", _connectivity=connectivity)
 
 
 def test_unregistered_nonpairwise_extension_is_rejected(monkeypatch):
@@ -91,9 +91,9 @@ def test_batch_skips_unsupported_measure_with_warning(monkeypatch, caplog):
         result = multitaper_connectivity(
             time_series,
             sampling_frequency=128,
-            method=["coherence_magnitude", "custom_summary"],
+            method=["magnitude_squared_coherence", "custom_summary"],
         )
-    assert "coherence_magnitude" in result.data_vars
+    assert "magnitude_squared_coherence" in result.data_vars
     assert "custom_summary" not in result.data_vars
     assert "Skipping custom_summary" in caplog.text
 

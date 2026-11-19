@@ -94,8 +94,8 @@ def test_minimal_transform_gets_the_documented_defaults(coefficients):
     np.testing.assert_array_equal(connectivity.all_frequencies, frequencies)
     expected = Connectivity(
         coefficients, frequencies=frequencies, time=transform.time
-    ).coherence_magnitude()
-    np.testing.assert_allclose(connectivity.coherence_magnitude(), expected)
+    ).magnitude_squared_coherence()
+    np.testing.assert_allclose(connectivity.magnitude_squared_coherence(), expected)
 
 
 def test_optional_capability_attributes_are_honored(coefficients):
@@ -134,7 +134,7 @@ def test_missing_frequencies_and_time_get_normalized_defaults(coefficients, one_
     np.testing.assert_array_equal(connectivity.all_frequencies, expected)
     np.testing.assert_array_equal(connectivity.time, np.arange(N_TIME_WINDOWS))
     off_diagonal = ~np.eye(N_SIGNALS, dtype=bool)
-    assert np.isfinite(connectivity.coherence_magnitude()[..., off_diagonal]).all()
+    assert np.isfinite(connectivity.magnitude_squared_coherence()[..., off_diagonal]).all()
 
 
 def test_from_transform_forwards_dtype_and_wilson_options():

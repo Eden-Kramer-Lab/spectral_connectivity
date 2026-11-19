@@ -64,7 +64,7 @@ axes.
 >>> coherence = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     time_halfbandwidth_product=3,
 ... )
 >>> type(coherence).__name__
@@ -72,7 +72,7 @@ axes.
 >>> coherence.dims
 ('time', 'frequency', 'source', 'target')
 >>> coherence.name
-'coherence_magnitude'
+'magnitude_squared_coherence'
 
 ```
 
@@ -122,13 +122,13 @@ measure. Shared spectra are cached, so this is cheaper than separate calls.
 >>> result = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method=["power", "coherence_magnitude"],
+...     method=["power", "magnitude_squared_coherence"],
 ...     time_halfbandwidth_product=3,
 ... )
 >>> type(result).__name__
 'Dataset'
 >>> sorted(result.data_vars)
-['coherence_magnitude', 'power']
+['magnitude_squared_coherence', 'power']
 >>> result["power"].dims
 ('time', 'frequency', 'source')
 
@@ -166,7 +166,7 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 >>> banded = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
 ...     time_halfbandwidth_product=3,
 ... )
@@ -185,7 +185,7 @@ at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
 ```python
 >>> settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
 >>> cropped = multitaper_connectivity(
-...     time_series, method="coherence_magnitude", frequency_range=(10, 50), **settings
+...     time_series, method="magnitude_squared_coherence", frequency_range=(10, 50), **settings
 ... )
 >>> cropped.frequency.values[[0, -1]].tolist()
 [10.0, 50.0]
@@ -215,7 +215,7 @@ Below, bin 142 of `np.arange(1.0, 100.0, 0.1)` is stored as
 ...     coords={"frequency": frequencies},
 ... )
 >>> edge = fourier_connectivity(
-...     coefficients, method="coherence_magnitude", frequency_range=(10, 15.2)
+...     coefficients, method="magnitude_squared_coherence", frequency_range=(10, 15.2)
 ... )
 >>> round(float(edge.frequency[-1]), 9), edge.sizes["frequency"]
 (15.2, 53)
@@ -287,7 +287,7 @@ the multitaper step and use `fourier_connectivity`. NumPy inputs may use the
 ... )
 >>> frequencies = np.linspace(0, 250, 16)
 >>> byo = fourier_connectivity(
-...     coefficients, frequencies=frequencies, method="coherence_magnitude"
+...     coefficients, frequencies=frequencies, method="magnitude_squared_coherence"
 ... )
 >>> byo.dims
 ('time', 'frequency', 'source', 'target')
@@ -332,7 +332,7 @@ coherence are unaffected.
 >>> transform = HannTransform(time_series, sampling_frequency=500)
 >>> isinstance(transform, SpectralTransform)
 True
->>> Connectivity.from_transform(transform).coherence_magnitude().shape
+>>> Connectivity.from_transform(transform).magnitude_squared_coherence().shape
 (1, 501, 3, 3)
 
 ```
@@ -462,7 +462,7 @@ frequency and the signal labels become the `source`/`target` coordinates:
 ...     dims=("time", "trial", "signal"),
 ...     coords={"time": np.arange(1000) / 500, "signal": ["CA1", "CA3", "PFC"]},
 ... )
->>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+>>> coherence = multitaper_connectivity(da, method="magnitude_squared_coherence")
 >>> coherence.attrs["sampling_frequency"]
 500.0
 >>> coherence.source.values.tolist()
@@ -476,7 +476,7 @@ For other dimension names, say which dimension plays which role:
 >>> custom = da.rename(time="t", trial="epoch", signal="channel")
 >>> coherence = multitaper_connectivity(
 ...     custom,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     time_dim="t",
 ...     trial_dim="epoch",
 ...     signal_dim="channel",
@@ -521,7 +521,7 @@ If you hit an error or a warning:
 >>> elapsed = stamped.assign_coords(
 ...     time=(stamped.time - stamped.time[0]) / np.timedelta64(1, "s")
 ... )
->>> multitaper_connectivity(elapsed, method="coherence_magnitude").attrs["sampling_frequency"]
+>>> multitaper_connectivity(elapsed, method="magnitude_squared_coherence").attrs["sampling_frequency"]
 500.0
 
 ```

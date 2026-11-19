@@ -252,9 +252,11 @@ def test_numpy_scalar_sampling_frequency_is_accepted(rate):
     expected = Multitaper(ts, sampling_frequency=500.0)
     np.testing.assert_allclose(to_host(transform.frequencies), to_host(expected.frequencies))
 
-    result = multitaper_connectivity(ts, sampling_frequency=rate, method="coherence_magnitude")
+    result = multitaper_connectivity(
+        ts, sampling_frequency=rate, method="magnitude_squared_coherence"
+    )
     baseline = multitaper_connectivity(
-        ts, sampling_frequency=500.0, method="coherence_magnitude"
+        ts, sampling_frequency=500.0, method="magnitude_squared_coherence"
     )
     np.testing.assert_allclose(result.frequency, baseline.frequency)
     np.testing.assert_allclose(result.values, baseline.values, equal_nan=True)

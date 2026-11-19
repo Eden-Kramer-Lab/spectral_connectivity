@@ -637,7 +637,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 plt.subplot(2, 2, 3)
-plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
 
 multitaper = Multitaper(
@@ -648,13 +648,13 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 plt.subplot(2, 2, 4)
-plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
 # %%
 # Coherence is near 1 at 200 Hz and at the noise level away from it. The
 # cross-spectrum [0, 1] is E[X_0 conj(X_1)], so its phase is phase_0 - phase_1:
 # signal 2 leads signal 1 by pi / 2, giving -pi / 2.
-coherence = connectivity.coherence_magnitude()[0, :, 0, 1]
+coherence = connectivity.magnitude_squared_coherence()[0, :, 0, 1]
 frequencies = connectivity.frequencies
 peak = np.argmin(np.abs(frequencies - frequency_of_interest))
 off_peak = np.abs(frequencies - frequency_of_interest) > multitaper.frequency_resolution
@@ -721,7 +721,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 plt.subplot(2, 2, 3)
-plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
 
 multitaper = Multitaper(
@@ -732,14 +732,14 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 plt.subplot(2, 2, 4)
-plt.plot(connectivity.frequencies, connectivity.coherence_magnitude()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
 # %%
 # Coherence at 200 Hz is well below 1 but far above the off-peak chance level,
 # and its phase is still the planted offset. The cross-spectrum [0, 1] is
 # E[X_0 conj(X_1)], so its phase is phase_0 - phase_1: signal 2 leads signal 1
 # by pi / 2, giving -pi / 2.
-coherence = connectivity.coherence_magnitude()[0, :, 0, 1]
+coherence = connectivity.magnitude_squared_coherence()[0, :, 0, 1]
 frequencies = connectivity.frequencies
 peak = np.argmin(np.abs(frequencies - frequency_of_interest))
 off_peak = np.abs(frequencies - frequency_of_interest) > multitaper.frequency_resolution
@@ -840,7 +840,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 axes[1, 0].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axes[1, 0].set_xlim((0, multitaper.nyquist_frequency))
 
@@ -852,7 +852,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_multitaper(multitaper)
 axes[1, 1].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axes[1, 1].set_xlim((0, multitaper.nyquist_frequency))
 
@@ -874,7 +874,7 @@ time_grid, freq_grid = np.meshgrid(
 mesh = axes[2, 0].pcolormesh(
     time_grid,
     freq_grid,
-    connectivity.coherence_magnitude()[..., 0, 1].squeeze().T,
+    connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze().T,
     vmin=0.0,
     vmax=1.0,
     cmap="viridis",
@@ -901,7 +901,7 @@ time_grid, freq_grid = np.meshgrid(
 mesh = axes[2, 1].pcolormesh(
     time_grid,
     freq_grid,
-    connectivity.coherence_magnitude()[..., 0, 1].squeeze().T,
+    connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze().T,
     vmin=0.0,
     vmax=1.0,
     cmap="viridis",
@@ -926,7 +926,7 @@ print(f"frequency resolution: {multitaper.frequency_resolution}")
 # After the onset, the pair is coherent at 200 Hz; before it, and away from
 # 200 Hz, coherence stays near the chance level.
 before, after, off_peak_after = split_at_onset(
-    connectivity.coherence_magnitude()[..., 0, 1], connectivity, multitaper
+    connectivity.magnitude_squared_coherence()[..., 0, 1], connectivity, multitaper
 )
 assert np.all(after > 0.7)  # about 0.8 at this signal-to-noise ratio
 # Before the onset each trial has its own phase relation, so the chance level
@@ -1927,7 +1927,7 @@ axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 0].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 0].plot(
     connectivity.frequencies,
@@ -1961,7 +1961,7 @@ axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 1].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 1].plot(
     connectivity.frequencies,
@@ -2031,7 +2031,7 @@ axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 0].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 0].plot(
     connectivity.frequencies,
@@ -2065,7 +2065,7 @@ axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 1].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 1].plot(
     connectivity.frequencies,
@@ -2205,7 +2205,7 @@ axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 0].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 0].plot(
     connectivity.frequencies,
@@ -2236,7 +2236,7 @@ axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 1].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 1].plot(
     connectivity.frequencies,
@@ -2305,7 +2305,7 @@ axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 0].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 0].plot(
     connectivity.frequencies,
@@ -2336,7 +2336,7 @@ axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 1].squeeze()
 )
 axis_handles[2, 1].plot(
-    connectivity.frequencies, connectivity.coherence_magnitude()[..., 0, 1].squeeze()
+    connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
 axis_handles[3, 1].plot(
     connectivity.frequencies,
@@ -2502,7 +2502,7 @@ for ind1, ind2 in product(range(n_signals), range(n_signals)):
     mesh = axes[ind1, ind2].pcolormesh(
         time_grid,
         freq_grid,
-        connectivity.coherence_magnitude()[..., ind1, ind2].squeeze().T,
+        connectivity.magnitude_squared_coherence()[..., ind1, ind2].squeeze().T,
         vmin=vmin,
         vmax=vmax,
         cmap="viridis",
@@ -2559,7 +2559,7 @@ at_20_hz = np.argmin(np.abs(frequencies - 20))
 at_40_hz = np.argmin(np.abs(frequencies - 40))
 assert np.all(canonical_coherence[:, at_20_hz, 0, 1] > 0.95)
 assert np.all(canonical_coherence[:, at_40_hz, 0, 1] < 0.1)
-coherence_at_40_hz = connectivity.coherence_magnitude()[:, at_40_hz]
+coherence_at_40_hz = connectivity.magnitude_squared_coherence()[:, at_40_hz]
 for members in (np.flatnonzero(in_group_a), np.flatnonzero(in_group_b)):
     assert np.all(coherence_at_40_hz[:, members[0], members[1]] >= 0.9)
 
@@ -2621,7 +2621,7 @@ for ind1, ind2 in product(range(n_signals), range(n_signals)):
     mesh = axes[ind1, ind2].pcolormesh(
         time_grid,
         freq_grid,
-        connectivity.coherence_magnitude()[..., ind1, ind2].squeeze().T,
+        connectivity.magnitude_squared_coherence()[..., ind1, ind2].squeeze().T,
         vmin=vmin,
         vmax=vmax,
         cmap="viridis",
@@ -2679,7 +2679,7 @@ cb.outline.set_linewidth(0)
 frequencies = connectivity.frequencies
 at_20_hz = np.argmin(np.abs(frequencies - 20))
 at_40_hz = np.argmin(np.abs(frequencies - 40))
-between_groups = connectivity.coherence_magnitude()[:, at_20_hz][
+between_groups = connectivity.magnitude_squared_coherence()[:, at_20_hz][
     :, np.flatnonzero(in_group_a)
 ][:, :, np.flatnonzero(in_group_b)]  # (n_windows, 3, 3)
 largest_pairwise = between_groups.max(axis=(1, 2))
@@ -2768,23 +2768,23 @@ assert np.median(global_coherence[:, : frequencies.size][:, off_peak, 0]) < 2 / 
 # 3. easy and quick plotting
 
 # %% jupyter={"outputs_hidden": false} pycharm={"name": "#%%\n"}
-coherence_magnitude = multitaper_connectivity(
+magnitude_squared_coherence = multitaper_connectivity(
     data,
     sampling_frequency=sampling_frequency,
     time_halfbandwidth_product=time_halfbandwidth_product,
     time_window_duration=0.080,
     time_window_step=0.080,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
 )
 
-coherence_magnitude
+magnitude_squared_coherence
 
 # %%
-coherence_magnitude.plot(col="source", row="target", x="time")
+magnitude_squared_coherence.plot(col="source", row="target", x="time")
 
 # %%
-# The labeled result holds the same numbers as `Connectivity.coherence_magnitude`
+# The labeled result holds the same numbers as `Connectivity.magnitude_squared_coherence`
 # for the same data and parameters (the Global Coherence section above).
 np.testing.assert_allclose(
-    coherence_magnitude.values, connectivity.coherence_magnitude(), equal_nan=True
+    magnitude_squared_coherence.values, connectivity.magnitude_squared_coherence(), equal_nan=True
 )

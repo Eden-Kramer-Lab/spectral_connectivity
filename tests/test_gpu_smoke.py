@@ -50,7 +50,7 @@ _MEASURES_SCRIPT = textwrap.dedent(
         outputs = {
             "power": connectivity.power(),
             "coherency": connectivity.coherency(),
-            "coherence_magnitude": connectivity.coherence_magnitude(),
+            "magnitude_squared_coherence": connectivity.magnitude_squared_coherence(),
             "phase_lag_index": connectivity.phase_lag_index(),
             "global_coherence": connectivity.global_coherence()[0],
             "pairwise_spectral_granger_prediction": (
@@ -62,11 +62,11 @@ _MEASURES_SCRIPT = textwrap.dedent(
     wrapped = multitaper_connectivity(
         data,
         sampling_frequency=256,
-        method=["coherence_magnitude", "phase_lag_index"],
+        method=["magnitude_squared_coherence", "phase_lag_index"],
         time_halfbandwidth_product=2,
     )
-    assert set(wrapped.data_vars) == {"coherence_magnitude", "phase_lag_index"}
-    outputs["wrapped_coherence_magnitude"] = wrapped["coherence_magnitude"].values
+    assert set(wrapped.data_vars) == {"magnitude_squared_coherence", "phase_lag_index"}
+    outputs["wrapped_coherence_magnitude"] = wrapped["magnitude_squared_coherence"].values
     np.savez(output_path, **outputs)
     """
 )
@@ -77,7 +77,7 @@ _MEASURES_SCRIPT = textwrap.dedent(
 _TOLERANCES = {
     "power": {"rtol": 1e-9, "atol": 1e-12},
     "coherency": {"rtol": 1e-9, "atol": 1e-12},
-    "coherence_magnitude": {"rtol": 1e-9, "atol": 1e-12},
+    "magnitude_squared_coherence": {"rtol": 1e-9, "atol": 1e-12},
     "phase_lag_index": {"rtol": 1e-9, "atol": 1e-12},
     "global_coherence": {"rtol": 1e-9, "atol": 1e-12},
     "pairwise_spectral_granger_prediction": {"rtol": 1e-5, "atol": 1e-8},
@@ -158,10 +158,10 @@ def test_measures_script_runs_on_cpu(tmp_path):
 
     assert set(results) == set(_TOLERANCES)
     n_frequencies = 256 // 2 + 1
-    assert results["coherence_magnitude"].shape == (1, n_frequencies, 3, 3)
+    assert results["magnitude_squared_coherence"].shape == (1, n_frequencies, 3, 3)
     assert np.all(np.isfinite(results["power"]))
     np.testing.assert_array_equal(
-        results["wrapped_coherence_magnitude"], results["coherence_magnitude"]
+        results["wrapped_coherence_magnitude"], results["magnitude_squared_coherence"]
     )
 
 

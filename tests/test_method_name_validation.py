@@ -69,7 +69,7 @@ def test_unknown_method_in_a_list_is_validated(time_series):
         multitaper_connectivity(
             time_series,
             sampling_frequency=200,
-            method=["coherence_magnitude", "not_real"],
+            method=["magnitude_squared_coherence", "not_real"],
         )
     assert "not_real" in str(excinfo.value)
 
