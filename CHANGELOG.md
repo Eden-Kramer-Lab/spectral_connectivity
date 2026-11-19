@@ -52,7 +52,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
-| `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). Explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name and returns the same values. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
+| `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 
 ### Added
@@ -493,6 +493,18 @@ Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
 where noted), warns with a `DeprecationWarning` that names its replacement, and
 is removed in 4.0.
 
+- `coherence_magnitude`, as the `Connectivity` method and as a `method` string
+  of `multitaper_connectivity`, `fourier_connectivity`, `connectivity_to_xarray`
+  and `Connectivity.jackknife`: use `magnitude_squared_coherence`, the same
+  calculation under a name that says it is squared (as SciPy's
+  `scipy.signal.coherence` documents). It is the default result variable and
+  the one entry in `DEFAULT_METHODS`, `list_measures()`, and the measure
+  table; the old name is not listed or computed by default. A result requested
+  by the old name keeps the variable name `coherence_magnitude` and records
+  `measure="coherence_magnitude"` (the name asked for), so 2.x selectors keep
+  working and a saved file says which name produced it; its values and other
+  attributes are those of `magnitude_squared_coherence`. Requesting both names
+  in one call raises `ValueError`.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both

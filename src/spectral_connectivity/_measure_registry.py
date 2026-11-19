@@ -2,6 +2,7 @@
 
 import difflib
 import inspect
+import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import KW_ONLY, dataclass
 from typing import Literal
@@ -13,6 +14,7 @@ from spectral_connectivity.connectivity import (
     _NON_MEASURE_METHODS,
     Connectivity,
 )
+from spectral_connectivity.utils import stacklevel_outside_package
 
 
 @dataclass(frozen=True)
@@ -507,7 +509,34 @@ def _requested_methods(
         msg = "method must name at least one connectivity measure; got an empty list."
         raise ValueError(msg)
     _validate_method_names(methods)
+    _warn_deprecated_measure_names(methods)
     return methods, isinstance(method, str)
+
+
+def _warn_deprecated_measure_names(methods: Sequence[str]) -> None:
+    """Warn at the caller for each deprecated measure name requested.
+
+    A request naming a measure under both its names is rejected: the two would
+    be the same estimate under two variable names.
+    """
+    for method in methods:
+        canonical = _DEPRECATED_MEASURE_NAMES.get(method)
+        if canonical is None:
+            continue
+        if canonical in methods:
+            msg = (
+                f"method names {canonical!r} twice: {method!r} is the deprecated name "
+                f"of {canonical!r}. Request it once, as {canonical!r}."
+            )
+            raise ValueError(msg)
+        warnings.warn(
+            f"method={method!r} is deprecated and will be removed in 4.0; use "
+            f"method={canonical!r}, which computes the same values. Through 3.x a "
+            f"result requested as {method!r} keeps that variable name and records "
+            f"measure={method!r}.",
+            DeprecationWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
 
 
 def _measure_description(name: str) -> str:

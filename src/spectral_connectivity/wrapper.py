@@ -34,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _requested_methods,
     _requires_two_sided,
     _validate_method_names,
+    _warn_deprecated_measure_names,
 )
 from spectral_connectivity._provenance import (
     _shared_provenance_attrs,
@@ -382,7 +383,7 @@ def connectivity_to_xarray(
         .. versionchanged:: 3.0
            The default is ``"magnitude_squared_coherence"``, so the default
            result is named that; 2.x defaulted to ``"coherence_magnitude"``,
-           which still works when requested.
+           which still works when requested, with a ``DeprecationWarning``.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to
         ``"0"``, ``"1"``, ....
@@ -412,6 +413,7 @@ def connectivity_to_xarray(
     ('time', 'frequency', 'source', 'target')
     """
     _validate_method_names([method])
+    _warn_deprecated_measure_names([method])
     connectivity = Connectivity.from_transform(m)
     provenance_metadata = getattr(m, "_provenance_metadata", None)
     if provenance_metadata is not None:
@@ -804,8 +806,8 @@ def multitaper_connectivity(
         component, group, candidate-delay, or frequency-reduced dimensions.
         Examples:
         "magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value".
-        The 2.x name ``"coherence_magnitude"`` still works and keeps that
-        variable name.
+        The 2.x name ``"coherence_magnitude"`` still works through 3.x with a
+        ``DeprecationWarning`` and keeps that variable name; it is removed in 4.0.
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
         channels. Integer labels must fit the signed 32-bit range for portable

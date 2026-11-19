@@ -71,8 +71,8 @@ _NON_MEASURE_METHODS = frozenset(
     {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
 )
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
-# name. Each still computes its measure; the canonical measure is the one
-# registered and listed.
+# name. Each still works through 3.x with a DeprecationWarning and is removed
+# in 4.0; the canonical measure is the one registered and listed.
 _DEPRECATED_MEASURE_NAMES: dict[str, str] = {
     "coherence_magnitude": "magnitude_squared_coherence",
 }
@@ -1922,8 +1922,9 @@ class Connectivity:
         method : str
             Name of a public, real-valued connectivity measure to recompute,
             e.g. ``"magnitude_squared_coherence"``. Complex-valued and
-            tuple-valued measures are not supported. The 2.x name
-            ``"coherence_magnitude"`` is accepted as the same measure.
+            tuple-valued measures are not supported. The deprecated
+            ``"coherence_magnitude"`` is accepted with a ``DeprecationWarning``
+            through 3.x.
         confidence_level : float, default=0.95
             Two-sided coverage of the interval, in (0, 1). The critical value
             is Student t with ``n_observations - 1`` degrees of freedom.
@@ -2035,9 +2036,16 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
-        # A 2.x name is computed, and its interval scale chosen, as the
-        # canonical measure.
-        method = _DEPRECATED_MEASURE_NAMES.get(method, method)
+        if method in _DEPRECATED_MEASURE_NAMES:
+            canonical = _DEPRECATED_MEASURE_NAMES[method]
+            warnings.warn(
+                f"jackknife({method!r}) names a measure by its deprecated name, which "
+                f"will be removed in 4.0; use jackknife({canonical!r}), which gives "
+                "the same interval.",
+                DeprecationWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+            method = canonical
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
             method.startswith("_")
@@ -2392,7 +2400,7 @@ class Connectivity:
 
         .. versionadded:: 3.0
            The canonical name of the calculation 2.x called
-           ``coherence_magnitude``.
+           ``coherence_magnitude``, which is deprecated.
 
         Returns
         -------
@@ -2440,15 +2448,24 @@ class Connectivity:
         return clipped
 
     def coherence_magnitude(self) -> NDArray[np.floating]:
-        """Return magnitude-squared coherence (the 2.x name).
+        """Return magnitude-squared coherence (deprecated name).
 
-        The same values as :meth:`magnitude_squared_coherence`.
+        .. deprecated:: 3.0
+           Use :meth:`magnitude_squared_coherence`, which returns the same
+           values. ``coherence_magnitude`` is removed in 4.0.
 
         Returns
         -------
         magnitude_squared_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
         """
+        warnings.warn(
+            "Connectivity.coherence_magnitude() is deprecated and will be removed in "
+            "4.0; use Connectivity.magnitude_squared_coherence(), which returns the "
+            "same values.",
+            DeprecationWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
         return self.magnitude_squared_coherence()
 
     @_asnumpy
