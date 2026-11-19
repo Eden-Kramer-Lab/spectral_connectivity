@@ -304,14 +304,14 @@ def test_time_and_angle_units_match_a_known_lag():
     band = {"frequency_range": (5.0, 50.0)}
     lag = 3 / 500
 
-    group_delay = multitaper_connectivity(
-        time_series, method="group_delay", connectivity_kwargs=band, **kwargs
-    )["group_delay"].sel(source="0", target="1")
+    group_delay = multitaper_connectivity(time_series, method="group_delay", **band, **kwargs)[
+        "group_delay"
+    ].sel(source="0", target="1")
     assert float(group_delay.squeeze()) == pytest.approx(lag, rel=0.05)
 
-    delay = multitaper_connectivity(
-        time_series, method="delay", connectivity_kwargs=band, **kwargs
-    ).sel(source="0", target="1")
+    delay = multitaper_connectivity(time_series, method="delay", **band, **kwargs).sel(
+        source="0", target="1"
+    )
     zero_wrap = delay.isel(candidate=delay.sizes["candidate"] // 2)
     assert float(np.nanmedian(zero_wrap.values)) == pytest.approx(lag, rel=0.05)
 

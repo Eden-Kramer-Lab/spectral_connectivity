@@ -450,6 +450,19 @@ directly with results from 2.x.
   (`selected_frequency_lower`/`_upper`), and `frequency_interval_closed`
   (`"both"`, or `"neither"` for the deprecated keyword) on each of their
   variables, and a Morlet result's `valid_time` covers exactly those bins.
+- `multitaper_connectivity` and `fourier_connectivity` pass their
+  `frequency_range` to `delay`, `group_delay`, and `phase_slope_index` instead
+  of refusing it for the frequency-reduced measures, so the wrapper and a
+  direct `Connectivity` call consume the same bins. Every other measure is
+  still computed from the full spectrum (the Wilson factorization sees the
+  whole two-sided spectrum) and cropped to the same bins, so a Dataset mixing
+  them shares one frequency axis. Previously a Dataset mixing
+  `phase_slope_index` with a cropped measure summed every bin. `frequency_bands`
+  and `frequency_decimation` reduce the frequency-resolved variables, `delay`
+  included, and leave `phase_slope_index` and `group_delay` as computed over
+  `frequency_range`; requesting either with only those two measures raises.
+  `frequency_range` inside `connectivity_kwargs` is rejected in favor of the
+  wrapper argument.
 - The `taper_weighting="adaptive"` documentation states that the Thomson
   weights are applied per signal, so coherence between signals with different
   spectra is shrunk by the cosine similarity of their weight vectors and cannot

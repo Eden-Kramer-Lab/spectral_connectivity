@@ -210,8 +210,10 @@ group measures use `source_group`/`target_group`; CaCoh and rich MIC use
 `connection`, `component`, `side`, and `signal` plus group-membership metadata;
 delay exposes a `candidate` axis; global coherence returns score and vector
 variables; and group delay returns delay, slope, and correlation variables.
-Phase slope and group delay are already frequency-reduced, so select their band
-with `connectivity_kwargs={"frequencies_of_interest": (...)}`.
+`frequency_range=(low, high)` includes both endpoints. Phase slope, group delay,
+and delay consume only those bins; phase slope and group delay are already
+frequency-reduced, so `frequency_bands` and `frequency_decimation` leave them
+as computed over `frequency_range`.
 
 The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
 wavelet transforms. Morlet coefficients are one-sided, so they support

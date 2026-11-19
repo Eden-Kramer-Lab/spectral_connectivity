@@ -403,3 +403,213 @@ def test_morlet_validity_follows_the_consumed_bins(measure, kwargs, consumed_bin
         np.testing.assert_array_equal(result.valid_time_frequency, validity)
     else:
         np.testing.assert_array_equal(result.valid_time, validity.all(axis=1))
+
+
+# --- The wrappers' frequency_range ---------------------------------------------
+
+
+def _main_variable(result, measure):
+    """The measure's own variable (group delay's ``group_delay``)."""
+    return result[measure] if isinstance(result, xr.Dataset) else result
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_wrapper_frequency_range_selects_the_estimators_bins(
+    lagged_time_series, lagged_connectivity, measure
+):
+    """The wrapper passes frequency_range to the estimator, so it consumes the
+    same bins as the direct call instead of the wrapper refusing the range."""
+    result = multitaper_connectivity(
+        lagged_time_series, method=measure, frequency_range=(10.0, 50.0), **_LAGGED_TRANSFORM
+    )
+    direct = getattr(lagged_connectivity, measure)(frequency_range=(10.0, 50.0))
+    direct = direct[0] if measure == "group_delay" else direct
+    np.testing.assert_array_equal(_main_variable(result, measure).values, direct)
+    if measure == "delay":
+        frequencies = lagged_connectivity.frequencies
+        np.testing.assert_array_equal(
+            result.frequency.values, frequencies[(frequencies >= 10) & (frequencies <= 50)]
+        )
+    variable = _main_variable(result, measure)
+    assert variable.attrs["frequency_interval_closed"] == "both"
+    assert json.loads(variable.attrs["measure_kwargs_json"]) == {
+        "frequency_range": [10.0, 50.0]
+    }
+
+
+def test_fourier_connectivity_frequency_range_reaches_phase_slope_index(lagged_connectivity):
+    transform = Multitaper(
+        np.random.default_rng(0).standard_normal((1000, 20, 2)), **_LAGGED_TRANSFORM
+    )
+    result = fourier_connectivity(
+        transform.fft(),
+        frequencies=transform.frequencies,
+        method="phase_slope_index",
+        frequency_range=(10.0, 50.0),
+    )
+    np.testing.assert_array_equal(
+        result.values,
+        Connectivity.from_transform(transform).phase_slope_index(frequency_range=(10.0, 50.0)),
+    )
+
+
+def test_one_frequency_range_crops_and_selects_the_same_bins_in_a_dataset(
+    lagged_time_series, lagged_connectivity
+):
+    """In one Dataset the crop of a frequency-resolved measure, the bins delay
+    returns, and the bins phase_slope_index sums are the same."""
+    result = multitaper_connectivity(
+        lagged_time_series,
+        method=["coherence_magnitude", "delay", "phase_slope_index"],
+        frequency_range=(10.0, 50.0),
+        **_LAGGED_TRANSFORM,
+    )
+    frequencies = lagged_connectivity.frequencies
+    expected = frequencies[(frequencies >= 10) & (frequencies <= 50)]
+    np.testing.assert_array_equal(result.frequency.values, expected)
+    assert result.coherence_magnitude.sizes["frequency"] == expected.size
+    assert result.delay.sizes["frequency"] == expected.size
+    np.testing.assert_array_equal(
+        result.phase_slope_index.values,
+        lagged_connectivity.phase_slope_index(frequency_range=(10.0, 50.0)),
+    )
+    assert result.phase_slope_index.attrs["selected_frequency_lower"] == 10.0
+    assert json.loads(result.coherence_magnitude.attrs["frequency_range_json"]) == [10.0, 50.0]
+    # The crop is recorded as a crop; only the estimators got the keyword.
+    assert json.loads(result.coherence_magnitude.attrs["measure_kwargs_json"]) == {}
+
+
+@pytest.mark.parametrize("method", ["phase_slope_index", "group_delay"])
+@pytest.mark.parametrize(
+    ("operation", "hint"),
+    [
+        ({"frequency_bands": {"theta": (4.0, 8.0)}}, "once per band"),
+        ({"frequency_decimation": 2}, "frequency_resolution"),
+    ],
+)
+def test_frequency_operations_on_only_frequency_reduced_measures_raise(
+    lagged_time_series, method, operation, hint
+):
+    """frequency_bands and frequency_decimation act on a frequency axis, which
+    phase_slope_index and group_delay have already reduced: a request with no
+    other measure would return them unchanged, so it raises instead."""
+    with pytest.raises(ValueError, match="already reduce") as error:
+        multitaper_connectivity(
+            lagged_time_series, method=method, **operation, **_LAGGED_TRANSFORM
+        )
+    assert hint in str(error.value)
+
+
+@pytest.mark.parametrize("measure", ["phase_slope_index", "group_delay"])
+@pytest.mark.parametrize(
+    "operation",
+    [{"frequency_bands": {"theta": (10.0, 20.0)}}, {"frequency_decimation": 2}],
+)
+def test_frequency_reduced_variables_of_a_dataset_are_not_reduced_again(
+    lagged_time_series, measure, operation
+):
+    """Bands and decimation reduce the frequency-resolved variables of a
+    Dataset; the frequency-reduced measure keeps its value over frequency_range
+    and records none of them."""
+    kwargs = {"frequency_range": (10.0, 50.0), **_LAGGED_TRANSFORM}
+    result = multitaper_connectivity(
+        lagged_time_series, method=["coherence_magnitude", measure], **operation, **kwargs
+    )
+    alone = multitaper_connectivity(lagged_time_series, method=[measure], **kwargs)
+    if "frequency_bands" in operation:
+        assert result.coherence_magnitude.dims == ("time", "band", "source", "target")
+    else:  # every other bin of 10, 12, ..., 50 Hz
+        np.testing.assert_array_equal(result.frequency.values, np.arange(10.0, 51.0, 4.0))
+    xr.testing.assert_identical(result[measure], alone[measure])
+    for key in ("frequency_bands_json", "frequency_decimation"):
+        assert key not in result[measure].attrs
+
+
+def test_delay_is_frequency_resolved_so_bands_aggregate_it(lagged_time_series):
+    result = multitaper_connectivity(
+        lagged_time_series,
+        method="delay",
+        frequency_range=(10.0, 50.0),
+        frequency_bands={"low": (10.0, 20.0)},
+        **_LAGGED_TRANSFORM,
+    )
+    unreduced = multitaper_connectivity(
+        lagged_time_series, method="delay", frequency_range=(10.0, 50.0), **_LAGGED_TRANSFORM
+    )
+    np.testing.assert_array_equal(
+        result.sel(band="low").values,
+        unreduced.sel(frequency=slice(10.0, 20.0)).mean("frequency", skipna=False).values,
+    )
+
+
+def test_frequency_range_in_connectivity_kwargs_points_to_the_wrapper_argument(
+    lagged_time_series,
+):
+    with pytest.raises(ValueError, match="pass frequency_range=") as error:
+        multitaper_connectivity(
+            lagged_time_series,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequency_range": (10.0, 50.0)},
+            **_LAGGED_TRANSFORM,
+        )
+    assert "connectivity_kwargs" in str(error.value)
+
+
+def test_deprecated_keyword_through_the_wrapper_warns_at_the_caller(
+    lagged_time_series, lagged_connectivity
+):
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest") as record:
+        result = multitaper_connectivity(
+            lagged_time_series,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequencies_of_interest": (10.0, 50.0)},
+            **_LAGGED_TRANSFORM,
+        )
+    assert {w.filename for w in record if issubclass(w.category, DeprecationWarning)} == {
+        __file__
+    }
+    assert "multitaper_connectivity and fourier_connectivity take frequency_range" in str(
+        record[0].message
+    )
+    np.testing.assert_array_equal(
+        result.values, lagged_connectivity.phase_slope_index(frequency_range=(12.0, 48.0))
+    )
+    assert result.attrs["frequency_interval_closed"] == "neither"
+    with pytest.raises(ValueError, match="frequency_range and the deprecated"):
+        multitaper_connectivity(
+            lagged_time_series,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequencies_of_interest": (10.0, 50.0)},
+            frequency_range=(10.0, 50.0),
+            **_LAGGED_TRANSFORM,
+        )
+
+
+def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
+    """frequency_range crops a Wilson-factorized measure's result: the
+    factorization's input, and so every retained value, is unchanged."""
+    import spectral_connectivity._granger as granger
+
+    factorized = []
+    original = granger.minimum_phase_decomposition
+
+    def recording_decomposition(cross_spectral_matrix, *args, **kwargs):
+        factorized.append(to_host(cross_spectral_matrix).copy())
+        return original(cross_spectral_matrix, *args, **kwargs)
+
+    monkeypatch.setattr(granger, "minimum_phase_decomposition", recording_decomposition)
+    time_series = np.random.default_rng(5).standard_normal((512, 10, 2))
+    kwargs = {
+        "sampling_frequency": 128,
+        "time_halfbandwidth_product": 3,
+        "method": "pairwise_spectral_granger_prediction",
+    }
+    full = multitaper_connectivity(time_series, **kwargs)
+    cropped = multitaper_connectivity(time_series, frequency_range=(10.0, 30.0), **kwargs)
+
+    assert len(factorized) == 2
+    np.testing.assert_array_equal(factorized[1], factorized[0])
+    # The full two-sided FFT grid, not the cropped bins.
+    assert factorized[0].shape[-3] == 2 * (full.sizes["frequency"] - 1)
+    np.testing.assert_array_equal(cropped.values, full.sel(frequency=slice(10.0, 30.0)).values)
+    assert cropped.frequency.values[[0, -1]].tolist() == [10.0, 30.0]

@@ -11,9 +11,11 @@ import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity._frequency_bands import (
+    _check_frequency_operations,
+    _crop_frequency_range,
+    _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
-    _select_and_reduce_frequencies,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -30,6 +32,7 @@ from spectral_connectivity._measure_registry import (
     _measure_description,
     _requested_methods,
     _requires_two_sided,
+    _selects_frequency_range,
     _validate_method_names,
 )
 from spectral_connectivity._provenance import (
@@ -305,7 +308,12 @@ def frequency_band_reduce(
             frequency_bands,
             frequency_reduction=frequency_reduction,
             circular=circular,
-            nyquist_frequency=_nyquist_frequency(result),
+            nyquist_frequency=_nyquist_frequency(
+                result.attrs,
+                np.asarray(result.coords["frequency"].values)
+                if "frequency" in result.coords
+                else None,
+            ),
         )
     )
 
@@ -372,7 +380,9 @@ def connectivity_to_xarray(
         (first source, last target), keeping ``source`` and ``target`` as
         scalar coordinates.
     **kwargs
-        Keyword arguments for the measure (e.g. ``group_labels``).
+        Keyword arguments for the measure (e.g. ``group_labels``, or
+        ``frequency_range`` for ``delay``, ``group_delay``, and
+        ``phase_slope_index``).
 
     Returns
     -------
@@ -577,16 +587,28 @@ def _format_and_reduce_measures(
     to ``group_methods`` only, honors ``squeeze`` only for a single-measure
     DataArray, formats each measure (skipping structurally-unsupported ones in a
     multi-measure batch), merges the survivors, and applies any frequency
-    crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free;
-    ``transform_settings_hint`` tells a rejected keyword argument where transform
-    settings go for the calling wrapper.
+    crop/decimation/band reduction. ``frequency_range`` is passed to the
+    measures that consume an interval and crops each other result before they
+    are merged, so every variable keeps the same bins. ``connectivity_kwargs``
+    must be label-free; ``transform_settings_hint`` tells a rejected keyword
+    argument where transform settings go for the calling wrapper.
     """
+    _check_frequency_operations(
+        methods,
+        connectivity_kwargs,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
-        """Keyword arguments for one measure: ``group_labels`` reaches group measures only."""
+        """Keyword arguments for one measure: ``group_labels`` reaches group
+        measures only, and ``frequency_range`` the measures that consume it."""
+        kwargs = dict(connectivity_kwargs)
         if method in group_methods:
-            return {**connectivity_kwargs, "group_labels": group_labels}
-        return connectivity_kwargs
+            kwargs["group_labels"] = group_labels
+        if frequency_range is not None and _selects_frequency_range(method):
+            kwargs["frequency_range"] = frequency_range
+        return kwargs
 
     if squeeze and not return_dataarray:
         # squeeze reduces a pairwise measure to a (time, frequency) array whose
@@ -602,30 +624,36 @@ def _format_and_reduce_measures(
         squeeze = False
 
     if return_dataarray:
-        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
-            connectivity,
-            methods[0],
-            signal_labels,
-            squeeze,
-            shared_attrs,
-            signal_metadata=signal_metadata,
-            transform_settings_hint=transform_settings_hint,
-            **measure_kwargs(methods[0]),
+        result: xr.DataArray | xr.Dataset = _crop_frequency_range(
+            _connectivity_result_to_xarray(
+                connectivity,
+                methods[0],
+                signal_labels,
+                squeeze,
+                shared_attrs,
+                signal_metadata=signal_metadata,
+                transform_settings_hint=transform_settings_hint,
+                **measure_kwargs(methods[0]),
+            ),
+            frequency_range,
         )
     else:
         formatted_results: list[xr.DataArray | xr.Dataset] = []
         for this_method in methods:
             try:
                 formatted_results.append(
-                    _connectivity_result_to_xarray(
-                        connectivity,
-                        this_method,
-                        signal_labels,
-                        False,
-                        shared_attrs,
-                        signal_metadata=signal_metadata,
-                        transform_settings_hint=transform_settings_hint,
-                        **measure_kwargs(this_method),
+                    _crop_frequency_range(
+                        _connectivity_result_to_xarray(
+                            connectivity,
+                            this_method,
+                            signal_labels,
+                            False,
+                            shared_attrs,
+                            signal_metadata=signal_metadata,
+                            transform_settings_hint=transform_settings_hint,
+                            **measure_kwargs(this_method),
+                        ),
+                        frequency_range,
                     )
                 )
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
@@ -670,12 +698,13 @@ def _format_and_reduce_measures(
                 if name not in reserved
             }
         )
-    return _select_and_reduce_frequencies(
+    return _decimate_and_reduce_frequencies(
         result,
-        frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        # The computed grid's, before the crop can make an interior bin the last.
+        nyquist_frequency=_nyquist_frequency(shared_attrs, to_numpy(connectivity.frequencies)),
     )
 
 
@@ -799,18 +828,33 @@ def multitaper_connectivity(
         requested measure takes it (labels are passed only to the measures that
         do).
     frequency_range : (float, float), optional
-        Frequency interval ``(low, high)`` retained in the labeled result, both
-        endpoints included; a bin lies on a bound when the two agree to within
-        two units in the last place of each (see :func:`frequency_band_reduce`).
+        Frequency interval ``(low, high)``, both endpoints included; a bin lies
+        on a bound when the two agree to within two units in the last place of
+        each (see :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
+        ``phase_slope_index`` receive it as their own ``frequency_range`` and
+        consume only those bins; every other measure is computed from the full
+        spectrum (Wilson-factorized measures factorize all of it) and then
+        cropped to the same bins. Pass it here, not in ``connectivity_kwargs``.
     frequency_decimation : int, default=1
         Keep every Nth frequency bin after applying ``frequency_range``.
+        ``phase_slope_index`` and ``group_delay`` have no frequency axis and are
+        left as computed over ``frequency_range``; to make them combine fewer
+        bins, pass ``connectivity_kwargs={"frequency_resolution": ...}``.
     frequency_bands : mapping of str to (float, float), optional
-        Reduce the selected bins into named, inclusive bands. With
+        Reduce the selected bins into named bands, both endpoints included, so
+        adjacent bands sharing an endpoint both average a bin lying on it. With
         ``frequency_reduction="mean"``, scores are averaged, complex measures
         use a complex vector mean, and ``coherence_phase`` uses a circular mean.
+        ``delay`` is frequency-resolved and is averaged like any score;
+        ``phase_slope_index`` and ``group_delay`` are left as computed over
+        ``frequency_range`` (call once per band, with ``frequency_range``, for
+        band values). Requesting ``frequency_bands`` or ``frequency_decimation``
+        with only those two measures raises ``ValueError``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Band reduction. Integration is restricted to ``power`` and
-        ``cross_spectral_density``, where it yields band power/covariance.
+        ``cross_spectral_density``, where it yields band power/covariance;
+        adjacent band integrals add up to their union without counting a
+        shared edge bin twice (see :func:`frequency_band_reduce`).
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.
@@ -1172,12 +1216,18 @@ def fourier_connectivity(
         ``(low, high)`` bounds, in the units of the frequency coordinate, to
         keep before any decimation or band reduction; both endpoints are
         included, to within two units in the last place of each (see
-        :func:`frequency_band_reduce`).
+        :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
+        ``phase_slope_index`` consume only these bins; other measures are
+        computed from every bin and cropped, as in
+        :func:`multitaper_connectivity`.
     frequency_decimation : int, default=1
-        Keep every ``frequency_decimation``-th frequency bin.
+        Keep every ``frequency_decimation``-th frequency bin of the
+        frequency-resolved measures.
     frequency_bands : mapping of str to (float, float), optional
-        Named inclusive bands to reduce the frequency axis into; see
-        :func:`frequency_band_reduce`.
+        Named bands, both endpoints included, to reduce the frequency axis of
+        the frequency-resolved measures into; see :func:`frequency_band_reduce`
+        and :func:`multitaper_connectivity` for ``phase_slope_index`` and
+        ``group_delay``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Within-band reduction used with ``frequency_bands``.
     time_dim, trial_dim, taper_dim, frequency_dim, signal_dim : hashable, optional

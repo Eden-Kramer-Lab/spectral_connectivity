@@ -5084,7 +5084,9 @@ class Connectivity:
                 "frequency_range includes both endpoints. To keep the same "
                 f"{selected.size} bins, replace frequencies_of_interest=({low!r}, "
                 f"{high!r}) with frequency_range=({float(selected[0])!r}, "
-                f"{float(selected[-1])!r}), the lowest and highest bins it selects.",
+                f"{float(selected[-1])!r}), the lowest and highest bins it selects. "
+                "multitaper_connectivity and fourier_connectivity take "
+                "frequency_range as their own argument, not in connectivity_kwargs.",
                 DeprecationWarning,
                 stacklevel=stacklevel_outside_package(),
             )

@@ -435,6 +435,23 @@ def _is_group_measure(method: str) -> bool:
     return callable(measure) and "group_labels" in inspect.signature(measure).parameters
 
 
+def _selects_frequency_range(method: str) -> bool:
+    """Whether a measure consumes a ``frequency_range`` (``delay``, ``group_delay``,
+    ``phase_slope_index``), so the wrappers pass theirs to it.
+
+    Decided from the ``Connectivity`` method's signature, as for
+    :func:`_is_group_measure`.
+    """
+    measure = getattr(Connectivity, method, None)
+    return callable(measure) and "frequency_range" in inspect.signature(measure).parameters
+
+
+def _reduces_frequency(method: str) -> bool:
+    """Whether a registered measure's result has no frequency axis."""
+    spec = _MEASURE_SPECS.get(method)
+    return spec is not None and "frequency" not in spec.dims
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
 ) -> tuple[list[str], bool]:

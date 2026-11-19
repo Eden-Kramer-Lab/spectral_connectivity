@@ -177,6 +177,69 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 
 ```
 
+## Select a frequency range
+
+`frequency_range=(low, high)` includes both endpoints. With 0.5-second windows
+at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
+
+```python
+>>> settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
+>>> cropped = multitaper_connectivity(
+...     time_series, method="coherence_magnitude", frequency_range=(10, 50), **settings
+... )
+>>> cropped.frequency.values[[0, -1]].tolist()
+[10.0, 50.0]
+
+```
+
+`delay`, `group_delay`, and `phase_slope_index` receive the wrapper's
+`frequency_range` and consume only those bins; every other measure is computed
+from the full spectrum (the directed measures factorize all of it) and then
+cropped. The frequency-reduced measures record the interval on their variables:
+
+```python
+>>> psi = multitaper_connectivity(
+...     time_series, method="phase_slope_index", frequency_range=(10, 50), **settings
+... )
+>>> psi.attrs["selected_frequency_lower"], psi.attrs["selected_frequency_upper"]
+(10.0, 50.0)
+>>> psi.attrs["frequency_interval_closed"]
+'both'
+
+```
+
+`requested_frequency_lower`/`_upper` hold the bounds as given and
+`selected_frequency_lower`/`_upper` the lowest and highest bins consumed. Phase
+slope and group delay have no frequency axis, so `frequency_bands` and
+`frequency_decimation` leave them as computed over `frequency_range`; call once
+per band for band values. `delay` keeps its frequency axis and is cropped,
+decimated, and band-averaged like any other measure.
+
+Adjacent bands such as `(10, 20)` and `(20, 30)` both average a bin lying at
+exactly 20 Hz. Band integrals give each bin the part of its frequency cell
+inside the band, so they stay additive and count no power twice:
+
+```python
+>>> from spectral_connectivity import frequency_band_reduce
+>>> power = multitaper_connectivity(time_series, method="power", **settings)
+>>> band_power = frequency_band_reduce(
+...     power,
+...     {"low": (10, 20), "high": (20, 30), "both": (10, 30)},
+...     frequency_reduction="integral",
+... )
+>>> adjacent = band_power.sel(band="low") + band_power.sel(band="high")
+>>> bool(np.allclose(adjacent, band_power.sel(band="both")))
+True
+
+```
+
+Before 3.0 these three measures took `frequencies_of_interest=(low, high)`,
+which excludes a bin lying on either edge. It still works through 3.x, with
+results recording `frequency_interval_closed="neither"` and a
+`DeprecationWarning` naming the `frequency_range` that keeps the same bins:
+on this grid `phase_slope_index(frequencies_of_interest=(10, 50))` becomes
+`phase_slope_index(frequency_range=(12.0, 48.0))`. It is removed in 4.0.
+
 ## Bring your own Fourier coefficients
 
 If you already have Fourier coefficients (e.g. from a wavelet transform), skip

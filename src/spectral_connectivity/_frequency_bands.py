@@ -1,13 +1,14 @@
 """Frequency cropping, decimation, and band reduction of labeled results."""
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
+from spectral_connectivity._measure_registry import _reduces_frequency
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
 from spectral_connectivity.connectivity import _frequency_interval_mask
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
@@ -60,24 +61,25 @@ def _band_integration_weights(
     return weights
 
 
-def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
-    """The Nyquist frequency of ``result``'s one-sided spectrum, if known.
+def _nyquist_frequency(
+    attrs: Mapping[Any, Any], frequencies: NDArray[np.floating] | None
+) -> float | None:
+    """The Nyquist frequency of a one-sided spectrum, if known.
 
-    A result records ``nyquist_frequency`` (or, from 2.x, ``mt_nyquist_frequency``)
-    when its sampling rate or normalized grid is known; the grid has a bin there
-    only for an even FFT length. Without it, a grid anchored at 0 is taken to be
-    a complete one-sided spectrum whose last bin is Nyquist. Only the grid as
-    computed can say so: cropping or decimating it makes an interior bin the
-    last one.
+    ``attrs`` are a result's attributes and ``frequencies`` its grid as
+    computed. A result records ``nyquist_frequency`` (or, from 2.x,
+    ``mt_nyquist_frequency``) when its sampling rate or normalized grid is
+    known; the grid has a bin there only for an even FFT length. Without it, a
+    grid anchored at 0 is taken to be a complete one-sided spectrum whose last
+    bin is Nyquist. Only the grid as computed can say so: cropping or
+    decimating it makes an interior bin the last one, so pass the grid before
+    either.
     """
-    nyquist_frequency = result.attrs.get(
-        "nyquist_frequency", result.attrs.get("mt_nyquist_frequency")
-    )
+    nyquist_frequency = attrs.get("nyquist_frequency", attrs.get("mt_nyquist_frequency"))
     if nyquist_frequency is not None:
         return float(nyquist_frequency)
-    if "frequency" not in result.coords:
+    if frequencies is None:
         return None
-    frequencies = np.asarray(result.coords["frequency"].values)
     if frequencies.ndim != 1 or frequencies.size < 2 or frequencies[0] != 0.0:
         return None
     return float(frequencies[-1])
@@ -322,46 +324,92 @@ def _with_frequency_attrs(
     )
 
 
-def _select_and_reduce_frequencies(
-    result: xr.DataArray | xr.Dataset,
+def _check_frequency_operations(
+    methods: Sequence[str],
+    connectivity_kwargs: Mapping[str, Any],
     *,
-    frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
-    frequency_reduction: Literal["mean", "integral"],
-) -> xr.DataArray | xr.Dataset:
-    """Apply the wrapper's shared, coordinate-aware frequency operations."""
+) -> None:
+    """Reject the wrappers' frequency operations a request cannot honor.
+
+    Runs before any measure is computed. ``frequency_range`` reaches the
+    measures that consume an interval as their own keyword, so it is a wrapper
+    argument only. ``frequency_bands`` and ``frequency_decimation`` act on the
+    frequency axis of frequency-resolved variables; ``phase_slope_index`` and
+    ``group_delay`` have already reduced theirs over ``frequency_range``, so
+    those variables are left as computed, never reduced a second time. A
+    request in which every measure is frequency-reduced would be left entirely
+    unchanged, so it is refused.
+    """
+    if "frequency_range" in connectivity_kwargs:
+        msg = (
+            "frequency_range was given inside connectivity_kwargs; pass "
+            "frequency_range=(low, high) to the wrapper itself. It selects the bins "
+            "delay, group_delay, and phase_slope_index consume and crops every "
+            "other measure to the same bins."
+        )
+        raise ValueError(msg)
     if not is_positive_integer(frequency_decimation):
         msg = "frequency_decimation must be a positive integer."
         raise ValueError(msg)
-
-    selected = result
-    # Before cropping or decimation, which can make an interior bin the last.
-    nyquist_frequency = _nyquist_frequency(result)
-    requests_frequency_operation = (
-        frequency_range is not None or frequency_decimation != 1 or frequency_bands is not None
-    )
-    if requests_frequency_operation and "frequency" not in selected.dims:
+    reduced = [method for method in methods if _reduces_frequency(method)]
+    requested = [
+        name
+        for name, given in (
+            ("frequency_bands", frequency_bands is not None),
+            ("frequency_decimation", frequency_decimation != 1),
+        )
+        if given
+    ]
+    if requested and len(reduced) == len(methods):
         msg = (
-            "This result has no frequency dimension: the requested method "
-            "already reduces frequency (for example phase_slope_index or "
-            "group_delay), so frequency_range, frequency_decimation, and "
-            "frequency_bands cannot be applied afterward. Pass the method's "
-            "frequencies_of_interest argument through connectivity_kwargs instead."
+            f"{' and '.join(requested)} cannot be applied to {', '.join(reduced)}: "
+            "these measures already reduce frequency over frequency_range, while "
+            "frequency_bands and frequency_decimation act on the frequency axis of "
+            "frequency-resolved measures. To summarize several bands, call once per "
+            "band with frequency_range=(low, high); to combine fewer, independent "
+            "bins, pass connectivity_kwargs={'frequency_resolution': ...}."
         )
         raise ValueError(msg)
-    if frequency_range is not None:
-        mask, (lower, upper) = _frequency_interval_mask(
-            "frequency_range",
-            frequency_range,
-            np.asarray(selected.coords["frequency"].values),
-            closed="both",
-        )
-        selected = _with_frequency_attrs(
-            selected.isel(frequency=np.flatnonzero(mask)),
-            frequency_range_json=_canonical_json((lower, upper)),
-        )
 
+
+def _crop_frequency_range(
+    result: xr.DataArray | xr.Dataset, frequency_range: tuple[float, float] | None
+) -> xr.DataArray | xr.Dataset:
+    """Keep the bins of ``frequency_range`` on every frequency-resolved variable.
+
+    A result without a frequency axis (``phase_slope_index``, ``group_delay``)
+    is returned unchanged: those measures consumed the range themselves.
+    """
+    if frequency_range is None or "frequency" not in result.dims:
+        return result
+    mask, (lower, upper) = _frequency_interval_mask(
+        "frequency_range",
+        frequency_range,
+        np.asarray(result.coords["frequency"].values),
+        closed="both",
+    )
+    return _with_frequency_attrs(
+        result.isel(frequency=np.flatnonzero(mask)),
+        frequency_range_json=_canonical_json((lower, upper)),
+    )
+
+
+def _decimate_and_reduce_frequencies(
+    result: xr.DataArray | xr.Dataset,
+    *,
+    frequency_decimation: int,
+    frequency_bands: Mapping[str, tuple[float, float]] | None,
+    frequency_reduction: Literal["mean", "integral"],
+    nyquist_frequency: float | None,
+) -> xr.DataArray | xr.Dataset:
+    """Apply the wrappers' decimation and band reduction after the crop.
+
+    ``nyquist_frequency`` is that of the grid as computed, before cropping
+    (see :func:`_nyquist_frequency`).
+    """
+    selected = result
     if frequency_decimation != 1:
         selected = _with_frequency_attrs(
             selected.isel(frequency=slice(None, None, frequency_decimation)),

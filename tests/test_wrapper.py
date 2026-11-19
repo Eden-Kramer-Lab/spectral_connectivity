@@ -246,18 +246,6 @@ def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
     assert group_delay.group_delay.attrs["units"] == "s"
 
 
-def test_frequency_operations_reject_already_reduced_output():
-    data = np.random.default_rng(428).standard_normal((256, 4, 2))
-    with pytest.raises(ValueError, match="no frequency dimension"):
-        multitaper_connectivity(
-            data,
-            sampling_frequency=128,
-            method="phase_slope_index",
-            connectivity_kwargs={"frequency_range": (8, 40)},
-            frequency_range=(10, 30),
-        )
-
-
 def test_fourier_connectivity_exposes_global_dataset():
     rng = np.random.default_rng(429)
     coefficients = rng.standard_normal((2, 4, 2, 16, 3)) + 1j * rng.standard_normal(
@@ -2674,10 +2662,9 @@ _LAGGED_BAND = (5.0, 100.0)
 _LAGGED_KWARGS = {
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
     "blockwise_spectral_granger_prediction": {"group_labels": ["A", "B", "C"]},
-    "phase_slope_index": {"frequency_range": _LAGGED_BAND},
-    "delay": {"frequency_range": _LAGGED_BAND},
-    "group_delay": {"frequency_range": _LAGGED_BAND},
 }
+# Measures that consume a frequency interval get the band as frequency_range.
+_LAGGED_INTERVAL_MEASURES = frozenset({"phase_slope_index", "delay", "group_delay"})
 
 
 def _directed_entry(values: xr.DataArray) -> float:
@@ -2719,6 +2706,7 @@ def test_remaining_directed_measures_are_oriented_source_to_target(method, lagge
         method=method,
         signal_names=["x", "y", "z"],
         connectivity_kwargs=_LAGGED_KWARGS.get(method, {}),
+        frequency_range=_LAGGED_BAND if method in _LAGGED_INTERVAL_MEASURES else None,
     )
     values = result[method] if isinstance(result, xr.Dataset) else result
     if method == "blockwise_spectral_granger_prediction":
@@ -3756,9 +3744,10 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
     for name in ("selected_frequency_lower", "frequency_interval_closed"):
         assert name not in coherence.coords
         assert name not in coherence.attrs
-    # phase_slope_index used its own (default, full) interval, not frequency_range.
-    assert psi.attrs["selected_frequency_lower"] == 0.0
-    assert psi.attrs["selected_frequency_upper"] == 250.0
+        assert name not in dataset.attrs
+    # phase_slope_index consumed frequency_range itself; it was not cropped.
+    assert psi.attrs["selected_frequency_lower"] == 4.0
+    assert psi.attrs["selected_frequency_upper"] == 50.0
     assert json.loads(coherence.attrs["frequency_range_json"]) == [4.0, 50.0]
     assert coherence.attrs["frequency_decimation"] == 2
     for key in ("frequency_range_json", "frequency_decimation"):
