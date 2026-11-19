@@ -374,7 +374,15 @@ Rulings where the rules above were silent:
   (rule 5): a Python-number band meets a float32 grid in float32, an ndarray
   band in float64. On a rounded grid that can include a bin within rounding of
   an edge, as in v2.0.1. (Development builds before this step compared in
-  float64 and gained edge bins on float32 grids.)
+  float64 and gained edge bins on float32 grids.) It accepts infinite bounds
+  and selects exactly the bins v2.0.1 selects for an open-ended band; it
+  rejects a NaN bound, `low >= high`, and a band with no bin inside. A band
+  that is not exactly two values also raises, deliberately: v2.0.1 silently
+  used the first two elements of a longer band, which hides a caller's
+  mistake. An infinite bound records no `requested_frequency_*` attribute for
+  that side, so the interval attributes stay finite floats; the selected
+  bounds and `frequency_interval_closed="neither"` still describe the
+  interval, and `measure_kwargs_json` records the band as given.
 - **Positional slot.** `frequencies_of_interest` was the first positional
   parameter in v2.0.1, so it stays there as the deprecated route (by keyword or
   position); `frequency_range` is keyword-only. A 2.x positional band therefore

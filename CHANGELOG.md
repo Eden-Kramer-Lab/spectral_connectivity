@@ -497,15 +497,17 @@ is removed in 4.0.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
-  edges and selects the bins 2.x selected for every band 2.x accepted with a
-  bin inside it, including on float32 grids: it evaluates 2.x's
-  `band[0] < frequencies < band[1]` on the band as given. Its results record
-  `frequency_interval_closed="neither"`. Its warning names the
-  `frequency_range` that reproduces the same bins, e.g. on a 2 Hz grid
-  `frequencies_of_interest=(10, 50)` is `frequency_range=(12.0, 48.0)`.
-  Unlike 2.x it is validated: a band that is not two finite values with
-  lower < upper, or that holds no bin strictly inside (one beyond Nyquist,
-  between two adjacent bins, or `(5, 5)`), raises `ValueError` where 2.x
+  edges and, for every band of two values with a bin inside it, selects the
+  bins 2.x selected, including on float32 grids and for open-ended bands such
+  as `(10, np.inf)`: it evaluates 2.x's `band[0] < frequencies < band[1]` on
+  the band as given. Its results record `frequency_interval_closed="neither"`,
+  and an infinite bound records no `requested_frequency_*` for that side. Its
+  warning names the finite `frequency_range` that reproduces the same bins,
+  e.g. on a 2 Hz grid `frequencies_of_interest=(10, 50)` is
+  `frequency_range=(12.0, 48.0)`. Unlike 2.x it is validated: a band that is
+  not exactly two values (2.x silently used the first two of a longer one), a
+  NaN bound, lower >= upper, or a band with no bin strictly inside (one beyond
+  Nyquist, between two adjacent bins, or `(5, 5)`) raises `ValueError` where 2.x
   returned all-NaN `group_delay` results, an empty `delay` frequency axis, or
   a `phase_slope_index` computed from no bins. Giving both spellings raises
   `ValueError`.

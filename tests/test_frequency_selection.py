@@ -356,6 +356,47 @@ _BAND_FORMS = {
 
 
 @pytest.mark.parametrize(
+    ("bounds", "requested"),
+    [
+        pytest.param((10.0, np.inf), {"requested_frequency_lower": 10.0}, id="above"),
+        pytest.param((-np.inf, 50.0), {"requested_frequency_upper": 50.0}, id="below"),
+        pytest.param((-np.inf, np.inf), {}, id="unbounded"),
+    ],
+)
+def test_an_open_deprecated_band_records_only_its_finite_requested_bounds(
+    lagged_time_series, tmp_path, bounds, requested
+):
+    """An infinite bound requests no bound on that side, so it records no
+    requested_frequency_* there; every attribute stays a finite float and
+    survives a NetCDF round trip."""
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
+        result = connectivity_to_xarray(
+            Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
+            method="phase_slope_index",
+            frequencies_of_interest=bounds,
+        )
+    names = [
+        "requested_frequency_lower",
+        "requested_frequency_upper",
+        "selected_frequency_lower",
+        "selected_frequency_upper",
+        "frequency_interval_closed",
+    ]
+    recorded = {name: result.attrs[name] for name in names if name in result.attrs}
+    lowest = 12.0 if np.isfinite(bounds[0]) else 0.0
+    highest = 48.0 if np.isfinite(bounds[1]) else 250.0
+    assert recorded == {
+        **requested,
+        "selected_frequency_lower": lowest,
+        "selected_frequency_upper": highest,
+        "frequency_interval_closed": "neither",
+    }
+    result.to_netcdf(tmp_path / "psi.nc", engine="scipy")
+    with xr.open_dataarray(tmp_path / "psi.nc", engine="scipy") as reloaded:
+        assert {name: reloaded.attrs[name] for name in recorded} == recorded
+
+
+@pytest.mark.parametrize(
     "grid",
     [
         pytest.param(_DECIMAL_TENTHS, id="decimal-rounded-float64"),
@@ -363,11 +404,23 @@ _BAND_FORMS = {
     ],
 )
 @pytest.mark.parametrize("form", list(_BAND_FORMS))
-@pytest.mark.parametrize("bounds", [(0.3, 0.7), (0.7, 1.2), (1.0, 5.0), (1, 5)])
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        (0.3, 0.7),
+        (0.7, 1.2),
+        (1.0, 5.0),
+        (1, 5),
+        (0.3, np.inf),
+        (-np.inf, 0.7),
+        (-np.inf, np.inf),
+    ],
+)
 def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
     """The deprecated exclusive selection is v2.0.1's, bit for bit: on a
     float32 grid a Python-number band is compared in float32, so float32(0.3)
-    excludes the 0.3 bin, while an ndarray band is compared in float64."""
+    excludes the 0.3 bin, while an ndarray band is compared in float64. An
+    open-ended band, which v2.0.1 accepted, selects what v2.0.1 selected."""
     band = _BAND_FORMS[form](bounds)
     mask, _ = _frequencies_of_interest_mask(band, grid)
     np.testing.assert_array_equal(mask, _released_band_mask(band, grid))
@@ -393,14 +446,23 @@ def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
     assert np.flatnonzero(as_array).tolist() == [3, 4, 5, 6, 7]
 
 
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        pytest.param((10.1, 20.3), id="closed"),
+        pytest.param((10.1, np.inf), id="above"),
+        pytest.param((-np.inf, 20.3), id="below"),
+    ],
+)
 @pytest.mark.parametrize("form", list(_BAND_FORMS))
 @pytest.mark.parametrize("positional", [False, True], ids=["keyword", "positional"])
 @pytest.mark.parametrize("measure", ["delay", "phase_slope_index"])
 def test_deprecated_calls_on_a_float32_grid_consume_the_released_bins(
-    form, positional, measure
+    form, positional, measure, bounds
 ):
-    """End to end on a float32 0.1 Hz grid: every v2.0.1 call form consumes
-    the bins v2.0.1 consumed, and the warning's frequency_range keeps them."""
+    """End to end on a float32 0.1 Hz grid: every v2.0.1 call form, open-ended
+    bands included, consumes the bins v2.0.1 consumed, and the warning's
+    frequency_range, finite even for an open band, keeps them."""
     rng = np.random.default_rng(1)
     shape = (1, 4, 3, 2000, 2)
     grid = np.fft.fftfreq(2000, d=1 / 200).astype(np.float32)
@@ -409,12 +471,13 @@ def test_deprecated_calls_on_a_float32_grid_consume_the_released_bins(
         expectation_type="trials_tapers",
         frequencies=grid,
     )
-    band = _BAND_FORMS[form]((10.1, 20.3))
+    band = _BAND_FORMS[form](bounds)
     released = _released_band_mask(band, connectivity.frequencies)
     args, kwargs = ((band,), {}) if positional else ((), {"frequencies_of_interest": band})
     with pytest.warns(DeprecationWarning, match="frequencies_of_interest") as record:
         deprecated = getattr(connectivity, measure)(*args, **kwargs)
     selected = connectivity.frequencies[released]
+    assert np.isfinite(selected[[0, -1]]).all()
     suggestion = f"frequency_range=({float(selected[0])!r}, {float(selected[-1])!r})"
     assert suggestion in str(record[0].message)
     migrated = getattr(connectivity, measure)(

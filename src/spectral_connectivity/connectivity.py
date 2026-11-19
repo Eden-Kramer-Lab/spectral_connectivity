@@ -5831,7 +5831,9 @@ class _FrequencySelection:
     def attrs(self) -> dict[str, Any]:
         """Result attributes recording the interval, in the grid's units.
 
-        The requested bounds are omitted when every bin is used; the selected
+        The requested bounds are omitted when every bin is used, and a side
+        left open by an infinite bound of the deprecated keyword records no
+        requested bound, so every attribute is a finite float; the selected
         bounds are the lowest and highest bins in the interval, before any
         ``frequency_resolution`` subsampling. ``frequency_interval_closed`` is
         ``"neither"`` for the deprecated keyword's exclusive edges, else
@@ -5839,8 +5841,11 @@ class _FrequencySelection:
         """
         attrs: dict[str, Any] = {}
         if self.requested is not None:
-            attrs["requested_frequency_lower"] = self.requested[0]
-            attrs["requested_frequency_upper"] = self.requested[1]
+            lower, upper = self.requested
+            if np.isfinite(lower):
+                attrs["requested_frequency_lower"] = lower
+            if np.isfinite(upper):
+                attrs["requested_frequency_upper"] = upper
         attrs["selected_frequency_lower"] = self.lowest
         attrs["selected_frequency_upper"] = self.highest
         attrs["frequency_interval_closed"] = "neither" if self.deprecated else "both"
@@ -5855,29 +5860,33 @@ def _frequencies_of_interest_mask(
     v2.0.1's ``_bandpass`` evaluated ``(band[0] < frequencies) & (frequencies
     < band[1])`` on the band as the caller gave it and the grid as stored;
     this does the same, so NumPy compares a Python-number band with a float32
-    grid in float32 and an ndarray band in float64, exactly as v2.0.1 did, and
-    every call it accepted with a bin inside the band selects the same bins.
-    The validation is this function's own: two finite values with
-    ``low < high`` and at least one bin strictly inside, where v2.0.1 returned
-    empty or NaN results. It never changes with :func:`_frequency_interval_mask`.
+    grid in float32 and an ndarray band in float64, exactly as v2.0.1 did.
+    Every band of two values with a bin inside selects the bins v2.0.1
+    selected, including an open-ended one such as ``(10, np.inf)``.
+
+    The validation is this function's own and never changes with
+    :func:`_frequency_interval_mask`. It rejects a band that is not exactly
+    two values (v2.0.1 silently used the first two of a longer one), a NaN
+    bound, ``low >= high``, and a band with no bin strictly inside, for which
+    v2.0.1 returned an empty ``delay`` axis or failed with an unrelated error.
 
     Returns
     -------
     mask : NDArray[bool], shape (n_frequencies,)
         Host mask of the bins strictly inside the band.
     bounds : (float, float)
-        The band as floats, for messages and attributes.
+        The band as floats (possibly infinite), for messages and attributes.
     """
     invalid = (
-        "frequencies_of_interest must be two finite values (low, high) with low < high, "
-        f"got {frequencies_of_interest!r}."
+        "frequencies_of_interest must be two values (low, high), not NaN, with "
+        f"low < high, got {frequencies_of_interest!r}."
     )
     try:
         stored_lower, stored_upper = frequencies_of_interest
         lower, upper = float(stored_lower), float(stored_upper)
     except (TypeError, ValueError) as error:
         raise ValueError(invalid) from error
-    if not (np.isfinite(lower) and np.isfinite(upper)) or lower >= upper:
+    if np.isnan(lower) or np.isnan(upper) or lower >= upper:
         raise ValueError(invalid)
     values = to_numpy(frequencies)
     mask: NDArray[np.bool_] = (stored_lower < values) & (values < stored_upper)
