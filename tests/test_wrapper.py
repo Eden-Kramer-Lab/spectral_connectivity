@@ -149,7 +149,7 @@ def test_connectivity_to_xarray_exposes_rich_multivariate_components():
         method="canonical_coherency",
         signal_names=["a", "b", "c", "d"],
         group_labels=[10, 10, 20, 20],
-        n_components=2,
+        connectivity_kwargs={"n_components": 2},
     )
 
     assert set(result.data_vars) == {
@@ -193,7 +193,7 @@ def test_connectivity_to_xarray_exposes_global_components():
         transform,
         method="global_coherence",
         signal_names=["a", "b", "c"],
-        max_rank=2,
+        connectivity_kwargs={"max_rank": 2},
     )
 
     assert set(result.data_vars) == {
@@ -219,20 +219,19 @@ def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
         transform,
         method="delay",
         signal_names=["a", "b"],
-        frequency_range=(8, 40),
-        n_range=1,
+        connectivity_kwargs={"frequency_range": (8, 40), "n_range": 1},
     )
     psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
         signal_names=["a", "b"],
-        frequency_range=(8, 40),
+        connectivity_kwargs={"frequency_range": (8, 40)},
     )
     group_delay = connectivity_to_xarray(
         transform,
         method="group_delay",
         signal_names=["a", "b"],
-        frequency_range=(8, 40),
+        connectivity_kwargs={"frequency_range": (8, 40)},
     )
 
     assert delay.dims == ("time", "frequency", "candidate", "source", "target")
@@ -339,7 +338,7 @@ def test_default_dataset_frequency_grid_is_nonnegative_fft_bins():
         time_series,
         sampling_frequency=sampling_frequency,
         time_window_duration=None,
-        n_fft_samples=n_fft_samples,
+        transform_kwargs={"n_fft_samples": n_fft_samples},
     )
 
     # Non-negative frequency grid, 0 .. Nyquist (n_fft // 2 + 1 bins).
@@ -803,7 +802,12 @@ def test_dataarray_non_scalar_start_time_is_rejected():
         coords={"time": np.arange(raw.shape[0]) / 64.0},
     )
     with pytest.raises(ValueError, match="requires scalar start_time"):
-        multitaper_connectivity(data, sampling_frequency=64, method="power", start_time=[0, 1])
+        multitaper_connectivity(
+            data,
+            sampling_frequency=64,
+            method="power",
+            transform_kwargs={"start_time": [0, 1]},
+        )
 
 
 def test_measure_spec_labels_are_keyword_only():
@@ -837,7 +841,7 @@ def test_dataarray_numeric_time_coordinate_sets_output_time():
         sampling_frequency=sampling_frequency,
         method="power",
         signal_names=["left", "right"],
-        start_time=time[0],
+        transform_kwargs={"start_time": time[0]},
     )
 
     xr.testing.assert_identical(actual, expected)
@@ -947,7 +951,7 @@ def test_dataarray_time_coordinate_must_agree_with_explicit_start_time():
             data,
             sampling_frequency=64,
             method="power",
-            start_time=0,
+            transform_kwargs={"start_time": 0},
         )
 
 
@@ -1426,9 +1430,11 @@ def test_structured_and_nonfinite_kwargs_survive_netcdf(tmp_path, stub_measure):
     da = connectivity_to_xarray(
         m,
         method=stub_measure,
-        nested={"b": 1, "a": 2},
-        weights=np.array([1.0, 2.0]),
-        cutoff=float("inf"),
+        connectivity_kwargs={
+            "nested": {"b": 1, "a": 2},
+            "weights": np.array([1.0, 2.0]),
+            "cutoff": float("inf"),
+        },
     )
     assert json.loads(da.attrs["arg_nested_json"]) == {"a": 2, "b": 1}
     assert json.loads(da.attrs["arg_weights_json"]) == [1.0, 2.0]
@@ -1491,7 +1497,7 @@ def test_fft_workers_does_not_change_results():
         time_series,
         sampling_frequency=500,
         method="magnitude_squared_coherence",
-        fft_workers=-1,
+        transform_kwargs={"fft_workers": -1},
     )
     np.testing.assert_allclose(baseline.values, parallel.values, rtol=1e-10, atol=1e-12)
 
@@ -1578,7 +1584,7 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
             time_series,
             sampling_frequency=500,
             method="magnitude_squared_coherence",
-            fft_workers=2,
+            transform_kwargs={"fft_workers": 2},
         )
     assert 2 in recorded  # the taper-projection FFT received workers=2
 
@@ -1749,7 +1755,9 @@ def test_connectivity_to_xarray_gives_no_transform_settings_hint():
     transform = Multitaper(np.random.default_rng(13).standard_normal((256, 2, 3)), 250)
     with pytest.raises(TypeError, match="does not accept keyword argument") as excinfo:
         connectivity_to_xarray(
-            transform, "magnitude_squared_coherence", time_halfbandwidth_product=4
+            transform,
+            "magnitude_squared_coherence",
+            connectivity_kwargs={"time_halfbandwidth_product": 4},
         )
     assert "transform setting" not in str(excinfo.value)
 
@@ -2229,8 +2237,7 @@ def test_provenance_records_measure_kwargs(tmp_path, stub_measure):
     da = connectivity_to_xarray(
         m,
         method=stub_measure,
-        threshold=0.5,
-        window=[1, 2, 3],
+        connectivity_kwargs={"threshold": 0.5, "window": [1, 2, 3]},
     )
     # Scalar kwarg stored as-is under ``arg_<key>``; structured kwarg stored as
     # parseable JSON under the ``arg_<key>_json`` name so it self-identifies.
@@ -2251,7 +2258,11 @@ def test_provenance_arg_key_collision_raises_instead_of_overwriting(stub_measure
     m = Multitaper(rng.standard_normal((256, 4, 3)), sampling_frequency=500)
 
     with pytest.raises(ValueError, match="assigned twice"):
-        connectivity_to_xarray(m, method=stub_measure, x=[1, 2, 3], x_json=5)
+        connectivity_to_xarray(
+            m,
+            method=stub_measure,
+            connectivity_kwargs={"x": [1, 2, 3], "x_json": 5},
+        )
 
 
 def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
@@ -3123,8 +3134,8 @@ def test_frequency_band_integral_over_every_bin_is_parseval_exact(n_fft_samples)
         sampling_frequency=100,
         method="power",
         detrend_type=None,
-        n_fft_samples=n_fft_samples,
         time_halfbandwidth_product=1,
+        transform_kwargs={"n_fft_samples": n_fft_samples},
     )
     assert power.frequency.size == n_fft_samples // 2 + 1
     spacing = float(power.frequency[1] - power.frequency[0])
@@ -3187,7 +3198,7 @@ def test_frequency_band_integral_of_odd_fft_last_bin_is_not_nyquist(path):
         "sampling_frequency": sampling_frequency,
         "method": "power",
         "time_halfbandwidth_product": 1,
-        "n_fft_samples": n_time,
+        "transform_kwargs": {"n_fft_samples": n_time},
     }
     power = multitaper_connectivity(time_series, **power_kwargs).squeeze()
     frequencies = power.frequency.values
@@ -3632,7 +3643,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         delay = connectivity_to_xarray(
             transform,
             method="delay",
-            frequency_range=band,
+            connectivity_kwargs={"frequency_range": band},
         )
     np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
     np.testing.assert_array_equal(
@@ -3644,7 +3655,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         group_delay = connectivity_to_xarray(
             transform,
             method="group_delay",
-            frequency_range=band,
+            connectivity_kwargs={"frequency_range": band},
         )
     assert "frequency" not in group_delay.dims
     assert group_delay.valid_time.dims == ("time",)
