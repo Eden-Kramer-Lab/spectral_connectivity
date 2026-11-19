@@ -188,6 +188,41 @@ def test_wrapper_crop_and_bands_include_bins_on_their_bounds():
     )
 
 
+def test_adjacent_bands_share_their_endpoint_bin_without_double_counting_power():
+    """(10, 20) and (20, 30) both average the 20 Hz bin, while their integrals
+    split its cell, so they add up to the integral over (10, 30)."""
+    time_series = np.random.default_rng(6).standard_normal((1000, 4, 2))
+    settings = {"sampling_frequency": 500, "time_window_duration": 0.5, "method": "power"}
+    power = multitaper_connectivity(time_series, **settings)
+    bands = {"low": (10.0, 20.0), "high": (20.0, 30.0), "union": (10.0, 30.0)}
+
+    means = multitaper_connectivity(time_series, frequency_bands=bands, **settings)
+    for name, (low, high) in bands.items():
+        np.testing.assert_allclose(
+            means.sel(band=name).values,
+            power.sel(frequency=slice(low, high)).mean("frequency").values,
+            rtol=1e-12,
+        )
+    assert power.sel(frequency=slice(10.0, 20.0)).frequency.values[-1] == 20.0
+    assert power.sel(frequency=slice(20.0, 30.0)).frequency.values[0] == 20.0
+
+    integrals = multitaper_connectivity(
+        time_series, frequency_bands=bands, frequency_reduction="integral", **settings
+    )
+    np.testing.assert_allclose(
+        (integrals.sel(band="low") + integrals.sel(band="high")).values,
+        integrals.sel(band="union").values,
+        rtol=1e-12,
+    )
+    # Bins are 2 Hz apart, so the union is the 11 bins' density times 2 Hz,
+    # less the outer halves of the 10 and 30 Hz cells.
+    union = power.sel(frequency=slice(10.0, 30.0))
+    expected = 2.0 * union.sum("frequency") - (
+        union.isel(frequency=0) + union.isel(frequency=-1)
+    )
+    np.testing.assert_allclose(integrals.sel(band="union").values, expected.values, rtol=1e-12)
+
+
 # --- Measures that consume a frequency interval --------------------------------
 
 _SELECTING_MEASURES = ("delay", "group_delay", "phase_slope_index")
