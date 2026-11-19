@@ -471,8 +471,6 @@ def _uniform_grid_spacing(frequencies: Any) -> float | None:
         The mean step, in the coordinate's units.
     """
     stored = to_numpy(frequencies)
-    if not np.issubdtype(stored.dtype, np.floating):
-        stored = stored.astype(float)
     if stored.size < 2 or not np.all(np.isfinite(stored)):
         return None
     last_place = _last_place(stored)

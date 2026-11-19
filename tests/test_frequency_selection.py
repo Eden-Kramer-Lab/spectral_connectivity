@@ -882,25 +882,37 @@ def test_one_frequency_range_crops_and_selects_the_same_bins_in_a_dataset(
     assert json.loads(result.coherence_magnitude.attrs["measure_kwargs_json"]) == {}
 
 
-@pytest.mark.parametrize("method", ["phase_slope_index", "group_delay"])
 @pytest.mark.parametrize(
-    ("operation", "hint"),
+    "method", ["phase_slope_index", "group_delay", ["phase_slope_index", "group_delay"]]
+)
+@pytest.mark.parametrize(
+    ("operation", "named"),
     [
-        ({"frequency_bands": {"theta": (4.0, 8.0)}}, "once per band"),
-        ({"frequency_decimation": 2}, "frequency_resolution"),
+        ({"frequency_bands": {"theta": (4.0, 8.0)}}, "frequency_bands cannot"),
+        ({"frequency_decimation": 2}, "frequency_decimation cannot"),
+        (
+            {"frequency_bands": {"theta": (4.0, 8.0)}, "frequency_decimation": 2},
+            "frequency_bands and frequency_decimation cannot",
+        ),
     ],
 )
 def test_frequency_operations_on_only_frequency_reduced_measures_raise(
-    lagged_time_series, method, operation, hint
+    lagged_time_series, method, operation, named
 ):
     """frequency_bands and frequency_decimation act on a frequency axis, which
     phase_slope_index and group_delay have already reduced: a request with no
-    other measure would return them unchanged, so it raises instead."""
+    other measure would return them unchanged, so it raises instead, naming
+    what was asked and both remedies. No frequency_range is given, so the
+    message must not claim the measures reduced one."""
     with pytest.raises(ValueError, match="already reduce") as error:
         multitaper_connectivity(
             lagged_time_series, method=method, **operation, **_LAGGED_TRANSFORM
         )
-    assert hint in str(error.value)
+    message = str(error.value)
+    assert message.startswith(named)
+    assert "once per band" in message
+    assert "frequency_resolution" in message
+    assert "over frequency_range" not in message
 
 
 @pytest.mark.parametrize("measure", ["phase_slope_index", "group_delay"])

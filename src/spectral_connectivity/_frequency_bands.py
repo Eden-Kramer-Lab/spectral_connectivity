@@ -357,23 +357,24 @@ def _check_frequency_operations(
     if not is_positive_integer(frequency_decimation):
         msg = "frequency_decimation must be a positive integer."
         raise ValueError(msg)
-    reduced = [method for method in methods if _reduces_frequency(method)]
-    requested = [
-        name
-        for name, given in (
-            ("frequency_bands", frequency_bands is not None),
-            ("frequency_decimation", frequency_decimation != 1),
+    if (frequency_bands is not None or frequency_decimation != 1) and all(
+        _reduces_frequency(method) for method in methods
+    ):
+        operation = (
+            "frequency_bands and frequency_decimation"
+            if frequency_bands is not None and frequency_decimation != 1
+            else "frequency_bands"
+            if frequency_bands is not None
+            else "frequency_decimation"
         )
-        if given
-    ]
-    if requested and len(reduced) == len(methods):
         msg = (
-            f"{' and '.join(requested)} cannot be applied to {', '.join(reduced)}: "
-            "these measures already reduce frequency over frequency_range, while "
-            "frequency_bands and frequency_decimation act on the frequency axis of "
-            "frequency-resolved measures. To summarize several bands, call once per "
-            "band with frequency_range=(low, high); to combine fewer, independent "
-            "bins, pass connectivity_kwargs={'frequency_resolution': ...}."
+            f"{operation} cannot be applied to {_listed(methods)}: these measures "
+            "already reduce their frequency bins (every bin, or those of "
+            "frequency_range) to one value, while frequency_bands and "
+            "frequency_decimation act on the frequency axis of frequency-resolved "
+            "measures. To summarize several bands, call once per band with "
+            "frequency_range=(low, high); to combine fewer, independent bins, pass "
+            "connectivity_kwargs={'frequency_resolution': ...}."
         )
         raise ValueError(msg)
 
