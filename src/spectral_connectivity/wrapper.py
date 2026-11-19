@@ -33,8 +33,6 @@ from spectral_connectivity._measure_registry import (
     _measure_description,
     _requested_methods,
     _requires_two_sided,
-    _validate_method_names,
-    _warn_deprecated_measure_names,
 )
 from spectral_connectivity._provenance import (
     _shared_provenance_attrs,
@@ -466,8 +464,7 @@ def connectivity_to_xarray(
     >>> connectivity_to_xarray(mt).dims
     ('time', 'frequency', 'source', 'target')
     """
-    _validate_method_names([method])
-    _warn_deprecated_measure_names([method])
+    (method,), output_names, _ = _requested_methods(method, ())
     connectivity = Connectivity.from_transform(m)
     provenance_metadata = getattr(m, "_provenance_metadata", None)
     if provenance_metadata is not None:
@@ -504,6 +501,7 @@ def connectivity_to_xarray(
         squeeze,
         shared_attrs,
         frequency_selection=selection,
+        result_name=output_names[method],
         **kwargs,
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
@@ -642,9 +640,14 @@ def _format_and_reduce_measures(
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
+    output_names: Mapping[str, str],
     signal_metadata: _SignalMetadata | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Format the requested measures to xarray and apply frequency reduction.
+
+    ``methods`` are canonical names; ``output_names`` maps each to the name the
+    caller requested, which names its result variable (see
+    :func:`_requested_methods`).
 
     Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
     passes the already-resolved ``group_labels`` (see :func:`_resolve_group_labels`)
@@ -708,6 +711,7 @@ def _format_and_reduce_measures(
             signal_metadata=signal_metadata,
             transform_settings_hint=transform_settings_hint,
             frequency_selection=selection if consumes_range else None,
+            result_name=output_names[method],
             **measure_kwargs(method),
         )
         if frequency_range is None or consumes_range:
@@ -1125,7 +1129,7 @@ def multitaper_connectivity(
     # The default set (DEFAULT_METHODS) is portably serializable; complex,
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
-    method, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -1169,6 +1173,7 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        output_names=output_names,
         signal_metadata=signal_metadata,
     )
     _warn_label_orientation_changed(method)
@@ -1407,7 +1412,7 @@ def fourier_connectivity(
         is_one_sided=one_sided,
     )
     # No default measure needs a two-sided spectrum, so the defaults suit any input.
-    methods, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )
@@ -1523,5 +1528,6 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        output_names=output_names,
         signal_metadata=signal_metadata,
     )

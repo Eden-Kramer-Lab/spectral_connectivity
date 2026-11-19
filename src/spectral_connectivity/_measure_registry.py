@@ -2,7 +2,6 @@
 
 import difflib
 import inspect
-import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import KW_ONLY, dataclass
 from typing import Literal
@@ -13,8 +12,8 @@ from spectral_connectivity.connectivity import (
     _DEPRECATED_MEASURE_NAMES,
     _NON_MEASURE_METHODS,
     Connectivity,
+    _resolve_deprecated_measure_name,
 )
-from spectral_connectivity.utils import stacklevel_outside_package
 
 
 @dataclass(frozen=True)
@@ -646,21 +645,9 @@ _CATEGORY_DIMS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _canonical_measure_name(method: str) -> str:
-    """The registered name ``method`` stands for: a deprecated name's replacement,
-    otherwise ``method`` itself."""
-    return _DEPRECATED_MEASURE_NAMES.get(method, method)
-
-
-def _measure_spec(method: str) -> _MeasureSpec | None:
-    """The registry record of ``method`` (or of the measure a deprecated name
-    stands for); ``None`` for an unregistered extension measure."""
-    return _MEASURE_SPECS.get(_canonical_measure_name(method))
-
-
 def _requires_two_sided(method: str) -> bool:
     """Whether a registered measure needs a two-sided spectrum (Wilson factorization)."""
-    spec = _measure_spec(method)
+    spec = _MEASURE_SPECS.get(method)
     return spec is not None and spec.requires_two_sided
 
 
@@ -678,7 +665,7 @@ def _is_group_measure(method: str) -> bool:
 def _consumes_frequency_range(method: str) -> bool:
     """Whether a registered measure consumes ``frequency_range`` (see
     :attr:`_MeasureSpec.consumes_frequency_range`)."""
-    spec = _measure_spec(method)
+    spec = _MEASURE_SPECS.get(method)
     return spec is not None and spec.consumes_frequency_range
 
 
@@ -691,57 +678,51 @@ def _listed(names: Sequence[str]) -> str:
 
 def _reduces_frequency(method: str) -> bool:
     """Whether a registered measure's result has no frequency axis."""
-    spec = _measure_spec(method)
+    spec = _MEASURE_SPECS.get(method)
     return spec is not None and "frequency" not in spec.dims
 
 
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
-) -> tuple[list[str], bool]:
-    """The measures a wrapper call requests, and whether it named a single one.
+) -> tuple[list[str], dict[str, str], bool]:
+    """The measures a wrapper call requests, resolved once to canonical names.
 
     ``None`` requests ``defaults``; a string requests that one measure, whose
-    result is returned as a DataArray rather than a Dataset. An empty request
-    or an unknown name raises.
+    result is returned as a DataArray rather than a Dataset. An empty request,
+    an unknown name, or a measure named under both its deprecated and its
+    canonical name (one estimate under two variable names) raises; a deprecated
+    name warns at the caller.
+
+    Returns
+    -------
+    methods : list of str
+        The canonical names, in request order, which everything downstream uses.
+    output_names : dict of str to str
+        Each canonical name's requested name, which names its result variable
+        and its ``measure`` attribute.
+    single : bool
+        Whether ``method`` was a single name.
     """
     if method is None:
-        methods = list(defaults)
+        requested = list(defaults)
     elif isinstance(method, str):
-        methods = [method]
+        requested = [method]
     else:
-        methods = list(method)
-    if not methods:
+        requested = list(method)
+    if not requested:
         msg = "method must name at least one connectivity measure; got an empty list."
         raise ValueError(msg)
-    _validate_method_names(methods)
-    _warn_deprecated_measure_names(methods)
-    return methods, isinstance(method, str)
-
-
-def _warn_deprecated_measure_names(methods: Sequence[str]) -> None:
-    """Warn at the caller for each deprecated measure name requested.
-
-    A request naming a measure under both its names is rejected: the two would
-    be the same estimate under two variable names.
-    """
-    for method in methods:
-        canonical = _DEPRECATED_MEASURE_NAMES.get(method)
-        if canonical is None:
-            continue
-        if canonical in methods:
+    for name in requested:
+        canonical = _DEPRECATED_MEASURE_NAMES.get(name)
+        if canonical is not None and canonical in requested:
             msg = (
-                f"method names {canonical!r} twice: {method!r} is the deprecated name "
+                f"method names {canonical!r} twice: {name!r} is the deprecated name "
                 f"of {canonical!r}. Request it once, as {canonical!r}."
             )
             raise ValueError(msg)
-        warnings.warn(
-            f"method={method!r} is deprecated and will be removed in 4.0; use "
-            f"method={canonical!r}, which computes the same values. Through 3.x a "
-            f"result requested as {method!r} keeps that variable name and records "
-            f"measure={method!r}.",
-            DeprecationWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
+    _validate_method_names([_DEPRECATED_MEASURE_NAMES.get(name, name) for name in requested])
+    methods = [_resolve_deprecated_measure_name(name, "method={!r}") for name in requested]
+    return methods, dict(zip(methods, requested, strict=True)), isinstance(method, str)
 
 
 def _measure_description(name: str) -> str:
@@ -777,11 +758,7 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
 
 def _is_extension_measure(name: str) -> bool:
     """Whether ``name`` is a public instance method usable as a measure."""
-    if (
-        name.startswith("_")
-        or name in _NON_MEASURE_METHODS
-        or name in _DEPRECATED_MEASURE_NAMES
-    ):
+    if name.startswith("_") or name in _NON_MEASURE_METHODS:
         return False
     attribute = inspect.getattr_static(Connectivity, name, None)
     return inspect.isfunction(attribute)
@@ -799,9 +776,7 @@ def _validate_method_names(methods: Sequence[str]) -> None:
     unknown = [
         method
         for method in methods
-        if method not in _MEASURE_SPECS
-        and method not in _DEPRECATED_MEASURE_NAMES
-        and not _is_extension_measure(method)
+        if method not in _MEASURE_SPECS and not _is_extension_measure(method)
     ]
     if not unknown:
         return
@@ -823,7 +798,7 @@ def _validate_method_names(methods: Sequence[str]) -> None:
 def _measure_attrs(method: str, signal_units: str | None) -> dict[str, str | float]:
     """The attrs of ``method``'s result variable (see :meth:`_MeasureSpec.result_attrs`);
     an unregistered extension measure gets only its name as ``long_name``."""
-    spec = _measure_spec(method)
+    spec = _MEASURE_SPECS.get(method)
     if spec is None:
         return {"long_name": method}
     return spec.result_attrs(signal_units)

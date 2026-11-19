@@ -76,6 +76,26 @@ _NON_MEASURE_METHODS = frozenset(
 _DEPRECATED_MEASURE_NAMES: dict[str, str] = {
     "coherence_magnitude": "magnitude_squared_coherence",
 }
+
+
+def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
+    """The canonical name of ``method``; a deprecated name warns at the caller.
+
+    ``spelling`` writes a name the way the caller did, e.g. ``"method={!r}"``,
+    for the old and new spellings in the warning.
+    """
+    canonical = _DEPRECATED_MEASURE_NAMES.get(method)
+    if canonical is None:
+        return method
+    warnings.warn(
+        f"{spelling.format(method)} is deprecated and will be removed in 4.0; use "
+        f"{spelling.format(canonical)}, which gives the same values.",
+        DeprecationWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+    return canonical
+
+
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -2040,16 +2060,7 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
-        if method in _DEPRECATED_MEASURE_NAMES:
-            canonical = _DEPRECATED_MEASURE_NAMES[method]
-            warnings.warn(
-                f"jackknife({method!r}) names a measure by its deprecated name, which "
-                f"will be removed in 4.0; use jackknife({canonical!r}), which gives "
-                "the same interval.",
-                DeprecationWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
-            method = canonical
+        method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
             method.startswith("_")
@@ -2466,13 +2477,7 @@ class Connectivity:
         magnitude_squared_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
         """
-        warnings.warn(
-            "Connectivity.coherence_magnitude() is deprecated and will be removed in "
-            "4.0; use Connectivity.magnitude_squared_coherence(), which returns the "
-            "same values.",
-            DeprecationWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
+        _resolve_deprecated_measure_name("coherence_magnitude", "Connectivity.{}()")
         return self.magnitude_squared_coherence()
 
     @_asnumpy

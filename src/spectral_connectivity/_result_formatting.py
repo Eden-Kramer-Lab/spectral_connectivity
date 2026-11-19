@@ -12,9 +12,8 @@ from numpy.typing import NDArray
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
     _COMPANION_SPECS,
-    _canonical_measure_name,
+    _MEASURE_SPECS,
     _measure_attrs,
-    _measure_spec,
 )
 from spectral_connectivity._provenance import _canonical_json, _store_provenance_item
 from spectral_connectivity.connectivity import (
@@ -123,9 +122,15 @@ def _connectivity_result_to_xarray(
     signal_metadata: _SignalMetadata | None = None,
     transform_settings_hint: str | None = None,
     frequency_selection: _FrequencySelection | None = None,
+    result_name: str | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
+
+    ``method`` is the canonical measure name. ``result_name`` (default
+    ``method``) is the name the caller requested, which names the result
+    variable and its ``measure`` attribute, so a deprecated name requested
+    explicitly keeps its 2.x variable name.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
@@ -137,10 +142,9 @@ def _connectivity_result_to_xarray(
     measure's own variables rather than becoming scalar coordinates a Dataset
     would broadcast onto every other variable.
     """
-    # A deprecated name has warned already (where the request was read) and is
-    # computed under its canonical name; the result keeps the name requested.
-    measure_spec = _measure_spec(method)
-    measure = getattr(connectivity, _canonical_measure_name(method))
+    name = method if result_name is None else result_name
+    measure_spec = _MEASURE_SPECS.get(method)
+    measure = getattr(connectivity, method)
     _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
@@ -172,7 +176,7 @@ def _connectivity_result_to_xarray(
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
-    attrs["measure"] = method
+    attrs["measure"] = name
     attrs["measure_kwargs_json"] = _canonical_json(kwargs)
     for key, value in kwargs.items():
         _store_provenance_item(attrs, "arg_", key, value)
@@ -236,7 +240,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
 
@@ -247,7 +251,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source", "target"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
         if squeeze and connectivity.n_signals == 2:
@@ -294,7 +298,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source_group", "target_group"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
 
@@ -332,7 +336,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "candidate", "source", "target"),
-            name=method,
+            name=name,
             attrs={
                 **measure_attrs,
                 **selection.attrs(),
@@ -357,7 +361,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords={"time": base_coordinates["time"], **signal_coordinates},
             dims=("time", "source", "target"),
-            name=method,
+            name=name,
             attrs={
                 **measure_attrs,
                 **_required_selection(method, frequency_selection).attrs(),
@@ -389,7 +393,7 @@ def _connectivity_result_to_xarray(
             ),
         }
         data_vars: dict[str, xr.DataArray] = {}
-        for name, (values, own_attrs, units) in variables.items():
+        for variable_name, (values, own_attrs, units) in variables.items():
             if values.shape != (
                 len(connectivity.time),
                 connectivity.n_signals,
@@ -398,7 +402,7 @@ def _connectivity_result_to_xarray(
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
             variable_attrs = {**own_attrs, **interval_attrs, "units": units}
-            data_vars[name] = xr.DataArray(
+            data_vars[variable_name] = xr.DataArray(
                 values,
                 coords=dataset_coordinates,
                 dims=("time", "source", "target"),
@@ -488,7 +492,7 @@ def _connectivity_result_to_xarray(
             for name, (values, attrs) in extra_signal_coordinates.items()
         }
         data_vars = {
-            method: xr.DataArray(
+            name: xr.DataArray(
                 numerical_result.scores,
                 coords={
                     key: component_coordinates[key]
@@ -540,14 +544,14 @@ def _connectivity_result_to_xarray(
         }
         projection_coordinates.update(signal_extras)
         if numerical_result.filters is not None:
-            data_vars[f"{method}_filters"] = xr.DataArray(
+            data_vars[f"{name}_filters"] = xr.DataArray(
                 numerical_result.filters,
                 coords=projection_coordinates,
                 dims=projection_dims,
                 attrs={**attrs, "long_name": "Spatial filters"},
             )
         if numerical_result.patterns is not None:
-            data_vars[f"{method}_patterns"] = xr.DataArray(
+            data_vars[f"{name}_patterns"] = xr.DataArray(
                 numerical_result.patterns,
                 coords=projection_coordinates,
                 dims=projection_dims,
