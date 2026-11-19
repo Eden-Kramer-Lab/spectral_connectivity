@@ -380,11 +380,19 @@ Rulings where the rules above were silent:
   bins in the interval, before any `frequency_resolution` subsampling), and
   `frequency_interval_closed` replace the unreleased
   `frequency_band_lower`/`_upper` on each variable of the three measures.
+- **One interval record.** `_FrequencySelection.attrs()` is the single writer
+  of those five attributes for every variable a `frequency_range` applied to,
+  whether the wrapper cropped it or the estimator consumed the range. The
+  unreleased `frequency_range_json` is retired without an alias;
+  `measure_kwargs_json` and `arg_*` remain the generic record of a measure's
+  keyword arguments. Decimation and band reduction keep the interval record,
+  which names the interval they were drawn from, and add their own
+  (`frequency_decimation`, `frequency_bands_json`, `frequency_reduction`).
 - **Wrapper meaning.** `frequency_range` is selected once per call, on the
   full grid, before any measure runs. It is passed to the interval measures,
   which are not cut again, and that one selection crops every other result
-  before the merge; every variable it applied to records `frequency_range_json`.
-  It is rejected inside `connectivity_kwargs`. `frequency_bands` and `frequency_decimation` act on
+  before the merge. It is rejected inside `connectivity_kwargs`.
+  `frequency_bands` and `frequency_decimation` act on
   frequency-resolved variables, `delay` included, and leave
   `phase_slope_index`/`group_delay` as computed over `frequency_range`; a
   request made only of those two raises.

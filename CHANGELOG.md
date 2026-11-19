@@ -472,8 +472,10 @@ directly with results from 2.x.
   `frequency_range`; requesting either with only those two measures raises.
   `frequency_range` inside `connectivity_kwargs` is rejected in favor of the
   wrapper argument. The range is selected once per call, on the full grid, and
-  every variable it applied to records it as `frequency_range_json`: the
-  cropped variables and every variable of the three interval measures.
+  every variable it applied to, cropped or consuming, records the same
+  `requested_frequency_*`, `selected_frequency_*`, and
+  `frequency_interval_closed` attributes; decimation and band reduction keep
+  them and record themselves.
 - The `taper_weighting="adaptive"` documentation states that the Thomson
   weights are applied per signal, so coherence between signals with different
   spectra is shrunk by the cosine similarity of their weight vectors and cannot

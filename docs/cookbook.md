@@ -225,7 +225,7 @@ Below, bin 142 of `np.arange(1.0, 100.0, 0.1)` is stored as
 `delay`, `group_delay`, and `phase_slope_index` receive the wrapper's
 `frequency_range` and consume only those bins; every other measure is computed
 from the full spectrum (the directed measures factorize all of it) and then
-cropped. The frequency-reduced measures record the interval on their variables:
+cropped. Every variable the range applied to records the interval:
 
 ```python
 >>> psi = multitaper_connectivity(
@@ -358,11 +358,10 @@ facts needed to interpret it. Settings use one JSON record:
 | `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
 | `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs and for a transform of your own that leaves `frequencies` as `None`. |
 | `frequency_coordinate`, `time_coordinate` | External Fourier inputs: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). A transform of your own that leaves `frequencies` or `time` as `None` records the filled-in value. |
-| `frequency_range_json` | The wrapper's `frequency_range` as JSON `[low, high]`, on every variable it applied to: each frequency-resolved variable it cropped, and each variable of `delay`, `group_delay`, and `phase_slope_index`, which consumed it. Not on the Dataset itself. |
-| `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. |
-| `requested_frequency_lower`, `requested_frequency_upper` | `delay`, `group_delay`, and `phase_slope_index` only: the bounds given as `frequency_range` (or the deprecated `frequencies_of_interest`), in the frequency coordinate's units. Omitted when every bin is used. |
-| `selected_frequency_lower`, `selected_frequency_upper` | The same three measures: the lowest and highest bins in that interval, before any `frequency_resolution` subsampling. |
-| `frequency_interval_closed` | The same three measures: `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
+| `requested_frequency_lower`, `requested_frequency_upper` | The bounds given as `frequency_range` (or the deprecated `frequencies_of_interest`), in the frequency coordinate's units. The interval record below is on every variable a `frequency_range` applied to: each frequency-resolved variable the wrappers cropped, and every variable of `delay`, `group_delay`, and `phase_slope_index`, which consume the interval and carry the record even without one (then every bin, with no requested bounds). Not on the Dataset itself. |
+| `selected_frequency_lower`, `selected_frequency_upper` | The lowest and highest bins in that interval, before any `frequency_resolution` subsampling or `frequency_decimation`. |
+| `frequency_interval_closed` | `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
+| `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. Decimation and band reduction keep the interval record, which still names the interval they were drawn from; the `frequency` (or `band`) coordinate shows what was returned. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

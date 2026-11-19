@@ -649,9 +649,9 @@ def _format_and_reduce_measures(
             frequency_selection=selection if consumes_range else None,
             **measure_kwargs(method),
         )
-        if frequency_range is None:
+        if frequency_range is None or consumes_range:
             return result
-        return _crop_frequency_range(result, selection, consumed=consumes_range)
+        return _crop_frequency_range(result, selection)
 
     if return_dataarray:
         result: xr.DataArray | xr.Dataset = formatted(methods[0], squeeze)

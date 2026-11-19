@@ -379,35 +379,17 @@ def _check_frequency_operations(
 
 
 def _crop_frequency_range(
-    result: xr.DataArray | xr.Dataset,
-    selection: _FrequencySelection,
-    *,
-    consumed: bool,
+    result: xr.DataArray | xr.Dataset, selection: _FrequencySelection
 ) -> xr.DataArray | xr.Dataset:
-    """Cut every frequency-resolved variable of ``result`` to ``selection``.
+    """Cut a frequency-resolved result to the call's ``frequency_range``.
 
-    ``selection`` is the call's ``frequency_range``, resolved once on the full
-    grid. ``result``'s frequency axis is that grid, unless the measure
-    ``consumed`` the range itself (``_MeasureSpec.consumes_frequency_range``):
-    it then holds only the selected bins already, or has no frequency axis,
-    and is not cut again. Every variable the range
-    applied to records it as ``frequency_range_json``: each variable of a
-    consuming measure, and each frequency-resolved variable of the others.
+    ``selection`` is that range, resolved once on the full grid, which is the
+    frequency axis of ``result``. Each frequency-resolved variable records
+    ``selection.attrs()``, the interval record a measure that consumed the
+    range writes for itself, so every variable the range applied to carries
+    the same attributes.
     """
-    assert selection.requested is not None  # cropped only for a frequency_range
-    record = {"frequency_range_json": _canonical_json(selection.requested)}
-    if consumed:
-        if isinstance(result, xr.DataArray):
-            return result.assign_attrs(record)
-        return result.assign(
-            {
-                name: variable.assign_attrs(record)
-                for name, variable in result.data_vars.items()
-            }
-        )
-    if "frequency" not in result.dims:
-        return result
-    return _with_frequency_attrs(result.isel(frequency=selection.index), **record)
+    return _with_frequency_attrs(result.isel(frequency=selection.index), **selection.attrs())
 
 
 def _decimate_and_reduce_frequencies(

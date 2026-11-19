@@ -3741,19 +3741,21 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
         frequency_decimation=2,
     )
     coherence, psi = dataset.coherence_magnitude, dataset.phase_slope_index
-    for name in ("selected_frequency_lower", "frequency_interval_closed"):
-        assert name not in coherence.coords
-        assert name not in coherence.attrs
-        assert name not in dataset.attrs
-    # phase_slope_index consumed frequency_range itself, so it records the
-    # range but was neither cropped nor decimated.
-    assert psi.attrs["selected_frequency_lower"] == 4.0
-    assert psi.attrs["selected_frequency_upper"] == 50.0
+    # Both variables record the interval frequency_range selected: coherence
+    # was cropped to it and phase_slope_index consumed it, uncropped and
+    # undecimated. The Dataset itself carries no frequency record.
     for variable in (coherence, psi):
-        assert json.loads(variable.attrs["frequency_range_json"]) == [4.0, 50.0]
+        assert variable.attrs["selected_frequency_lower"] == 4.0
+        assert variable.attrs["selected_frequency_upper"] == 50.0
+        assert variable.attrs["frequency_interval_closed"] == "both"
+        assert "selected_frequency_lower" not in variable.coords
     assert coherence.attrs["frequency_decimation"] == 2
     assert "frequency_decimation" not in psi.attrs
-    for key in ("frequency_range_json", "frequency_decimation"):
+    for key in (
+        "selected_frequency_lower",
+        "frequency_interval_closed",
+        "frequency_decimation",
+    ):
         assert key not in dataset.attrs
 
     banded = multitaper_connectivity(
