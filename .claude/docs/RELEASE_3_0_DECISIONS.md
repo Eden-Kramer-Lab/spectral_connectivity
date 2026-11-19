@@ -371,8 +371,10 @@ Rulings where the rules above were silent:
   is derived. It evaluates v2.0.1's expression, `(band[0] < frequencies) &
   (frequencies < band[1])`, on the band as the caller gave it and the grid as
   stored, so the deprecated keyword selects the bins it selected in v2.0.1
-  (rule 5): a Python-number band meets a float32 grid in float32, an ndarray
-  band in float64. On a rounded grid that can include a bin within rounding of
+  (rule 5) under the same NumPy: a Python-number band meets a float32 grid in
+  float32, while an ndarray band's float64 scalar compares in float64 under
+  NumPy 2 (NEP 50) but is cast to float32 under NumPy 1.x, as in v2.0.1
+  itself (checked against the 2.0.1 wheel under both NumPy 2.5 and 1.24). On a rounded grid that can include a bin within rounding of
   an edge, as in v2.0.1. (Development builds before this step compared in
   float64 and gained edge bins on float32 grids.) It accepts infinite bounds
   and selects exactly the bins v2.0.1 selects for an open-ended band; it

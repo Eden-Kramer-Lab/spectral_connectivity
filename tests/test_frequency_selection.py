@@ -341,8 +341,8 @@ def test_a_bin_stored_with_rounding_of_its_decimal_bound_is_included(
 
 def _released_band_mask(frequencies_of_interest, frequencies):
     """The bin mask of v2.0.1's ``_bandpass``, verbatim: the band as the caller
-    gave it compared against the grid in its stored dtype, so a Python float
-    bound meets a float32 grid in float32 and an ndarray bound in float64."""
+    gave it compared against the grid in its stored dtype, promoted by the
+    installed NumPy as v2.0.1's own expression would be."""
     return (frequencies_of_interest[0] < frequencies) & (
         frequencies < frequencies_of_interest[1]
     )
@@ -417,10 +417,10 @@ def test_an_open_deprecated_band_records_only_its_finite_requested_bounds(
     ],
 )
 def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
-    """The deprecated exclusive selection is v2.0.1's, bit for bit: on a
-    float32 grid a Python-number band is compared in float32, so float32(0.3)
-    excludes the 0.3 bin, while an ndarray band is compared in float64. An
-    open-ended band, which v2.0.1 accepted, selects what v2.0.1 selected."""
+    """The deprecated exclusive selection is v2.0.1's, bit for bit, under the
+    installed NumPy: the reference is the released expression evaluated here,
+    so it holds whichever promotion rules apply. An open-ended band, which
+    v2.0.1 accepted, selects what v2.0.1 selects."""
     band = _BAND_FORMS[form](bounds)
     mask, _ = _frequencies_of_interest_mask(band, grid)
     np.testing.assert_array_equal(mask, _released_band_mask(band, grid))
@@ -456,12 +456,19 @@ def test_the_frozen_validation_accepts_open_bands_the_canonical_rule_rejects(bou
         _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
 
 
-def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
-    """Guard for the test above: its float32 cases exercise both promotions."""
+def test_the_released_comparison_promotes_as_the_installed_numpy_does():
+    """Guard for the test above: its float32 cases exercise the promotion the
+    installed NumPy applies. A Python-number band meets a float32 grid in
+    float32 under every NumPy, so float32(0.3) excludes the 0.3 bin. A NumPy
+    float64 scalar from an ndarray band compares in float64 under NumPy 2
+    (NEP 50), keeping the 0.3 and 0.7 bins, but is cast to float32 under
+    NumPy 1.x's value-based casting, like the tuple."""
     as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTHS)
     as_array = _released_band_mask(np.array([0.3, 0.7]), _FLOAT32_TENTHS)
     assert np.flatnonzero(as_tuple).tolist() == [4, 5, 6]
-    assert np.flatnonzero(as_array).tolist() == [3, 4, 5, 6, 7]
+    numpy_2 = np.lib.NumpyVersion(np.__version__) >= "2.0.0"
+    expected = [3, 4, 5, 6, 7] if numpy_2 else [4, 5, 6]
+    assert np.flatnonzero(as_array).tolist() == expected
 
 
 @pytest.mark.parametrize(

@@ -5859,10 +5859,15 @@ def _frequencies_of_interest_mask(
 
     v2.0.1's ``_bandpass`` evaluated ``(band[0] < frequencies) & (frequencies
     < band[1])`` on the band as the caller gave it and the grid as stored;
-    this does the same, so NumPy compares a Python-number band with a float32
-    grid in float32 and an ndarray band in float64, exactly as v2.0.1 did.
-    Every band of two values with a bin inside selects the bins v2.0.1
-    selected, including an open-ended one such as ``(10, np.inf)``.
+    this evaluates the same expression, so the installed NumPy promotes it
+    exactly as it promotes v2.0.1's. On a float32 grid a Python-number bound
+    is compared in float32 under every NumPy; a NumPy float64 scalar (from an
+    ndarray band) is compared in float64 under NumPy 2 (NEP 50) but cast to
+    float32 under NumPy 1.x's value-based casting, so the two forms can select
+    different edge bins under NumPy 2 and the same bins under NumPy 1.x, as in
+    v2.0.1. Every band of two values with a bin inside selects the bins
+    v2.0.1 selects under the same NumPy, including an open-ended one such as
+    ``(10, np.inf)``.
 
     The validation is this function's own and never changes with
     :func:`_frequency_interval_mask`. It rejects a band that is not exactly
