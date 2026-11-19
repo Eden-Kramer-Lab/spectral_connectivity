@@ -42,6 +42,7 @@ from spectral_connectivity._provenance import (
 from spectral_connectivity._result_formatting import (
     UnsupportedMeasureError,
     _connectivity_result_to_xarray,
+    _measure_frequency_selection,
 )
 from spectral_connectivity.connectivity import (
     _MIGRATION_GUIDE_URL,
@@ -49,7 +50,6 @@ from spectral_connectivity.connectivity import (
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
-    _select_measure_frequencies,
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
@@ -463,11 +463,7 @@ def connectivity_to_xarray(
             # frequency dimension on which a 2-D coordinate can live, so expose
             # whether every frequency the measure consumed has full
             # wavelet/smoothing support at each time point.
-            consumed = _select_measure_frequencies(
-                connectivity.frequencies,
-                kwargs.get("frequency_range"),
-                kwargs.get("frequencies_of_interest"),
-            ).mask
+            consumed = _measure_frequency_selection(connectivity, kwargs).mask
             valid_time = validity[:, consumed].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
