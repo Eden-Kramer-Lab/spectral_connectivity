@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from spectral_connectivity._backend import ON_GPU
-from spectral_connectivity.connectivity import Connectivity, _frequency_grid_rtol
+from spectral_connectivity.connectivity import Connectivity, _uniform_grid_spacing
 from spectral_connectivity.utils import to_numpy
 
 
@@ -230,23 +230,13 @@ def _with_frequency_grid_metadata(
     grid: dict[str, Any] = {}
     if "frequency" in result.dims:
         frequency = result.coords["frequency"]
-        values = np.asarray(frequency.values)
-        if values.size >= 2:
-            # Compare against the fitted linear grid with the tolerance external
-            # FFT grids are accepted under.
-            rtol = _frequency_grid_rtol(values)
-            values = values.astype(float)
-            spacing = float((values[-1] - values[0]) / (values.size - 1))
-            expected = values[0] + spacing * np.arange(values.size)
-            if (
-                np.isfinite(spacing)
-                and spacing > 0
-                and np.allclose(values, expected, rtol=rtol, atol=spacing * rtol)
-            ):
-                grid["frequency_bin_spacing"] = spacing
-                units = result.attrs.get("frequency_units", frequency.attrs.get("units"))
-                if units is not None:
-                    grid["frequency_bin_spacing_units"] = units
+        # The definition of a uniform grid the adjacent-bin measures use.
+        spacing = _uniform_grid_spacing(frequency.values)
+        if spacing is not None and spacing > 0:
+            grid["frequency_bin_spacing"] = spacing
+            units = result.attrs.get("frequency_units", frequency.attrs.get("units"))
+            if units is not None:
+                grid["frequency_bin_spacing_units"] = units
 
     def grid_attrs(data: xr.DataArray | xr.Dataset) -> dict[str, Any]:
         attrs = {

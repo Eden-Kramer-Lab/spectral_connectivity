@@ -2194,9 +2194,10 @@ class Welch:
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     segment_duration : float, optional
-        Segment length in seconds; sets the frequency resolution
-        (``1 / segment_duration`` Hz). Strongly recommended -- the fallback of
-        256 samples does not scale with the sampling rate. Give this or
+        Segment length in seconds; sets the spectral bandwidth
+        (:attr:`equivalent_noise_bandwidth`, ``1.5 / segment_duration`` Hz for
+        the Hann window). Strongly recommended -- the fallback of 256 samples
+        does not scale with the sampling rate. Give this or
         ``n_time_samples_per_segment``.
     segment_overlap : float, default=0.5
         Fractional overlap between successive segments, in ``[0, 1)``.
@@ -2247,27 +2248,9 @@ class Welch:
             sampling_frequency,
             "segment_duration and n_time_samples_per_segment resolve to different lengths.",
         )
+        uses_default_segment = segment_samples is None
         if segment_samples is None:
             segment_samples = min(256, n_time_samples)
-            # SciPy's historical 256-sample default does not scale with the
-            # sampling rate, so at typical electrophysiology rates it yields a
-            # very short window and coarse frequency resolution (e.g. ~117 Hz at
-            # 30 kHz), collapsing neuroscience bands. Warn so the choice is
-            # explicit rather than silent.
-            frequency_resolution = sampling_frequency / segment_samples
-            if frequency_resolution > 4:
-                warnings.warn(
-                    f"Welch is using the default segment length of "
-                    f"{segment_samples} samples, giving a "
-                    f"{segment_samples / sampling_frequency * 1e3:.1f} ms window "
-                    f"and {frequency_resolution:.1f} Hz frequency resolution at "
-                    f"sampling_frequency={sampling_frequency:g} Hz. This is too "
-                    "coarse for typical neuroscience bands. Pass segment_duration "
-                    "(seconds) or n_time_samples_per_segment to set the resolution "
-                    "explicitly.",
-                    UserWarning,
-                    stacklevel=2,
-                )
         if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
             msg = "segment_overlap must satisfy 0 <= overlap < 1."
             raise ValueError(msg)
@@ -2283,6 +2266,24 @@ class Welch:
             fft_workers=fft_workers,
         )
         self._segment_overlap = float(segment_overlap)
+        # SciPy's historical 256-sample default does not scale with the
+        # sampling rate, so at typical electrophysiology rates it yields a very
+        # short segment and a wide spectral bandwidth (e.g. ~176 Hz at 30 kHz),
+        # collapsing neuroscience bands. Warn for a default segment shorter than
+        # 0.25 s so the choice is explicit rather than silent.
+        if uses_default_segment and sampling_frequency / segment_samples > 4:
+            warnings.warn(
+                f"Welch is using the default segment length of "
+                f"{segment_samples} samples, giving a "
+                f"{self.segment_duration * 1e3:.1f} ms segment with a "
+                f"{self.equivalent_noise_bandwidth:.1f} Hz equivalent noise "
+                f"bandwidth at sampling_frequency={sampling_frequency:g} Hz. This "
+                "is too coarse for typical neuroscience bands. Pass "
+                "segment_duration (seconds) or n_time_samples_per_segment to set "
+                "the segment length explicitly.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # The settings below are read from the internal STFT that does the
     # computation, so they cannot be reassigned out of step with it.

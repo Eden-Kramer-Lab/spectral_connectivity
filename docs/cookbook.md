@@ -298,9 +298,12 @@ units are unknown. External Fourier defaults use `cycles/sample` frequencies
 and window-index time; these do not establish a physical sampling rate.
 Supplied Fourier coordinates preserve their attrs; a DataArray frequency
 coordinate declaring `units="cycles/sample"` also stays normalized. Supported
-frequency units are `Hz` (also spelled `hz`, `Hertz`, `1/s`, or `s^-1`, in any
-case) and `cycles/sample` (or `cycle/sample`); convert other units before
-calling the wrapper. The top-level `frequency_units` is the canonical spelling,
+frequency units are `Hz` and `cycles/sample`, compared ignoring case and
+whitespace. `Hz` may also be spelled `Hertz`, `cps`, `1/s`, `cycles/s`, `s-1`,
+`s^-1`, or `s**-1` (with `s`, `sec`, or `second`, and `cycle` or `cycles`), and
+`cycles/sample` as `cycle/sample`. Convert other units, such as `kHz` or
+`rad/s`, before calling the wrapper; an empty `units` is treated as unstated.
+The top-level `frequency_units` is the canonical spelling,
 while the returned `frequency` coordinate keeps the supplied attrs as given.
 Whether external coefficients were one-sided is an input setting, recorded as
 `is_one_sided` in `transform_parameters_json`; it does not describe the
@@ -308,8 +311,11 @@ returned frequency grid. A labeled or explicitly declared trial axis, or the
 trial axis of a 4-D/5-D NumPy array, supplies `n_trials`, while an arbitrary
 observation axis supplies only the raw observation count.
 Unambiguous scalar recording coordinates such as `subject`/`session` keep
-their attrs; one named like a result coordinate (e.g. `band`) is dropped with
-a warning. Labels along averaged trial axes are omitted.
+their attrs; one named like a coordinate or variable of the result (e.g.
+`frequency`, or `band` when `frequency_bands` is given) is dropped with a
+warning. Coefficients without a time dimension that keep a numeric scalar time
+coordinate, as after `isel(time=0)`, use it as the time of their single window.
+Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
 helper names:

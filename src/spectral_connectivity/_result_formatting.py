@@ -501,7 +501,9 @@ def _connectivity_result_to_xarray(
                     **signal_extras,
                 },
                 dims=("group", "signal"),
-                attrs={**attrs, "long_name": "Signal belongs to group"},
+                # Shared by every group measure of a merged result, so it
+                # carries no single measure's name or arguments.
+                attrs={**shared_attrs, "long_name": "Signal belongs to group"},
             ),
         }
         projection_dims = (

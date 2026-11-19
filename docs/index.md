@@ -177,8 +177,9 @@ Morlet data, `smoothing_time` and `smoothing_frequency` collect a local
 time/frequency neighborhood; `smoothing_kernel` selects boxcar or Hann weights.
 `padding_mode` controls convolution boundaries, while `edge_mode` retains,
 masks, or trims estimates without full wavelet support. The strict
-`valid_time_frequency` mask is also exposed by the xarray wrapper. `Welch`
-resolves `1 / segment_duration` Hz, so set `segment_duration` explicitly for
+`valid_time_frequency` mask is also exposed by the xarray wrapper. `Welch`'s
+spectral bandwidth (`equivalent_noise_bandwidth`) is `1.5 / segment_duration`
+Hz for its Hann window, so set `segment_duration` explicitly for
 electrophysiology data. Multitaper DPSS coefficients support uniform
 (historical), eigenvalue, or Thomson adaptive taper weighting through
 `taper_weighting`.

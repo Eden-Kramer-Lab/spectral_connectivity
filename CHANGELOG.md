@@ -161,7 +161,8 @@ directly with results from 2.x.
   derived from them) warn when computed from a single observation, where they
   are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
   provide multiple trials/tapers. `Welch` warns when its default segment length
-  yields coarse frequency resolution. `fourier_connectivity` rejects directed
+  is shorter than 0.25 s, reporting the resulting equivalent noise bandwidth.
+  `fourier_connectivity` rejects directed
   measures on unlabeled coefficients whose two-sidedness cannot be verified.
 - `multitaper_connectivity` now accepts the directed-transfer-function family
   (`directed_transfer_function`, `directed_coherence`,
@@ -206,7 +207,18 @@ directly with results from 2.x.
   external grids keep `cycles/sample` units and record no physical sampling
   rate; an external observation axis not named or declared as trials records no
   `n_trials`. Scalar recording coordinates keep their attrs; coordinates along
-  averaged dimensions, such as per-trial labels, are not carried over.
+  averaged dimensions, such as per-trial labels, are not carried over, and one
+  named like a coordinate or variable of the result is dropped with a warning
+  (band reduction likewise discards existing `band`, `band_lower`,
+  `band_upper`, and `valid_time_band` coordinates). Fourier coefficients
+  without a time dimension use a numeric scalar time coordinate, as left by
+  `isel(time=0)`, as the time of their single window. A DataArray frequency
+  coordinate may spell `Hz` as `Hertz`, `cps`, `1/s`, `cycles/s`, `s-1`,
+  `s^-1`, or `s**-1`; other units, such as `kHz`, are rejected and an empty
+  `units` is treated as unstated. `connectivity_to_xarray` accepts any
+  `SpectralTransform`; one that is not built in records its class name as
+  `transform`. The shared `group_membership` variable of the component
+  measures carries only the shared provenance.
 - The xarray interfaces now expose every built-in nonstandard result contract:
   group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
   and membership, delay candidates, global-coherence scores/vectors,
@@ -345,7 +357,10 @@ directly with results from 2.x.
   coefficient of its pattern, so the canonical phase is no longer ambiguous by
   pi; single-channel groups reproduce the conjugate pairwise coherency.
 - `phase_slope_index`, `delay`, and `group_delay` require a uniformly spaced
-  frequency grid, and `delay`/`group_delay` reject non-uniform observation
+  frequency grid (every step within one part in a million of the mean step,
+  allowing for the rounding of a float32 or decimal-rounded coordinate; the
+  same test decides whether a result records `frequency_bin_spacing`), and
+  `delay`/`group_delay` reject non-uniform observation
   weights, because their adjacent-bin combinations and coherence null assume
   equal spacing and equally weighted observations (wavelet grids and Hann
   smoothing violate these silently).
@@ -579,7 +594,8 @@ directly with results from 2.x.
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
   data is no longer short by half the DC cell. The Nyquist bin is the bin at the
   result's recorded `nyquist_frequency` (or a 2.x result's
-  `mt_nyquist_frequency`), so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
+  `mt_nyquist_frequency`, or else half its recorded sampling rate), so an
+  odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
   a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`

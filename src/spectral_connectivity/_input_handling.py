@@ -704,9 +704,9 @@ def _unwrap_xarray_input(
         inferred_start_time,
         dict(time_series.attrs),
         _SignalMetadata(
-            _signal_coordinates_from_dataarray(time_series, signal_dimension),
-            units if isinstance(units, str) and units else None,
-            _scalar_coordinates_from_dataarray(time_series),
+            coordinates=_signal_coordinates_from_dataarray(time_series, signal_dimension),
+            units=units if isinstance(units, str) and units else None,
+            recording_coordinates=_scalar_coordinates_from_dataarray(time_series),
         ),
     )
 
@@ -790,7 +790,7 @@ def _unwrap_fourier_input(
             time,
             signal_names,
             None,
-            _SignalMetadata({}, None, n_trials=n_trials),
+            _SignalMetadata(coordinates={}, units=None, n_trials=n_trials),
         )
 
     coefficient_array = fourier_coefficients
@@ -907,22 +907,34 @@ def _unwrap_fourier_input(
         msg = "frequencies conflicts with the DataArray frequency coordinate."
         raise ValueError(msg)
 
-    time_coordinate_attrs = None
+    coordinate_time: NDArray[Any] | None = None
+    time_coordinate_attrs: dict[Hashable, Any] | None = None
+    recording_coordinates = _scalar_coordinates_from_dataarray(coefficient_array)
     if "time" in role_to_dimension:
         time_dimension = role_to_dimension["time"]
-        coordinate_time = (
-            coefficient_array.coords[time_dimension].to_numpy()
-            if time_dimension in coefficient_array.coords
-            and coefficient_array.coords[time_dimension].dims == (time_dimension,)
-            else None
-        )
-        if time is None:
-            time = coordinate_time
-        elif coordinate_time is not None and not _coordinates_agree(time, coordinate_time):
-            msg = "time conflicts with the DataArray time coordinate."
-            raise ValueError(msg)
-        if coordinate_time is not None:
+        if time_dimension in coefficient_array.coords and coefficient_array.coords[
+            time_dimension
+        ].dims == (time_dimension,):
+            coordinate_time = coefficient_array.coords[time_dimension].to_numpy()
             time_coordinate_attrs = dict(coefficient_array.coords[time_dimension].attrs)
+    else:
+        # Selecting one window (e.g. ``isel(time=0)``) leaves its time as a
+        # scalar coordinate: the time of the single window, not a recording
+        # identifier. Several candidates are ambiguous and stay identifiers.
+        scalar_times = [
+            name
+            for name, (values, _) in recording_coordinates.items()
+            if name.lower() in _FOURIER_ROLE_SYNONYMS["time"]
+            and _is_real_numeric_dtype(values.dtype)
+        ]
+        if len(scalar_times) == 1:
+            scalar_time, time_coordinate_attrs = recording_coordinates.pop(scalar_times[0])
+            coordinate_time = scalar_time.reshape(1)
+    if time is None:
+        time = coordinate_time
+    elif coordinate_time is not None and not _coordinates_agree(time, coordinate_time):
+        msg = "time conflicts with the DataArray time coordinate."
+        raise ValueError(msg)
 
     if signal_names is None:
         signal_names = _signal_labels_from_dataarray(
@@ -930,16 +942,22 @@ def _unwrap_fourier_input(
         )
     # Coefficient units are not time-series units, so no density units follow.
     signal_metadata = _SignalMetadata(
-        _signal_coordinates_from_dataarray(coefficient_array, role_to_dimension["signal"]),
-        None,
-        _scalar_coordinates_from_dataarray(coefficient_array),
-        dict(coefficient_array.coords[frequency_dimension].attrs)
-        if frequency_coordinate_is_1d
-        else None,
-        time_coordinate_attrs,
-        int(coefficient_array.sizes[role_to_dimension["trial"]])
-        if trials_are_labeled
-        else None,
+        coordinates=_signal_coordinates_from_dataarray(
+            coefficient_array, role_to_dimension["signal"]
+        ),
+        units=None,
+        recording_coordinates=recording_coordinates,
+        frequency_coordinate_attrs=(
+            dict(coefficient_array.coords[frequency_dimension].attrs)
+            if frequency_coordinate_is_1d
+            else None
+        ),
+        time_coordinate_attrs=time_coordinate_attrs,
+        n_trials=(
+            int(coefficient_array.sizes[role_to_dimension["trial"]])
+            if trials_are_labeled
+            else None
+        ),
     )
     return (
         data,

@@ -274,11 +274,13 @@ def frequency_band_reduce(
     every bin of the band had full support.
 
     The Nyquist frequency is ``result``'s ``nyquist_frequency`` provenance attr
-    (0.5 cycles/sample on normalized Fourier grids), or the released
-    ``mt_nyquist_frequency`` compatibility attr. If neither is recorded, the last bin of a grid starting at 0 Hz is
-    taken to be the Nyquist bin, so reduce such a result before cropping it.
-    Existing ``band``, ``band_lower``, ``band_upper``, or ``valid_time_band``
-    coordinates are replaced, with a warning.
+    (0.5 cycles/sample on normalized Fourier grids), the released
+    ``mt_nyquist_frequency`` compatibility attr, or else half the recorded
+    ``sampling_frequency``. If none is recorded, the last bin of a grid
+    starting at 0 Hz is taken to be the Nyquist bin, so reduce such a result
+    before cropping it. Existing ``band``, ``band_lower``, ``band_upper``, or
+    ``valid_time_band`` coordinates are discarded, with a warning: band
+    reduction defines its own.
     """
     return _with_frequency_grid_metadata(
         _reduce_frequency_bands(
@@ -339,7 +341,10 @@ def connectivity_to_xarray(
     ----------
     m : transform
         A spectral transform (e.g. ``Multitaper``, ``MorletWavelet``, ``Welch``)
-        whose coefficients the measure is computed from.
+        whose coefficients the measure is computed from. Any object satisfying
+        :class:`~spectral_connectivity.transforms.SpectralTransform` works; the
+        result of one that is not built in records its class name as
+        ``transform`` and none of the built-in transforms' settings.
     method : str, default="coherence_magnitude"
         Measure name from :func:`list_measures`.
     signal_names : sequence, optional
@@ -369,7 +374,14 @@ def connectivity_to_xarray(
     ('time', 'frequency', 'source', 'target')
     """
     _validate_method_names([method])
-    metadata = m._provenance_metadata()
+    # The public SpectralTransform interface does not include the built-in
+    # transforms' settings record.
+    provenance_metadata = getattr(m, "_provenance_metadata", None)
+    metadata = (
+        {"transform": type(m).__name__}
+        if provenance_metadata is None
+        else provenance_metadata()
+    )
     connectivity = Connectivity.from_transform(m)
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     shared_attrs = _shared_provenance_attrs(connectivity, metadata)
@@ -906,9 +918,10 @@ def multitaper_connectivity(
       keys without collisions or invalid NetCDF attribute names.
 
     Unambiguous scalar recording coordinates (e.g. ``subject``/``session``)
-    retain their values and attrs; one named like a result coordinate or
-    variable (e.g. ``band``) is not carried over, with a warning. Labels along
-    averaged trial axes are omitted.
+    retain their values and attrs; one named like a coordinate or variable of
+    the result (e.g. ``frequency``, or ``band`` when ``frequency_bands`` is
+    given) is not carried over, with a warning. Labels along averaged trial
+    axes are omitted.
 
     JSON records are canonical for scalar, numpy, mapping, and sequence values.
     A value outside those kinds is recorded best-effort via its ``repr``, which
@@ -1003,16 +1016,47 @@ def multitaper_connectivity(
     return result
 
 
-# Case-insensitive spellings of the frequency units fourier_connectivity accepts
-# without conversion, mapped to the canonical ``frequency_units`` attribute.
-_FREQUENCY_UNIT_SPELLINGS = {
-    "hz": "Hz",
-    "hertz": "Hz",
-    "1/s": "Hz",
-    "s^-1": "Hz",
-    "cycles/sample": "cycles/sample",
-    "cycle/sample": "cycles/sample",
-}
+# Spellings of the frequency units fourier_connectivity accepts without
+# conversion, compared ignoring case and whitespace.
+_HERTZ_SPELLINGS = frozenset(
+    {
+        "hz",
+        "hertz",
+        "cps",
+        "1/s",
+        "1/sec",
+        "1/second",
+        "cycle/s",
+        "cycle/sec",
+        "cycle/second",
+        "cycles/s",
+        "cycles/sec",
+        "cycles/second",
+        "s-1",
+        "s^-1",
+        "s**-1",
+        "second-1",
+        "second^-1",
+        "second**-1",
+    }
+)
+_CYCLES_PER_SAMPLE_SPELLINGS = frozenset({"cycle/sample", "cycles/sample"})
+
+
+def _canonical_frequency_units(units: Any) -> str | None:
+    """Canonical ``frequency_units`` for a frequency coordinate's ``units``.
+
+    ``None`` for units that need converting first (e.g. ``"kHz"`` or
+    ``"rad/s"``) and for a value that is not a string.
+    """
+    if not isinstance(units, str):
+        return None
+    spelling = "".join(units.split()).lower()
+    if spelling in _HERTZ_SPELLINGS:
+        return "Hz"
+    if spelling in _CYCLES_PER_SAMPLE_SPELLINGS:
+        return "cycles/sample"
+    return None
 
 
 def fourier_connectivity(
@@ -1059,10 +1103,15 @@ def fourier_connectivity(
         FFT order; a non-negative, strictly increasing coordinate is treated as
         one-sided when ``is_one_sided`` is omitted. Taken from the DataArray
         coordinate when not given; that coordinate may instead declare
-        ``units="cycles/sample"``. Without either, bins are labeled in
-        normalized cycles/sample.
+        ``units="cycles/sample"``. Its ``units`` must be a spelling of Hz or
+        cycles/sample (e.g. ``"Hertz"``, ``"1/s"``, ``"s-1"``, ``"cycles/s"``,
+        ignoring case and whitespace) or empty; convert other units first.
+        Without either, bins are labeled in normalized cycles/sample.
     time : array, shape (n_time,), optional
         Center time of each window in seconds; defaults to window indices.
+        Taken from the DataArray time coordinate when not given, including a
+        numeric scalar one on coefficients without a time dimension (as left by
+        ``isel(time=0)``), which is the time of the single window.
     method : str or list of str, optional
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
@@ -1266,17 +1315,17 @@ def fourier_connectivity(
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     frequency_units = "cycles/sample" if frequencies is None else "Hz"
     coordinate_units = (signal_metadata.frequency_coordinate_attrs or {}).get("units")
+    if isinstance(coordinate_units, str) and not coordinate_units.strip():
+        # An empty ``units`` states nothing, like an absent one.
+        coordinate_units = None
     if coordinate_units is not None:
-        canonical_units = (
-            _FREQUENCY_UNIT_SPELLINGS.get(coordinate_units.strip().lower())
-            if isinstance(coordinate_units, str)
-            else None
-        )
+        canonical_units = _canonical_frequency_units(coordinate_units)
         if canonical_units is None:
             msg = (
                 "External Fourier frequencies must be in Hz or cycles/sample, got "
-                f"units={coordinate_units!r}; convert the coordinate before calling "
-                "fourier_connectivity."
+                f"units={coordinate_units!r}. Convert the coordinate before calling "
+                "fourier_connectivity, or, if it is already in one of those units "
+                "under another spelling, set its units to 'Hz' or 'cycles/sample'."
             )
             raise ValueError(msg)
         frequency_units = canonical_units

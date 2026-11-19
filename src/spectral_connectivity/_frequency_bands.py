@@ -92,15 +92,21 @@ def _nyquist_frequency(result: xr.DataArray | xr.Dataset) -> float | None:
 
     A result records ``nyquist_frequency`` (or, from 2.x, ``mt_nyquist_frequency``)
     when its sampling rate or normalized grid is known; the grid has a bin there
-    only for an even FFT length. Without it, a grid anchored at 0 is taken to be
-    a complete one-sided spectrum whose last bin is Nyquist. Only the grid as computed can say so:
-    cropping or decimating it makes an interior bin the last one.
+    only for an even FFT length. A result recording only its sampling rate has
+    its Nyquist frequency at half of it. Without either, a grid anchored at 0 is
+    taken to be a complete one-sided spectrum whose last bin is Nyquist. Only
+    the grid as computed can say so: cropping or decimating it makes an interior
+    bin the last one.
     """
-    nyquist_frequency = result.attrs.get(
-        "nyquist_frequency", result.attrs.get("mt_nyquist_frequency")
-    )
-    if nyquist_frequency is not None:
-        return float(nyquist_frequency)
+    for key, scale in (
+        ("nyquist_frequency", 1.0),
+        ("mt_nyquist_frequency", 1.0),
+        ("sampling_frequency", 0.5),
+        ("mt_sampling_frequency", 0.5),
+    ):
+        recorded = result.attrs.get(key)
+        if recorded is not None:
+            return scale * float(recorded)
     if "frequency" not in result.coords:
         return None
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -162,19 +168,23 @@ def _reduce_frequency_bands(
         _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)
         for name, bounds in bands.items()
     ]
-    replaced = [
+    discarded = [
         name
         for name in ("band", "band_lower", "band_upper", "valid_time_band")
         if name in result.coords
     ]
-    if replaced:
+    if discarded:
         warnings.warn(
-            f"Band reduction replaces the existing coordinates {replaced} of the "
-            "result (e.g. scalar recording coordinates carried from the input). "
-            "Rename them before reducing to keep them.",
+            f"Band reduction defines its own coordinates named {discarded}, so the "
+            "result's existing ones (e.g. scalar recording coordinates carried "
+            "from the input) are discarded. Rename them before reducing to keep "
+            "them.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
+        # Discard them first: one left on a Dataset would take precedence over
+        # the per-band coordinate of each reduced variable.
+        result = result.drop_vars(discarded)
     if reduction == "integral" and frequencies.size < 2:
         msg = "reduction='integral' needs at least two frequency bins to know their widths."
         raise ValueError(msg)

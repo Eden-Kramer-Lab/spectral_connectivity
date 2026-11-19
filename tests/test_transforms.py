@@ -2096,9 +2096,12 @@ def test_adaptive_coherence_is_joint_estimate_shrunk_by_weight_cosine_similarity
 
 
 def test_welch_default_segment_warns_on_coarse_resolution():
+    """The warning reports the bandwidth the transform itself reports."""
     data = np.random.default_rng(916).standard_normal((30000, 1, 1))
-    with pytest.warns(UserWarning, match="default segment length"):
-        Welch(data, sampling_frequency=30000)
+    with pytest.warns(UserWarning, match="default segment length") as record:
+        welch = Welch(data, sampling_frequency=30000)
+    assert welch.equivalent_noise_bandwidth == pytest.approx(1.5 * 30000 / 256)
+    assert "175.8 Hz equivalent noise bandwidth" in str(record[0].message)
 
 
 def test_welch_explicit_segment_does_not_warn():

@@ -424,6 +424,38 @@ def _frequency_grid_rtol(values: NDArray[Any]) -> float:
     return max(1e-9, 8 * float(np.finfo(precision).eps))
 
 
+def _uniform_grid_spacing(frequencies: Any) -> float | None:
+    """Step of a uniformly spaced frequency grid, or ``None`` if it is not one.
+
+    The measures that combine adjacent bins and the ``frequency_bin_spacing``
+    recorded on results share this definition. Every step must lie within one
+    part in a million of the mean step, plus the rounding of the two values it
+    separates (see :func:`_frequency_grid_rtol`): a coordinate stored as
+    float32 or rounded to a few decimals is still uniform. The step is negative
+    for a decreasing grid, and a grid with fewer than two values has none.
+
+    Parameters
+    ----------
+    frequencies : array, shape (n_frequencies,)
+        The frequency coordinate, on the host or the device.
+
+    Returns
+    -------
+    float or None
+        The mean step, in the coordinate's units.
+    """
+    values = to_numpy(frequencies)
+    value_rtol = _frequency_grid_rtol(values)
+    values = values.astype(float)
+    if values.size < 2 or not np.all(np.isfinite(values)):
+        return None
+    spacing = float((values[-1] - values[0]) / (values.size - 1))
+    rounding = value_rtol * (np.abs(values[:-1]) + np.abs(values[1:]))
+    if np.all(np.abs(np.diff(values) - spacing) <= 1e-6 * abs(spacing) + rounding):
+        return spacing
+    return None
+
+
 def _require_fft_order(frequencies: Any) -> None:
     """Raise unless two-sided ``frequencies`` are uniformly spaced in FFT order.
 
@@ -1094,8 +1126,9 @@ class Connectivity:
         interpret one bin step as one frequency step; a wavelet transform can
         expose an arbitrary grid, on which those combinations are meaningless.
         """
-        steps = np.diff(to_numpy(self.frequencies))
-        if steps.size and not np.allclose(steps, steps[0], rtol=1e-6, atol=0.0):
+        frequencies = to_numpy(self.frequencies)
+        if frequencies.size >= 2 and _uniform_grid_spacing(frequencies) is None:
+            steps = np.diff(frequencies)
             msg = (
                 f"{measure} requires uniformly spaced frequencies because it "
                 f"combines adjacent frequency bins, but the grid steps range "
