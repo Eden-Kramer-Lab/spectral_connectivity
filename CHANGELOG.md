@@ -507,10 +507,11 @@ is removed in 4.0.
   `frequency_range=(12.0, 48.0)`. Unlike 2.x it is validated: a band that is
   not exactly two values (2.x silently used the first two of a longer one), a
   NaN bound, lower >= upper, or a band with no bin strictly inside (one beyond
-  Nyquist, between two adjacent bins, or `(5, 5)`) raises `ValueError` where 2.x
-  returned all-NaN `group_delay` results, an empty `delay` frequency axis, or
-  a `phase_slope_index` computed from no bins. Giving both spellings raises
-  `ValueError`.
+  Nyquist, between two adjacent bins, or `(5, 5)`) raises `ValueError`. For a
+  band with no bin inside, 2.x returned an empty `delay` frequency axis, while
+  `phase_slope_index` failed with an unrelated `IndexError` and `group_delay`
+  with an unrelated `ValueError` (a zero-size reduction). Giving both
+  spellings raises `ValueError`.
 
 ### Fixed
 

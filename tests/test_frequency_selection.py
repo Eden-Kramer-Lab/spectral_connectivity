@@ -707,11 +707,13 @@ def test_both_spellings_are_rejected(lagged_connectivity, measure):
     ],
 )
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
-def test_deprecated_bands_without_a_bin_inside_raise_where_2x_returned_empty_results(
+def test_invalid_or_binless_deprecated_bands_raise(
     lagged_connectivity, measure, band, message
 ):
-    """As the CHANGELOG states: 2.x returned all-NaN or empty results for
-    these bands; the deprecated keyword now validates them."""
+    """The deprecated keyword validates its band. For a band with no bin
+    inside, 2.x returned an empty delay axis and failed with an unrelated
+    IndexError (phase_slope_index) or ValueError (group_delay); it used the
+    first two values of a longer band and could not index a shorter one."""
     with pytest.raises(ValueError, match=message):
         getattr(lagged_connectivity, measure)(frequencies_of_interest=band)
 
