@@ -1151,7 +1151,11 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct from a spectral transform; the 2.x name of :meth:`from_transform`.
+        """Construct from a spectral transform (deprecated name).
+
+        .. deprecated:: 3.0
+           Use :meth:`from_transform`, which takes the same arguments and
+           builds the same instance. ``from_multitaper`` is removed in 4.0.
 
         Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`
         and calls ``cls.from_transform`` with the same arguments, so a
@@ -1170,6 +1174,11 @@ class Connectivity:
             New Connectivity instance.
 
         """
+        warn_deprecated(
+            f"{cls.__name__}.from_multitaper()",
+            f"{cls.__name__}.from_transform()",
+            "takes the same arguments and builds the same instance",
+        )
         return cls.from_transform(
             multitaper_instance,
             expectation_type=expectation_type,

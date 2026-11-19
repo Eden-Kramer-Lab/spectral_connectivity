@@ -151,8 +151,7 @@ m = Multitaper(
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-# (`from_multitaper` is a backward-compatible alias for the transform-neutral
-# `from_transform`.)
+# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.)
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples

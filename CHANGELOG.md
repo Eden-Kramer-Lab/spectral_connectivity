@@ -55,6 +55,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 | `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `Connectivity.from_multitaper(m)` | Use `Connectivity.from_transform(m)`, which takes the same arguments and builds the same instance from any spectral transform. `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 
 ### Added
 
@@ -545,6 +546,15 @@ is removed in 4.0.
   working and a saved file says which name produced it; its values and other
   attributes are those of `magnitude_squared_coherence`. Requesting both names
   in one call raises `ValueError`.
+- `Connectivity.from_multitaper`: use `Connectivity.from_transform`, the
+  canonical constructor for any spectral transform. The old name takes the
+  same arguments (including its `multitaper_instance` keyword), calls
+  `cls.from_transform`, so a subclass's `from_transform` override applies to
+  both names, and builds the same instance; it warns once, at the line that
+  called it. A subclass overriding `from_multitaper` keeps working when called
+  by that name and warns at its own call to `super().from_multitaper`;
+  `from_transform` does not go through such an override. The package itself
+  uses only `from_transform`.
 - `power_confidence_intervals(n_tapers=...)`: use `n_observations=...`. The
   count is every observation averaged into the estimate (tapers x trials), not
   the taper count, so the old name invited intervals far too wide for
@@ -844,7 +854,7 @@ is removed in 4.0.
   `sliding_window_view`.
 - Multi-measure wrapper calls build one `Connectivity` and reuse its cached
   power, cross-spectrum, directed factors, and phase-lag moments.
-- `Connectivity.from_multitaper` adopts the transform's fresh FFT output
+- `Connectivity.from_transform` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
 - `MorletWavelet.fft` fills one preallocated coefficient array instead of
