@@ -344,7 +344,7 @@ to trigger an exact zero pivot consistently across LAPACK builds.
 
 **Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
 `77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
-Implemented and validated locally on 2026-11-19: 1,977 tests passed with 16
+Implemented and validated locally on 2026-11-19: 2,028 tests passed with 16
 skips on the main CPU environment; all 70 source doctests, Ruff
 formatting/lint, and mypy passed.
 
@@ -380,9 +380,11 @@ Rulings where the rules above were silent:
   bins in the interval, before any `frequency_resolution` subsampling), and
   `frequency_interval_closed` replace the unreleased
   `frequency_band_lower`/`_upper` on each variable of the three measures.
-- **Wrapper meaning.** `frequency_range` is passed to the interval measures
-  and crops every other result before the merge; it is rejected inside
-  `connectivity_kwargs`. `frequency_bands` and `frequency_decimation` act on
+- **Wrapper meaning.** `frequency_range` is selected once per call, on the
+  full grid, before any measure runs. It is passed to the interval measures,
+  which are not cut again, and that one selection crops every other result
+  before the merge; every variable it applied to records `frequency_range_json`.
+  It is rejected inside `connectivity_kwargs`. `frequency_bands` and `frequency_decimation` act on
   frequency-resolved variables, `delay` included, and leave
   `phase_slope_index`/`group_delay` as computed over `frequency_range`; a
   request made only of those two raises.
