@@ -139,7 +139,7 @@ def _reduce_frequency_bands(
         raise ValueError(msg)
 
     band_masks_and_bounds = [
-        _frequency_interval_mask(f"Band {name!r}", bounds, frequencies, closed="both")
+        _frequency_interval_mask(f"Band {name!r}", bounds, frequencies)
         for name, bounds in frequency_bands.items()
     ]
     discarded = [

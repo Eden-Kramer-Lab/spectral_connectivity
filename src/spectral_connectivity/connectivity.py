@@ -511,21 +511,14 @@ def _nearest_bin_gap(grid: NDArray[np.float64]) -> NDArray[np.float64]:
 
 
 def _frequency_interval_mask(
-    label: str,
-    bounds: Any,
-    frequencies: Any,
-    *,
-    closed: Literal["both", "neither"],
+    label: str, bounds: Any, frequencies: Any
 ) -> tuple[NDArray[np.bool_], tuple[float, float]]:
     """Validate ``(low, high)`` bounds and return the frequency bins they select.
 
-    The package's single frequency-selection rule. ``frequency_range`` (the
-    wrappers' crop and the measures that consume a frequency interval) and each
-    of ``frequency_bands`` use ``closed="both"``; the deprecated
-    ``frequencies_of_interest`` uses ``closed="neither"``.
-
-    ``closed="both"`` keeps every bin from ``low`` to ``high``, including a bin
-    lying on either bound. Bin ``f`` lies on bound ``b`` when
+    The package's frequency-selection rule, used by ``frequency_range`` (the
+    wrappers' crop and the measures that consume a frequency interval) and by
+    each of ``frequency_bands``. It keeps every bin from ``low`` to ``high``,
+    including a bin lying on either bound. Bin ``f`` lies on bound ``b`` when
     ``abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``: ``gap(f)`` is the
     distance to its nearest neighbouring bin (:func:`_nearest_bin_gap`, zero
     for a single bin) and ``ulp`` is :func:`_last_place` of each value in its
@@ -542,13 +535,8 @@ def _frequency_interval_mask(
     ``np.arange(1000.0, 1100.0, 0.001)``, whose bins drift by up to 2.4e-6 of
     its spacing, and float32 cumulative sums do not.
 
-    ``closed="neither"`` is v2.0.1's exclusive selection, evaluated as v2.0.1
-    did: ``(bounds[0] < frequencies) & (frequencies < bounds[1])`` on the
-    bounds as the caller gave them and the grid as stored. NumPy's promotion
-    then compares a Python-number bound with a float32 grid in float32, and an
-    ndarray bound in float64, exactly as in v2.0.1, so the deprecated keyword
-    selects the bins it selected there. Validation converts the bounds to
-    floats, but the mask never uses the converted values.
+    The deprecated ``frequencies_of_interest`` does not use this rule; see
+    :func:`_frequencies_of_interest_mask`.
 
     Parameters
     ----------
@@ -558,8 +546,6 @@ def _frequency_interval_mask(
         Lower and upper bound, in the units of ``frequencies``.
     frequencies : array, shape (n_frequencies,)
         The frequency grid, on the host or the device.
-    closed : {"both", "neither"}
-        Whether bins on the bounds are selected.
 
     Returns
     -------
@@ -571,38 +557,31 @@ def _frequency_interval_mask(
     Raises
     ------
     ValueError
-        If ``bounds`` is not two finite values with ``low <= high``
-        (``low < high`` for ``closed="neither"``), or selects no bin.
+        If ``bounds`` is not two finite values with ``low <= high``, or
+        selects no bin.
     """
     values = to_numpy(frequencies)
-    order = "<=" if closed == "both" else "<"
     invalid = (
-        f"{label} must be two finite values (low, high) with low {order} high, got {bounds!r}."
+        f"{label} must be two finite values (low, high) with low <= high, got {bounds!r}."
     )
     try:
         stored_lower, stored_upper = bounds
         lower, upper = float(stored_lower), float(stored_upper)
     except (TypeError, ValueError) as error:
         raise ValueError(invalid) from error
-    if not (np.isfinite(lower) and np.isfinite(upper)) or (
-        lower > upper if closed == "both" else lower >= upper
-    ):
+    if not (np.isfinite(lower) and np.isfinite(upper)) or lower > upper:
         raise ValueError(invalid)
 
     grid = values.astype(np.float64)
-    mask: NDArray[np.bool_]
-    if closed == "neither":
-        mask = (stored_lower < values) & (values < stored_upper)
-    else:
-        grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
-        on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)
-        on_upper = np.abs(grid - upper) <= grid_allowance + 2 * _last_place(stored_upper)
-        mask = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
+    grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
+    on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)
+    on_upper = np.abs(grid - upper) <= grid_allowance + 2 * _last_place(stored_upper)
+    mask: NDArray[np.bool_] = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
     if not mask.any():
-        edges = "both endpoints included" if closed == "both" else "both edges excluded"
         msg = (
-            f"{label} ({lower:g}, {upper:g}) contains no frequency bin ({edges}); "
-            f"the {grid.size} bins span {grid.min():g} to {grid.max():g}. Widen it."
+            f"{label} ({lower:g}, {upper:g}) contains no frequency bin (both endpoints "
+            f"included); the {grid.size} bins span {grid.min():g} to {grid.max():g}. "
+            "Widen it."
         )
         raise ValueError(msg)
     return mask, (lower, upper)
@@ -5121,7 +5100,8 @@ class Connectivity:
         selection = _select_measure_frequencies(
             self.frequencies, frequency_range, frequencies_of_interest
         )
-        if selection.closed == "neither" and selection.requested is not None:
+        if selection.deprecated:
+            assert selection.requested is not None  # the deprecated band
             low, high = selection.requested
             warnings.warn(
                 f"{measure}(frequencies_of_interest=...) is deprecated and will be "
@@ -5831,15 +5811,16 @@ class _FrequencySelection:
         Host mask of the bins in the interval, over the full grid.
     requested : (float, float) or None
         The requested bounds; ``None`` when every bin is used.
-    closed : {"both", "neither"}
-        Whether a bin on a requested bound is included.
+    deprecated : bool
+        Whether the interval was given as the deprecated
+        ``frequencies_of_interest`` and selected by :func:`_frequencies_of_interest_mask`.
     lowest, highest : float
         The lowest and highest selected bin.
     """
 
     mask: NDArray[np.bool_]
     requested: tuple[float, float] | None
-    closed: Literal["both", "neither"]
+    deprecated: bool
     lowest: float
     highest: float
 
@@ -5854,7 +5835,9 @@ class _FrequencySelection:
 
         The requested bounds are omitted when every bin is used; the selected
         bounds are the lowest and highest bins in the interval, before any
-        ``frequency_resolution`` subsampling.
+        ``frequency_resolution`` subsampling. ``frequency_interval_closed`` is
+        ``"neither"`` for the deprecated keyword's exclusive edges, else
+        ``"both"``.
         """
         attrs: dict[str, Any] = {}
         if self.requested is not None:
@@ -5862,14 +5845,59 @@ class _FrequencySelection:
             attrs["requested_frequency_upper"] = self.requested[1]
         attrs["selected_frequency_lower"] = self.lowest
         attrs["selected_frequency_upper"] = self.highest
-        attrs["frequency_interval_closed"] = self.closed
+        attrs["frequency_interval_closed"] = "neither" if self.deprecated else "both"
         return attrs
+
+
+def _frequencies_of_interest_mask(
+    frequencies_of_interest: Any, frequencies: NDArray[np.floating]
+) -> tuple[NDArray[np.bool_], tuple[float, float]]:
+    """The deprecated ``frequencies_of_interest`` selection, frozen at v2.0.1.
+
+    v2.0.1's ``_bandpass`` evaluated ``(band[0] < frequencies) & (frequencies
+    < band[1])`` on the band as the caller gave it and the grid as stored;
+    this does the same, so NumPy compares a Python-number band with a float32
+    grid in float32 and an ndarray band in float64, exactly as v2.0.1 did, and
+    every call it accepted with a bin inside the band selects the same bins.
+    The validation is this function's own: two finite values with
+    ``low < high`` and at least one bin strictly inside, where v2.0.1 returned
+    empty or NaN results. It never changes with :func:`_frequency_interval_mask`.
+
+    Returns
+    -------
+    mask : NDArray[bool], shape (n_frequencies,)
+        Host mask of the bins strictly inside the band.
+    bounds : (float, float)
+        The band as floats, for messages and attributes.
+    """
+    invalid = (
+        "frequencies_of_interest must be two finite values (low, high) with low < high, "
+        f"got {frequencies_of_interest!r}."
+    )
+    try:
+        stored_lower, stored_upper = frequencies_of_interest
+        lower, upper = float(stored_lower), float(stored_upper)
+    except (TypeError, ValueError) as error:
+        raise ValueError(invalid) from error
+    if not (np.isfinite(lower) and np.isfinite(upper)) or lower >= upper:
+        raise ValueError(invalid)
+    values = to_numpy(frequencies)
+    mask: NDArray[np.bool_] = (stored_lower < values) & (values < stored_upper)
+    if not mask.any():
+        grid = values.astype(np.float64)
+        msg = (
+            f"frequencies_of_interest ({lower:g}, {upper:g}) contains no frequency bin "
+            f"(both edges excluded); the {grid.size} bins span {grid.min():g} to "
+            f"{grid.max():g}. Widen it."
+        )
+        raise ValueError(msg)
+    return mask, (lower, upper)
 
 
 def _select_measure_frequencies(
     frequencies: NDArray[np.floating],
-    frequency_range: tuple[float, float] | None = None,
-    frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
+    frequency_range: tuple[float, float] | None,
+    frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None,
 ) -> _FrequencySelection:
     """The bins ``delay``, ``group_delay``, or ``phase_slope_index`` consume.
 
@@ -5890,21 +5918,19 @@ def _select_measure_frequencies(
         raise ValueError(msg)
     grid = to_numpy(frequencies)
     requested: tuple[float, float] | None = None
-    closed: Literal["both", "neither"] = "both"
     if frequencies_of_interest is not None:
-        mask, requested = _frequency_interval_mask(
-            "frequencies_of_interest", frequencies_of_interest, grid, closed="neither"
-        )
-        closed = "neither"
+        mask, requested = _frequencies_of_interest_mask(frequencies_of_interest, grid)
     elif frequency_range is not None:
-        mask, requested = _frequency_interval_mask(
-            "frequency_range", frequency_range, grid, closed="both"
-        )
+        mask, requested = _frequency_interval_mask("frequency_range", frequency_range, grid)
     else:
         mask = np.ones(grid.shape, dtype=bool)
     selected = grid[mask]
     return _FrequencySelection(
-        mask, requested, closed, lowest=float(selected[0]), highest=float(selected[-1])
+        mask,
+        requested,
+        deprecated=frequencies_of_interest is not None,
+        lowest=float(selected[0]),
+        highest=float(selected[-1]),
     )
 
 

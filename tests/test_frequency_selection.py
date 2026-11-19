@@ -21,6 +21,7 @@ import xarray as xr
 from spectral_connectivity import Connectivity, MorletWavelet, Multitaper
 from spectral_connectivity._measure_registry import _FREQUENCY_RANGE_MEASURES, _MEASURE_SPECS
 from spectral_connectivity.connectivity import (
+    _frequencies_of_interest_mask,
     _frequency_interval_mask,
     _uniform_grid_spacing,
 )
@@ -46,9 +47,7 @@ _EXACT_GRID = np.arange(0.0, 51.0, 2.0)
     ],
 )
 def test_bounds_on_bins_are_included(bounds, expected):
-    mask, selected_bounds = _frequency_interval_mask(
-        "frequency_range", bounds, _EXACT_GRID, closed="both"
-    )
+    mask, selected_bounds = _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
     assert selected_bounds == bounds
 
@@ -57,7 +56,7 @@ def test_a_bound_a_clear_fraction_of_a_bin_away_does_not_select_it():
     """The allowance is one part in a million of the bin spacing, not a fraction
     of it: 1e-3 of the 2 Hz spacing away, the edge bins are not selected."""
     mask, _ = _frequency_interval_mask(
-        "frequency_range", (10.0 + 2e-3, 20.0 - 2e-3), _EXACT_GRID, closed="both"
+        "frequency_range", (10.0 + 2e-3, 20.0 - 2e-3), _EXACT_GRID
     )
     np.testing.assert_array_equal(_EXACT_GRID[mask], [12, 14, 16, 18])
 
@@ -73,7 +72,7 @@ def test_the_allowance_on_a_uniform_grid_is_a_millionth_of_the_spacing(
     units in the last place, negligible here) is on the bound and no more."""
     offset = fraction_of_allowance * 1e-6 * 2.0
     mask, _ = _frequency_interval_mask(
-        "frequency_range", (10.0 + offset, 20.0 - offset), _EXACT_GRID, closed="both"
+        "frequency_range", (10.0 + offset, 20.0 - offset), _EXACT_GRID
     )
     expected = [10, 12, 14, 16, 18, 20] if selects_edge_bins else [12, 14, 16, 18]
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
@@ -88,14 +87,12 @@ def test_a_single_bin_has_only_the_last_place_allowance(n_last_places, selected)
         bound = float(np.nextafter(bound, np.inf))
     grid = np.array([10.0])
     if selected:
-        mask, _ = _frequency_interval_mask(
-            "frequency_range", (bound, 20.0), grid, closed="both"
-        )
+        mask, _ = _frequency_interval_mask("frequency_range", (bound, 20.0), grid)
         assert mask.tolist() == [True]
     else:
         with pytest.raises(ValueError, match="contains no frequency bin"):
-            _frequency_interval_mask("frequency_range", (bound, 20.0), grid, closed="both")
-    mask, _ = _frequency_interval_mask("frequency_range", (10.0, 10.0), grid, closed="both")
+            _frequency_interval_mask("frequency_range", (bound, 20.0), grid)
+    mask, _ = _frequency_interval_mask("frequency_range", (10.0, 10.0), grid)
     assert mask.tolist() == [True]
 
 
@@ -105,9 +102,7 @@ def test_a_single_bin_has_only_the_last_place_allowance(n_last_places, selected)
 def test_two_bins_use_their_distance_as_the_gap(fraction_of_gap, expected):
     grid = np.array([10.0, 12.0])
     offset = fraction_of_gap * 2.0
-    mask, _ = _frequency_interval_mask(
-        "frequency_range", (10.0 + offset, 12.0 + offset), grid, closed="both"
-    )
+    mask, _ = _frequency_interval_mask("frequency_range", (10.0 + offset, 12.0 + offset), grid)
     np.testing.assert_array_equal(grid[mask], expected)
 
 
@@ -137,7 +132,7 @@ def test_the_gap_is_local_on_a_log_spaced_grid(k, fraction_of_gap, selected):
     if k in (45, 5):  # the mean step would decide these the other way
         assert (offset <= 1e-6 * _LOG_MEAN_STEP) == (not selected)
     upper = float(grid[k] - offset)
-    mask, _ = _frequency_interval_mask("frequency_range", (1.0, upper), grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", (1.0, upper), grid)
     assert np.flatnonzero(mask)[-1] == (k if selected else k - 1)
 
 
@@ -161,9 +156,7 @@ def test_a_bin_that_drifted_past_a_millionth_of_its_spacing_is_not_named_by_its_
     grid = np.arange(1000.0, 1100.0, 0.001)
     drift = (grid[42351] - 1042.351) / 0.001
     assert -1.01e-6 < drift < -1e-6
-    mask, _ = _frequency_interval_mask(
-        "frequency_range", (1042.351, 1043.0), grid, closed="both"
-    )
+    mask, _ = _frequency_interval_mask("frequency_range", (1042.351, 1043.0), grid)
     assert np.flatnonzero(mask)[0] == 42352
 
 
@@ -180,7 +173,7 @@ def test_decimal_bounds_name_the_printed_bins_of_drifting_grids(grid, bounds):
     expected = _decimal_bins(grid, bounds)
     exact = np.flatnonzero((grid >= bounds[0]) & (grid <= bounds[1]))
     assert not np.array_equal(exact, expected)  # exact comparison misses an edge bin
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(np.flatnonzero(mask), expected)
 
 
@@ -201,7 +194,7 @@ def test_wrapper_and_direct_paths_select_the_same_bins_on_irregular_and_drifting
     cropped = fourier_connectivity(
         coefficients, method="coherence_magnitude", frequency_range=bounds
     )
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(cropped.frequency.values, grid[mask])
     connectivity = Connectivity(
         coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
@@ -310,7 +303,7 @@ def test_band_means_use_the_inclusive_rule_and_integrals_the_exact_bounds():
 @pytest.mark.parametrize("bounds", [(0.3, 0.7), (0.7, 1.2)])
 def test_both_includes_a_bin_stored_with_rounding_of_its_decimal_bound(grid, bounds):
     """Bin ``k`` stores ``0.1 * k``, so the bounds name bins 3-7 or 7-12."""
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(
         np.flatnonzero(mask), np.arange(round(bounds[0] * 10), round(bounds[1] * 10) + 1)
     )
@@ -359,7 +352,7 @@ def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
     float32 grid a Python-number band is compared in float32, so float32(0.3)
     excludes the 0.3 bin, while an ndarray band is compared in float64."""
     band = _BAND_FORMS[form](bounds)
-    mask, _ = _frequency_interval_mask("frequencies_of_interest", band, grid, closed="neither")
+    mask, _ = _frequencies_of_interest_mask(band, grid)
     np.testing.assert_array_equal(mask, _released_band_mask(band, grid))
 
 
@@ -371,9 +364,7 @@ def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
     ],
 )
 def test_neither_excludes_bins_on_the_bounds(bounds, expected):
-    mask, _ = _frequency_interval_mask(
-        "frequencies_of_interest", bounds, _EXACT_GRID, closed="neither"
-    )
+    mask, _ = _frequencies_of_interest_mask(bounds, _EXACT_GRID)
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
 
 
@@ -421,7 +412,7 @@ def test_float32_bounds_on_a_float64_grid_use_float32_rounding():
     """Bounds read off a float32 coordinate still select the bins they name."""
     bounds = tuple(np.linspace(0, 6.3, 64).astype(np.float32)[[7, 12]])
     grid = np.arange(64) * 0.1
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(np.flatnonzero(mask), np.arange(7, 13))
 
 
@@ -439,7 +430,7 @@ def test_float32_bounds_on_a_float64_grid_use_float32_rounding():
 )
 def test_invalid_or_empty_intervals_raise_naming_the_argument(bounds, message):
     with pytest.raises(ValueError, match=message) as error:
-        _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID, closed="both")
+        _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
     assert str(error.value).startswith("frequency_range")
 
 

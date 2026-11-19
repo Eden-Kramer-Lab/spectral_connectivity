@@ -364,7 +364,11 @@ Rulings where the rules above were silent:
   float64 cumulative-sum grids do; `np.arange(1000.0, 1100.0, 0.001)` (drift up
   to 2.4e-6 of its spacing) and float32 cumulative sums do not. A bound 1e-3 of
   the spacing from a bin does not select it.
-  `"neither"` evaluates v2.0.1's expression, `(band[0] < frequencies) &
+  The deprecated keyword does not use that rule: its frozen selection,
+  `_frequencies_of_interest_mask`, has its own validation, so no change to
+  the canonical rule can alter what it accepts, and `_FrequencySelection`
+  records it in a `deprecated` field from which `frequency_interval_closed`
+  is derived. It evaluates v2.0.1's expression, `(band[0] < frequencies) &
   (frequencies < band[1])`, on the band as the caller gave it and the grid as
   stored, so the deprecated keyword selects the bins it selected in v2.0.1
   (rule 5): a Python-number band meets a float32 grid in float32, an ndarray
