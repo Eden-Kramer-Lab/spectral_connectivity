@@ -17,6 +17,7 @@ from spectral_connectivity import (
     ShortTimeFourierTransform,
     Welch,
 )
+from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 
 _POSITIONAL = (
     inspect.Parameter.POSITIONAL_ONLY,
@@ -126,6 +127,24 @@ def test_canonical_coherence_keeps_its_released_signature_without_tuning():
 def connectivity():
     time_series = np.random.default_rng(1).standard_normal((256, 8, 4))
     return Connectivity.from_transform(Multitaper(time_series, sampling_frequency=128))
+
+
+def test_minimum_phase_decomposition_keeps_its_positional_tolerances():
+    """``tolerance`` and ``max_iterations`` keep their released order and
+    remain supported positionally, without a warning."""
+    assert _positional_names(minimum_phase_decomposition) == [
+        "cross_spectral_matrix",
+        "tolerance",
+        "max_iterations",
+    ]
+    rng = np.random.default_rng(2)
+    mixing = rng.standard_normal((2, 2))
+    spectrum = np.tile(mixing @ mixing.T + 2 * np.eye(2), (1, 16, 1, 1)).astype(complex)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        positional = minimum_phase_decomposition(spectrum, 1e-10, 50)
+        keyword = minimum_phase_decomposition(spectrum, tolerance=1e-10, max_iterations=50)
+    np.testing.assert_array_equal(positional, keyword)
 
 
 def test_global_coherence_keeps_released_max_rank_and_workspace_is_keyword_only(

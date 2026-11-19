@@ -633,7 +633,11 @@ def minimum_phase_decomposition(
         Maximum number of iterations before stopping algorithm. Near-singular
         cross-spectral matrices (highly correlated channels) can need several
         hundred iterations to reach the relative tolerance; the loop returns
-        early as soon as every sub-spectrum has converged.
+        early as soon as every sub-spectrum has converged. 2.x defaulted to
+        60; pass ``max_iterations=60`` for that cap.
+
+        ``tolerance`` and ``max_iterations`` may be passed by position or by
+        keyword; keywords make a call easier to read.
 
     Returns
     -------
@@ -653,7 +657,9 @@ def minimum_phase_decomposition(
     >>> a = rng.standard_normal((n_signals, n_signals))
     >>> spd = a @ a.T + n_signals * np.eye(n_signals)
     >>> cross_spec = np.tile(spd, (n_times, n_freqs, 1, 1))
-    >>> min_phase = minimum_phase_decomposition(cross_spec)
+    >>> min_phase = minimum_phase_decomposition(
+    ...     cross_spec, tolerance=1e-8, max_iterations=500
+    ... )
     >>> # The factor reconstructs the input: G @ G^H == S.
     >>> error = minimum_phase_reconstruction_error(cross_spec, min_phase)
     >>> bool(error.max() < 1e-6)

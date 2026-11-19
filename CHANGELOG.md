@@ -57,6 +57,7 @@ directly with results from 2.x.
 | `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "delay", frequency_range=(4, 12))`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"frequency_range": (4, 12)}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`) stay named arguments and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `Connectivity.from_multitaper(m)` | Use `Connectivity.from_transform(m)`, which takes the same arguments and builds the same instance from any spectral transform. `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `minimum_phase_decomposition(S)` stopped after 60 Wilson iterations by default | The default `max_iterations` is 500, so spectra that need more iterations converge instead of warning; pass `max_iterations=60` for the 2.x cap. `tolerance` and `max_iterations` keep their positions and still work positionally or by keyword |
 
 ### Added
 
@@ -393,6 +394,12 @@ directly with results from 2.x.
 
 ### Changed
 
+- `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
+  defaulted to 60. Near-singular cross-spectra (highly correlated channels)
+  can need several hundred Wilson iterations, and the loop still stops as soon
+  as every sub-spectrum converges. Pass `max_iterations=60` for the 2.0.1 cap.
+  `tolerance` and `max_iterations` keep their positions and are accepted by
+  position or keyword.
 - On the GPU, the default FFT length (and so the default frequency grid) of
   `Multitaper`, `ShortTimeFourierTransform`, and `Welch` now follows SciPy's
   `next_fast_len`, as on the CPU, so the same data gives the same frequencies
