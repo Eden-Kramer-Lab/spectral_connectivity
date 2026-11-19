@@ -496,10 +496,29 @@ Rulings where the rules above were silent:
   `sqrt(1 - Re(PLV)^2)` (of order sqrt(eps) when `Re` rounds just below 1), so
   it is noise below about sqrt(eps), measured up to 6e-10 in float64 and 2e-5
   at complex64 precision under NumPy 1.24. Tests bound a constant diagonal by
-  `n_observations * eps` (an n-term sum's forward error, with a factor 2 for
-  normalization and PPC's squaring), the `rounding_noise` diagonal by
-  `sqrt(eps)`, and the cross-spectral density diagonal's imaginary part by
-  `n_observations * eps` times its real part.
+  `4 * (n_observations + 4) * eps` (about 4 eps per normalized term, n eps for
+  the sum, and PPC's factor 2n/(n - 1) <= 4; it holds with one and two
+  observations), the `rounding_noise` diagonal by `sqrt(eps)`, and the
+  cross-spectral density diagonal's imaginary part by `n_observations * eps`
+  times its real part. `value_range` is the theoretical range, which rounding
+  can cross (PPC's self-value reaches 1 + 1e-15).
+- **Flat signals.** `constant` holds for signals with nonzero power.
+  `diagonal_nan_for_zero_power` marks the four measures that normalize by
+  amplitude (`imaginary_coherence`, `phase_locking_value`,
+  `pairwise_phase_consistency`, and the corrected imaginary PLV), whose
+  flat-signal self-connection is NaN; the phase lag indices keep theirs.
+- **Recorded nominal value.** Beside `constant` or `rounding_noise`, a
+  variable records `diagonal_value` (a float) and
+  `diagonal_nan_for_zero_power` (0/1).
+- **Companion records.** `group_delay_slope` and `group_delay_r_value` have
+  their own registry records (`_COMPANION_SPECS`, not listed as measures):
+  interpretation, group delay's sign convention, an unbounded slope and a
+  [-1, 1] correlation. Group membership and spatial vectors, filters, and
+  patterns carry no measure record.
+- **dPLI.** Its lead/lag reading moved to `sign_convention`; `interpretation`
+  says what the value is (the fraction of observations in which the source
+  leads, `(1 + phase_lag_index) / 2`), so its row in the generated table
+  changed.
 - **Interpretation attributes.** `interpretation`, `sign_convention`,
   `value_range_lower`/`value_range_upper` (an infinite side omitted, since not
   every engine round-trips a bare infinity; `value_range_applies_to=
