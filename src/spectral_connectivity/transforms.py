@@ -863,6 +863,8 @@ class _WindowedFourierTransform:
     #: negative frequencies), so consumers must not assume a one-sided layout.
     is_one_sided = False
     _transform_name: str
+    # Shortest window the subclass's tapers can use, in samples.
+    _MIN_WINDOW_SAMPLES = 1
     # The shared window settings; a subclass extends the tuple with its own.
     _PROVENANCE_FIELDS: tuple[str, ...] = (
         "detrend_type",
@@ -1081,8 +1083,8 @@ Frequency Analysis
         Raises
         ------
         ValueError
-            If the resolved window is shorter than one sample or longer than
-            the time series.
+            If the resolved window is shorter than the transform's tapers
+            allow or longer than the time series.
 
         """
         # An explicit n_time_samples_per_window is used as given (a duration
@@ -1100,15 +1102,20 @@ Frequency Analysis
         # 0) would divide by zero downstream, and an oversized window yields an
         # empty transform.
         n_time_samples = self._time_series.shape[0]
-        if self._n_time_samples_per_window < 1:
+        minimum = self._MIN_WINDOW_SAMPLES
+        if self._n_time_samples_per_window < minimum:
+            samples, count = (
+                ("1 sample", "a positive n_time_samples_per_window")
+                if minimum == 1
+                else (f"{minimum} samples", f"n_time_samples_per_window >= {minimum}")
+            )
             msg = (
                 f"n_time_samples_per_window resolved to "
                 f"{self._n_time_samples_per_window}, but each window needs at "
-                f"least 1 sample. If you set time_window_duration "
+                f"least {samples}. If you set time_window_duration "
                 f"({self._time_window_duration}), it is too short for "
                 f"sampling_frequency ({self.sampling_frequency}); use a duration "
-                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
-                f"n_time_samples_per_window."
+                f">= {minimum / self.sampling_frequency} s. Otherwise pass {count}."
             )
             raise ValueError(msg)
         if self._n_time_samples_per_window > n_time_samples:
@@ -2059,6 +2066,8 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     """
 
     _transform_name = "stft"
+    # A 1-sample "Hann" window is the rectangular window [1.0], not a taper.
+    _MIN_WINDOW_SAMPLES = 2
 
     def __init__(
         self,
@@ -2081,13 +2090,19 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             if value is not None and (not np.isfinite(value) or value <= 0):
                 msg = f"{name} must be finite and positive."
                 raise ValueError(msg)
-        for name, value in (
-            ("n_time_samples_per_window", n_time_samples_per_window),
-            ("n_time_samples_per_step", n_time_samples_per_step),
+        if n_time_samples_per_window is not None and not is_positive_integer(
+            n_time_samples_per_window, minimum=self._MIN_WINDOW_SAMPLES
         ):
-            if value is not None and not is_positive_integer(value):
-                msg = f"{name} must be a positive integer."
-                raise ValueError(msg)
+            msg = (
+                "n_time_samples_per_window must be an integer of at least "
+                f"{self._MIN_WINDOW_SAMPLES}."
+            )
+            raise ValueError(msg)
+        if n_time_samples_per_step is not None and not is_positive_integer(
+            n_time_samples_per_step
+        ):
+            msg = "n_time_samples_per_step must be a positive integer."
+            raise ValueError(msg)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2128,12 +2143,10 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
                 None if n_time_samples_per_step is None else int(n_time_samples_per_step)
             ),
         )
-        # Resolve the window and step now, so a window that does not fit the
-        # signal or a step shorter than one sample fails here, not in fft().
+        # Resolve the window and step now, so a window that is too short or does
+        # not fit the signal, or a step shorter than one sample, fails here
+        # rather than in fft().
         window_samples = self.n_time_samples_per_window
-        if window_samples < 2:
-            msg = "A Hann transform window requires at least 2 samples."
-            raise ValueError(msg)
         window = scipy_hann(window_samples, sym=False)
         self._window = _immutable_array_snapshot(
             (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]

@@ -1,3 +1,4 @@
+import re
 import tracemalloc
 import warnings
 from contextlib import nullcontext
@@ -589,23 +590,56 @@ def test_multitaper_equal_duration_and_step_are_non_overlapping():
             {"time_window_duration": 0.5, "time_window_step": 0.0001},
             r"n_time_samples_per_step resolved to 0.*time_window_step \(0\.0001\)",
         ),
+        # A Hann window needs 2 samples, and the advice says which duration gives them.
         (
             {"time_window_duration": 0.0001},
-            r"n_time_samples_per_window resolved to 0.*time_window_duration \(0\.0001\)",
+            (
+                r"n_time_samples_per_window resolved to 0, but each window needs at least 2 "
+                r"samples\. If you set time_window_duration \(0\.0001\).*use a duration >= 0\.004 s"
+            ),
         ),
-        ({"n_time_samples_per_window": 1}, "requires at least 2 samples"),
+        (
+            {"time_window_duration": 0.002},
+            r"n_time_samples_per_window resolved to 1, but each window needs at least 2 samples",
+        ),
+        (
+            {"n_time_samples_per_window": 1},
+            "n_time_samples_per_window must be an integer of at least 2",
+        ),
         # Argument checks come before the window and step are resolved.
-        ({"n_time_samples_per_window": 1, "fft_workers": 0}, "fft_workers must be"),
+        ({"time_window_duration": 0.002, "fft_workers": 0}, "fft_workers must be"),
         (
             {"time_window_duration": 0.5, "time_window_step": 0.0001, "start_time": np.nan},
             "start_time must be a finite scalar",
         ),
     ],
-    ids=["step_rounds_to_zero", "window_rounds_to_zero", "one_sample", "fft_workers", "start"],
+    ids=[
+        "step_rounds_to_zero",
+        "window_rounds_to_zero",
+        "window_rounds_to_one",
+        "one_sample",
+        "fft_workers",
+        "start",
+    ],
 )
 def test_stft_rejects_windows_and_steps_it_cannot_use(kwargs, match):
     with pytest.raises(ValueError, match=match):
         ShortTimeFourierTransform(np.ones((1000, 1, 1)), sampling_frequency=500, **kwargs)
+
+
+@pytest.mark.parametrize("sampling_frequency", [500.0, 300.0, 44100.0])
+def test_stft_advised_window_duration_is_accepted(sampling_frequency):
+    """Following the too-short-window advice gives the shortest Hann window."""
+    time_series = np.ones((1000, 1, 1))
+    with pytest.raises(ValueError, match="needs at least 2 samples") as error:
+        ShortTimeFourierTransform(
+            time_series, sampling_frequency, time_window_duration=0.1 / sampling_frequency
+        )
+    advised = float(re.search(r"use a duration >= (\S+) s", str(error.value)).group(1))
+    stft = ShortTimeFourierTransform(
+        time_series, sampling_frequency, time_window_duration=advised
+    )
+    assert stft.n_time_samples_per_window == 2
 
 
 def test_stft_explicit_step_is_not_re_truncated():
