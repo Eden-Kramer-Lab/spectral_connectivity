@@ -25,8 +25,10 @@ class _MeasureSpec:
     requirements; the remaining fields label and interpret its values.
     ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
     score and ``None`` a spectral density, whose units derive from the input's
-    (see :meth:`units_for`). ``value_range`` bounds the returned
-    values, or their magnitude when ``is_complex``.
+    (see :meth:`units_for`). ``value_range`` is the estimator's theoretical
+    range, of the values or of their magnitude when ``is_complex``; a computed
+    value can lie outside it by rounding (``pairwise_phase_consistency``'s self
+    value reaches 1 + 1e-15).
 
     ``diagonal_policy`` says what a self-connection (a signal, or group, with
     itself) holds; ``diagonal_value`` is the value of a ``"constant"`` or
@@ -37,7 +39,7 @@ class _MeasureSpec:
     - ``"undefined_nan"``: NaN because the estimator has no self-connection.
     - ``"constant"``: the estimator's value, the same for any signal with
       nonzero power, to within the rounding of the averages it is computed
-      from (about ``n_observations`` units in the last place).
+      from (at most ``4 * (n_observations + 4)`` times machine epsilon).
     - ``"rounding_noise"``: nominally ``diagonal_value`` (an identity or a
       defined 0/0 limit), but computed from rounding residues that the
       measure's formula amplifies, so it can differ from that value by much

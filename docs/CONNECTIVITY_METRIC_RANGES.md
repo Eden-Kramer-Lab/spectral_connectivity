@@ -15,7 +15,9 @@ directed phase lag index) means `i` leads `j`.
 
 ## Measures
 
-Generated from `list_measures()`. For complex measures the range bounds the
+Generated from `list_measures()`. Ranges are the estimators' theoretical
+bounds; a computed value can lie outside one by rounding (a few times the
+number of observations machine epsilon). For complex measures the range bounds the
 magnitude. "Observations" are trials × tapers. The Diagonal column is what a
 self-connection holds (see [Diagonal values](#diagonal-values)); a number is
 the constant every diagonal entry has, to within rounding.
@@ -115,7 +117,7 @@ the Diagonal column above:
 |---|---|---|
 | `masked_nan` | NaN by the package's choice, although the estimator defines a value: self-coherence is 1 for a signal with nonzero power, its phase and imaginary part are 0, and partial and canonical coherence of a signal (group) with itself are 1. | the coherency family (`magnitude_squared_coherence`, `coherence_phase`, `coherency`, `imaginary_coherency`, `partial_coherence`), `canonical_coherence`, `maximized_imaginary_coherency` and `multivariate_interaction_measure` (a group with itself is not computed), and `delay`, `group_delay`, and `phase_slope_index`, which inherit coherency's mask |
 | `undefined_nan` | NaN: the estimator has no self-connection (a signal cannot Granger-cause itself in these models). | the spectral Granger measures, including blockwise |
-| `constant` | The estimator's value, the same for any signal with nonzero power, to within the rounding of the averages it is computed from: at most about `n_observations` × machine epsilon (2.2e-16 in float64) from the value, and exact on some platforms. A zero-power (flat) signal's self-connection is NaN for the measures that normalize by amplitude (`diagonal_nan_for_zero_power`); the phase lag indices keep their value. | 0 for `imaginary_coherence` (NaN for a flat signal) and the phase lag indices; 1 for `phase_locking_value` and `pairwise_phase_consistency` (NaN for a flat signal); 0.5 for `directed_phase_lag_index` |
+| `constant` | The estimator's value, the same for any signal with nonzero power, to within the rounding of the averages it is computed from: at most `4 × (n_observations + 4)` × machine epsilon (2.2e-16 in float64) from the value, and exact on some platforms. A zero-power (flat) signal's self-connection is NaN for the measures that normalize by amplitude (`diagonal_nan_for_zero_power`); the phase lag indices keep their value. | 0 for `imaginary_coherence` (NaN for a flat signal) and the phase lag indices; 1 for `phase_locking_value` and `pairwise_phase_consistency` (NaN for a flat signal); 0.5 for `directed_phase_lag_index` |
 | `rounding_noise` | Nominally a constant, but computed from rounding residues that the formula amplifies, so it can be visibly nonzero; mask it rather than read it. | `corrected_imaginary_phase_locking_value`, nominally 0 (NaN for a flat signal; see below) |
 | `estimated` | The estimator's own, data-dependent value. | `cross_spectral_density` (the power spectrum; its imaginary part is zero to within rounding) and the transfer-function measures (each signal's self-transfer) |
 | `not_applicable` | No self-connection entries. | `power`, `global_coherence`, and the component measures, whose connections pair different groups |

@@ -523,15 +523,32 @@ def test_diagonal_matches_its_policy(coupled_results, measure):
 
 
 def _sum_rounding(variable):
-    """Bound on the rounding of an average of ``n_observations`` terms of unit size.
+    """Bound on the rounding of an average of ``n_observations`` terms.
 
     A sum of ``n`` terms is within ``n * u`` of its exact value relative to the
-    terms' magnitudes (Higham's ``gamma_n``, unit roundoff ``u = eps / 2``).
-    Twice that, ``n * eps``, also covers the unit-modulus normalization of
-    phase measures and the squaring in pairwise phase consistency.
+    terms' magnitudes (Higham's ``gamma_n``, unit roundoff ``u = eps / 2``);
+    ``n * eps`` leaves a factor 2.
     """
     eps = np.finfo(np.real(variable.values).dtype).eps
     return variable.attrs["n_observations"] * eps
+
+
+def _nominal_tolerance(policy, n_observations, dtype):
+    """How far a ``constant`` or ``rounding_noise`` diagonal may lie from its value.
+
+    A constant is an average of ``n`` unit-modulus (or unit-normalized) terms:
+    normalizing each term ``z / |z|`` and squaring its modulus leaves it within
+    about ``4 * eps`` of 1, and summing adds at most ``n * eps``. Pairwise
+    phase consistency, ``(n * PLV**2 - 1) / (n - 1)``, multiplies the PLV's error
+    by ``2 * n / (n - 1) <= 4``. Hence ``4 * (n + 4) * eps``; measured
+    deviations are at most 10 eps (PPC with two observations). A
+    ``rounding_noise`` diagonal divides an imaginary part of order ``eps`` by
+    ``sqrt(1 - Re**2)`` of at least ``sqrt(eps)``, so it is below ``sqrt(eps)``.
+    """
+    eps = np.finfo(dtype).eps
+    if policy == "rounding_noise":
+        return np.sqrt(eps)
+    return 4 * (n_observations + 4) * eps
 
 
 def _assert_diagonal_matches(measure, variable):
@@ -559,11 +576,54 @@ def _assert_diagonal_matches(measure, variable):
 def _assert_nominal_diagonal(measure, variable, diagonal):
     """``diagonal`` (entries of ``variable``) holds ``measure.diagonal_value``
     to within the rounding its policy allows."""
-    eps = np.finfo(np.real(variable.values).dtype).eps
-    tolerance = (
-        _sum_rounding(variable) if measure.diagonal_policy == "constant" else np.sqrt(eps)
+    tolerance = _nominal_tolerance(
+        measure.diagonal_policy,
+        variable.attrs["n_observations"],
+        np.real(variable.values).dtype,
     )
     np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=tolerance)
+
+
+# Measures that need at least two observations (a debiasing factor n - 1).
+_NEED_TWO_OBSERVATIONS = {
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "pairwise_phase_consistency",
+}
+
+
+@pytest.mark.parametrize("n_trials", [1, 2])
+@pytest.mark.parametrize(
+    "measure",
+    [m for m in list_measures() if m.diagonal_value is not None],
+    ids=lambda measure: measure.name,
+)
+def test_nominal_diagonal_holds_with_one_or_two_observations(
+    coupled_time_series, measure, n_trials
+):
+    """With one taper per trial, the fewest observations a measure accepts,
+    where rounding is least averaged out: the tolerance still holds."""
+
+    def compute():
+        return multitaper_connectivity(
+            coupled_time_series[:, :n_trials],
+            sampling_frequency=500,
+            time_window_duration=0.5,
+            time_halfbandwidth_product=1,
+            method=measure.name,
+        )
+
+    with warnings.catch_warnings():
+        # One observation makes the normalized measures warn that they are
+        # degenerate; that is expected here.
+        warnings.simplefilter("ignore")
+        if n_trials == 1 and measure.name in _NEED_TWO_OBSERVATIONS:
+            with pytest.raises(ValueError, match="at least 2 observations"):
+                compute()
+            return
+        variable = compute()
+    assert variable.attrs["n_observations"] == n_trials  # one taper per trial
+    _assert_nominal_diagonal(measure, variable, _diagonal(variable))
 
 
 # Measures whose self-connection of a zero-power (flat) signal is NaN, although
