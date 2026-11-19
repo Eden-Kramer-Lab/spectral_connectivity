@@ -843,8 +843,9 @@ class _WindowedFourierTransform:
     - ``sampling_frequency``, ``detrend_type``, and ``fft_workers``, fixed
       after construction (immutable attributes on :class:`Multitaper`,
       properties without setters on :class:`ShortTimeFourierTransform`);
-    - ``_transform_name`` and ``_PROVENANCE_FIELDS``, the name and the
-      attributes that :meth:`_provenance_metadata` records;
+    - ``_transform_name``, and any attributes of its own that
+      :meth:`_provenance_metadata` should record, appended to the base's
+      ``_PROVENANCE_FIELDS``;
     - :meth:`_tapers_for_fft`, the tapers applied to each window, of shape
       ``(n_time_samples_per_window, n_tapers)``. Generated DPSS tapers and the
       Hann window are unit-energy windows scaled by ``sqrt(sampling_frequency)``,
@@ -862,7 +863,21 @@ class _WindowedFourierTransform:
     #: negative frequencies), so consumers must not assume a one-sided layout.
     is_one_sided = False
     _transform_name: str
-    _PROVENANCE_FIELDS: tuple[str, ...]
+    # The shared window settings; a subclass extends the tuple with its own.
+    _PROVENANCE_FIELDS: tuple[str, ...] = (
+        "detrend_type",
+        "fft_workers",
+        "n_fft_samples",
+        "n_signals",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "nyquist_frequency",
+        "sampling_frequency",
+        "start_time",
+        "time_window_duration",
+        "time_window_step",
+    )
 
     if TYPE_CHECKING:
         # Read here, provided by each subclass (see the class docstring).
@@ -1548,25 +1563,14 @@ class Multitaper(_WindowedFourierTransform):
         }
     )
     _PROVENANCE_FIELDS: tuple[str, ...] = (
-        "detrend_type",
-        "fft_workers",
+        *_WindowedFourierTransform._PROVENANCE_FIELDS,
         "frequency_resolution",
         "is_low_bias",
-        "n_fft_samples",
-        "n_signals",
         "n_tapers",
-        "n_time_samples_per_step",
-        "n_time_samples_per_window",
-        "n_trials",
-        "nyquist_frequency",
-        "sampling_frequency",
-        "start_time",
         "taper_weighting",
         "adaptive_max_iterations",
         "adaptive_tolerance",
         "time_halfbandwidth_product",
-        "time_window_duration",
-        "time_window_step",
     )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -2061,20 +2065,6 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     """
 
     _transform_name = "stft"
-    _PROVENANCE_FIELDS: tuple[str, ...] = (
-        "detrend_type",
-        "fft_workers",
-        "n_fft_samples",
-        "n_signals",
-        "n_time_samples_per_step",
-        "n_time_samples_per_window",
-        "n_trials",
-        "nyquist_frequency",
-        "sampling_frequency",
-        "start_time",
-        "time_window_duration",
-        "time_window_step",
-    )
 
     def __init__(
         self,
