@@ -12,7 +12,7 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
-from spectral_connectivity._measure_registry import _MEASURE_SPECS
+from spectral_connectivity._measure_registry import _COMPANION_SPECS, _MEASURE_SPECS
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
@@ -126,6 +126,7 @@ def test_invalid_category_lists_valid_categories():
     assert "pairwise" in message
 
 
+_MEASURES = {measure.name: measure for measure in list_measures()}
 _GROUPS = ["a", "a", "b", "b"]
 _MEASURE_KWARGS = {
     "canonical_coherence": {"group_labels": _GROUPS},
@@ -677,11 +678,62 @@ def test_measure_variable_records_how_to_read_it(coupled_results, measure):
     """Interpretation, sign convention, theoretical range, and diagonal policy
     are on the measure's own variable, so an extracted variable keeps them; an
     unbounded side of the range and facts a measure does not state are absent."""
-    variable = _main_variable(coupled_results[measure.name], measure.name)
-    expected = _expected_measure_attrs(measure)
+    _assert_records_how_to_read(
+        measure, _main_variable(coupled_results[measure.name], measure.name)
+    )
+
+
+def _assert_records_how_to_read(record, variable):
+    """``variable`` carries ``record``'s attrs, and no fact the record omits."""
+    expected = _expected_measure_attrs(record)
     assert {key: variable.attrs.get(key) for key in expected} == expected
     absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
     assert not absent & set(variable.attrs)
+
+
+# Dataset variables that are not measure values: group membership and the
+# spatial vectors, filters, and patterns. They carry provenance and labels,
+# not a measure's interpretation, range, or diagonal.
+_AUXILIARY_VARIABLES = {
+    "group_membership",
+    "global_coherence_vectors",
+    *(
+        f"{measure.name}_{kind}"
+        for measure in list_measures(category="multivariate_components")
+        for kind in ("filters", "patterns")
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [m for m in list_measures() if _CATEGORY_STRUCTURE[m.category][0] is xr.Dataset],
+    ids=lambda measure: measure.name,
+)
+def test_every_variable_of_a_dataset_result_records_how_to_read_it(coupled_results, measure):
+    """A measure's other value variables (group delay's slope and fit
+    correlation) carry their own record, as the measure's variable does; the
+    auxiliary variables carry none."""
+    for name, variable in coupled_results[measure.name].data_vars.items():
+        if name in _AUXILIARY_VARIABLES:
+            assert not {"interpretation", "diagonal_policy"} & set(variable.attrs), name
+        elif name == measure.name:
+            _assert_records_how_to_read(measure, variable)
+        else:
+            _assert_records_how_to_read(_COMPANION_SPECS[name], variable)
+
+
+def test_group_delay_companions_state_their_range_and_sign():
+    """The correlation lies in [-1, 1] with the slope's sign, whose sign is
+    group delay's."""
+    slope = _COMPANION_SPECS["group_delay_slope"]
+    r_value = _COMPANION_SPECS["group_delay_r_value"]
+    assert r_value.value_range == (-1.0, 1.0)
+    assert slope.value_range == (-np.inf, np.inf)
+    group_delay = _MEASURES["group_delay"]
+    assert slope.sign_convention == r_value.sign_convention == group_delay.sign_convention
+    assert slope.interpretation
+    assert r_value.interpretation
 
 
 def test_every_variable_of_group_delay_records_its_own_diagonal(coupled_results):
@@ -726,7 +778,6 @@ def test_signed_and_phase_measures_state_their_sign_convention():
     assert {m.name for m in list_measures() if m.sign_convention} == signed
 
 
-_MEASURES = {measure.name: measure for measure in list_measures()}
 _BANDS = {"low": (4.0, 40.0), "high": (40.0, 120.0)}
 
 

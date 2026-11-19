@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
+    _COMPANION_SPECS,
     _canonical_measure_name,
     _measure_attrs,
     _measure_spec,
@@ -371,25 +372,24 @@ def _connectivity_result_to_xarray(
             "time": base_coordinates["time"],
             **signal_coordinates,
         }
-        # (long_name, values, units, diagonal_policy): the fit's correlation is
-        # 1 on the diagonal, where delay and slope inherit coherency's mask.
+        # (values, attrs, units): group_delay carries the measure's record, the
+        # slope and fit correlation their own; delay and slope are in the
+        # reciprocal units of the frequency coordinate.
         variables = {
-            "group_delay": (
-                "Group delay",
-                np.asarray(delay),
-                delay_units,
-                measure_attrs["diagonal_policy"],
+            "group_delay": (np.asarray(delay), measure_attrs, delay_units),
+            "group_delay_slope": (
+                np.asarray(slope),
+                {**attrs, **_COMPANION_SPECS["group_delay_slope"].result_attrs(None)},
+                slope_units,
             ),
-            "group_delay_slope": ("phase slope", np.asarray(slope), slope_units, "masked_nan"),
             "group_delay_r_value": (
-                "phase-frequency correlation",
                 np.asarray(r_value),
+                {**attrs, **_COMPANION_SPECS["group_delay_r_value"].result_attrs(None)},
                 "1",
-                "constant",
             ),
         }
         data_vars: dict[str, xr.DataArray] = {}
-        for name, (long_name, values, units, diagonal_policy) in variables.items():
+        for name, (values, own_attrs, units) in variables.items():
             if values.shape != (
                 len(connectivity.time),
                 connectivity.n_signals,
@@ -397,15 +397,7 @@ def _connectivity_result_to_xarray(
             ):
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
-            # group_delay carries the measure's record, the others their own
-            # labels and diagonal.
-            variable_attrs = {
-                **(measure_attrs if name == method else attrs),
-                **interval_attrs,
-                "long_name": long_name,
-                "units": units,
-                "diagonal_policy": diagonal_policy,
-            }
+            variable_attrs = {**own_attrs, **interval_attrs, "units": units}
             data_vars[name] = xr.DataArray(
                 values,
                 coords=dataset_coordinates,

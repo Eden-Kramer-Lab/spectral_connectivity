@@ -587,6 +587,34 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
 }
 
 
+# The other value variables of a measure's Dataset, each with its own record
+# (not listed by list_measures: they are parts of the measure named first).
+_COMPANION_SPECS: dict[str, _MeasureSpec] = {
+    "group_delay_slope": _MeasureSpec(
+        "group_delay",
+        long_name="phase slope",
+        units="rad/Hz",
+        value_range=(-_INFINITY, _INFINITY),
+        interpretation="Slope of the unwrapped coherency phase against frequency over "
+        "frequency_range, from the linear fit group_delay is computed from "
+        "(group_delay = slope / (2*pi)).",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
+    ),
+    "group_delay_r_value": _MeasureSpec(
+        "group_delay",
+        long_name="phase-frequency correlation",
+        units="1",
+        value_range=(-1.0, 1.0),
+        interpretation="Correlation coefficient of the linear phase-frequency fit, with the "
+        "sign of the slope: near +1 or -1 the phase is linear in frequency and "
+        "group_delay is reliable.",
+        diagonal_policy="constant",
+        diagonal_value=1.0,
+        sign_convention=_LEADS,
+    ),
+}
+
 # Output kinds whose estimator consumes a frequency interval.
 _FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})
 
