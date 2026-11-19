@@ -1354,6 +1354,25 @@ def test_warnings_point_at_the_users_call(call, message):
 
 
 @pytest.mark.parametrize(
+    ("time_series", "kwargs"),
+    [
+        (_WITH_NAN, {}),
+        (_TRANSPOSED, {}),
+        (_LONG, _GAP),
+        (_LONG, _GAP_IN_SAMPLES),
+    ],
+    ids=["nan", "transposed", "gap", "gap_in_samples"],
+)
+def test_stft_that_fails_to_construct_does_not_warn_first(time_series, kwargs):
+    """Input warnings come after every check, so an invalid STFT only raises."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="start_time must be a finite scalar"):
+            ShortTimeFourierTransform(time_series, 1000, start_time=np.nan, **kwargs)
+    assert record == []
+
+
+@pytest.mark.parametrize(
     "n_tapers",
     [0, -1, True, np.True_, 51],
     ids=["zero", "negative", "bool", "numpy_bool", "above_window"],
