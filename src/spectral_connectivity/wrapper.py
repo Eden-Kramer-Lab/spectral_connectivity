@@ -109,8 +109,7 @@ class MeasureInfo:
     value_range : tuple of float
         ``(lower, upper)`` theoretical bounds of the values, or of their
         magnitude when ``is_complex``; ``inf`` marks an unbounded side. A
-        computed value can lie outside them by rounding (at most a few times
-        ``n_observations`` machine epsilon).
+        computed value can lie outside them by rounding.
     is_complex : bool
         Whether the values are complex.
     dims : tuple of str
@@ -122,21 +121,16 @@ class MeasureInfo:
         How to read the values.
     diagonal_policy : str
         What a self-connection (a signal, or group, with itself) holds:
-        ``"masked_nan"`` (NaN although the estimator defines a value there,
-        e.g. self-coherence is 1 at nonzero power), ``"undefined_nan"`` (NaN:
-        the estimator has no self-connection), ``"constant"`` (the same value
-        for any signal with nonzero power, ``diagonal_value``, to within the
-        rounding of the averages behind it), ``"rounding_noise"`` (nominally
-        ``diagonal_value``, but computed from rounding residues the formula
-        amplifies, so it can be visibly nonzero), ``"estimated"`` (a
-        data-dependent value), or ``"not_applicable"`` (no self-connection
-        entries).
+        ``"masked_nan"``, ``"undefined_nan"``, ``"constant"``,
+        ``"rounding_noise"``, ``"estimated"``, or ``"not_applicable"``, as
+        defined in the diagonal-policy table of
+        ``docs/CONNECTIVITY_METRIC_RANGES.md``.
     diagonal_value : float or None
-        The value of a ``"constant"`` diagonal, or the nominal value of a
-        ``"rounding_noise"`` one; ``None`` otherwise.
+        The value of a ``"constant"`` diagonal (to within rounding), or the
+        nominal value of a ``"rounding_noise"`` one; ``None`` otherwise.
     nan_for_zero_power_signal : bool
         Whether every entry involving a zero-power (flat) signal, the diagonal
-        included, is NaN, as for the measures that normalize by amplitude.
+        included, is NaN.
     sign_convention : str or None
         Which signal leads when the sign or angle shows it; ``None`` for
         measures whose sign carries no lead/lag.
@@ -1018,13 +1012,11 @@ def multitaper_connectivity(
     :func:`list_measures` returns: ``interpretation``, ``sign_convention``
     (measures whose sign or angle says which signal leads),
     ``value_range_lower``/``value_range_upper`` (theoretical bounds, which
-    rounding can cross by a few machine epsilon; an unbounded side omitted;
+    rounding can cross; an unbounded side omitted;
     ``value_range_applies_to="magnitude"`` for complex measures), ``quantity``
     and ``formula`` (the coherency family), and ``diagonal_policy``, what a
-    self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
-    ``"constant"``, ``"rounding_noise"``, ``"estimated"``, or
-    ``"not_applicable"``; a ``"constant"`` or ``"rounding_noise"`` one adds
-    ``diagonal_value``. ``nan_for_zero_power_signal`` (0 or 1) says whether
+    self-connection holds (defined in ``docs/CONNECTIVITY_METRIC_RANGES.md``);
+    a policy with a nominal value adds ``diagonal_value``. ``nan_for_zero_power_signal`` (0 or 1) says whether
     every entry involving a zero-power signal is NaN.
     ``group_delay``'s other value variables,
     ``group_delay_slope`` and ``group_delay_r_value``, record their own.

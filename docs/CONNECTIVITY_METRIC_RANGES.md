@@ -16,11 +16,11 @@ directed phase lag index) means `i` leads `j`.
 ## Measures
 
 Generated from `list_measures()`. Ranges are the estimators' theoretical
-bounds; a computed value can lie outside one by rounding (a few times the
-number of observations machine epsilon). For complex measures the range bounds the
-magnitude. "Observations" are trials × tapers. The Diagonal column is what a
+bounds; a computed value can lie outside one by rounding. For complex measures
+the range bounds the magnitude. "Observations" are trials × tapers. The Diagonal column is what a
 self-connection holds (see [Diagonal values](#diagonal-values)); a number is
-the constant every diagonal entry has, to within rounding.
+the constant every diagonal entry has, to within rounding. Flat signal is NaN
+where every entry involving a zero-power signal is NaN.
 
 <!-- measure-table:start -->
 | Measure | Range | Units | Diagonal | Flat signal | Interpretation |
@@ -111,36 +111,26 @@ measures), and `diagonal_policy`.
 The diagonal of a pairwise result, `result.sel(source="a", target="a")` (or
 `source_group`/`target_group` for group measures), holds a self-connection.
 What it holds is recorded as each variable's `diagonal_policy` attribute and in
-the Diagonal column above:
+the Diagonal column above. This table, generated from the registry, is the
+definition of each policy:
 
-| `diagonal_policy` | Diagonal holds | Measures |
+<!-- policy-table:start -->
+| `diagonal_policy` | A self-connection holds | Variables |
 |---|---|---|
-| `masked_nan` | NaN by the package's choice, although the estimator defines a value: self-coherence is 1 for a signal with nonzero power, its phase and imaginary part are 0, and partial and canonical coherence of a signal (group) with itself are 1. | the coherency family (`magnitude_squared_coherence`, `coherence_phase`, `coherency`, `imaginary_coherency`, `partial_coherence`), `canonical_coherence`, `maximized_imaginary_coherency` and `multivariate_interaction_measure` (a group with itself is not computed), and `delay`, `group_delay`, and `phase_slope_index`, which inherit coherency's mask |
-| `undefined_nan` | NaN: the estimator has no self-connection (a signal cannot Granger-cause itself in these models). | the spectral Granger measures, including blockwise |
-| `constant` | The estimator's value, the same for any signal with nonzero power, to within the rounding of the averages it is computed from: at most `4 × (n_observations + 4)` × machine epsilon (2.2e-16 in float64) from the value, and exact on some platforms. A zero-power (flat) signal's self-connection is NaN for the measures that normalize by amplitude (`nan_for_zero_power_signal`, the Flat signal column); the phase lag indices keep their value. | 0 for `imaginary_coherence` (NaN for a flat signal) and the phase lag indices; 1 for `phase_locking_value` and `pairwise_phase_consistency` (NaN for a flat signal); 0.5 for `directed_phase_lag_index` |
-| `rounding_noise` | Nominally a constant, but computed from rounding residues that the formula amplifies, so it can be visibly nonzero; mask it rather than read it. | `corrected_imaginary_phase_locking_value`, nominally 0 (NaN for a flat signal; see below) |
-| `estimated` | The estimator's own, data-dependent value. | `cross_spectral_density` (the power spectrum; its imaginary part is zero to within rounding) and the transfer-function measures (each signal's self-transfer) |
-| `not_applicable` | No self-connection entries. | `power`, `global_coherence`, and the component measures, whose connections pair different groups |
+| `masked_nan` | NaN by the package's choice, although the estimator defines a value there: self-coherence is 1 for a signal with nonzero power, its phase and imaginary part are 0, and partial and canonical coherence of a signal (group) with itself are 1; the maximized imaginary coherency and interaction measure do not compute a group with itself. The delay measures inherit coherency's mask. | `magnitude_squared_coherence`, `coherence_phase`, `coherency`, `imaginary_coherency`, `partial_coherence`, `canonical_coherence`, `maximized_imaginary_coherency`, `multivariate_interaction_measure`, `delay`, `group_delay`, `phase_slope_index`, `group_delay_slope` |
+| `undefined_nan` | NaN: the estimator has no self-connection (a signal cannot Granger-cause itself in these models). | `pairwise_spectral_granger_prediction`, `subset_pairwise_spectral_granger_prediction`, `conditional_spectral_granger_prediction`, `time_reversed_spectral_granger_prediction`, `blockwise_spectral_granger_prediction` |
+| `constant` | diagonal_value, the same for any signal with nonzero power, to within the rounding of the averages it is computed from: at most 4 * (n_observations + 4) times machine epsilon away, since normalizing each averaged term leaves about 4 eps, the sum adds n_observations eps, and pairwise phase consistency multiplies the error by 2 n / (n - 1) <= 4. Exact on some platforms. | `debiased_squared_phase_lag_index` (0), `debiased_squared_weighted_phase_lag_index` (0), `imaginary_coherence` (0), `pairwise_phase_consistency` (1), `phase_lag_index` (0), `phase_locking_value` (1), `weighted_phase_lag_index` (0), `directed_phase_lag_index` (0.5), `group_delay_r_value` (1) |
+| `rounding_noise` | Nominally diagonal_value (a defined 0/0 limit), but computed from rounding residues that the formula amplifies, so it can lie much farther from that value than rounding: the corrected imaginary PLV divides an imaginary part of order eps by sqrt(1 - Re^2) of at least sqrt(eps), so its diagonal is below sqrt(eps) (1.5e-8 in float64). Mask it rather than read it. | `corrected_imaginary_phase_locking_value` (0) |
+| `estimated` | The estimator's own, data-dependent value: the power spectrum for the cross-spectral density (real to within rounding), each signal's self-transfer for the transfer-function measures. | `cross_spectral_density`, `directed_transfer_function`, `directed_coherence`, `partial_directed_coherence`, `generalized_partial_directed_coherence`, `direct_directed_transfer_function` |
+| `not_applicable` | No self-connection entries. | `power`, `canonical_coherency`, `maximized_imaginary_coherency_components`, `global_coherence` |
 
-`group_delay`'s Dataset also holds `group_delay_slope` (NaN diagonal) and
-`group_delay_r_value`, whose diagonal is 1; each records its own
-`diagonal_policy`.
-
-`corrected_imaginary_phase_locking_value` divides `|Im(PLV)|` by
-`sqrt(1 - Re(PLV)^2)` and defines the 0/0 of exact zero-lag locking as 0. A
-signal's PLV with itself is 1 in exact arithmetic, but the computed average can
-round to just below 1 with an imaginary part of rounding size. The square root
-then turns `1 - Re(PLV)^2`, of order machine epsilon `eps`, into a denominator
-of order `sqrt(eps)`, and the numerator `|Im(PLV)|` is at most of order `eps`:
-the diagonal is rounding noise amplified by about `1 / sqrt(eps)`, below about
-`sqrt(eps)` (1.5e-8 in float64, 3.5e-4 when computed with
-`dtype=np.complex64`). Observed values range from exactly 0 (NumPy 2) to about
-6e-10 in float64 and 2e-5 at complex64 precision (NumPy 1.24).
+`nan_for_zero_power_signal`: Every entry involving a zero-power (flat) signal, its self-connection included, is NaN: the measure normalizes by each signal's amplitude. Where it is not set, a flat signal can still give some NaN entries, or finite ones. Set for `magnitude_squared_coherence`, `coherence_phase`, `imaginary_coherence`, `pairwise_phase_consistency`, `phase_locking_value`, `coherency`, `corrected_imaginary_phase_locking_value`, `delay`, `group_delay`, `phase_slope_index`, `group_delay_slope`.
+<!-- policy-table:end -->
 
 Two differences are deliberate and are kept: `imaginary_coherence` is 0 (to
 within rounding) on the diagonal where the signed `imaginary_coherency` is NaN,
-and coherence is NaN where its value would be 1. To treat every self-connection the same way, mask
-it yourself; the cookbook's "Mask or fill the diagonal" recipe shows how.
+and coherence is NaN where its value would be 1. To treat every
+self-connection the same way, mask it yourself; the cookbook's "Mask or fill the diagonal" recipe shows how.
 
 ## Notes
 

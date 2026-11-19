@@ -128,12 +128,11 @@ which it is. Coherence is NaN there by the package's choice (`masked_nan`),
 although self-coherence is 1 for a signal with nonzero power; the imaginary
 part of coherency is 0 for a signal with itself, which `imaginary_coherence`
 returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
-A constant holds to within the rounding of the averages it is computed from,
-at most `4 * (n_observations + 4)` times machine epsilon (exactly 0 on some
-NumPy builds), and only for signals with power: where
-`nan_for_zero_power_signal` is set, as for `imaginary_coherence`, every entry
-involving a flat signal, its self-connection included, is NaN. `docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's
-policy.
+A constant holds to within rounding, and only for signals with power: where
+`nan_for_zero_power_signal` is set, as for `imaginary_coherence`, a flat
+signal's entries are NaN. The policy table in
+`docs/CONNECTIVITY_METRIC_RANGES.md` defines each policy and lists its
+measures.
 
 ```python
 >>> default = multitaper_connectivity(time_series, sampling_frequency=500)
@@ -142,8 +141,8 @@ policy.
 >>> default["imaginary_coherence"].attrs["diagonal_policy"]
 'constant'
 >>> imaginary = default["imaginary_coherence"]
->>> rounding = 4 * (imaginary.attrs["n_observations"] + 4) * np.finfo(float).eps
->>> bool(abs(imaginary.sel(source="0", target="0")).max() <= rounding)
+>>> self_imaginary = imaginary.sel(source="0", target="0")
+>>> bool(np.allclose(self_imaginary, imaginary.attrs["diagonal_value"]))  # to rounding
 True
 
 ```
@@ -500,11 +499,11 @@ facts needed to interpret it. Settings use one JSON record:
 | `measure`, `measure_kwargs_json` | The measure name the caller requested and its keyword arguments, on each measure's variables. A result requested by a deprecated name (`coherence_magnitude`) records that name, and its variable has that name too. |
 | `long_name`, `units`, `interpretation` | How to read the measure variable, from `list_measures()`. With `sign_convention`, the value range, and `diagonal_policy` (below), these are on each measure variable and on `group_delay`'s other value variables, `group_delay_slope` and `group_delay_r_value` (range [-1, 1], with the slope's sign), which have their own; group membership and spatial vectors, filters, and patterns carry none. Band reduction names its reduction (mean, circular mean, complex mean, or integral) at the start of `interpretation` and `formula`, and an integral rewrites `long_name` and `units`; cropping and decimation change none of the measure attributes. |
 | `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
-| `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The estimator's theoretical range; an unbounded side is omitted. A computed value can lie outside it by rounding (a few times `n_observations` machine epsilon), e.g. a pairwise phase consistency of 1 + 1e-15. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
+| `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The estimator's theoretical range; an unbounded side is omitted. A computed value can lie outside it by rounding. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
 | `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
-| `diagonal_policy` | What a self-connection holds: `masked_nan`, `undefined_nan`, `constant` (to within rounding), `rounding_noise` (nominally constant, but amplified rounding; mask it), `estimated`, or `not_applicable` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay_slope` (`masked_nan`) and `group_delay_r_value` (`constant`, 1), whose diagonals differ. |
+| `diagonal_policy` | What a self-connection holds, one of the policies defined in the policy table of `docs/CONNECTIVITY_METRIC_RANGES.md` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay_slope` and `group_delay_r_value`, whose diagonals differ. |
 | `diagonal_value` | Where the policy is `constant` or `rounding_noise`: the (nominal) value, a float. Omitted for the other policies. |
-| `nan_for_zero_power_signal` | 1 if every entry involving a zero-power (flat) signal, its self-connection included, is NaN, else 0. On each measure variable. |
+| `nan_for_zero_power_signal` | 1 if every entry involving a zero-power (flat) signal is NaN, else 0 (defined below the policy table). On each measure variable. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

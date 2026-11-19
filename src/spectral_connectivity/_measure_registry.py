@@ -26,30 +26,12 @@ class _MeasureSpec:
     score and ``None`` a spectral density, whose units derive from the input's
     (see :meth:`units_for`). ``value_range`` is the estimator's theoretical
     range, of the values or of their magnitude when ``is_complex``; a computed
-    value can lie outside it by rounding (``pairwise_phase_consistency``'s self
-    value reaches 1 + 1e-15).
+    value can lie outside it by rounding.
 
-    ``diagonal_policy`` says what a self-connection (a signal, or group, with
-    itself) holds; ``diagonal_value`` is the value of a ``"constant"`` or
-    ``"rounding_noise"`` one:
-
-    - ``"masked_nan"``: NaN although the estimator defines a value there (for
-      coherence, 1 at nonzero power): the package masks it.
-    - ``"undefined_nan"``: NaN because the estimator has no self-connection.
-    - ``"constant"``: the estimator's value, the same for any signal with
-      nonzero power, to within the rounding of the averages it is computed
-      from (at most ``4 * (n_observations + 4)`` times machine epsilon).
-    - ``"rounding_noise"``: nominally ``diagonal_value`` (an identity or a
-      defined 0/0 limit), but computed from rounding residues that the
-      measure's formula amplifies, so it can differ from that value by much
-      more than rounding (see ``corrected_imaginary_phase_locking_value``).
-    - ``"estimated"``: the estimator's value, which depends on the data.
-    - ``"not_applicable"``: the result has no self-connection entries.
-
-    ``nan_for_zero_power_signal`` marks a measure for which every entry
-    involving a zero-power (flat) signal, the diagonal included, is NaN: it
-    normalizes by each signal's amplitude. Where it is not set, a flat signal
-    can still give some NaN entries, or finite ones.
+    ``diagonal_policy`` is one of :data:`_DIAGONAL_POLICIES`, which defines
+    each; ``diagonal_value`` is the value of a ``"constant"`` or the nominal
+    value of a ``"rounding_noise"`` one. ``nan_for_zero_power_signal`` is
+    defined by :data:`_NAN_FOR_ZERO_POWER_SIGNAL`.
 
     ``sign_convention`` says which signal leads when a measure's sign or angle
     shows it. ``quantity`` and ``formula`` define the coherency family's values
@@ -97,6 +79,9 @@ class _MeasureSpec:
     requires_two_sided: bool = False
 
     def __post_init__(self) -> None:
+        if self.diagonal_policy not in _DIAGONAL_POLICIES:
+            msg = f"diagonal_policy {self.diagonal_policy!r} is not one of _DIAGONAL_POLICIES."
+            raise ValueError(msg)
         nominal = self.diagonal_policy in {"constant", "rounding_noise"}
         if nominal != (self.diagonal_value is not None):
             msg = (
@@ -186,6 +171,40 @@ def _wilson_directed_spec(
         requires_two_sided=True,
     )
 
+
+#: What each ``diagonal_policy`` says a self-connection (a signal, or a
+#: group, with itself) holds: the one definition of the vocabulary, from which
+#: the policy table in docs/CONNECTIVITY_METRIC_RANGES.md is generated.
+_DIAGONAL_POLICIES: dict[str, str] = {
+    "masked_nan": "NaN by the package's choice, although the estimator defines a value "
+    "there: self-coherence is 1 for a signal with nonzero power, its phase and imaginary "
+    "part are 0, and partial and canonical coherence of a signal (group) with itself are "
+    "1; the maximized imaginary coherency and interaction measure do not compute a group "
+    "with itself. The delay measures inherit coherency's mask.",
+    "undefined_nan": "NaN: the estimator has no self-connection (a signal cannot "
+    "Granger-cause itself in these models).",
+    "constant": "diagonal_value, the same for any signal with nonzero power, to within the "
+    "rounding of the averages it is computed from: at most 4 * (n_observations + 4) times "
+    "machine epsilon away, since normalizing each averaged term leaves about 4 eps, the "
+    "sum adds n_observations eps, and pairwise phase consistency multiplies the error by "
+    "2 n / (n - 1) <= 4. Exact on some platforms.",
+    "rounding_noise": "Nominally diagonal_value (a defined 0/0 limit), but computed from "
+    "rounding residues that the formula amplifies, so it can lie much farther from that "
+    "value than rounding: the corrected imaginary PLV divides an imaginary part of order "
+    "eps by sqrt(1 - Re^2) of at least sqrt(eps), so its diagonal is below sqrt(eps) "
+    "(1.5e-8 in float64). Mask it rather than read it.",
+    "estimated": "The estimator's own, data-dependent value: the power spectrum for the "
+    "cross-spectral density (real to within rounding), each signal's self-transfer for the "
+    "transfer-function measures.",
+    "not_applicable": "No self-connection entries.",
+}
+
+#: The definition of ``nan_for_zero_power_signal``.
+_NAN_FOR_ZERO_POWER_SIGNAL = (
+    "Every entry involving a zero-power (flat) signal, its self-connection included, is "
+    "NaN: the measure normalizes by each signal's amplitude. Where it is not set, a flat "
+    "signal can still give some NaN entries, or finite ones."
+)
 
 _INFINITY = float("inf")
 _PI = float(np.pi)

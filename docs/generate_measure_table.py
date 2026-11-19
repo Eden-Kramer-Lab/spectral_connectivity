@@ -1,4 +1,4 @@
-"""Write the measure table in CONNECTIVITY_METRIC_RANGES.md from list_measures().
+"""Write the generated tables in CONNECTIVITY_METRIC_RANGES.md from the registry.
 
 Run ``python docs/generate_measure_table.py`` after changing a measure's
 metadata; ``tests/test_docs.py`` fails while the committed table is stale.
@@ -8,12 +8,19 @@ import math
 from pathlib import Path
 
 from spectral_connectivity import list_measures
+from spectral_connectivity._measure_registry import (
+    _COMPANION_SPECS,
+    _DIAGONAL_POLICIES,
+    _NAN_FOR_ZERO_POWER_SIGNAL,
+)
 
 DOCUMENT = Path(__file__).with_name("CONNECTIVITY_METRIC_RANGES.md")
 START = "<!-- measure-table:start -->"
 END = "<!-- measure-table:end -->"
 FORMULA_START = "<!-- formula-table:start -->"
 FORMULA_END = "<!-- formula-table:end -->"
+POLICY_START = "<!-- policy-table:start -->"
+POLICY_END = "<!-- policy-table:end -->"
 _DIAGONALS = {
     "masked_nan": "NaN (masked)",
     "undefined_nan": "NaN (undefined)",
@@ -82,6 +89,31 @@ def formula_table() -> str:
     return "\n".join(rows)
 
 
+def _value_variables():
+    """``(name, record)`` of every measure variable: the measures, then the
+    other value variables of their Datasets."""
+    yield from ((measure.name, measure) for measure in list_measures())
+    yield from _COMPANION_SPECS.items()
+
+
+def policy_table() -> str:
+    """The diagonal policies, their definitions, and the variables of each."""
+    rows = ["| `diagonal_policy` | A self-connection holds | Variables |", "|---|---|---|"]
+    for policy, definition in _DIAGONAL_POLICIES.items():
+        names = ", ".join(
+            f"`{name}`"
+            + ("" if record.diagonal_value is None else f" ({record.diagonal_value:g})")
+            for name, record in _value_variables()
+            if record.diagonal_policy == policy
+        )
+        rows.append(f"| `{policy}` | {_table_cell(definition)} | {names} |")
+    flagged = ", ".join(
+        f"`{name}`" for name, record in _value_variables() if record.nan_for_zero_power_signal
+    )
+    rows += ["", f"`nan_for_zero_power_signal`: {_NAN_FOR_ZERO_POWER_SIGNAL} Set for {flagged}."]
+    return "\n".join(rows)
+
+
 def _between(document: str, start: str, end: str, table: str) -> str:
     head, rest = document.split(start, 1)
     _, tail = rest.split(end, 1)
@@ -91,7 +123,8 @@ def _between(document: str, start: str, end: str, table: str) -> str:
 def render(document: str) -> str:
     """``document`` with the text between each pair of table markers regenerated."""
     document = _between(document, START, END, measure_table())
-    return _between(document, FORMULA_START, FORMULA_END, formula_table())
+    document = _between(document, FORMULA_START, FORMULA_END, formula_table())
+    return _between(document, POLICY_START, POLICY_END, policy_table())
 
 
 if __name__ == "__main__":

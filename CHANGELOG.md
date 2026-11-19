@@ -212,17 +212,11 @@ directly with results from 2.x.
   NetCDF-safe attributes from the same registry: `interpretation`,
   `sign_convention`, `value_range_lower`/`value_range_upper` (an unbounded side
   is omitted; complex measures add `value_range_applies_to="magnitude"`),
-  `quantity` and `formula` for the coherency family, and `diagonal_policy`:
-  `masked_nan` where the package masks a defined self-value (coherence, whose
-  self-value is 1 at nonzero power), `undefined_nan` where the estimator has
-  none (the Granger family), `constant` for identities, to within rounding
-  and for signals with power (0 for `imaginary_coherence`, where the signed
-  `imaginary_coherency` is masked), `rounding_noise` for the corrected imaginary PLV, whose nominal 0
-  is computed from amplified rounding residues and can be visibly nonzero,
-  `estimated` for data-dependent self-values, and `not_applicable`, with
-  `diagonal_value` recorded beside a constant or rounding-noise policy;
-  `nan_for_zero_power_signal` marks the measures for which every entry
-  involving a zero-power (flat) signal, the diagonal included, is NaN. `group_delay_slope` and
+  `quantity` and `formula` for the coherency family, `diagonal_policy`
+  (`masked_nan`, `undefined_nan`, `constant`, `rounding_noise`, `estimated`, or
+  `not_applicable`, defined in the policy table of
+  `docs/CONNECTIVITY_METRIC_RANGES.md`) with `diagonal_value` beside a nominal
+  value, and `nan_for_zero_power_signal`. `group_delay_slope` and
   `group_delay_r_value` carry their own records. No
   diagonal value changed; the cookbook shows how to mask or fill diagonals
   uniformly. Band reduction keeps these attributes true of the band values:
