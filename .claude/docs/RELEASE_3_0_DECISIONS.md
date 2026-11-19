@@ -2,7 +2,8 @@
 
 **Status: step 1 merged; step 2 implemented and validated locally; step 3
 (D4, D23) implemented on `refactor/frequency-selection`; step 4 (D5-D8, D25)
-implemented on `refactor/coherence-naming`, see below.**
+implemented on `refactor/coherence-naming`; step 5 (D9, D11, D12, D14, D16,
+D24, D29) implemented on `refactor/signatures-and-routing`, see below.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -574,6 +575,76 @@ Rulings where the rules above were silent:
 - [x] Measure attributes stay true after cropping, decimation, and band
   reduction (density, coherence, phase, and complex measures).
 - [ ] Issue #101 entry for the `coherence_magnitude` alias (orchestrator).
+
+## Step 5 implementation
+
+**Scope:** D9, D11, D12, D14, D16, D24, and D29. **Branch:**
+`refactor/signatures-and-routing`, based on step 4's final head `0621a70`.
+Implemented and validated locally on 2026-11-19: 2,359 tests passed with 16
+skips on the main CPU environment, and 2,244 passed with 101 skips on Python
+3.10 with the NumPy 1.24/SciPy 1.11.1/xarray 2023.1/Matplotlib 3.7 floors; all
+70 source doctests (also on the floors), Ruff formatting/lint, and mypy
+passed; the benchmark's 22 arrays are bit-identical to `0621a70`.
+
+Released forms checked against `v2.0.1`: `Multitaper` (13 positional
+parameters, unchanged), `multitaper_connectivity(time_series,
+sampling_frequency, time_window_duration, method, signal_names, squeeze,
+connectivity_kwargs, **kwargs)`, `connectivity_to_xarray(m, method,
+signal_names, squeeze, **kwargs)`, `power_confidence_intervals(n_tapers,
+power, ci)`, `minimum_phase_decomposition(cross_spectral_matrix, tolerance,
+max_iterations=60)`, `global_coherence(max_rank)`,
+`canonical_coherence(group_labels)`, and `from_multitaper(multitaper_instance,
+expectation_type, blocks, dtype)`. The STFT, Welch, Morlet, MIC, MIM,
+`partial_coherence`, `canonical_coherency`, `max_workspace_elements`,
+`fourier_connectivity`, and `from_transform` are new in 3.0.
+
+Rulings where the rules above were silent:
+
+- **One route per setting (owner's ruling).** The six common transform
+  settings are named arguments only, with `Multitaper`'s real defaults and no
+  sentinel defaults; one of them inside `transform_kwargs` raises
+  `ValueError` whether or not it was also named. `group_labels` keeps its existing acceptance inside
+  `connectivity_kwargs` (default `None` is unambiguous), with the existing
+  both-ways `ValueError`. A key both in a mapping and as a plain keyword
+  raises `ValueError` naming both; an unknown key raises `TypeError` with close
+  matches, before any warning or computation.
+- **Legacy route.** Every plain keyword the target accepts warns (one
+  warning per call listing them), including settings first added in 3.0
+  such as `fft_workers`: the deprecated interface is the released forwarding
+  route, not each key. `connectivity_to_xarray` gains a keyword-only
+  `group_labels` so that common setting keeps a flat route.
+- **from_multitaper.** It calls `cls.from_transform`, so a subclass's
+  `from_transform` override applies to both names; a subclass overriding
+  `from_multitaper` warns at its own `super()` call and is not reached by
+  `from_transform`. The 2.x `blocks` parameter (third position) was removed
+  before this step and is not restored. A 2.x call that still passes it
+  there binds `dtype`; 2.x's `None` was read as float64 and silently dropped
+  every coefficient's imaginary part, so `Connectivity` now rejects any dtype
+  that is not complex with a `TypeError` naming `blocks`.
+- **One deprecation template.** `utils.warn_deprecated` writes every 2.x
+  deprecation warning (the measure-name resolver, `from_multitaper`,
+  `n_tapers=`, and plain-keyword settings) as "<old> is deprecated and will be
+  removed in 4.0; use <new>, which <outcome>.", attributed with
+  `stacklevel_outside_package()`.
+- **fourier_connectivity (owner's ruling).** New in 3.0, so every parameter
+  after `signal_names` is keyword-only, as for the other new 3.0 APIs.
+- **n_tapers alias.** It matches the canonical 3.0 interval exactly; 2.0.1's
+  numbers differ by the documented formula correction (2.0.1's `ci=c` interval
+  is 3.0's `ci=2c-1`). Both spellings raise `ValueError`.
+- **max_iterations default (owner's ruling).** It stays 500, a 3.0 change
+  from 2.0.1's 60, recorded in the CHANGELOG (Changed and the migration
+  guide) and the docstring, with `max_iterations=60` for the 2.0.1 cap.
+
+### Step 5 acceptance checklist
+
+- [x] Supported released forms and common wrapper keywords work without
+  warnings (`tests/test_signatures.py`, `tests/test_wrapper_routing.py`).
+- [x] Deprecated paths agree numerically and warn at the caller's line:
+  `from_multitaper`, plain-keyword settings, `n_tapers=`; compared with the
+  2.0.1 wheel under NumPy 2.5 and 1.24.
+- [x] Duplicate arguments fail; misspelled mapping keys fail.
+- [x] Published positional orders are preserved and pinned by tests.
+- [ ] Issue #101 entries for the three aliases (orchestrator).
 
 ## Verification performed for this sheet
 
