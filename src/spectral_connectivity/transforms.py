@@ -841,6 +841,7 @@ class _WindowedFourierTransform:
     def _set_window_state(
         self,
         start_time: Any,
+        *,
         time_window_duration: float | None,
         time_window_step: float | None,
         n_fft_samples: int | None,
@@ -1691,11 +1692,11 @@ class Multitaper(_WindowedFourierTransform):
         # fails construction.
         self._set_window_state(
             start_time,
-            time_window_duration,
-            time_window_step,
-            n_fft_samples,
-            n_time_samples_per_window,
-            n_time_samples_per_step,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
+            n_fft_samples=n_fft_samples,
+            n_time_samples_per_window=n_time_samples_per_window,
+            n_time_samples_per_step=n_time_samples_per_step,
         )
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
@@ -2143,11 +2144,11 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         self._fft_workers = fft_workers
         self._set_window_state(
             start_time,
-            resolved_duration,
-            resolved_step_duration,
-            n_fft_samples,
-            window_samples,
-            step_samples,
+            time_window_duration=resolved_duration,
+            time_window_step=resolved_step_duration,
+            n_fft_samples=n_fft_samples,
+            n_time_samples_per_window=window_samples,
+            n_time_samples_per_step=step_samples,
         )
         self._window = _immutable_array_snapshot(window)
         # Fail now, rather than inside fft(), when the window does not fit the
