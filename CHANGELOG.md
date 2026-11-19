@@ -460,13 +460,11 @@ directly with results from 2.x.
   `frequency_resolution` it can be stricter than the bins
   `phase_slope_index` actually sums.
 - `multitaper_connectivity` and `fourier_connectivity` pass their
-  `frequency_range` to `delay`, `group_delay`, and `phase_slope_index` instead
-  of refusing it for the frequency-reduced measures, so the wrapper and a
-  direct `Connectivity` call consume the same bins. Every other measure is
-  still computed from the full spectrum (the Wilson factorization sees the
+  `frequency_range` to `delay`, `group_delay`, and `phase_slope_index`, so the
+  wrapper and a direct `Connectivity` call consume the same bins. Every other
+  measure is computed from the full spectrum (the Wilson factorization sees the
   whole two-sided spectrum) and cropped to the same bins, so a Dataset mixing
-  them shares one frequency axis. Previously a Dataset mixing
-  `phase_slope_index` with a cropped measure summed every bin. `frequency_bands`
+  them shares one frequency axis. `frequency_bands`
   and `frequency_decimation` reduce the frequency-resolved variables, `delay`
   included, and leave `phase_slope_index` and `group_delay` as computed over
   `frequency_range`; requesting either with only those two measures raises.
