@@ -1143,17 +1143,6 @@ def test_multitaper_rejects_negative_time_window_step():
         Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=0)
 
 
-def test_multitaper_warns_likely_transposed():
-    """Test that Multitaper warns when data appears to be transposed."""
-    rng = np.random.default_rng(42)
-    # Create time series where n_time < n_signals (likely transposed)
-    # Shape: (10 time points, 1 trial, 100 signals) - suspiciously few time points
-    time_series = rng.standard_normal((10, 1, 100))
-
-    with pytest.warns(UserWarning, match=r"data may be transposed"):
-        Multitaper(time_series=time_series, sampling_frequency=1000)
-
-
 def test_multitaper_warns_on_nan_input():
     """Test that Multitaper warns when input contains NaN or Inf values."""
     rng = np.random.default_rng(42)
@@ -1179,94 +1168,98 @@ def test_multitaper_warns_on_nan_input():
         Multitaper(time_series=time_series_neginf, sampling_frequency=1000)
 
 
-def test_multitaper_warns_on_large_time_halfbandwidth():
-    """Test that Multitaper warns when time_halfbandwidth_product is unusually large."""
-    rng = np.random.default_rng(42)
-    time_series = rng.standard_normal((100, 1, 1))
-
-    with pytest.warns(UserWarning, match=r"unusually large"):
-        Multitaper(
-            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=15
-        )
-
-
-def test_multitaper_warns_on_step_larger_than_duration():
-    """Test that Multitaper warns when time_window_step > time_window_duration."""
-    rng = np.random.default_rng(42)
-    time_series = rng.standard_normal((1000, 1, 1))
-
-    with pytest.warns(UserWarning, match=r"creates gaps"):
-        Multitaper(
-            time_series=time_series,
-            sampling_frequency=1000,
-            time_window_duration=0.5,
-            time_window_step=1.0,
-        )
+_RNG = np.random.default_rng(42)
+_WITH_NAN = _RNG.standard_normal((100, 1, 1))
+_WITH_NAN[50, 0, 0] = np.nan
+_TRANSPOSED = _RNG.standard_normal((10, 1, 100))  # fewer time points than signals
+_LONG = _RNG.standard_normal((1000, 1, 1))
+_GAP = {"time_window_duration": 0.5, "time_window_step": 1.0}
+_NAN_MESSAGE = "Input time_series contains NaN"
+_TRANSPOSED_MESSAGE = "data may be transposed"
+_GAP_MESSAGE = "creates gaps"
+_LARGE_NW_MESSAGE = "unusually large"
 
 
-def _input_that_warns(case):
-    """Time series and window arguments that trigger one construction warning."""
-    rng = np.random.default_rng(42)
-    if case == "nan":
-        time_series = rng.standard_normal((100, 1, 1))
-        time_series[50, 0, 0] = np.nan
-        return time_series, {}
-    if case == "transposed":
-        return rng.standard_normal((10, 1, 100)), {}
-    if case == "large_nw":
-        return rng.standard_normal((1000, 1, 1)), {"time_halfbandwidth_product": 11}
-    return rng.standard_normal((1000, 1, 1)), {
-        "time_window_duration": 0.5,
-        "time_window_step": 1.0,
-    }
-
-
-_WARNING_MATCHES = {
-    "nan": "Input time_series contains NaN",
-    "transposed": "data may be transposed",
-    "gap": "creates gaps",
-    "large_nw": "unusually large",
-}
-# Each entry builds a transform from the user's code; Welch and the wrapper
-# build theirs inside the package.
-_CONSTRUCTING_CALLS = {
-    "Multitaper": lambda time_series, kwargs: Multitaper(
-        time_series, sampling_frequency=1000, **kwargs
-    ),
-    "ShortTimeFourierTransform": lambda time_series, kwargs: ShortTimeFourierTransform(
-        time_series, sampling_frequency=1000, **kwargs
-    ),
-    "Welch": lambda time_series, kwargs: Welch(
-        time_series, sampling_frequency=1000, n_time_samples_per_segment=4, **kwargs
-    ),
-    "multitaper_connectivity": lambda time_series, kwargs: multitaper_connectivity(
-        time_series, 1000, method="power", **kwargs
-    ),
-}
-
-
+# Each call is written here, in the user's code. Welch and the wrapper build
+# their transforms inside the package. A Welch step never exceeds its segment,
+# and Welch has no NW.
 @pytest.mark.parametrize(
-    ("constructor", "case"),
+    ("call", "message"),
     [
-        *[("Multitaper", case) for case in ("nan", "transposed", "gap", "large_nw")],
-        *[("ShortTimeFourierTransform", case) for case in ("nan", "transposed", "gap")],
-        # A Welch step never exceeds its segment, and Welch has no NW.
-        *[("Welch", case) for case in ("nan", "transposed")],
-        *[
-            ("multitaper_connectivity", case)
-            for case in ("nan", "transposed", "gap", "large_nw")
-        ],
+        pytest.param(lambda: Multitaper(_WITH_NAN, 1000), _NAN_MESSAGE, id="Multitaper-nan"),
+        pytest.param(
+            lambda: Multitaper(_TRANSPOSED, 1000),
+            _TRANSPOSED_MESSAGE,
+            id="Multitaper-transposed",
+        ),
+        pytest.param(
+            lambda: Multitaper(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="Multitaper-gap"
+        ),
+        pytest.param(
+            lambda: Multitaper(_LONG, 1000, time_halfbandwidth_product=11),
+            _LARGE_NW_MESSAGE,
+            id="Multitaper-large_nw",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_WITH_NAN, 1000), _NAN_MESSAGE, id="STFT-nan"
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_TRANSPOSED, 1000),
+            _TRANSPOSED_MESSAGE,
+            id="STFT-transposed",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="STFT-gap"
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(
+                _LONG, 1000, n_time_samples_per_window=100, n_time_samples_per_step=150
+            ),
+            _GAP_MESSAGE,
+            id="STFT-gap_in_samples",
+        ),
+        pytest.param(
+            lambda: Welch(_WITH_NAN, 1000, n_time_samples_per_segment=4),
+            _NAN_MESSAGE,
+            id="Welch-nan",
+        ),
+        pytest.param(
+            lambda: Welch(_TRANSPOSED, 1000, n_time_samples_per_segment=4),
+            _TRANSPOSED_MESSAGE,
+            id="Welch-transposed",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_WITH_NAN, 1000, method="power"),
+            _NAN_MESSAGE,
+            id="wrapper-nan",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_TRANSPOSED, 1000, method="power"),
+            _TRANSPOSED_MESSAGE,
+            id="wrapper-transposed",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_LONG, 1000, method="power", **_GAP),
+            _GAP_MESSAGE,
+            id="wrapper-gap",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _LONG, 1000, method="power", time_halfbandwidth_product=11
+            ),
+            _LARGE_NW_MESSAGE,
+            id="wrapper-large_nw",
+        ),
     ],
 )
-def test_construction_warnings_point_at_the_constructing_call(constructor, case):
-    """Input warnings name the user's line, not package internals."""
-    time_series, window_kwargs = _input_that_warns(case)
-    match = _WARNING_MATCHES[case]
+def test_warnings_point_at_the_users_call(call, message):
+    """Each warning is a UserWarning that names the user's line, not package internals."""
     # Record every warning: the wrapper also warns about NaN coefficients.
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        _CONSTRUCTING_CALLS[constructor](time_series, window_kwargs)
-    assert [w.filename for w in record if match in str(w.message)] == [__file__]
+        call()
+    matching = [(w.category, w.filename) for w in record if message in str(w.message)]
+    assert matching == [(UserWarning, __file__)]
 
 
 @pytest.mark.parametrize(
