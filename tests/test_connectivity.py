@@ -1305,45 +1305,29 @@ def test_pairwise_phase_consistency():
     assert coupled_ppc[0, 1] == pytest.approx(expected_coupled, rel=1e-10)
 
 
-def test__bandpass():
-    test_data = np.arange(0, 10).reshape((2, 5))
-    labels = np.arange(0, 5) * 2
-    labels_of_interest = [1, 5]
-
-    expected_labels = np.array([2, 4])
-    expected_data = np.array([[1, 2], [6, 7]])
-
-    filtered_data, filtered_labels = _bandpass(test_data, labels, labels_of_interest, axis=-1)
-
-    assert np.allclose(expected_data, filtered_data) & np.allclose(
-        expected_labels, filtered_labels
-    )
-
-
-def test__bandpass_band_edges_are_exclusive():
-    """Only frequencies strictly inside the band are kept: a bin exactly on
-    either edge is dropped. This pins the documented (exclusive) semantics."""
+def test__bandpass_keeps_the_masked_bins():
     data = np.arange(0, 10).reshape((2, 5))
     frequencies = np.arange(0, 5) * 2.0  # 0, 2, 4, 6, 8
-    filtered_data, filtered_frequencies = _bandpass(data, frequencies, [2.0, 6.0], axis=-1)
-    np.testing.assert_array_equal(filtered_frequencies, [4.0])
-    np.testing.assert_array_equal(filtered_data, [[2], [7]])
+    mask = np.array([False, True, True, False, False])
+    filtered_data, filtered_frequencies = _bandpass(data, frequencies, mask, axis=-1)
+    np.testing.assert_array_equal(filtered_frequencies, [2.0, 4.0])
+    np.testing.assert_array_equal(filtered_data, [[1, 2], [6, 7]])
 
 
 @pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
 @pytest.mark.parametrize(
     "band",
-    [[10.0], [10.0, 20.0, 30.0], [20.0, 10.0], [10.0, 10.0], [np.nan, 10.0], [0.0, np.inf]],
+    [[10.0], [10.0, 20.0, 30.0], [20.0, 10.0], [np.nan, 10.0], [0.0, np.inf]],
 )
-def test_frequencies_of_interest_must_be_two_finite_increasing_values(measure, band):
+def test_frequency_range_must_be_two_finite_ordered_values(measure, band):
     rng = np.random.default_rng(19)
     shape = (1, 6, 2, 32, 2)
     connectivity = Connectivity(
         rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
         frequencies=np.fft.fftfreq(32, d=1 / 100.0),
     )
-    with pytest.raises(ValueError, match="frequencies_of_interest must be two finite"):
-        getattr(connectivity, measure)(frequencies_of_interest=band)
+    with pytest.raises(ValueError, match="frequency_range must be two finite"):
+        getattr(connectivity, measure)(frequency_range=band)
 
 
 @pytest.mark.parametrize("measure", ["group_delay", "delay", "phase_slope_index"])
@@ -1354,7 +1338,7 @@ def test_frequencies_of_interest_must_be_two_finite_increasing_values(measure, b
         pytest.param([12.6, 15.5], id="between-adjacent-bins"),
     ],
 )
-def test_frequencies_of_interest_must_contain_a_frequency_bin(measure, band):
+def test_frequency_range_must_contain_a_frequency_bin(measure, band):
     """A well-formed band holding no bin must raise, not return a silent result.
 
     Regression: group_delay returned all-NaN delays and delay an empty
@@ -1367,7 +1351,7 @@ def test_frequencies_of_interest_must_contain_a_frequency_bin(measure, band):
         frequencies=np.fft.fftfreq(32, d=1 / 100.0),  # bins every 3.125 Hz to 50 Hz
     )
     with pytest.raises(ValueError, match="contains no frequency bin"):
-        getattr(connectivity, measure)(frequencies_of_interest=band)
+        getattr(connectivity, measure)(frequency_range=band)
 
 
 @pytest.mark.parametrize(
@@ -3707,7 +3691,7 @@ def test_phase_slope_index_uses_adjacent_frequency_bins():
 
     # Reproduce the internal subsampling to build a faithful reference.
     frequencies = conn.frequencies
-    bandpassed, band_freqs = _bandpass(conn.coherency(), frequencies, None)
+    bandpassed, band_freqs = conn.coherency(), frequencies
     step = _get_independent_frequency_step(frequencies[1] - frequencies[0], None)
     idx = np.arange(0, band_freqs.shape[0], step)
     bandpassed = bandpassed[..., idx, :, :]

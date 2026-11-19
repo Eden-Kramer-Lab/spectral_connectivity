@@ -385,7 +385,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Group delay",
         units="s",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Delay in seconds from the slope of phase against frequency over the band; "
+        interpretation="Delay in seconds from the slope of phase against frequency over "
+        "frequency_range (every bin by default); "
         f"check group_delay_r_value for the quality of the fit. {_LEADS}",
         is_directed=True,
     ),
@@ -394,7 +395,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Phase slope index",
         units="1",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Coherence-weighted slope of phase against frequency over the band. "
+        interpretation="Coherence-weighted slope of phase against frequency over "
+        "frequency_range (every bin by default). "
         "Unnormalized, so judge it "
         f"against a null distribution rather than a fixed threshold. {_LEADS}",
         is_directed=True,

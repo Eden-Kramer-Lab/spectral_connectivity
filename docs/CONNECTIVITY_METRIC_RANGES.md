@@ -54,8 +54,8 @@ magnitude. "Observations" are trials × tapers.
 | `maximized_imaginary_coherency_components` | [0, 1] | 1 | maximized_imaginary_coherency resolved into components, with the spatial filters and patterns that produce them. |
 | `delay` | (-∞, ∞) | s | Candidate delays in seconds, one per 2*pi phase ambiguity; the true delay is the candidate that is constant across frequency. Frequencies without significant coherence are NaN. Positive (source=a, target=b) means a leads b. |
 | `global_coherence` | [0, 1] | 1 | Fraction of the total cross-spectral power in each component; a large leading component indicates one dominant coherent network. |
-| `group_delay` | (-∞, ∞) | s | Delay in seconds from the slope of phase against frequency over the band; check group_delay_r_value for the quality of the fit. Positive (source=a, target=b) means a leads b. |
-| `phase_slope_index` | (-∞, ∞) | 1 | Coherence-weighted slope of phase against frequency over the band. Unnormalized, so judge it against a null distribution rather than a fixed threshold. Positive (source=a, target=b) means a leads b. |
+| `group_delay` | (-∞, ∞) | s | Delay in seconds from the slope of phase against frequency over frequency_range (every bin by default); check group_delay_r_value for the quality of the fit. Positive (source=a, target=b) means a leads b. |
+| `phase_slope_index` | (-∞, ∞) | 1 | Coherence-weighted slope of phase against frequency over frequency_range (every bin by default). Unnormalized, so judge it against a null distribution rather than a fixed threshold. Positive (source=a, target=b) means a leads b. |
 <!-- measure-table:end -->
 
 ## Notes

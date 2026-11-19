@@ -216,8 +216,13 @@ def test_measures_match_mne_connectivity_reference(
     seeds, targets = mne_reference["seeds"], mne_reference["targets"]
 
     if method == "phase_slope_index":
+        # mne-connectivity excludes bins on both band edges; frequency_range
+        # includes them, so pass the first and last bin strictly inside.
+        low, high = mne_reference["psi_band"]
+        frequencies = connectivity.frequencies
+        inside = frequencies[(low < frequencies) & (frequencies < high)]
         ours = connectivity.phase_slope_index(
-            frequencies_of_interest=mne_reference["psi_band"]
+            frequency_range=(float(inside[0]), float(inside[-1]))
         )[0][seeds, targets]
     elif method == "canonical_coherency":
         result = connectivity.canonical_coherency(mne_reference["cacoh_group_labels"])

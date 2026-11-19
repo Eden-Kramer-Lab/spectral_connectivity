@@ -46,7 +46,7 @@ from spectral_connectivity.connectivity import (
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
-    _frequencies_in_band,
+    _select_measure_frequencies,
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
@@ -449,17 +449,16 @@ def connectivity_to_xarray(
                 )
             )
         elif "time" in result.dims:
-            # PSI and group delay aggregate a frequency band. They have no
+            # PSI and group delay aggregate a frequency interval. They have no
             # frequency dimension on which a 2-D coordinate can live, so expose
-            # whether every frequency contributing to each time point has full
-            # wavelet/smoothing support.
-            frequencies = np.asarray(connectivity.frequencies)
-            frequency_band = kwargs.get("frequencies_of_interest")
-            if frequency_band is None:
-                frequency_index = np.ones(frequencies.shape, dtype=bool)
-            else:
-                frequency_index = _frequencies_in_band(frequencies, frequency_band)
-            valid_time = validity[:, frequency_index].all(axis=1)
+            # whether every frequency the measure consumed has full
+            # wavelet/smoothing support at each time point.
+            consumed = _select_measure_frequencies(
+                connectivity.frequencies,
+                kwargs.get("frequency_range"),
+                kwargs.get("frequencies_of_interest"),
+            ).mask
+            valid_time = validity[:, consumed].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
     return _with_frequency_grid_metadata(result)

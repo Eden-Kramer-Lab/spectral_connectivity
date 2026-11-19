@@ -24,9 +24,9 @@ from spectral_connectivity.wrapper import connectivity_to_xarray
 _KWARGS = {
     "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1])},
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
-    "delay": {"frequencies_of_interest": [5.0, 20.0]},
-    "group_delay": {"frequencies_of_interest": [5.0, 20.0]},
-    "phase_slope_index": {"frequencies_of_interest": [5.0, 20.0]},
+    "delay": {"frequency_range": (5.0, 20.0)},
+    "group_delay": {"frequency_range": (5.0, 20.0)},
+    "phase_slope_index": {"frequency_range": (5.0, 20.0)},
 }
 _UNCHANGED = [
     *sorted(

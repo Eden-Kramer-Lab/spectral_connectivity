@@ -5058,17 +5058,50 @@ class Connectivity:
         )
         return full_frequency_dtf * squared_partial_coherence
 
+    def _selected_frequencies(
+        self,
+        measure: str,
+        frequency_range: tuple[float, float] | None,
+        frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None,
+    ) -> NDArray[np.bool_]:
+        """Mask of the bins ``measure`` consumes; warns for the deprecated keyword.
+
+        Returns
+        -------
+        mask : NDArray[bool], shape (n_frequencies,)
+            Host mask over :attr:`frequencies`.
+        """
+        selection = _select_measure_frequencies(
+            self.frequencies, frequency_range, frequencies_of_interest
+        )
+        if selection.closed == "neither" and selection.requested is not None:
+            low, high = selection.requested
+            selected = self.frequencies[selection.mask]
+            warnings.warn(
+                f"{measure}(frequencies_of_interest=...) is deprecated and will be "
+                "removed in 4.0; use frequency_range=(low, high). "
+                "frequencies_of_interest excludes a bin lying on either edge, while "
+                "frequency_range includes both endpoints. To keep the same "
+                f"{selected.size} bins, replace frequencies_of_interest=({low!r}, "
+                f"{high!r}) with frequency_range=({float(selected[0])!r}, "
+                f"{float(selected[-1])!r}), the lowest and highest bins it selects.",
+                DeprecationWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return selection.mask
+
     def _significant_pair_phase(
         self,
         measure: str,
-        frequencies_of_interest: NDArray[np.floating] | None,
+        frequency_mask: NDArray[np.bool_],
         frequency_resolution: float | None,
         significance_threshold: float,
     ) -> tuple[np.ma.MaskedArray, NDArray[np.floating], NDArray[np.intp], int]:
         """Unwrapped coherency phase per signal pair, masked where not significant.
 
         Shared setup of :meth:`group_delay` and :meth:`delay`: validates the
-        frequency grid and observation weights, bandpasses the coherency,
+        frequency grid and observation weights, keeps the coherency at the bins
+        of ``frequency_mask`` (see :meth:`_selected_frequencies`),
         gathers the upper-triangle signal pairs, and masks frequencies whose
         coherence is not significant.
 
@@ -5100,7 +5133,7 @@ class Connectivity:
             frequency_difference, frequency_resolution
         )
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self._coherency(), frequencies, frequencies_of_interest
+            self._coherency(), frequencies, frequency_mask
         )
         # Significance testing and the masked phase below are NumPy operations.
         # Make the GPU-to-host boundary explicit before passing data into them;
@@ -5127,23 +5160,31 @@ class Connectivity:
 
     def group_delay(
         self,
-        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
         frequency_resolution: float | None = None,
         significance_threshold: float = 0.05,
+        *,
+        frequency_range: tuple[float, float] | None = None,
     ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
         """Return the average time-delay of a broadband signal.
 
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band ``(low, high)`` to fit over, in the units of
-            ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band are used, and at least one must be. ``None`` uses
-            every frequency.
+            Deprecated; use ``frequency_range``. Will be removed in 4.0. The
+            historical band ``(low, high)``, with both edges excluded: only bins
+            strictly inside it are used. It keeps its 2.x position as the first
+            positional argument, so a positional band keeps this meaning.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
             P-value threshold for significance.
+        frequency_range : (float, float), optional
+            Frequency interval ``(low, high)`` to fit over, in the units of
+            ``frequencies``. Both endpoints are included: a bin lies on a bound
+            when they differ by at most two units in the last place of each, in
+            its own stored precision. At least one
+            bin must be selected. ``None`` uses every frequency.
 
         Returns
         -------
@@ -5182,7 +5223,7 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> delay, slope, r_value = connectivity.group_delay(frequencies_of_interest=[5, 50])
+        >>> delay, slope, r_value = connectivity.group_delay(frequency_range=(5, 50))
         >>> delay.shape  # (n_time_windows, n_signals, n_signals)
         (1, 2, 2)
         >>> # Signal 0 leads signal 1 by 6 ms, so [..., 0, 1] is +0.006 s.
@@ -5194,7 +5235,9 @@ class Connectivity:
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
                 "group_delay",
-                frequencies_of_interest,
+                self._selected_frequencies(
+                    "group_delay", frequency_range, frequencies_of_interest
+                ),
                 frequency_resolution,
                 significance_threshold,
             )
@@ -5254,10 +5297,12 @@ class Connectivity:
     @_asnumpy
     def delay(
         self,
-        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
         frequency_resolution: float | None = None,
         significance_threshold: float = 0.05,
         n_range: int = 3,
+        *,
+        frequency_range: tuple[float, float] | None = None,
     ) -> NDArray[np.floating]:
         """Find a range of possible delays from the coherence phase.
 
@@ -5268,23 +5313,29 @@ class Connectivity:
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band ``(low, high)`` to evaluate, in the units of
-            ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band are returned, and at least one must be. ``None``
-            uses every frequency.
+            Deprecated; use ``frequency_range``. Will be removed in 4.0. The
+            historical band ``(low, high)``, with both edges excluded: only bins
+            strictly inside it are used. It keeps its 2.x position as the first
+            positional argument, so a positional band keeps this meaning.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
             P-value threshold for significance.
         n_range : int, default=3
             Number of phases to consider.
+        frequency_range : (float, float), optional
+            Frequency interval ``(low, high)`` to evaluate, in the units of
+            ``frequencies``. Both endpoints are included: a bin lies on a bound
+            when they differ by at most two units in the last place of each, in
+            its own stored precision. At least one
+            bin must be selected. ``None`` uses every frequency.
 
         Returns
         -------
         possible_delays : array
             Shape (..., n_frequencies, (n_range * 2) + 1, n_signals, n_signals),
-            where ``n_frequencies`` counts only the frequencies inside
-            ``frequencies_of_interest``. Candidate ``k`` (index ``k + n_range``)
+            where ``n_frequencies`` counts only the frequencies in
+            ``frequency_range``. Candidate ``k`` (index ``k + n_range``)
             adds ``k`` cycles of phase. Array of possible time delays in the
             reciprocal units of ``frequencies`` (seconds for Hz, samples for
             cycles/sample); positive ``[..., i, j]`` means signal ``i`` leads
@@ -5304,16 +5355,20 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> delays = connectivity.delay(frequencies_of_interest=[5, 50], n_range=3)
+        >>> delays = connectivity.delay(frequency_range=(5, 50), n_range=3)
+        >>> # 5 to 50 Hz in 0.5 Hz steps, both endpoints included: 91 bins.
         >>> delays.shape  # (n_time_windows, n_band_freqs, n_candidates, n_signals, n_signals)
-        (1, 89, 7, 2, 2)
+        (1, 91, 7, 2, 2)
         >>> # The zero-wrap candidate (index n_range) recovers the 6 ms lead of signal 0.
         >>> round(float(np.nanmedian(delays[0, :, 3, 0, 1])), 3)
         0.006
         """
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
-                "delay", frequencies_of_interest, frequency_resolution, significance_threshold
+                "delay",
+                self._selected_frequencies("delay", frequency_range, frequencies_of_interest),
+                frequency_resolution,
+                significance_threshold,
             )
         )
         possible_range = 2 * np.pi * np.arange(-n_range, n_range + 1)
@@ -5356,8 +5411,10 @@ class Connectivity:
     @_asnumpy
     def phase_slope_index(
         self,
-        frequencies_of_interest: NDArray[np.floating] | None = None,
+        frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
         frequency_resolution: float | None = None,
+        *,
+        frequency_range: tuple[float, float] | None = None,
     ) -> NDArray[np.floating]:
         """Return weighted average of slopes projected onto imaginary axis.
 
@@ -5370,12 +5427,18 @@ class Connectivity:
         Parameters
         ----------
         frequencies_of_interest : array-like, shape (2,), optional
-            Frequency band ``(low, high)`` to sum over, in the units of
-            ``frequencies``. Both edges are exclusive: only bins strictly
-            inside the band contribute, and at least one must. ``None`` uses
-            every frequency.
+            Deprecated; use ``frequency_range``. Will be removed in 4.0. The
+            historical band ``(low, high)``, with both edges excluded: only bins
+            strictly inside it are used. It keeps its 2.x position as the first
+            positional argument, so a positional band keeps this meaning.
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
+        frequency_range : (float, float), optional
+            Frequency interval ``(low, high)`` to sum over, in the units of
+            ``frequencies``. Both endpoints are included: a bin lies on a bound
+            when they differ by at most two units in the last place of each, in
+            its own stored precision. At least one
+            bin must be selected. ``None`` uses every frequency.
 
         Returns
         -------
@@ -5405,7 +5468,7 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> psi = connectivity.phase_slope_index(frequencies_of_interest=[5, 50])
+        >>> psi = connectivity.phase_slope_index(frequency_range=(5, 50))
         >>> psi.shape  # (n_time_windows, n_signals, n_signals)
         (1, 2, 2)
         >>> # Signal 0 leads signal 1, so [..., 0, 1] is positive and [..., 1, 0] negative.
@@ -5414,7 +5477,11 @@ class Connectivity:
         """
         frequencies = self.frequencies
         bandpassed_coherency, bandpassed_frequencies = _bandpass(
-            self._coherency(), frequencies, frequencies_of_interest
+            self._coherency(),
+            frequencies,
+            self._selected_frequencies(
+                "phase_slope_index", frequency_range, frequencies_of_interest
+            ),
         )
 
         self._require_multiple_frequencies("phase_slope_index")
@@ -5437,7 +5504,7 @@ class Connectivity:
             msg = (
                 f"phase_slope_index needs at least 2 frequency bins in the band "
                 f"after subsampling, but got {n_band_frequencies}. Widen "
-                f"frequencies_of_interest, or decrease frequency_resolution so "
+                f"frequency_range, or decrease frequency_resolution so "
                 f"more than one independent frequency remains."
             )
             raise ValueError(msg)
@@ -5666,61 +5733,103 @@ def _unwrap_across_undefined(
 def _bandpass(
     data: NDArray[np.complexfloating],
     frequencies: NDArray[np.floating],
-    frequencies_of_interest: NDArray[np.floating] | None,
+    frequency_mask: NDArray[np.bool_],
     axis: int = -3,
 ) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
-    """Filter data matrix along axis for frequencies of interest.
-
-    Filters the data matrix along an axis given a maximum and minimum
-    frequency of interest. Both band edges are exclusive: a frequency bin
-    lying exactly on an edge is dropped.
+    """Keep the frequency bins of ``data`` selected by ``frequency_mask``.
 
     Parameters
     ----------
-    data : array, shape (..., n_fft_samples, ...)
-        Input data array.
-    frequencies : array, shape (n_fft_samples,)
+    data : array, shape (..., n_frequencies, ...)
+        Input data array, on the host or the device.
+    frequencies : array, shape (n_frequencies,)
         Frequency values.
-    frequencies_of_interest : array-like, shape (2,)
-        Min and max frequencies of interest; two finite values with
-        ``low < high``.
+    frequency_mask : NDArray[bool], shape (n_frequencies,)
+        Host mask of the bins to keep (see :func:`_frequency_interval_mask`).
     axis : int, default=-3
-        Axis along which to filter.
+        Frequency axis of ``data``.
 
     Returns
     -------
-    filtered_data : array
-        Filtered data.
-    filtered_frequencies : array
-        Corresponding filtered frequencies.
+    filtered_data : array, shape (..., n_selected, ...)
+        ``data`` at the selected bins; ``data`` itself when every bin is.
+    filtered_frequencies : array, shape (n_selected,)
+        The selected frequencies.
+    """
+    if frequency_mask.all():
+        return data, frequencies
+    index = np.flatnonzero(frequency_mask)
+    return xp.take(data, xp.asarray(index), axis=axis), frequencies[index]
+
+
+@dataclass(frozen=True)
+class _FrequencySelection:
+    """The bins a frequency-selecting measure consumes, and how they were chosen.
+
+    Attributes
+    ----------
+    mask : NDArray[bool], shape (n_frequencies,)
+        Host mask of the consumed bins.
+    requested : (float, float) or None
+        The requested bounds; ``None`` when every bin is used.
+    closed : {"both", "neither"}
+        Whether a bin on a requested bound is included.
+    """
+
+    mask: NDArray[np.bool_]
+    requested: tuple[float, float] | None
+    closed: Literal["both", "neither"]
+
+    def attrs(self, frequencies: NDArray[np.floating]) -> dict[str, Any]:
+        """Result attributes recording the interval, in the units of ``frequencies``.
+
+        The requested bounds are omitted when every bin is used; the selected
+        bounds are the lowest and highest bins consumed.
+        """
+        selected = to_numpy(frequencies)[self.mask]
+        attrs: dict[str, Any] = {}
+        if self.requested is not None:
+            attrs["requested_frequency_lower"] = self.requested[0]
+            attrs["requested_frequency_upper"] = self.requested[1]
+        attrs["selected_frequency_lower"] = float(selected[0])
+        attrs["selected_frequency_upper"] = float(selected[-1])
+        attrs["frequency_interval_closed"] = self.closed
+        return attrs
+
+
+def _select_measure_frequencies(
+    frequencies: NDArray[np.floating],
+    frequency_range: tuple[float, float] | None = None,
+    frequencies_of_interest: Sequence[float] | NDArray[np.floating] | None = None,
+) -> _FrequencySelection:
+    """The bins ``delay``, ``group_delay``, or ``phase_slope_index`` consume.
+
+    The one place their two keywords are resolved, shared by the measures and
+    by the labeled results that describe them, so both name the same bins.
 
     Raises
     ------
     ValueError
-        If ``frequencies_of_interest`` is not two finite values with
-        ``low < high``, or no frequency lies strictly inside the band.
-
+        If both keywords are given, or the interval is invalid or selects no bin.
     """
-    if frequencies_of_interest is None:
-        return data, frequencies
-    frequency_index = _frequencies_in_band(frequencies, frequencies_of_interest)
-    return (
-        xp.take(data, frequency_index.nonzero()[0], axis=axis),
-        frequencies[frequency_index],
-    )
-
-
-def _frequencies_in_band(
-    frequencies: NDArray[np.floating], band: NDArray[np.floating] | Sequence[float]
-) -> NDArray[np.bool_]:
-    """Boolean mask of ``frequencies`` strictly inside ``(low, high)``.
-
-    The exclusive band edges used by :func:`_bandpass` and by the wrapper's
-    coordinates for band-restricted results.
-    """
-    return _frequency_interval_mask(
-        "frequencies_of_interest", band, frequencies, closed="neither"
-    )[0]
+    if frequency_range is not None and frequencies_of_interest is not None:
+        msg = (
+            "frequency_range and the deprecated frequencies_of_interest were both "
+            "given; pass only frequency_range=(low, high), which includes both "
+            "endpoints."
+        )
+        raise ValueError(msg)
+    if frequencies_of_interest is not None:
+        mask, bounds = _frequency_interval_mask(
+            "frequencies_of_interest", frequencies_of_interest, frequencies, closed="neither"
+        )
+        return _FrequencySelection(mask, bounds, "neither")
+    if frequency_range is not None:
+        mask, bounds = _frequency_interval_mask(
+            "frequency_range", frequency_range, frequencies, closed="both"
+        )
+        return _FrequencySelection(mask, bounds, "both")
+    return _FrequencySelection(np.ones(len(frequencies), dtype=bool), None, "both")
 
 
 def _get_independent_frequency_step(

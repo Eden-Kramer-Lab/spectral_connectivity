@@ -52,6 +52,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
+| `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 
 ### Added
 
@@ -438,11 +439,17 @@ directly with results from 2.x.
   raises a clear error instead of a broadcast failure, and `MorletWavelet` no
   longer accepts `NaN`. A single-element array such as `time[0]` of a column
   time axis is accepted as one start time.
-- `frequencies_of_interest` for `phase_slope_index`, `delay`, and `group_delay`
-  is validated (two finite values, lower < upper, at least one frequency bin
-  strictly inside) and its band edges are documented as exclusive. A band with
-  no bin, such as one beyond Nyquist or between two adjacent bins, previously
-  gave all-NaN `group_delay` results and an empty `delay` frequency axis.
+- `phase_slope_index`, `delay`, and `group_delay` take
+  `frequency_range=(low, high)`, which includes both endpoints, to choose the
+  bins they consume. It is validated (two finite values, lower <= upper, at
+  least one frequency bin selected): a band with no bin, such as one beyond
+  Nyquist or between two adjacent bins, previously gave all-NaN `group_delay`
+  results and an empty `delay` frequency axis. Their xarray results record the
+  requested bounds (`requested_frequency_lower`/`_upper`, omitted when every
+  bin is used), the lowest and highest bins consumed
+  (`selected_frequency_lower`/`_upper`), and `frequency_interval_closed`
+  (`"both"`, or `"neither"` for the deprecated keyword) on each of their
+  variables, and a Morlet result's `valid_time` covers exactly those bins.
 - The `taper_weighting="adaptive"` documentation states that the Thomson
   weights are applied per signal, so coherence between signals with different
   spectra is shrunk by the cosine similarity of their weight vectors and cannot
@@ -454,6 +461,20 @@ directly with results from 2.x.
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
+
+### Deprecated
+
+Each deprecated spelling keeps its 2.x numerical meaning through 3.x, warns
+with a `DeprecationWarning` that names its replacement, and is removed in 4.0.
+
+- `frequencies_of_interest` of `delay`, `group_delay`, and
+  `phase_slope_index`, by keyword or as the first positional argument: use the
+  keyword-only `frequency_range`. The deprecated form still excludes bins on
+  both edges, exactly as in 2.x, and its results record
+  `frequency_interval_closed="neither"`. Its warning names the
+  `frequency_range` that reproduces the same bins, e.g. on a 2 Hz grid
+  `frequencies_of_interest=(10, 50)` is `frequency_range=(12.0, 48.0)`.
+  Giving both raises `ValueError`.
 
 ### Fixed
 

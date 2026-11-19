@@ -18,7 +18,8 @@ from spectral_connectivity._provenance import _canonical_json, _store_provenance
 from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
-    _frequencies_in_band,
+    _FrequencySelection,
+    _select_measure_frequencies,
     _warn_orientation_change,
 )
 from spectral_connectivity.utils import stacklevel_outside_package
@@ -69,18 +70,21 @@ def _check_method_accepts_kwargs(
         raise TypeError(msg)
 
 
-def _frequency_band_attrs(
+def _measure_frequency_selection(
     connectivity: Connectivity, kwargs: Mapping[str, Any]
-) -> dict[str, float]:
-    """The band a frequency-reducing measure summarized, as variable attrs.
+) -> _FrequencySelection:
+    """The bins a ``delay``, ``group_delay``, or ``phase_slope_index`` call consumed.
 
-    Stored on the measure's own variables rather than as scalar coordinates,
-    which a Dataset would broadcast onto every other variable.
+    Resolved from its keyword arguments by the rule the measure itself used.
+    Its :meth:`~_FrequencySelection.attrs` go on the measure's own variables
+    rather than becoming scalar coordinates, which a Dataset would broadcast
+    onto every other variable.
     """
-    band = kwargs.get("frequencies_of_interest")
-    if band is None:
-        band = (connectivity.frequencies[0], connectivity.frequencies[-1])
-    return {"frequency_band_lower": float(band[0]), "frequency_band_upper": float(band[1])}
+    return _select_measure_frequencies(
+        connectivity.frequencies,
+        kwargs.get("frequency_range"),
+        kwargs.get("frequencies_of_interest"),
+    )
 
 
 def _coordinate_attrs(
@@ -297,10 +301,8 @@ def _connectivity_result_to_xarray(
 
     if output_kind == "delay":
         connectivity_mat = np.asarray(numerical_result)
-        frequencies = np.asarray(connectivity.frequencies)
-        frequency_band = kwargs.get("frequencies_of_interest")
-        if frequency_band is not None:
-            frequencies = frequencies[_frequencies_in_band(frequencies, frequency_band)]
+        selection = _measure_frequency_selection(connectivity, kwargs)
+        frequencies = np.asarray(connectivity.frequencies)[selection.mask]
         delay_expected_shape = (
             len(connectivity.time),
             len(frequencies),
@@ -332,7 +334,11 @@ def _connectivity_result_to_xarray(
             coords=coordinates,
             dims=("time", "frequency", "candidate", "source", "target"),
             name=method,
-            attrs={**measure_attrs, "units": _delay_units(shared_attrs)[0]},
+            attrs={
+                **measure_attrs,
+                **selection.attrs(connectivity.frequencies),
+                "units": _delay_units(shared_attrs)[0],
+            },
         )
 
     if output_kind == "phase_slope":
@@ -353,12 +359,20 @@ def _connectivity_result_to_xarray(
             coords={"time": base_coordinates["time"], **signal_coordinates},
             dims=("time", "source", "target"),
             name=method,
-            attrs={**measure_attrs, **_frequency_band_attrs(connectivity, kwargs)},
+            attrs={
+                **measure_attrs,
+                **_measure_frequency_selection(connectivity, kwargs).attrs(
+                    connectivity.frequencies
+                ),
+            },
         )
 
     if output_kind == "group_delay":
         delay, slope, r_value = numerical_result
         delay_units, slope_units = _delay_units(shared_attrs)
+        interval_attrs = _measure_frequency_selection(connectivity, kwargs).attrs(
+            connectivity.frequencies
+        )
         dataset_coordinates = {
             "time": base_coordinates["time"],
             **signal_coordinates,
@@ -383,7 +397,7 @@ def _connectivity_result_to_xarray(
                 raise ValueError(msg)
             variable_attrs = {
                 **attrs,
-                **_frequency_band_attrs(connectivity, kwargs),
+                **interval_attrs,
                 "long_name": long_name,
                 "units": units,
             }

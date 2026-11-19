@@ -8,12 +8,21 @@ an edge written as a decimal still selects the bin a float32 or
 decimal-rounded coordinate stores for it.
 """
 
+import json
+import warnings
+
 import numpy as np
 import pytest
 import xarray as xr
 
+from spectral_connectivity import Connectivity, MorletWavelet, Multitaper
 from spectral_connectivity.connectivity import _frequency_interval_mask
-from spectral_connectivity.wrapper import fourier_connectivity, multitaper_connectivity
+from spectral_connectivity.wrapper import (
+    connectivity_to_xarray,
+    fourier_connectivity,
+    multitaper_connectivity,
+)
+from tests._backend_helpers import to_host
 
 # Bins 0, 2, ..., 50 Hz: every bound below is either exactly a bin or between bins.
 _EXACT_GRID = np.arange(0.0, 51.0, 2.0)
@@ -177,3 +186,220 @@ def test_wrapper_crop_and_bands_include_bins_on_their_bounds():
     np.testing.assert_allclose(
         band.sel(band="alpha").values, cropped.mean("frequency").values, rtol=1e-12
     )
+
+
+# --- Measures that consume a frequency interval --------------------------------
+
+_SELECTING_MEASURES = ("delay", "group_delay", "phase_slope_index")
+_LAGGED_TRANSFORM = {"sampling_frequency": 500, "time_window_duration": 0.5}
+
+
+@pytest.fixture(scope="module")
+def lagged_time_series():
+    """Signal 0 leads signal 1 by 3 samples (6 ms at 500 Hz), plus noise.
+
+    Returns
+    -------
+    time_series : np.ndarray, shape (1000, 20, 2)
+    """
+    rng = np.random.default_rng(0)
+    leader = rng.standard_normal((1003, 20))
+    time_series = np.stack([leader[3:], leader[:-3]], axis=-1)
+    return time_series + 0.5 * rng.standard_normal(time_series.shape)
+
+
+@pytest.fixture(scope="module")
+def lagged_connectivity(lagged_time_series):
+    """``Connectivity`` on a 2 Hz grid (0.5 s windows at 500 Hz)."""
+    connectivity = Connectivity.from_transform(
+        Multitaper(lagged_time_series, **_LAGGED_TRANSFORM)
+    )
+    assert np.isin([10.0, 50.0], connectivity.frequencies).all()
+    return connectivity
+
+
+def _call(connectivity, measure, *args, **kwargs):
+    """The measure's values as one array (group delay's three outputs stacked)."""
+    result = getattr(connectivity, measure)(*args, **kwargs)
+    return np.stack(result) if measure == "group_delay" else result
+
+
+def _deprecated(connectivity, measure, *args, **kwargs):
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
+        return _call(connectivity, measure, *args, **kwargs)
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_frequency_range_consumes_the_bins_on_its_bounds(lagged_connectivity, measure):
+    """frequency_range=(10, 50) uses the 10 and 50 Hz bins: it equals the
+    exclusive selection of (9, 51), whose edges lie between bins, and differs
+    from the exclusive selection of (10, 50)."""
+    inclusive = _call(lagged_connectivity, measure, frequency_range=(10.0, 50.0))
+    np.testing.assert_array_equal(
+        inclusive,
+        _deprecated(lagged_connectivity, measure, frequencies_of_interest=(9.0, 51.0)),
+    )
+    exclusive = _deprecated(lagged_connectivity, measure, frequencies_of_interest=(10.0, 50.0))
+    assert inclusive.shape != exclusive.shape or not np.allclose(
+        inclusive, exclusive, equal_nan=True
+    )
+
+
+def test_delay_returns_the_bins_of_frequency_range(lagged_connectivity):
+    delays = lagged_connectivity.delay(frequency_range=(10.0, 50.0), n_range=1)
+    # 10, 12, ..., 50 Hz.
+    assert delays.shape[-4] == 21
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_frequencies_of_interest_warns_with_an_exact_migration(lagged_connectivity, measure):
+    """The deprecated exclusive keyword names its replacement, removal in 4.0,
+    and a frequency_range that reproduces its result exactly."""
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest") as record:
+        deprecated = _call(lagged_connectivity, measure, frequencies_of_interest=(10.0, 50.0))
+    (warning,) = [w for w in record if issubclass(w.category, DeprecationWarning)]
+    message = str(warning.message)
+    assert warning.filename == __file__
+    assert "removed in 4.0" in message
+    assert (
+        "replace frequencies_of_interest=(10.0, 50.0) with frequency_range=(12.0, 48.0)"
+        in message
+    )
+    np.testing.assert_array_equal(
+        deprecated, _call(lagged_connectivity, measure, frequency_range=(12.0, 48.0))
+    )
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_positional_band_is_the_deprecated_exclusive_selection(lagged_connectivity, measure):
+    """A 2.x positional band keeps its exclusive meaning, with the warning,
+    instead of silently gaining the edge bins."""
+    np.testing.assert_array_equal(
+        _deprecated(lagged_connectivity, measure, (10.0, 50.0)),
+        _call(lagged_connectivity, measure, frequency_range=(12.0, 48.0)),
+    )
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_both_spellings_are_rejected(lagged_connectivity, measure):
+    with pytest.raises(ValueError, match="frequency_range and the deprecated"):
+        getattr(lagged_connectivity, measure)(
+            frequency_range=(10.0, 50.0), frequencies_of_interest=(10.0, 50.0)
+        )
+
+
+def _measure_variables(result):
+    """The result's measure variables (all three of group delay's)."""
+    return list(result.data_vars.values()) if isinstance(result, xr.Dataset) else [result]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"frequency_range": (10.0, 50.0)},
+            {
+                "requested_frequency_lower": 10.0,
+                "requested_frequency_upper": 50.0,
+                "selected_frequency_lower": 10.0,
+                "selected_frequency_upper": 50.0,
+                "frequency_interval_closed": "both",
+            },
+            id="on-bins",
+        ),
+        pytest.param(
+            {"frequency_range": (9.0, 51.0)},
+            {
+                "requested_frequency_lower": 9.0,
+                "requested_frequency_upper": 51.0,
+                "selected_frequency_lower": 10.0,
+                "selected_frequency_upper": 50.0,
+                "frequency_interval_closed": "both",
+            },
+            id="off-bins",
+        ),
+        pytest.param(
+            {},
+            {
+                "selected_frequency_lower": 0.0,
+                "selected_frequency_upper": 250.0,
+                "frequency_interval_closed": "both",
+            },
+            id="every-bin",
+        ),
+    ],
+)
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_results_record_the_requested_and_selected_interval(
+    lagged_time_series, measure, kwargs, expected
+):
+    result = connectivity_to_xarray(
+        Multitaper(lagged_time_series, **_LAGGED_TRANSFORM), method=measure, **kwargs
+    )
+    for variable in _measure_variables(result):
+        assert {key: variable.attrs[key] for key in expected} == expected
+        assert ("requested_frequency_lower" in variable.attrs) == bool(kwargs)
+        assert json.loads(variable.attrs["measure_kwargs_json"]) == {
+            key: list(value) for key, value in kwargs.items()
+        }
+    if measure == "delay":
+        assert result.frequency.values[[0, -1]].tolist() == [
+            expected["selected_frequency_lower"],
+            expected["selected_frequency_upper"],
+        ]
+
+
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_deprecated_results_record_the_exclusive_interval_and_keyword(
+    lagged_time_series, measure
+):
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
+        result = connectivity_to_xarray(
+            Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
+            method=measure,
+            frequencies_of_interest=(10.0, 50.0),
+        )
+    for variable in _measure_variables(result):
+        assert variable.attrs["requested_frequency_lower"] == 10.0
+        assert variable.attrs["requested_frequency_upper"] == 50.0
+        assert variable.attrs["selected_frequency_lower"] == 12.0
+        assert variable.attrs["selected_frequency_upper"] == 48.0
+        assert variable.attrs["frequency_interval_closed"] == "neither"
+        assert json.loads(variable.attrs["measure_kwargs_json"]) == {
+            "frequencies_of_interest": [10.0, 50.0]
+        }
+        assert "arg_frequencies_of_interest_json" in variable.attrs
+        assert "arg_frequency_range_json" not in variable.attrs
+    if measure == "delay":
+        assert result.frequency.values[[0, -1]].tolist() == [12.0, 48.0]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "consumed_bins"),
+    [
+        pytest.param({"frequency_range": (8.0, 16.0)}, [1, 2, 3], id="frequency_range"),
+        pytest.param({"frequencies_of_interest": (8.0, 20.0)}, [2, 3], id="deprecated"),
+    ],
+)
+@pytest.mark.parametrize("measure", _SELECTING_MEASURES)
+def test_morlet_validity_follows_the_consumed_bins(measure, kwargs, consumed_bins):
+    """valid_time of a frequency-reduced measure, and valid_time_frequency of
+    delay, describe exactly the bins the estimator used."""
+    transform = MorletWavelet(
+        np.random.default_rng(319).standard_normal((192, 5, 2)),
+        64,
+        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
+        edge_mode="nan",
+    )
+    validity = to_host(transform.valid_time_frequency)[:, consumed_bins]
+    # The bins differ in validity, so using the wrong ones would show.
+    assert not np.array_equal(
+        validity.all(axis=1), to_host(transform.valid_time_frequency).all(axis=1)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        result = connectivity_to_xarray(transform, method=measure, **kwargs)
+    if measure == "delay":
+        np.testing.assert_array_equal(result.valid_time_frequency, validity)
+    else:
+        np.testing.assert_array_equal(result.valid_time, validity.all(axis=1))
