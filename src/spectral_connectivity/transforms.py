@@ -747,11 +747,11 @@ class _WindowedFourierTransform:
 
     A subclass constructor validates its own arguments in its own order, using
     :func:`_validate_fft_workers`, :func:`_validate_window_durations`, and
-    :meth:`_warn_about_unusual_time_series`, and sets the private fields
-    annotated below: ``_time_series`` is the read-only snapshot of the input,
-    ``_start_time`` the validated scalar start time, and the others hold the
-    requested durations, sample counts, and FFT length (``None`` when not
-    given). The subclass must also supply:
+    :meth:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
+    read-only snapshot of the input (``_immutable_array_snapshot``), before
+    those checks read it, and calls :meth:`_set_window_state`, which
+    validates the start time and sets the other private fields annotated
+    below. The subclass must also supply:
 
     - ``sampling_frequency``, ``detrend_type``, and ``fft_workers``, fixed
       after construction (immutable attributes on :class:`Multitaper`,
@@ -765,14 +765,15 @@ class _WindowedFourierTransform:
       as given;
     - :meth:`_spectral_bandwidth_metadata`, the taper identity and its
       qualified bandwidth;
-    - the public ``fft()`` (which logs the transform and returns
-      :meth:`_tapered_fft`), ``is_one_sided``,
-      ``observations_are_independent``, ``summarize_parameters()`` (built with
-      :meth:`_summary`), and ``__repr__``;
+    - the public ``observations_are_independent``, ``summarize_parameters()``
+      (built with :meth:`_summary`), and ``__repr__`` (which :meth:`fft` logs);
     - optionally :meth:`_weight_taper_coefficients`, which reweights the
       coefficients of each taper.
     """
 
+    #: The transform returns the full two-sided FFT spectrum (both positive and
+    #: negative frequencies), so consumers must not assume a one-sided layout.
+    is_one_sided = False
     _transform_name: str
     _PROVENANCE_FIELDS: tuple[str, ...]
 
@@ -835,6 +836,35 @@ class _WindowedFourierTransform:
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
+
+    def _set_window_state(
+        self,
+        start_time: Any,
+        time_window_duration: float | None,
+        time_window_step: float | None,
+        n_fft_samples: int | None,
+        n_time_samples_per_window: int | None,
+        n_time_samples_per_step: int | None,
+    ) -> None:
+        """Validate and store the start time, and store the window request.
+
+        The durations, sample counts, and FFT length are stored as given
+        (``None`` when not requested); the properties resolve and check them.
+
+        Raises
+        ------
+        ValueError
+            If ``start_time`` is not a finite scalar.
+        """
+        # ``time`` adds start_time to a 1-D array of window centers, so a
+        # per-trial array would either broadcast-fail or silently produce a 2-D
+        # time axis.
+        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
+        self._time_window_duration = time_window_duration
+        self._time_window_step = time_window_step
+        self._n_fft_samples = n_fft_samples
+        self._n_time_samples_per_window = n_time_samples_per_window
+        self._n_samples_per_time_step = n_time_samples_per_step
 
     @property
     def time_series(self) -> BackendArray:
@@ -1209,8 +1239,23 @@ Frequency Analysis
         """
         return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
 
-    def _tapered_fft(self) -> NDArray[np.complexfloating]:
-        """Compute the tapered FFT of every window without logging settings."""
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Compute the tapered Fourier coefficients of every time window.
+
+        Each window is detrended as ``detrend_type`` sets, multiplied by each
+        taper, and transformed with an FFT of length ``n_fft_samples``.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+            Complex-valued Fourier coefficients. :class:`Multitaper` has one
+            entry per taper on the taper axis, weighted as ``taper_weighting``
+            sets; :class:`ShortTimeFourierTransform` has a singleton taper
+            axis for its Hann window.
+
+        """
+        logger.info(self)
         time_series = _sliding_window(
             self._time_series,
             window_size=self.n_time_samples_per_window,
@@ -1438,9 +1483,6 @@ class Multitaper(_WindowedFourierTransform):
     Trials: 100, Signals: 5
     """
 
-    #: Multitaper returns the full two-sided FFT spectrum (both positive and
-    #: negative frequencies), so consumers must not assume a one-sided layout.
-    is_one_sided = False
     _transform_name = "multitaper"
     if TYPE_CHECKING:
         # Plain attributes here, kept immutable by __setattr__. Declared for
@@ -1630,14 +1672,18 @@ class Multitaper(_WindowedFourierTransform):
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
-        self._time_window_duration = time_window_duration
-        self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
-        # ``time`` adds start_time to a 1-D array of window centers, so a
-        # per-trial array would either broadcast-fail or silently produce a 2-D
-        # time axis.
-        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
-        self._n_fft_samples = n_fft_samples
+        # The sample counts are stored before the n_tapers and duration/count
+        # checks below, which read only the arguments; a failing check still
+        # fails construction.
+        self._set_window_state(
+            start_time,
+            time_window_duration,
+            time_window_step,
+            n_fft_samples,
+            n_time_samples_per_window,
+            n_time_samples_per_step,
+        )
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
         # Reject a fractional (or boolean) n_tapers at construction so the
@@ -1677,8 +1723,6 @@ class Multitaper(_WindowedFourierTransform):
                         f"of them, or values that resolve to the same sample count."
                     )
                     raise ValueError(msg)
-        self._n_time_samples_per_window = n_time_samples_per_window
-        self._n_samples_per_time_step = n_time_samples_per_step
         if self._tapers is not None:
             # Validate custom tapers now; a mismatch would otherwise surface as
             # an opaque broadcasting error inside fft().
@@ -1918,19 +1962,6 @@ class Multitaper(_WindowedFourierTransform):
         """
         return True
 
-    def fft(self) -> NDArray[np.complexfloating]:
-        """Compute the fast Fourier transform using the multitaper method.
-
-        Returns
-        -------
-        fourier_coefficients : array
-            Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-            Complex-valued Fourier coefficients.
-
-        """
-        logger.info(self)
-        return self._tapered_fft()
-
     def _weight_taper_coefficients(
         self,
         coefficients: NDArray[np.complexfloating],
@@ -2010,7 +2041,6 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     """
 
     _transform_name = "stft"
-    is_one_sided = False
     _PROVENANCE_FIELDS: tuple[str, ...] = (
         "detrend_type",
         "fft_workers",
@@ -2097,12 +2127,14 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers
-        self._time_window_duration = resolved_duration
-        self._time_window_step = resolved_step_duration
-        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
-        self._n_fft_samples = n_fft_samples
-        self._n_time_samples_per_window = window_samples
-        self._n_samples_per_time_step = step_samples
+        self._set_window_state(
+            start_time,
+            resolved_duration,
+            resolved_step_duration,
+            n_fft_samples,
+            window_samples,
+            step_samples,
+        )
         self._window = _immutable_array_snapshot(window)
         # Fail now, rather than inside fft(), when the window does not fit the
         # signal.
@@ -2139,18 +2171,6 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         bool
         """
         return True
-
-    def fft(self) -> NDArray[np.complexfloating]:
-        """Compute the Hann-windowed Fourier coefficients of every window.
-
-        Returns
-        -------
-        fourier_coefficients : array
-            Shape ``(n_time_windows, n_trials, 1, n_fft_samples, n_signals)``;
-            the taper axis is a singleton.
-        """
-        logger.info(self)
-        return self._tapered_fft()
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the scaled Hann window, ``(n_time_samples_per_window, 1)``."""
