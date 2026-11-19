@@ -344,7 +344,7 @@ to trigger an exact zero pivot consistently across LAPACK builds.
 
 **Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
 `77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
-Implemented and validated locally on 2026-11-19: 2,028 tests passed with 16
+Implemented and validated locally on 2026-11-19: 2,057 tests passed with 16
 skips on the main CPU environment; all 70 source doctests, Ruff
 formatting/lint, and mypy passed.
 
@@ -400,6 +400,16 @@ Rulings where the rules above were silent:
   frequency-resolved variables, `delay` included, and leave
   `phase_slope_index`/`group_delay` as computed over `frequency_range`; a
   request made only of those two raises.
+- **One selection, one record.** Each entry point
+  (`multitaper_connectivity`/`fourier_connectivity` and
+  `connectivity_to_xarray`) resolves a call's interval once, on the full grid,
+  into one `_FrequencySelection`, and passes it to the formatter, so the
+  coordinates, interval attributes, crop, and validity masks read the same
+  object. The estimators still resolve their own public keywords from the
+  caller's arguments as given (not floats re-derived from them, which would
+  lose a float32 bound's precision). Which measures consume the range is one
+  registry property, `_MeasureSpec.consumes_frequency_range`, derived from
+  `output_kind`.
 - **D23.** `frequency_band_reduce(result, frequency_bands, *,
   frequency_reduction="mean", circular=None)` with no aliases; its error
   messages name the canonical keywords.
