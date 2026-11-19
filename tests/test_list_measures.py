@@ -12,7 +12,7 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
-from spectral_connectivity._measure_registry import _COMPANION_SPECS, _MEASURE_SPECS
+from spectral_connectivity._measure_registry import _MEASURE_SPECS
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
@@ -127,6 +127,10 @@ def test_invalid_category_lists_valid_categories():
 
 
 _MEASURES = {measure.name: measure for measure in list_measures()}
+# The other value variables of a measure's Dataset, by variable name.
+_COMPANIONS = {
+    name: companion for spec in _MEASURE_SPECS.values() for name, companion in spec.companions
+}
 _GROUPS = ["a", "a", "b", "b"]
 _MEASURE_KWARGS = {
     "canonical_coherence": {"group_labels": _GROUPS},
@@ -674,7 +678,7 @@ def _entries_involving_the_flat_signal(variable):
 
 _VALUE_VARIABLES = [
     *((measure.name, measure) for measure in list_measures()),
-    *_COMPANION_SPECS.items(),
+    *_COMPANIONS.items(),
 ]
 
 
@@ -751,10 +755,10 @@ def _expected_measure_attrs(measure):
         expected["value_range_lower"] = lower
     if np.isfinite(upper):
         expected["value_range_upper"] = upper
-    if measure.is_complex:
+    if getattr(measure, "is_complex", False):
         expected["value_range_applies_to"] = "magnitude"
     for key in ("sign_convention", "quantity", "formula"):
-        if getattr(measure, key) is not None:
+        if getattr(measure, key, None) is not None:
             expected[key] = getattr(measure, key)
     if measure.diagonal_value is not None:
         expected["diagonal_value"] = measure.diagonal_value
@@ -801,39 +805,23 @@ _AUXILIARY_VARIABLES = {
     ids=lambda measure: measure.name,
 )
 def test_every_variable_of_a_dataset_result_records_how_to_read_it(coupled_results, measure):
-    """A measure's other value variables (group delay's slope and fit
-    correlation) carry their own record, as the measure's variable does; the
-    auxiliary variables carry none."""
+    """A measure's companion variables (group delay's slope and fit
+    correlation) carry their own record, whose range and diagonal hold of their
+    values, as the measure's variable does; the auxiliary variables carry none."""
+    companions = dict(_MEASURE_SPECS[measure.name].companions)
     for name, variable in coupled_results[measure.name].data_vars.items():
         if name in _AUXILIARY_VARIABLES:
             assert not {"interpretation", "diagonal_policy"} & set(variable.attrs), name
         elif name == measure.name:
             _assert_records_how_to_read(measure, variable)
         else:
-            _assert_records_how_to_read(_COMPANION_SPECS[name], variable)
-
-
-def test_group_delay_companions_state_their_range_and_sign():
-    """The correlation lies in [-1, 1] with the slope's sign, whose sign is
-    group delay's."""
-    slope = _COMPANION_SPECS["group_delay_slope"]
-    r_value = _COMPANION_SPECS["group_delay_r_value"]
-    assert r_value.value_range == (-1.0, 1.0)
-    assert slope.value_range == (-np.inf, np.inf)
-    group_delay = _MEASURES["group_delay"]
-    assert slope.sign_convention == r_value.sign_convention == group_delay.sign_convention
-    assert slope.interpretation
-    assert r_value.interpretation
-
-
-def test_every_variable_of_group_delay_records_its_own_diagonal(coupled_results):
-    """The fit's correlation is 1 on the diagonal while delay and slope are NaN."""
-    result = coupled_results["group_delay"]
-    for name in ("group_delay", "group_delay_slope"):
-        assert result[name].attrs["diagonal_policy"] == "masked_nan"
-        assert np.isnan(_diagonal(result[name])).all()
-    assert result["group_delay_r_value"].attrs["diagonal_policy"] == "constant"
-    np.testing.assert_array_equal(_diagonal(result["group_delay_r_value"]), 1.0)
+            record = companions[name]
+            _assert_records_how_to_read(record, variable)
+            finite = variable.values[np.isfinite(variable.values)]
+            assert (
+                record.value_range[0] <= finite.min() <= finite.max() <= record.value_range[1]
+            )
+            _assert_diagonal_matches(record, variable)
 
 
 def test_coherence_family_states_its_formula_and_quantity():

@@ -16,41 +16,21 @@ from spectral_connectivity.connectivity import (
 )
 
 
-@dataclass(frozen=True)
-class _MeasureSpec:
-    """One measure's wrapper contract and what its values mean.
+@dataclass(frozen=True, kw_only=True)
+class _VariableSpec:
+    """What the values of one result variable mean.
 
-    ``output_kind`` and the capability flags describe the result's shape and
-    requirements; the remaining fields label and interpret its values.
     ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
     score and ``None`` a spectral density, whose units derive from the input's
-    (see :meth:`units_for`). ``value_range`` is the estimator's theoretical
-    range, of the values or of their magnitude when ``is_complex``; a computed
-    value can lie outside it by rounding.
-
-    ``diagonal_policy`` is one of :data:`_DIAGONAL_POLICIES`, which defines
-    each; ``diagonal_value`` is the value of a ``"constant"`` or the nominal
-    value of a ``"rounding_noise"`` one. ``nan_for_zero_power_signal`` is
-    defined by :data:`_NAN_FOR_ZERO_POWER_SIGNAL`.
-
-    ``sign_convention`` says which signal leads when a measure's sign or angle
-    shows it. ``quantity`` and ``formula`` define the coherency family's values
-    (``None`` for other measures).
+    (see :meth:`units_for`). ``value_range`` is the theoretical range, which a
+    computed value can cross by rounding. ``diagonal_policy`` is one of
+    :data:`_DIAGONAL_POLICIES`, which defines each; ``diagonal_value`` is the
+    value of a ``"constant"`` or the nominal value of a ``"rounding_noise"``
+    one. ``nan_for_zero_power_signal`` is defined by
+    :data:`_NAN_FOR_ZERO_POWER_SIGNAL`. ``sign_convention`` says which signal
+    leads when the sign or angle shows it.
     """
 
-    output_kind: Literal[
-        "pairwise",
-        "power",
-        "group_pairwise",
-        "delay",
-        "global",
-        "group_delay",
-        "phase_slope",
-        "multivariate_components",
-    ]
-    # The labels are keyword-only: three are strings, so a positional mix-up
-    # would pass silently into results and the generated docs.
-    _: KW_ONLY
     long_name: str
     units: str | None
     value_range: tuple[float, float]
@@ -66,17 +46,6 @@ class _MeasureSpec:
     diagonal_value: float | None = None
     nan_for_zero_power_signal: bool = False
     sign_convention: str | None = None
-    quantity: (
-        Literal["magnitude", "squared_magnitude", "signed", "phase", "complex"] | None
-    ) = None
-    formula: str | None = None
-    is_complex: bool = False
-    is_default: bool = False
-    # Scientific directionality and spectrum requirements are independent
-    # capabilities. For example dPLI and PSI are directional but do not need
-    # Wilson factorization.
-    is_directed: bool = False
-    requires_two_sided: bool = False
 
     def __post_init__(self) -> None:
         if self.diagonal_policy not in _DIAGONAL_POLICIES:
@@ -89,6 +58,82 @@ class _MeasureSpec:
                 "diagonal, and only that."
             )
             raise ValueError(msg)
+
+    def units_for(self, signal_units: str | None) -> str:
+        """UDUNITS string of the values for input in ``signal_units``.
+
+        A spectral density (``units is None``) is in ``(signal_units)^2/Hz``,
+        and has no known units (``""``) when ``signal_units`` is unknown.
+        """
+        if self.units is not None:
+            return self.units
+        return f"({signal_units})^2/Hz" if signal_units else ""
+
+    def result_attrs(self, signal_units: str | None) -> dict[str, str | float | int]:
+        """The attrs of a result variable with these values.
+
+        NetCDF-safe scalars: an unbounded side of ``value_range`` and the
+        facts not stated are omitted, and unknown units too (see
+        :meth:`units_for`).
+        """
+        units = self.units_for(signal_units)
+        lower, upper = self.value_range
+        optional: dict[str, str | float | int | None] = {
+            "units": units or None,
+            "value_range_lower": lower if np.isfinite(lower) else None,
+            "value_range_upper": upper if np.isfinite(upper) else None,
+            "sign_convention": self.sign_convention,
+            # The value a constant or rounding_noise diagonal holds.
+            "diagonal_value": self.diagonal_value,
+        }
+        return {
+            "long_name": self.long_name,
+            "interpretation": self.interpretation,
+            "diagonal_policy": self.diagonal_policy,
+            # 0/1: NetCDF has no boolean.
+            "nan_for_zero_power_signal": int(self.nan_for_zero_power_signal),
+            **{key: value for key, value in optional.items() if value is not None},
+        }
+
+
+@dataclass(frozen=True)
+class _MeasureSpec(_VariableSpec):
+    """One measure's wrapper contract and what its values mean.
+
+    ``output_kind`` and the capability flags describe the result's shape and
+    requirements; the fields of :class:`_VariableSpec` label and interpret the
+    measure's own variable. ``value_range`` bounds the values, or their
+    magnitude when ``is_complex``. ``quantity`` and ``formula`` define the
+    coherency family's values (``None`` for other measures). ``companions``
+    are the measure's other value variables, in the order the measure returns
+    them after its own.
+    """
+
+    output_kind: Literal[
+        "pairwise",
+        "power",
+        "group_pairwise",
+        "delay",
+        "global",
+        "group_delay",
+        "phase_slope",
+        "multivariate_components",
+    ]
+    # The rest are keyword-only: several are strings, so a positional mix-up
+    # would pass silently into results and the generated docs.
+    _: KW_ONLY
+    quantity: (
+        Literal["magnitude", "squared_magnitude", "signed", "phase", "complex"] | None
+    ) = None
+    formula: str | None = None
+    is_complex: bool = False
+    is_default: bool = False
+    # Scientific directionality and spectrum requirements are independent
+    # capabilities. For example dPLI and PSI are directional but do not need
+    # Wilson factorization.
+    is_directed: bool = False
+    requires_two_sided: bool = False
+    companions: tuple[tuple[str, _VariableSpec], ...] = ()
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -104,42 +149,16 @@ class _MeasureSpec:
         """
         return self.output_kind in _FREQUENCY_RANGE_KINDS
 
-    def units_for(self, signal_units: str | None) -> str:
-        """UDUNITS string of the values for input in ``signal_units``.
-
-        A spectral density (``units is None``) is in ``(signal_units)^2/Hz``,
-        and has no known units (``""``) when ``signal_units`` is unknown.
-        """
-        if self.units is not None:
-            return self.units
-        return f"({signal_units})^2/Hz" if signal_units else ""
-
     def result_attrs(self, signal_units: str | None) -> dict[str, str | float | int]:
-        """The attrs of a result variable of this measure.
-
-        NetCDF-safe scalars: an unbounded side of ``value_range`` and the
-        facts the measure does not state are omitted, and unknown units too
-        (see :meth:`units_for`).
-        """
-        units = self.units_for(signal_units)
-        lower, upper = self.value_range
-        optional: dict[str, str | float | int | None] = {
-            "units": units or None,
-            "value_range_lower": lower if np.isfinite(lower) else None,
-            "value_range_upper": upper if np.isfinite(upper) else None,
+        """The attrs of the measure's own result variable (see
+        :meth:`_VariableSpec.result_attrs`), with the facts only a measure states."""
+        optional = {
             "value_range_applies_to": "magnitude" if self.is_complex else None,
-            "sign_convention": self.sign_convention,
             "quantity": self.quantity,
             "formula": self.formula,
-            # The value a constant or rounding_noise diagonal holds.
-            "diagonal_value": self.diagonal_value,
         }
         return {
-            "long_name": self.long_name,
-            "interpretation": self.interpretation,
-            "diagonal_policy": self.diagonal_policy,
-            # 0/1: NetCDF has no boolean.
-            "nan_for_zero_power_signal": int(self.nan_for_zero_power_signal),
+            **super().result_attrs(signal_units),
             **{key: value for key, value in optional.items() if value is not None},
         }
 
@@ -597,6 +616,36 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
+        companions=(
+            (
+                "group_delay_slope",
+                _VariableSpec(
+                    long_name="phase slope",
+                    units="rad/Hz",
+                    value_range=(-_INFINITY, _INFINITY),
+                    interpretation="Slope of the unwrapped coherency phase against "
+                    "frequency over frequency_range, from the linear fit group_delay is "
+                    "computed from (group_delay = slope / (2*pi)).",
+                    diagonal_policy="masked_nan",
+                    nan_for_zero_power_signal=True,
+                    sign_convention=_LEADS,
+                ),
+            ),
+            (
+                "group_delay_r_value",
+                _VariableSpec(
+                    long_name="phase-frequency correlation",
+                    units="1",
+                    value_range=(-1.0, 1.0),
+                    interpretation="Correlation coefficient of the linear phase-frequency "
+                    "fit, with the sign of the slope: near +1 or -1 the phase is linear in "
+                    "frequency and group_delay is reliable.",
+                    diagonal_policy="constant",
+                    diagonal_value=1.0,
+                    sign_convention=_LEADS,
+                ),
+            ),
+        ),
     ),
     "phase_slope_index": _MeasureSpec(
         "phase_slope",
@@ -614,35 +663,6 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
     ),
 }
 
-
-# The other value variables of a measure's Dataset, each with its own record
-# (not listed by list_measures: they are parts of the measure named first).
-_COMPANION_SPECS: dict[str, _MeasureSpec] = {
-    "group_delay_slope": _MeasureSpec(
-        "group_delay",
-        long_name="phase slope",
-        units="rad/Hz",
-        value_range=(-_INFINITY, _INFINITY),
-        interpretation="Slope of the unwrapped coherency phase against frequency over "
-        "frequency_range, from the linear fit group_delay is computed from "
-        "(group_delay = slope / (2*pi)).",
-        diagonal_policy="masked_nan",
-        nan_for_zero_power_signal=True,
-        sign_convention=_LEADS,
-    ),
-    "group_delay_r_value": _MeasureSpec(
-        "group_delay",
-        long_name="phase-frequency correlation",
-        units="1",
-        value_range=(-1.0, 1.0),
-        interpretation="Correlation coefficient of the linear phase-frequency fit, with the "
-        "sign of the slope: near +1 or -1 the phase is linear in frequency and "
-        "group_delay is reliable.",
-        diagonal_policy="constant",
-        diagonal_value=1.0,
-        sign_convention=_LEADS,
-    ),
-}
 
 # Output kinds whose estimator consumes a frequency interval.
 _FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})

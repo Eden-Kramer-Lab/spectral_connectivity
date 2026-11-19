@@ -9,8 +9,8 @@ from pathlib import Path
 
 from spectral_connectivity import list_measures
 from spectral_connectivity._measure_registry import (
-    _COMPANION_SPECS,
     _DIAGONAL_POLICIES,
+    _MEASURE_SPECS,
     _NAN_FOR_ZERO_POWER_SIGNAL,
 )
 
@@ -93,7 +93,8 @@ def _value_variables():
     """``(name, record)`` of every measure variable: the measures, then the
     other value variables of their Datasets."""
     yield from ((measure.name, measure) for measure in list_measures())
-    yield from _COMPANION_SPECS.items()
+    for spec in _MEASURE_SPECS.values():
+        yield from spec.companions
 
 
 def policy_table() -> str:

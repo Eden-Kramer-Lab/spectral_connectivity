@@ -11,7 +11,6 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
-    _COMPANION_SPECS,
     _MEASURE_SPECS,
     _measure_attrs,
 )
@@ -101,15 +100,25 @@ def _coordinate_attrs(
     return time_attrs, frequency_attrs
 
 
-def _delay_units(shared_attrs: Mapping[str, Any]) -> tuple[str, str]:
-    """``(delay_units, slope_units)`` for the result's frequency coordinate.
+# Units of the variables recorded in seconds or per Hz, on a normalized
+# (cycles/sample) frequency grid: a delay is in the reciprocal units of
+# frequency, so there it is in samples.
+_NORMALIZED_GRID_UNITS = {
+    "delay": "samples",
+    "group_delay": "samples",
+    "group_delay_slope": "rad/(cycles/sample)",
+}
 
-    A delay is in the reciprocal units of frequency, so on a normalized
-    (cycles/sample) grid it is in samples.
-    """
-    if shared_attrs.get("frequency_units") == "cycles/sample":
-        return "samples", "rad/(cycles/sample)"
-    return "s", "rad/Hz"
+
+def _grid_units(variable_name: str, shared_attrs: Mapping[str, Any]) -> dict[str, str]:
+    """A ``units`` override for ``variable_name`` where the frequency units
+    require one (a normalized grid); otherwise none."""
+    if (
+        shared_attrs.get("frequency_units") == "cycles/sample"
+        and variable_name in _NORMALIZED_GRID_UNITS
+    ):
+        return {"units": _NORMALIZED_GRID_UNITS[variable_name]}
+    return {}
 
 
 def _connectivity_result_to_xarray(
@@ -340,7 +349,7 @@ def _connectivity_result_to_xarray(
             attrs={
                 **measure_attrs,
                 **selection.attrs(),
-                "units": _delay_units(shared_attrs)[0],
+                **_grid_units(method, shared_attrs),
             },
         )
 
@@ -369,31 +378,26 @@ def _connectivity_result_to_xarray(
         )
 
     if output_kind == "group_delay":
-        delay, slope, r_value = numerical_result
-        delay_units, slope_units = _delay_units(shared_attrs)
+        assert measure_spec is not None  # a registered output kind
         interval_attrs = _required_selection(method, frequency_selection).attrs()
         dataset_coordinates = {
             "time": base_coordinates["time"],
             **signal_coordinates,
         }
-        # (values, attrs, units): group_delay carries the measure's record, the
-        # slope and fit correlation their own; delay and slope are in the
-        # reciprocal units of the frequency coordinate.
+        # The measure's own variable, then its companions, in the order the
+        # measure returns their values.
         variables = {
-            "group_delay": (np.asarray(delay), measure_attrs, delay_units),
-            "group_delay_slope": (
-                np.asarray(slope),
-                {**attrs, **_COMPANION_SPECS["group_delay_slope"].result_attrs(None)},
-                slope_units,
-            ),
-            "group_delay_r_value": (
-                np.asarray(r_value),
-                {**attrs, **_COMPANION_SPECS["group_delay_r_value"].result_attrs(None)},
-                "1",
-            ),
+            name: measure_attrs,
+            **{
+                companion_name: {**attrs, **companion.result_attrs(None)}
+                for companion_name, companion in measure_spec.companions
+            },
         }
         data_vars: dict[str, xr.DataArray] = {}
-        for variable_name, (values, own_attrs, units) in variables.items():
+        for (variable_name, own_attrs), values in zip(
+            variables.items(), numerical_result, strict=True
+        ):
+            values = np.asarray(values)
             if values.shape != (
                 len(connectivity.time),
                 connectivity.n_signals,
@@ -401,12 +405,15 @@ def _connectivity_result_to_xarray(
             ):
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
-            variable_attrs = {**own_attrs, **interval_attrs, "units": units}
             data_vars[variable_name] = xr.DataArray(
                 values,
                 coords=dataset_coordinates,
                 dims=("time", "source", "target"),
-                attrs=variable_attrs,
+                attrs={
+                    **own_attrs,
+                    **interval_attrs,
+                    **_grid_units(variable_name, shared_attrs),
+                },
             )
         return xr.Dataset(data_vars, attrs=attrs)
 
