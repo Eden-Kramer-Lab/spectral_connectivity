@@ -1176,6 +1176,42 @@ def test_multitaper_warns_on_step_larger_than_duration():
         )
 
 
+def _input_that_warns(case):
+    """Time series and window arguments that trigger one construction warning."""
+    rng = np.random.default_rng(42)
+    if case == "nan":
+        time_series = rng.standard_normal((100, 1, 1))
+        time_series[50, 0, 0] = np.nan
+        return time_series, {}
+    if case == "transposed":
+        return rng.standard_normal((10, 1, 100)), {}
+    return rng.standard_normal((1000, 1, 1)), {
+        "time_window_duration": 0.5,
+        "time_window_step": 1.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "transform_cls",
+    [Multitaper, ShortTimeFourierTransform],
+    ids=["Multitaper", "ShortTimeFourierTransform"],
+)
+@pytest.mark.parametrize(
+    ("case", "match"),
+    [
+        ("nan", "contains NaN"),
+        ("transposed", "data may be transposed"),
+        ("gap", "creates gaps"),
+    ],
+)
+def test_construction_warnings_point_at_the_constructing_call(transform_cls, case, match):
+    """Input warnings name the line that built the transform, not package internals."""
+    time_series, window_kwargs = _input_that_warns(case)
+    with pytest.warns(UserWarning, match=match) as record:
+        transform_cls(time_series, sampling_frequency=1000, **window_kwargs)
+    assert [w.filename for w in record if match in str(w.message)] == [__file__]
+
+
 @pytest.mark.parametrize(
     "n_tapers",
     [0, -1, True, np.True_, 51],
