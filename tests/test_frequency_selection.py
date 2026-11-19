@@ -202,6 +202,66 @@ def test_wrapper_and_direct_paths_select_the_same_bins_on_irregular_and_drifting
         assert psi.attrs["selected_frequency_upper"] == float(grid[mask][-1])
 
 
+_ONE_BIN_RANGES = [
+    pytest.param((15.15, 15.2), id="upper-on-drifted-bin"),
+    pytest.param((15.2, 15.2), id="low-equals-high"),
+]
+
+
+@pytest.mark.parametrize("bounds", _ONE_BIN_RANGES)
+@pytest.mark.parametrize(
+    "methods",
+    [
+        pytest.param("delay", id="delay"),
+        pytest.param(["delay", "coherence_magnitude"], id="delay-and-coherence"),
+        pytest.param(
+            ["coherence_magnitude", "delay", "group_delay"], id="mixed-with-group-delay"
+        ),
+    ],
+)
+def test_a_one_bin_range_on_a_drifting_grid_selects_the_same_bin_everywhere(methods, bounds):
+    """The selection is made once, on the full grid; a result already cut to
+    it is not selected again, where a lone bin would have lost the gap term
+    that put it on the bound (bin 142 is 15.200000000000014)."""
+    grid = np.arange(1.0, 100.0, 0.1)
+    rng = np.random.default_rng(9)
+    shape = (8, grid.size, 2)
+    coefficients = xr.DataArray(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        dims=("trial", "frequency", "signal"),
+        coords={"frequency": grid},
+    )
+    connectivity = Connectivity(
+        coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
+    )
+    direct = connectivity.delay(frequency_range=bounds)
+    assert direct.shape[1] == 1
+
+    result = fourier_connectivity(coefficients, method=methods, frequency_range=bounds)
+    delay = result["delay"] if isinstance(result, xr.Dataset) else result
+    np.testing.assert_array_equal(delay.frequency.values, [grid[142]])
+    np.testing.assert_array_equal(delay.values, direct)
+    if isinstance(result, xr.Dataset):
+        assert result.coherence_magnitude.sizes["frequency"] == 1
+
+
+def test_a_one_bin_range_through_multitaper_connectivity_matches_the_direct_call():
+    time_series = np.random.default_rng(10).standard_normal((1000, 6, 2))
+    settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
+    connectivity = Connectivity.from_transform(Multitaper(time_series, **settings))
+    for bounds in [(10.0, 10.0), (9.5, 10.0)]:
+        result = multitaper_connectivity(
+            time_series,
+            method=["delay", "coherence_magnitude"],
+            frequency_range=bounds,
+            **settings,
+        )
+        assert result.frequency.values.tolist() == [10.0]
+        np.testing.assert_array_equal(
+            result.delay.values, connectivity.delay(frequency_range=bounds)
+        )
+
+
 def test_band_means_use_the_inclusive_rule_and_integrals_the_exact_bounds():
     """On np.arange(1.0, 100.0, 0.1) the (10, 15.2) band mean includes the
     15.2 bin, while its integral of a flat density is the exact width 5.2."""

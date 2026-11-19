@@ -16,6 +16,7 @@ from spectral_connectivity._frequency_bands import (
     _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
+    _select_frequency_range,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -598,6 +599,10 @@ def _format_and_reduce_measures(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
+    # One selection per call, on the full grid, cuts every result below.
+    range_selection = _select_frequency_range(
+        to_numpy(connectivity.frequencies), frequency_range
+    )
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
         """Keyword arguments for one measure: ``group_labels`` reaches group
@@ -634,7 +639,8 @@ def _format_and_reduce_measures(
                 transform_settings_hint=transform_settings_hint,
                 **measure_kwargs(methods[0]),
             ),
-            frequency_range,
+            range_selection,
+            consumed=_selects_frequency_range(methods[0]),
         )
     else:
         formatted_results: list[xr.DataArray | xr.Dataset] = []
@@ -652,7 +658,8 @@ def _format_and_reduce_measures(
                             transform_settings_hint=transform_settings_hint,
                             **measure_kwargs(this_method),
                         ),
-                        frequency_range,
+                        range_selection,
+                        consumed=_selects_frequency_range(this_method),
                     )
                 )
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip

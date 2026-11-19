@@ -2,6 +2,7 @@
 
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -374,25 +375,59 @@ def _check_frequency_operations(
         raise ValueError(msg)
 
 
-def _crop_frequency_range(
-    result: xr.DataArray | xr.Dataset, frequency_range: tuple[float, float] | None
-) -> xr.DataArray | xr.Dataset:
-    """Keep the bins of ``frequency_range`` on every frequency-resolved variable.
+@dataclass(frozen=True)
+class _FrequencyRangeSelection:
+    """A wrapper call's ``frequency_range``, selected once on the full grid.
 
-    A result without a frequency axis (``phase_slope_index``, ``group_delay``)
-    is returned unchanged: those measures consumed the range themselves.
+    Attributes
+    ----------
+    index : NDArray[intp], shape (n_selected,)
+        Positions of the selected bins on the full frequency grid.
+    bounds : (float, float)
+        The validated ``(low, high)`` bounds.
     """
-    if frequency_range is None or "frequency" not in result.dims:
-        return result
-    mask, (lower, upper) = _frequency_interval_mask(
-        "frequency_range",
-        frequency_range,
-        np.asarray(result.coords["frequency"].values),
-        closed="both",
+
+    index: NDArray[np.intp]
+    bounds: tuple[float, float]
+
+
+def _select_frequency_range(
+    frequencies: NDArray[np.floating], frequency_range: tuple[float, float] | None
+) -> _FrequencyRangeSelection | None:
+    """Select the bins of ``frequency_range`` on the full grid ``frequencies``.
+
+    The wrappers call this once per call, before any measure is computed, and
+    cut every result with it. Selecting again on an axis already cut to these
+    bins could disagree: a lone selected bin has no neighbour there, so the
+    gap term that put it on a bound would be lost.
+    """
+    if frequency_range is None:
+        return None
+    mask, bounds = _frequency_interval_mask(
+        "frequency_range", frequency_range, frequencies, closed="both"
     )
+    return _FrequencyRangeSelection(np.flatnonzero(mask), bounds)
+
+
+def _crop_frequency_range(
+    result: xr.DataArray | xr.Dataset,
+    selection: _FrequencyRangeSelection | None,
+    *,
+    consumed: bool,
+) -> xr.DataArray | xr.Dataset:
+    """Cut every frequency-resolved variable of ``result`` to ``selection``.
+
+    ``result``'s frequency axis is the full grid, unless the measure
+    ``consumed`` the range itself (``delay``, ``group_delay``,
+    ``phase_slope_index``): it then holds only the selected bins already, or
+    has no frequency axis, and is not cut again.
+    """
+    if selection is None or "frequency" not in result.dims:
+        return result
+    if not consumed:
+        result = result.isel(frequency=selection.index)
     return _with_frequency_attrs(
-        result.isel(frequency=np.flatnonzero(mask)),
-        frequency_range_json=_canonical_json((lower, upper)),
+        result, frequency_range_json=_canonical_json(selection.bounds)
     )
 
 
