@@ -46,6 +46,28 @@ autosummary_ignore_module_all = False
 add_module_names = False
 numpydoc_class_members_toctree = False
 
+
+def _public_bases(app, name, obj, options, bases):
+    """Show a private base class's public bases in "Bases:" instead of the private class.
+
+    The class pages list inherited members, so the private class's documented
+    members still appear on its public subclasses.
+    """
+    resolved = []
+    pending = list(bases)
+    while pending:
+        base = pending.pop(0)
+        if base.__name__.startswith("_"):
+            pending[:0] = base.__bases__
+        elif base not in resolved:
+            resolved.append(base)
+    bases[:] = resolved
+
+
+def setup(app):
+    app.connect("autodoc-process-bases", _public_bases)
+
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 
