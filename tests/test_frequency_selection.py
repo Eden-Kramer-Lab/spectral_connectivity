@@ -35,20 +35,62 @@ from tests._backend_helpers import to_host
 
 # Bins 0, 2, ..., 50 Hz: every bound below is either exactly a bin or between bins.
 _EXACT_GRID = np.arange(0.0, 51.0, 2.0)
+# Bin k stores 0.1 * k in float64: bin 3 is 0.30000000000000004, bin 7
+# 0.7000000000000001.
+_DECIMAL_TENTHS = np.arange(64) * 0.1
+# The same tenths stored as float32: float32(0.7) is below 0.7, float32(1.2) above.
+_FLOAT32_TENTHS = np.linspace(0, 6.3, 64).astype(np.float32)
+# NumPy takes this grid's step as (1.0 + 0.1) - 1.0, so bin 142 is
+# 15.200000000000014, four units in the last place from 15.2.
+_ARANGE_TENTHS = np.arange(1.0, 100.0, 0.1)
+_LOG_GRID = np.geomspace(1.0, 100.0, 50)
+
+
+def _fourier_input(grid, seed, n_trials=6):
+    """Labeled one-sided coefficients on ``grid``, and the same as ``Connectivity``.
+
+    Returns
+    -------
+    coefficients : xarray.DataArray, shape (n_trials, n_frequencies, 2)
+    connectivity : Connectivity
+    """
+    rng = np.random.default_rng(seed)
+    shape = (n_trials, grid.size, 2)
+    coefficients = xr.DataArray(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        dims=("trial", "frequency", "signal"),
+        coords={"frequency": grid},
+    )
+    connectivity = Connectivity(
+        coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
+    )
+    return coefficients, connectivity
+
+
+@pytest.fixture(scope="module")
+def morlet_transform():
+    """A Morlet transform on 4, 8, ..., 20 Hz whose bins differ in validity."""
+    return MorletWavelet(
+        np.random.default_rng(319).standard_normal((192, 5, 2)),
+        64,
+        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
+        edge_mode="nan",
+    )
 
 
 @pytest.mark.parametrize(
-    ("bounds", "expected"),
+    ("grid", "bounds", "expected"),
     [
-        pytest.param((10.0, 20.0), [10, 12, 14, 16, 18, 20], id="on-bins"),
-        pytest.param((9.0, 21.0), [10, 12, 14, 16, 18, 20], id="off-bins"),
-        pytest.param((10.0, 10.0), [10], id="single-bin"),
-        pytest.param((0.0, 50.0), list(range(0, 51, 2)), id="whole-grid"),
+        pytest.param(_EXACT_GRID, (10.0, 20.0), [10, 12, 14, 16, 18, 20], id="on-bins"),
+        pytest.param(_EXACT_GRID, (9.0, 21.0), [10, 12, 14, 16, 18, 20], id="off-bins"),
+        pytest.param(_EXACT_GRID, (10.0, 10.0), [10], id="single-bin"),
+        pytest.param(_EXACT_GRID, (0.0, 50.0), list(range(0, 51, 2)), id="whole-grid"),
+        pytest.param(np.array([10.0]), (10.0, 10.0), [10], id="single-bin-grid"),
     ],
 )
-def test_bounds_on_bins_are_included(bounds, expected):
-    mask, selected_bounds = _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
-    np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
+def test_bounds_on_bins_are_included(grid, bounds, expected):
+    mask, selected_bounds = _frequency_interval_mask("frequency_range", bounds, grid)
+    np.testing.assert_array_equal(grid[mask], expected)
     assert selected_bounds == bounds
 
 
@@ -92,8 +134,6 @@ def test_a_single_bin_has_only_the_last_place_allowance(n_last_places, selected)
     else:
         with pytest.raises(ValueError, match="contains no frequency bin"):
             _frequency_interval_mask("frequency_range", (bound, 20.0), grid)
-    mask, _ = _frequency_interval_mask("frequency_range", (10.0, 10.0), grid)
-    assert mask.tolist() == [True]
 
 
 @pytest.mark.parametrize(
@@ -106,7 +146,6 @@ def test_two_bins_use_their_distance_as_the_gap(fraction_of_gap, expected):
     np.testing.assert_array_equal(grid[mask], expected)
 
 
-_LOG_GRID = np.geomspace(1.0, 100.0, 50)
 _LOG_MEAN_STEP = (_LOG_GRID[-1] - _LOG_GRID[0]) / (_LOG_GRID.size - 1)
 
 
@@ -140,7 +179,7 @@ def _drifting_grids():
     """Grids whose bins drift from their decimal values by more than a few
     units in the last place, as NumPy builds them."""
     return [
-        pytest.param(np.arange(1.0, 100.0, 0.1), (10.0, 15.2), id="arange-start-1"),
+        pytest.param(_ARANGE_TENTHS, (10.0, 15.2), id="arange-start-1"),
         pytest.param(np.arange(1000.0, 1101.0, 0.1), (1010.0, 1099.1), id="arange-start-1000"),
         pytest.param(
             np.concatenate([[0.0], np.cumsum(np.full(1000, 0.1))]), (10.0, 99.9), id="cumsum"
@@ -179,26 +218,23 @@ def test_decimal_bounds_name_the_printed_bins_of_drifting_grids(grid, bounds):
 
 @pytest.mark.parametrize(
     ("grid", "bounds"),
-    [*_drifting_grids(), pytest.param(np.geomspace(1.0, 100.0, 50), (2.0, 50.0), id="log")],
+    [
+        *_drifting_grids(),
+        pytest.param(_LOG_GRID, (2.0, 50.0), id="log"),
+        pytest.param(_FLOAT32_TENTHS, (0.7, 1.2), id="float32"),
+    ],
 )
 def test_wrapper_and_direct_paths_select_the_same_bins_on_irregular_and_drifting_grids(
     grid, bounds
 ):
-    rng = np.random.default_rng(8)
-    shape = (6, grid.size, 2)
-    coefficients = xr.DataArray(
-        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
-        dims=("trial", "frequency", "signal"),
-        coords={"frequency": grid},
-    )
+    """The wrapper's crop uses the same rule as the direct call, so a float32
+    or drifting coordinate keeps the bins its decimal bounds name."""
+    coefficients, connectivity = _fourier_input(grid, seed=8)
     cropped = fourier_connectivity(
         coefficients, method="coherence_magnitude", frequency_range=bounds
     )
     mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
     np.testing.assert_array_equal(cropped.frequency.values, grid[mask])
-    connectivity = Connectivity(
-        coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
-    )
     if _uniform_grid_spacing(grid) is not None:  # PSI needs a uniform grid
         psi = fourier_connectivity(
             coefficients, method="phase_slope_index", frequency_range=bounds
@@ -230,17 +266,8 @@ def test_a_one_bin_range_on_a_drifting_grid_selects_the_same_bin_everywhere(meth
     """The selection is made once, on the full grid; a result already cut to
     it is not selected again, where a lone bin would have lost the gap term
     that put it on the bound (bin 142 is 15.200000000000014)."""
-    grid = np.arange(1.0, 100.0, 0.1)
-    rng = np.random.default_rng(9)
-    shape = (8, grid.size, 2)
-    coefficients = xr.DataArray(
-        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
-        dims=("trial", "frequency", "signal"),
-        coords={"frequency": grid},
-    )
-    connectivity = Connectivity(
-        coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
-    )
+    grid = _ARANGE_TENTHS
+    coefficients, connectivity = _fourier_input(grid, seed=9, n_trials=8)
     direct = connectivity.delay(frequency_range=bounds)
     assert direct.shape[1] == 1
 
@@ -272,7 +299,7 @@ def test_a_one_bin_range_through_multitaper_connectivity_matches_the_direct_call
 def test_band_means_use_the_inclusive_rule_and_integrals_the_exact_bounds():
     """On np.arange(1.0, 100.0, 0.1) the (10, 15.2) band mean includes the
     15.2 bin, while its integral of a flat density is the exact width 5.2."""
-    grid = np.arange(1.0, 100.0, 0.1)
+    grid = _ARANGE_TENTHS
     bins = _decimal_bins(grid, (10.0, 15.2))
     density = xr.DataArray(
         grid.copy(),
@@ -290,35 +317,26 @@ def test_band_means_use_the_inclusive_rule_and_integrals_the_exact_bounds():
 
 
 @pytest.mark.parametrize(
-    "grid",
+    ("grid", "bounds", "exact_drops_an_edge_bin"),
     [
-        # 0.1 * k in float64: bin 3 is 0.30000000000000004 and bin 7 is
-        # 0.7000000000000001, so exact comparison would drop the 0.7 bin.
-        pytest.param(np.arange(64) * 0.1, id="decimal-rounded-float64"),
-        # float32(0.7) is below 0.7 and float32(1.2) above 1.2, so exact
-        # comparison would drop both edge bins.
-        pytest.param(np.linspace(0, 6.3, 64).astype(np.float32), id="float32"),
+        pytest.param(_DECIMAL_TENTHS, (0.3, 0.7), True, id="decimal-0.3-0.7"),
+        pytest.param(_DECIMAL_TENTHS, (0.7, 1.2), True, id="decimal-0.7-1.2"),
+        pytest.param(_FLOAT32_TENTHS, (0.3, 0.7), False, id="float32-0.3-0.7"),
+        pytest.param(_FLOAT32_TENTHS, (0.7, 1.2), True, id="float32-0.7-1.2"),
     ],
 )
-@pytest.mark.parametrize("bounds", [(0.3, 0.7), (0.7, 1.2)])
-def test_both_includes_a_bin_stored_with_rounding_of_its_decimal_bound(grid, bounds):
-    """Bin ``k`` stores ``0.1 * k``, so the bounds name bins 3-7 or 7-12."""
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
-    np.testing.assert_array_equal(
-        np.flatnonzero(mask), np.arange(round(bounds[0] * 10), round(bounds[1] * 10) + 1)
+def test_a_bin_stored_with_rounding_of_its_decimal_bound_is_included(
+    grid, bounds, exact_drops_an_edge_bin
+):
+    """Bin ``k`` stores ``0.1 * k``, so the bounds name bins 3-7 or 7-12; an
+    exact float64 ``>=``/``<=`` comparison would drop an edge bin where noted."""
+    expected = np.arange(round(bounds[0] * 10), round(bounds[1] * 10) + 1)
+    exact = np.flatnonzero(
+        (grid.astype(float) >= bounds[0]) & (grid.astype(float) <= bounds[1])
     )
-
-
-def test_the_rounded_grids_have_edge_bins_that_exact_comparison_drops():
-    """Guard for the test above: without the tolerance its edge bins are lost
-    (bins are compared in float64)."""
-    decimal = np.arange(64) * 0.1
-    assert not decimal[7] <= 0.7
-    # ... and the exclusive comparison keeps bin 3 inside a band starting at 0.3.
-    assert decimal[3] > 0.3
-    float32 = np.linspace(0, 6.3, 64).astype(np.float32).astype(np.float64)
-    assert not float32[7] >= 0.7
-    assert not float32[12] <= 1.2
+    assert (not np.array_equal(exact, expected)) == exact_drops_an_edge_bin
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
+    np.testing.assert_array_equal(np.flatnonzero(mask), expected)
 
 
 def _released_band_mask(frequencies_of_interest, frequencies):
@@ -330,7 +348,6 @@ def _released_band_mask(frequencies_of_interest, frequencies):
     )
 
 
-_FLOAT32_TENTH_GRID = np.linspace(0, 6.3, 64).astype(np.float32)
 _BAND_FORMS = {
     "tuple": tuple,
     "list": list,
@@ -341,8 +358,8 @@ _BAND_FORMS = {
 @pytest.mark.parametrize(
     "grid",
     [
-        pytest.param(np.arange(64) * 0.1, id="decimal-rounded-float64"),
-        pytest.param(_FLOAT32_TENTH_GRID, id="float32"),
+        pytest.param(_DECIMAL_TENTHS, id="decimal-rounded-float64"),
+        pytest.param(_FLOAT32_TENTHS, id="float32"),
     ],
 )
 @pytest.mark.parametrize("form", list(_BAND_FORMS))
@@ -370,8 +387,8 @@ def test_neither_excludes_bins_on_the_bounds(bounds, expected):
 
 def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
     """Guard for the test above: its float32 cases exercise both promotions."""
-    as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTH_GRID)
-    as_array = _released_band_mask(np.array([0.3, 0.7]), _FLOAT32_TENTH_GRID)
+    as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTHS)
+    as_array = _released_band_mask(np.array([0.3, 0.7]), _FLOAT32_TENTHS)
     assert np.flatnonzero(as_tuple).tolist() == [4, 5, 6]
     assert np.flatnonzero(as_array).tolist() == [3, 4, 5, 6, 7]
 
@@ -410,9 +427,8 @@ def test_deprecated_calls_on_a_float32_grid_consume_the_released_bins(
 
 def test_float32_bounds_on_a_float64_grid_use_float32_rounding():
     """Bounds read off a float32 coordinate still select the bins they name."""
-    bounds = tuple(np.linspace(0, 6.3, 64).astype(np.float32)[[7, 12]])
-    grid = np.arange(64) * 0.1
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid)
+    bounds = tuple(_FLOAT32_TENTHS[[7, 12]])
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, _DECIMAL_TENTHS)
     np.testing.assert_array_equal(np.flatnonzero(mask), np.arange(7, 13))
 
 
@@ -432,22 +448,6 @@ def test_invalid_or_empty_intervals_raise_naming_the_argument(bounds, message):
     with pytest.raises(ValueError, match=message) as error:
         _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
     assert str(error.value).startswith("frequency_range")
-
-
-def test_wrapper_crop_includes_rounded_edge_bins_of_a_float32_coordinate():
-    """The wrapper's crop uses the same rule, so a float32 frequency coordinate
-    keeps the bins its decimal bounds name."""
-    rng = np.random.default_rng(3)
-    grid = np.linspace(0, 6.3, 64).astype(np.float32)
-    coefficients = xr.DataArray(
-        rng.standard_normal((8, 64, 2)) + 1j * rng.standard_normal((8, 64, 2)),
-        dims=("trial", "frequency", "signal"),
-        coords={"frequency": grid},
-    )
-    cropped = fourier_connectivity(
-        coefficients, method="coherence_magnitude", frequency_range=(0.7, 1.2)
-    )
-    np.testing.assert_array_equal(cropped.frequency.values, grid[7:13])
 
 
 def test_wrapper_crop_and_bands_include_bins_on_their_bounds():
@@ -553,11 +553,6 @@ def _call(connectivity, measure, *args, **kwargs):
     return np.stack(result) if measure == "group_delay" else result
 
 
-def _deprecated(connectivity, measure, *args, **kwargs):
-    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
-        return _call(connectivity, measure, *args, **kwargs)
-
-
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
 def test_frequency_range_consumes_the_bins_on_its_bounds(lagged_connectivity, measure):
     """frequency_range=(10, 50) uses the 10 and 50 Hz bins: it equals
@@ -571,12 +566,8 @@ def test_frequency_range_consumes_the_bins_on_its_bounds(lagged_connectivity, me
     assert inclusive.shape != without_edges.shape or not np.allclose(
         inclusive, without_edges, equal_nan=True
     )
-
-
-def test_delay_returns_the_bins_of_frequency_range(lagged_connectivity):
-    delays = lagged_connectivity.delay(frequency_range=(10.0, 50.0), n_range=1)
-    # 10, 12, ..., 50 Hz.
-    assert delays.shape[-4] == 21
+    if measure == "delay":  # 10, 12, ..., 50 Hz
+        assert inclusive.shape[-4] == 21
 
 
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
@@ -602,9 +593,10 @@ def test_frequencies_of_interest_warns_with_an_exact_migration(lagged_connectivi
 def test_positional_band_is_the_deprecated_exclusive_selection(lagged_connectivity, measure):
     """A 2.x positional band keeps its exclusive meaning, with the warning,
     instead of silently gaining the edge bins."""
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
+        positional = _call(lagged_connectivity, measure, (10.0, 50.0))
     np.testing.assert_array_equal(
-        _deprecated(lagged_connectivity, measure, (10.0, 50.0)),
-        _call(lagged_connectivity, measure, frequency_range=(12.0, 48.0)),
+        positional, _call(lagged_connectivity, measure, frequency_range=(12.0, 48.0))
     )
 
 
@@ -729,15 +721,12 @@ def test_deprecated_results_record_the_exclusive_interval_and_keyword(
     ],
 )
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
-def test_morlet_validity_follows_the_consumed_bins(measure, kwargs, consumed_bins):
+def test_morlet_validity_follows_the_consumed_bins(
+    morlet_transform, measure, kwargs, consumed_bins
+):
     """valid_time of a frequency-reduced measure, and valid_time_frequency of
     delay, describe exactly the bins the estimator used."""
-    transform = MorletWavelet(
-        np.random.default_rng(319).standard_normal((192, 5, 2)),
-        64,
-        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
-        edge_mode="nan",
-    )
+    transform = morlet_transform
     validity = to_host(transform.valid_time_frequency)[:, consumed_bins]
     # The bins differ in validity, so using the wrong ones would show.
     assert not np.array_equal(
@@ -760,15 +749,28 @@ def _main_variable(result, measure):
     return result[measure] if isinstance(result, xr.Dataset) else result
 
 
+@pytest.mark.parametrize("wrapper", ["multitaper_connectivity", "fourier_connectivity"])
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
 def test_wrapper_frequency_range_selects_the_estimators_bins(
-    lagged_time_series, lagged_connectivity, measure
+    lagged_time_series, lagged_connectivity, measure, wrapper
 ):
-    """The wrapper passes frequency_range to the estimator, so it consumes the
+    """Both wrappers pass frequency_range to the estimator, so it consumes the
     same bins as the direct call instead of the wrapper refusing the range."""
-    result = multitaper_connectivity(
-        lagged_time_series, method=measure, frequency_range=(10.0, 50.0), **_LAGGED_TRANSFORM
-    )
+    if wrapper == "multitaper_connectivity":
+        result = multitaper_connectivity(
+            lagged_time_series,
+            method=measure,
+            frequency_range=(10.0, 50.0),
+            **_LAGGED_TRANSFORM,
+        )
+    else:
+        transform = Multitaper(lagged_time_series, **_LAGGED_TRANSFORM)
+        result = fourier_connectivity(
+            transform.fft(),
+            frequencies=transform.frequencies,
+            method=measure,
+            frequency_range=(10.0, 50.0),
+        )
     direct = getattr(lagged_connectivity, measure)(frequency_range=(10.0, 50.0))
     direct = direct[0] if measure == "group_delay" else direct
     np.testing.assert_array_equal(_main_variable(result, measure).values, direct)
@@ -782,22 +784,6 @@ def test_wrapper_frequency_range_selects_the_estimators_bins(
     assert json.loads(variable.attrs["measure_kwargs_json"]) == {
         "frequency_range": [10.0, 50.0]
     }
-
-
-def test_fourier_connectivity_frequency_range_reaches_phase_slope_index(lagged_connectivity):
-    transform = Multitaper(
-        np.random.default_rng(0).standard_normal((1000, 20, 2)), **_LAGGED_TRANSFORM
-    )
-    result = fourier_connectivity(
-        transform.fft(),
-        frequencies=transform.frequencies,
-        method="phase_slope_index",
-        frequency_range=(10.0, 50.0),
-    )
-    np.testing.assert_array_equal(
-        result.values,
-        Connectivity.from_transform(transform).phase_slope_index(frequency_range=(10.0, 50.0)),
-    )
 
 
 def test_the_wrapper_records_its_frequency_range_on_every_variable_it_applied_to(
@@ -1031,7 +1017,7 @@ def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
 
 
 def test_selected_bounds_and_validity_describe_the_interval_before_subsampling(
-    lagged_time_series,
+    lagged_time_series, morlet_transform
 ):
     """With frequency_resolution, PSI sums every fourth bin of 5-50 Hz on the
     0.5 Hz grid (last one 49 Hz), but the recorded interval and the Morlet
@@ -1050,12 +1036,7 @@ def test_selected_bounds_and_validity_describe_the_interval_before_subsampling(
     summed = np.arange(5.0, 50.0 + 0.25, 0.5)[::4]
     assert summed[-1] == 49.0
 
-    transform = MorletWavelet(
-        np.random.default_rng(319).standard_normal((192, 5, 2)),
-        64,
-        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
-        edge_mode="nan",
-    )
+    transform = morlet_transform
     morlet_psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
