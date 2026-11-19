@@ -9,35 +9,8 @@ import xarray as xr
 from numpy.typing import NDArray
 
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
+from spectral_connectivity.connectivity import _frequency_interval_mask
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
-
-
-def _inclusive_frequency_mask(
-    label: str,
-    bounds: Any,
-    frequencies: NDArray[np.floating],
-) -> tuple[NDArray[np.bool_], tuple[float, float]]:
-    """Validate ``(low, high)`` bounds and return the inclusive bin mask.
-
-    Shared by ``frequency_range`` and ``frequency_bands`` so both arguments keep
-    the same semantics and error messages; ``label`` names the offending
-    argument or band in those messages.
-    """
-    try:
-        lower, upper = bounds
-    except (TypeError, ValueError) as error:
-        msg = f"{label} must contain exactly two bounds (low, high)."
-        raise ValueError(msg) from error
-    lower = float(lower)
-    upper = float(upper)
-    if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
-        msg = f"{label} must have finite bounds with low <= high; got ({lower!r}, {upper!r})."
-        raise ValueError(msg)
-    mask = (frequencies >= lower) & (frequencies <= upper)
-    if not np.any(mask):
-        msg = f"{label} ({lower:g}, {upper:g}) contains no frequency bins."
-        raise ValueError(msg)
-    return mask, (lower, upper)
 
 
 def _band_integration_weights(
@@ -160,7 +133,7 @@ def _reduce_frequency_bands(
         raise ValueError(msg)
 
     band_masks_and_bounds = [
-        _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)
+        _frequency_interval_mask(f"Band {name!r}", bounds, frequencies, closed="both")
         for name, bounds in frequency_bands.items()
     ]
     discarded = [
@@ -378,10 +351,11 @@ def _select_and_reduce_frequencies(
         )
         raise ValueError(msg)
     if frequency_range is not None:
-        mask, (lower, upper) = _inclusive_frequency_mask(
+        mask, (lower, upper) = _frequency_interval_mask(
             "frequency_range",
             frequency_range,
             np.asarray(selected.coords["frequency"].values),
+            closed="both",
         )
         selected = _with_frequency_attrs(
             selected.isel(frequency=np.flatnonzero(mask)),

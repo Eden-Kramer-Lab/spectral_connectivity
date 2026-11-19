@@ -146,7 +146,12 @@ directly with results from 2.x.
   declared with `is_one_sided=True`), while directed factorization still
   requires a full two-sided spectrum. High-level results can be cropped,
   decimated, or reduced into named frequency bands; phase uses a circular mean
-  and integration is restricted to spectral densities. The standalone
+  and integration is restricted to spectral densities. `frequency_range` and
+  each band of `frequency_bands` include both endpoints. Bin `f` lies on bound
+  `b` when `abs(f - b) <= 2 * (ulp(f) + ulp(b))`, two units in the last place of
+  each value in its own stored precision (the rounding the uniform-grid check
+  allows), so a float32 coordinate, or one computed as `0.1 * k`, keeps the bins
+  its decimal bounds name. The standalone
   `frequency_band_reduce(result, frequency_bands, frequency_reduction=...)`
   applies the same band reduction, with the wrappers' keywords, to an
   already-computed labeled result. Datasets holding

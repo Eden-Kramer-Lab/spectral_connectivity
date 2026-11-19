@@ -414,6 +414,31 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
     )
 
 
+def _last_place(values: Any) -> NDArray[np.float64]:
+    """Distance from each value to the next representable one, in its stored precision.
+
+    The unit in the last place of a float32 value is that of float32, of a
+    float64 value that of float64; a non-floating value (an integer bound) is
+    taken as float64. :func:`_uniform_grid_spacing` and
+    :func:`_frequency_interval_mask` allow two of these units per stored value,
+    so a grid's uniformity and the bins a bound names follow the same rounding.
+
+    Parameters
+    ----------
+    values : array-like or scalar
+        Values on the host or the device.
+
+    Returns
+    -------
+    NDArray[float64], same shape as ``values``
+    """
+    stored = np.asarray(to_numpy(values))
+    if not np.issubdtype(stored.dtype, np.floating):
+        stored = stored.astype(float)
+    last_place: NDArray[np.float64] = np.spacing(np.abs(stored)).astype(float)
+    return last_place
+
+
 def _uniform_grid_spacing(frequencies: Any) -> float | None:
     """Step of a uniformly spaced frequency grid, or ``None`` if it is not one.
 
@@ -443,14 +468,99 @@ def _uniform_grid_spacing(frequencies: Any) -> float | None:
         stored = stored.astype(float)
     if stored.size < 2 or not np.all(np.isfinite(stored)):
         return None
-    # The distance to the next representable value, in the stored precision.
-    last_place = np.spacing(np.abs(stored)).astype(float)
+    last_place = _last_place(stored)
     values = stored.astype(float)
     spacing = float((values[-1] - values[0]) / (values.size - 1))
     rounding = 2 * (last_place[:-1] + last_place[1:])
     if np.all(np.abs(np.diff(values) - spacing) <= 1e-6 * abs(spacing) + rounding):
         return spacing
     return None
+
+
+def _frequency_interval_mask(
+    label: str,
+    bounds: Any,
+    frequencies: Any,
+    *,
+    closed: Literal["both", "neither"],
+) -> tuple[NDArray[np.bool_], tuple[float, float]]:
+    """Validate ``(low, high)`` bounds and return the frequency bins they select.
+
+    The package's single frequency-selection rule. ``frequency_range`` (the
+    wrappers' crop and the measures that consume a frequency interval) and each
+    of ``frequency_bands`` use ``closed="both"``; the deprecated
+    ``frequencies_of_interest`` uses ``closed="neither"``.
+
+    ``closed="both"`` keeps every bin from ``low`` to ``high``, including a bin
+    lying on either bound. Bin ``f`` lies on bound ``b`` when
+    ``abs(f - b) <= 2 * (ulp(f) + ulp(b))``, where ``ulp`` is
+    :func:`_last_place` of each value in its own stored precision (the grid's
+    dtype for ``f``; float64 for a Python ``float`` or integer bound, float32
+    for a float32 bound) -- the rounding :func:`_uniform_grid_spacing` allows.
+    So a coordinate stored as float32, or computed as ``0.1 * k``, keeps the
+    bin its decimal bound names, while a bound a millionth of a bin away from a
+    float64 bin does not select it.
+
+    ``closed="neither"`` is the historical exclusive selection
+    ``low < f < high``, compared exactly in float64, so the deprecated keyword
+    keeps selecting the bins it always has.
+
+    Parameters
+    ----------
+    label : str
+        The argument or band named in error messages.
+    bounds : (float, float)
+        Lower and upper bound, in the units of ``frequencies``.
+    frequencies : array, shape (n_frequencies,)
+        The frequency grid, on the host or the device.
+    closed : {"both", "neither"}
+        Whether bins on the bounds are selected.
+
+    Returns
+    -------
+    mask : NDArray[bool], shape (n_frequencies,)
+        Host mask of the selected bins.
+    bounds : (float, float)
+        The validated bounds.
+
+    Raises
+    ------
+    ValueError
+        If ``bounds`` is not two finite values with ``low <= high``
+        (``low < high`` for ``closed="neither"``), or selects no bin.
+    """
+    values = to_numpy(frequencies)
+    order = "<=" if closed == "both" else "<"
+    invalid = (
+        f"{label} must be two finite values (low, high) with low {order} high, got {bounds!r}."
+    )
+    try:
+        stored_lower, stored_upper = bounds
+        lower, upper = float(stored_lower), float(stored_upper)
+    except (TypeError, ValueError) as error:
+        raise ValueError(invalid) from error
+    if not (np.isfinite(lower) and np.isfinite(upper)) or (
+        lower > upper if closed == "both" else lower >= upper
+    ):
+        raise ValueError(invalid)
+
+    grid = values.astype(np.float64)
+    mask: NDArray[np.bool_]
+    if closed == "neither":
+        mask = (lower < grid) & (grid < upper)
+    else:
+        grid_last_place = _last_place(values)
+        on_lower = np.abs(grid - lower) <= 2 * (grid_last_place + _last_place(stored_lower))
+        on_upper = np.abs(grid - upper) <= 2 * (grid_last_place + _last_place(stored_upper))
+        mask = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
+    if not mask.any():
+        edges = "both endpoints included" if closed == "both" else "both edges excluded"
+        msg = (
+            f"{label} ({lower:g}, {upper:g}) contains no frequency bin ({edges}); "
+            f"the {grid.size} bins span {grid.min():g} to {grid.max():g}. Widen it."
+        )
+        raise ValueError(msg)
+    return mask, (lower, upper)
 
 
 def _require_fft_order(frequencies: Any) -> None:
@@ -5593,23 +5703,7 @@ def _bandpass(
     """
     if frequencies_of_interest is None:
         return data, frequencies
-    band = np.asarray(frequencies_of_interest, dtype=float)
-    if band.shape != (2,) or not np.all(np.isfinite(band)) or not band[0] < band[1]:
-        msg = (
-            "frequencies_of_interest must be two finite values (low, high) with "
-            f"low < high, got {frequencies_of_interest!r}. Band edges are "
-            "exclusive: only frequencies strictly inside (low, high) are kept."
-        )
-        raise ValueError(msg)
-    frequency_index = _frequencies_in_band(frequencies, band)
-    if not bool(frequency_index.any()):
-        msg = (
-            f"frequencies_of_interest {frequencies_of_interest!r} contains no "
-            "frequency bin: band edges are exclusive, and the frequencies span "
-            f"{float(frequencies.min())} to {float(frequencies.max())} "
-            f"({frequencies.shape[0]} bins). Widen the band."
-        )
-        raise ValueError(msg)
+    frequency_index = _frequencies_in_band(frequencies, frequencies_of_interest)
     return (
         xp.take(data, frequency_index.nonzero()[0], axis=axis),
         frequencies[frequency_index],
@@ -5621,11 +5715,12 @@ def _frequencies_in_band(
 ) -> NDArray[np.bool_]:
     """Boolean mask of ``frequencies`` strictly inside ``(low, high)``.
 
-    The single definition of the exclusive band edges used by :func:`_bandpass`
-    and by the wrapper's coordinates for band-restricted results.
+    The exclusive band edges used by :func:`_bandpass` and by the wrapper's
+    coordinates for band-restricted results.
     """
-    in_band: NDArray[np.bool_] = (band[0] < frequencies) & (frequencies < band[1])
-    return in_band
+    return _frequency_interval_mask(
+        "frequencies_of_interest", band, frequencies, closed="neither"
+    )[0]
 
 
 def _get_independent_frequency_step(

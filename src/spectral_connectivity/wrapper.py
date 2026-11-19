@@ -249,7 +249,14 @@ def frequency_band_reduce(
         Result with a one-dimensional ``frequency`` coordinate.
     frequency_bands : mapping of str to (float, float)
         Band names and their ``(low, high)`` bounds in the coordinate's units,
-        both endpoints included.
+        both endpoints included. Bin ``f`` lies on bound ``b`` when
+        ``abs(f - b) <= 2 * (ulp(f) + ulp(b))``: two units in the last place of
+        each value in its own stored precision (float32 for a float32
+        coordinate or bound, float64 for a Python number). So a float32
+        coordinate, or one computed as ``0.1 * k``, keeps the bin its decimal
+        bound names; a coordinate that drifted further from its decimal values
+        (e.g. ``np.arange(1.0, 100.0, 0.1)``, whose bins differ from ``1 + 0.1 * k``
+        by a growing amount) needs bounds taken from the coordinate itself.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
     circular : bool, optional
@@ -793,7 +800,9 @@ def multitaper_connectivity(
         requested measure takes it (labels are passed only to the measures that
         do).
     frequency_range : (float, float), optional
-        Inclusive frequency interval retained in the labeled result.
+        Frequency interval ``(low, high)`` retained in the labeled result, both
+        endpoints included; a bin lies on a bound when the two agree to within
+        two units in the last place of each (see :func:`frequency_band_reduce`).
     frequency_decimation : int, default=1
         Keep every Nth frequency bin after applying ``frequency_range``.
     frequency_bands : mapping of str to (float, float), optional
@@ -1161,8 +1170,10 @@ def fourier_connectivity(
         requested measure takes it (labels are passed only to the measures that
         do).
     frequency_range : (float, float), optional
-        Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
-        or band reduction.
+        ``(low, high)`` bounds, in the units of the frequency coordinate, to
+        keep before any decimation or band reduction; both endpoints are
+        included, to within two units in the last place of each (see
+        :func:`frequency_band_reduce`).
     frequency_decimation : int, default=1
         Keep every ``frequency_decimation``-th frequency bin.
     frequency_bands : mapping of str to (float, float), optional
