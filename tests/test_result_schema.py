@@ -395,6 +395,24 @@ def test_spacing_is_omitted_for_a_nearly_uniform_grid():
     assert "frequency_bin_spacing" not in _with_frequency_grid_metadata(grid).attrs
 
 
+@pytest.mark.parametrize(
+    "frequency",
+    [
+        # One bin moved by 12% of a step, 15 float32 units in the last place.
+        np.where(np.arange(64) == 30, 0.03, 0.0).astype(np.float32)
+        + (20_000 + 0.25 * np.arange(64)).astype(np.float32),
+        np.geomspace(100, 101, 50).astype(np.float32),
+        np.round(np.arange(4, 20, 1 / 3), 4),
+    ],
+    ids=["displaced_float32_bin", "log_spaced_float32", "rounded_to_4_decimals"],
+)
+def test_spacing_is_omitted_when_irregularity_exceeds_the_coordinate_precision(frequency):
+    grid = xr.DataArray(
+        np.zeros(frequency.size), dims="frequency", coords={"frequency": frequency}
+    )
+    assert "frequency_bin_spacing" not in _with_frequency_grid_metadata(grid).attrs
+
+
 def test_spacing_is_omitted_for_a_grid_with_a_non_finite_value():
     grid = xr.DataArray(
         np.zeros(3), dims="frequency", coords={"frequency": [0.0, np.inf, 2.0]}

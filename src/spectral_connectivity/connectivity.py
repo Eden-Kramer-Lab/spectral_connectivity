@@ -430,9 +430,12 @@ def _uniform_grid_spacing(frequencies: Any) -> float | None:
     The measures that combine adjacent bins and the ``frequency_bin_spacing``
     recorded on results share this definition. Every step must lie within one
     part in a million of the mean step, plus the rounding of the two values it
-    separates (see :func:`_frequency_grid_rtol`): a coordinate stored as
-    float32 or rounded to a few decimals is still uniform. The step is negative
-    for a decreasing grid, and a grid with fewer than two values has none.
+    separates in the coordinate's own precision (two units in the last place
+    each). A uniform grid stored as float32 is therefore still uniform, however
+    fine its step, while a grid rounded to a few decimals is uniform only if
+    that rounding is within one part in a million of the step. The step is
+    negative for a decreasing grid, and a grid with fewer than two values or
+    with a non-finite value has none.
 
     Parameters
     ----------
@@ -444,13 +447,16 @@ def _uniform_grid_spacing(frequencies: Any) -> float | None:
     float or None
         The mean step, in the coordinate's units.
     """
-    values = to_numpy(frequencies)
-    value_rtol = _frequency_grid_rtol(values)
-    values = values.astype(float)
-    if values.size < 2 or not np.all(np.isfinite(values)):
+    stored = to_numpy(frequencies)
+    if not np.issubdtype(stored.dtype, np.floating):
+        stored = stored.astype(float)
+    if stored.size < 2 or not np.all(np.isfinite(stored)):
         return None
+    # The distance to the next representable value, in the stored precision.
+    last_place = np.spacing(np.abs(stored)).astype(float)
+    values = stored.astype(float)
     spacing = float((values[-1] - values[0]) / (values.size - 1))
-    rounding = value_rtol * (np.abs(values[:-1]) + np.abs(values[1:]))
+    rounding = 2 * (last_place[:-1] + last_place[1:])
     if np.all(np.abs(np.diff(values) - spacing) <= 1e-6 * abs(spacing) + rounding):
         return spacing
     return None

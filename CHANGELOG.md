@@ -358,8 +358,8 @@ directly with results from 2.x.
   pi; single-channel groups reproduce the conjugate pairwise coherency.
 - `phase_slope_index`, `delay`, and `group_delay` require a uniformly spaced
   frequency grid (every step within one part in a million of the mean step,
-  allowing for the rounding of a float32 or decimal-rounded coordinate; the
-  same test decides whether a result records `frequency_bin_spacing`), and
+  allowing for the storage rounding of a float32 coordinate; the same test
+  decides whether a result records `frequency_bin_spacing`), and
   `delay`/`group_delay` reject non-uniform observation
   weights, because their adjacent-bin combinations and coherence null assume
   equal spacing and equally weighted observations (wavelet grids and Hann
