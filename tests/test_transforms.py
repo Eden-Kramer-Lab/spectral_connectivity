@@ -18,6 +18,7 @@ from spectral_connectivity.transforms import (
     _multitaper_fft,
     _sliding_window,
     dpss_windows,
+    suggest_parameters,
 )
 from spectral_connectivity.wrapper import multitaper_connectivity
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
@@ -1173,7 +1174,15 @@ _WITH_NAN = _RNG.standard_normal((100, 1, 1))
 _WITH_NAN[50, 0, 0] = np.nan
 _TRANSPOSED = _RNG.standard_normal((10, 1, 100))  # fewer time points than signals
 _LONG = _RNG.standard_normal((1000, 1, 1))
+_TWO_SIGNALS = _RNG.standard_normal((4000, 1, 2))
 _GAP = {"time_window_duration": 0.5, "time_window_step": 1.0}
+# One iteration with an unreachable tolerance cannot converge.
+_UNCONVERGED_ADAPTIVE = {
+    "time_halfbandwidth_product": 4,
+    "taper_weighting": "adaptive",
+    "adaptive_max_iterations": 1,
+    "adaptive_tolerance": 1e-15,
+}
 _NAN_MESSAGE = "Input time_series contains NaN"
 _TRANSPOSED_MESSAGE = "data may be transposed"
 _GAP_MESSAGE = "creates gaps"
@@ -1249,6 +1258,50 @@ _LARGE_NW_MESSAGE = "unusually large"
             ),
             _LARGE_NW_MESSAGE,
             id="wrapper-large_nw",
+        ),
+        pytest.param(
+            lambda: Multitaper(_TWO_SIGNALS, 256, **_UNCONVERGED_ADAPTIVE).fft(),
+            "did not converge",
+            id="Multitaper-adaptive_not_converged",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _TWO_SIGNALS, 256, method="power", **_UNCONVERGED_ADAPTIVE
+            ),
+            "did not converge",
+            id="wrapper-adaptive_not_converged",
+        ),
+        pytest.param(
+            lambda: dpss_windows(100, 0.5, 1),
+            "lowest-bias taper",
+            id="dpss_windows-no_low_bias_taper",
+        ),
+        pytest.param(
+            lambda: Welch(_LONG, 30000), "default segment length", id="Welch-default_segment"
+        ),
+        pytest.param(
+            lambda: MorletWavelet(
+                _TWO_SIGNALS, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.1
+            ),
+            "shorter than 4 wavelet standard deviations",
+            id="MorletWavelet-short_smoothing",
+        ),
+        pytest.param(
+            lambda: suggest_parameters(
+                sampling_frequency=1000,
+                signal_duration=2.0,
+                desired_freq_resolution=5.0,
+                desired_n_tapers=7,
+            ),
+            "were specified",
+            id="suggest_parameters-both_targets",
+        ),
+        pytest.param(
+            lambda: suggest_parameters(
+                sampling_frequency=1000, signal_duration=2.0, desired_freq_resolution=4.0
+            ),
+            "leaves 1 taper",
+            id="suggest_parameters-one_taper",
         ),
     ],
 )

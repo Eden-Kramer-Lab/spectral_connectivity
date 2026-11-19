@@ -397,7 +397,7 @@ def suggest_parameters(
             "This is typically not recommended as they have competing effects on the analysis. "
             "Using 'desired_freq_resolution' and ignoring 'desired_n_tapers'.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
         desired_n_tapers = None
 
@@ -495,7 +495,7 @@ def suggest_parameters(
             f"  - a longer signal (at least {min_signal_duration:.2f} s), or\n"
             f"  - a coarser frequency resolution (at least {min_freq_resolution:.2f} Hz).",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
     frequency_resolution = estimate_frequency_resolution(
         sampling_frequency, time_window_duration, time_halfbandwidth_product
@@ -2359,7 +2359,7 @@ class Welch:
                 "segment_duration (seconds) or n_time_samples_per_segment to set "
                 "the segment length explicitly.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
     # The settings below are read from the internal STFT that does the
@@ -2761,7 +2761,7 @@ class MorletWavelet:
                     "multiple trials so the expectation also averages independent "
                     "realizations.",
                     UserWarning,
-                    stacklevel=2,
+                    stacklevel=stacklevel_outside_package(),
                 )
 
     @property
@@ -3425,7 +3425,7 @@ def _apply_adaptive_taper_weights(
             "last iterate, which may bias power and connectivity estimates. "
             "Increase adaptive_max_iterations or relax adaptive_tolerance.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
 
     rms = xp.sqrt(xp.mean(weights**2, axis=2, keepdims=True))
@@ -3546,7 +3546,7 @@ def _get_low_bias_tapers(
             "(time_halfbandwidth_product is too small for low-bias tapers); keeping "
             "only the lowest-bias taper, whose spectral leakage is high.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]

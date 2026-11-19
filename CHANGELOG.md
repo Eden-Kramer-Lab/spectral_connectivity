@@ -524,7 +524,9 @@ directly with results from 2.x.
   `multitaper_connectivity` or `Welch` builds the transform. They named the
   `Multitaper(...)` call inside `wrapper.py`, or a line inside `Welch`. The
   categories and messages are unchanged, and constructing `Multitaper` directly
-  already named the caller.
+  already named the caller. The warning that adaptive taper weighting did not
+  converge, raised when the coefficients are computed, likewise names the
+  user's line instead of one inside `Multitaper`.
 - `global_coherence` is reproducible run to run on the CPU backend when it
   decomposes bins one at a time (many signals and estimates). SciPy's `svds`
   started from a random vector, so the values varied at rounding level and the
