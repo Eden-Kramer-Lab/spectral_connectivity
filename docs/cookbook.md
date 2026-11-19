@@ -192,6 +192,31 @@ at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
 
 ```
 
+Bin `f` lies on bound `b` when `abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) +
+ulp(b))`: within one part in a million of the distance to its nearest
+neighbouring bin, plus two units in the last place of each stored value. So a
+decimal bound names the bin printed as that decimal even where the stored value
+has drifted from it, as on `np.arange` grids with a nonzero start (bin 142
+below is stored as `15.200000000000014`); a bound farther from every bin is an
+ordinary edge between bins.
+
+```python
+>>> import xarray as xr
+>>> frequencies = np.arange(1.0, 100.0, 0.1)
+>>> coefficients = xr.DataArray(
+...     rng.standard_normal((8, frequencies.size, 2))
+...     + 1j * rng.standard_normal((8, frequencies.size, 2)),
+...     dims=("trial", "frequency", "signal"),
+...     coords={"frequency": frequencies},
+... )
+>>> edge = fourier_connectivity(
+...     coefficients, method="coherence_magnitude", frequency_range=(10, 15.2)
+... )
+>>> round(float(edge.frequency[-1]), 9), edge.sizes["frequency"]
+(15.2, 53)
+
+```
+
 `delay`, `group_delay`, and `phase_slope_index` receive the wrapper's
 `frequency_range` and consume only those bins; every other measure is computed
 from the full spectrum (the directed measures factorize all of it) and then

@@ -344,7 +344,7 @@ to trigger an exact zero pivot consistently across LAPACK builds.
 
 **Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
 `77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
-Implemented and validated locally on 2026-11-19: 1,961 tests passed with 16
+Implemented and validated locally on 2026-11-19: 1,977 tests passed with 16
 skips on the main CPU environment; all 70 source doctests, Ruff
 formatting/lint, and mypy passed.
 
@@ -352,13 +352,16 @@ Rulings where the rules above were silent:
 
 - **Comparison rule.** One helper, `_frequency_interval_mask`, serves the
   wrappers' crop, each named band, and the three interval measures. Under
-  `"both"` a bin `f` lies on a bound `b` when `|f - b| <= 2 * (ulp(f) +
-  ulp(b))`, each unit in the last place in the value's own stored precision
-  (`_last_place`, the same per-value rounding `_uniform_grid_spacing` allows),
-  so float32 and `0.1 * k` grids keep the bins their decimal bounds name. A
-  grid that has drifted further from its decimal values, such as
-  `np.arange(1.0, 100.0, 0.1)` (bin 142 is `15.200000000000014`, four of those
-  units from 15.2), does not: take such bounds from the coordinate.
+  `"both"` a bin `f` lies on a bound `b` when `|f - b| <= 1e-6 * gap(f) +
+  2 * (ulp(f) + ulp(b))`: `gap(f)` is the distance to its nearest neighbouring
+  bin (zero for a single bin) and each unit in the last place is in the
+  value's own stored precision. These are `_uniform_grid_spacing`'s two
+  allowances (one named `_GRID_SPACING_RTOL`, one `_last_place`), with the
+  local gap in place of the mean step so irregular grids are judged bin by
+  bin. Float32, `0.1 * k`, `np.arange` from a nonzero start (bin 142 of
+  `np.arange(1.0, 100.0, 0.1)` is `15.200000000000014`), and cumulative-sum
+  grids keep the bins their decimal bounds name; a bound 1e-3 of the spacing
+  from a bin does not select it.
   `"neither"` keeps the exact float64 comparison so the
   deprecated keyword selects bit-for-bit the bins it always has (rule 5); on a
   rounded grid that can include a bin within rounding of an edge, as before.

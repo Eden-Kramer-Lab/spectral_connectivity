@@ -414,6 +414,13 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
     )
 
 
+# A frequency grid's bins are trusted to one part in a million of their
+# spacing (plus the rounding of their stored values; see _last_place): the
+# uniform-grid test, the FFT-order check, and whether a bin lies on a
+# frequency bound all allow this much.
+_GRID_SPACING_RTOL = 1e-6
+
+
 def _last_place(values: Any) -> NDArray[np.float64]:
     """Distance from each value to the next representable one, in its stored precision.
 
@@ -472,9 +479,35 @@ def _uniform_grid_spacing(frequencies: Any) -> float | None:
     values = stored.astype(float)
     spacing = float((values[-1] - values[0]) / (values.size - 1))
     rounding = 2 * (last_place[:-1] + last_place[1:])
-    if np.all(np.abs(np.diff(values) - spacing) <= 1e-6 * abs(spacing) + rounding):
+    if np.all(
+        np.abs(np.diff(values) - spacing) <= _GRID_SPACING_RTOL * abs(spacing) + rounding
+    ):
         return spacing
     return None
+
+
+def _nearest_bin_gap(grid: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Distance from each bin to its nearest neighbouring bin, in any order.
+
+    Zero for a single-bin grid, which has no neighbour.
+
+    Parameters
+    ----------
+    grid : NDArray[float64], shape (n_frequencies,)
+
+    Returns
+    -------
+    NDArray[float64], shape (n_frequencies,)
+    """
+    order = np.argsort(grid, kind="stable")
+    steps = np.diff(grid[order])
+    no_neighbour = np.array([np.inf])
+    nearest = np.minimum(
+        np.concatenate((no_neighbour, steps)), np.concatenate((steps, no_neighbour))
+    )
+    gap = np.empty_like(grid)
+    gap[order] = np.where(np.isfinite(nearest), nearest, 0.0)
+    return gap
 
 
 def _frequency_interval_mask(
@@ -493,13 +526,16 @@ def _frequency_interval_mask(
 
     ``closed="both"`` keeps every bin from ``low`` to ``high``, including a bin
     lying on either bound. Bin ``f`` lies on bound ``b`` when
-    ``abs(f - b) <= 2 * (ulp(f) + ulp(b))``, where ``ulp`` is
-    :func:`_last_place` of each value in its own stored precision (the grid's
-    dtype for ``f``; float64 for a Python ``float`` or integer bound, float32
-    for a float32 bound) -- the rounding :func:`_uniform_grid_spacing` allows.
-    So a coordinate stored as float32, or computed as ``0.1 * k``, keeps the
-    bin its decimal bound names, while a bound a millionth of a bin away from a
-    float64 bin does not select it.
+    ``abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``: ``gap(f)`` is the
+    distance to its nearest neighbouring bin (:func:`_nearest_bin_gap`, zero
+    for a single bin) and ``ulp`` is :func:`_last_place` of each value in its
+    own stored precision (the grid's dtype for ``f``; float64 for a Python
+    ``float`` or integer bound, float32 for a float32 bound). These are the
+    allowances of :func:`_uniform_grid_spacing`, with the local gap in place of
+    the mean step so irregular grids are judged bin by bin. So a coordinate
+    stored as float32, computed as ``0.1 * k``, or built with ``np.arange``
+    from a nonzero start keeps the bin its decimal bound names, while a bound
+    1e-3 of the spacing away from a bin does not select it.
 
     ``closed="neither"`` is the historical exclusive selection
     ``low < f < high``, compared exactly in float64, so the deprecated keyword
@@ -549,9 +585,9 @@ def _frequency_interval_mask(
     if closed == "neither":
         mask = (lower < grid) & (grid < upper)
     else:
-        grid_last_place = _last_place(values)
-        on_lower = np.abs(grid - lower) <= 2 * (grid_last_place + _last_place(stored_lower))
-        on_upper = np.abs(grid - upper) <= 2 * (grid_last_place + _last_place(stored_upper))
+        grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
+        on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)
+        on_upper = np.abs(grid - upper) <= grid_allowance + 2 * _last_place(stored_upper)
         mask = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
     if not mask.any():
         edges = "both endpoints included" if closed == "both" else "both edges excluded"
@@ -581,7 +617,9 @@ def _require_fft_order(frequencies: Any) -> None:
         # into one increasing, uniformly spaced grid.
         spacing = _uniform_grid_spacing(np.fft.fftshift(values))
         in_order = (
-            spacing is not None and spacing > 0 and abs(float(values[0])) <= 1e-6 * spacing
+            spacing is not None
+            and spacing > 0
+            and abs(float(values[0])) <= _GRID_SPACING_RTOL * spacing
         )
     if not in_order:
         values = values.astype(float)
@@ -5184,8 +5222,9 @@ class Connectivity:
         frequency_range : (float, float), optional
             Frequency interval ``(low, high)`` to fit over, in the units of
             ``frequencies``. Both endpoints are included: a bin lies on a bound
-            when they differ by at most two units in the last place of each, in
-            its own stored precision. At least one
+            when they differ by at most one part in a million of the bin's
+            spacing, plus rounding (see
+            :func:`~spectral_connectivity.frequency_band_reduce`). At least one
             bin must be selected. ``None`` uses every frequency.
 
         Returns
@@ -5328,8 +5367,9 @@ class Connectivity:
         frequency_range : (float, float), optional
             Frequency interval ``(low, high)`` to evaluate, in the units of
             ``frequencies``. Both endpoints are included: a bin lies on a bound
-            when they differ by at most two units in the last place of each, in
-            its own stored precision. At least one
+            when they differ by at most one part in a million of the bin's
+            spacing, plus rounding (see
+            :func:`~spectral_connectivity.frequency_band_reduce`). At least one
             bin must be selected. ``None`` uses every frequency.
 
         Returns
@@ -5438,8 +5478,9 @@ class Connectivity:
         frequency_range : (float, float), optional
             Frequency interval ``(low, high)`` to sum over, in the units of
             ``frequencies``. Both endpoints are included: a bin lies on a bound
-            when they differ by at most two units in the last place of each, in
-            its own stored precision. At least one
+            when they differ by at most one part in a million of the bin's
+            spacing, plus rounding (see
+            :func:`~spectral_connectivity.frequency_band_reduce`). At least one
             bin must be selected. ``None`` uses every frequency.
 
         Returns

@@ -2,10 +2,12 @@
 
 One helper decides which bins an interval selects, for the wrappers' crop,
 named bands, and the estimators that consume a frequency interval (``delay``,
-``group_delay``, ``phase_slope_index``). A bin lies on a bound when they differ by
-at most two units in the last place of each, in its own stored precision, so
-an edge written as a decimal still selects the bin a float32 or
-decimal-rounded coordinate stores for it.
+``group_delay``, ``phase_slope_index``). Bin ``f`` lies on bound ``b`` when
+``|f - b| <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``, with ``gap(f)`` the
+distance to its nearest neighbouring bin and ``ulp`` each value's unit in the
+last place in its own stored precision -- the allowances of the uniform-grid
+check. So an edge written as a decimal still selects the bin a float32,
+``0.1 * k``, or ``np.arange`` coordinate stores for it.
 """
 
 import json
@@ -16,10 +18,14 @@ import pytest
 import xarray as xr
 
 from spectral_connectivity import Connectivity, MorletWavelet, Multitaper
-from spectral_connectivity.connectivity import _frequency_interval_mask
+from spectral_connectivity.connectivity import (
+    _frequency_interval_mask,
+    _uniform_grid_spacing,
+)
 from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
     fourier_connectivity,
+    frequency_band_reduce,
     multitaper_connectivity,
 )
 from tests._backend_helpers import to_host
@@ -47,28 +53,173 @@ def test_bounds_on_bins_are_included_only_when_closed_on_both_sides(bounds, clos
     assert selected_bounds == bounds
 
 
-def test_a_bound_just_off_a_bin_does_not_select_it():
-    """The tolerance is rounding-sized, not a fraction of the bin spacing."""
+def test_a_bound_a_clear_fraction_of_a_bin_away_does_not_select_it():
+    """The allowance is one part in a million of the bin spacing, not a fraction
+    of it: 1e-3 of the 2 Hz spacing away, the edge bins are not selected."""
     mask, _ = _frequency_interval_mask(
-        "frequency_range", (10.0 + 1e-6, 20.0 - 1e-6), _EXACT_GRID, closed="both"
+        "frequency_range", (10.0 + 2e-3, 20.0 - 2e-3), _EXACT_GRID, closed="both"
     )
     np.testing.assert_array_equal(_EXACT_GRID[mask], [12, 14, 16, 18])
 
 
-@pytest.mark.parametrize(("n_last_places", "selects_edge_bins"), [(4, True), (5, False)])
-def test_a_bin_is_on_a_bound_within_two_last_places_of_each(n_last_places, selects_edge_bins):
-    """|f - b| <= 2 * (ulp(f) + ulp(b)): at 10 and 20 Hz in float64 that is
-    four units in the last place (both values share one ulp), and no more."""
-
-    def nudge(value, direction):
-        for _ in range(n_last_places):
-            value = np.nextafter(value, direction)
-        return float(value)
-
-    bounds = (nudge(10.0, np.inf), nudge(20.0, -np.inf))
-    mask, _ = _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID, closed="both")
+@pytest.mark.parametrize(
+    ("fraction_of_allowance", "selects_edge_bins"), [(1 - 1e-3, True), (1 + 1e-3, False)]
+)
+def test_the_allowance_on_a_uniform_grid_is_a_millionth_of_the_spacing(
+    fraction_of_allowance, selects_edge_bins
+):
+    """|f - b| <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b)): on the 2 Hz grid the
+    10 and 20 Hz bins are 2 Hz from their neighbours, so 2e-6 Hz (plus a few
+    units in the last place, negligible here) is on the bound and no more."""
+    offset = fraction_of_allowance * 1e-6 * 2.0
+    mask, _ = _frequency_interval_mask(
+        "frequency_range", (10.0 + offset, 20.0 - offset), _EXACT_GRID, closed="both"
+    )
     expected = [10, 12, 14, 16, 18, 20] if selects_edge_bins else [12, 14, 16, 18]
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
+
+
+@pytest.mark.parametrize(("n_last_places", "selected"), [(4, True), (5, False)])
+def test_a_single_bin_has_only_the_last_place_allowance(n_last_places, selected):
+    """With no neighbour the gap term is zero, leaving 2 * (ulp(f) + ulp(b)):
+    four units in the last place at 10 Hz in float64, and no more."""
+    bound = 10.0
+    for _ in range(n_last_places):
+        bound = float(np.nextafter(bound, np.inf))
+    grid = np.array([10.0])
+    if selected:
+        mask, _ = _frequency_interval_mask(
+            "frequency_range", (bound, 20.0), grid, closed="both"
+        )
+        assert mask.tolist() == [True]
+    else:
+        with pytest.raises(ValueError, match="contains no frequency bin"):
+            _frequency_interval_mask("frequency_range", (bound, 20.0), grid, closed="both")
+    mask, _ = _frequency_interval_mask("frequency_range", (10.0, 10.0), grid, closed="both")
+    assert mask.tolist() == [True]
+
+
+@pytest.mark.parametrize(
+    ("fraction_of_gap", "expected"), [(0.5e-6, [10.0, 12.0]), (1e-3, [12.0])]
+)
+def test_two_bins_use_their_distance_as_the_gap(fraction_of_gap, expected):
+    grid = np.array([10.0, 12.0])
+    offset = fraction_of_gap * 2.0
+    mask, _ = _frequency_interval_mask(
+        "frequency_range", (10.0 + offset, 12.0 + offset), grid, closed="both"
+    )
+    np.testing.assert_array_equal(grid[mask], expected)
+
+
+_LOG_GRID = np.geomspace(1.0, 100.0, 50)
+_LOG_MEAN_STEP = (_LOG_GRID[-1] - _LOG_GRID[0]) / (_LOG_GRID.size - 1)
+
+
+@pytest.mark.parametrize(
+    ("k", "fraction_of_gap", "selected"),
+    [
+        # Near the top the local gap is about 3 times the mean step: 0.9e-6 of
+        # it is on the bound, though it exceeds 1e-6 of the mean step.
+        pytest.param(45, 0.9e-6, True, id="wide-gap-inside"),
+        # Near the bottom it is a fourteenth of the mean step: 1.5e-6 of it is
+        # off the bound, though it is within 1e-6 of the mean step.
+        pytest.param(5, 1.5e-6, False, id="narrow-gap-outside"),
+        pytest.param(20, 0.5e-6, True, id="inside"),
+        pytest.param(20, 1e-3, False, id="clear-fraction"),
+    ],
+)
+def test_the_gap_is_local_on_a_log_spaced_grid(k, fraction_of_gap, selected):
+    """On an irregular grid each bin's allowance follows its own nearest
+    neighbour, not the mean step."""
+    grid = _LOG_GRID
+    gap = min(grid[k + 1] - grid[k], grid[k] - grid[k - 1])
+    offset = fraction_of_gap * gap
+    if k in (45, 5):  # the mean step would decide these the other way
+        assert (offset <= 1e-6 * _LOG_MEAN_STEP) == (not selected)
+    upper = float(grid[k] - offset)
+    mask, _ = _frequency_interval_mask("frequency_range", (1.0, upper), grid, closed="both")
+    assert np.flatnonzero(mask)[-1] == (k if selected else k - 1)
+
+
+def _drifting_grids():
+    """Grids whose bins drift from their decimal values by more than a few
+    units in the last place, as NumPy builds them."""
+    return [
+        pytest.param(np.arange(1.0, 100.0, 0.1), (10.0, 15.2), id="arange-start-1"),
+        pytest.param(np.arange(1000.0, 1101.0, 0.1), (1010.0, 1099.1), id="arange-start-1000"),
+        pytest.param(
+            np.concatenate([[0.0], np.cumsum(np.full(1000, 0.1))]), (10.0, 99.9), id="cumsum"
+        ),
+    ]
+
+
+def _decimal_bins(grid, bounds):
+    """Indices of the bins whose decimal value (to 9 places) lies in ``bounds``."""
+    decimal = np.round(grid, 9)
+    return np.flatnonzero((decimal >= bounds[0]) & (decimal <= bounds[1]))
+
+
+@pytest.mark.parametrize(("grid", "bounds"), _drifting_grids())
+def test_decimal_bounds_name_the_printed_bins_of_drifting_grids(grid, bounds):
+    """np.arange(1.0, 100.0, 0.1)'s bin 142 is 15.200000000000014, four units
+    in the last place from 15.2; it is still the 15.2 bin."""
+    expected = _decimal_bins(grid, bounds)
+    exact = np.flatnonzero((grid >= bounds[0]) & (grid <= bounds[1]))
+    assert not np.array_equal(exact, expected)  # exact comparison misses an edge bin
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    np.testing.assert_array_equal(np.flatnonzero(mask), expected)
+
+
+@pytest.mark.parametrize(
+    ("grid", "bounds"),
+    [*_drifting_grids(), pytest.param(np.geomspace(1.0, 100.0, 50), (2.0, 50.0), id="log")],
+)
+def test_wrapper_and_direct_paths_select_the_same_bins_on_irregular_and_drifting_grids(
+    grid, bounds
+):
+    rng = np.random.default_rng(8)
+    shape = (6, grid.size, 2)
+    coefficients = xr.DataArray(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        dims=("trial", "frequency", "signal"),
+        coords={"frequency": grid},
+    )
+    cropped = fourier_connectivity(
+        coefficients, method="coherence_magnitude", frequency_range=bounds
+    )
+    mask, _ = _frequency_interval_mask("frequency_range", bounds, grid, closed="both")
+    np.testing.assert_array_equal(cropped.frequency.values, grid[mask])
+    connectivity = Connectivity(
+        coefficients.values[np.newaxis, :, np.newaxis], frequencies=grid, is_one_sided=True
+    )
+    if _uniform_grid_spacing(grid) is not None:  # PSI needs a uniform grid
+        psi = fourier_connectivity(
+            coefficients, method="phase_slope_index", frequency_range=bounds
+        )
+        np.testing.assert_array_equal(
+            psi.values, connectivity.phase_slope_index(frequency_range=bounds)
+        )
+        assert psi.attrs["selected_frequency_upper"] == float(grid[mask][-1])
+
+
+def test_band_means_use_the_inclusive_rule_and_integrals_the_exact_bounds():
+    """On np.arange(1.0, 100.0, 0.1) the (10, 15.2) band mean includes the
+    15.2 bin, while its integral of a flat density is the exact width 5.2."""
+    grid = np.arange(1.0, 100.0, 0.1)
+    bins = _decimal_bins(grid, (10.0, 15.2))
+    density = xr.DataArray(
+        grid.copy(),
+        dims="frequency",
+        coords={"frequency": grid},
+        name="power",
+        attrs={"measure": "power"},
+    )
+    band = {"b": (10.0, 15.2)}
+    mean = frequency_band_reduce(density, band)
+    np.testing.assert_allclose(float(mean.squeeze()), grid[bins].mean(), rtol=1e-12)
+    flat = density.copy(data=np.ones(grid.size))
+    integral = frequency_band_reduce(flat, band, frequency_reduction="integral")
+    np.testing.assert_allclose(float(integral.squeeze()), 15.2 - 10.0, rtol=1e-12)
 
 
 @pytest.mark.parametrize(

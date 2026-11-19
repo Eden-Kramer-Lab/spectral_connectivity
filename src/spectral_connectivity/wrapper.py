@@ -253,13 +253,16 @@ def frequency_band_reduce(
     frequency_bands : mapping of str to (float, float)
         Band names and their ``(low, high)`` bounds in the coordinate's units,
         both endpoints included. Bin ``f`` lies on bound ``b`` when
-        ``abs(f - b) <= 2 * (ulp(f) + ulp(b))``: two units in the last place of
+        ``abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``, where
+        ``gap(f)`` is the distance from ``f`` to its nearest neighbouring bin
+        (zero for a single bin) and ``ulp`` is the unit in the last place of
         each value in its own stored precision (float32 for a float32
-        coordinate or bound, float64 for a Python number). So a float32
-        coordinate, or one computed as ``0.1 * k``, keeps the bin its decimal
-        bound names; a coordinate that drifted further from its decimal values
-        (e.g. ``np.arange(1.0, 100.0, 0.1)``, whose bins differ from ``1 + 0.1 * k``
-        by a growing amount) needs bounds taken from the coordinate itself.
+        coordinate or bound, float64 for a Python number). A bound therefore
+        names a bin when it is within one part in a million of that bin's
+        spacing, plus rounding: a decimal bound selects the bin printed as that
+        decimal on a float32 coordinate or one built as ``0.1 * k`` or with
+        ``np.arange(1.0, 100.0, 0.1)``, while a bound farther from every bin is
+        an ordinary edge between bins.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
     circular : bool, optional
@@ -825,8 +828,9 @@ def multitaper_connectivity(
         do).
     frequency_range : (float, float), optional
         Frequency interval ``(low, high)``, both endpoints included; a bin lies
-        on a bound when the two agree to within two units in the last place of
-        each (see :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
+        on a bound when they differ by at most one part in a million of the
+        bin's spacing, plus rounding (see :func:`frequency_band_reduce`).
+        ``delay``, ``group_delay``, and
         ``phase_slope_index`` receive it as their own ``frequency_range`` and
         consume only those bins; every other measure is computed from the full
         spectrum (Wilson-factorized measures factorize all of it) and then
@@ -1211,8 +1215,8 @@ def fourier_connectivity(
     frequency_range : (float, float), optional
         ``(low, high)`` bounds, in the units of the frequency coordinate, to
         keep before any decimation or band reduction; both endpoints are
-        included, to within two units in the last place of each (see
-        :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
+        included, to within one part in a million of the bin spacing plus
+        rounding (see :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
         ``phase_slope_index`` consume only these bins; other measures are
         computed from every bin and cropped, as in
         :func:`multitaper_connectivity`.
