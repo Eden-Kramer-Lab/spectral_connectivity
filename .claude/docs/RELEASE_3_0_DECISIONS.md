@@ -1,6 +1,7 @@
 # 3.0 API and result consistency decisions
 
-**Status: step 1 merged; step 2 implemented and validated locally.**
+**Status: step 1 merged; step 2 implemented and validated locally; step 3
+(D4, D23) implemented on `refactor/frequency-selection`, see below.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -338,6 +339,65 @@ to trigger an exact zero pivot consistently across LAPACK builds.
   and tutorials covering the clarified names and STFT's renamed property.
   Run the full suite, source doctests, Ruff formatting/lint, mypy, and CI's
   minimum-dependency checks.
+
+## Step 3 implementation
+
+**Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
+`77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
+Implemented and validated locally on 2026-11-19: 1,961 tests passed with 16
+skips on the main CPU environment; all 70 source doctests, Ruff
+formatting/lint, and mypy passed.
+
+Rulings where the rules above were silent:
+
+- **Comparison rule.** One helper, `_frequency_interval_mask`, serves the
+  wrappers' crop, each named band, and the three interval measures. Under
+  `"both"` a bin `f` lies on a bound `b` when `|f - b| <= 2 * (ulp(f) +
+  ulp(b))`, each unit in the last place in the value's own stored precision
+  (`_last_place`, the same per-value rounding `_uniform_grid_spacing` allows),
+  so float32 and `0.1 * k` grids keep the bins their decimal bounds name. A
+  grid that has drifted further from its decimal values, such as
+  `np.arange(1.0, 100.0, 0.1)` (bin 142 is `15.200000000000014`, four of those
+  units from 15.2), does not: take such bounds from the coordinate.
+  `"neither"` keeps the exact float64 comparison so the
+  deprecated keyword selects bit-for-bit the bins it always has (rule 5); on a
+  rounded grid that can include a bin within rounding of an edge, as before.
+- **Positional slot.** `frequencies_of_interest` was the first positional
+  parameter in v2.0.1, so it stays there as the deprecated route (by keyword or
+  position); `frequency_range` is keyword-only. A 2.x positional band therefore
+  warns and keeps its exclusive meaning instead of silently gaining edge bins.
+- **Recorded attributes.** `requested_frequency_lower`/`_upper` (omitted when
+  every bin is used), `selected_frequency_lower`/`_upper` (lowest and highest
+  bins in the interval, before any `frequency_resolution` subsampling), and
+  `frequency_interval_closed` replace the unreleased
+  `frequency_band_lower`/`_upper` on each variable of the three measures.
+- **Wrapper meaning.** `frequency_range` is passed to the interval measures
+  and crops every other result before the merge; it is rejected inside
+  `connectivity_kwargs`. `frequency_bands` and `frequency_decimation` act on
+  frequency-resolved variables, `delay` included, and leave
+  `phase_slope_index`/`group_delay` as computed over `frequency_range`; a
+  request made only of those two raises.
+- **D23.** `frequency_band_reduce(result, frequency_bands, *,
+  frequency_reduction="mean", circular=None)` with no aliases; its error
+  messages name the canonical keywords.
+
+### Step 3 acceptance checklist
+
+- [x] Exact-edge examples: bounds on bins are included by the crop, bands, and
+  all three measures, including float32 and decimal-rounded grids
+  (`tests/test_frequency_selection.py`, cookbook "Select a frequency range",
+  and the `delay` docstring example, now 91 bins for 5-50 Hz).
+- [x] Old exclusive-edge calls warn at the caller with an exact migration
+  example and agree with the historical selection (bit-identical outputs of 40
+  recorded `frequencies_of_interest` cases against both `4266d7c` and
+  `77e83ce`).
+- [x] New helper keywords match the wrappers and give identical results.
+- [x] Unchanged Wilson input spectra: the recorded factorization input is the
+  same with and without `frequency_range`, and the cropped result equals the
+  full result's slice.
+- [x] Additive band-power integrals for adjacent inclusive bands; their means
+  share the endpoint bin.
+- [ ] Issue #101 entry for the `frequencies_of_interest` alias (orchestrator).
 
 ## Verification performed for this sheet
 
