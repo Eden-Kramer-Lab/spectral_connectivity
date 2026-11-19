@@ -258,8 +258,8 @@ facts needed to interpret it. Settings use one JSON record:
 | `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |
 | `frequency_bin_spacing`, `frequency_bin_spacing_units` | Spacing of the uniform frequency grid as returned, after the wrapper's cropping and decimation. Omitted for irregular/singleton grids and outputs without a frequency axis. xarray selections such as `.isel`/`.sel` keep attrs unchanged, so recompute spacing from the `frequency` coordinate after selecting bins yourself. |
 | `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
-| `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs. |
-| `frequency_coordinate`, `time_coordinate` | External Fourier inputs only: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). |
+| `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs and for a transform of your own that leaves `frequencies` as `None`. |
+| `frequency_coordinate`, `time_coordinate` | External Fourier inputs: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). A transform of your own that leaves `frequencies` or `time` as `None` records the filled-in value. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

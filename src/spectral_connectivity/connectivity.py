@@ -414,21 +414,12 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
     )
 
 
-def _frequency_grid_rtol(values: NDArray[Any]) -> float:
-    """Relative tolerance for a frequency grid to count as uniformly spaced.
-
-    Allows for the coordinate's own rounding (e.g. float32 from netCDF), which
-    the grid step inherits, but is never less strict than 1e-9.
-    """
-    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
-    return max(1e-9, 8 * float(np.finfo(precision).eps))
-
-
 def _uniform_grid_spacing(frequencies: Any) -> float | None:
     """Step of a uniformly spaced frequency grid, or ``None`` if it is not one.
 
-    The measures that combine adjacent bins and the ``frequency_bin_spacing``
-    recorded on results share this definition. Every step must lie within one
+    The measures that combine adjacent bins, the FFT-order check of two-sided
+    frequencies, and the ``frequency_bin_spacing`` recorded on results share
+    this definition. Every step must lie within one
     part in a million of the mean step, plus the rounding of the two values it
     separates in the coordinate's own precision (two units in the last place
     each). A uniform grid stored as float32 is therefore still uniform, however
@@ -471,19 +462,19 @@ def _require_fft_order(frequencies: Any) -> None:
     mislabel frequencies.
     """
     values = to_numpy(frequencies)
-    rtol = _frequency_grid_rtol(values)
-    values = values.astype(float)
     if values.size == 0:
         return
     if values.size == 1:
         in_order = bool(values[0] == 0.0)
     else:
-        step = values[1] - values[0] if values.size > 2 else abs(values[1])
-        expected = np.fft.fftfreq(values.size, d=1.0 / (step * values.size))
-        in_order = bool(step > 0) and np.allclose(
-            values, expected, rtol=rtol, atol=max(abs(step) * rtol, np.finfo(float).eps)
+        # FFT order puts the zero bin first, and fftshift then sorts the bins
+        # into one increasing, uniformly spaced grid.
+        spacing = _uniform_grid_spacing(np.fft.fftshift(values))
+        in_order = (
+            spacing is not None and spacing > 0 and abs(float(values[0])) <= 1e-6 * spacing
         )
     if not in_order:
+        values = values.astype(float)
         msg = (
             f"frequencies must be uniformly spaced in standard FFT order (zero and "
             f"positive bins followed by negative bins, as numpy.fft.fftfreq); got "

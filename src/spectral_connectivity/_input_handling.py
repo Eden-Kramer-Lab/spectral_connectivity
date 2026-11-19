@@ -632,17 +632,18 @@ def _scalar_coordinates_from_dataarray(
     }
 
 
-def _stated_coordinate_attrs(coordinate: xr.DataArray) -> dict[Hashable, Any]:
-    """A coordinate's attrs, without an empty ``units``.
+def _stated_units(units: Any) -> str | None:
+    """``units`` if it states a unit; an empty or blank string states nothing."""
+    return units if isinstance(units, str) and units.strip() else None
 
-    An empty or blank ``units`` states nothing, like an absent one, so the
-    result's own default applies instead of an empty unit string.
-    """
-    attrs = dict(coordinate.attrs)
-    units = attrs.get("units")
-    if isinstance(units, str) and not units.strip():
-        del attrs["units"]
-    return attrs
+
+def _stated_coordinate_attrs(attrs: Mapping[Hashable, Any]) -> dict[Hashable, Any]:
+    """A coordinate's attrs without blank ``units``, so the result's default applies."""
+    return {
+        key: value
+        for key, value in attrs.items()
+        if key != "units" or not isinstance(value, str) or value.strip()
+    }
 
 
 def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
@@ -709,7 +710,6 @@ def _unwrap_xarray_input(
 
     data = time_series.transpose(*dimension_order).data
     _reject_unmaterialized_backing(data, "multitaper_connectivity")
-    units = time_series.attrs.get("units")
     return _UnwrappedInput(
         data,
         signal_names,
@@ -718,7 +718,7 @@ def _unwrap_xarray_input(
         dict(time_series.attrs),
         _SignalMetadata(
             coordinates=_signal_coordinates_from_dataarray(time_series, signal_dimension),
-            units=units if isinstance(units, str) and units else None,
+            units=_stated_units(time_series.attrs.get("units")),
             recording_coordinates=_scalar_coordinates_from_dataarray(time_series),
         ),
     )
@@ -925,13 +925,13 @@ def _unwrap_fourier_input(
     recording_coordinates = _scalar_coordinates_from_dataarray(coefficient_array)
     if "time" in role_to_dimension:
         time_dimension = role_to_dimension["time"]
-        if time_dimension in coefficient_array.coords and coefficient_array.coords[
-            time_dimension
-        ].dims == (time_dimension,):
-            coordinate_time = coefficient_array.coords[time_dimension].to_numpy()
-            time_coordinate_attrs = _stated_coordinate_attrs(
-                coefficient_array.coords[time_dimension]
-            )
+        # Membership, not ``coords.get``, which fabricates an index for a bare
+        # dimension.
+        if time_dimension in coefficient_array.coords:
+            time_coordinate = coefficient_array.coords[time_dimension]
+            if time_coordinate.dims == (time_dimension,):
+                coordinate_time = time_coordinate.to_numpy()
+                time_coordinate_attrs = _stated_coordinate_attrs(time_coordinate.attrs)
     else:
         # Selecting one window (e.g. ``isel(time=0)``) leaves its time as a
         # scalar coordinate: the time of the single window, not a recording
@@ -943,8 +943,9 @@ def _unwrap_fourier_input(
             and _is_real_numeric_dtype(values.dtype)
         ]
         if len(scalar_times) == 1:
-            scalar_time, time_coordinate_attrs = recording_coordinates.pop(scalar_times[0])
+            scalar_time, scalar_time_attrs = recording_coordinates.pop(scalar_times[0])
             coordinate_time = scalar_time.reshape(1)
+            time_coordinate_attrs = _stated_coordinate_attrs(scalar_time_attrs)
     if time is None:
         time = coordinate_time
     elif coordinate_time is not None and not _coordinates_agree(time, coordinate_time):
@@ -963,7 +964,7 @@ def _unwrap_fourier_input(
         units=None,
         recording_coordinates=recording_coordinates,
         frequency_coordinate_attrs=(
-            _stated_coordinate_attrs(coefficient_array.coords[frequency_dimension])
+            _stated_coordinate_attrs(coefficient_array.coords[frequency_dimension].attrs)
             if frequency_coordinate_is_1d
             else None
         ),

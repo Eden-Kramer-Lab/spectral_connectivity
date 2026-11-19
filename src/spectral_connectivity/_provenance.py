@@ -182,6 +182,10 @@ def _shared_provenance_attrs(
         for key, value in transform_metadata.items()
         if key in _COMMON_TRANSFORM_FIELDS and value is not None
     }
+    if "sampling_frequency" in attrs:
+        # Band integration reads the Nyquist frequency, which a known sampling
+        # rate determines even when the transform's record omits it.
+        attrs.setdefault("nyquist_frequency", attrs["sampling_frequency"] / 2)
     attrs.update(
         package="spectral_connectivity",
         package_version=_package_version(),

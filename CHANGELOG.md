@@ -362,7 +362,8 @@ directly with results from 2.x.
 - `phase_slope_index`, `delay`, and `group_delay` require a uniformly spaced
   frequency grid (every step within one part in a million of the mean step,
   allowing for the storage rounding of a float32 coordinate; the same test
-  decides whether a result records `frequency_bin_spacing`), and
+  decides whether a result records `frequency_bin_spacing` and whether
+  two-sided frequencies are in FFT order), and
   `delay`/`group_delay` reject non-uniform observation
   weights, because their adjacent-bin combinations and coherence null assume
   equal spacing and equally weighted observations (wavelet grids and Hann
@@ -597,8 +598,8 @@ directly with results from 2.x.
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
   data is no longer short by half the DC cell. The Nyquist bin is the bin at the
   result's recorded `nyquist_frequency` (or a 2.x result's
-  `mt_nyquist_frequency`, or else half its recorded sampling rate), so an
-  odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
+  `mt_nyquist_frequency`), recorded as half the sampling rate wherever that is
+  known, so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
   a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`

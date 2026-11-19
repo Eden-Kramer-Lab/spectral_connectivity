@@ -274,9 +274,9 @@ def frequency_band_reduce(
     every bin of the band had full support.
 
     The Nyquist frequency is ``result``'s ``nyquist_frequency`` provenance attr
-    (0.5 cycles/sample on normalized Fourier grids), the released
-    ``mt_nyquist_frequency`` compatibility attr, or else half the recorded
-    ``sampling_frequency``. If none is recorded, the last bin of a grid
+    (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
+    wherever that is known), or the released ``mt_nyquist_frequency``
+    compatibility attr. If neither is recorded, the last bin of a grid
     starting at 0 Hz is taken to be the Nyquist bin, so reduce such a result
     before cropping it. Existing ``band``, ``band_lower``, ``band_upper``, or
     ``valid_time_band`` coordinates are discarded, with a warning: band
@@ -1026,30 +1026,15 @@ def multitaper_connectivity(
 
 # Spellings of the frequency units fourier_connectivity accepts without
 # conversion, compared ignoring case and whitespace.
+_SECOND_SPELLINGS = ("s", "sec", "second")
 _HERTZ_SPELLINGS = frozenset(
-    {
-        "hz",
-        "hertz",
-        "cps",
-        "1/s",
-        "1/sec",
-        "1/second",
-        "cycle/s",
-        "cycle/sec",
-        "cycle/second",
-        "cycles/s",
-        "cycles/sec",
-        "cycles/second",
-        "s-1",
-        "s^-1",
-        "s**-1",
-        "sec-1",
-        "sec^-1",
-        "sec**-1",
-        "second-1",
-        "second^-1",
-        "second**-1",
+    {"hz", "hertz", "cps"}
+    | {
+        f"{numerator}/{second}"
+        for numerator in ("1", "cycle", "cycles")
+        for second in _SECOND_SPELLINGS
     }
+    | {f"{second}{power}" for second in _SECOND_SPELLINGS for power in ("-1", "^-1", "**-1")}
 )
 _CYCLES_PER_SAMPLE_SPELLINGS = frozenset({"cycle/sample", "cycles/sample"})
 
