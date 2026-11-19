@@ -1308,14 +1308,17 @@ Frequency Analysis
         """Compute the tapered Fourier coefficients of every time window.
 
         Each window is detrended as ``detrend_type`` sets, multiplied by each
-        taper, and transformed with an FFT of length ``n_fft_samples``.
+        taper, and transformed with an FFT of length ``n_fft_samples``. A
+        transform with a ``taper_weighting`` other than ``"uniform"`` then
+        rescales each taper's coefficients by its weight.
 
         Returns
         -------
         fourier_coefficients : array
             Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
             Complex-valued Fourier coefficients, with one entry per taper on
-            the taper axis.
+            the taper axis; a transform with a single window function, such as
+            a Hann window, has a singleton taper axis (``n_tapers`` is 1).
 
         """
         logger.info(self)
