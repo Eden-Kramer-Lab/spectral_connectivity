@@ -80,12 +80,11 @@ def _resolve_sample_count(
     sampling_frequency: float,
     mismatch_message: str,
 ) -> int | None:
-    """Resolve a window/segment length from an explicit count or a duration.
+    """Resolve Welch's segment length from an explicit count or a duration.
 
     Returns the sample count when either ``explicit`` or ``duration`` is given
     (cross-checking that they agree when both are), or ``None`` when neither is
-    provided so the caller can apply its own default. Shared by the STFT window,
-    STFT step, and Welch segment resolution.
+    provided so the caller can apply its own default.
     """
     if explicit is not None:
         samples = int(explicit)
@@ -2107,59 +2106,56 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
                 raise ValueError(msg)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
-        resolved_window = _resolve_sample_count(
-            n_time_samples_per_window,
-            time_window_duration,
-            sampling_frequency,
-            "time_window_duration and n_time_samples_per_window resolve to "
-            "different Hann window lengths.",
-        )
-        window_samples = (
-            int(self._time_series.shape[0]) if resolved_window is None else resolved_window
-        )
-        if window_samples < 2:
-            msg = "A Hann transform window requires at least 2 samples."
-            raise ValueError(msg)
-
-        resolved_step = _resolve_sample_count(
-            n_time_samples_per_step,
-            time_window_step,
-            sampling_frequency,
-            "time_window_step and n_time_samples_per_step resolve to different step lengths.",
-        )
-        step_samples = window_samples if resolved_step is None else resolved_step
-
-        window = scipy_hann(window_samples, sym=False)
-        norm = np.linalg.norm(window)
-        if norm == 0:
-            msg = "The requested Hann window has zero energy."
-            raise ValueError(msg)
-        window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
-
+        for duration, count, mismatch_message in (
+            (
+                time_window_duration,
+                n_time_samples_per_window,
+                (
+                    "time_window_duration and n_time_samples_per_window resolve to "
+                    "different Hann window lengths."
+                ),
+            ),
+            (
+                time_window_step,
+                n_time_samples_per_step,
+                "time_window_step and n_time_samples_per_step resolve to different step lengths.",
+            ),
+        ):
+            if (
+                duration is not None
+                and count is not None
+                and _duration_to_samples(duration, sampling_frequency) != count
+            ):
+                raise ValueError(mismatch_message)
         _validate_fft_workers(fft_workers)
-        # The window and step are fixed in samples from here on; their
-        # durations are what the time_window_* properties report. The window
-        # has at least 2 samples, so only a step duration that rounds to zero
-        # samples is rejected here.
-        resolved_duration = window_samples / sampling_frequency
-        resolved_step_duration = step_samples / sampling_frequency
-        _validate_window_step(resolved_duration, resolved_step_duration)
-        _warn_about_unusual_time_series(self._time_series)
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers
         self._set_window_state(
             start_time,
-            time_window_duration=resolved_duration,
-            time_window_step=resolved_step_duration,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
             n_fft_samples=n_fft_samples,
-            n_time_samples_per_window=window_samples,
-            n_time_samples_per_step=step_samples,
+            # NumPy integer counts are stored as Python ints.
+            n_time_samples_per_window=(
+                None if n_time_samples_per_window is None else int(n_time_samples_per_window)
+            ),
+            n_time_samples_per_step=(
+                None if n_time_samples_per_step is None else int(n_time_samples_per_step)
+            ),
         )
-        self._window = _immutable_array_snapshot(window)
-        # Fail now, rather than inside fft(), when the window does not fit the
-        # signal.
-        _ = self.n_time_samples_per_window
+        # Resolve the window and step now, so a window that does not fit the
+        # signal or a step shorter than one sample fails here, not in fft().
+        window_samples = self.n_time_samples_per_window
+        if window_samples < 2:
+            msg = "A Hann transform window requires at least 2 samples."
+            raise ValueError(msg)
+        window = scipy_hann(window_samples, sym=False)
+        self._window = _immutable_array_snapshot(
+            (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]
+        )
+        _validate_window_step(self.time_window_duration, self.time_window_step)
+        _warn_about_unusual_time_series(self._time_series)
 
     # The settings below have no setters, so they cannot be reassigned out of
     # step with the computation.

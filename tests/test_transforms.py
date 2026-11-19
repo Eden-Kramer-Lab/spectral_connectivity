@@ -580,6 +580,33 @@ def test_multitaper_equal_duration_and_step_are_non_overlapping():
     assert m.fft().shape[0] == 1000 // 57
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        # A positive step that rounds to zero samples names the step and the rate.
+        (
+            {"time_window_duration": 0.5, "time_window_step": 0.0001},
+            r"n_time_samples_per_step resolved to 0.*time_window_step \(0\.0001\)",
+        ),
+        (
+            {"time_window_duration": 0.0001},
+            r"n_time_samples_per_window resolved to 0.*time_window_duration \(0\.0001\)",
+        ),
+        ({"n_time_samples_per_window": 1}, "requires at least 2 samples"),
+        # Argument checks come before the window and step are resolved.
+        ({"n_time_samples_per_window": 1, "fft_workers": 0}, "fft_workers must be"),
+        (
+            {"time_window_duration": 0.5, "time_window_step": 0.0001, "start_time": np.nan},
+            "start_time must be a finite scalar",
+        ),
+    ],
+    ids=["step_rounds_to_zero", "window_rounds_to_zero", "one_sample", "fft_workers", "start"],
+)
+def test_stft_rejects_windows_and_steps_it_cannot_use(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ShortTimeFourierTransform(np.ones((1000, 1, 1)), sampling_frequency=500, **kwargs)
+
+
 def test_stft_explicit_step_is_not_re_truncated():
     """STFT forwards an explicit step both as a duration and a sample count;
     the sample count must survive the round trip through the duration."""
