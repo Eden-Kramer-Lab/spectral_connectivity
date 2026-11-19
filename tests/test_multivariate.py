@@ -259,3 +259,50 @@ def test_mic_rejects_zero_lag_shared_source():
     assert mic[peak] < 0.15
     assert mic[peak] <= 2 * np.median(mic[off_peak])
     assert canonical[0, peak, 0, 1] > 0.9
+
+
+@pytest.fixture(scope="module")
+def six_signal_connectivity():
+    """Six correlated signals, two groups of three, eight trials."""
+    rng = np.random.default_rng(7)
+    shared = rng.standard_normal((512, 8, 2))
+    signals = shared @ rng.standard_normal((2, 6)) + rng.standard_normal((512, 8, 6))
+    return Connectivity.from_transform(Multitaper(signals, sampling_frequency=128))
+
+
+_SIX_SIGNAL_GROUPS = [0, 0, 0, 1, 1, 1]
+
+
+def test_global_coherence_max_rank_only_limits_the_returned_components(
+    six_signal_connectivity,
+):
+    """``max_rank`` truncates the output: the strongest component and its
+    fraction of total power are the same whether one or three are returned."""
+    one, one_vectors = six_signal_connectivity.global_coherence(max_rank=1)
+    three, three_vectors = six_signal_connectivity.global_coherence(max_rank=3)
+    assert one.shape[-1] == 1
+    assert three.shape[-1] == 3
+    np.testing.assert_allclose(one[..., 0], three[..., 0], rtol=1e-10, atol=0)
+    # A vector is defined up to a complex phase.
+    np.testing.assert_allclose(
+        np.abs(np.sum(one_vectors[..., 0].conj() * three_vectors[..., 0], axis=-1)),
+        1.0,
+        rtol=1e-8,
+    )
+
+
+@pytest.mark.parametrize(
+    "method", ["canonical_coherency", "maximized_imaginary_coherency_components"]
+)
+def test_n_components_counts_outputs_while_rank_restricts_estimation(
+    six_signal_connectivity, method
+):
+    """``n_components`` says how many components are returned and leaves the
+    earlier ones unchanged; ``rank`` restricts the whitening subspace the
+    estimate is computed in, so it changes the leading component itself."""
+    estimate = getattr(six_signal_connectivity, method)
+    first = estimate(_SIX_SIGNAL_GROUPS, n_components=1).scores
+    three = estimate(_SIX_SIGNAL_GROUPS, n_components=3).scores
+    np.testing.assert_allclose(first[..., 0], three[..., 0], rtol=1e-8, atol=1e-12)
+    restricted = estimate(_SIX_SIGNAL_GROUPS, n_components=1, rank=1).scores
+    assert np.max(np.abs(np.abs(restricted) - np.abs(first))) > 1e-3

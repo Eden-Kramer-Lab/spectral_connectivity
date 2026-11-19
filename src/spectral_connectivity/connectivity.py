@@ -2591,6 +2591,7 @@ class Connectivity:
     @_asnumpy
     def partial_coherence(
         self,
+        *,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> NDArray[np.floating]:
         """Return magnitude-squared coherence conditional on all other signals.
@@ -2996,10 +2997,14 @@ class Connectivity:
         rank : int, optional
             Retain at most this many within-group whitening directions per group.
             ``None`` keeps every numerically non-zero direction. Applied
-            identically to both groups of every connection.
+            identically to both groups of every connection. This is an
+            estimation rank: it restricts the subspace every component is
+            sought in, so it changes the scores themselves.
         n_components : int, default=1
-            Number of coherency components to return. A connection whose smaller
-            group has fewer channels returns NaN for the unavailable components.
+            Number of coherency components to return, an output count: the
+            earlier components are the same however many are returned. A
+            connection whose smaller group has fewer channels returns NaN for
+            the unavailable components.
         regularization : float, default=1e-12
             Relative diagonal loading used by the whitening decomposition.
 
@@ -3104,10 +3109,14 @@ class Connectivity:
             groups is one connection.
         rank : int, optional
             Retain at most this many within-group whitening directions per group.
-            ``None`` keeps every numerically non-zero direction.
+            ``None`` keeps every numerically non-zero direction. This is an
+            estimation rank: it restricts the subspace the singular components
+            are computed in, so it changes the scores themselves.
         n_components : int, default=1
-            Number of singular components to return. A connection whose smaller
-            group has fewer channels returns NaN for the unavailable components.
+            Number of singular components to return, an output count: the
+            earlier components are the same however many are returned. A
+            connection whose smaller group has fewer channels returns NaN for
+            the unavailable components.
         regularization : float, default=1e-12
             Relative diagonal loading used by the whitening decomposition.
 
@@ -3307,6 +3316,7 @@ class Connectivity:
     def maximized_imaginary_coherency(
         self,
         group_labels: NDArray[np.integer],
+        *,
         rank: int | None = None,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -3372,6 +3382,7 @@ class Connectivity:
     def multivariate_interaction_measure(
         self,
         group_labels: NDArray[np.integer],
+        *,
         rank: int | None = None,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -3509,6 +3520,7 @@ class Connectivity:
     def global_coherence(
         self,
         max_rank: int = 1,
+        *,
         max_workspace_elements: int = GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
     ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
@@ -3522,7 +3534,14 @@ class Connectivity:
         Parameters
         ----------
         max_rank : int, default=1
-            The number of components to keep (like the number of PC dimensions).
+            The number of components returned, strongest first (like the
+            number of PC dimensions kept); more than
+            ``min(n_signals, n_trials * n_tapers)`` is clamped with a warning.
+            It limits the output only: the decomposition uses the whole
+            cross-spectral matrix, each value is a fraction of the total power
+            of all components, and a returned component does not depend on
+            how many are returned. It is not an estimation rank like the
+            ``rank`` of the group measures.
         max_workspace_elements : int, default=16_000_000
             Approximate working-set target, in array elements, for the batched
             decomposition: frequency bins are processed in chunks sized so the

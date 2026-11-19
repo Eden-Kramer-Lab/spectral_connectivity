@@ -5,11 +5,13 @@ change to any of them would silently rebind existing positional calls.
 """
 
 import inspect
+import warnings
 
 import numpy as np
 import pytest
 
 from spectral_connectivity import (
+    Connectivity,
     MorletWavelet,
     Multitaper,
     ShortTimeFourierTransform,
@@ -94,3 +96,49 @@ def test_new_transforms_reject_a_positional_setting(make, third):
     time_series = np.zeros((200, 1, 2))
     with pytest.raises(TypeError, match="positional argument"):
         make(time_series, 100, third)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "canonical_coherency",
+        "maximized_imaginary_coherency_components",
+        "maximized_imaginary_coherency",
+        "multivariate_interaction_measure",
+        "partial_coherence",
+    ],
+)
+def test_new_measures_take_tuning_parameters_by_keyword_only(name):
+    method = getattr(Connectivity, name)
+    accepted = {"rank", "regularization", "n_components"} & set(
+        inspect.signature(method).parameters
+    )
+    assert accepted
+    assert accepted <= set(_keyword_only_names(method))
+
+
+def test_canonical_coherence_keeps_its_released_signature_without_tuning():
+    assert _positional_names(Connectivity.canonical_coherence) == ["group_labels"]
+    assert _keyword_only_names(Connectivity.canonical_coherence) == []
+
+
+@pytest.fixture(scope="module")
+def connectivity():
+    time_series = np.random.default_rng(1).standard_normal((256, 8, 4))
+    return Connectivity.from_transform(Multitaper(time_series, sampling_frequency=128))
+
+
+def test_global_coherence_keeps_released_max_rank_and_workspace_is_keyword_only(
+    connectivity,
+):
+    assert _positional_names(Connectivity.global_coherence) == ["max_rank"]
+    assert _keyword_only_names(Connectivity.global_coherence) == ["max_workspace_elements"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        positional = connectivity.global_coherence(2)
+    keyword = connectivity.global_coherence(max_rank=2)
+    assert positional[0].shape[-1] == 2
+    for by_position, by_keyword in zip(positional, keyword, strict=True):
+        np.testing.assert_array_equal(by_position, by_keyword)
+    with pytest.raises(TypeError, match="positional argument"):
+        connectivity.global_coherence(2, 1000)

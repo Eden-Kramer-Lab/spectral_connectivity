@@ -92,6 +92,16 @@ directly with results from 2.x.
   root: its magnitude is the unsquared, phase-optimized coherence. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
+- The tuning settings of the new measures are keyword-only: `rank`,
+  `regularization`, and `n_components` of `canonical_coherency`,
+  `maximized_imaginary_coherency(_components)`,
+  `multivariate_interaction_measure`, and `partial_coherence`, and the new
+  `max_workspace_elements` of `global_coherence`. `rank` is an estimation rank
+  (it restricts the whitening subspace, so it changes the scores);
+  `n_components` and `global_coherence`'s released `max_rank`, which keeps its
+  keyword and position, only count the components returned.
+  `canonical_coherence` keeps its released signature and gains no tuning
+  setting.
 - `Connectivity.clear_cache()` releases the intermediates cached for reuse
   across measures (cross-spectral matrix, power, phase-lag moments, and the
   minimum-phase factorization with the Granger quantities derived from it) so
