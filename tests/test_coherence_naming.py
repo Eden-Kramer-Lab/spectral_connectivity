@@ -1,8 +1,12 @@
-"""``magnitude_squared_coherence`` and its deprecated 2.x name ``coherence_magnitude``."""
+"""``magnitude_squared_coherence`` and its deprecated 2.x name ``coherence_magnitude``.
+
+The suite turns every warning into an error, so each call here that uses the
+canonical name, or the defaults, also checks that it does not warn.
+"""
 
 import inspect
 import json
-import warnings
+import re
 
 import numpy as np
 import pytest
@@ -41,17 +45,24 @@ def connectivity(multitaper):
     return Connectivity.from_transform(multitaper)
 
 
-def _deprecations(record):
-    return [w for w in record if issubclass(w.category, DeprecationWarning)]
+# How each route writes a measure name in its warning.
+_METHOD, _STRING, _JACKKNIFE = "Connectivity.{}()", "method={!r}", "jackknife({!r})"
 
 
-def _assert_one_caller_warning(record):
-    """Exactly one DeprecationWarning, at this file, naming the replacement and
-    its removal."""
-    (warning,) = _deprecations(record)
+def _warns(spelling):
+    """Expect the deprecation of the old name as ``spelling`` writes it."""
+    return pytest.warns(DeprecationWarning, match=re.escape(spelling.format(_OLD)))
+
+
+def _assert_one_caller_warning(record, spelling):
+    """Exactly one DeprecationWarning, attributed to this file, naming the old
+    and new spellings and the removal in 4.0."""
+    (warning,) = [w for w in record if issubclass(w.category, DeprecationWarning)]
     assert warning.filename == __file__
-    assert f"method='{_NEW}'" in str(warning.message)
-    assert "removed in 4.0" in str(warning.message)
+    message = str(warning.message)
+    assert spelling.format(_OLD) in message
+    assert spelling.format(_NEW) in message
+    assert "removed in 4.0" in message
 
 
 def test_canonical_method_is_the_squared_magnitude_of_coherency(connectivity):
@@ -64,11 +75,9 @@ def test_canonical_method_is_the_squared_magnitude_of_coherency(connectivity):
 
 def test_deprecated_method_warns_at_the_caller_and_agrees_exactly(connectivity):
     canonical = connectivity.magnitude_squared_coherence()
-    with pytest.warns(DeprecationWarning, match="magnitude_squared_coherence") as record:
+    with _warns(_METHOD) as record:
         deprecated = connectivity.coherence_magnitude()
-    (warning,) = _deprecations(record)
-    assert warning.filename == __file__
-    assert "removed in 4.0" in str(warning.message)
+    _assert_one_caller_warning(record, _METHOD)
     np.testing.assert_array_equal(deprecated, canonical)
 
 
@@ -92,12 +101,9 @@ def test_deprecated_method_warns_at_the_caller_and_agrees_exactly(connectivity):
 def test_deprecated_method_string_keeps_its_name_values_and_warns_once(time_series, call):
     """An explicitly requested old name keeps its variable name and the values."""
     canonical = call(time_series, _NEW)
-    with pytest.warns(DeprecationWarning, match=f"method='{_OLD}'") as record:
+    with _warns(_STRING) as record:
         deprecated = call(time_series, _OLD)
-    (warning,) = _deprecations(record)
-    assert warning.filename == __file__
-    assert f"method='{_NEW}'" in str(warning.message)
-    assert "removed in 4.0" in str(warning.message)
+    _assert_one_caller_warning(record, _STRING)
 
     assert canonical.name == _NEW
     assert deprecated.name == _OLD
@@ -115,9 +121,9 @@ def test_deprecated_method_string_keeps_its_name_values_and_warns_once(time_seri
 
 def test_deprecated_method_string_in_a_list_keeps_its_variable(time_series):
     methods = ["power", _OLD, "phase_locking_value"]
-    with pytest.warns(DeprecationWarning, match=f"method='{_OLD}'") as record:
+    with _warns(_STRING) as record:
         result = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
-    _assert_one_caller_warning(record)
+    _assert_one_caller_warning(record, _STRING)
     assert list(result.data_vars) == methods
     assert result[_OLD].attrs["measure"] == _OLD
 
@@ -126,9 +132,9 @@ def test_deprecated_method_string_through_fourier_connectivity(multitaper):
     coefficients = multitaper.fft()
     frequencies = multitaper.frequencies
     canonical = fourier_connectivity(coefficients, frequencies=frequencies, method=_NEW)
-    with pytest.warns(DeprecationWarning, match=f"method='{_OLD}'") as record:
+    with _warns(_STRING) as record:
         deprecated = fourier_connectivity(coefficients, frequencies=frequencies, method=_OLD)
-    _assert_one_caller_warning(record)
+    _assert_one_caller_warning(record, _STRING)
     assert deprecated.name == _OLD
     np.testing.assert_array_equal(deprecated.values, canonical.values)
 
@@ -136,9 +142,7 @@ def test_deprecated_method_string_through_fourier_connectivity(multitaper):
 def test_default_result_uses_the_canonical_variable_and_old_indexing_fails(time_series):
     """The migration example: 2.x ``result["coherence_magnitude"]`` on a default
     result raises instead of silently selecting something else."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        result = multitaper_connectivity(time_series, sampling_frequency=500)
+    result = multitaper_connectivity(time_series, sampling_frequency=500)
     assert _NEW in result.data_vars
     assert _OLD not in result.data_vars
     with pytest.raises(KeyError):
@@ -162,16 +166,6 @@ def test_requesting_both_spellings_is_rejected(time_series):
         multitaper_connectivity(time_series, sampling_frequency=500, method=[_NEW, _OLD])
 
 
-def test_canonical_routes_do_not_warn(time_series, multitaper, connectivity):
-    """Package internals reach the calculation without the deprecated name."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        multitaper_connectivity(time_series, sampling_frequency=500)
-        multitaper_connectivity(time_series, sampling_frequency=500, method=_NEW)
-        connectivity_to_xarray(multitaper)
-        connectivity.jackknife(_NEW)
-
-
 def test_connectivity_to_xarray_defaults_to_the_canonical_name(multitaper):
     assert inspect.signature(connectivity_to_xarray).parameters["method"].default == _NEW
     assert connectivity_to_xarray(multitaper).name == _NEW
@@ -182,10 +176,9 @@ def test_jackknife_accepts_the_deprecated_name_with_one_warning(connectivity):
     scale (atanh(sqrt(.)) for a squared magnitude), not the identity scale an
     unknown name would get."""
     canonical = connectivity.jackknife(_NEW)
-    with pytest.warns(DeprecationWarning, match=_NEW) as record:
+    with _warns(_JACKKNIFE) as record:
         deprecated = connectivity.jackknife(_OLD)
-    (warning,) = _deprecations(record)
-    assert warning.filename == __file__
+    _assert_one_caller_warning(record, _JACKKNIFE)
     assert deprecated.transformation == canonical.transformation == "fisher_squared"
     for field in ("estimate", "bias_corrected", "standard_error"):
         np.testing.assert_array_equal(getattr(deprecated, field), getattr(canonical, field))
@@ -196,7 +189,7 @@ def test_jackknife_accepts_the_deprecated_name_with_one_warning(connectivity):
 
 
 def test_saved_result_requested_by_the_old_name_reads_back_by_that_name(time_series, tmp_path):
-    with pytest.warns(DeprecationWarning, match=_OLD):
+    with _warns(_STRING):
         result = multitaper_connectivity(time_series, sampling_frequency=500, method=[_OLD])
     path = tmp_path / "result.nc"
     result.to_netcdf(path, engine="scipy")

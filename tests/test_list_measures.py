@@ -465,36 +465,54 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(
     np.testing.assert_allclose(result.values, expected, rtol=1e-9, atol=1e-12)
 
 
-# The self-connection values the documentation states, pinned here so that a
-# change to a measure's diagonal, or to what the registry says about it, fails.
-# A float is the constant every diagonal entry holds, a (policy, value) pair
-# the nominal value of a diagonal that only approximates it.
+# What the documentation states about each value variable (the measures and
+# group delay's companions), pinned so that a change to a measure's diagonal,
+# or to what the registry says about it, fails:
+# (diagonal_policy, diagonal_value, nan_for_zero_power_signal).
 _DOCUMENTED_DIAGONALS = {
-    "magnitude_squared_coherence": "masked_nan",
-    "coherence_phase": "masked_nan",
-    "coherency": "masked_nan",
-    "imaginary_coherency": "masked_nan",
-    "partial_coherence": "masked_nan",
-    "imaginary_coherence": 0.0,
-    "phase_lag_index": 0.0,
-    "weighted_phase_lag_index": 0.0,
-    "debiased_squared_phase_lag_index": 0.0,
-    "debiased_squared_weighted_phase_lag_index": 0.0,
-    "corrected_imaginary_phase_locking_value": ("rounding_noise", 0.0),
-    "phase_locking_value": 1.0,
-    "pairwise_phase_consistency": 1.0,
-    "directed_phase_lag_index": 0.5,
-    "pairwise_spectral_granger_prediction": "undefined_nan",
-    "conditional_spectral_granger_prediction": "undefined_nan",
-    "blockwise_spectral_granger_prediction": "undefined_nan",
-    "cross_spectral_density": "estimated",
-    "directed_transfer_function": "estimated",
-    "canonical_coherence": "masked_nan",
-    "delay": "masked_nan",
-    "power": "not_applicable",
-    "canonical_coherency": "not_applicable",
-    "global_coherence": "not_applicable",
+    "magnitude_squared_coherence": ("masked_nan", None, True),
+    "coherence_phase": ("masked_nan", None, True),
+    "debiased_squared_phase_lag_index": ("constant", 0.0, False),
+    "debiased_squared_weighted_phase_lag_index": ("constant", 0.0, False),
+    "imaginary_coherence": ("constant", 0.0, True),
+    "pairwise_phase_consistency": ("constant", 1.0, True),
+    "pairwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "phase_lag_index": ("constant", 0.0, False),
+    "phase_locking_value": ("constant", 1.0, True),
+    "power": ("not_applicable", None, False),
+    "weighted_phase_lag_index": ("constant", 0.0, False),
+    "coherency": ("masked_nan", None, True),
+    "cross_spectral_density": ("estimated", None, False),
+    "imaginary_coherency": ("masked_nan", None, False),
+    "partial_coherence": ("masked_nan", None, False),
+    "corrected_imaginary_phase_locking_value": ("rounding_noise", 0.0, True),
+    "directed_phase_lag_index": ("constant", 0.5, False),
+    "subset_pairwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "conditional_spectral_granger_prediction": ("undefined_nan", None, False),
+    "time_reversed_spectral_granger_prediction": ("undefined_nan", None, False),
+    "directed_transfer_function": ("estimated", None, False),
+    "directed_coherence": ("estimated", None, False),
+    "partial_directed_coherence": ("estimated", None, False),
+    "generalized_partial_directed_coherence": ("estimated", None, False),
+    "direct_directed_transfer_function": ("estimated", None, False),
+    "blockwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "canonical_coherence": ("masked_nan", None, False),
+    "maximized_imaginary_coherency": ("masked_nan", None, False),
+    "multivariate_interaction_measure": ("masked_nan", None, False),
+    "canonical_coherency": ("not_applicable", None, False),
+    "maximized_imaginary_coherency_components": ("not_applicable", None, False),
+    "delay": ("masked_nan", None, True),
+    "global_coherence": ("not_applicable", None, False),
+    "group_delay": ("masked_nan", None, True),
+    "group_delay_slope": ("masked_nan", None, True),
+    "group_delay_r_value": ("constant", 1.0, False),
+    "phase_slope_index": ("masked_nan", None, True),
 }
+# Every value variable and its record: the measures, then their companions.
+_VALUE_VARIABLES = [
+    *((measure.name, measure) for measure in list_measures()),
+    *_COMPANIONS.items(),
+]
 
 # Pairs of axes whose shared labels form a variable's diagonal.
 _PAIR_AXES = (("source", "target"), ("source_group", "target_group"))
@@ -519,51 +537,23 @@ def _diagonal(variable):
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
 def test_diagonal_matches_its_policy(coupled_results, measure):
     """The recorded ``diagonal_policy`` describes the values on the diagonal."""
-    nominal = measure.diagonal_policy in {"constant", "rounding_noise"}
-    assert nominal == (measure.diagonal_value is not None)
     _assert_diagonal_matches(
         measure, _main_variable(coupled_results[measure.name], measure.name)
     )
 
 
-def _sum_rounding(variable):
-    """Bound on the rounding of an average of ``n_observations`` terms.
-
-    A sum of ``n`` terms is within ``n * u`` of its exact value relative to the
-    terms' magnitudes (Higham's ``gamma_n``, unit roundoff ``u = eps / 2``);
-    ``n * eps`` leaves a factor 2.
-    """
+def _rounding(variable, policy="constant"):
+    """How far ``variable``'s values may lie from an exact value by rounding:
+    the bounds that ``_DIAGONAL_POLICIES`` derives, ``4 * (n_observations + 4)
+    * eps`` for an average and ``sqrt(eps)`` for a ``rounding_noise`` diagonal."""
     eps = np.finfo(np.real(variable.values).dtype).eps
-    return variable.attrs["n_observations"] * eps
-
-
-def _nominal_tolerance(policy, n_observations, dtype):
-    """How far a ``constant`` or ``rounding_noise`` diagonal may lie from its value.
-
-    A constant is an average of ``n`` unit-modulus (or unit-normalized) terms:
-    normalizing each term ``z / |z|`` and squaring its modulus leaves it within
-    about ``4 * eps`` of 1, and summing adds at most ``n * eps``. Pairwise
-    phase consistency, ``(n * PLV**2 - 1) / (n - 1)``, multiplies the PLV's error
-    by ``2 * n / (n - 1) <= 4``. Hence ``4 * (n + 4) * eps``; measured
-    deviations are at most 10 eps (PPC with two observations). A
-    ``rounding_noise`` diagonal divides an imaginary part of order ``eps`` by
-    ``sqrt(1 - Re**2)`` of at least ``sqrt(eps)``, so it is below ``sqrt(eps)``.
-    """
-    eps = np.finfo(dtype).eps
     if policy == "rounding_noise":
         return np.sqrt(eps)
-    return 4 * (n_observations + 4) * eps
+    return 4 * (variable.attrs["n_observations"] + 4) * eps
 
 
 def _assert_diagonal_matches(measure, variable):
-    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says.
-
-    A constant is the exact value only to within the rounding of the averages
-    it is computed from, which varies with the NumPy/BLAS build (exact in some).
-    A ``rounding_noise`` diagonal is that rounding amplified by ``1 / sqrt(eps)``
-    (corrected imaginary PLV divides a numerator of order ``eps`` by
-    ``sqrt(1 - Re^2)`` of order ``sqrt(eps)``), so it is bounded by ``sqrt(eps)``.
-    """
+    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says."""
     diagonal = _diagonal(variable)
     if measure.diagonal_policy == "not_applicable":
         assert diagonal is None
@@ -580,12 +570,12 @@ def _assert_diagonal_matches(measure, variable):
 def _assert_nominal_diagonal(measure, variable, diagonal):
     """``diagonal`` (entries of ``variable``) holds ``measure.diagonal_value``
     to within the rounding its policy allows."""
-    tolerance = _nominal_tolerance(
-        measure.diagonal_policy,
-        variable.attrs["n_observations"],
-        np.real(variable.values).dtype,
+    np.testing.assert_allclose(
+        diagonal,
+        measure.diagonal_value,
+        rtol=0,
+        atol=_rounding(variable, measure.diagonal_policy),
     )
-    np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=tolerance)
 
 
 # Measures that need at least two observations (a debiasing factor n - 1).
@@ -596,36 +586,32 @@ _NEED_TWO_OBSERVATIONS = {
 }
 
 
-@pytest.mark.parametrize("n_trials", [1, 2])
 @pytest.mark.parametrize(
-    "measure",
-    [m for m in list_measures() if m.diagonal_value is not None],
-    ids=lambda measure: measure.name,
+    ("measure", "n_trials"),
+    [
+        pytest.param(measure, n_trials, id=f"{measure.name}-{n_trials}")
+        for measure in list_measures()
+        if measure.diagonal_value is not None
+        for n_trials in (1, 2)
+        if n_trials > 1 or measure.name not in _NEED_TWO_OBSERVATIONS
+    ],
 )
 def test_nominal_diagonal_holds_with_one_or_two_observations(
     coupled_time_series, measure, n_trials
 ):
     """With one taper per trial, the fewest observations a measure accepts,
     where rounding is least averaged out: the tolerance still holds."""
-
-    def compute():
-        return multitaper_connectivity(
+    with warnings.catch_warnings():
+        # One observation makes the normalized measures warn that they are
+        # degenerate; that is expected here.
+        warnings.simplefilter("ignore")
+        variable = multitaper_connectivity(
             coupled_time_series[:, :n_trials],
             sampling_frequency=500,
             time_window_duration=0.5,
             time_halfbandwidth_product=1,
             method=measure.name,
         )
-
-    with warnings.catch_warnings():
-        # One observation makes the normalized measures warn that they are
-        # degenerate; that is expected here.
-        warnings.simplefilter("ignore")
-        if n_trials == 1 and measure.name in _NEED_TWO_OBSERVATIONS:
-            with pytest.raises(ValueError, match="at least 2 observations"):
-                compute()
-            return
-        variable = compute()
     assert variable.attrs["n_observations"] == n_trials  # one taper per trial
     _assert_nominal_diagonal(measure, variable, _diagonal(variable))
 
@@ -676,12 +662,6 @@ def _entries_involving_the_flat_signal(variable):
     return variable.values.ravel()
 
 
-_VALUE_VARIABLES = [
-    *((measure.name, measure) for measure in list_measures()),
-    *_COMPANIONS.items(),
-]
-
-
 @pytest.mark.parametrize(
     ("name", "record"), _VALUE_VARIABLES, ids=[n for n, _ in _VALUE_VARIABLES]
 )
@@ -694,33 +674,27 @@ def test_nan_for_zero_power_signal_matches_what_a_flat_signal_gives(
     assert record.nan_for_zero_power_signal == bool(np.isnan(entries).all())
 
 
-@pytest.mark.parametrize("measure", _NOMINAL_DIAGONALS, ids=lambda measure: measure.name)
+@pytest.mark.parametrize(
+    "measure",
+    [m for m in _NOMINAL_DIAGONALS if not m.nan_for_zero_power_signal],
+    ids=lambda measure: measure.name,
+)
 def test_a_flat_signal_keeps_the_nominal_diagonal_unless_it_is_nan(
     flat_signal_results, measure
 ):
-    """A flat signal's self-connection keeps the nominal value where the flag
-    is not set; every signal with power keeps it."""
+    """Where the flag is not set, a flat signal's self-connection keeps the
+    nominal value."""
     variable = flat_signal_results[measure.name]
-    if not measure.nan_for_zero_power_signal:
-        flat_self = variable.sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL).values
-        _assert_nominal_diagonal(measure, variable, flat_self)
-    live = variable.drop_sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL)
-    _assert_nominal_diagonal(measure, live, _diagonal(live))
+    flat_self = variable.sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL).values
+    _assert_nominal_diagonal(measure, variable, flat_self)
 
 
 def test_documented_diagonals_are_the_registered_ones():
-    measures = {measure.name: measure for measure in list_measures()}
-    for name, documented in _DOCUMENTED_DIAGONALS.items():
-        measure = measures[name]
-        if isinstance(documented, float):
-            assert (measure.diagonal_policy, measure.diagonal_value) == (
-                "constant",
-                documented,
-            )
-        elif isinstance(documented, tuple):
-            assert (measure.diagonal_policy, measure.diagonal_value) == documented, name
-        else:
-            assert measure.diagonal_policy == documented, name
+    registered = {
+        name: (record.diagonal_policy, record.diagonal_value, record.nan_for_zero_power_signal)
+        for name, record in _VALUE_VARIABLES
+    }
+    assert registered == _DOCUMENTED_DIAGONALS
 
 
 def test_cross_spectral_density_diagonal_is_the_power_spectrum(coupled_results):
@@ -730,7 +704,7 @@ def test_cross_spectral_density_diagonal_is_the_power_spectrum(coupled_results):
     np.testing.assert_allclose(
         diagonal.real, coupled_results["power"].values, rtol=1e-12, atol=0
     )
-    assert np.all(np.abs(diagonal.imag) <= _sum_rounding(csd) * diagonal.real)
+    assert np.all(np.abs(diagonal.imag) <= _rounding(csd) * diagonal.real)
 
 
 _OPTIONAL_MEASURE_ATTRS = (
@@ -777,9 +751,10 @@ def test_measure_variable_records_how_to_read_it(coupled_results, measure):
     )
 
 
-def _assert_records_how_to_read(record, variable):
-    """``variable`` carries ``record``'s attrs, and no fact the record omits."""
-    expected = _expected_measure_attrs(record)
+def _assert_records_how_to_read(record, variable, **rewritten):
+    """``variable`` carries ``record``'s attrs, with any ``rewritten`` ones, and
+    no fact the record omits."""
+    expected = {**_expected_measure_attrs(record), **rewritten}
     assert {key: variable.attrs.get(key) for key in expected} == expected
     absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
     assert not absent & set(variable.attrs)
@@ -807,14 +782,13 @@ _AUXILIARY_VARIABLES = {
 def test_every_variable_of_a_dataset_result_records_how_to_read_it(coupled_results, measure):
     """A measure's companion variables (group delay's slope and fit
     correlation) carry their own record, whose range and diagonal hold of their
-    values, as the measure's variable does; the auxiliary variables carry none."""
+    values; the auxiliary variables carry none. (The measure's own variable is
+    checked by ``test_measure_variable_records_how_to_read_it``.)"""
     companions = dict(_MEASURE_SPECS[measure.name].companions)
     for name, variable in coupled_results[measure.name].data_vars.items():
         if name in _AUXILIARY_VARIABLES:
             assert not {"interpretation", "diagonal_policy"} & set(variable.attrs), name
-        elif name == measure.name:
-            _assert_records_how_to_read(measure, variable)
-        else:
+        elif name != measure.name:
             record = companions[name]
             _assert_records_how_to_read(record, variable)
             finite = variable.values[np.isfinite(variable.values)]
@@ -825,7 +799,7 @@ def test_every_variable_of_a_dataset_result_records_how_to_read_it(coupled_resul
 
 
 def test_coherence_family_states_its_formula_and_quantity():
-    measures = {measure.name: measure for measure in list_measures()}
+    measures = _MEASURES
     quantities = {
         "magnitude_squared_coherence": "squared_magnitude",
         "partial_coherence": "squared_magnitude",
@@ -898,22 +872,20 @@ def test_band_reduction_keeps_each_measure_attribute_true(
         _BANDS,
         frequency_reduction=frequency_reduction,
     )
-    expected = _expected_measure_attrs(measure)
-    expected["interpretation"] = (
-        f"Each value is {description} of the per-frequency values. {measure.interpretation}"
-    )
+    rewritten = {
+        "interpretation": f"Each value is {description} of the per-frequency values. "
+        f"{measure.interpretation}"
+    }
     if measure.formula is not None:
-        expected["formula"] = f"{description} of {measure.formula}"
-    assert {key: reduced.attrs.get(key) for key in expected} == expected
-    absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
-    assert not absent & set(reduced.attrs)
+        rewritten["formula"] = f"{description} of {measure.formula}"
+    _assert_records_how_to_read(measure, reduced, **rewritten)
 
     values = np.abs(reduced.values) if measure.is_complex else reduced.values
     finite = values[np.isfinite(values)]
     assert finite.size > 0
     lower, upper = measure.value_range
-    assert lower - 1e-12 <= finite.min()
-    assert finite.max() <= upper + 1e-12
+    assert lower - _rounding(reduced) <= finite.min()
+    assert finite.max() <= upper + _rounding(reduced)
     _assert_diagonal_matches(measure, reduced)
 
 
@@ -929,5 +901,4 @@ def test_cropping_and_decimation_leave_measure_attributes_unchanged(coupled_time
         frequency_decimation=3,
     )
     for name in names:
-        expected = _expected_measure_attrs(_MEASURES[name])
-        assert {key: result[name].attrs.get(key) for key in expected} == expected
+        _assert_records_how_to_read(_MEASURES[name], result[name])
