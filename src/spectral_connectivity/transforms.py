@@ -738,6 +738,48 @@ def _validate_window_step(
         )
 
 
+def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
+    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite."""
+    # Warn if data appears to be transposed (very few time points, many signals)
+    n_time, _, n_signals = time_series.shape
+    if n_time < n_signals:
+        warnings.warn(
+            f"Your time series has only {n_time} time points but {n_signals} signals. "
+            "This seems unusual and your data may be transposed.\n"
+            "\n"
+            "Expected shape: (n_time_samples, n_trials, n_signals)\n"
+            f"Your shape: {time_series.shape}\n"
+            "\n"
+            "If your data is transposed, use:\n"
+            "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
+            "\n"
+            "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+    # Warn if data contains NaN or Inf
+    if not xp.all(xp.isfinite(time_series)):
+        warnings.warn(
+            "Input time_series contains NaN or infinite values.\n"
+            "\n"
+            "This will produce invalid spectral estimates. Common causes:\n"
+            "  - Missing data or recording artifacts\n"
+            "  - Incorrect preprocessing (division by zero, log of negative)\n"
+            "  - Corrupted data files\n"
+            "\n"
+            "Suggestions:\n"
+            "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
+            "  - Remove bad segments or trials\n"
+            "  - Check your preprocessing pipeline\n"
+            "  - Verify data integrity\n"
+            "\n"
+            "For artifact removal, consider using MNE-Python or similar tools.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
 class _WindowedFourierTransform:
     """Tapered sliding-window FFT shared by Multitaper and the Hann STFT.
 
@@ -748,11 +790,10 @@ class _WindowedFourierTransform:
 
     A subclass constructor validates its own arguments in its own order, using
     :func:`_validate_fft_workers`, :func:`_validate_window_step`, and
-    :meth:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
-    read-only snapshot of the input (``_immutable_array_snapshot``), before
-    those checks read it, and calls :meth:`_set_window_state`, which
-    validates the start time and sets the other private fields annotated
-    below. The subclass must also supply:
+    :func:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
+    read-only snapshot of the input (``_immutable_array_snapshot``), and calls
+    :meth:`_set_window_state`, which validates the start time and sets the
+    other private fields annotated below. The subclass must also supply:
 
     - ``sampling_frequency``, ``detrend_type``, and ``fft_workers``, fixed
       after construction (immutable attributes on :class:`Multitaper`,
@@ -796,47 +837,6 @@ class _WindowedFourierTransform:
     _n_fft_samples: int | None
     _n_time_samples_per_window: int | None
     _n_samples_per_time_step: int | None
-
-    def _warn_about_unusual_time_series(self) -> None:
-        """Warn when the time-series snapshot looks transposed or is not finite."""
-        # Warn if data appears to be transposed (very few time points, many signals)
-        n_time, _, n_signals = self._time_series.shape
-        if n_time < n_signals:
-            warnings.warn(
-                f"Your time series has only {n_time} time points but {n_signals} signals. "
-                "This seems unusual and your data may be transposed.\n"
-                "\n"
-                "Expected shape: (n_time_samples, n_trials, n_signals)\n"
-                f"Your shape: {self._time_series.shape}\n"
-                "\n"
-                "If your data is transposed, use:\n"
-                "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
-                "\n"
-                "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
-
-        # Warn if data contains NaN or Inf
-        if not xp.all(xp.isfinite(self._time_series)):
-            warnings.warn(
-                "Input time_series contains NaN or infinite values.\n"
-                "\n"
-                "This will produce invalid spectral estimates. Common causes:\n"
-                "  - Missing data or recording artifacts\n"
-                "  - Incorrect preprocessing (division by zero, log of negative)\n"
-                "  - Corrupted data files\n"
-                "\n"
-                "Suggestions:\n"
-                "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
-                "  - Remove bad segments or trials\n"
-                "  - Check your preprocessing pipeline\n"
-                "  - Verify data integrity\n"
-                "\n"
-                "For artifact removal, consider using MNE-Python or similar tools.",
-                UserWarning,
-                stacklevel=stacklevel_outside_package(),
-            )
 
     def _set_window_state(
         self,
@@ -1680,7 +1680,7 @@ class Multitaper(_WindowedFourierTransform):
             )
             raise ValueError(msg)
         _validate_window_step(time_window_duration, time_window_step)
-        self._warn_about_unusual_time_series()
+        _warn_about_unusual_time_series(self._time_series)
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
@@ -2137,7 +2137,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         resolved_duration = window_samples / sampling_frequency
         resolved_step_duration = step_samples / sampling_frequency
         _validate_window_step(resolved_duration, resolved_step_duration)
-        self._warn_about_unusual_time_series()
+        _warn_about_unusual_time_series(self._time_series)
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers
