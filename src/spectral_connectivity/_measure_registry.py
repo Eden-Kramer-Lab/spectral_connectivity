@@ -8,7 +8,11 @@ from typing import Literal
 
 import numpy as np
 
-from spectral_connectivity.connectivity import _NON_MEASURE_METHODS, Connectivity
+from spectral_connectivity.connectivity import (
+    _DEPRECATED_MEASURE_NAMES,
+    _NON_MEASURE_METHODS,
+    Connectivity,
+)
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,7 @@ _DEBIASED = "Negative values are finite-sample noise around zero, not negative c
 # value labels: adding a measure means adding one complete entry here.
 # Insertion order preserves the historical Dataset variable order.
 _MEASURE_SPECS: dict[str, _MeasureSpec] = {
-    "coherence_magnitude": _MeasureSpec(
+    "magnitude_squared_coherence": _MeasureSpec(
         "pairwise",
         long_name="Magnitude-squared coherence",
         units="1",
@@ -210,8 +214,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Coherency",
         units="1",
         value_range=(0.0, 1.0),
-        interpretation="Complex coherency: its squared magnitude is coherence_magnitude and its "
-        "angle is coherence_phase.",
+        interpretation="Complex coherency: its squared magnitude is "
+        "magnitude_squared_coherence and its angle is coherence_phase.",
         is_complex=True,
     ),
     "cross_spectral_density": _MeasureSpec(
@@ -435,9 +439,21 @@ _CATEGORY_DIMS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _canonical_measure_name(method: str) -> str:
+    """The registered name ``method`` stands for: a deprecated name's replacement,
+    otherwise ``method`` itself."""
+    return _DEPRECATED_MEASURE_NAMES.get(method, method)
+
+
+def _measure_spec(method: str) -> _MeasureSpec | None:
+    """The registry record of ``method`` (or of the measure a deprecated name
+    stands for); ``None`` for an unregistered extension measure."""
+    return _MEASURE_SPECS.get(_canonical_measure_name(method))
+
+
 def _requires_two_sided(method: str) -> bool:
     """Whether a registered measure needs a two-sided spectrum (Wilson factorization)."""
-    spec = _MEASURE_SPECS.get(method)
+    spec = _measure_spec(method)
     return spec is not None and spec.requires_two_sided
 
 
@@ -455,7 +471,7 @@ def _is_group_measure(method: str) -> bool:
 def _consumes_frequency_range(method: str) -> bool:
     """Whether a registered measure consumes ``frequency_range`` (see
     :attr:`_MeasureSpec.consumes_frequency_range`)."""
-    spec = _MEASURE_SPECS.get(method)
+    spec = _measure_spec(method)
     return spec is not None and spec.consumes_frequency_range
 
 
@@ -468,7 +484,7 @@ def _listed(names: Sequence[str]) -> str:
 
 def _reduces_frequency(method: str) -> bool:
     """Whether a registered measure's result has no frequency axis."""
-    spec = _MEASURE_SPECS.get(method)
+    spec = _measure_spec(method)
     return spec is not None and "frequency" not in spec.dims
 
 
@@ -527,7 +543,11 @@ def _suggest_measure_names(name: str, limit: int = 5) -> list[str]:
 
 def _is_extension_measure(name: str) -> bool:
     """Whether ``name`` is a public instance method usable as a measure."""
-    if name.startswith("_") or name in _NON_MEASURE_METHODS:
+    if (
+        name.startswith("_")
+        or name in _NON_MEASURE_METHODS
+        or name in _DEPRECATED_MEASURE_NAMES
+    ):
         return False
     attribute = inspect.getattr_static(Connectivity, name, None)
     return inspect.isfunction(attribute)
@@ -545,7 +565,9 @@ def _validate_method_names(methods: Sequence[str]) -> None:
     unknown = [
         method
         for method in methods
-        if method not in _MEASURE_SPECS and not _is_extension_measure(method)
+        if method not in _MEASURE_SPECS
+        and method not in _DEPRECATED_MEASURE_NAMES
+        and not _is_extension_measure(method)
     ]
     if not unknown:
         return
@@ -566,7 +588,7 @@ def _validate_method_names(methods: Sequence[str]) -> None:
 
 def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str]:
     """``long_name``/``units`` attrs; no ``units`` when they are unknown."""
-    spec = _MEASURE_SPECS.get(method)
+    spec = _measure_spec(method)
     if spec is None:
         return {"long_name": method}
     units = spec.units_for(signal_units)

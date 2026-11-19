@@ -11,8 +11,9 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
-    _MEASURE_SPECS,
+    _canonical_measure_name,
     _measure_label_attrs,
+    _measure_spec,
 )
 from spectral_connectivity._provenance import _canonical_json, _store_provenance_item
 from spectral_connectivity.connectivity import (
@@ -135,8 +136,10 @@ def _connectivity_result_to_xarray(
     measure's own variables rather than becoming scalar coordinates a Dataset
     would broadcast onto every other variable.
     """
-    measure_spec = _MEASURE_SPECS.get(method)
-    measure = getattr(connectivity, method)
+    # A deprecated name has warned already (where the request was read) and is
+    # computed under its canonical name; the result keeps the name requested.
+    measure_spec = _measure_spec(method)
+    measure = getattr(connectivity, _canonical_measure_name(method))
     _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).

@@ -2020,12 +2020,13 @@ def test_default_method_set_is_explicit_and_ordered():
 
     The exact tuple (including order) is locked: xarray preserves insertion
     order, so the default Dataset's variable/iteration/serialization order is
-    part of the public contract. The allowlist is kept in alphabetical order.
+    part of the public contract. It keeps the alphabetical order of the 2.x
+    allowlist, with magnitude_squared_coherence in the place of its 2.x name.
     """
     from spectral_connectivity.wrapper import DEFAULT_METHODS
 
     expected = (
-        "coherence_magnitude",
+        "magnitude_squared_coherence",
         "coherence_phase",
         "debiased_squared_phase_lag_index",
         "debiased_squared_weighted_phase_lag_index",
@@ -2404,7 +2405,7 @@ def test_metadata_survives_netcdf_round_trip(tmp_path):
     try:
         assert reloaded.coords["time"].attrs["units"] == "s"
         assert reloaded.coords["frequency"].attrs["units"] == "Hz"
-        var = reloaded["coherence_magnitude"]
+        var = reloaded["magnitude_squared_coherence"]
         assert var.attrs["package"] == "spectral_connectivity"
         assert var.attrs["backend"] in ("cpu", "gpu")
         assert var.attrs["expectation_type"] == "trials_tapers"
@@ -2574,11 +2575,11 @@ def test_multitaper_connectivity_squeeze_ignored_for_multi_measure_dataset():
             squeeze=True,
         )
     assert "power" in ds.data_vars
-    assert ds["coherence_magnitude"].dims == ("time", "frequency", "source", "target")
+    assert ds["magnitude_squared_coherence"].dims == ("time", "frequency", "source", "target")
     assert ds["power"].dims == ("time", "frequency", "source")
     # No Dataset-wide scalar coordinate leaked onto the wrong variable.
     assert "target" not in ds["power"].coords
-    assert ds["coherence_magnitude"].sizes["source"] == 2
+    assert ds["magnitude_squared_coherence"].sizes["source"] == 2
 
 
 @pytest.fixture(scope="module")

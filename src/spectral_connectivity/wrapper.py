@@ -172,7 +172,7 @@ def list_measures(
     --------
     >>> from spectral_connectivity import list_measures
     >>> [m.name for m in list_measures(default_only=True)][:3]
-    ['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+    ['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
     >>> next(m for m in list_measures() if m.name == "power").description
     'Return the one-sided power spectral density of the signal.'
     """
@@ -351,7 +351,7 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
 
 def connectivity_to_xarray(
     m: Any,
-    method: str = "coherence_magnitude",
+    method: str = "magnitude_squared_coherence",
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     **kwargs: Any,
@@ -376,8 +376,13 @@ def connectivity_to_xarray(
         :class:`~spectral_connectivity.transforms.SpectralTransform` works; the
         result of one that is not built in records its class name as
         ``transform`` and none of the built-in transforms' settings.
-    method : str, default="coherence_magnitude"
+    method : str, default="magnitude_squared_coherence"
         Measure name from :func:`list_measures`.
+
+        .. versionchanged:: 3.0
+           The default is ``"magnitude_squared_coherence"``, so the default
+           result is named that; 2.x defaulted to ``"coherence_magnitude"``,
+           which still works when requested.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to
         ``"0"``, ``"1"``, ....
@@ -798,7 +803,9 @@ def multitaper_connectivity(
         available by name and return labeled DataArrays or Datasets with their
         component, group, candidate-delay, or frequency-reduced dimensions.
         Examples:
-        "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
+        "magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value".
+        The 2.x name ``"coherence_magnitude"`` still works and keeps that
+        variable name.
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
         channels. Integer labels must fit the signed 32-bit range for portable
@@ -899,7 +906,7 @@ def multitaper_connectivity(
     >>> # Compute coherence
     >>> coherence = multitaper_connectivity(
     ...     data, sampling_frequency=500,
-    ...     method="coherence_magnitude",
+    ...     method="magnitude_squared_coherence",
     ...     signal_names=["Signal_1", "Signal_2"]
     ... )
     >>> coherence.dims
@@ -908,10 +915,10 @@ def multitaper_connectivity(
     >>> # Compute multiple measures
     >>> measures = multitaper_connectivity(
     ...     data, sampling_frequency=500,
-    ...     method=["coherence_magnitude", "imaginary_coherence"]
+    ...     method=["magnitude_squared_coherence", "imaginary_coherence"]
     ... )
     >>> list(measures.data_vars)
-    ['coherence_magnitude', 'imaginary_coherence']
+    ['magnitude_squared_coherence', 'imaginary_coherence']
 
     >>> # An xarray.DataArray labels axes by dimension name and can supply the
     >>> # sampling rate and channel labels itself (no sampling_frequency needed).
@@ -921,7 +928,7 @@ def multitaper_connectivity(
     ...     dims=("time", "channel"),
     ...     coords={"time": t, "channel": ["Signal_1", "Signal_2"]},
     ... )
-    >>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+    >>> coherence = multitaper_connectivity(da, method="magnitude_squared_coherence")
     >>> coherence.coords["source"].values.tolist()
     ['Signal_1', 'Signal_2']
 

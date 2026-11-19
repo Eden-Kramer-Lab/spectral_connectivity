@@ -11,7 +11,7 @@ Three fixed cases (seed 0, 1000 Hz, white noise):
   makes each repeat take several minutes.
 
 For each case this times the multitaper transform, then every measure in
-``DEFAULT_METHODS`` (``coherence_magnitude`` among them) plus the opt-in
+``DEFAULT_METHODS`` (``magnitude_squared_coherence`` among them) plus the opt-in
 ``pairwise_spectral_granger_prediction`` on a fresh ``Connectivity``, the
 default phase-lag-index measures together, the default set on one
 ``Connectivity`` (the way the wrapper computes it, sharing cached
@@ -32,7 +32,9 @@ then check the change against it::
 ``--save`` writes every default measure's array (from the default-set run) for
 the cases run to one ``.npz``. ``--compare`` prints the largest absolute
 difference per measure against that file and exits non-zero when any exceeds
-``1e-12`` or the NaN patterns differ.
+``1e-12`` or the NaN patterns differ. A measure missing from the baseline is
+looked up under its deprecated name, so a baseline saved before a rename
+(``coherence_magnitude`` before 3.0) still compares.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from typing import Any
 import numpy as np
 
 from spectral_connectivity import DEFAULT_METHODS, Connectivity, Multitaper
+from spectral_connectivity.connectivity import _DEPRECATED_MEASURE_NAMES
 
 try:
     import resource
@@ -71,6 +74,8 @@ CASES: dict[str, dict[str, Any]] = {
         "time_halfbandwidth_product": 2,
     },
 }
+# Each canonical measure name's deprecated name, for baselines saved before it.
+PREVIOUS_NAMES = {new: old for old, new in _DEPRECATED_MEASURE_NAMES.items()}
 # Case keys that set the simulated data's shape; the rest go to Multitaper.
 SHAPE_KEYS = ("n_time", "n_trials", "n_signals")
 
@@ -212,11 +217,14 @@ def main() -> int:
             failed = False
             print(f"\n{'case/measure':<50} {'max abs diff':>14}")
             for key, value in outputs.items():
-                if key not in baseline.files:
+                case, measure = key.split("/", 1)
+                previous_key = f"{case}/{PREVIOUS_NAMES.get(measure, measure)}"
+                baseline_key = key if key in baseline.files else previous_key
+                if baseline_key not in baseline.files:
                     failed = True
                     print(f"{key:<50} {'FAIL: missing':>14}")
                     continue
-                difference = max_abs_difference(value, baseline[key])
+                difference = max_abs_difference(value, baseline[baseline_key])
                 failed |= not difference <= TOLERANCE
                 print(f"{key:<50} {difference:>14.3e}")
         print(f"\n{'FAIL' if failed else 'PASS'}: tolerance {TOLERANCE:g}")

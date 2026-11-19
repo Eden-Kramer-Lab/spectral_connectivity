@@ -21,7 +21,7 @@ magnitude. "Observations" are trials × tapers.
 <!-- measure-table:start -->
 | Measure | Range | Units | Interpretation |
 |---|---|---|---|
-| `coherence_magnitude` | [0, 1] | 1 | Linear coupling at each frequency: 0 is none, 1 is a perfectly consistent amplitude and phase relationship. Biased upward when trials x tapers is small. |
+| `magnitude_squared_coherence` | [0, 1] | 1 | Linear coupling at each frequency: 0 is none, 1 is a perfectly consistent amplitude and phase relationship. Biased upward when trials x tapers is small. |
 | `coherence_phase` | [-π, π] | rad | Mean phase difference in radians. Positive (source=a, target=b) means a leads b. |
 | `debiased_squared_phase_lag_index` | [-1, 1] | 1 | Bias-corrected squared phase lag index. Negative values are finite-sample noise around zero, not negative coupling. Lower bound is -1 / (n_observations - 1). |
 | `debiased_squared_weighted_phase_lag_index` | [-1, 1] | 1 | Bias-corrected squared weighted phase lag index. Negative values are finite-sample noise around zero, not negative coupling. |
@@ -32,7 +32,7 @@ magnitude. "Observations" are trials × tapers.
 | `phase_locking_value` | [0, 1] | 1 | Consistency of the phase difference across trials and tapers, ignoring amplitude: 0 is random, 1 is constant. Biased upward with few observations. |
 | `power` | [0, ∞) | (input units)^2/Hz | One-sided power spectral density of each signal. |
 | `weighted_phase_lag_index` | [-1, 1] | 1 | Phase lag index weighted by the magnitude of the imaginary cross-spectrum; less sensitive to noise than the unweighted index. Positive (source=a, target=b) means a leads b. |
-| `coherency` | \|z\| in [0, 1] | 1 | Complex coherency: its squared magnitude is coherence_magnitude and its angle is coherence_phase. |
+| `coherency` | \|z\| in [0, 1] | 1 | Complex coherency: its squared magnitude is magnitude_squared_coherence and its angle is coherence_phase. |
 | `cross_spectral_density` | \|z\| in [0, ∞) | (input units)^2/Hz | Complex, Hermitian cross-spectrum; unnormalized, so it scales with signal power. Use coherency for a normalized version. |
 | `imaginary_coherency` | [-1, 1] | 1 | Signed imaginary part of coherency; blind to zero-lag coupling. Positive (source=a, target=b) means a leads b. |
 | `partial_coherence` | [0, 1] | 1 | Magnitude-squared coherence after removing the linear influence of every other signal; near 0 for pairs coupled only through other signals. |

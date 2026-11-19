@@ -30,7 +30,7 @@ category and a one-line description. Use it instead of guessing method strings.
 >>> len(list_measures())
 35
 >>> [m.name for m in list_measures(default_only=True)][:3]
-['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
 >>> [m.name for m in list_measures(directed=True)][:2]
 ['pairwise_spectral_granger_prediction', 'directed_phase_lag_index']
 >>> next(m for m in list_measures() if m.name == "phase_slope_index").requires_two_sided
@@ -50,7 +50,7 @@ Passing an unknown name raises a helpful error rather than an obscure
 ... )
 Traceback (most recent call last):
     ...
-ValueError: 'coherence' is not a known connectivity measure. Did you mean: 'coherence_magnitude', 'coherence_phase', 'imaginary_coherence', 'partial_coherence', 'directed_coherence'? Call spectral_connectivity.list_measures() to see the 35 available measures.
+ValueError: 'coherence' is not a known connectivity measure. Did you mean: 'magnitude_squared_coherence', 'coherence_phase', 'imaginary_coherence', 'partial_coherence', 'directed_coherence'? Call spectral_connectivity.list_measures() to see the 35 available measures.
 
 ```
 

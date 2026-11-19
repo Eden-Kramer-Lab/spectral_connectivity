@@ -70,6 +70,12 @@ logger = getLogger(__name__)
 _NON_MEASURE_METHODS = frozenset(
     {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
 )
+# Measure names released in 2.x and replaced in 3.0, mapped to the canonical
+# name. Each still computes its measure; the canonical measure is the one
+# registered and listed.
+_DEPRECATED_MEASURE_NAMES: dict[str, str] = {
+    "coherence_magnitude": "magnitude_squared_coherence",
+}
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -763,7 +769,7 @@ class Connectivity:
     ... )
     >>> coeffs[:, :, :, 10, 1] = coeffs[:, :, :, 10, 0] * np.exp(1j * phase_diff)
     >>> conn = Connectivity(coeffs, expectation_type="trials_tapers")
-    >>> coherence = conn.coherence_magnitude()
+    >>> coherence = conn.magnitude_squared_coherence()
     >>> coherence.shape  # (n_times, non-negative freqs, n_signals, n_signals)
     (50, 51, 2, 2)
     >>> print(f"Peak coherence: {np.max(coherence[:, 10, 0, 1]):.3f}")
@@ -920,9 +926,9 @@ class Connectivity:
         >>> rng = np.random.default_rng(0)
         >>> fourier_coefficients = rng.standard_normal((1, 5, 3, 16, 4)) + 0j
         >>> connectivity = Connectivity(fourier_coefficients)
-        >>> coherence = connectivity.coherence_magnitude()
+        >>> coherence = connectivity.magnitude_squared_coherence()
         >>> connectivity.clear_cache()
-        >>> bool(np.array_equal(connectivity.coherence_magnitude(), coherence, equal_nan=True))
+        >>> bool(np.array_equal(connectivity.magnitude_squared_coherence(), coherence, equal_nan=True))
         True
         """
         # Discovering descriptors avoids a second, hand-maintained registry that
@@ -1670,7 +1676,7 @@ class Connectivity:
         This is the reduced result of ``_expectation_cross_spectral_matrix()``.
         It is reused within a measure (``coherency`` divides it by power) and
         across measures that share one ``Connectivity`` instance
-        (``coherence_magnitude``, ``coherence_phase``, ``imaginary_coherence``,
+        (``magnitude_squared_coherence``, ``coherence_phase``, ``imaginary_coherence``,
         pairwise spectral Granger). Only the reduced ``(..., n_signals,
         n_signals)`` form is cached, never the observation-resolved
         ``_cross_spectral_matrix``. Invalidated with the other cached
@@ -1915,8 +1921,9 @@ class Connectivity:
         ----------
         method : str
             Name of a public, real-valued connectivity measure to recompute,
-            e.g. ``"coherence_magnitude"``. Complex-valued and tuple-valued
-            measures are not supported.
+            e.g. ``"magnitude_squared_coherence"``. Complex-valued and
+            tuple-valued measures are not supported. The 2.x name
+            ``"coherence_magnitude"`` is accepted as the same measure.
         confidence_level : float, default=0.95
             Two-sided coverage of the interval, in (0, 1). The critical value
             is Student t with ``n_observations - 1`` degrees of freedom.
@@ -1926,7 +1933,7 @@ class Connectivity:
 
             - ``"log"`` for ``power``;
             - ``"fisher_squared"`` (``atanh(sqrt(.))``) for the
-              magnitude-squared measures in ``[0, 1]``: ``coherence_magnitude``
+              magnitude-squared measures in ``[0, 1]``: ``magnitude_squared_coherence``
               and ``partial_coherence``;
             - ``"fisher"`` (``atanh(.)``) for the magnitudes in ``[0, 1]``:
               ``phase_locking_value`` and ``imaginary_coherence``. For these
@@ -1979,7 +1986,7 @@ class Connectivity:
         (``"auto"``) 95% intervals, with independent complex-Gaussian
         observations and 5 to 100 observations per dataset:
 
-        - ``coherence_magnitude`` (``fisher_squared``): 94-95% when the true
+        - ``magnitude_squared_coherence`` (``fisher_squared``): 94-95% when the true
           ``|coherency|`` is 0.3-0.8, but at zero true coherence the interval
           excludes 0 in 11-15% of datasets, and more observations do not help
           (the estimated magnitude's spread shrinks with ``n`` at the same
@@ -2028,6 +2035,9 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
+        # A 2.x name is computed, and its interval scale chosen, as the
+        # canonical measure.
+        method = _DEPRECATED_MEASURE_NAMES.get(method, method)
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
             method.startswith("_")
@@ -2131,7 +2141,7 @@ class Connectivity:
         if transformation == "auto":
             if method == "power":
                 resolved_transformation = "log"
-            elif method in {"coherence_magnitude", "partial_coherence"}:
+            elif method in {"magnitude_squared_coherence", "partial_coherence"}:
                 # These return magnitude-*squared* coherence, whose
                 # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
                 resolved_transformation = "fisher_squared"
@@ -2313,7 +2323,7 @@ class Connectivity:
         """Device-native complex coherency (see the public ``coherency``).
 
         Kept on the active array namespace (``xp``) so internal consumers --
-        ``coherence_magnitude``/``coherence_phase``, ``group_delay``, ``delay``,
+        ``magnitude_squared_coherence``/``coherence_phase``, ``group_delay``, ``delay``,
         ``phase_slope_index`` -- operate on device arrays without a premature
         host transfer; the public ``coherency`` converts the result to NumPy.
         """
@@ -2373,23 +2383,29 @@ class Connectivity:
         return phase
 
     @_asnumpy
-    def coherence_magnitude(self) -> NDArray[np.floating]:
+    def magnitude_squared_coherence(self) -> NDArray[np.floating]:
         """Return the magnitude squared of the complex coherency.
 
-        Note that the squared modulus of coherency (originally a complex quantity)
-        is the magnitude-squared coherence (i.e., the normalized, real component
-        of coherency). This value should be bounded by 0 and 1.
+        ``|S_ij|^2 / (S_ii * S_jj)``, the squared modulus of :meth:`coherency`,
+        with ``S_ij = E[X_i conj(X_j)]``. This is the quantity
+        :func:`scipy.signal.coherence` calls coherence.
+
+        .. versionadded:: 3.0
+           The canonical name of the calculation 2.x called
+           ``coherence_magnitude``.
 
         Returns
         -------
-        magnitude : array
+        magnitude_squared_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Magnitude-squared coherence values (symmetric in the signal pair).
+            The diagonal is NaN: the package masks self-coherence, which is 1
+            for a signal with nonzero power.
 
         Notes
         -----
-        **Range**: [0, 1]. Implementation may produce tiny numerical excursions
-        beyond bounds due to floating-point precision.
+        **Range**: [0, 1]; values are clipped to it, removing floating-point
+        excursions beyond the bounds.
 
         References
         ----------
@@ -2409,15 +2425,31 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> coherence = connectivity.coherence_magnitude()
+        >>> coherence = connectivity.magnitude_squared_coherence()
         >>> coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
         >>> round(float(coherence[0, 20, 0, 1]), 1)  # strong coupling at 10 Hz (bin 20)
         0.6
+        >>> # The squared magnitude of coherency, not its magnitude.
+        >>> coherency = connectivity.coherency()
+        >>> bool(np.allclose(coherence[0, 20, 0, 1], abs(coherency[0, 20, 0, 1]) ** 2))
+        True
         """
         magnitude = _squared_magnitude(self._coherency())
         clipped: NDArray[np.floating] = xp.clip(magnitude, 0, 1)
         return clipped
+
+    def coherence_magnitude(self) -> NDArray[np.floating]:
+        """Return magnitude-squared coherence (the 2.x name).
+
+        The same values as :meth:`magnitude_squared_coherence`.
+
+        Returns
+        -------
+        magnitude_squared_coherence : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+        """
+        return self.magnitude_squared_coherence()
 
     @_asnumpy
     def imaginary_coherence(self) -> NDArray[np.floating]:
@@ -2575,7 +2607,7 @@ class Connectivity:
         >>> partial.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
         >>> # Signals 1 and 2 are coherent, but not once signal 0 is accounted for (10 Hz).
-        >>> bool(connectivity.coherence_magnitude()[0, 20, 1, 2] > 0.5)
+        >>> bool(connectivity.magnitude_squared_coherence()[0, 20, 1, 2] > 0.5)
         True
         >>> bool(partial[0, 20, 1, 2] < 0.05)
         True
@@ -3642,7 +3674,7 @@ class Connectivity:
         """
         # Clip to the documented [0, 1] range: |mean of unit-magnitude entries|
         # is <= 1 mathematically, but floating-point rounding can leave it a few
-        # ulp above 1 (matching the bounds clipping coherence_magnitude applies).
+        # ulp above 1 (matching the bounds clipping magnitude_squared_coherence applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
     @_asnumpy

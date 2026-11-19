@@ -35,7 +35,10 @@ def test_every_public_connectivity_measure_is_registered():
     """
     import inspect
 
-    from spectral_connectivity.connectivity import _NON_MEASURE_METHODS
+    from spectral_connectivity.connectivity import (
+        _DEPRECATED_MEASURE_NAMES,
+        _NON_MEASURE_METHODS,
+    )
 
     public_methods = {
         name
@@ -43,13 +46,18 @@ def test_every_public_connectivity_measure_is_registered():
         if not name.startswith("_")
         and inspect.isfunction(inspect.getattr_static(Connectivity, name))
     }
-    assert public_methods - _NON_MEASURE_METHODS == set(_MEASURE_SPECS)
+    # A deprecated name is a method standing for a registered measure.
+    assert set(_DEPRECATED_MEASURE_NAMES) <= public_methods
+    assert set(_DEPRECATED_MEASURE_NAMES.values()) <= set(_MEASURE_SPECS)
+    assert public_methods - _NON_MEASURE_METHODS - set(_DEPRECATED_MEASURE_NAMES) == set(
+        _MEASURE_SPECS
+    )
 
 
 def test_returns_measureinfo_records_with_populated_fields():
     """Records expose name, category, description, and capability flags."""
     coherence = next(
-        measure for measure in list_measures() if measure.name == "coherence_magnitude"
+        measure for measure in list_measures() if measure.name == "magnitude_squared_coherence"
     )
     assert isinstance(coherence, MeasureInfo)
     assert coherence.category == "pairwise"
@@ -83,7 +91,7 @@ def test_directed_filter_selects_directed_measures():
 
     undirected = list_measures(directed=False)
     assert all(not measure.is_directed for measure in undirected)
-    assert "coherence_magnitude" in {measure.name for measure in undirected}
+    assert "magnitude_squared_coherence" in {measure.name for measure in undirected}
 
 
 def test_directionality_is_independent_of_spectrum_requirement():
@@ -264,7 +272,7 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
 # What users get when ``method`` is omitted. Pinned explicitly: every other
 # check derives the default set from the same registry flag it would test.
 _DEFAULT_MEASURES = {
-    "coherence_magnitude",
+    "magnitude_squared_coherence",
     "coherence_phase",
     "debiased_squared_phase_lag_index",
     "debiased_squared_weighted_phase_lag_index",
@@ -329,7 +337,7 @@ def test_units_name_the_input_dependence_of_spectral_densities():
     units = {measure.name: measure.units for measure in list_measures()}
     assert units["power"] == "(input units)^2/Hz"
     assert units["cross_spectral_density"] == "(input units)^2/Hz"
-    assert units["coherence_magnitude"] == "1"
+    assert units["magnitude_squared_coherence"] == "1"
     assert units["group_delay"] == "s"
 
 

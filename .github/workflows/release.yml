@@ -238,7 +238,7 @@ jobs:
           m = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=3)
           c = Connectivity.from_multitaper(m)
 
-          coherence = np.asarray(c.coherence_magnitude())
+          coherence = np.asarray(c.magnitude_squared_coherence())
           assert coherence.shape[-2:] == (3, 3), coherence.shape
           # Off-diagonal coherence must be finite and in [0, 1].
           offdiag = coherence[..., 0, 1]
@@ -253,7 +253,7 @@ jobs:
           assert (granger_off_diagonal >= 0).all()
 
           ds = multitaper_connectivity(signals, sampling_frequency=500)
-          assert "coherence_magnitude" in ds.data_vars
+          assert "magnitude_squared_coherence" in ds.data_vars
           print("Installed-package smoke test OK")
           PY
 

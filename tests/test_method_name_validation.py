@@ -47,7 +47,7 @@ def test_unknown_method_suggests_close_match(time_series):
         ValueError, match="'coherence' is not a known connectivity measure"
     ) as excinfo:
         multitaper_connectivity(time_series, sampling_frequency=200, method="coherence")
-    assert "coherence_magnitude" in str(excinfo.value)
+    assert "magnitude_squared_coherence" in str(excinfo.value)
 
 
 def test_unknown_method_points_to_list_measures(time_series):
@@ -88,7 +88,7 @@ def test_fourier_connectivity_validates_method_names():
             frequencies=frequencies,
             method="coherence",
         )
-    assert "coherence_magnitude" in str(excinfo.value)
+    assert "magnitude_squared_coherence" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("property_name", ["frequencies", "n_signals"])
