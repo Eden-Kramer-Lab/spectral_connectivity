@@ -207,7 +207,9 @@ mic = c.maximized_imaginary_coherency_components(brain_area_labels, n_components
 
 The xarray interfaces preserve these non-pairwise contracts as labeled axes:
 group measures use `source_group`/`target_group`; CaCoh and rich MIC use
-`connection`, `component`, `side`, and `signal` plus group-membership metadata;
+`connection`, `component`, `side` (`"source"` or `"target"`, the connection's
+`connection_source_group` or `connection_target_group`), and `signal` plus
+group-membership metadata;
 delay exposes a `candidate` axis; global coherence returns score and vector
 variables; and group delay returns delay, slope, and correlation variables.
 `frequency_range=(low, high)` includes both endpoints. Phase slope, group delay,

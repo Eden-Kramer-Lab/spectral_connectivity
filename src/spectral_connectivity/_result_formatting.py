@@ -468,17 +468,17 @@ def _connectivity_result_to_xarray(
             # coordinates used by group-pairwise results so the two contracts
             # never alias (and are silently overwritten) when merged in one
             # Dataset.
-            "connection_seed_group": (
+            "connection_source_group": (
                 "connection",
                 numerical_result.connections[:, 0],
-                {"long_name": "Seed group of the connection"},
+                {"long_name": "Source group of the connection"},
             ),
             "connection_target_group": (
                 "connection",
                 numerical_result.connections[:, 1],
                 {"long_name": "Target group of the connection"},
             ),
-            "side": ("side", ["seed", "target"], {"long_name": "Side of the connection"}),
+            "side": ("side", ["source", "target"], {"long_name": "Side of the connection"}),
             "signal": ("signal", signal_labels, {"long_name": "Signal"}),
             "group": ("group", numerical_result.group_labels, {"long_name": "Signal group"}),
         }
@@ -496,7 +496,7 @@ def _connectivity_result_to_xarray(
                         "frequency",
                         "connection",
                         "component",
-                        "connection_seed_group",
+                        "connection_source_group",
                         "connection_target_group",
                     )
                 },
@@ -531,7 +531,7 @@ def _connectivity_result_to_xarray(
                 "frequency",
                 "connection",
                 "component",
-                "connection_seed_group",
+                "connection_source_group",
                 "connection_target_group",
                 "side",
                 "signal",

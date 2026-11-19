@@ -110,9 +110,11 @@ class MultivariateConnectivityResult:
 
     ``scores`` has shape ``(..., frequency, connection, component)``. Filters
     and patterns, when present, append ``(side, signal)`` where side 0 is the
-    first group and side 1 is the second. Entries for signals outside a side's
-    group are NaN. ``connections`` contains the corresponding group-label pair
-    for each connection and ``group_membership`` has shape ``(group, signal)``.
+    connection's source (first) group and side 1 its target (second) group;
+    the xarray wrappers label them ``side="source"`` and ``side="target"``.
+    Entries for signals outside a side's group are NaN. ``connections``
+    contains the corresponding group-label pair for each connection and
+    ``group_membership`` has shape ``(group, signal)``.
 
     Attributes
     ----------
@@ -124,7 +126,9 @@ class MultivariateConnectivityResult:
         connection cannot supply (its smaller group has fewer channels than the
         requested ``n_components``) is NaN.
     connections : NDArray, shape (connection, 2)
-        The ``(first_group_label, second_group_label)`` pair for each connection.
+        The ``(source_group_label, target_group_label)`` pair for each
+        connection, the wrappers' ``connection_source_group`` and
+        ``connection_target_group`` coordinates.
     group_labels : NDArray, shape (group,)
         Sorted unique group labels.
     group_membership : NDArray[bool], shape (group, signal)

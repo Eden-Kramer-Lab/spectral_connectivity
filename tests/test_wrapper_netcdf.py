@@ -211,3 +211,18 @@ def test_complex_results_roundtrip_with_netcdf4_auto_complex(measure_results, tm
         opener = xr.open_dataset if isinstance(result, xr.Dataset) else xr.open_dataarray
         with opener(path, engine="netcdf4", auto_complex=True) as loaded:
             xr.testing.assert_identical(loaded.load(), result)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_component_selectors_survive_a_roundtrip(measure_results, engine, tmp_path):
+    """Component results are selected by ``side`` and the connection's source
+    and target groups, and those selectors work the same on a saved file."""
+    result = measure_results["maximized_imaginary_coherency_components"]
+    loaded = _roundtrip(result, tmp_path / "result.nc", _engine(engine))
+    assert loaded.side.values.tolist() == ["source", "target"]
+    assert loaded.connection_source_group.values.tolist() == ["a"]
+    assert loaded.connection_target_group.values.tolist() == ["b"]
+    patterns = "maximized_imaginary_coherency_components_patterns"
+    xr.testing.assert_identical(
+        loaded[patterns].sel(side="target"), result[patterns].sel(side="target")
+    )

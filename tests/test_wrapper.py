@@ -172,8 +172,13 @@ def test_connectivity_to_xarray_exposes_rich_multivariate_components():
         "side",
         "signal",
     )
-    assert result.connection_seed_group.values.tolist() == [10]
+    assert result.connection_source_group.values.tolist() == [10]
     assert result.connection_target_group.values.tolist() == [20]
+    assert result.side.values.tolist() == ["source", "target"]
+    # The source side's filter is NaN outside the source group (signals c, d).
+    source_filters = result.canonical_coherency_filters.sel(side="source")
+    assert np.isnan(source_filters.sel(signal=["c", "d"])).all()
+    assert np.isfinite(source_filters.sel(signal=["a", "b"])).all()
     assert result.group_membership.sel(group=10, signal="a").item()
     assert result.group_membership.attrs["output_schema_version"] == 1
     assert result.group_membership.attrs["transform"] == "multitaper"
@@ -2354,7 +2359,7 @@ def test_multitaper_connectivity_merges_rich_multivariate_datasets():
 
 def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_not_collide():
     # A group-pairwise measure uses source_group/target_group as *dimensions*;
-    # components use connection_seed_group/connection_target_group as per-
+    # components use connection_source_group/connection_target_group as per-
     # connection coordinates. Merging them must keep the per-connection labels
     # intact rather than overwrite them with the group dimension index.
     result = multitaper_connectivity(
@@ -2365,7 +2370,7 @@ def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_no
     )
     assert result["target_group"].dims == ("target_group",)
     assert result["connection_target_group"].dims == ("connection",)
-    assert result.connection_seed_group.values.tolist() == [0]
+    assert result.connection_source_group.values.tolist() == [0]
     assert result.connection_target_group.values.tolist() == [1]
 
 

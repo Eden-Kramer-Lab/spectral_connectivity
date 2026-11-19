@@ -157,6 +157,37 @@ instead of by signal.
 
 ```
 
+The component measures (`canonical_coherency`,
+`maximized_imaginary_coherency_components`) return a Dataset with one
+`connection` per pair of groups. Each connection names its
+`connection_source_group` and `connection_target_group`, and the spatial
+filters and patterns have a `side` axis, `"source"` or `"target"`, over the
+`signal` axis; a side's entries for signals outside its group are NaN.
+
+```python
+>>> components = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=500,
+...     method="canonical_coherency",
+...     group_labels=["CA1", "CA1", "PFC"],
+... )
+>>> components["canonical_coherency"].dims
+('time', 'frequency', 'connection', 'component')
+>>> components.connection_source_group.values.tolist()
+['CA1']
+>>> components.connection_target_group.values.tolist()
+['PFC']
+>>> filters = components["canonical_coherency_filters"]
+>>> filters.dims
+('time', 'frequency', 'connection', 'component', 'side', 'signal')
+>>> filters.side.values.tolist()
+['source', 'target']
+>>> source_filters = filters.sel(side="source", connection=0, component=0)
+>>> bool(source_filters.sel(signal="2").isnull().all())  # signal 2 is in PFC
+True
+
+```
+
 ## Collapse into frequency bands
 
 Pass `frequency_bands` to average (or integrate) each measure within named
