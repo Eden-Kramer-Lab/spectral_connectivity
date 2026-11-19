@@ -64,6 +64,16 @@ TAPER_MULTIPLIER = 2.0
 MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS = 1.5
 
 
+def _duration_to_samples(duration: float, sampling_frequency: float) -> int:
+    """Nearest whole number of samples in ``duration`` seconds.
+
+    Rounds rather than truncates: ``step / fs * fs`` can land just below
+    ``step`` in floating point (e.g. 0.57 s at 100 Hz gives 56.99999...), and
+    ``int()`` would truncate to 56.
+    """
+    return int(np.around(duration * sampling_frequency))
+
+
 def _resolve_sample_count(
     explicit: int | None,
     duration: float | None,
@@ -79,11 +89,14 @@ def _resolve_sample_count(
     """
     if explicit is not None:
         samples = int(explicit)
-        if duration is not None and int(np.around(duration * sampling_frequency)) != (samples):
+        if (
+            duration is not None
+            and _duration_to_samples(duration, sampling_frequency) != samples
+        ):
             raise ValueError(mismatch_message)
         return samples
     if duration is not None:
-        return int(np.around(duration * sampling_frequency))
+        return _duration_to_samples(duration, sampling_frequency)
     return None
 
 
@@ -1018,8 +1031,8 @@ Frequency Analysis
             if self._time_window_duration is None:
                 self._n_time_samples_per_window = self._time_series.shape[0]
             else:
-                self._n_time_samples_per_window = int(
-                    np.around(self._time_window_duration * self.sampling_frequency)
+                self._n_time_samples_per_window = _duration_to_samples(
+                    self._time_window_duration, self.sampling_frequency
                 )
         assert self._n_time_samples_per_window is not None
         # Validate the resolved window length regardless of which input path set
@@ -1125,11 +1138,8 @@ Frequency Analysis
             if self._time_window_step is None:
                 self._n_samples_per_time_step = self.n_time_samples_per_window
             else:
-                # Round like n_time_samples_per_window does: ``step / fs * fs``
-                # can land just below ``step`` in floating point (e.g. 0.57 s at
-                # 100 Hz gives 56.99999...), and ``int()`` would truncate to 56.
-                self._n_samples_per_time_step = int(
-                    np.around(self._time_window_step * self.sampling_frequency)
+                self._n_samples_per_time_step = _duration_to_samples(
+                    self._time_window_step, self.sampling_frequency
                 )
         assert self._n_samples_per_time_step is not None
         # Validate the resolved step regardless of which input path set it: an
@@ -1717,7 +1727,7 @@ class Multitaper(_WindowedFourierTransform):
             ),
         ):
             if duration is not None and count is not None:
-                duration_samples = int(np.around(duration * sampling_frequency))
+                duration_samples = _duration_to_samples(duration, sampling_frequency)
                 if duration_samples != count:
                     msg = (
                         f"{duration_name}={duration} s and {count_name}={count} "
