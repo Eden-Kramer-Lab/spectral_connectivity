@@ -740,26 +740,35 @@ def _validate_window_durations(
 class _WindowedFourierTransform:
     """Tapered sliding-window FFT shared by Multitaper and the Hann STFT.
 
-    Owns what the two transforms have in common: the time-series snapshot, the
-    window and step sample counts and their durations, the FFT length, the
-    time and frequency coordinates, the windowed FFT itself, and the summary
-    and provenance scaffolding.
+    Owns what the two transforms have in common: the window and step sample
+    counts and their durations, the FFT length, the time and frequency
+    coordinates, the windowed FFT itself, and the summary and provenance
+    scaffolding.
 
     A subclass constructor validates its own arguments in its own order, using
     :func:`_validate_fft_workers`, :func:`_validate_window_durations`, and
     :meth:`_warn_about_unusual_time_series`, and sets the private fields
-    annotated below. The subclass supplies:
+    annotated below: ``_time_series`` is the read-only snapshot of the input,
+    ``_start_time`` the validated scalar start time, and the others hold the
+    requested durations, sample counts, and FFT length (``None`` when not
+    given). The subclass must also supply:
 
-    - the ``sampling_frequency``, ``detrend_type``, and ``fft_workers``
-      settings (immutable attributes on :class:`Multitaper`, read-only
-      properties on :class:`ShortTimeFourierTransform`);
-    - ``_transform_name`` and ``_PROVENANCE_FIELDS`` (the attributes recorded
-      by :meth:`_provenance_metadata`);
-    - :meth:`_tapers_for_fft`, the tapers of shape
-      ``(n_time_samples_per_window, n_tapers)``, scaled by
-      ``sqrt(sampling_frequency)``;
+    - ``sampling_frequency``, ``detrend_type``, and ``fft_workers``, fixed
+      after construction (immutable attributes on :class:`Multitaper`,
+      properties without setters on :class:`ShortTimeFourierTransform`);
+    - ``_transform_name`` and ``_PROVENANCE_FIELDS``, the name and the
+      attributes that :meth:`_provenance_metadata` records;
+    - :meth:`_tapers_for_fft`, the tapers applied to each window, of shape
+      ``(n_time_samples_per_window, n_tapers)``. Generated DPSS tapers and the
+      Hann window are unit-energy windows scaled by ``sqrt(sampling_frequency)``,
+      so ``power()`` is a density; custom :class:`Multitaper` tapers are used
+      as given;
     - :meth:`_spectral_bandwidth_metadata`, the taper identity and its
       qualified bandwidth;
+    - the public ``fft()`` (which logs the transform and returns
+      :meth:`_tapered_fft`), ``is_one_sided``,
+      ``observations_are_independent``, ``summarize_parameters()`` (built with
+      :meth:`_summary`), and ``__repr__``;
     - optionally :meth:`_weight_taper_coefficients`, which reweights the
       coefficients of each taper.
     """
@@ -834,7 +843,10 @@ class _WindowedFourierTransform:
 
     @property
     def start_time(self) -> BackendArray:
-        """Independent read-only copy of the transform's start-time coordinate."""
+        """Time of the first sample, in seconds.
+
+        Returns an independent read-only copy of the start-time coordinate.
+        """
         return _readonly_array_copy(self._start_time)
 
     def _provenance_metadata(self) -> dict[str, Any]:
@@ -934,7 +946,7 @@ Frequency Analysis
 
     @property
     def time_window_duration(self) -> float:
-        """Return duration of each time bin.
+        """Window length in seconds, after rounding to whole samples.
 
         Returns
         -------
@@ -948,7 +960,7 @@ Frequency Analysis
 
     @property
     def time_window_step(self) -> float:
-        """Return how much each time window slides.
+        """Step between window starts in seconds, after rounding to whole samples.
 
         Returns
         -------
@@ -962,7 +974,12 @@ Frequency Analysis
 
     @property
     def n_time_samples_per_window(self) -> int:
-        """Return number of samples per time bin.
+        """Window length in samples.
+
+        An explicit ``n_time_samples_per_window`` is used as given. Otherwise,
+        if ``time_window_duration`` is set, the window is the nearest whole
+        number of samples in that duration. If neither is set, the window is
+        the whole time series.
 
         Returns
         -------
@@ -972,7 +989,9 @@ Frequency Analysis
         Raises
         ------
         ValueError
-            If neither n_time_samples_per_window nor time_window_duration is set.
+            If the resolved window is shorter than one sample or longer than
+            the time series. :class:`ShortTimeFourierTransform` checks this
+            when it is constructed.
 
         """
         # An explicit n_time_samples_per_window is used as given (a duration
@@ -1014,12 +1033,22 @@ Frequency Analysis
 
     @property
     def n_fft_samples(self) -> int:
-        """Return number of frequency bins.
+        """FFT length of each window, which is also the number of frequency bins.
+
+        An explicit ``n_fft_samples`` is used as given. Otherwise it is a
+        length at least ``n_time_samples_per_window`` that is fast for the FFT
+        (``scipy.fft.next_fast_len``), so windows may be zero-padded.
 
         Returns
         -------
         int
             Number of FFT samples.
+
+        Raises
+        ------
+        ValueError
+            If the requested ``n_fft_samples`` is smaller than
+            ``n_time_samples_per_window``.
 
         """
         if self._n_fft_samples is None:
@@ -1042,19 +1071,21 @@ Frequency Analysis
 
     @property
     def frequencies(self) -> NDArray[np.floating]:
-        """Return frequency of each frequency bin.
+        """Frequency of each FFT bin in Hz, in standard FFT order.
 
         Returns
         -------
-        NDArray[float64], shape (n_frequencies,)
-            Frequency values in Hz corresponding to FFT bins.
+        NDArray[float64], shape (n_fft_samples,)
+            Frequency values in Hz corresponding to FFT bins, as
+            ``numpy.fft.fftfreq`` orders them (non-negative frequencies first,
+            then negative).
 
         """
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
     @property
     def n_time_samples_per_step(self) -> int:
-        """Return number of samples to step between windows.
+        """Step between window starts, in samples.
 
         An explicit `n_time_samples_per_step` is used as given. Otherwise, if
         `time_window_step` is set, the step is the nearest whole number of
@@ -1065,6 +1096,11 @@ Frequency Analysis
         -------
         int
             Number of samples to advance between windows.
+
+        Raises
+        ------
+        ValueError
+            If the resolved step is shorter than one sample.
 
         """
         if self._n_samples_per_time_step is None:
@@ -1096,12 +1132,13 @@ Frequency Analysis
 
     @property
     def time(self) -> NDArray[np.floating]:
-        """Return time of each time bin.
+        """Center time of each window, in seconds.
 
         Returns
         -------
         NDArray[float64], shape (n_time_windows,)
-            Time values in seconds for center of each time window.
+            Time values in seconds for center of each time window, offset by
+            ``start_time``.
 
         """
         original_time = xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
@@ -1115,7 +1152,7 @@ Frequency Analysis
 
     @property
     def n_signals(self) -> int:
-        """Return number of signals computed.
+        """Number of signals in the time series.
 
         Returns
         -------
@@ -1127,7 +1164,7 @@ Frequency Analysis
 
     @property
     def n_trials(self) -> int:
-        """Return number of trials computed.
+        """Number of trials in the time series.
 
         Returns
         -------
@@ -1139,12 +1176,12 @@ Frequency Analysis
 
     @property
     def nyquist_frequency(self) -> float:
-        """Return maximum resolvable frequency.
+        """Maximum resolvable frequency, in Hz.
 
         Returns
         -------
         float
-            Nyquist frequency in Hz.
+            Nyquist frequency in Hz, ``sampling_frequency / 2``.
 
         """
         return self.sampling_frequency / 2
