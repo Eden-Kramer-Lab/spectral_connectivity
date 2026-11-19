@@ -146,7 +146,7 @@ class TestCanonicalCoherence:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
         group_labels = np.array([0, 0, 0, 1, 1, 1])
         canonical_coh, labels = conn.canonical_coherence(group_labels)
 
@@ -208,7 +208,7 @@ class TestCanonicalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=1,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         canonical_coh, labels = conn.canonical_coherence(group_labels)
 
@@ -244,7 +244,7 @@ class TestCanonicalCoherence:
         the maximal between-group coherence is exactly ``magnitude_squared_coherence``.
         """
         time_series = self.rng.standard_normal((50, 5, 3))
-        conn = Connectivity.from_multitaper(
+        conn = Connectivity.from_transform(
             Multitaper(
                 time_series=time_series, sampling_frequency=200, time_halfbandwidth_product=1
             )
@@ -445,7 +445,7 @@ class TestGlobalCoherence:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=1)
 
         assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
@@ -473,7 +473,7 @@ class TestGlobalCoherence:
             sampling_frequency=500,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         max_rank = 3
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=max_rank)
@@ -510,8 +510,8 @@ class TestGlobalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=2,
         )
-        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
-        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(max_rank=1)
+        gc, _ = Connectivity.from_transform(m).global_coherence(max_rank=1)
+        gc_scaled, _ = Connectivity.from_transform(m_scaled).global_coherence(max_rank=1)
         np.testing.assert_allclose(gc, gc_scaled, rtol=1e-6)
 
     @pytest.mark.parametrize("path", ["batched", "per_bin"])
@@ -543,8 +543,8 @@ class TestGlobalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=2,
         )
-        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=n_signals)
-        gc_scaled, _ = Connectivity.from_multitaper(m_scaled).global_coherence(
+        gc, _ = Connectivity.from_transform(m).global_coherence(max_rank=n_signals)
+        gc_scaled, _ = Connectivity.from_transform(m_scaled).global_coherence(
             max_rank=n_signals
         )
         np.testing.assert_allclose(
@@ -575,7 +575,7 @@ class TestGlobalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=2,
         )
-        gc, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=3)
+        gc, _ = Connectivity.from_transform(m).global_coherence(max_rank=3)
         np.testing.assert_allclose(
             gc, _global_coherence_oracle(to_host(m.fft()))[..., :3], rtol=1e-8, atol=1e-12
         )
@@ -593,7 +593,7 @@ class TestGlobalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=1,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
         expected = _global_coherence_oracle(to_host(m.fft()))
 
         for max_rank in (n_signals, n_signals - 1):
@@ -616,7 +616,7 @@ class TestGlobalCoherence:
             sampling_frequency=200,
             time_halfbandwidth_product=1,
         )
-        global_coh, _ = Connectivity.from_multitaper(m).global_coherence(max_rank=1)
+        global_coh, _ = Connectivity.from_transform(m).global_coherence(max_rank=1)
 
         x = _observations(to_host(m.fft()))
         a = np.sum(np.abs(x[..., 0, :]) ** 2, axis=-1)
@@ -640,7 +640,7 @@ class TestGlobalCoherence:
             sampling_frequency=100,
             time_halfbandwidth_product=1,
         )
-        global_coh, global_coh_vectors = Connectivity.from_multitaper(m).global_coherence(
+        global_coh, global_coh_vectors = Connectivity.from_transform(m).global_coherence(
             max_rank=2
         )
 
@@ -749,7 +749,7 @@ class TestGroupDelay:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=3,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         # Standard (not relaxed) significance threshold: real coherence must be
         # detected for this to return anything.
@@ -790,7 +790,7 @@ class TestGroupDelay:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         delay, slope, r_value = conn.group_delay()
 
@@ -825,7 +825,7 @@ class TestGroupDelay:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         delay1, _slope1, _r_value1 = conn.group_delay(
             frequency_range=(10, 90), frequency_resolution=5.0
@@ -866,7 +866,7 @@ class TestGroupDelay:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         delay_strict, _, _ = conn.group_delay(
             frequency_range=(10, 90),
@@ -903,7 +903,7 @@ class TestGroupDelay:
             sampling_frequency=200,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         delay, slope, r_value = conn.group_delay(
             frequency_range=(10, 90), frequency_resolution=5.0
@@ -1015,7 +1015,7 @@ class TestGroupDelay:
             signals.append(trials)
         time_series = np.stack(signals, axis=-1)  # (n_time, n_trials, n_signals)
 
-        conn = Connectivity.from_multitaper(
+        conn = Connectivity.from_transform(
             Multitaper(
                 time_series=time_series,
                 sampling_frequency=sampling_frequency,
@@ -1070,7 +1070,7 @@ class TestGroupDelay:
             sampling_frequency=200,
             time_halfbandwidth_product=3,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         delay, _slope, _r_value = conn.group_delay(
             frequency_range=(10, 90), frequency_resolution=5.0
@@ -1086,7 +1086,7 @@ class TestGroupDelay:
         time_series = simulate_lagged_broadband(
             [0, 3, 8], [0.3, 0.3, 0.3], 200, 10, random_state=self.rng
         )
-        conn = Connectivity.from_multitaper(
+        conn = Connectivity.from_transform(
             Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
         )
         _delay, slope, r_value = conn.group_delay(frequency_range=(10, 90))
@@ -1155,7 +1155,7 @@ class TestAdvancedConnectivityIntegration:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=3,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
         fourier_coefficients = to_host(m.fft())
 
         # Canonical coherence
@@ -1222,7 +1222,7 @@ class TestAdvancedConnectivityIntegration:
             sampling_frequency=500,
             time_halfbandwidth_product=2,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
 
         coherence = conn.magnitude_squared_coherence()
         canonical_coh, _ = conn.canonical_coherence(np.arange(n_signals))
@@ -1248,7 +1248,7 @@ class TestDelay:
         time_series = simulate_lagged_broadband(
             [0, 3], 0.3, n_time_samples=1000, n_trials=20, random_state=self.rng
         )
-        conn = Connectivity.from_multitaper(
+        conn = Connectivity.from_transform(
             Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
         )
         n_range = 2
@@ -1291,7 +1291,7 @@ class TestDelay:
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=3,
         )
-        conn = Connectivity.from_multitaper(m)
+        conn = Connectivity.from_transform(m)
         n_range = 3
         possible_delays = conn.delay(
             frequency_range=(20, 80),

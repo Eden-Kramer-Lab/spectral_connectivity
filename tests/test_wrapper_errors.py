@@ -66,7 +66,7 @@ def test_connectivity_injection_is_rejected():
     """
     rng = np.random.default_rng(5)
     m = Multitaper(rng.standard_normal((256, 3, 3)), sampling_frequency=500)
-    connectivity = Connectivity.from_multitaper(m)
+    connectivity = Connectivity.from_transform(m)
 
     with pytest.raises(TypeError, match="multiple values for argument 'connectivity'"):
         connectivity_to_xarray(m, "magnitude_squared_coherence", connectivity=connectivity)

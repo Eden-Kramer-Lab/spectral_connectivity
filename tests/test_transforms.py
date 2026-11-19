@@ -960,7 +960,7 @@ def test_multitaper_real_input_is_exactly_conjugate_symmetric():
         time_window_duration=0.25,
         n_fft_samples=300,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
     assert _is_conjugate_symmetric(connectivity._expectation_cross_spectral_matrix())
 
 
@@ -1590,7 +1590,7 @@ def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
     noise, so wavelet and multitaper power are on the same scale."""
     fs, variance = 500.0, 4.0
     data = np.sqrt(variance) * np.random.default_rng(926).standard_normal((10000, 20, 1))
-    multitaper_power = Connectivity.from_multitaper(
+    multitaper_power = Connectivity.from_transform(
         Multitaper(data, fs, time_halfbandwidth_product=4, time_window_duration=2.0)
     ).power()
     morlet_power = Connectivity.from_transform(
@@ -2289,7 +2289,7 @@ def test_adaptive_coherence_is_joint_estimate_shrunk_by_weight_cosine_similarity
         np.sum(d_x**2, axis=0) * np.sum(d_y**2, axis=0)
     )
 
-    connectivity = Connectivity.from_multitaper(adaptive)
+    connectivity = Connectivity.from_transform(adaptive)
     package = np.abs(connectivity.coherency()[0, :, 0, 1])
     n_frequencies = len(connectivity.frequencies)
     np.testing.assert_allclose(

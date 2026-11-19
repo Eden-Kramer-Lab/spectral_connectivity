@@ -233,8 +233,8 @@ def test_direct_construction_copies_and_is_isolated_from_caller_mutation():
     np.testing.assert_array_equal(c.power(), power_before)
 
 
-def test_from_multitaper_adopts_without_copying():
-    """from_multitaper takes ownership of fft() output without a full copy.
+def test_from_transform_adopts_without_copying():
+    """from_transform takes ownership of fft() output without a full copy.
 
     Multitaper.fft() returns a swapaxes view that is referenced nowhere else, so
     Connectivity freezes it in place rather than copying the largest array in the
@@ -247,7 +247,7 @@ def test_from_multitaper_adopts_without_copying():
         sampling_frequency=400,
         time_halfbandwidth_product=3,
     )
-    c = Connectivity.from_multitaper(m)
+    c = Connectivity.from_transform(m)
 
     stored = c._fourier_coefficients
     # Adopted (a view of fft() output), not an owning copy.
@@ -274,7 +274,7 @@ def test_from_multitaper_adopts_without_copying():
 @pytest.mark.parametrize(
     "make",
     [
-        lambda m: Connectivity.from_multitaper(m),  # adoption path (frozen view)
+        lambda m: Connectivity.from_transform(m),  # adoption path (frozen view)
         lambda m: Connectivity(to_device(m.fft())),  # defensive-copy path
     ],
     ids=["adopt", "copy"],
@@ -312,7 +312,7 @@ def test_getter_copy_defeats_base_reenable_attack(make):
     np.testing.assert_array_equal(c.power(), power_before)
 
 
-def test_from_multitaper_adoption_matches_copy_numerically():
+def test_from_transform_adoption_matches_copy_numerically():
     """Adoption must not change results vs. the defensive-copy path."""
     rng = np.random.default_rng(24)
     m = Multitaper(
@@ -320,7 +320,7 @@ def test_from_multitaper_adoption_matches_copy_numerically():
         sampling_frequency=400,
         time_halfbandwidth_product=3,
     )
-    adopted = Connectivity.from_multitaper(m)
+    adopted = Connectivity.from_transform(m)
     copied = Connectivity(to_device(m.fft()))  # forces the copy path
 
     np.testing.assert_array_equal(adopted.power(), copied.power())
@@ -331,7 +331,7 @@ def test_from_multitaper_adoption_matches_copy_numerically():
         assert np.array_equal(a, b, equal_nan=True)
 
 
-def test_from_multitaper_adoption_invalidates_cache_on_reassignment():
+def test_from_transform_adoption_invalidates_cache_on_reassignment():
     """Reassigning fourier_coefficients on an adopted instance clears caches."""
     rng = np.random.default_rng(25)
     m = Multitaper(
@@ -339,13 +339,13 @@ def test_from_multitaper_adoption_invalidates_cache_on_reassignment():
         sampling_frequency=400,
         time_halfbandwidth_product=3,
     )
-    c = Connectivity.from_multitaper(m)
+    c = Connectivity.from_transform(m)
     _ = c.power()
     assert "_power" in c.__dict__  # cached
     c.fourier_coefficients = to_device(m.fft()) * 2.0
     assert "_power" not in c.__dict__  # cleared
     # New power reflects the reassigned (4x) data.
-    np.testing.assert_allclose(c.power(), 4.0 * Connectivity.from_multitaper(m).power())
+    np.testing.assert_allclose(c.power(), 4.0 * Connectivity.from_transform(m).power())
 
 
 def test_reassigning_different_geometry_resets_coordinates():
@@ -483,12 +483,12 @@ def test_empty_frequency_coordinate_is_accepted():
     Connectivity(fourier_coefficients=fc, frequencies=np.array([]))
 
 
-def test_from_multitaper_connectivity_is_picklable():
+def test_from_transform_connectivity_is_picklable():
     """A Connectivity built from Multitaper round-trips with standard pickle."""
 
     rng = np.random.default_rng(0)
     m = Multitaper(rng.standard_normal((128, 2, 3)), sampling_frequency=500)
-    conn = Connectivity.from_multitaper(m)
+    conn = Connectivity.from_transform(m)
 
     restored = pickle.loads(pickle.dumps(conn))
     np.testing.assert_allclose(
@@ -514,7 +514,7 @@ def test_pickle_and_copy_preserve_subclass_slots(subclass):
 
     rng = np.random.default_rng(1)
     m = Multitaper(rng.standard_normal((128, 2, 3)), sampling_frequency=500)
-    conn = subclass.from_multitaper(m)
+    conn = subclass.from_transform(m)
     conn.extra_metadata = {"subject": "s1"}
 
     for clone in (

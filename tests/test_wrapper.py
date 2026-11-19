@@ -1959,7 +1959,7 @@ def test_multi_method_shares_single_fft(monkeypatch):
     """A multi-method call computes the FFT once, not once per measure.
 
     ``multitaper_connectivity`` builds one shared ``Connectivity`` and reuses it
-    across every requested measure. Since ``Connectivity.from_multitaper`` calls
+    across every requested measure. Since ``Connectivity.from_transform`` calls
     the (uncached) ``Multitaper.fft``, the FFT must run exactly once regardless
     of how many measures are requested.
     """
@@ -1986,7 +1986,7 @@ def test_shared_connectivity_matches_per_method_construction():
     """Sharing one Connectivity yields identical results to building per method.
 
     Reusing a single instance only avoids recomputation; it must not change any
-    numbers. Results must match a fresh ``Connectivity.from_multitaper`` per
+    numbers. Results must match a fresh ``Connectivity.from_transform`` per
     measure bit-for-bit.
     """
     import xarray as xr
@@ -2067,12 +2067,12 @@ def test_default_method_set_is_explicit_and_ordered():
     assert tuple(ds.data_vars) == expected
 
 
-def test_from_multitaper_supports_subclass_overriding_init():
-    """from_multitaper must work for a subclass with the previous constructor.
+def test_from_transform_supports_subclass_overriding_init():
+    """from_transform must work for a subclass with the previous constructor.
 
     The private adoption fast-path passes a keyword the base __init__ accepts; a
     subclass that overrides __init__ (mirroring the old signature) need not, so
-    from_multitaper must fall back to the plain (defensive-copy) path for it
+    from_transform must fall back to the plain (defensive-copy) path for it
     rather than raising TypeError.
     """
     rng = np.random.default_rng(3)
@@ -2104,12 +2104,12 @@ def test_from_multitaper_supports_subclass_overriding_init():
             )
             self.marker = "subclass"
 
-    sub = LegacyConnectivity.from_multitaper(m)
+    sub = LegacyConnectivity.from_transform(m)
     assert isinstance(sub, LegacyConnectivity)
     assert sub.marker == "subclass"
     # Fell back to the defensive-copy path (owns its data), and works normally.
     assert sub._fourier_coefficients.base is None
-    base = Connectivity.from_multitaper(m)
+    base = Connectivity.from_transform(m)
     np.testing.assert_array_equal(sub.power(), base.power())
     # The base class still uses the no-copy adoption path (stores a view).
     assert base._fourier_coefficients.base is not None
@@ -3296,7 +3296,7 @@ def test_fourier_connectivity_rejects_undeclared_unlabeled_directed_measure():
 def test_fourier_connectivity_honors_explicit_two_sided_declaration():
     """``is_one_sided=False`` on unlabeled coefficients declares a full FFT-order
     spectrum, so Wilson-factorized measures run without the assumed-sidedness
-    warning and match ``Connectivity.from_multitaper`` on the same transform."""
+    warning and match ``Connectivity.from_transform`` on the same transform."""
     rng = np.random.default_rng(325)
     time_series = rng.standard_normal((256, 4, 2))
     time_series[1:, :, 1] += 0.8 * time_series[:-1, :, 0]
@@ -3308,7 +3308,7 @@ def test_fourier_connectivity_honors_explicit_two_sided_declaration():
             method="pairwise_spectral_granger_prediction",
             is_one_sided=False,
         )
-    expected = Connectivity.from_multitaper(multitaper).pairwise_spectral_granger_prediction()
+    expected = Connectivity.from_transform(multitaper).pairwise_spectral_granger_prediction()
 
     assert result.dims == ("time", "frequency", "source", "target")
     estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]

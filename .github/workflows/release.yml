@@ -236,7 +236,7 @@ jobs:
           rng = np.random.default_rng(0)
           signals = rng.standard_normal((512, 5, 3))
           m = Multitaper(signals, sampling_frequency=500, time_halfbandwidth_product=3)
-          c = Connectivity.from_multitaper(m)
+          c = Connectivity.from_transform(m)
 
           coherence = np.asarray(c.magnitude_squared_coherence())
           assert coherence.shape[-2:] == (3, 3), coherence.shape

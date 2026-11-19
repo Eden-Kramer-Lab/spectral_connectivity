@@ -256,10 +256,10 @@ connectivity = Connectivity(
 )
 
 # %% [markdown]
-# Alternatively, you can also instantiate the class this way, which is a little more convenient code-wise. Note that in this formulation, you do not call the `.fft` method, the class method `from_multitaper` does this for you:
+# Alternatively, you can also instantiate the class this way, which is a little more convenient code-wise. Note that in this formulation, you do not call the `.fft` method, the class method `from_transform` does this for you:
 
 # %%
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 # %% [markdown]
 # We are now ready to compute the connectivity measures. These all exists as function methods on the class. So for instance, if you want to compute the power of the two signals, we would use the `power` method:
@@ -278,7 +278,7 @@ connectivity.frequencies.shape
 # We could also average over time here since there is only one time point -- the average will have no effect other than to remove the time dimension from the output. Let's try that here:
 
 # %%
-connectivity = Connectivity.from_multitaper(
+connectivity = Connectivity.from_transform(
     multitaper, expectation_type="time_trials_tapers"
 )
 connectivity.power().shape
@@ -316,7 +316,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=5,
     time_window_duration=2.0,
 )
-connectivity = Connectivity.from_multitaper(
+connectivity = Connectivity.from_transform(
     multitaper, expectation_type="trials_tapers"
 )
 

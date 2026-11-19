@@ -44,7 +44,7 @@ def time_series():
 
 @pytest.fixture(scope="module")
 def connectivity(time_series):
-    return Connectivity.from_multitaper(Multitaper(time_series, sampling_frequency=100))
+    return Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
 
 
 def _orientation_warnings(record):

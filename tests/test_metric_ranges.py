@@ -66,7 +66,7 @@ def connectivity_obj(simple_synthetic_data):
         n_tapers=N_TAPERS,
     )
 
-    return Connectivity.from_multitaper(mt)
+    return Connectivity.from_transform(mt)
 
 
 def test_coherence_magnitude_range(connectivity_obj):
