@@ -126,6 +126,47 @@ def test_transform_kwargs_reach_the_transform_silently(time_series):
     assert result.attrs["mt_start_time"] == 1.5
 
 
+def test_legacy_transform_keywords_warn_once_at_the_caller_and_match_the_mapping(
+    time_series,
+):
+    settings = {"n_fft_samples": 2048, "start_time": 1.5, "fft_workers": 1}
+    canonical = multitaper_connectivity(
+        time_series, sampling_frequency=500, method="power", transform_kwargs=settings
+    )
+    call = lambda: multitaper_connectivity(  # noqa: E731
+        time_series, sampling_frequency=500, method="power", **settings
+    )
+    with pytest.warns(DeprecationWarning, match="transform_kwargs") as record:
+        legacy = call()
+    deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
+    assert [(w.filename, w.lineno) for w in deprecations] == [
+        (__file__, call.__code__.co_firstlineno)
+    ]
+    message = str(deprecations[0].message)
+    assert "removed in 4.0" in message
+    for key in settings:
+        assert key in message
+    _assert_identical(legacy, canonical)
+
+
+def test_legacy_and_mapping_transform_keywords_combine(time_series):
+    canonical = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method="power",
+        transform_kwargs={"n_fft_samples": 2048, "start_time": 1.5},
+    )
+    with pytest.warns(DeprecationWarning, match="start_time"):
+        mixed = multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            transform_kwargs={"n_fft_samples": 2048},
+            start_time=1.5,
+        )
+    _assert_identical(mixed, canonical)
+
+
 def test_a_transform_setting_given_twice_is_rejected(time_series):
     with pytest.raises(ValueError, match=r"n_fft_samples.*transform_kwargs.*keyword"):
         multitaper_connectivity(
@@ -207,6 +248,22 @@ def test_connectivity_kwargs_reach_the_measure_of_connectivity_to_xarray(multita
         ).subset_pairwise_spectral_granger_prediction(pairs)
     np.testing.assert_array_equal(result.values, expected)
     assert result.attrs["arg_pairs_json"] == "[[0,1],[1,0]]"
+
+
+def test_connectivity_to_xarray_legacy_keywords_warn_once_and_match_the_mapping(multitaper):
+    settings = {"frequency_range": (20.0, 80.0), "frequency_resolution": 10.0}
+    canonical = connectivity_to_xarray(
+        multitaper, "phase_slope_index", connectivity_kwargs=settings
+    )
+    call = lambda: connectivity_to_xarray(multitaper, "phase_slope_index", **settings)  # noqa: E731
+    with pytest.warns(DeprecationWarning, match="connectivity_kwargs") as record:
+        legacy = call()
+    deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
+    assert [(w.filename, w.lineno) for w in deprecations] == [
+        (__file__, call.__code__.co_firstlineno)
+    ]
+    assert "removed in 4.0" in str(deprecations[0].message)
+    _assert_identical(legacy, canonical)
 
 
 def test_connectivity_to_xarray_rejects_a_measure_setting_given_twice(multitaper):

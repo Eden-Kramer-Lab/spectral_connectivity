@@ -253,6 +253,11 @@ a misspelled key in either mapping raises `TypeError`. `connectivity_to_xarray`
 takes an existing transform, so it has `connectivity_kwargs` (and
 `group_labels`) but no `transform_kwargs`.
 
+Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
+`multitaper_connectivity(x, fs, n_fft_samples=512)`. That still works
+through 3.x, with the same result and a `DeprecationWarning` naming the
+mapping to use, and is removed in 4.0.
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and

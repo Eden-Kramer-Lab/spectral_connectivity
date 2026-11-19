@@ -55,7 +55,7 @@ from spectral_connectivity.connectivity import (
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
+from spectral_connectivity.utils import stacklevel_outside_package, to_numpy, warn_deprecated
 
 # The public API. UnsupportedMeasureError is defined in _result_formatting
 # (which raises it) and re-exported here; listing it makes the API reference
@@ -448,6 +448,22 @@ def _merge_legacy_settings(
     return {**mapping, **legacy}
 
 
+def _warn_legacy_settings(function: str, mapping_name: str, legacy: Mapping[str, Any]) -> None:
+    """Warn once, at the caller, that ``legacy`` settings belong in ``mapping_name``.
+
+    Called after every setting is validated, so a rejected call does not warn.
+    """
+    if not legacy:
+        return
+    old = ", ".join(f"{key}=..." for key in legacy)
+    new = ", ".join(f"{key!r}: ..." for key in legacy)
+    warn_deprecated(
+        f"{function}({old})",
+        f"{function}({mapping_name}={{{new}}})",
+        "gives the same result",
+    )
+
+
 def _transform_settings(
     transform_kwargs: Mapping[str, Any] | None, legacy: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -485,9 +501,11 @@ def _transform_settings(
                 "settings in transform_kwargs."
             )
             raise TypeError(msg)
-    return _merge_legacy_settings(
+    settings = _merge_legacy_settings(
         "multitaper_connectivity", "transform_kwargs", mapping, legacy
     )
+    _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", legacy)
+    return settings
 
 
 def connectivity_to_xarray(
@@ -545,9 +563,12 @@ def connectivity_to_xarray(
         measure does not take raises ``TypeError``. There is no
         ``transform_kwargs``: ``m`` is already built.
     **kwargs
-        Measure settings given directly as keyword arguments, the 2.x route;
-        pass them in ``connectivity_kwargs`` instead. A setting in both raises
-        ``ValueError``.
+        Measure settings given directly as keyword arguments.
+
+        .. deprecated:: 3.0
+           Pass them in ``connectivity_kwargs``, which gives the same result;
+           this route warns and is removed in 4.0. A setting given both ways
+           raises ``ValueError``.
 
     Returns
     -------
@@ -585,6 +606,7 @@ def connectivity_to_xarray(
         getattr(Connectivity, method),
         {key: value for key, value in measure_settings.items() if key != "group_labels"},
     )
+    _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     connectivity = Connectivity.from_transform(m)
     group_labels, measure_settings, group_methods = _resolve_group_labels(
         [method], measure_settings, group_labels, connectivity.n_signals
@@ -1085,11 +1107,14 @@ def multitaper_connectivity(
         DataArray dimension containing signals or channels. Common names such as
         ``"signal"`` and ``"channel"`` are inferred automatically.
     **kwargs
-        Advanced ``Multitaper`` settings given directly as keyword arguments,
-        the 2.x route; pass them in ``transform_kwargs`` instead. A setting in
-        both raises ``ValueError``, and a name that is not a ``Multitaper``
-        setting raises ``TypeError``. Measure settings do not go here (see
-        ``connectivity_kwargs``).
+        Advanced ``Multitaper`` settings given directly as keyword arguments.
+
+        .. deprecated:: 3.0
+           Pass them in ``transform_kwargs``, which gives the same result;
+           this route warns and is removed in 4.0. A setting given both ways
+           raises ``ValueError``, and a name that is not a ``Multitaper``
+           setting raises ``TypeError``. Measure settings do not go here (see
+           ``connectivity_kwargs``).
 
     Returns
     -------
