@@ -205,9 +205,27 @@ def test_hann_bandwidth_matches_the_actual_window(data, n_samples):
     expected = 64 * np.sum(window**2) / np.sum(window) ** 2
     assert stft.equivalent_noise_bandwidth == pytest.approx(expected)
     assert welch.equivalent_noise_bandwidth == pytest.approx(expected)
-    assert not hasattr(stft, "frequency_resolution")
-    with pytest.raises(AttributeError, match="equivalent_noise_bandwidth"):
-        _ = stft.frequency_resolution
+
+
+def test_stft_has_no_multitaper_only_settings(data):
+    """A Hann STFT is not a multitaper estimate with one taper."""
+    stft = _transform("stft", data)
+    assert not isinstance(stft, Multitaper)
+    multitaper_only = {
+        "frequency_resolution",
+        "time_halfbandwidth_product",
+        "n_tapers",
+        "tapers",
+        "taper_eigenvalues",
+        "taper_weighting",
+        "is_low_bias",
+        "adaptive_max_iterations",
+        "adaptive_tolerance",
+    }
+    assert multitaper_only <= set(dir(_transform("multitaper", data)))
+    assert not multitaper_only & set(dir(stft))
+    with pytest.raises(AttributeError):
+        stft.sampling_frequency = 32
 
 
 def test_familiar_multitaper_names_remain_the_single_supported_spelling(data):

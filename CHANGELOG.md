@@ -103,9 +103,10 @@ directly with results from 2.x.
   and `summarize_parameters()` describe its Hann window and equivalent noise
   bandwidth. `ShortTimeFourierTransform` and `Welch` expose
   `equivalent_noise_bandwidth`, computed from the actual window (so a
-  two-sample window gives `sampling_frequency`);
-  `ShortTimeFourierTransform.frequency_resolution` raises `AttributeError`
-  instead of inheriting Multitaper's DPSS definition. `Welch` exposes its resolved settings (segment duration and step,
+  two-sample window gives `sampling_frequency`).
+  `ShortTimeFourierTransform` is not a `Multitaper` subclass, so it has none of
+  the DPSS-only settings (`frequency_resolution`, `time_halfbandwidth_product`,
+  `n_tapers`, `tapers`, taper weighting). `Welch` exposes its resolved settings (segment duration and step,
   overlap, detrending, start time, FFT length, workers) as read-only
   properties.
 - Morlet transforms now expose strict time-frequency edge validity and support

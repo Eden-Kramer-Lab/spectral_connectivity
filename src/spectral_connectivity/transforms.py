@@ -6,7 +6,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
-    NoReturn,
     Protocol,
     TypedDict,
     TypeVar,
@@ -1777,6 +1776,11 @@ Frequency Analysis
             Complex-valued Fourier coefficients.
 
         """
+        logger.info(self)
+        return self._tapered_fft()
+
+    def _tapered_fft(self) -> NDArray[np.complexfloating]:
+        """Compute :meth:`fft` without logging this transform's settings."""
         time_series = _sliding_window(
             self._time_series,
             window_size=self.n_time_samples_per_window,
@@ -1785,8 +1789,6 @@ Frequency Analysis
         )
         if self.detrend_type is not None:
             time_series = detrend(time_series, type=self.detrend_type)
-
-        logger.info(self)
 
         coefficients = _multitaper_fft(
             self._tapers_for_fft(),
@@ -1832,7 +1834,7 @@ Frequency Analysis
         return self._tapers
 
 
-class ShortTimeFourierTransform(Multitaper):
+class ShortTimeFourierTransform:
     """Short-time Fourier transform using an L2-normalized Hann window.
 
     The returned coefficients follow the same five-dimensional contract as
@@ -1868,22 +1870,6 @@ class ShortTimeFourierTransform(Multitaper):
     """
 
     _transform_name = "stft"
-    # Listed, not filtered from Multitaper's, so a multitaper-only setting added
-    # there cannot leak into STFT provenance.
-    _PROVENANCE_FIELDS = (
-        "detrend_type",
-        "fft_workers",
-        "n_fft_samples",
-        "n_signals",
-        "n_time_samples_per_step",
-        "n_time_samples_per_window",
-        "n_trials",
-        "nyquist_frequency",
-        "sampling_frequency",
-        "start_time",
-        "time_window_duration",
-        "time_window_step",
-    )
     is_one_sided = False
 
     def __init__(
@@ -1944,7 +1930,10 @@ class ShortTimeFourierTransform(Multitaper):
             msg = "The requested Hann window has zero energy."
             raise ValueError(msg)
         window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
-        super().__init__(
+        # Multitaper's windowed FFT with one custom taper is the Hann STFT. It
+        # is held, not inherited, because none of its DPSS settings (NW, taper
+        # count and weighting, concentration bandwidth) describe this transform.
+        self._windowed_fft = Multitaper(
             time_series,
             sampling_frequency=sampling_frequency,
             time_halfbandwidth_product=1,
@@ -1961,11 +1950,135 @@ class ShortTimeFourierTransform(Multitaper):
             fft_workers=fft_workers,
         )
 
+    # The settings below are read from the internal transform that does the
+    # computation, so they cannot be reassigned out of step with it.
     @property
-    def frequency_resolution(self) -> NoReturn:
-        """Raise AttributeError: STFT uses ``equivalent_noise_bandwidth`` instead."""
-        msg = "STFT exposes equivalent_noise_bandwidth; frequency_resolution is a Multitaper property."
-        raise AttributeError(msg)
+    def time_series(self) -> BackendArray:
+        """Independent read-only copy of the input time-series snapshot."""
+        return self._windowed_fft.time_series
+
+    @property
+    def sampling_frequency(self) -> float:
+        """Samples per second, in Hz."""
+        return self._windowed_fft.sampling_frequency
+
+    @property
+    def detrend_type(self) -> str | None:
+        """Detrending applied to each window before the FFT."""
+        return self._windowed_fft.detrend_type
+
+    @property
+    def start_time(self) -> BackendArray:
+        """Time of the first sample, in seconds."""
+        return self._windowed_fft.start_time
+
+    @property
+    def fft_workers(self) -> int | None:
+        """Worker threads for SciPy's CPU FFT (``None`` uses SciPy's default)."""
+        return self._windowed_fft.fft_workers
+
+    @property
+    def n_time_samples_per_window(self) -> int:
+        """Window length in samples."""
+        return self._windowed_fft.n_time_samples_per_window
+
+    @property
+    def n_time_samples_per_step(self) -> int:
+        """Step between window starts, in samples."""
+        return self._windowed_fft.n_time_samples_per_step
+
+    @property
+    def time_window_duration(self) -> float:
+        """Window length in seconds, after rounding to whole samples."""
+        return self._windowed_fft.time_window_duration
+
+    @property
+    def time_window_step(self) -> float:
+        """Step between window starts in seconds, after rounding to whole samples."""
+        return self._windowed_fft.time_window_step
+
+    @property
+    def n_fft_samples(self) -> int:
+        """FFT length of each window."""
+        return self._windowed_fft.n_fft_samples
+
+    @property
+    def frequencies(self) -> NDArray[np.floating]:
+        """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        Returns
+        -------
+        frequencies : array, shape (n_fft_samples,)
+        """
+        return self._windowed_fft.frequencies
+
+    @property
+    def time(self) -> NDArray[np.floating]:
+        """Center time of each window, in seconds.
+
+        Returns
+        -------
+        time : array, shape (n_time_windows,)
+        """
+        return self._windowed_fft.time
+
+    @property
+    def n_trials(self) -> int:
+        """Number of trials in the time series."""
+        return self._windowed_fft.n_trials
+
+    @property
+    def n_signals(self) -> int:
+        """Number of signals in the time series."""
+        return self._windowed_fft.n_signals
+
+    @property
+    def nyquist_frequency(self) -> float:
+        """Maximum resolvable frequency, in Hz."""
+        return self._windowed_fft.nyquist_frequency
+
+    @property
+    def observations_are_independent(self) -> bool:
+        """Whether the trial observations may be counted as independent.
+
+        Each window has one Hann-windowed estimate per trial, and trials are
+        independent realizations, so this is always ``True``. Correlation
+        between overlapping windows, which matters only for expectations that
+        also average over time, is reported by :attr:`time_bins_are_independent`.
+
+        Returns
+        -------
+        bool
+        """
+        return True
+
+    @property
+    def time_bins_are_independent(self) -> bool:
+        """Whether the time windows may be counted as independent observations.
+
+        As for :class:`Multitaper`, windows count as independent when
+        ``n_time_samples_per_step`` is at least half of
+        ``n_time_samples_per_window``. :class:`Connectivity` warns when an
+        expectation averages over correlated time bins.
+
+        Returns
+        -------
+        bool
+            ``True`` when successive windows overlap by at most half.
+        """
+        return self._windowed_fft.time_bins_are_independent
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Compute the Hann-windowed Fourier coefficients of every window.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape ``(n_time_windows, n_trials, 1, n_fft_samples, n_signals)``;
+            the taper axis is a singleton.
+        """
+        logger.info(self)
+        return self._windowed_fft._tapered_fft()
 
     @property
     def equivalent_noise_bandwidth(self) -> float:
@@ -1998,7 +2111,7 @@ class ShortTimeFourierTransform(Multitaper):
         >>> round(stft.equivalent_noise_bandwidth, 6)
         3.0
         """
-        window = self._tapers_for_fft()[:, 0]
+        window = self._windowed_fft._tapers_for_fft()[:, 0]
         return float(
             to_numpy(self.sampling_frequency * xp.sum(window**2) / xp.sum(window) ** 2)
         )
@@ -2033,16 +2146,31 @@ class ShortTimeFourierTransform(Multitaper):
         >>> print(stft.summarize_parameters().splitlines()[0])
         Short-Time Fourier Transform Configuration
         """
-        return self._summary(
+        return self._windowed_fft._summary(
             "Short-Time Fourier Transform Configuration",
             [("Window", "Hann (periodic, L2-normalized)")],
             ("Equivalent noise bandwidth", f"{self.equivalent_noise_bandwidth:.1f} Hz"),
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
-        metadata = super()._provenance_metadata()
-        metadata["window"] = "hann_periodic"
-        return metadata
+        """Native transform settings, serialized by the shared provenance builder."""
+        return {
+            "transform": self._transform_name,
+            "detrend_type": self.detrend_type,
+            "fft_workers": self.fft_workers,
+            "n_fft_samples": self.n_fft_samples,
+            "n_signals": self.n_signals,
+            "n_time_samples_per_step": self.n_time_samples_per_step,
+            "n_time_samples_per_window": self.n_time_samples_per_window,
+            "n_trials": self.n_trials,
+            "nyquist_frequency": self.nyquist_frequency,
+            "sampling_frequency": self.sampling_frequency,
+            "start_time": to_numpy(self.start_time),
+            "time_window_duration": self.time_window_duration,
+            "time_window_step": self.time_window_step,
+            "window": "hann_periodic",
+            **self._spectral_bandwidth_metadata(),
+        }
 
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
         return {

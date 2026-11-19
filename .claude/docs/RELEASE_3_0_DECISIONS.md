@@ -107,9 +107,10 @@ released interfaces, and remove those aliases in 4.0 under the policy below.
   bandwidth. For Hann STFT/Welch, identify equivalent noise bandwidth. A future
   Morlet bandwidth must state whether it describes amplitude or power and which
   width convention it uses. Custom tapers also need an explicit definition.
-- STFT currently subclasses Multitaper. Renaming the STFT property must also
-  prevent it from inheriting Multitaper's supported `frequency_resolution`
-  property with a different meaning. Include that in the D2 acceptance checks.
+- STFT must not inherit Multitaper's supported `frequency_resolution` property
+  with a different meaning. Step 2 therefore stops STFT subclassing Multitaper:
+  it holds one, so it has none of the DPSS-only members. Include that in the D2
+  acceptance checks.
 - Preserve units and `long_name` on copied coordinates. Keep recording identifiers
   such as scalar `subject`/`session` coordinates when unambiguous. Do not copy a
   trial-level condition label onto a result that averages several conditions.
@@ -241,6 +242,11 @@ adding it would preserve that estimator's definition.
 | 4 | Add coherence/source naming and interpretation metadata; document power's axis (D5–D8, D25). | Numerical identity of aliases; D6 default-variable migration example; explicitly requested old names still work with warnings; unchanged documented diagonals; component serialization. |
 | 5 | Set new signatures and advanced wrapper routing; correct the statistics observation-count keyword; deprecate the constructor alias; document retained component-count and tolerance calls (D9, D11, D12, D14, D16, D24, D29). | Supported released forms and common wrapper keywords work without warnings; genuinely deprecated paths agree numerically and warn at callers; duplicate arguments fail; published positional order is preserved. |
 | 6 | Set simulator shapes and lag units; finalize migration examples and the removal checklist (D17, D31). | All documented shapes and asserting tutorials pass; seconds-to-samples conversion is explicit; every deprecated path is tracked for 4.0. |
+
+Between PRs 2 and 3, a separate internal PR extracts a private windowed-FFT base
+class shared by `Multitaper` and `ShortTimeFourierTransform`, replacing the
+Multitaper that step 2 leaves STFT holding. It changes no public name, value,
+or result attribute.
 
 D10's step option and D22 can follow in 3.x. The released names and call forms
 retained by D2, D11, D12, D14 (`ci`), D15, D24, D25, D28, and D29 deliberately
