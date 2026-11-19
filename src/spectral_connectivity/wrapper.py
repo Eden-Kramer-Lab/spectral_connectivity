@@ -210,24 +210,33 @@ def list_measures(
 
 def frequency_band_reduce(
     result: xr.DataArray | xr.Dataset,
-    bands: Mapping[str, tuple[float, float]],
+    frequency_bands: Mapping[str, tuple[float, float]],
     *,
-    reduction: Literal["mean", "integral"] = "mean",
+    frequency_reduction: Literal["mean", "integral"] = "mean",
     circular: bool | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Reduce a frequency-resolved result into labeled frequency bands.
 
-    ``reduction="mean"`` averages the already-computed connectivity score over
-    the bins in each inclusive band. Phase is treated specially: a
+    The ``frequency_bands`` and ``frequency_reduction`` arguments mean what they
+    mean in :func:`multitaper_connectivity` and :func:`fourier_connectivity`,
+    applied to an already-computed result.
+
+    ``frequency_reduction="mean"`` averages the already-computed connectivity
+    score over the bins in each band, both endpoints included, so adjacent
+    bands such as ``(4, 8)`` and ``(8, 12)`` both average a bin lying at
+    exactly 8 Hz. Phase is treated specially: a
     ``coherence_phase`` result uses a circular mean, while complex-valued
-    measures use their ordinary complex (vector) mean. ``reduction="integral"``
+    measures use their ordinary complex (vector) mean.
+    ``frequency_reduction="integral"``
     integrates a spectral density over ``[low, high]`` and is intentionally
     restricted to ``power`` and ``cross_spectral_density``, where it represents
     band power/covariance rather than a frequency-averaged score. Each bin
     stands for the frequency cell between the midpoints to its neighbours, and
     contributes its density times the part of that cell inside the band, so
     band edges need not fall on bins, a one-bin band is not zero, and adjacent
-    bands add up to their union. On a one-sided grid starting at 0 Hz the DC
+    bands add up to their union: a bin on their shared endpoint contributes
+    half its cell to each, so no power is counted twice. On a one-sided grid
+    starting at 0 Hz the DC
     bin and the Nyquist bin (present for an even FFT length) own only the
     half-cell toward their neighbour but count with a full spacing, matching
     the one-sided convention in which those two bins are not doubled;
@@ -238,9 +247,10 @@ def frequency_band_reduce(
     ----------
     result : xarray.DataArray or xarray.Dataset
         Result with a one-dimensional ``frequency`` coordinate.
-    bands : mapping of str to (float, float)
-        Inclusive lower and upper frequency bounds in the coordinate's units.
-    reduction : {"mean", "integral"}, default="mean"
+    frequency_bands : mapping of str to (float, float)
+        Band names and their ``(low, high)`` bounds in the coordinate's units,
+        both endpoints included.
+    frequency_reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
     circular : bool, optional
         Use a circular mean (for phase angles in radians). By default it is
@@ -285,8 +295,8 @@ def frequency_band_reduce(
     return _with_frequency_grid_metadata(
         _reduce_frequency_bands(
             result,
-            bands,
-            reduction=reduction,
+            frequency_bands,
+            frequency_reduction=frequency_reduction,
             circular=circular,
             nyquist_frequency=_nyquist_frequency(result),
         )

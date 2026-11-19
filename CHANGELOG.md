@@ -147,8 +147,9 @@ directly with results from 2.x.
   requires a full two-sided spectrum. High-level results can be cropped,
   decimated, or reduced into named frequency bands; phase uses a circular mean
   and integration is restricted to spectral densities. The standalone
-  `frequency_band_reduce(result, bands, reduction=...)` applies the same
-  band reduction to an already-computed labeled result. Datasets holding
+  `frequency_band_reduce(result, frequency_bands, frequency_reduction=...)`
+  applies the same band reduction, with the wrappers' keywords, to an
+  already-computed labeled result. Datasets holding
   spatial filters, patterns, or global-coherence vectors are rejected, since
   their sign and phase are arbitrary per frequency; reduce the score variable
   instead.
@@ -599,7 +600,7 @@ directly with results from 2.x.
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
   simulations.
-- `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
+- `frequency_band_reduce(frequency_reduction="integral")` half-counted the DC and Nyquist
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
   data is no longer short by half the DC cell. The Nyquist bin is the bin at the

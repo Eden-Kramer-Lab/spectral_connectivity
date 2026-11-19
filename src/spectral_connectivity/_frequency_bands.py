@@ -119,9 +119,9 @@ _BAND_INTEGRAL_LONG_NAMES = {
 
 def _reduce_frequency_bands(
     result: xr.DataArray | xr.Dataset,
-    bands: Mapping[str, tuple[float, float]],
+    frequency_bands: Mapping[str, tuple[float, float]],
     *,
-    reduction: Literal["mean", "integral"],
+    frequency_reduction: Literal["mean", "integral"],
     circular: bool | None,
     nyquist_frequency: float | None,
 ) -> xr.DataArray | xr.Dataset:
@@ -133,11 +133,11 @@ def _reduce_frequency_bands(
     if "frequency" not in result.dims:
         msg = "result must have a 'frequency' dimension."
         raise ValueError(msg)
-    if reduction not in {"mean", "integral"}:
-        msg = "reduction must be either 'mean' or 'integral'."
+    if frequency_reduction not in {"mean", "integral"}:
+        msg = "frequency_reduction must be either 'mean' or 'integral'."
         raise ValueError(msg)
-    if not isinstance(bands, Mapping) or len(bands) == 0:  # type: ignore[redundant-expr]  # user input
-        msg = "bands must be a non-empty mapping of names to bounds."
+    if not isinstance(frequency_bands, Mapping) or len(frequency_bands) == 0:  # type: ignore[redundant-expr]  # user input
+        msg = "frequency_bands must be a non-empty mapping of names to bounds."
         raise ValueError(msg)
 
     frequencies = np.asarray(result.coords["frequency"].values)
@@ -151,7 +151,7 @@ def _reduce_frequency_bands(
         msg = "frequency must be strictly increasing for band reduction."
         raise ValueError(msg)
 
-    band_names = list(bands)
+    band_names = list(frequency_bands)
     if len(set(band_names)) != len(band_names) or not all(
         isinstance(name, str) and name  # type: ignore[redundant-expr]  # user input
         for name in band_names
@@ -161,7 +161,7 @@ def _reduce_frequency_bands(
 
     band_masks_and_bounds = [
         _inclusive_frequency_mask(f"Band {name!r}", bounds, frequencies)
-        for name, bounds in bands.items()
+        for name, bounds in frequency_bands.items()
     ]
     discarded = [
         name
@@ -180,19 +180,22 @@ def _reduce_frequency_bands(
         # Discard them first: one left on a Dataset would take precedence over
         # the per-band coordinate of each reduced variable.
         result = result.drop_vars(discarded)
-    if reduction == "integral" and frequencies.size < 2:
-        msg = "reduction='integral' needs at least two frequency bins to know their widths."
+    if frequency_reduction == "integral" and frequencies.size < 2:
+        msg = (
+            "frequency_reduction='integral' needs at least two frequency bins to "
+            "know their widths."
+        )
         raise ValueError(msg)
 
     def _reduce_dataarray(data: xr.DataArray) -> xr.DataArray:
         measure = str(data.attrs.get("measure", "" if data.name is None else data.name))
-        if reduction == "integral" and measure not in {
+        if frequency_reduction == "integral" and measure not in {
             "power",
             "cross_spectral_density",
         }:
             msg = (
-                "reduction='integral' is defined only for power and "
-                "cross_spectral_density; use reduction='mean' for "
+                "frequency_reduction='integral' is defined only for power and "
+                "cross_spectral_density; use frequency_reduction='mean' for "
                 f"{measure or 'this result'!r}."
             )
             raise ValueError(msg)
@@ -200,7 +203,7 @@ def _reduce_frequency_bands(
         reduced_bands: list[xr.DataArray] = []
         band_validity: list[xr.DataArray] = []
         for mask, (low, high) in band_masks_and_bounds:
-            if reduction == "integral":
+            if frequency_reduction == "integral":
                 weights = _band_integration_weights(frequencies, low, high, nyquist_frequency)
                 # Bins inside the band count for validity even with zero weight
                 # (a zero-width band), so an invalid bin is never read as zero.
@@ -211,7 +214,7 @@ def _reduce_frequency_bands(
             # A NaN bin (an edge-invalid or undefined estimate) makes the band
             # value undefined for every reduction; skipping it silently would
             # average a different set of bins per time point.
-            if reduction == "integral":
+            if frequency_reduction == "integral":
                 reduced = xr.dot(selected, xr.DataArray(weights[used], dims="frequency"))
                 # Some xarray versions (e.g. 2025.6) drop coordinate attrs in
                 # xr.dot; restore them from the input's coordinates.
@@ -277,15 +280,15 @@ def _reduce_frequency_bands(
         )
         reduced = reduced.transpose(*desired_dims)
         reduced.attrs = dict(data.attrs)
-        if reduction == "integral":
+        if frequency_reduction == "integral":
             # Integrating a density over frequency removes its per-Hz unit; a
             # unit that does not end in /Hz cannot be converted, so it is dropped.
             reduced.attrs["long_name"] = _BAND_INTEGRAL_LONG_NAMES[measure]
             units = reduced.attrs.pop("units", None)
             if isinstance(units, str) and units.endswith("/Hz"):
                 reduced.attrs["units"] = units.removesuffix("/Hz")
-        reduced.attrs["frequency_bands_json"] = _canonical_json(bands)
-        reduced.attrs["frequency_reduction"] = reduction
+        reduced.attrs["frequency_bands_json"] = _canonical_json(frequency_bands)
+        reduced.attrs["frequency_reduction"] = frequency_reduction
         return reduced
 
     if isinstance(result, xr.DataArray):
@@ -395,7 +398,7 @@ def _select_and_reduce_frequencies(
         selected = _reduce_frequency_bands(
             selected,
             frequency_bands,
-            reduction=frequency_reduction,
+            frequency_reduction=frequency_reduction,
             circular=None,
             nyquist_frequency=nyquist_frequency,
         )

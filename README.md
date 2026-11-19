@@ -150,7 +150,8 @@ use a complex-vector mean and `coherence_phase` uses a circular mean. Band
 integration is restricted to power and cross-spectral density, where it has the
 physical interpretation of band power/covariance. The same reduction is
 available for an already-computed result via
-`frequency_band_reduce(result, bands, reduction="mean")`.
+`frequency_band_reduce(result, frequency_bands, frequency_reduction="mean")`,
+which takes the wrappers' keywords.
 
 `time_series` may also be an `xarray.DataArray`. Dimension names, not
 positions, define the roles: common names for time, trial and signal dimensions

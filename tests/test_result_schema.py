@@ -449,8 +449,8 @@ def test_normalized_grid_keeps_its_nyquist_bin_after_cropping(data):
     cropped = full.sel(frequency=slice(0, 0.4375))
     band = {"upper": (0.375, 0.4375)}
     xr.testing.assert_allclose(
-        frequency_band_reduce(cropped, band, reduction="integral"),
-        frequency_band_reduce(full, band, reduction="integral"),
+        frequency_band_reduce(cropped, band, frequency_reduction="integral"),
+        frequency_band_reduce(full, band, frequency_reduction="integral"),
         rtol=1e-12,
     )
 
@@ -522,8 +522,10 @@ def test_nyquist_follows_from_the_sampling_rate_when_the_transform_omits_it(data
     assert "mt_nyquist_frequency" not in full.attrs
     band = {"upper": (4, 8)}
     xr.testing.assert_allclose(
-        frequency_band_reduce(full.sel(frequency=slice(0, 8)), band, reduction="integral"),
-        frequency_band_reduce(full, band, reduction="integral"),
+        frequency_band_reduce(
+            full.sel(frequency=slice(0, 8)), band, frequency_reduction="integral"
+        ),
+        frequency_band_reduce(full, band, frequency_reduction="integral"),
         rtol=1e-12,
     )
 
