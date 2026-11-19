@@ -38,6 +38,8 @@ def _range(lower: float, upper: float, is_complex: bool) -> str:
 
 
 def _diagonal(policy: str, value: float | None) -> str:
+    if policy == "rounding_noise":
+        return f"{value:g}, plus rounding noise"
     return _DIAGONALS[policy] if value is None else f"{value:g}"
 
 

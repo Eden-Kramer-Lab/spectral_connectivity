@@ -2493,8 +2493,8 @@ class Connectivity:
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Imaginary coherence magnitudes (symmetric in the signal pair; see
             :meth:`imaginary_coherency` for the signed, lead/lag-aware version).
-            The diagonal is 0, the imaginary part of a signal's coherency with
-            itself.
+            The diagonal is 0 (to within rounding), the imaginary part of a
+            signal's coherency with itself.
 
         Notes
         -----
@@ -3755,7 +3755,13 @@ class Connectivity:
         Notes
         -----
         **Range**: ``[0, 1]``.  Exact zero- or pi-lag locking has a zero
-        numerator and denominator and is defined as zero.
+        numerator and denominator and is defined as zero. A signal with
+        itself is such a case, but its PLV is computed: rounding can leave its
+        real part just below 1 and its imaginary part of rounding size, and
+        the square root in the denominator amplifies that by about
+        ``1 / sqrt(eps)``. The diagonal is therefore rounding noise below about
+        ``sqrt(eps)`` of the computation precision (1.5e-8 in float64,
+        3.5e-4 in float32), and exactly 0 only where the rounding cancels.
 
         References
         ----------

@@ -125,10 +125,15 @@ class MeasureInfo:
         ``"masked_nan"`` (NaN although the estimator defines a value there,
         e.g. self-coherence is 1 at nonzero power), ``"undefined_nan"`` (NaN:
         the estimator has no self-connection), ``"constant"`` (the same value
-        for any data, ``diagonal_value``), ``"estimated"`` (a data-dependent
-        value), or ``"not_applicable"`` (no self-connection entries).
+        for any data, ``diagonal_value``, to within the rounding of the
+        averages behind it), ``"rounding_noise"`` (nominally
+        ``diagonal_value``, but computed from rounding residues the formula
+        amplifies, so it can be visibly nonzero), ``"estimated"`` (a
+        data-dependent value), or ``"not_applicable"`` (no self-connection
+        entries).
     diagonal_value : float or None
-        The value of a ``"constant"`` diagonal; ``None`` otherwise.
+        The value of a ``"constant"`` diagonal, or the nominal value of a
+        ``"rounding_noise"`` one; ``None`` otherwise.
     sign_convention : str or None
         Which signal leads when the sign or angle shows it; ``None`` for
         measures whose sign carries no lead/lag.
@@ -1005,7 +1010,8 @@ def multitaper_connectivity(
     ``value_range_applies_to="magnitude"`` for complex measures), ``quantity``
     and ``formula`` (the coherency family), and ``diagonal_policy``, what a
     self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
-    ``"constant"``, ``"estimated"``, or ``"not_applicable"``.
+    ``"constant"``, ``"rounding_noise"``, ``"estimated"``, or
+    ``"not_applicable"``.
 
     ``power`` has a ``source`` axis, the one it shares with the pairwise
     measures in a Dataset; component filters and patterns index channels

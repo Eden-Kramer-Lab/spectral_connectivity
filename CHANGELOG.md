@@ -215,8 +215,10 @@ directly with results from 2.x.
   `quantity` and `formula` for the coherency family, and `diagonal_policy`:
   `masked_nan` where the package masks a defined self-value (coherence, whose
   self-value is 1 at nonzero power), `undefined_nan` where the estimator has
-  none (the Granger family), `constant` for identities (0 for
-  `imaginary_coherence`, where the signed `imaginary_coherency` is masked),
+  none (the Granger family), `constant` for identities, to within rounding
+  (0 for `imaginary_coherence`, where the signed `imaginary_coherency` is
+  masked), `rounding_noise` for the corrected imaginary PLV, whose nominal 0
+  is computed from amplified rounding residues and can be visibly nonzero,
   `estimated` for data-dependent self-values, and `not_applicable`. No
   diagonal value changed; the cookbook shows how to mask or fill diagonals
   uniformly. Band reduction keeps these attributes true of the band values:

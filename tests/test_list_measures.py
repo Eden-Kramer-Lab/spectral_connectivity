@@ -462,7 +462,8 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(
 
 # The self-connection values the documentation states, pinned here so that a
 # change to a measure's diagonal, or to what the registry says about it, fails.
-# A float is the constant every diagonal entry holds.
+# A float is the constant every diagonal entry holds, a (policy, value) pair
+# the nominal value of a diagonal that only approximates it.
 _DOCUMENTED_DIAGONALS = {
     "magnitude_squared_coherence": "masked_nan",
     "coherence_phase": "masked_nan",
@@ -474,7 +475,7 @@ _DOCUMENTED_DIAGONALS = {
     "weighted_phase_lag_index": 0.0,
     "debiased_squared_phase_lag_index": 0.0,
     "debiased_squared_weighted_phase_lag_index": 0.0,
-    "corrected_imaginary_phase_locking_value": 0.0,
+    "corrected_imaginary_phase_locking_value": ("rounding_noise", 0.0),
     "phase_locking_value": 1.0,
     "pairwise_phase_consistency": 1.0,
     "directed_phase_lag_index": 0.5,
@@ -513,21 +514,46 @@ def _diagonal(variable):
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
 def test_diagonal_matches_its_policy(coupled_results, measure):
     """The recorded ``diagonal_policy`` describes the values on the diagonal."""
-    assert (measure.diagonal_policy == "constant") == (measure.diagonal_value is not None)
+    nominal = measure.diagonal_policy in {"constant", "rounding_noise"}
+    assert nominal == (measure.diagonal_value is not None)
     _assert_diagonal_matches(
         measure, _main_variable(coupled_results[measure.name], measure.name)
     )
 
 
+def _sum_rounding(variable):
+    """Bound on the rounding of an average of ``n_observations`` terms of unit size.
+
+    A sum of ``n`` terms is within ``n * u`` of its exact value relative to the
+    terms' magnitudes (Higham's ``gamma_n``, unit roundoff ``u = eps / 2``).
+    Twice that, ``n * eps``, also covers the unit-modulus normalization of
+    phase measures and the squaring in pairwise phase consistency.
+    """
+    eps = np.finfo(np.real(variable.values).dtype).eps
+    return variable.attrs["n_observations"] * eps
+
+
 def _assert_diagonal_matches(measure, variable):
-    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says."""
+    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says.
+
+    A constant is the exact value only to within the rounding of the averages
+    it is computed from, which varies with the NumPy/BLAS build (exact in some).
+    A ``rounding_noise`` diagonal is that rounding amplified by ``1 / sqrt(eps)``
+    (corrected imaginary PLV divides a numerator of order ``eps`` by
+    ``sqrt(1 - Re^2)`` of order ``sqrt(eps)``), so it is bounded by ``sqrt(eps)``.
+    """
     diagonal = _diagonal(variable)
+    eps = np.finfo(np.real(variable.values).dtype).eps
     if measure.diagonal_policy == "not_applicable":
         assert diagonal is None
     elif measure.diagonal_policy in {"masked_nan", "undefined_nan"}:
         assert np.isnan(diagonal).all()
     elif measure.diagonal_policy == "constant":
-        np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            diagonal, measure.diagonal_value, rtol=0, atol=_sum_rounding(variable)
+        )
+    elif measure.diagonal_policy == "rounding_noise":
+        np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=np.sqrt(eps))
     else:
         assert measure.diagonal_policy == "estimated"
         assert np.isfinite(diagonal).all()
@@ -543,17 +569,20 @@ def test_documented_diagonals_are_the_registered_ones():
                 "constant",
                 documented,
             )
+        elif isinstance(documented, tuple):
+            assert (measure.diagonal_policy, measure.diagonal_value) == documented, name
         else:
             assert measure.diagonal_policy == documented, name
 
 
 def test_cross_spectral_density_diagonal_is_the_power_spectrum(coupled_results):
+    """The diagonal is the power, real to within the rounding of its average."""
     csd = coupled_results["cross_spectral_density"]
     diagonal = np.diagonal(csd.values, axis1=-2, axis2=-1)
     np.testing.assert_allclose(
         diagonal.real, coupled_results["power"].values, rtol=1e-12, atol=0
     )
-    np.testing.assert_array_equal(diagonal.imag, 0.0)
+    assert np.all(np.abs(diagonal.imag) <= _sum_rounding(csd) * diagonal.real)
 
 
 _OPTIONAL_MEASURE_ATTRS = (

@@ -128,7 +128,10 @@ which it is. Coherence is NaN there by the package's choice (`masked_nan`),
 although self-coherence is 1 for a signal with nonzero power; the imaginary
 part of coherency is 0 for a signal with itself, which `imaginary_coherence`
 returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
-`docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's policy.
+A constant holds to within the rounding of the averages it is computed from,
+at most about `n_observations` times machine epsilon (exactly 0 on some
+NumPy builds). `docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's
+policy.
 
 ```python
 >>> default = multitaper_connectivity(time_series, sampling_frequency=500)
@@ -137,8 +140,9 @@ returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
 >>> default["imaginary_coherence"].attrs["diagonal_policy"]
 'constant'
 >>> imaginary = default["imaginary_coherence"]
->>> float(imaginary.sel(source="0", target="0").max())
-0.0
+>>> rounding = imaginary.attrs["n_observations"] * np.finfo(float).eps
+>>> bool(abs(imaginary.sel(source="0", target="0")).max() <= rounding)
+True
 
 ```
 
@@ -496,7 +500,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
 | `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The theoretical range; an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
 | `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
-| `diagonal_policy` | What a self-connection holds: `masked_nan`, `undefined_nan`, `constant`, `estimated`, or `not_applicable` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay`'s slope and correlation variables, whose diagonals differ. |
+| `diagonal_policy` | What a self-connection holds: `masked_nan`, `undefined_nan`, `constant` (to within rounding), `rounding_noise` (nominally constant, but amplified rounding; mask it), `estimated`, or `not_applicable` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay`'s slope and correlation variables, whose diagonals differ. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

@@ -29,12 +29,19 @@ class _MeasureSpec:
     values, or their magnitude when ``is_complex``.
 
     ``diagonal_policy`` says what a self-connection (a signal, or group, with
-    itself) holds; ``diagonal_value`` is the value of a ``"constant"`` one:
+    itself) holds; ``diagonal_value`` is the value of a ``"constant"`` or
+    ``"rounding_noise"`` one:
 
     - ``"masked_nan"``: NaN although the estimator defines a value there (for
       coherence, 1 at nonzero power): the package masks it.
     - ``"undefined_nan"``: NaN because the estimator has no self-connection.
-    - ``"constant"``: the estimator's value, the same for any data.
+    - ``"constant"``: the estimator's value, the same for any data, to within
+      the rounding of the averages it is computed from (about
+      ``n_observations`` units in the last place).
+    - ``"rounding_noise"``: nominally ``diagonal_value`` (an identity or a
+      defined 0/0 limit), but computed from rounding residues that the
+      measure's formula amplifies, so it can differ from that value by much
+      more than rounding (see ``corrected_imaginary_phase_locking_value``).
     - ``"estimated"``: the estimator's value, which depends on the data.
     - ``"not_applicable"``: the result has no self-connection entries.
 
@@ -61,7 +68,12 @@ class _MeasureSpec:
     value_range: tuple[float, float]
     interpretation: str
     diagonal_policy: Literal[
-        "masked_nan", "undefined_nan", "constant", "estimated", "not_applicable"
+        "masked_nan",
+        "undefined_nan",
+        "constant",
+        "rounding_noise",
+        "estimated",
+        "not_applicable",
     ]
     diagonal_value: float | None = None
     sign_convention: str | None = None
@@ -78,8 +90,12 @@ class _MeasureSpec:
     requires_two_sided: bool = False
 
     def __post_init__(self) -> None:
-        if (self.diagonal_policy == "constant") != (self.diagonal_value is not None):
-            msg = "diagonal_value is the value of a constant diagonal, and only that."
+        nominal = self.diagonal_policy in {"constant", "rounding_noise"}
+        if nominal != (self.diagonal_value is not None):
+            msg = (
+                "diagonal_value is the value of a constant or rounding_noise "
+                "diagonal, and only that."
+            )
             raise ValueError(msg)
 
     @property
@@ -348,7 +364,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Phase locking with zero- and pi-lag contributions removed; insensitive to "
         "volume conduction.",
-        diagonal_policy="constant",
+        # A self-connection is the defined 0/0 limit, but the 0/0 is computed:
+        # rounding in the self-PLV leaves |Im| of order eps over
+        # sqrt(1 - Re^2) of order sqrt(eps).
+        diagonal_policy="rounding_noise",
         diagonal_value=0.0,
     ),
     "directed_phase_lag_index": _MeasureSpec(

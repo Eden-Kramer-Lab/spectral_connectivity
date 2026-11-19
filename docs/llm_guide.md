@@ -136,8 +136,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `formula` attrs say which form a coherency-family value has.
 - **Diagonals differ by measure.** A self-connection is NaN for coherence (a
   mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
-  `phase_locking_value`. Read a variable's `diagonal_policy` attr, and before
-  averaging over pairs mask a pairwise variable `v` with
+  `phase_locking_value`, to within rounding. Read a variable's
+  `diagonal_policy` attr, and before averaging over pairs mask a pairwise
+  variable `v` with
   `v.where(v.source != v.target)` (not a whole Dataset, whose `power` has no
   `target` axis).
 - **Directed measures need a two-sided spectrum.** The Granger and

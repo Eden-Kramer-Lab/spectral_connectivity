@@ -18,7 +18,7 @@ directed phase lag index) means `i` leads `j`.
 Generated from `list_measures()`. For complex measures the range bounds the
 magnitude. "Observations" are trials × tapers. The Diagonal column is what a
 self-connection holds (see [Diagonal values](#diagonal-values)); a number is
-the constant every diagonal entry has.
+the constant every diagonal entry has, to within rounding.
 
 <!-- measure-table:start -->
 | Measure | Range | Units | Diagonal | Interpretation |
@@ -38,7 +38,7 @@ the constant every diagonal entry has.
 | `cross_spectral_density` | \|z\| in [0, ∞) | (input units)^2/Hz | estimated | Complex, Hermitian cross-spectrum; unnormalized, so it scales with signal power. Use coherency for a normalized version. |
 | `imaginary_coherency` | [-1, 1] | 1 | NaN (masked) | Signed imaginary part of coherency; blind to zero-lag coupling. Positive (source=a, target=b) means a leads b. |
 | `partial_coherence` | [0, 1] | 1 | NaN (masked) | Magnitude-squared coherence after removing the linear influence of every other signal; near 0 for pairs coupled only through other signals. |
-| `corrected_imaginary_phase_locking_value` | [0, 1] | 1 | 0 | Phase locking with zero- and pi-lag contributions removed; insensitive to volume conduction. |
+| `corrected_imaginary_phase_locking_value` | [0, 1] | 1 | 0, plus rounding noise | Phase locking with zero- and pi-lag contributions removed; insensitive to volume conduction. |
 | `directed_phase_lag_index` | [0, 1] | 1 | 0.5 | Above 0.5, the source phase-leads the target; below 0.5 it lags; 0.5 is no preferred direction. |
 | `subset_pairwise_spectral_granger_prediction` | [0, ∞) | 1 | NaN (undefined) | pairwise_spectral_granger_prediction for only the requested pairs; other entries are NaN. |
 | `conditional_spectral_granger_prediction` | [0, ∞) | 1 | NaN (undefined) | Spectral Granger causality from source to target conditioned on every other signal, removing influence relayed through observed signals. |
@@ -115,17 +115,29 @@ the Diagonal column above:
 |---|---|---|
 | `masked_nan` | NaN by the package's choice, although the estimator defines a value: self-coherence is 1 for a signal with nonzero power, its phase and imaginary part are 0, and partial and canonical coherence of a signal (group) with itself are 1. | the coherency family (`magnitude_squared_coherence`, `coherence_phase`, `coherency`, `imaginary_coherency`, `partial_coherence`), `canonical_coherence`, `maximized_imaginary_coherency` and `multivariate_interaction_measure` (a group with itself is not computed), and `delay`, `group_delay`, and `phase_slope_index`, which inherit coherency's mask |
 | `undefined_nan` | NaN: the estimator has no self-connection (a signal cannot Granger-cause itself in these models). | the spectral Granger measures, including blockwise |
-| `constant` | The estimator's value, the same for any data. | 0 for `imaginary_coherence`, the phase lag indices, and `corrected_imaginary_phase_locking_value`; 1 for `phase_locking_value` and `pairwise_phase_consistency`; 0.5 for `directed_phase_lag_index` |
-| `estimated` | The estimator's own, data-dependent value. | `cross_spectral_density` (the power spectrum) and the transfer-function measures (each signal's self-transfer) |
+| `constant` | The estimator's value, the same for any data, to within the rounding of the averages it is computed from: at most about `n_observations` × machine epsilon (2.2e-16 in float64) from the value, and exact on some platforms. | 0 for `imaginary_coherence` and the phase lag indices; 1 for `phase_locking_value` and `pairwise_phase_consistency`; 0.5 for `directed_phase_lag_index` |
+| `rounding_noise` | Nominally a constant, but computed from rounding residues that the formula amplifies, so it can be visibly nonzero; mask it rather than read it. | `corrected_imaginary_phase_locking_value`, nominally 0 (see below) |
+| `estimated` | The estimator's own, data-dependent value. | `cross_spectral_density` (the power spectrum; its imaginary part is zero to within rounding) and the transfer-function measures (each signal's self-transfer) |
 | `not_applicable` | No self-connection entries. | `power`, `global_coherence`, and the component measures, whose connections pair different groups |
 
 `group_delay`'s Dataset also holds `group_delay_slope` (NaN diagonal) and
 `group_delay_r_value`, whose diagonal is 1; each records its own
 `diagonal_policy`.
 
-Two differences are deliberate and are kept: `imaginary_coherence` is 0 on the
-diagonal where the signed `imaginary_coherency` is NaN, and coherence is NaN
-where its value would be 1. To treat every self-connection the same way, mask
+`corrected_imaginary_phase_locking_value` divides `|Im(PLV)|` by
+`sqrt(1 - Re(PLV)^2)` and defines the 0/0 of exact zero-lag locking as 0. A
+signal's PLV with itself is 1 in exact arithmetic, but the computed average can
+round to just below 1 with an imaginary part of rounding size. The square root
+then turns `1 - Re(PLV)^2`, of order machine epsilon `eps`, into a denominator
+of order `sqrt(eps)`, and the numerator `|Im(PLV)|` is at most of order `eps`:
+the diagonal is rounding noise amplified by about `1 / sqrt(eps)`, below about
+`sqrt(eps)` (1.5e-8 in float64, 3.5e-4 when computed with
+`dtype=np.complex64`). Observed values range from exactly 0 (NumPy 2) to about
+6e-10 in float64 and 2e-5 at complex64 precision (NumPy 1.24).
+
+Two differences are deliberate and are kept: `imaginary_coherence` is 0 (to
+within rounding) on the diagonal where the signed `imaginary_coherency` is NaN,
+and coherence is NaN where its value would be 1. To treat every self-connection the same way, mask
 it yourself; the cookbook's "Mask or fill the diagonal" recipe shows how.
 
 ## Notes
