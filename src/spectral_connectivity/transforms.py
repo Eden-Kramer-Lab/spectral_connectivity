@@ -1082,8 +1082,7 @@ Frequency Analysis
         ------
         ValueError
             If the resolved window is shorter than one sample or longer than
-            the time series. :class:`ShortTimeFourierTransform` checks this
-            when it is constructed.
+            the time series.
 
         """
         # An explicit n_time_samples_per_window is used as given (a duration
@@ -1308,10 +1307,8 @@ Frequency Analysis
         -------
         fourier_coefficients : array
             Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-            Complex-valued Fourier coefficients. :class:`Multitaper` has one
-            entry per taper on the taper axis, weighted as ``taper_weighting``
-            sets; :class:`ShortTimeFourierTransform` has a singleton taper
-            axis for its Hann window.
+            Complex-valued Fourier coefficients, with one entry per taper on
+            the taper axis.
 
         """
         logger.info(self)
@@ -1544,8 +1541,8 @@ class Multitaper(_WindowedFourierTransform):
 
     _transform_name = "multitaper"
     if TYPE_CHECKING:
-        # Plain attributes here, kept immutable by __setattr__. Declared for
-        # type checking only, so the API docs do not list them undocumented.
+        # Plain attributes here. Declared for type checking only, so the API
+        # docs do not list them undocumented.
         sampling_frequency: float
         detrend_type: str | None
         fft_workers: int | None
@@ -1697,9 +1694,6 @@ class Multitaper(_WindowedFourierTransform):
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
         self.is_low_bias = is_low_bias
-        # The sample counts are stored before the n_tapers and duration/count
-        # checks below, which read only the arguments; a failing check still
-        # fails construction.
         self._set_window_state(
             start_time,
             time_window_duration=time_window_duration,
@@ -2147,8 +2141,6 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         _validate_window_step(self.time_window_duration, self.time_window_step)
         _warn_about_unusual_time_series(self._time_series)
 
-    # The settings below have no setters, so they cannot be reassigned out of
-    # step with the computation.
     @property
     def sampling_frequency(self) -> float:
         """Samples per second, in Hz."""
