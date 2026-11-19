@@ -551,6 +551,43 @@ def test_transform_with_only_the_public_interface_is_labeled_by_its_class(data):
     )
 
 
+@pytest.mark.parametrize("has_frequencies", [False, True])
+@pytest.mark.parametrize("has_time", [False, True])
+def test_public_interface_transform_without_coordinates_is_not_labeled_hz_and_seconds(
+    data, has_frequencies, has_time
+):
+    """``frequencies=None`` and ``time=None`` mean cycles/sample and window indices."""
+    builtin = _transform("multitaper", data)
+
+    class PrecomputedTransform:
+        frequencies = builtin.frequencies if has_frequencies else None
+        time = builtin.time if has_time else None
+
+        def fft(self):
+            return builtin.fft()
+
+    result = connectivity_to_xarray(PrecomputedTransform(), "power")
+    delay = connectivity_to_xarray(PrecomputedTransform(), "group_delay")
+    if has_frequencies:
+        assert result.frequency.attrs["units"] == "Hz"
+        assert result.attrs["frequency_bin_spacing_units"] == "Hz"
+        assert "frequency_units" not in result.attrs
+        assert delay.group_delay.attrs["units"] == "s"
+    else:
+        assert result.frequency.values[-1] == 0.5
+        assert result.frequency.attrs["units"] == "cycles/sample"
+        assert result.attrs["frequency_units"] == "cycles/sample"
+        assert result.attrs["frequency_bin_spacing_units"] == "cycles/sample"
+        assert result.attrs["nyquist_frequency"] == 0.5
+        assert delay.group_delay.attrs["units"] == "samples"
+    if has_time:
+        assert result.time.attrs["units"] == "s"
+    else:
+        assert result.time.values.tolist() == list(range(builtin.time.size))
+        assert "units" not in result.time.attrs
+        assert result.attrs["time_coordinate"] == "index"
+
+
 def test_rounded_uniform_grid_is_uniform_for_both_spacing_and_phase_slope(data):
     """One definition of a uniform grid serves the metadata and the measures."""
     frequencies = np.round(np.arange(4, 20, 1 / 3), 7)
@@ -678,6 +715,7 @@ def test_coordinate_units_express_normalized_delay_without_claiming_seconds(data
         ("1/s", "Hz"),
         ("s-1", "Hz"),  # CF/UDUNITS
         ("s**-1", "Hz"),
+        ("sec^-1", "Hz"),
         ("1 / second", "Hz"),
         ("cycles/s", "Hz"),
         (" Cycles/Sample ", "cycles/sample"),
@@ -715,6 +753,21 @@ def test_external_fourier_treats_empty_coordinate_units_as_unstated(data, units)
     result = fourier_connectivity(coefficients, method="power")
     assert result.attrs["frequency_units"] == "Hz"
     assert result.attrs["sampling_frequency"] == 64
+    assert result.frequency.attrs["units"] == "Hz"
+
+
+def test_empty_fourier_time_coordinate_units_are_unstated(data):
+    values = np.fft.fft(data, axis=0).transpose(1, 0, 2)[np.newaxis, ...]
+    coefficients = xr.DataArray(
+        values,
+        dims=("time", "trial", "frequency", "signal"),
+        coords={
+            "time": ("time", [2.0], {"units": "", "long_name": "Epoch center"}),
+            "frequency": np.fft.fftfreq(128, 1 / 64),
+        },
+    )
+    result = fourier_connectivity(coefficients, method="power")
+    assert result.time.attrs == {"long_name": "Epoch center", "units": "s"}
 
 
 def test_external_fourier_rejects_coordinate_units_that_require_conversion(data):

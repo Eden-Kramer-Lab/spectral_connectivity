@@ -632,6 +632,19 @@ def _scalar_coordinates_from_dataarray(
     }
 
 
+def _stated_coordinate_attrs(coordinate: xr.DataArray) -> dict[Hashable, Any]:
+    """A coordinate's attrs, without an empty ``units``.
+
+    An empty or blank ``units`` states nothing, like an absent one, so the
+    result's own default applies instead of an empty unit string.
+    """
+    attrs = dict(coordinate.attrs)
+    units = attrs.get("units")
+    if isinstance(units, str) and not units.strip():
+        del attrs["units"]
+    return attrs
+
+
 def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
     """Reject a lazy backing array the positional spectral math cannot consume.
 
@@ -916,7 +929,9 @@ def _unwrap_fourier_input(
             time_dimension
         ].dims == (time_dimension,):
             coordinate_time = coefficient_array.coords[time_dimension].to_numpy()
-            time_coordinate_attrs = dict(coefficient_array.coords[time_dimension].attrs)
+            time_coordinate_attrs = _stated_coordinate_attrs(
+                coefficient_array.coords[time_dimension]
+            )
     else:
         # Selecting one window (e.g. ``isel(time=0)``) leaves its time as a
         # scalar coordinate: the time of the single window, not a recording
@@ -948,7 +963,7 @@ def _unwrap_fourier_input(
         units=None,
         recording_coordinates=recording_coordinates,
         frequency_coordinate_attrs=(
-            dict(coefficient_array.coords[frequency_dimension].attrs)
+            _stated_coordinate_attrs(coefficient_array.coords[frequency_dimension])
             if frequency_coordinate_is_1d
             else None
         ),

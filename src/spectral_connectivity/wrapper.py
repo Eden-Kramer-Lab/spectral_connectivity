@@ -374,15 +374,23 @@ def connectivity_to_xarray(
     ('time', 'frequency', 'source', 'target')
     """
     _validate_method_names([method])
-    # The public SpectralTransform interface does not include the built-in
-    # transforms' settings record.
-    provenance_metadata = getattr(m, "_provenance_metadata", None)
-    metadata = (
-        {"transform": type(m).__name__}
-        if provenance_metadata is None
-        else provenance_metadata()
-    )
     connectivity = Connectivity.from_transform(m)
+    provenance_metadata = getattr(m, "_provenance_metadata", None)
+    if provenance_metadata is not None:
+        metadata = provenance_metadata()
+    else:
+        # The public SpectralTransform interface has no settings record. It
+        # lets a transform leave either coordinate to Connectivity, which then
+        # uses normalized frequencies and window indices, not Hz and seconds.
+        metadata = {"transform": type(m).__name__}
+        if m.frequencies is None:
+            metadata.update(
+                frequency_coordinate="normalized",
+                frequency_units="cycles/sample",
+                nyquist_frequency=0.5,
+            )
+        if m.time is None:
+            metadata["time_coordinate"] = "index"
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     shared_attrs = _shared_provenance_attrs(connectivity, metadata)
     result = _connectivity_result_to_xarray(
@@ -1035,6 +1043,9 @@ _HERTZ_SPELLINGS = frozenset(
         "s-1",
         "s^-1",
         "s**-1",
+        "sec-1",
+        "sec^-1",
+        "sec**-1",
         "second-1",
         "second^-1",
         "second**-1",
@@ -1315,9 +1326,6 @@ def fourier_connectivity(
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     frequency_units = "cycles/sample" if frequencies is None else "Hz"
     coordinate_units = (signal_metadata.frequency_coordinate_attrs or {}).get("units")
-    if isinstance(coordinate_units, str) and not coordinate_units.strip():
-        # An empty ``units`` states nothing, like an absent one.
-        coordinate_units = None
     if coordinate_units is not None:
         canonical_units = _canonical_frequency_units(coordinate_units)
         if canonical_units is None:

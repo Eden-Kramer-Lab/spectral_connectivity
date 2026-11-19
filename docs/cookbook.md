@@ -302,9 +302,10 @@ frequency units are `Hz` and `cycles/sample`, compared ignoring case and
 whitespace. `Hz` may also be spelled `Hertz`, `cps`, `1/s`, `cycles/s`, `s-1`,
 `s^-1`, or `s**-1` (with `s`, `sec`, or `second`, and `cycle` or `cycles`), and
 `cycles/sample` as `cycle/sample`. Convert other units, such as `kHz` or
-`rad/s`, before calling the wrapper; an empty `units` is treated as unstated.
-The top-level `frequency_units` is the canonical spelling,
-while the returned `frequency` coordinate keeps the supplied attrs as given.
+`rad/s`, before calling the wrapper. An empty `units` is treated as unstated,
+so the default applies. The top-level `frequency_units` is the canonical
+spelling, while the returned `frequency` coordinate otherwise keeps the
+supplied attrs as given.
 Whether external coefficients were one-sided is an input setting, recorded as
 `is_one_sided` in `transform_parameters_json`; it does not describe the
 returned frequency grid. A labeled or explicitly declared trial axis, or the
@@ -333,9 +334,18 @@ through 3.x and will be removed in 4.0: `mt_detrend_type`, `mt_is_low_bias`,
 `mt_n_time_samples_per_window`, `mt_n_trials`, `mt_time_window_duration`,
 `mt_time_window_step`, `mt_frequency_resolution`, and `mt_nyquist_frequency`.
 Attribute dictionaries cannot warn on access. These keys are documented as
-deprecated; a `None` setting is stored as the string `"None"`, which NetCDF
-can save. New settings
-such as FFT workers or adaptive weighting do not get legacy copies.
+deprecated. New settings such as FFT workers or adaptive weighting do not get
+legacy copies.
+
+The copies equal their 2.0.1 values but are stored as scalars NetCDF can save,
+so three representations differ: `mt_is_low_bias` is `1` or `0` instead of a
+`bool`, `mt_start_time` and `mt_sampling_frequency` are floats, and a `None`
+setting such as `mt_detrend_type` is the string `"None"`. Compare them with
+`==`, not `is`. `mt_time_window_duration`, `mt_time_window_step`, and
+`mt_frequency_resolution` describe the window actually analyzed, which is a
+whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
+report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
+and 11.88 Hz. `estimate_frequency_resolution` uses the duration it is given.
 
 ## Pass a labeled DataArray
 

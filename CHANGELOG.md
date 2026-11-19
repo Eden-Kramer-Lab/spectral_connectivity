@@ -199,7 +199,9 @@ directly with results from 2.x.
   and one canonical `transform_parameters_json` record separating estimator
   and execution settings. Optional structured settings use JSON `null`.
   Only the 15 scalar `mt_*` attributes released in 2.0.1 remain, as deprecated
-  compatibility copies until 4.0. Multitaper's `frequency_resolution`, its
+  compatibility copies until 4.0. They are stored as scalars NetCDF can save:
+  `mt_is_low_bias` as 0/1, `mt_start_time` and `mt_sampling_frequency` as
+  floats, and a `None` setting as the string `"None"`. Multitaper's `frequency_resolution`, its
   helper names, and the helper's returned key remain supported.
 - Results distinguish qualified estimator `spectral_bandwidth` from uniform
   returned-grid `frequency_bin_spacing`, refreshed after crop/decimation and
@@ -217,7 +219,8 @@ directly with results from 2.x.
   `s^-1`, or `s**-1`; other units, such as `kHz`, are rejected and an empty
   `units` is treated as unstated. `connectivity_to_xarray` accepts any
   `SpectralTransform`; one that is not built in records its class name as
-  `transform`. The shared `group_membership` variable of the component
+  `transform`, and its result is labeled in cycles/sample or window indices
+  when it leaves `frequencies` or `time` as `None`. The shared `group_membership` variable of the component
   measures carries only the shared provenance.
 - The xarray interfaces now expose every built-in nonstandard result contract:
   group-pair matrices, exact CaCoh/rich MIC components with filters, patterns,
@@ -607,7 +610,8 @@ directly with results from 2.x.
   and `Welch` no longer step one sample short of their reported step.
   `Multitaper.time_window_step` and `time_window_duration` (and the
   `mt_time_window_step`/`mt_time_window_duration` result attributes) report the
-  rounded step and window actually used rather than the request
+  rounded step and window actually used, and `frequency_resolution` (with
+  `mt_frequency_resolution`) follows that window, rather than the request
   (`time_window_step=0.01` at 250 Hz reported 0.01 s while stepping 2 samples,
   0.008 s). Giving both a duration and a sample count for the window or the
   step now raises `ValueError` when they disagree, as
