@@ -316,6 +316,12 @@ def frequency_band_reduce(
         recorded in ``attrs["frequency_bands_json"]``. An integral is in the
         density's ``units`` without the ``/Hz`` (e.g. ``(uV)^2/Hz`` becomes
         ``(uV)^2``) and is labeled ``"Band power"`` or ``"Band cross-power"``.
+        A measure variable's ``interpretation`` and ``formula``, which describe
+        one frequency bin, name the reduction that made each band value (e.g.
+        ``"Each value is the mean over the band's frequency bins of the
+        per-frequency values. ..."``); its value range, sign convention,
+        ``quantity``, and ``diagonal_policy`` hold of the band values and are
+        kept.
 
     Notes
     -----

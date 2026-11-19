@@ -17,6 +17,7 @@ from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     MeasureInfo,
+    frequency_band_reduce,
 )
 
 
@@ -512,9 +513,15 @@ def _diagonal(variable):
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
 def test_diagonal_matches_its_policy(coupled_results, measure):
     """The recorded ``diagonal_policy`` describes the values on the diagonal."""
-    variable = _main_variable(coupled_results[measure.name], measure.name)
-    diagonal = _diagonal(variable)
     assert (measure.diagonal_policy == "constant") == (measure.diagonal_value is not None)
+    _assert_diagonal_matches(
+        measure, _main_variable(coupled_results[measure.name], measure.name)
+    )
+
+
+def _assert_diagonal_matches(measure, variable):
+    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says."""
+    diagonal = _diagonal(variable)
     if measure.diagonal_policy == "not_applicable":
         assert diagonal is None
     elif measure.diagonal_policy in {"masked_nan", "undefined_nan"}:
@@ -630,3 +637,80 @@ def test_signed_and_phase_measures_state_their_sign_convention():
         "phase_slope_index",
     }
     assert {m.name for m in list_measures() if m.sign_convention} == signed
+
+
+_MEASURES = {measure.name: measure for measure in list_measures()}
+_BANDS = {"low": (4.0, 40.0), "high": (40.0, 120.0)}
+
+
+@pytest.mark.parametrize(
+    ("name", "frequency_reduction", "description"),
+    [
+        ("power", "integral", "the integral over the band"),
+        ("cross_spectral_density", "integral", "the integral over the band"),
+        (
+            "magnitude_squared_coherence",
+            "mean",
+            "the mean over the band's frequency bins",
+        ),
+        (
+            "coherence_phase",
+            "mean",
+            (
+                "the circular mean (the angle of the mean unit phasor) over the band's "
+                "frequency bins"
+            ),
+        ),
+        (
+            "coherency",
+            "mean",
+            "the complex (vector) mean over the band's frequency bins",
+        ),
+    ],
+)
+def test_band_reduction_keeps_each_measure_attribute_true(
+    coupled_results, name, frequency_reduction, description
+):
+    """A band value is a reduction of the per-frequency measure, so the attrs
+    that describe single bins (interpretation, formula) say which reduction it
+    is; the range, sign convention, quantity, and diagonal policy still hold of
+    the band values unchanged."""
+    measure = _MEASURES[name]
+    reduced = frequency_band_reduce(
+        _main_variable(coupled_results[name], name),
+        _BANDS,
+        frequency_reduction=frequency_reduction,
+    )
+    expected = _expected_measure_attrs(measure)
+    expected["interpretation"] = (
+        f"Each value is {description} of the per-frequency values. {measure.interpretation}"
+    )
+    if measure.formula is not None:
+        expected["formula"] = f"{description} of {measure.formula}"
+    assert {key: reduced.attrs.get(key) for key in expected} == expected
+    absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
+    assert not absent & set(reduced.attrs)
+
+    values = np.abs(reduced.values) if measure.is_complex else reduced.values
+    finite = values[np.isfinite(values)]
+    assert finite.size > 0
+    lower, upper = measure.value_range
+    assert lower - 1e-12 <= finite.min()
+    assert finite.max() <= upper + 1e-12
+    _assert_diagonal_matches(measure, reduced)
+
+
+def test_cropping_and_decimation_leave_measure_attributes_unchanged(coupled_time_series):
+    """Selecting bins does not change what each bin's value means."""
+    names = ["power", "magnitude_squared_coherence", "coherence_phase", "coherency"]
+    result = multitaper_connectivity(
+        coupled_time_series,
+        sampling_frequency=500,
+        time_window_duration=0.5,
+        method=names,
+        frequency_range=(10.0, 100.0),
+        frequency_decimation=3,
+    )
+    for name in names:
+        expected = _expected_measure_attrs(_MEASURES[name])
+        assert {key: result[name].attrs.get(key) for key in expected} == expected

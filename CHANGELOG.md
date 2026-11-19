@@ -219,7 +219,11 @@ directly with results from 2.x.
   `imaginary_coherence`, where the signed `imaginary_coherency` is masked),
   `estimated` for data-dependent self-values, and `not_applicable`. No
   diagonal value changed; the cookbook shows how to mask or fill diagonals
-  uniformly.
+  uniformly. Band reduction keeps these attributes true of the band values:
+  `interpretation` and `formula` name the reduction (mean, circular mean,
+  complex mean, or integral) that made each value, and the range, sign
+  convention, `quantity`, and `diagonal_policy`, which hold of the band values,
+  are kept.
 - Every `Connectivity` measure's docstring has a runnable example, and every
   directed measure states its array orientation.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
