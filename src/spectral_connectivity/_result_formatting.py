@@ -19,7 +19,6 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
     _FrequencySelection,
-    _select_measure_frequencies,
     _warn_orientation_change,
 )
 from spectral_connectivity.utils import stacklevel_outside_package
@@ -70,22 +69,13 @@ def _check_method_accepts_kwargs(
         raise TypeError(msg)
 
 
-def _measure_frequency_selection(
-    connectivity: Connectivity, kwargs: Mapping[str, Any]
+def _required_selection(
+    method: str, frequency_selection: _FrequencySelection | None
 ) -> _FrequencySelection:
-    """The interval of bins a ``delay``, ``group_delay``, or ``phase_slope_index``
-    call drew from, before any ``frequency_resolution`` subsampling.
-
-    Resolved from its keyword arguments by the rule the measure itself used.
-    Its :meth:`~_FrequencySelection.attrs` go on the measure's own variables
-    rather than becoming scalar coordinates, which a Dataset would broadcast
-    onto every other variable.
-    """
-    return _select_measure_frequencies(
-        connectivity.frequencies,
-        kwargs.get("frequency_range"),
-        kwargs.get("frequencies_of_interest"),
-    )
+    """The call's interval, which a measure consuming one must be given."""
+    if frequency_selection is None:
+        raise AssertionError(f"{method} was formatted without its frequency selection")  # noqa: EM102
+    return frequency_selection
 
 
 def _coordinate_attrs(
@@ -130,6 +120,7 @@ def _connectivity_result_to_xarray(
     *,
     signal_metadata: _SignalMetadata | None = None,
     transform_settings_hint: str | None = None,
+    frequency_selection: _FrequencySelection | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
@@ -137,7 +128,12 @@ def _connectivity_result_to_xarray(
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
     ``transform_settings_hint`` is passed to the keyword-argument check so a
-    rejected keyword gets the calling wrapper's hint.
+    rejected keyword gets the calling wrapper's hint. ``frequency_selection``
+    is the call's interval, resolved once by the caller from the same keyword
+    arguments the measure receives; the measures that consume an interval need
+    it for their frequency coordinate and interval attributes, which go on the
+    measure's own variables rather than becoming scalar coordinates a Dataset
+    would broadcast onto every other variable.
     """
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
@@ -302,7 +298,7 @@ def _connectivity_result_to_xarray(
 
     if output_kind == "delay":
         connectivity_mat = np.asarray(numerical_result)
-        selection = _measure_frequency_selection(connectivity, kwargs)
+        selection = _required_selection(method, frequency_selection)
         frequencies = np.asarray(connectivity.frequencies)[selection.mask]
         delay_expected_shape = (
             len(connectivity.time),
@@ -337,7 +333,7 @@ def _connectivity_result_to_xarray(
             name=method,
             attrs={
                 **measure_attrs,
-                **selection.attrs(connectivity.frequencies),
+                **selection.attrs(),
                 "units": _delay_units(shared_attrs)[0],
             },
         )
@@ -362,18 +358,14 @@ def _connectivity_result_to_xarray(
             name=method,
             attrs={
                 **measure_attrs,
-                **_measure_frequency_selection(connectivity, kwargs).attrs(
-                    connectivity.frequencies
-                ),
+                **_required_selection(method, frequency_selection).attrs(),
             },
         )
 
     if output_kind == "group_delay":
         delay, slope, r_value = numerical_result
         delay_units, slope_units = _delay_units(shared_attrs)
-        interval_attrs = _measure_frequency_selection(connectivity, kwargs).attrs(
-            connectivity.frequencies
-        )
+        interval_attrs = _required_selection(method, frequency_selection).attrs()
         dataset_coordinates = {
             "time": base_coordinates["time"],
             **signal_coordinates,

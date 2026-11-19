@@ -5123,15 +5123,14 @@ class Connectivity:
         )
         if selection.closed == "neither" and selection.requested is not None:
             low, high = selection.requested
-            selected = self.frequencies[selection.mask]
             warnings.warn(
                 f"{measure}(frequencies_of_interest=...) is deprecated and will be "
                 "removed in 4.0; use frequency_range=(low, high). "
                 "frequencies_of_interest excludes a bin lying on either edge, while "
                 "frequency_range includes both endpoints. To keep the same "
-                f"{selected.size} bins, replace frequencies_of_interest=({low!r}, "
-                f"{high!r}) with frequency_range=({float(selected[0])!r}, "
-                f"{float(selected[-1])!r}), the lowest and highest bins it selects. "
+                f"{int(selection.mask.sum())} bins, replace frequencies_of_interest=("
+                f"{low!r}, {high!r}) with frequency_range=({selection.lowest!r}, "
+                f"{selection.highest!r}), the lowest and highest bins it selects. "
                 "multitaper_connectivity and fourier_connectivity take "
                 "frequency_range as their own argument, not in connectivity_kwargs.",
                 DeprecationWarning,
@@ -5816,41 +5815,53 @@ def _bandpass(
 
 @dataclass(frozen=True)
 class _FrequencySelection:
-    """The interval of bins a frequency-selecting measure draws from.
+    """A frequency interval selected on a full grid, and how it was chosen.
 
-    The interval is taken before any ``frequency_resolution`` subsampling:
-    ``phase_slope_index`` with ``frequency_resolution`` sums only every
-    independent step of these bins, and ``group_delay``'s significance test
-    can leave some out of its fit.
+    One call resolves its interval once, on the full grid, and every part of
+    the result reads this record: the bins an interval measure consumes, its
+    frequency coordinate and attributes, the wrappers' crop, and the Morlet
+    validity masks. The interval is taken before any ``frequency_resolution``
+    subsampling: ``phase_slope_index`` with ``frequency_resolution`` sums only
+    every independent step of these bins, and ``group_delay``'s significance
+    test can leave some out of its fit.
 
     Attributes
     ----------
     mask : NDArray[bool], shape (n_frequencies,)
-        Host mask of the bins in the interval.
+        Host mask of the bins in the interval, over the full grid.
     requested : (float, float) or None
         The requested bounds; ``None`` when every bin is used.
     closed : {"both", "neither"}
         Whether a bin on a requested bound is included.
+    lowest, highest : float
+        The lowest and highest selected bin.
     """
 
     mask: NDArray[np.bool_]
     requested: tuple[float, float] | None
     closed: Literal["both", "neither"]
+    lowest: float
+    highest: float
 
-    def attrs(self, frequencies: NDArray[np.floating]) -> dict[str, Any]:
-        """Result attributes recording the interval, in the units of ``frequencies``.
+    @property
+    def index(self) -> NDArray[np.intp]:
+        """Positions of the selected bins on the full grid."""
+        index: NDArray[np.intp] = np.flatnonzero(self.mask)
+        return index
+
+    def attrs(self) -> dict[str, Any]:
+        """Result attributes recording the interval, in the grid's units.
 
         The requested bounds are omitted when every bin is used; the selected
         bounds are the lowest and highest bins in the interval, before any
         ``frequency_resolution`` subsampling.
         """
-        selected = to_numpy(frequencies)[self.mask]
         attrs: dict[str, Any] = {}
         if self.requested is not None:
             attrs["requested_frequency_lower"] = self.requested[0]
             attrs["requested_frequency_upper"] = self.requested[1]
-        attrs["selected_frequency_lower"] = float(selected[0])
-        attrs["selected_frequency_upper"] = float(selected[-1])
+        attrs["selected_frequency_lower"] = self.lowest
+        attrs["selected_frequency_upper"] = self.highest
         attrs["frequency_interval_closed"] = self.closed
         return attrs
 
@@ -5877,17 +5888,24 @@ def _select_measure_frequencies(
             "endpoints."
         )
         raise ValueError(msg)
+    grid = to_numpy(frequencies)
+    requested: tuple[float, float] | None = None
+    closed: Literal["both", "neither"] = "both"
     if frequencies_of_interest is not None:
-        mask, bounds = _frequency_interval_mask(
-            "frequencies_of_interest", frequencies_of_interest, frequencies, closed="neither"
+        mask, requested = _frequency_interval_mask(
+            "frequencies_of_interest", frequencies_of_interest, grid, closed="neither"
         )
-        return _FrequencySelection(mask, bounds, "neither")
-    if frequency_range is not None:
-        mask, bounds = _frequency_interval_mask(
-            "frequency_range", frequency_range, frequencies, closed="both"
+        closed = "neither"
+    elif frequency_range is not None:
+        mask, requested = _frequency_interval_mask(
+            "frequency_range", frequency_range, grid, closed="both"
         )
-        return _FrequencySelection(mask, bounds, "both")
-    return _FrequencySelection(np.ones(len(frequencies), dtype=bool), None, "both")
+    else:
+        mask = np.ones(grid.shape, dtype=bool)
+    selected = grid[mask]
+    return _FrequencySelection(
+        mask, requested, closed, lowest=float(selected[0]), highest=float(selected[-1])
+    )
 
 
 def _get_independent_frequency_step(

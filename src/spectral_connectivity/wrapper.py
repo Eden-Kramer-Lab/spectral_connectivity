@@ -16,7 +16,6 @@ from spectral_connectivity._frequency_bands import (
     _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
-    _select_frequency_range,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -43,7 +42,6 @@ from spectral_connectivity._provenance import (
 from spectral_connectivity._result_formatting import (
     UnsupportedMeasureError,
     _connectivity_result_to_xarray,
-    _measure_frequency_selection,
 )
 from spectral_connectivity.connectivity import (
     _MIGRATION_GUIDE_URL,
@@ -51,6 +49,7 @@ from spectral_connectivity.connectivity import (
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
+    _select_measure_frequencies,
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
@@ -427,8 +426,24 @@ def connectivity_to_xarray(
             metadata["time_coordinate"] = "index"
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     shared_attrs = _shared_provenance_attrs(connectivity, metadata)
+    # The call's interval, resolved once; the result and its validity read it.
+    selection = (
+        _select_measure_frequencies(
+            to_numpy(connectivity.frequencies),
+            kwargs.get("frequency_range"),
+            kwargs.get("frequencies_of_interest"),
+        )
+        if _selects_frequency_range(method)
+        else None
+    )
     result = _connectivity_result_to_xarray(
-        connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
+        connectivity,
+        method,
+        signal_labels,
+        squeeze,
+        shared_attrs,
+        frequency_selection=selection,
+        **kwargs,
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
     if valid_time_frequency is not None:
@@ -442,28 +457,11 @@ def connectivity_to_xarray(
             raise ValueError(msg)
         validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
         if "frequency" in result.dims:
-            full_validity = xr.DataArray(
-                validity,
-                coords={
-                    "time": np.asarray(connectivity.time),
-                    "frequency": np.asarray(connectivity.frequencies),
-                },
-                dims=("time", "frequency"),
-                attrs=validity_attrs,
-            )
-            # Delay and other nonstandard schemas may retain only a requested
-            # frequency band. Select the matching validity bins rather than
-            # attaching the transform's full frequency axis to the result.
-            result_frequencies = np.asarray(result.coords["frequency"])
-            aligned_validity = full_validity.sel(frequency=result_frequencies)
-            # Attach the values alone: a DataArray would bring its own, unlabeled
-            # time and frequency coordinates and replace the result's.
+            # delay keeps only the bins of its interval; every other
+            # frequency-resolved result keeps the full grid.
+            bins = slice(None) if selection is None else selection.mask
             result = result.assign_coords(
-                valid_time_frequency=(
-                    ("time", "frequency"),
-                    aligned_validity.values,
-                    validity_attrs,
-                )
+                valid_time_frequency=(("time", "frequency"), validity[:, bins], validity_attrs)
             )
         elif "time" in result.dims:
             # PSI and group delay aggregate a frequency interval. They have no
@@ -472,8 +470,8 @@ def connectivity_to_xarray(
             # support at each time point. With frequency_resolution PSI sums
             # only some of those bins, so this is conservative: it can be False
             # where every bin PSI summed was valid, never True where one was not.
-            interval = _measure_frequency_selection(connectivity, kwargs).mask
-            valid_time = validity[:, interval].all(axis=1)
+            assert selection is not None  # PSI and group delay consume an interval
+            valid_time = validity[:, selection.mask].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
     return _with_frequency_grid_metadata(result)
@@ -604,9 +602,14 @@ def _format_and_reduce_measures(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
-    # One selection per call, on the full grid, cuts every result below.
-    range_selection = _select_frequency_range(
-        to_numpy(connectivity.frequencies), frequency_range
+    frequencies = to_numpy(connectivity.frequencies)
+    consuming_methods = frozenset(m for m in methods if _selects_frequency_range(m))
+    # One selection per call, on the full grid: the interval measures' results
+    # and attributes and the crop of every other result read it.
+    selection = _select_measure_frequencies(
+        frequencies,
+        frequency_range,
+        connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
     )
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
@@ -615,7 +618,7 @@ def _format_and_reduce_measures(
         kwargs = dict(connectivity_kwargs)
         if method in group_methods:
             kwargs["group_labels"] = group_labels
-        if frequency_range is not None and _selects_frequency_range(method):
+        if frequency_range is not None and method in consuming_methods:
             kwargs["frequency_range"] = frequency_range
         return kwargs
 
@@ -632,41 +635,31 @@ def _format_and_reduce_measures(
         )
         squeeze = False
 
-    if return_dataarray:
-        result: xr.DataArray | xr.Dataset = _crop_frequency_range(
-            _connectivity_result_to_xarray(
-                connectivity,
-                methods[0],
-                signal_labels,
-                squeeze,
-                shared_attrs,
-                signal_metadata=signal_metadata,
-                transform_settings_hint=transform_settings_hint,
-                **measure_kwargs(methods[0]),
-            ),
-            range_selection,
-            consumed=_selects_frequency_range(methods[0]),
+    def formatted(method: str, squeeze: bool) -> xr.DataArray | xr.Dataset:
+        """One measure's labeled result, cut to the call's ``frequency_range``."""
+        consumes_range = method in consuming_methods
+        result = _connectivity_result_to_xarray(
+            connectivity,
+            method,
+            signal_labels,
+            squeeze,
+            shared_attrs,
+            signal_metadata=signal_metadata,
+            transform_settings_hint=transform_settings_hint,
+            frequency_selection=selection if consumes_range else None,
+            **measure_kwargs(method),
         )
+        if frequency_range is None:
+            return result
+        return _crop_frequency_range(result, selection, consumed=consumes_range)
+
+    if return_dataarray:
+        result: xr.DataArray | xr.Dataset = formatted(methods[0], squeeze)
     else:
         formatted_results: list[xr.DataArray | xr.Dataset] = []
         for this_method in methods:
             try:
-                formatted_results.append(
-                    _crop_frequency_range(
-                        _connectivity_result_to_xarray(
-                            connectivity,
-                            this_method,
-                            signal_labels,
-                            False,
-                            shared_attrs,
-                            signal_metadata=signal_metadata,
-                            transform_settings_hint=transform_settings_hint,
-                            **measure_kwargs(this_method),
-                        ),
-                        range_selection,
-                        consumed=_selects_frequency_range(this_method),
-                    )
-                )
+                formatted_results.append(formatted(this_method, False))
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
                 # A measure whose result shape does not fit the xarray layout can
                 # be skipped in a batch. _connectivity_result_to_xarray raises
@@ -715,7 +708,7 @@ def _format_and_reduce_measures(
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
         # The computed grid's, before the crop can make an interior bin the last.
-        nyquist_frequency=_nyquist_frequency(shared_attrs, to_numpy(connectivity.frequencies)),
+        nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
     )
 
 

@@ -2,7 +2,6 @@
 
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
@@ -11,7 +10,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity._measure_registry import _reduces_frequency
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
-from spectral_connectivity.connectivity import _frequency_interval_mask
+from spectral_connectivity.connectivity import _frequency_interval_mask, _FrequencySelection
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
 
 
@@ -375,58 +374,24 @@ def _check_frequency_operations(
         raise ValueError(msg)
 
 
-@dataclass(frozen=True)
-class _FrequencyRangeSelection:
-    """A wrapper call's ``frequency_range``, selected once on the full grid.
-
-    Attributes
-    ----------
-    index : NDArray[intp], shape (n_selected,)
-        Positions of the selected bins on the full frequency grid.
-    bounds : (float, float)
-        The validated ``(low, high)`` bounds.
-    """
-
-    index: NDArray[np.intp]
-    bounds: tuple[float, float]
-
-
-def _select_frequency_range(
-    frequencies: NDArray[np.floating], frequency_range: tuple[float, float] | None
-) -> _FrequencyRangeSelection | None:
-    """Select the bins of ``frequency_range`` on the full grid ``frequencies``.
-
-    The wrappers call this once per call, before any measure is computed, and
-    cut every result with it. Selecting again on an axis already cut to these
-    bins could disagree: a lone selected bin has no neighbour there, so the
-    gap term that put it on a bound would be lost.
-    """
-    if frequency_range is None:
-        return None
-    mask, bounds = _frequency_interval_mask(
-        "frequency_range", frequency_range, frequencies, closed="both"
-    )
-    return _FrequencyRangeSelection(np.flatnonzero(mask), bounds)
-
-
 def _crop_frequency_range(
     result: xr.DataArray | xr.Dataset,
-    selection: _FrequencyRangeSelection | None,
+    selection: _FrequencySelection,
     *,
     consumed: bool,
 ) -> xr.DataArray | xr.Dataset:
     """Cut every frequency-resolved variable of ``result`` to ``selection``.
 
-    ``result``'s frequency axis is the full grid, unless the measure
+    ``selection`` is the call's ``frequency_range``, resolved once on the full
+    grid. ``result``'s frequency axis is that grid, unless the measure
     ``consumed`` the range itself (``delay``, ``group_delay``,
     ``phase_slope_index``): it then holds only the selected bins already, or
     has no frequency axis, and is not cut again. Every variable the range
     applied to records it as ``frequency_range_json``: each variable of a
     consuming measure, and each frequency-resolved variable of the others.
     """
-    if selection is None:
-        return result
-    record = {"frequency_range_json": _canonical_json(selection.bounds)}
+    assert selection.requested is not None  # cropped only for a frequency_range
+    record = {"frequency_range_json": _canonical_json(selection.requested)}
     if consumed:
         if isinstance(result, xr.DataArray):
             return result.assign_attrs(record)
