@@ -453,9 +453,11 @@ Rulings where the rules above were silent:
 
 **Scope:** D5-D8 and D25, the last bullet of "Rules for the shared metadata",
 and the D6 migration row. **Branch:** `refactor/coherence-naming`, based on
-step 3's final head `67005e8`. Implemented and validated locally on 2026-11-19:
-2,239 tests passed with 16 skips on the main CPU environment; all 70 source
-doctests, Ruff formatting/lint, and mypy passed.
+step 3's final head (now `0480d01`). Implemented and validated locally on
+2026-11-19: 2,239 tests passed with 16 skips on the main CPU environment, and
+2,124 passed with 101 skips on Python 3.10 with the NumPy 1.24/SciPy
+1.11.1/xarray 2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on the
+floors), Ruff formatting/lint, and mypy passed.
 
 Rulings where the rules above were silent:
 
@@ -478,13 +480,26 @@ Rulings where the rules above were silent:
   (an unknown name would fall to `identity`).
 - **Diagonal policy vocabulary.** `masked_nan` (a package mask of a defined
   self-value), `undefined_nan` (no self-connection: the Granger family),
-  `constant` (registry `diagonal_value`: 0, 0.5, or 1), `estimated`
+  `constant` (registry `diagonal_value`: 0, 0.5, or 1, to within the
+  rounding of the averages behind it, which NumPy 2 often makes exact and
+  NumPy 1.24 does not), `rounding_noise` (nominally `diagonal_value`, but
+  computed from rounding residues the formula amplifies), `estimated`
   (cross-spectral density, transfer-function family), `not_applicable`
   (power, global coherence, component measures). A group with itself in
   `canonical_coherence`, MIC, and MIM is `masked_nan` (computable, not
   computed); `delay`, `group_delay`, and `phase_slope_index` inherit
   coherency's mask. `group_delay_r_value`'s diagonal is 1 (`constant`) where
   delay and slope are NaN, so each `group_delay` variable records its own.
+- **Rounding of diagonals.** `corrected_imaginary_phase_locking_value` is
+  `rounding_noise` with nominal value 0, not `constant`: its self-connection is
+  the 0/0 it defines as 0, but computed as `|Im(PLV)|` (of order eps) over
+  `sqrt(1 - Re(PLV)^2)` (of order sqrt(eps) when `Re` rounds just below 1), so
+  it is noise below about sqrt(eps), measured up to 6e-10 in float64 and 2e-5
+  at complex64 precision under NumPy 1.24. Tests bound a constant diagonal by
+  `n_observations * eps` (an n-term sum's forward error, with a factor 2 for
+  normalization and PPC's squaring), the `rounding_noise` diagonal by
+  `sqrt(eps)`, and the cross-spectral density diagonal's imaginary part by
+  `n_observations * eps` times its real part.
 - **Interpretation attributes.** `interpretation`, `sign_convention`,
   `value_range_lower`/`value_range_upper` (an infinite side omitted, since not
   every engine round-trips a bare infinity; `value_range_applies_to=
@@ -520,7 +535,8 @@ Rulings where the rules above were silent:
 - [x] Explicitly requested old names work, keep their variable names, record
   them, and warn at the caller's line; package internals do not warn.
 - [x] Unchanged documented diagonals: tests pin every measure's diagonal
-  against its recorded policy and value.
+  against its recorded policy and value, with rounding bounds that hold on the
+  minimum-dependency floors too.
 - [x] Component serialization: `connection_source_group`,
   `connection_target_group`, and `side=["source", "target"]` round-trip with
   every engine and select the same values.
