@@ -989,6 +989,15 @@ def multitaper_connectivity(
     carried as ``source_<name>``/``target_<name>`` with their attrs unchanged,
     so those attrs must be NetCDF-serializable to save the result.
 
+    Each measure variable also records how to read it, from the same record
+    :func:`list_measures` returns: ``interpretation``, ``sign_convention``
+    (measures whose sign or angle says which signal leads),
+    ``value_range_lower``/``value_range_upper`` (an unbounded side omitted;
+    ``value_range_applies_to="magnitude"`` for complex measures), ``quantity``
+    and ``formula`` (the coherency family), and ``diagonal_policy``, what a
+    self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
+    ``"constant"``, ``"estimated"``, or ``"not_applicable"``.
+
     Real-valued results write with any NetCDF engine (booleans are stored as
     0/1). Complex results (``coherency``, ``cross_spectral_density``,
     ``canonical_coherency``, and the global-coherence vectors) need an engine
@@ -1017,8 +1026,10 @@ def multitaper_connectivity(
       compatibility copies through 3.x, removed in 4.0. The supported
       ``Multitaper.frequency_resolution`` property and parameter helpers retain
       their names and values. New transform/execution settings get no copies.
-    - ``measure`` and ``measure_kwargs_json`` -- the measure name and a canonical,
-      JSON-normalized representation of its keyword arguments.
+    - ``measure`` and ``measure_kwargs_json`` -- the measure name as requested
+      and a canonical, JSON-normalized representation of its keyword
+      arguments. A result requested by the deprecated ``"coherence_magnitude"``
+      records that name, and its variable has that name too.
     - ``arg_<key>`` / ``arg_<key>_json`` -- each measure keyword argument
       individually for quick inspection; a scalar is stored as-is under
       ``arg_<key>``, while a structured or non-finite value is stored as a JSON

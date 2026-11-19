@@ -129,6 +129,17 @@ Prefer the wrapper's labeled results so you never index these by hand.
   are biased upward when trials × tapers is small. The debiased measures
   (`pairwise_phase_consistency`, `debiased_squared_*`) are unbiased, so they
   can be slightly negative; that is noise, not negative coupling.
+- **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
+  take `abs(coherency)` for the unsquared magnitude. Its 2.x name,
+  `coherence_magnitude`, is deprecated: do not write new code with it, and
+  index default results by the new name. A measure variable's `quantity` and
+  `formula` attrs say which form a coherency-family value has.
+- **Diagonals differ by measure.** A self-connection is NaN for coherence (a
+  mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
+  `phase_locking_value`. Read a variable's `diagonal_policy` attr, and before
+  averaging over pairs mask a pairwise variable `v` with
+  `v.where(v.source != v.target)` (not a whole Dataset, whose `power` has no
+  `target` axis).
 - **Directed measures need a two-sided spectrum.** The Granger and
   directed-transfer-function families work with `multitaper_connectivity`, but
   not with Morlet wavelets or other one-sided coefficients, which raise a

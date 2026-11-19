@@ -84,7 +84,12 @@ directly with results from 2.x.
   filters, patterns, connections, and group membership. The new
   `maximized_imaginary_coherency_components` exposes the same rich result schema
   for multiple MIC singular components; the historical score-only APIs remain
-  available unchanged. Both are vectorized over the time/frequency axes on the
+  available unchanged. In the wrappers' results each connection names its
+  `connection_source_group` and `connection_target_group`, and filters and
+  patterns have a `side` axis, `"source"` or `"target"`, over a `signal` axis.
+  `canonical_coherency` is a different estimator from the historical
+  `canonical_coherence` (the squared canonical correlation), not its square
+  root: its magnitude is the unsquared, phase-optimized coherence. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
 - `Connectivity.clear_cache()` releases the intermediates cached for reuse
@@ -196,9 +201,25 @@ directly with results from 2.x.
   most common tasks (functional and directed connectivity, reading the labeled
   output, frequency bands, and bringing your own Fourier coefficients).
 - `MeasureInfo` records what each measure's values mean: `long_name`, `units`,
-  `value_range`, `is_complex`, the result's `dims`, and an `interpretation`
-  that includes the sign convention. The measure table in
-  `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
+  `value_range`, `is_complex`, the result's `dims`, an `interpretation`, the
+  `sign_convention` of measures whose sign or angle says which signal leads,
+  the `diagonal_policy` (and `diagonal_value`) of its self-connections, and,
+  for the coherency family, a `quantity` (`magnitude`, `squared_magnitude`,
+  `signed`, `phase`, or `complex`) and `formula`. The measure table in
+  `docs/CONNECTIVITY_METRIC_RANGES.md`, with its Diagonal column and a formula
+  table, is generated from it.
+- Each measure variable of a wrapper result records how to read it in
+  NetCDF-safe attributes from the same registry: `interpretation`,
+  `sign_convention`, `value_range_lower`/`value_range_upper` (an unbounded side
+  is omitted; complex measures add `value_range_applies_to="magnitude"`),
+  `quantity` and `formula` for the coherency family, and `diagonal_policy`:
+  `masked_nan` where the package masks a defined self-value (coherence, whose
+  self-value is 1 at nonzero power), `undefined_nan` where the estimator has
+  none (the Granger family), `constant` for identities (0 for
+  `imaginary_coherence`, where the signed `imaginary_coherency` is masked),
+  `estimated` for data-dependent self-values, and `not_applicable`. No
+  diagonal value changed; the cookbook shows how to mask or fill diagonals
+  uniformly.
 - Every `Connectivity` measure's docstring has a runnable example, and every
   directed measure states its array orientation.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
