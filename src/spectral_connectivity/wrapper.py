@@ -174,6 +174,9 @@ def list_measures(
     together with each measure's output category, a one-line description, and
     whether it is in the default set and/or directional, and what its values
     mean: units, range, result dimensions, and how to read the direction.
+    A deprecated name (``"coherence_magnitude"``, now
+    ``"magnitude_squared_coherence"``) is still accepted through 3.x but is
+    not listed: it is the same measure.
 
     Parameters
     ----------
