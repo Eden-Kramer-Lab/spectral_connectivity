@@ -1210,22 +1210,39 @@ _TRANSPOSED = _RNG.standard_normal((10, 1, 100))  # fewer time points than signa
 _LONG = _RNG.standard_normal((1000, 1, 1))
 _TWO_SIGNALS = _RNG.standard_normal((4000, 1, 2))
 _GAP = {"time_window_duration": 0.5, "time_window_step": 1.0}
+_GAP_IN_SAMPLES = {"n_time_samples_per_window": 100, "n_time_samples_per_step": 150}
+_LARGE_NW = {"time_halfbandwidth_product": 11}
+_POWER = {"method": "power"}
 # One iteration with an unreachable tolerance cannot converge.
-_UNCONVERGED_ADAPTIVE = {
+_UNCONVERGED = {
     "time_halfbandwidth_product": 4,
     "taper_weighting": "adaptive",
     "adaptive_max_iterations": 1,
     "adaptive_tolerance": 1e-15,
 }
+_SHORT_SMOOTHING = {"frequencies": [10.0, 40.0], "n_cycles": 7, "smoothing_time": 0.1}
+_BOTH_TARGETS = {
+    "sampling_frequency": 1000,
+    "signal_duration": 2.0,
+    "desired_freq_resolution": 5.0,
+    "desired_n_tapers": 7,
+}
+_ONE_TAPER = {
+    "sampling_frequency": 1000,
+    "signal_duration": 2.0,
+    "desired_freq_resolution": 4.0,
+}
 _NAN_MESSAGE = "Input time_series contains NaN"
 _TRANSPOSED_MESSAGE = "data may be transposed"
 _GAP_MESSAGE = "creates gaps"
 _LARGE_NW_MESSAGE = "unusually large"
+_ADAPTIVE_MESSAGE = "did not converge"
 
 
-# Each call is written here, in the user's code. Welch and the wrapper build
-# their transforms inside the package. A Welch step never exceeds its segment,
-# and Welch has no NW.
+# Each call is written here, in the user's code, on the line of its lambda,
+# which is the line every warning must name. Welch and the wrapper build their
+# transforms inside the package. A Welch step never exceeds its segment, and
+# Welch has no NW.
 @pytest.mark.parametrize(
     ("call", "message"),
     [
@@ -1239,7 +1256,7 @@ _LARGE_NW_MESSAGE = "unusually large"
             lambda: Multitaper(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="Multitaper-gap"
         ),
         pytest.param(
-            lambda: Multitaper(_LONG, 1000, time_halfbandwidth_product=11),
+            lambda: Multitaper(_LONG, 1000, **_LARGE_NW),
             _LARGE_NW_MESSAGE,
             id="Multitaper-large_nw",
         ),
@@ -1255,9 +1272,7 @@ _LARGE_NW_MESSAGE = "unusually large"
             lambda: ShortTimeFourierTransform(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="STFT-gap"
         ),
         pytest.param(
-            lambda: ShortTimeFourierTransform(
-                _LONG, 1000, n_time_samples_per_window=100, n_time_samples_per_step=150
-            ),
+            lambda: ShortTimeFourierTransform(_LONG, 1000, **_GAP_IN_SAMPLES),
             _GAP_MESSAGE,
             id="STFT-gap_in_samples",
         ),
@@ -1272,37 +1287,33 @@ _LARGE_NW_MESSAGE = "unusually large"
             id="Welch-transposed",
         ),
         pytest.param(
-            lambda: multitaper_connectivity(_WITH_NAN, 1000, method="power"),
+            lambda: multitaper_connectivity(_WITH_NAN, 1000, **_POWER),
             _NAN_MESSAGE,
             id="wrapper-nan",
         ),
         pytest.param(
-            lambda: multitaper_connectivity(_TRANSPOSED, 1000, method="power"),
+            lambda: multitaper_connectivity(_TRANSPOSED, 1000, **_POWER),
             _TRANSPOSED_MESSAGE,
             id="wrapper-transposed",
         ),
         pytest.param(
-            lambda: multitaper_connectivity(_LONG, 1000, method="power", **_GAP),
+            lambda: multitaper_connectivity(_LONG, 1000, **_POWER, **_GAP),
             _GAP_MESSAGE,
             id="wrapper-gap",
         ),
         pytest.param(
-            lambda: multitaper_connectivity(
-                _LONG, 1000, method="power", time_halfbandwidth_product=11
-            ),
+            lambda: multitaper_connectivity(_LONG, 1000, **_POWER, **_LARGE_NW),
             _LARGE_NW_MESSAGE,
             id="wrapper-large_nw",
         ),
         pytest.param(
-            lambda: Multitaper(_TWO_SIGNALS, 256, **_UNCONVERGED_ADAPTIVE).fft(),
-            "did not converge",
+            lambda: Multitaper(_TWO_SIGNALS, 256, **_UNCONVERGED).fft(),
+            _ADAPTIVE_MESSAGE,
             id="Multitaper-adaptive_not_converged",
         ),
         pytest.param(
-            lambda: multitaper_connectivity(
-                _TWO_SIGNALS, 256, method="power", **_UNCONVERGED_ADAPTIVE
-            ),
-            "did not converge",
+            lambda: multitaper_connectivity(_TWO_SIGNALS, 256, **_POWER, **_UNCONVERGED),
+            _ADAPTIVE_MESSAGE,
             id="wrapper-adaptive_not_converged",
         ),
         pytest.param(
@@ -1314,26 +1325,17 @@ _LARGE_NW_MESSAGE = "unusually large"
             lambda: Welch(_LONG, 30000), "default segment length", id="Welch-default_segment"
         ),
         pytest.param(
-            lambda: MorletWavelet(
-                _TWO_SIGNALS, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.1
-            ),
+            lambda: MorletWavelet(_TWO_SIGNALS, 1000.0, **_SHORT_SMOOTHING),
             "shorter than 4 wavelet standard deviations",
             id="MorletWavelet-short_smoothing",
         ),
         pytest.param(
-            lambda: suggest_parameters(
-                sampling_frequency=1000,
-                signal_duration=2.0,
-                desired_freq_resolution=5.0,
-                desired_n_tapers=7,
-            ),
+            lambda: suggest_parameters(**_BOTH_TARGETS),
             "were specified",
             id="suggest_parameters-both_targets",
         ),
         pytest.param(
-            lambda: suggest_parameters(
-                sampling_frequency=1000, signal_duration=2.0, desired_freq_resolution=4.0
-            ),
+            lambda: suggest_parameters(**_ONE_TAPER),
             "leaves 1 taper",
             id="suggest_parameters-one_taper",
         ),
@@ -1345,8 +1347,10 @@ def test_warnings_point_at_the_users_call(call, message):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         call()
-    matching = [(w.category, w.filename) for w in record if message in str(w.message)]
-    assert matching == [(UserWarning, __file__)]
+    matching = [
+        (w.category, w.filename, w.lineno) for w in record if message in str(w.message)
+    ]
+    assert matching == [(UserWarning, __file__, call.__code__.co_firstlineno)]
 
 
 @pytest.mark.parametrize(
