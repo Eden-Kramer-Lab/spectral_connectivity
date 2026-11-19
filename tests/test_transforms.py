@@ -2281,6 +2281,42 @@ def test_welch_default_segment_warns_on_coarse_resolution():
     assert "175.8 Hz equivalent noise bandwidth" in str(record[0].message)
 
 
+def test_welch_default_segment_reads_the_length_of_a_nested_list():
+    time_series = np.random.default_rng(918).standard_normal((600, 2, 2))
+    np.testing.assert_array_equal(
+        Welch(time_series.tolist(), sampling_frequency=100).fft(),
+        Welch(time_series, sampling_frequency=100).fft(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("time_series", "kwargs", "match"),
+    [
+        (
+            np.ones((1000, 1, 1)),
+            {"segment_duration": 0.001},
+            (
+                r"segment_duration=0\.001 s is 0 samples at sampling_frequency=500 Hz; a Welch "
+                r"segment needs at least 2 samples \(segment_duration >= 0\.004 s\)"
+            ),
+        ),
+        (
+            np.ones((1, 1, 1)),
+            {},
+            (
+                r"Welch needs a segment of at least 2 samples, but the time series has "
+                r"shape \(1, 1, 1\)"
+            ),
+        ),
+        (None, {}, r"Welch needs a segment of at least 2 samples.*has shape \(\)"),
+    ],
+    ids=["duration_rounds_to_zero", "one_sample_series", "none"],
+)
+def test_welch_reports_a_short_segment_in_its_own_terms(time_series, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        Welch(time_series, sampling_frequency=500, **kwargs)
+
+
 def test_welch_explicit_segment_does_not_warn():
     data = np.random.default_rng(917).standard_normal((30000, 1, 1))
     with warnings.catch_warnings():

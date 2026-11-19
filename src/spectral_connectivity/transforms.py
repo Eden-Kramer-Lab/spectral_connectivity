@@ -2331,7 +2331,9 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
-        n_time_samples = int(getattr(time_series, "shape", (0,))[0])
+        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
+        data_shape = np.shape(time_series)
+        n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(
             n_time_samples_per_segment,
             segment_duration,
@@ -2343,6 +2345,24 @@ class Welch:
             segment_samples = min(256, n_time_samples)
         if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
             msg = "segment_overlap must satisfy 0 <= overlap < 1."
+            raise ValueError(msg)
+        # An explicit n_time_samples_per_segment was checked above, so a short
+        # segment comes from the duration or from a short time series.
+        if segment_samples < 2:
+            if uses_default_segment:
+                msg = (
+                    "Welch needs a segment of at least 2 samples, but the time series "
+                    f"has shape {data_shape}; pass a time series of shape "
+                    "(n_time_samples, n_trials, n_signals) with at least 2 time samples."
+                )
+            else:
+                msg = (
+                    f"segment_duration={segment_duration} s is {segment_samples} "
+                    f"sample{'' if segment_samples == 1 else 's'} "
+                    f"at sampling_frequency={sampling_frequency:g} Hz; a Welch segment "
+                    f"needs at least 2 samples (segment_duration >= "
+                    f"{2 / sampling_frequency} s)."
+                )
             raise ValueError(msg)
         step_samples = max(1, int(np.around(segment_samples * (1 - segment_overlap))))
         self._stft = ShortTimeFourierTransform(
