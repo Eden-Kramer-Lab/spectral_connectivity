@@ -34,6 +34,7 @@ from spectral_connectivity.utils import (
     _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
+    stacklevel_outside_package,
     to_numpy,
 )
 
@@ -683,14 +684,8 @@ def _validate_fft_workers(fft_workers: int | None) -> None:
 def _validate_window_durations(
     time_window_duration: float | None,
     time_window_step: float | None,
-    stacklevel: int,
 ) -> None:
-    """Reject non-positive window durations and warn when steps leave gaps.
-
-    ``stacklevel`` is passed to :func:`warnings.warn` from this function, so a
-    constructor calling it directly passes 3 to attribute the warning to the
-    code that constructed the transform.
-    """
+    """Reject non-positive window durations and warn when steps leave gaps."""
     if time_window_duration is not None and time_window_duration <= 0:
         msg = (
             f"time_window_duration must be positive, got {time_window_duration}.\n"
@@ -738,7 +733,7 @@ def _validate_window_durations(
             "\n"
             "If gaps are intended (e.g., sampling every Nth window), ignore this warning.",
             UserWarning,
-            stacklevel=stacklevel,
+            stacklevel=stacklevel_outside_package(),
         )
 
 
@@ -791,12 +786,8 @@ class _WindowedFourierTransform:
     _n_time_samples_per_window: int | None
     _n_samples_per_time_step: int | None
 
-    def _warn_about_unusual_time_series(self, stacklevel: int) -> None:
-        """Warn when the time-series snapshot looks transposed or is not finite.
-
-        ``stacklevel`` is passed to :func:`warnings.warn` from this method, so
-        a constructor calling it directly passes 3.
-        """
+    def _warn_about_unusual_time_series(self) -> None:
+        """Warn when the time-series snapshot looks transposed or is not finite."""
         # Warn if data appears to be transposed (very few time points, many signals)
         n_time, _, n_signals = self._time_series.shape
         if n_time < n_signals:
@@ -812,7 +803,7 @@ class _WindowedFourierTransform:
                 "\n"
                 "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
                 UserWarning,
-                stacklevel=stacklevel,
+                stacklevel=stacklevel_outside_package(),
             )
 
         # Warn if data contains NaN or Inf
@@ -833,7 +824,7 @@ class _WindowedFourierTransform:
                 "\n"
                 "For artifact removal, consider using MNE-Python or similar tools.",
                 UserWarning,
-                stacklevel=stacklevel,
+                stacklevel=stacklevel_outside_package(),
             )
 
     @property
@@ -1593,11 +1584,11 @@ class Multitaper(_WindowedFourierTransform):
                 "Common values are 1-5. If you're unsure, try 3 (a typical default).\n"
                 "If you specifically need heavy smoothing, you can ignore this warning.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
-        _validate_window_durations(time_window_duration, time_window_step, stacklevel=3)
-        self._warn_about_unusual_time_series(stacklevel=3)
+        _validate_window_durations(time_window_duration, time_window_step)
+        self._warn_about_unusual_time_series()
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
@@ -2064,8 +2055,8 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         # duration that rounds to zero samples is rejected here.
         resolved_duration = window_samples / sampling_frequency
         resolved_step_duration = step_samples / sampling_frequency
-        _validate_window_durations(resolved_duration, resolved_step_duration, stacklevel=3)
-        self._warn_about_unusual_time_series(stacklevel=3)
+        _validate_window_durations(resolved_duration, resolved_step_duration)
+        self._warn_about_unusual_time_series()
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers

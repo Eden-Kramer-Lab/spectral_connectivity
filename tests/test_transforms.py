@@ -1185,30 +1185,59 @@ def _input_that_warns(case):
         return time_series, {}
     if case == "transposed":
         return rng.standard_normal((10, 1, 100)), {}
+    if case == "large_nw":
+        return rng.standard_normal((1000, 1, 1)), {"time_halfbandwidth_product": 11}
     return rng.standard_normal((1000, 1, 1)), {
         "time_window_duration": 0.5,
         "time_window_step": 1.0,
     }
 
 
+_WARNING_MATCHES = {
+    "nan": "Input time_series contains NaN",
+    "transposed": "data may be transposed",
+    "gap": "creates gaps",
+    "large_nw": "unusually large",
+}
+# Each entry builds a transform from the user's code; Welch and the wrapper
+# build theirs inside the package.
+_CONSTRUCTING_CALLS = {
+    "Multitaper": lambda time_series, kwargs: Multitaper(
+        time_series, sampling_frequency=1000, **kwargs
+    ),
+    "ShortTimeFourierTransform": lambda time_series, kwargs: ShortTimeFourierTransform(
+        time_series, sampling_frequency=1000, **kwargs
+    ),
+    "Welch": lambda time_series, kwargs: Welch(
+        time_series, sampling_frequency=1000, n_time_samples_per_segment=4, **kwargs
+    ),
+    "multitaper_connectivity": lambda time_series, kwargs: multitaper_connectivity(
+        time_series, 1000, method="power", **kwargs
+    ),
+}
+
+
 @pytest.mark.parametrize(
-    "transform_cls",
-    [Multitaper, ShortTimeFourierTransform],
-    ids=["Multitaper", "ShortTimeFourierTransform"],
-)
-@pytest.mark.parametrize(
-    ("case", "match"),
+    ("constructor", "case"),
     [
-        ("nan", "contains NaN"),
-        ("transposed", "data may be transposed"),
-        ("gap", "creates gaps"),
+        *[("Multitaper", case) for case in ("nan", "transposed", "gap", "large_nw")],
+        *[("ShortTimeFourierTransform", case) for case in ("nan", "transposed", "gap")],
+        # A Welch step never exceeds its segment, and Welch has no NW.
+        *[("Welch", case) for case in ("nan", "transposed")],
+        *[
+            ("multitaper_connectivity", case)
+            for case in ("nan", "transposed", "gap", "large_nw")
+        ],
     ],
 )
-def test_construction_warnings_point_at_the_constructing_call(transform_cls, case, match):
-    """Input warnings name the line that built the transform, not package internals."""
+def test_construction_warnings_point_at_the_constructing_call(constructor, case):
+    """Input warnings name the user's line, not package internals."""
     time_series, window_kwargs = _input_that_warns(case)
-    with pytest.warns(UserWarning, match=match) as record:
-        transform_cls(time_series, sampling_frequency=1000, **window_kwargs)
+    match = _WARNING_MATCHES[case]
+    # Record every warning: the wrapper also warns about NaN coefficients.
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        _CONSTRUCTING_CALLS[constructor](time_series, window_kwargs)
     assert [w.filename for w in record if match in str(w.message)] == [__file__]
 
 
