@@ -152,10 +152,14 @@ directly with results from 2.x.
   `b` when `abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))`, with `gap(f)`
   the distance to its nearest neighbouring bin and `ulp` each value's unit in
   the last place in its own stored precision: the allowances the uniform-grid
-  check uses. A decimal bound therefore selects the bin printed as that decimal
-  on a float32 coordinate or one built as `0.1 * k` or with
-  `np.arange(1.0, 100.0, 0.1)`, while a bound farther from every bin is an
-  ordinary edge between bins. The standalone
+  check uses; a bound farther from every bin is an ordinary edge between bins.
+  A decimal bound names a bin only when the bin's stored value has drifted
+  from that decimal by at most one part in a million of its spacing (plus
+  rounding): float32 coordinates, `0.1 * k`, `np.linspace`, `rfftfreq`, and
+  `np.arange(1.0, 100.0, 0.1)` stay within that, while
+  `np.arange(1000.0, 1100.0, 0.001)` (drift up to 2.4e-6 of its spacing) and
+  float32 cumulative sums do not; take bounds from the coordinate for those.
+  The standalone
   `frequency_band_reduce(result, frequency_bands, frequency_reduction=...)`
   applies the same band reduction, with the wrappers' keywords, to an
   already-computed labeled result. Datasets holding

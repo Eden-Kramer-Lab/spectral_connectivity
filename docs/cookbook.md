@@ -194,11 +194,16 @@ at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
 
 Bin `f` lies on bound `b` when `abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) +
 ulp(b))`: within one part in a million of the distance to its nearest
-neighbouring bin, plus two units in the last place of each stored value. So a
-decimal bound names the bin printed as that decimal even where the stored value
-has drifted from it, as on `np.arange` grids with a nonzero start (bin 142
-below is stored as `15.200000000000014`); a bound farther from every bin is an
-ordinary edge between bins.
+neighbouring bin, plus two units in the last place of each stored value; a
+bound farther from every bin is an ordinary edge between bins. A decimal bound
+names a bin only when the bin's stored value has drifted from that decimal by
+at most one part in a million of its spacing (plus rounding): float32
+coordinates, `0.1 * k`, `np.linspace`, `rfftfreq`, and
+`np.arange(1.0, 100.0, 0.1)` stay within that, while
+`np.arange(1000.0, 1100.0, 0.001)` (drift up to 2.4e-6 of its spacing) and
+float32 cumulative sums do not; take bounds from the coordinate for those.
+Below, bin 142 of `np.arange(1.0, 100.0, 0.1)` is stored as
+`15.200000000000014` and is still the 15.2 bin.
 
 ```python
 >>> import xarray as xr

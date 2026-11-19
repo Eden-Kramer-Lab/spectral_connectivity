@@ -532,10 +532,15 @@ def _frequency_interval_mask(
     own stored precision (the grid's dtype for ``f``; float64 for a Python
     ``float`` or integer bound, float32 for a float32 bound). These are the
     allowances of :func:`_uniform_grid_spacing`, with the local gap in place of
-    the mean step so irregular grids are judged bin by bin. So a coordinate
-    stored as float32, computed as ``0.1 * k``, or built with ``np.arange``
-    from a nonzero start keeps the bin its decimal bound names, while a bound
-    1e-3 of the spacing away from a bin does not select it.
+    the mean step so irregular grids are judged bin by bin. A bound 1e-3 of
+    the spacing away from a bin does not select it.
+
+    A decimal bound names a bin only when the bin's stored value has drifted
+    from that decimal by at most one part in a million of its spacing (plus
+    rounding). Float32 coordinates, ``0.1 * k``, ``np.linspace``,
+    ``rfftfreq``, and ``np.arange(1.0, 100.0, 0.1)`` stay within that;
+    ``np.arange(1000.0, 1100.0, 0.001)``, whose bins drift by up to 2.4e-6 of
+    its spacing, and float32 cumulative sums do not.
 
     ``closed="neither"`` is v2.0.1's exclusive selection, evaluated as v2.0.1
     did: ``(bounds[0] < frequencies) & (frequencies < bounds[1])`` on the

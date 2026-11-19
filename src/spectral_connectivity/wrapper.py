@@ -258,12 +258,15 @@ def frequency_band_reduce(
         ``gap(f)`` is the distance from ``f`` to its nearest neighbouring bin
         (zero for a single bin) and ``ulp`` is the unit in the last place of
         each value in its own stored precision (float32 for a float32
-        coordinate or bound, float64 for a Python number). A bound therefore
-        names a bin when it is within one part in a million of that bin's
-        spacing, plus rounding: a decimal bound selects the bin printed as that
-        decimal on a float32 coordinate or one built as ``0.1 * k`` or with
-        ``np.arange(1.0, 100.0, 0.1)``, while a bound farther from every bin is
-        an ordinary edge between bins.
+        coordinate or bound, float64 for a Python number); a bound farther
+        from every bin is an ordinary edge between bins. A decimal bound names
+        a bin only when the bin's stored value has drifted from that decimal by
+        at most one part in a million of its spacing (plus rounding). Float32
+        coordinates, ``0.1 * k``, ``np.linspace``, ``rfftfreq``, and
+        ``np.arange(1.0, 100.0, 0.1)`` stay within that;
+        ``np.arange(1000.0, 1100.0, 0.001)``, whose bins drift by up to 2.4e-6
+        of its spacing, and float32 cumulative sums do not, so for them take
+        bounds from the coordinate itself.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
     circular : bool, optional

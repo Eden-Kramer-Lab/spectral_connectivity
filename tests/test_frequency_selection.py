@@ -6,8 +6,8 @@ named bands, and the estimators that consume a frequency interval (``delay``,
 ``|f - b| <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``, with ``gap(f)`` the
 distance to its nearest neighbouring bin and ``ulp`` each value's unit in the
 last place in its own stored precision -- the allowances of the uniform-grid
-check. So an edge written as a decimal still selects the bin a float32,
-``0.1 * k``, or ``np.arange`` coordinate stores for it.
+check. So an edge written as a decimal still selects the bin a coordinate
+stores for it when that bin drifted by at most a millionth of its spacing.
 """
 
 import json
@@ -151,6 +151,20 @@ def _drifting_grids():
             np.concatenate([[0.0], np.cumsum(np.full(1000, 0.1))]), (10.0, 99.9), id="cumsum"
         ),
     ]
+
+
+def test_a_bin_that_drifted_past_a_millionth_of_its_spacing_is_not_named_by_its_decimal():
+    """The documented reach of the rule: np.arange(1000.0, 1100.0, 0.001) takes
+    its step as 0.0009999999999763531, so bin 42351 is 1042.3509999989985,
+    1.0016e-6 of the spacing below 1042.351, and a lower bound of 1042.351
+    starts at the next bin."""
+    grid = np.arange(1000.0, 1100.0, 0.001)
+    drift = (grid[42351] - 1042.351) / 0.001
+    assert -1.01e-6 < drift < -1e-6
+    mask, _ = _frequency_interval_mask(
+        "frequency_range", (1042.351, 1043.0), grid, closed="both"
+    )
+    assert np.flatnonzero(mask)[0] == 42352
 
 
 def _decimal_bins(grid, bounds):

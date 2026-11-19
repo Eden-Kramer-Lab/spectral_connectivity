@@ -358,10 +358,12 @@ Rulings where the rules above were silent:
   value's own stored precision. These are `_uniform_grid_spacing`'s two
   allowances (one named `_GRID_SPACING_RTOL`, one `_last_place`), with the
   local gap in place of the mean step so irregular grids are judged bin by
-  bin. Float32, `0.1 * k`, `np.arange` from a nonzero start (bin 142 of
-  `np.arange(1.0, 100.0, 0.1)` is `15.200000000000014`), and cumulative-sum
-  grids keep the bins their decimal bounds name; a bound 1e-3 of the spacing
-  from a bin does not select it.
+  bin. A decimal bound names a bin when the bin has drifted from it by at
+  most one part in a million of its spacing (plus rounding): float32, `0.1 *
+  k`, `np.arange(1.0, 100.0, 0.1)` (bin 142 is `15.200000000000014`), and
+  float64 cumulative-sum grids do; `np.arange(1000.0, 1100.0, 0.001)` (drift up
+  to 2.4e-6 of its spacing) and float32 cumulative sums do not. A bound 1e-3 of
+  the spacing from a bin does not select it.
   `"neither"` evaluates v2.0.1's expression, `(band[0] < frequencies) &
   (frequencies < band[1])`, on the band as the caller gave it and the grid as
   stored, so the deprecated keyword selects the bins it selected in v2.0.1
