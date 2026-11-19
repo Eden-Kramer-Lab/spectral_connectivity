@@ -48,20 +48,16 @@ numpydoc_class_members_toctree = False
 
 
 def _public_bases(app, name, obj, options, bases):
-    """Show a private base class's public bases in "Bases:" instead of the private class.
+    """Show a private base class's own bases in "Bases:" instead of the private class.
 
     The class pages list inherited members, so the private class's documented
     members still appear on its public subclasses.
     """
-    resolved = []
-    pending = list(bases)
-    while pending:
-        base = pending.pop(0)
-        if base.__name__.startswith("_"):
-            pending[:0] = base.__bases__
-        elif base not in resolved:
-            resolved.append(base)
-    bases[:] = resolved
+    bases[:] = [
+        b
+        for base in bases
+        for b in (base.__bases__ if base.__name__.startswith("_") else (base,))
+    ]
 
 
 def setup(app):
