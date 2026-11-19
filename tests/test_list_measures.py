@@ -651,6 +651,8 @@ _OPTIONAL_MEASURE_ATTRS = (
     "sign_convention",
     "quantity",
     "formula",
+    "diagonal_value",
+    "diagonal_nan_for_zero_power",
 )
 
 
@@ -670,6 +672,11 @@ def _expected_measure_attrs(measure):
     for key in ("sign_convention", "quantity", "formula"):
         if getattr(measure, key) is not None:
             expected[key] = getattr(measure, key)
+    if measure.diagonal_value is not None:
+        # Which constant, and whether a flat signal is the exception, as
+        # NetCDF-safe scalars (a flag is stored as 0/1).
+        expected["diagonal_value"] = measure.diagonal_value
+        expected["diagonal_nan_for_zero_power"] = int(measure.diagonal_nan_for_zero_power)
     return expected
 
 

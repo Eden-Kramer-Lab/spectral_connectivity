@@ -503,6 +503,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The theoretical range; an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
 | `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
 | `diagonal_policy` | What a self-connection holds: `masked_nan`, `undefined_nan`, `constant` (to within rounding), `rounding_noise` (nominally constant, but amplified rounding; mask it), `estimated`, or `not_applicable` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay_slope` (`masked_nan`) and `group_delay_r_value` (`constant`, 1), whose diagonals differ. |
+| `diagonal_value`, `diagonal_nan_for_zero_power` | Where the policy is `constant` or `rounding_noise`: the (nominal) value, a float, and 1 if a zero-power (flat) signal's self-connection is NaN instead, else 0. Omitted for the other policies. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

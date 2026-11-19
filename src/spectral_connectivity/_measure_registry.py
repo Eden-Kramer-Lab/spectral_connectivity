@@ -131,7 +131,7 @@ class _MeasureSpec:
             return self.units
         return f"({signal_units})^2/Hz" if signal_units else ""
 
-    def result_attrs(self, signal_units: str | None) -> dict[str, str | float]:
+    def result_attrs(self, signal_units: str | None) -> dict[str, str | float | int]:
         """The attrs of a result variable of this measure.
 
         NetCDF-safe scalars: an unbounded side of ``value_range`` and the
@@ -140,7 +140,7 @@ class _MeasureSpec:
         """
         units = self.units_for(signal_units)
         lower, upper = self.value_range
-        optional: dict[str, str | float | None] = {
+        optional: dict[str, str | float | int | None] = {
             "units": units or None,
             "value_range_lower": lower if np.isfinite(lower) else None,
             "value_range_upper": upper if np.isfinite(upper) else None,
@@ -148,6 +148,12 @@ class _MeasureSpec:
             "sign_convention": self.sign_convention,
             "quantity": self.quantity,
             "formula": self.formula,
+            # Which value a constant or rounding_noise diagonal holds, and
+            # whether a flat signal's is NaN instead (0/1: NetCDF has no bool).
+            "diagonal_value": self.diagonal_value,
+            "diagonal_nan_for_zero_power": (
+                None if self.diagonal_value is None else int(self.diagonal_nan_for_zero_power)
+            ),
         }
         return {
             "long_name": self.long_name,

@@ -1019,7 +1019,9 @@ def multitaper_connectivity(
     and ``formula`` (the coherency family), and ``diagonal_policy``, what a
     self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
     ``"constant"``, ``"rounding_noise"``, ``"estimated"``, or
-    ``"not_applicable"``. ``group_delay``'s other value variables,
+    ``"not_applicable"``; a ``"constant"`` or ``"rounding_noise"`` one adds
+    ``diagonal_value`` and ``diagonal_nan_for_zero_power`` (0 or 1).
+    ``group_delay``'s other value variables,
     ``group_delay_slope`` and ``group_delay_r_value``, record their own.
 
     ``power`` has a ``source`` axis, the one it shares with the pairwise
