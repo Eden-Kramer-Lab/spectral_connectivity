@@ -438,6 +438,24 @@ def test_neither_excludes_bins_on_the_bounds(bounds, expected):
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
 
 
+@pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        pytest.param((10.0, np.inf), list(range(12, 51, 2)), id="above"),
+        pytest.param((-np.inf, 10.0), [0, 2, 4, 6, 8], id="below"),
+        pytest.param((-np.inf, np.inf), list(range(0, 51, 2)), id="unbounded"),
+    ],
+)
+def test_the_frozen_validation_accepts_open_bands_the_canonical_rule_rejects(bounds, expected):
+    """Infinite bounds are valid for the deprecated keyword, as in v2.0.1,
+    while frequency_range keeps requiring two finite values."""
+    mask, recorded = _frequencies_of_interest_mask(bounds, _EXACT_GRID)
+    np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
+    assert recorded == bounds
+    with pytest.raises(ValueError, match="frequency_range must be two finite values"):
+        _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID)
+
+
 def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
     """Guard for the test above: its float32 cases exercise both promotions."""
     as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTHS)
@@ -676,8 +694,16 @@ def test_both_spellings_are_rejected(lagged_connectivity, measure):
     [
         pytest.param((5.0, 5.0), "low < high", id="equal-bounds"),
         pytest.param((20.0, 10.0), "low < high", id="reversed"),
+        pytest.param((np.inf, np.inf), "low < high", id="both-infinite"),
         pytest.param((10.0, 12.0), "contains no frequency bin", id="between-adjacent-bins"),
         pytest.param((300.0, 400.0), "contains no frequency bin", id="beyond-nyquist"),
+        pytest.param((300.0, np.inf), "contains no frequency bin", id="open-beyond-nyquist"),
+        pytest.param((10.0,), "must be two values", id="one-value"),
+        pytest.param((10.0, 50.0, 99.0), "must be two values", id="three-values"),
+        pytest.param(np.array([10.0, 50.0, 99.0]), "must be two values", id="three-array"),
+        pytest.param(10.0, "must be two values", id="scalar"),
+        pytest.param((np.nan, 50.0), "not NaN", id="nan-lower"),
+        pytest.param((10.0, np.nan), "not NaN", id="nan-upper"),
     ],
 )
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
