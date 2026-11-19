@@ -45,6 +45,15 @@ def _deprecations(record):
     return [w for w in record if issubclass(w.category, DeprecationWarning)]
 
 
+def _assert_one_caller_warning(record):
+    """Exactly one DeprecationWarning, at this file, naming the replacement and
+    its removal."""
+    (warning,) = _deprecations(record)
+    assert warning.filename == __file__
+    assert f"method='{_NEW}'" in str(warning.message)
+    assert "removed in 4.0" in str(warning.message)
+
+
 def test_canonical_method_is_the_squared_magnitude_of_coherency(connectivity):
     coherency = connectivity.coherency()
     expected = np.clip(np.abs(coherency) ** 2, 0, 1)
@@ -108,7 +117,7 @@ def test_deprecated_method_string_in_a_list_keeps_its_variable(time_series):
     methods = ["power", _OLD, "phase_locking_value"]
     with pytest.warns(DeprecationWarning, match=f"method='{_OLD}'") as record:
         result = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
-    assert len(_deprecations(record)) == 1
+    _assert_one_caller_warning(record)
     assert list(result.data_vars) == methods
     assert result[_OLD].attrs["measure"] == _OLD
 
@@ -119,7 +128,7 @@ def test_deprecated_method_string_through_fourier_connectivity(multitaper):
     canonical = fourier_connectivity(coefficients, frequencies=frequencies, method=_NEW)
     with pytest.warns(DeprecationWarning, match=f"method='{_OLD}'") as record:
         deprecated = fourier_connectivity(coefficients, frequencies=frequencies, method=_OLD)
-    assert {w.filename for w in _deprecations(record)} == {__file__}
+    _assert_one_caller_warning(record)
     assert deprecated.name == _OLD
     np.testing.assert_array_equal(deprecated.values, canonical.values)
 
