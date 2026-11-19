@@ -929,31 +929,32 @@ def test_fft():
     )
 
 
-def test_multitaper_requires_3d_input():
-    """Test that Multitaper requires 3D input array."""
+@pytest.mark.parametrize(
+    "construct",
+    [
+        lambda x: Multitaper(sampling_frequency=1000, time_series=x),
+        lambda x: ShortTimeFourierTransform(x, sampling_frequency=1000),
+        lambda x: Welch(x, sampling_frequency=1000, n_time_samples_per_segment=50),
+    ],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch"],
+)
+def test_windowed_transforms_require_3d_input(construct):
+    """Non-3-D input fails with a message showing how to reshape it; nested
+    lists are converted like arrays."""
     rng = np.random.default_rng(42)
-    # 1D input should raise ValueError
-    time_series_1d = rng.standard_normal(100)
+    time_series = rng.standard_normal((100, 2, 2))
+    np.testing.assert_array_equal(
+        construct(time_series.tolist()).fft(), construct(time_series).fft()
+    )
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
-        Multitaper(sampling_frequency=1000, time_series=time_series_1d)
-
-    # 2D input should raise ValueError with helpful message
-    time_series_2d = rng.standard_normal((100, 5))
+        construct(rng.standard_normal(100))
     with pytest.raises(
-        ValueError,
-        match=r"Expected 3D array.*got 2D.*Use prepare_time_series|np.newaxis",
+        ValueError, match=r"(?s)Expected 3D array.*got 2D.*prepare_time_series"
     ):
-        Multitaper(sampling_frequency=1000, time_series=time_series_2d)
-
-    # 4D input should raise ValueError
-    time_series_4d = rng.standard_normal((100, 10, 5, 3))
+        construct(rng.standard_normal((100, 5)))
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 4D"):
-        Multitaper(sampling_frequency=1000, time_series=time_series_4d)
-
-    # 3D input should work
-    time_series_3d = rng.standard_normal((100, 10, 5))
-    m = Multitaper(sampling_frequency=1000, time_series=time_series_3d)
-    assert m.time_series.ndim == 3
+        construct(rng.standard_normal((100, 10, 5, 3)))
+    assert construct(rng.standard_normal((100, 10, 5))).fft().ndim == 5
 
 
 def test_prepare_time_series_single_trial():

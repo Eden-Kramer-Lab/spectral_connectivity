@@ -672,6 +672,52 @@ class SpectralTransform(Protocol):
         """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
 
 
+def _check_time_series_is_3d(time_series: BackendArray) -> None:
+    """Reject a time series that is not ``(n_time_samples, n_trials, n_signals)``.
+
+    The message shows how to reshape 1-D and 2-D input.
+    """
+    if time_series.ndim != 3:
+        error_msg = (
+            f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
+            f"but got {time_series.ndim}D array with shape {time_series.shape}.\n"
+            "\n"
+        )
+
+        if time_series.ndim == 1:
+            error_msg += (
+                "For a single time series, use:\n"
+                "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                "  >>> time_series_3d = prepare_time_series(time_series)\n"
+                "Or manually:\n"
+                "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
+            )
+        elif time_series.ndim == 2:
+            error_msg += (
+                "For 2D data, you must clarify the meaning of the second dimension.\n"
+                "\n"
+                "Use prepare_time_series() helper:\n"
+                "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                "  >>> # If shape is (n_time, n_signals) with 1 trial:\n"
+                "  >>> time_series_3d = prepare_time_series(time_series, axis='signals')\n"
+                "  >>> # If shape is (n_time, n_trials) with 1 signal:\n"
+                "  >>> time_series_3d = prepare_time_series(time_series, axis='trials')\n"
+                "\n"
+                "Or manually with np.newaxis:\n"
+                "  >>> # For (n_time, n_signals) → (n_time, 1, n_signals):\n"
+                "  >>> time_series_3d = time_series[:, np.newaxis, :]\n"
+                "  >>> # For (n_time, n_trials) → (n_time, n_trials, 1):\n"
+                "  >>> time_series_3d = time_series[:, :, np.newaxis]"
+            )
+        else:
+            error_msg += (
+                f"Arrays with {time_series.ndim} dimensions are not supported.\n"
+                "Expected shape: (n_time_samples, n_trials, n_signals)"
+            )
+
+        raise ValueError(error_msg)
+
+
 def _validate_fft_workers(fft_workers: int | None) -> None:
     """Reject an ``fft_workers`` value that ``scipy.fft.fft(workers=...)`` cannot use."""
     # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
@@ -1589,46 +1635,7 @@ class Multitaper(_WindowedFourierTransform):
         self.adaptive_max_iterations = int(adaptive_max_iterations)
         self.adaptive_tolerance = float(adaptive_tolerance)
 
-        # Validate that time_series is 3D
-        if self._time_series.ndim != 3:
-            error_msg = (
-                f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
-                f"but got {self._time_series.ndim}D array with shape {self._time_series.shape}.\n"
-                "\n"
-            )
-
-            if self._time_series.ndim == 1:
-                error_msg += (
-                    "For a single time series, use:\n"
-                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series)\n"
-                    "Or manually:\n"
-                    "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
-                )
-            elif self._time_series.ndim == 2:
-                error_msg += (
-                    "For 2D data, you must clarify the meaning of the second dimension.\n"
-                    "\n"
-                    "Use prepare_time_series() helper:\n"
-                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
-                    "  >>> # If shape is (n_time, n_signals) with 1 trial:\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series, axis='signals')\n"
-                    "  >>> # If shape is (n_time, n_trials) with 1 signal:\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series, axis='trials')\n"
-                    "\n"
-                    "Or manually with np.newaxis:\n"
-                    "  >>> # For (n_time, n_signals) → (n_time, 1, n_signals):\n"
-                    "  >>> time_series_3d = time_series[:, np.newaxis, :]\n"
-                    "  >>> # For (n_time, n_trials) → (n_time, n_trials, 1):\n"
-                    "  >>> time_series_3d = time_series[:, :, np.newaxis]"
-                )
-            else:
-                error_msg += (
-                    f"Arrays with {self._time_series.ndim} dimensions are not supported.\n"
-                    "Expected shape: (n_time_samples, n_trials, n_signals)"
-                )
-
-            raise ValueError(error_msg)
+        _check_time_series_is_3d(self._time_series)
 
         sampling_frequency = _validate_sampling_frequency(sampling_frequency)
 
@@ -2098,10 +2105,8 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             if value is not None and not is_positive_integer(value):
                 msg = f"{name} must be a positive integer."
                 raise ValueError(msg)
-        data_shape: tuple[int, ...] = tuple(getattr(time_series, "shape", ()))
-        if len(data_shape) != 3:
-            msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
-            raise ValueError(msg)
+        self._time_series = _immutable_array_snapshot(time_series)
+        _check_time_series_is_3d(self._time_series)
         resolved_window = _resolve_sample_count(
             n_time_samples_per_window,
             time_window_duration,
@@ -2109,7 +2114,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             "time_window_duration and n_time_samples_per_window resolve to "
             "different Hann window lengths.",
         )
-        window_samples = int(data_shape[0]) if resolved_window is None else resolved_window
+        window_samples = (
+            int(self._time_series.shape[0]) if resolved_window is None else resolved_window
+        )
         if window_samples < 2:
             msg = "A Hann transform window requires at least 2 samples."
             raise ValueError(msg)
@@ -2129,7 +2136,6 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             raise ValueError(msg)
         window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
 
-        self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         # The window and step are fixed in samples from here on; their
         # durations are what the time_window_* properties report. The window
