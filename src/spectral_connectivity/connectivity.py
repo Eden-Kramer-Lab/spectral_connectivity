@@ -2494,7 +2494,8 @@ class Connectivity:
             Imaginary coherence magnitudes (symmetric in the signal pair; see
             :meth:`imaginary_coherency` for the signed, lead/lag-aware version).
             The diagonal is 0 (to within rounding), the imaginary part of a
-            signal's coherency with itself.
+            signal's coherency with itself, except for a zero-power signal,
+            whose entries are all NaN.
 
         Notes
         -----
@@ -3762,6 +3763,7 @@ class Connectivity:
         ``1 / sqrt(eps)``. The diagonal is therefore rounding noise below about
         ``sqrt(eps)`` of the computation precision (1.5e-8 in float64,
         3.5e-4 in float32), and exactly 0 only where the rounding cancels.
+        A zero-power signal's PLV is NaN, and so is its diagonal entry here.
 
         References
         ----------

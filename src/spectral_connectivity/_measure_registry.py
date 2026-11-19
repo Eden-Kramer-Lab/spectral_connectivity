@@ -35,15 +35,20 @@ class _MeasureSpec:
     - ``"masked_nan"``: NaN although the estimator defines a value there (for
       coherence, 1 at nonzero power): the package masks it.
     - ``"undefined_nan"``: NaN because the estimator has no self-connection.
-    - ``"constant"``: the estimator's value, the same for any data, to within
-      the rounding of the averages it is computed from (about
-      ``n_observations`` units in the last place).
+    - ``"constant"``: the estimator's value, the same for any signal with
+      nonzero power, to within the rounding of the averages it is computed
+      from (about ``n_observations`` units in the last place).
     - ``"rounding_noise"``: nominally ``diagonal_value`` (an identity or a
       defined 0/0 limit), but computed from rounding residues that the
       measure's formula amplifies, so it can differ from that value by much
       more than rounding (see ``corrected_imaginary_phase_locking_value``).
     - ``"estimated"``: the estimator's value, which depends on the data.
     - ``"not_applicable"``: the result has no self-connection entries.
+
+    ``diagonal_nan_for_zero_power`` marks a ``"constant"`` or
+    ``"rounding_noise"`` measure that normalizes by each signal's amplitude,
+    so a zero-power (flat) signal's self-connection is NaN instead of
+    ``diagonal_value``; the others keep the value for a flat signal too.
 
     ``sign_convention`` says which signal leads when a measure's sign or angle
     shows it. ``quantity`` and ``formula`` define the coherency family's values
@@ -76,6 +81,7 @@ class _MeasureSpec:
         "not_applicable",
     ]
     diagonal_value: float | None = None
+    diagonal_nan_for_zero_power: bool = False
     sign_convention: str | None = None
     quantity: (
         Literal["magnitude", "squared_magnitude", "signed", "phase", "complex"] | None
@@ -96,6 +102,9 @@ class _MeasureSpec:
                 "diagonal_value is the value of a constant or rounding_noise "
                 "diagonal, and only that."
             )
+            raise ValueError(msg)
+        if self.diagonal_nan_for_zero_power and not nominal:
+            msg = "diagonal_nan_for_zero_power qualifies a nominal diagonal value."
             raise ValueError(msg)
 
     @property
@@ -242,6 +251,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "such as volume conduction.",
         diagonal_policy="constant",
         diagonal_value=0.0,
+        diagonal_nan_for_zero_power=True,
         quantity="magnitude",
         formula=f"|Im(S_st)| / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
@@ -255,6 +265,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
         diagonal_policy="constant",
         diagonal_value=1.0,
+        diagonal_nan_for_zero_power=True,
         is_default=True,
     ),
     "pairwise_spectral_granger_prediction": _wilson_directed_spec(
@@ -288,6 +299,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "amplitude: 0 is random, 1 is constant. Biased upward with few observations.",
         diagonal_policy="constant",
         diagonal_value=1.0,
+        diagonal_nan_for_zero_power=True,
         is_default=True,
     ),
     "power": _MeasureSpec(
@@ -369,6 +381,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         # sqrt(1 - Re^2) of order sqrt(eps).
         diagonal_policy="rounding_noise",
         diagonal_value=0.0,
+        diagonal_nan_for_zero_power=True,
     ),
     "directed_phase_lag_index": _MeasureSpec(
         "pairwise",

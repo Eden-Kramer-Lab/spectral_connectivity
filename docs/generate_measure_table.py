@@ -37,10 +37,11 @@ def _range(lower: float, upper: float, is_complex: bool) -> str:
     return f"\\|z\\| in {interval}" if is_complex else interval
 
 
-def _diagonal(policy: str, value: float | None) -> str:
-    if policy == "rounding_noise":
-        return f"{value:g}, plus rounding noise"
-    return _DIAGONALS[policy] if value is None else f"{value:g}"
+def _diagonal(policy: str, value: float | None, nan_for_zero_power: bool) -> str:
+    if value is None:
+        return _DIAGONALS[policy]
+    text = f"{value:g}, plus rounding noise" if policy == "rounding_noise" else f"{value:g}"
+    return f"{text} (NaN for a zero-power signal)" if nan_for_zero_power else text
 
 
 def _meaning(interpretation: str, sign_convention: str | None) -> str:
@@ -57,7 +58,7 @@ def measure_table() -> str:
         f"| `{measure.name}` "
         f"| {_range(*measure.value_range, measure.is_complex)} "
         f"| {measure.units} "
-        f"| {_diagonal(measure.diagonal_policy, measure.diagonal_value)} "
+        f"| {_diagonal(measure.diagonal_policy, measure.diagonal_value, measure.diagonal_nan_for_zero_power)} "
         f"| {_meaning(measure.interpretation, measure.sign_convention)} |"
         for measure in list_measures()
     )

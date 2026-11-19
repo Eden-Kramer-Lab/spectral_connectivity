@@ -130,7 +130,9 @@ part of coherency is 0 for a signal with itself, which `imaginary_coherence`
 returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
 A constant holds to within the rounding of the averages it is computed from,
 at most about `n_observations` times machine epsilon (exactly 0 on some
-NumPy builds). `docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's
+NumPy builds), and only for signals with power: where
+`diagonal_nan_for_zero_power` is set, as for `imaginary_coherence`, a flat
+signal's self-connection is NaN. `docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's
 policy.
 
 ```python

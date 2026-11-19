@@ -125,8 +125,8 @@ class MeasureInfo:
         ``"masked_nan"`` (NaN although the estimator defines a value there,
         e.g. self-coherence is 1 at nonzero power), ``"undefined_nan"`` (NaN:
         the estimator has no self-connection), ``"constant"`` (the same value
-        for any data, ``diagonal_value``, to within the rounding of the
-        averages behind it), ``"rounding_noise"`` (nominally
+        for any signal with nonzero power, ``diagonal_value``, to within the
+        rounding of the averages behind it), ``"rounding_noise"`` (nominally
         ``diagonal_value``, but computed from rounding residues the formula
         amplifies, so it can be visibly nonzero), ``"estimated"`` (a
         data-dependent value), or ``"not_applicable"`` (no self-connection
@@ -134,6 +134,12 @@ class MeasureInfo:
     diagonal_value : float or None
         The value of a ``"constant"`` diagonal, or the nominal value of a
         ``"rounding_noise"`` one; ``None`` otherwise.
+    diagonal_nan_for_zero_power : bool
+        Whether a zero-power (flat) signal's self-connection is NaN instead of
+        ``diagonal_value``, as for the measures that normalize by amplitude
+        (``imaginary_coherence``, ``phase_locking_value``,
+        ``pairwise_phase_consistency``, and
+        ``corrected_imaginary_phase_locking_value``).
     sign_convention : str or None
         Which signal leads when the sign or angle shows it; ``None`` for
         measures whose sign carries no lead/lag.
@@ -161,6 +167,7 @@ class MeasureInfo:
     interpretation: str
     diagonal_policy: str
     diagonal_value: float | None
+    diagonal_nan_for_zero_power: bool
     sign_convention: str | None
     quantity: str | None
     formula: str | None
@@ -242,6 +249,7 @@ def list_measures(
                 interpretation=spec.interpretation,
                 diagonal_policy=spec.diagonal_policy,
                 diagonal_value=spec.diagonal_value,
+                diagonal_nan_for_zero_power=spec.diagonal_nan_for_zero_power,
                 sign_convention=spec.sign_convention,
                 quantity=spec.quantity,
                 formula=spec.formula,

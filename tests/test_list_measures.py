@@ -543,21 +543,79 @@ def _assert_diagonal_matches(measure, variable):
     ``sqrt(1 - Re^2)`` of order ``sqrt(eps)``), so it is bounded by ``sqrt(eps)``.
     """
     diagonal = _diagonal(variable)
-    eps = np.finfo(np.real(variable.values).dtype).eps
     if measure.diagonal_policy == "not_applicable":
         assert diagonal is None
     elif measure.diagonal_policy in {"masked_nan", "undefined_nan"}:
         assert np.isnan(diagonal).all()
-    elif measure.diagonal_policy == "constant":
-        np.testing.assert_allclose(
-            diagonal, measure.diagonal_value, rtol=0, atol=_sum_rounding(variable)
-        )
-    elif measure.diagonal_policy == "rounding_noise":
-        np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=np.sqrt(eps))
+    elif measure.diagonal_value is not None:
+        _assert_nominal_diagonal(measure, variable, diagonal)
     else:
         assert measure.diagonal_policy == "estimated"
         assert np.isfinite(diagonal).all()
         assert np.ptp(np.abs(diagonal)) > 0  # data-dependent, not a constant
+
+
+def _assert_nominal_diagonal(measure, variable, diagonal):
+    """``diagonal`` (entries of ``variable``) holds ``measure.diagonal_value``
+    to within the rounding its policy allows."""
+    eps = np.finfo(np.real(variable.values).dtype).eps
+    tolerance = (
+        _sum_rounding(variable) if measure.diagonal_policy == "constant" else np.sqrt(eps)
+    )
+    np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=tolerance)
+
+
+# Measures whose self-connection of a zero-power (flat) signal is NaN, although
+# their diagonal otherwise holds its nominal value: they normalize by each
+# signal's amplitude, which is zero there. The phase lag indices keep theirs.
+_NAN_FOR_ZERO_POWER = {
+    "imaginary_coherence",
+    "phase_locking_value",
+    "pairwise_phase_consistency",
+    "corrected_imaginary_phase_locking_value",
+}
+_NOMINAL_DIAGONALS = [m for m in list_measures() if m.diagonal_value is not None]
+
+
+@pytest.fixture(scope="module")
+def flat_channel_results(coupled_time_series):
+    """The measures with a nominal diagonal, and group_delay, with signal "3" flat."""
+    flat = coupled_time_series.copy()
+    flat[..., -1] = 0.0
+    names = [measure.name for measure in _NOMINAL_DIAGONALS] + ["group_delay"]
+    with warnings.catch_warnings():
+        # A flat signal makes the normalized measures warn; that is expected.
+        warnings.simplefilter("ignore")
+        return {
+            name: multitaper_connectivity(
+                flat, sampling_frequency=500, time_window_duration=0.5, method=name
+            )
+            for name in names
+        }
+
+
+@pytest.mark.parametrize("measure", _NOMINAL_DIAGONALS, ids=lambda measure: measure.name)
+def test_a_zero_power_signal_keeps_or_masks_the_nominal_diagonal(
+    flat_channel_results, measure
+):
+    """A flat signal's self-connection is NaN exactly for the measures that say
+    so; every signal with power keeps the nominal value."""
+    variable = flat_channel_results[measure.name]
+    assert measure.diagonal_nan_for_zero_power == (measure.name in _NAN_FOR_ZERO_POWER)
+    flat_self = variable.sel(source="3", target="3").values
+    if measure.diagonal_nan_for_zero_power:
+        assert np.isnan(flat_self).all()
+    else:
+        _assert_nominal_diagonal(measure, variable, flat_self)
+    live = variable.isel(source=[0, 1, 2], target=[0, 1, 2])
+    _assert_nominal_diagonal(measure, live, _diagonal(live))
+
+
+def test_group_delay_correlation_diagonal_is_one_for_a_zero_power_signal(
+    flat_channel_results,
+):
+    r_value = flat_channel_results["group_delay"]["group_delay_r_value"]
+    np.testing.assert_array_equal(_diagonal(r_value), 1.0)
 
 
 def test_documented_diagonals_are_the_registered_ones():
