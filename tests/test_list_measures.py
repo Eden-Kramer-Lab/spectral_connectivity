@@ -457,3 +457,176 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(
     # The two computations agree only to roundoff (it varies with the BLAS);
     # swapped axes would differ by orders of magnitude, since 0 -> 1 dominates.
     np.testing.assert_allclose(result.values, expected, rtol=1e-9, atol=1e-12)
+
+
+# The self-connection values the documentation states, pinned here so that a
+# change to a measure's diagonal, or to what the registry says about it, fails.
+# A float is the constant every diagonal entry holds.
+_DOCUMENTED_DIAGONALS = {
+    "magnitude_squared_coherence": "masked_nan",
+    "coherence_phase": "masked_nan",
+    "coherency": "masked_nan",
+    "imaginary_coherency": "masked_nan",
+    "partial_coherence": "masked_nan",
+    "imaginary_coherence": 0.0,
+    "phase_lag_index": 0.0,
+    "weighted_phase_lag_index": 0.0,
+    "debiased_squared_phase_lag_index": 0.0,
+    "debiased_squared_weighted_phase_lag_index": 0.0,
+    "corrected_imaginary_phase_locking_value": 0.0,
+    "phase_locking_value": 1.0,
+    "pairwise_phase_consistency": 1.0,
+    "directed_phase_lag_index": 0.5,
+    "pairwise_spectral_granger_prediction": "undefined_nan",
+    "conditional_spectral_granger_prediction": "undefined_nan",
+    "blockwise_spectral_granger_prediction": "undefined_nan",
+    "cross_spectral_density": "estimated",
+    "directed_transfer_function": "estimated",
+    "canonical_coherence": "masked_nan",
+    "delay": "masked_nan",
+    "power": "not_applicable",
+    "canonical_coherency": "not_applicable",
+    "global_coherence": "not_applicable",
+}
+
+# Pairs of axes whose shared labels form a variable's diagonal.
+_PAIR_AXES = (("source", "target"), ("source_group", "target_group"))
+
+
+def _diagonal(variable):
+    """The self-connection entries of a variable with a pair of axes, or None.
+
+    Shape ``(n_signals, ...)``: one slice per signal (or group).
+    """
+    for first, second in _PAIR_AXES:
+        if first in variable.dims and second in variable.dims:
+            return np.stack(
+                [
+                    variable.sel({first: label, second: label}).values
+                    for label in variable[first].values
+                ]
+            )
+    return None
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_diagonal_matches_its_policy(coupled_results, measure):
+    """The recorded ``diagonal_policy`` describes the values on the diagonal."""
+    variable = _main_variable(coupled_results[measure.name], measure.name)
+    diagonal = _diagonal(variable)
+    assert (measure.diagonal_policy == "constant") == (measure.diagonal_value is not None)
+    if measure.diagonal_policy == "not_applicable":
+        assert diagonal is None
+    elif measure.diagonal_policy in {"masked_nan", "undefined_nan"}:
+        assert np.isnan(diagonal).all()
+    elif measure.diagonal_policy == "constant":
+        np.testing.assert_allclose(diagonal, measure.diagonal_value, rtol=0, atol=1e-12)
+    else:
+        assert measure.diagonal_policy == "estimated"
+        assert np.isfinite(diagonal).all()
+        assert np.ptp(np.abs(diagonal)) > 0  # data-dependent, not a constant
+
+
+def test_documented_diagonals_are_the_registered_ones():
+    measures = {measure.name: measure for measure in list_measures()}
+    for name, documented in _DOCUMENTED_DIAGONALS.items():
+        measure = measures[name]
+        if isinstance(documented, float):
+            assert (measure.diagonal_policy, measure.diagonal_value) == (
+                "constant",
+                documented,
+            )
+        else:
+            assert measure.diagonal_policy == documented, name
+
+
+def test_cross_spectral_density_diagonal_is_the_power_spectrum(coupled_results):
+    csd = coupled_results["cross_spectral_density"]
+    diagonal = np.diagonal(csd.values, axis1=-2, axis2=-1)
+    np.testing.assert_allclose(
+        diagonal.real, coupled_results["power"].values, rtol=1e-12, atol=0
+    )
+    np.testing.assert_array_equal(diagonal.imag, 0.0)
+
+
+_OPTIONAL_MEASURE_ATTRS = (
+    "value_range_lower",
+    "value_range_upper",
+    "value_range_applies_to",
+    "sign_convention",
+    "quantity",
+    "formula",
+)
+
+
+def _expected_measure_attrs(measure):
+    """The attrs a measure variable takes from its registry record."""
+    lower, upper = measure.value_range
+    expected = {
+        "interpretation": measure.interpretation,
+        "diagonal_policy": measure.diagonal_policy,
+    }
+    if np.isfinite(lower):
+        expected["value_range_lower"] = lower
+    if np.isfinite(upper):
+        expected["value_range_upper"] = upper
+    if measure.is_complex:
+        expected["value_range_applies_to"] = "magnitude"
+    for key in ("sign_convention", "quantity", "formula"):
+        if getattr(measure, key) is not None:
+            expected[key] = getattr(measure, key)
+    return expected
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_measure_variable_records_how_to_read_it(coupled_results, measure):
+    """Interpretation, sign convention, theoretical range, and diagonal policy
+    are on the measure's own variable, so an extracted variable keeps them; an
+    unbounded side of the range and facts a measure does not state are absent."""
+    variable = _main_variable(coupled_results[measure.name], measure.name)
+    expected = _expected_measure_attrs(measure)
+    assert {key: variable.attrs.get(key) for key in expected} == expected
+    absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
+    assert not absent & set(variable.attrs)
+
+
+def test_every_variable_of_group_delay_records_its_own_diagonal(coupled_results):
+    """The fit's correlation is 1 on the diagonal while delay and slope are NaN."""
+    result = coupled_results["group_delay"]
+    for name in ("group_delay", "group_delay_slope"):
+        assert result[name].attrs["diagonal_policy"] == "masked_nan"
+        assert np.isnan(_diagonal(result[name])).all()
+    assert result["group_delay_r_value"].attrs["diagonal_policy"] == "constant"
+    np.testing.assert_array_equal(_diagonal(result["group_delay_r_value"]), 1.0)
+
+
+def test_coherence_family_states_its_formula_and_quantity():
+    measures = {measure.name: measure for measure in list_measures()}
+    quantities = {
+        "magnitude_squared_coherence": "squared_magnitude",
+        "partial_coherence": "squared_magnitude",
+        "canonical_coherence": "squared_magnitude",
+        "coherence_phase": "phase",
+        "coherency": "complex",
+        "canonical_coherency": "complex",
+        "imaginary_coherence": "magnitude",
+        "imaginary_coherency": "signed",
+    }
+    assert {name: m.quantity for name, m in measures.items() if m.quantity} == quantities
+    assert {name for name, m in measures.items() if m.formula} == set(quantities)
+
+
+def test_signed_and_phase_measures_state_their_sign_convention():
+    """Every measure whose sign or angle says which signal leads names how."""
+    signed = {
+        "coherence_phase",
+        "coherency",
+        "imaginary_coherency",
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "canonical_coherency",
+        "delay",
+        "group_delay",
+        "phase_slope_index",
+    }
+    assert {m.name for m in list_measures() if m.sign_convention} == signed

@@ -73,6 +73,34 @@ axes.
 ('time', 'frequency', 'source', 'target')
 >>> coherence.name
 'magnitude_squared_coherence'
+>>> coherence.attrs["quantity"]  # |coherency|^2, not |coherency|
+'squared_magnitude'
+
+```
+
+Before 3.0 this measure was named `coherence_magnitude`. A default result now
+holds `magnitude_squared_coherence` and no `coherence_magnitude`, so 2.x code
+that indexes a default result by the old name fails loudly. Requesting the old
+name explicitly still works through 3.x, with a `DeprecationWarning`: the
+result keeps the old variable name and records `measure="coherence_magnitude"`,
+the name asked for, with the same values. The old name is removed in 4.0.
+
+```python
+>>> import warnings
+>>> default = multitaper_connectivity(time_series, sampling_frequency=500)
+>>> "magnitude_squared_coherence" in default, "coherence_magnitude" in default
+(True, False)
+>>> with warnings.catch_warnings(record=True) as caught:
+...     warnings.simplefilter("always")
+...     old = multitaper_connectivity(
+...         time_series, sampling_frequency=500, method="coherence_magnitude"
+...     )
+>>> [warning.category.__name__ for warning in caught]
+['DeprecationWarning']
+>>> old.name, old.attrs["measure"]
+('coherence_magnitude', 'coherence_magnitude')
+>>> bool(old.equals(default["magnitude_squared_coherence"]))
+True
 
 ```
 
@@ -88,6 +116,47 @@ Default signal labels are the string indices `"0"`, `"1"`, `"2"`; pass
 ('time', 'frequency')
 >>> band = coherence.sel(frequency=slice(30, 50))
 >>> float(band.frequency.min()) >= 30.0
+True
+
+```
+
+## Mask or fill the diagonal
+
+A self-connection (`source` equal to `target`) does not hold the same kind of
+value for every measure, and each variable's `diagonal_policy` attribute says
+which it is. Coherence is NaN there by the package's choice (`masked_nan`),
+although self-coherence is 1 for a signal with nonzero power; the imaginary
+part of coherency is 0 for a signal with itself, which `imaginary_coherence`
+returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
+`docs/CONNECTIVITY_METRIC_RANGES.md` lists every measure's policy.
+
+```python
+>>> default = multitaper_connectivity(time_series, sampling_frequency=500)
+>>> default["magnitude_squared_coherence"].attrs["diagonal_policy"]
+'masked_nan'
+>>> default["imaginary_coherence"].attrs["diagonal_policy"]
+'constant'
+>>> imaginary = default["imaginary_coherence"]
+>>> float(imaginary.sel(source="0", target="0").max())
+0.0
+
+```
+
+To treat every self-connection alike, compare the `source` and `target`
+labels, which gives a `(source, target)` mask, and apply it to each variable
+with both axes (not to `power`, which has only `source`). For a group measure
+compare `source_group` with `target_group`.
+
+```python
+>>> self_connection = imaginary.source == imaginary.target
+>>> masked = imaginary.where(~self_connection)  # NaN, like imaginary_coherency
+>>> bool(masked.sel(source="0", target="0").isnull().all())
+True
+>>> coherence = default["magnitude_squared_coherence"]
+>>> filled = coherence.where(~self_connection, 1.0)  # self-coherence at nonzero power
+>>> float(filled.sel(source="1", target="1").min())
+1.0
+>>> bool(filled.sel(source="0", target="1").equals(coherence.sel(source="0", target="1")))
 True
 
 ```
@@ -185,6 +254,21 @@ filters and patterns have a `side` axis, `"source"` or `"target"`, over the
 >>> source_filters = filters.sel(side="source", connection=0, component=0)
 >>> bool(source_filters.sel(signal="2").isnull().all())  # signal 2 is in PFC
 True
+
+```
+
+`canonical_coherence` and `canonical_coherency` are different estimators, and
+neither is the square or square root of the other. `canonical_coherence` is
+the historical squared canonical correlation (complex channel weights);
+`canonical_coherency` is the phase-optimized CaCoh (real weights and one
+phase), whose magnitude is the unsquared maximized coherence. Their attributes
+say so:
+
+```python
+>>> between_areas.attrs["quantity"], components["canonical_coherency"].attrs["quantity"]
+('squared_magnitude', 'complex')
+>>> print(between_areas.attrs["formula"])
+max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)), with S_st the cross-spectral matrix from the source group's signals to the target group's
 
 ```
 
@@ -393,6 +477,12 @@ facts needed to interpret it. Settings use one JSON record:
 | `selected_frequency_lower`, `selected_frequency_upper` | The lowest and highest bins in that interval, before any `frequency_resolution` subsampling or `frequency_decimation`. |
 | `frequency_interval_closed` | `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
 | `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. Decimation and band reduction keep the interval record, which still names the interval they were drawn from; the `frequency` (or `band`) coordinate shows what was returned. |
+| `measure`, `measure_kwargs_json` | The measure name the caller requested and its keyword arguments, on each measure's variables. A result requested by a deprecated name (`coherence_magnitude`) records that name, and its variable has that name too. |
+| `long_name`, `units`, `interpretation` | How to read the measure variable, from `list_measures()`. |
+| `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
+| `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The theoretical range; an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
+| `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
+| `diagonal_policy` | What a self-connection holds: `masked_nan`, `undefined_nan`, `constant`, `estimated`, or `not_applicable` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay`'s slope and correlation variables, whose diagonals differ. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

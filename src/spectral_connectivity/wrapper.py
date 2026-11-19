@@ -119,7 +119,27 @@ class MeasureInfo:
         ``global_coherence``, ...) are Datasets whose variable named ``name``
         has these dimensions.
     interpretation : str
-        How to read the values, including the sign convention where one exists.
+        How to read the values.
+    diagonal_policy : str
+        What a self-connection (a signal, or group, with itself) holds:
+        ``"masked_nan"`` (NaN although the estimator defines a value there,
+        e.g. self-coherence is 1 at nonzero power), ``"undefined_nan"`` (NaN:
+        the estimator has no self-connection), ``"constant"`` (the same value
+        for any data, ``diagonal_value``), ``"estimated"`` (a data-dependent
+        value), or ``"not_applicable"`` (no self-connection entries).
+    diagonal_value : float or None
+        The value of a ``"constant"`` diagonal; ``None`` otherwise.
+    sign_convention : str or None
+        Which signal leads when the sign or angle shows it; ``None`` for
+        measures whose sign carries no lead/lag.
+    quantity : str or None
+        For the coherency family, the form of the value: ``"magnitude"``,
+        ``"squared_magnitude"``, ``"signed"`` (a real part with its sign),
+        ``"phase"`` (an angle in radians), or ``"complex"``; ``None`` for
+        other measures.
+    formula : str or None
+        For the coherency family, the definition of the value; ``None`` for
+        other measures.
     """
 
     name: str
@@ -134,6 +154,11 @@ class MeasureInfo:
     is_complex: bool
     dims: tuple[str, ...]
     interpretation: str
+    diagonal_policy: str
+    diagonal_value: float | None
+    sign_convention: str | None
+    quantity: str | None
+    formula: str | None
 
 
 def list_measures(
@@ -207,6 +232,11 @@ def list_measures(
                 is_complex=spec.is_complex,
                 dims=spec.dims,
                 interpretation=spec.interpretation,
+                diagonal_policy=spec.diagonal_policy,
+                diagonal_value=spec.diagonal_value,
+                sign_convention=spec.sign_convention,
+                quantity=spec.quantity,
+                formula=spec.formula,
             )
         )
     return measures

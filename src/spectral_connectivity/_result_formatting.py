@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
     _canonical_measure_name,
-    _measure_label_attrs,
+    _measure_attrs,
     _measure_spec,
 )
 from spectral_connectivity._provenance import _canonical_json, _store_provenance_item
@@ -209,9 +209,7 @@ def _connectivity_result_to_xarray(
     signal_coordinates.update(target_extras)
     measure_attrs = {
         **attrs,
-        **_measure_label_attrs(
-            method, None if signal_metadata is None else signal_metadata.units
-        ),
+        **_measure_attrs(method, None if signal_metadata is None else signal_metadata.units),
     }
 
     if output_kind in {"pairwise", "power"}:
@@ -373,17 +371,25 @@ def _connectivity_result_to_xarray(
             "time": base_coordinates["time"],
             **signal_coordinates,
         }
+        # (long_name, values, units, diagonal_policy): the fit's correlation is
+        # 1 on the diagonal, where delay and slope inherit coherency's mask.
         variables = {
-            "group_delay": ("Group delay", np.asarray(delay), delay_units),
-            "group_delay_slope": ("phase slope", np.asarray(slope), slope_units),
+            "group_delay": (
+                "Group delay",
+                np.asarray(delay),
+                delay_units,
+                measure_attrs["diagonal_policy"],
+            ),
+            "group_delay_slope": ("phase slope", np.asarray(slope), slope_units, "masked_nan"),
             "group_delay_r_value": (
                 "phase-frequency correlation",
                 np.asarray(r_value),
                 "1",
+                "constant",
             ),
         }
         data_vars: dict[str, xr.DataArray] = {}
-        for name, (long_name, values, units) in variables.items():
+        for name, (long_name, values, units, diagonal_policy) in variables.items():
             if values.shape != (
                 len(connectivity.time),
                 connectivity.n_signals,
@@ -391,11 +397,14 @@ def _connectivity_result_to_xarray(
             ):
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
+            # group_delay carries the measure's record, the others their own
+            # labels and diagonal.
             variable_attrs = {
-                **attrs,
+                **(measure_attrs if name == method else attrs),
                 **interval_attrs,
                 "long_name": long_name,
                 "units": units,
+                "diagonal_policy": diagonal_policy,
             }
             data_vars[name] = xr.DataArray(
                 values,

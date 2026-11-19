@@ -27,6 +27,20 @@ class _MeasureSpec:
     score and ``None`` a spectral density, whose units derive from the input's
     (see :meth:`units_for`). ``value_range`` bounds the returned
     values, or their magnitude when ``is_complex``.
+
+    ``diagonal_policy`` says what a self-connection (a signal, or group, with
+    itself) holds; ``diagonal_value`` is the value of a ``"constant"`` one:
+
+    - ``"masked_nan"``: NaN although the estimator defines a value there (for
+      coherence, 1 at nonzero power): the package masks it.
+    - ``"undefined_nan"``: NaN because the estimator has no self-connection.
+    - ``"constant"``: the estimator's value, the same for any data.
+    - ``"estimated"``: the estimator's value, which depends on the data.
+    - ``"not_applicable"``: the result has no self-connection entries.
+
+    ``sign_convention`` says which signal leads when a measure's sign or angle
+    shows it. ``quantity`` and ``formula`` define the coherency family's values
+    (``None`` for other measures).
     """
 
     output_kind: Literal[
@@ -46,6 +60,15 @@ class _MeasureSpec:
     units: str | None
     value_range: tuple[float, float]
     interpretation: str
+    diagonal_policy: Literal[
+        "masked_nan", "undefined_nan", "constant", "estimated", "not_applicable"
+    ]
+    diagonal_value: float | None = None
+    sign_convention: str | None = None
+    quantity: (
+        Literal["magnitude", "squared_magnitude", "signed", "phase", "complex"] | None
+    ) = None
+    formula: str | None = None
     is_complex: bool = False
     is_default: bool = False
     # Scientific directionality and spectrum requirements are independent
@@ -53,6 +76,11 @@ class _MeasureSpec:
     # Wilson factorization.
     is_directed: bool = False
     requires_two_sided: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.diagonal_policy == "constant") != (self.diagonal_value is not None):
+            msg = "diagonal_value is the value of a constant diagonal, and only that."
+            raise ValueError(msg)
 
     @property
     def dims(self) -> tuple[str, ...]:
@@ -78,6 +106,31 @@ class _MeasureSpec:
             return self.units
         return f"({signal_units})^2/Hz" if signal_units else ""
 
+    def result_attrs(self, signal_units: str | None) -> dict[str, str | float]:
+        """The attrs of a result variable of this measure.
+
+        NetCDF-safe scalars: an unbounded side of ``value_range`` and the
+        facts the measure does not state are omitted, and unknown units too
+        (see :meth:`units_for`).
+        """
+        units = self.units_for(signal_units)
+        lower, upper = self.value_range
+        optional: dict[str, str | float | None] = {
+            "units": units or None,
+            "value_range_lower": lower if np.isfinite(lower) else None,
+            "value_range_upper": upper if np.isfinite(upper) else None,
+            "value_range_applies_to": "magnitude" if self.is_complex else None,
+            "sign_convention": self.sign_convention,
+            "quantity": self.quantity,
+            "formula": self.formula,
+        }
+        return {
+            "long_name": self.long_name,
+            "interpretation": self.interpretation,
+            "diagonal_policy": self.diagonal_policy,
+            **{key: value for key, value in optional.items() if value is not None},
+        }
+
 
 def _wilson_directed_spec(
     output_kind: Literal["pairwise", "group_pairwise"],
@@ -86,6 +139,7 @@ def _wilson_directed_spec(
     units: str | None,
     value_range: tuple[float, float],
     interpretation: str,
+    diagonal_policy: Literal["undefined_nan", "estimated"],
     is_default: bool = False,
 ) -> _MeasureSpec:
     """Spec of a directed measure computed from the Wilson-factorized spectrum.
@@ -99,6 +153,7 @@ def _wilson_directed_spec(
         units=units,
         value_range=value_range,
         interpretation=interpretation,
+        diagonal_policy=diagonal_policy,
         is_default=is_default,
         is_directed=True,
         requires_two_sided=True,
@@ -108,6 +163,8 @@ def _wilson_directed_spec(
 _INFINITY = float("inf")
 _PI = float(np.pi)
 _LEADS = "Positive (source=a, target=b) means a leads b."
+# coherency's cross-spectrum, reused by the coherency family's formulas.
+_CROSS_SPECTRUM = "S_st = E[X_s * conj(X_t)], averaged over the expectation_type axes"
 _DEBIASED = "Negative values are finite-sample noise around zero, not negative coupling."
 
 
@@ -122,6 +179,9 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Linear coupling at each frequency: 0 is none, 1 is a perfectly consistent "
         "amplitude and phase relationship. Biased upward when trials x tapers is small.",
+        diagonal_policy="masked_nan",
+        quantity="squared_magnitude",
+        formula=f"|S_st|^2 / (S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
     ),
     "coherence_phase": _MeasureSpec(
@@ -129,7 +189,11 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Coherency phase",
         units="rad",
         value_range=(-_PI, _PI),
-        interpretation=f"Mean phase difference in radians. {_LEADS}",
+        interpretation="Mean phase difference in radians.",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
+        quantity="phase",
+        formula=f"angle(S_st), the angle of coherency, where {_CROSS_SPECTRUM}",
         is_default=True,
     ),
     "debiased_squared_phase_lag_index": _MeasureSpec(
@@ -139,6 +203,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(-1.0, 1.0),
         interpretation="Bias-corrected squared phase lag index. "
         f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
         is_default=True,
     ),
     "debiased_squared_weighted_phase_lag_index": _MeasureSpec(
@@ -147,6 +213,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         units="1",
         value_range=(-1.0, 1.0),
         interpretation=f"Bias-corrected squared weighted phase lag index. {_DEBIASED}",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
         is_default=True,
     ),
     "imaginary_coherence": _MeasureSpec(
@@ -156,6 +224,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Magnitude of the imaginary part of coherency; blind to zero-lag coupling "
         "such as volume conduction.",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
+        quantity="magnitude",
+        formula=f"|Im(S_st)| / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
     ),
     "pairwise_phase_consistency": _MeasureSpec(
@@ -165,6 +237,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(-1.0, 1.0),
         interpretation="Bias-free estimate of the squared phase-locking value. "
         f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
+        diagonal_policy="constant",
+        diagonal_value=1.0,
         is_default=True,
     ),
     "pairwise_spectral_granger_prediction": _wilson_directed_spec(
@@ -175,6 +249,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Nonparametric spectral Granger causality from source to target: 0 is no "
         "directed influence; larger values mean more of the target's power is "
         "predicted by the source's past. Not conditioned on other signals.",
+        diagonal_policy="undefined_nan",
     ),
     "phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -182,7 +257,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         units="1",
         value_range=(-1.0, 1.0),
         interpretation="Signed asymmetry of the phase-difference distribution; blind to zero-lag "
-        f"coupling. Take the absolute value for the unsigned index. {_LEADS}",
+        "coupling. Take the absolute value for the unsigned index.",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
+        sign_convention=_LEADS,
         is_default=True,
     ),
     "phase_locking_value": _MeasureSpec(
@@ -192,6 +270,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Consistency of the phase difference across trials and tapers, ignoring "
         "amplitude: 0 is random, 1 is constant. Biased upward with few observations.",
+        diagonal_policy="constant",
+        diagonal_value=1.0,
         is_default=True,
     ),
     "power": _MeasureSpec(
@@ -200,6 +280,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         units=None,
         value_range=(0.0, _INFINITY),
         interpretation="One-sided power spectral density of each signal.",
+        diagonal_policy="not_applicable",
         is_default=True,
     ),
     "weighted_phase_lag_index": _MeasureSpec(
@@ -208,7 +289,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         units="1",
         value_range=(-1.0, 1.0),
         interpretation="Phase lag index weighted by the magnitude of the imaginary cross-spectrum; "
-        f"less sensitive to noise than the unweighted index. {_LEADS}",
+        "less sensitive to noise than the unweighted index.",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
+        sign_convention=_LEADS,
         is_default=True,
     ),
     "coherency": _MeasureSpec(
@@ -218,6 +302,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Complex coherency: its squared magnitude is "
         "magnitude_squared_coherence and its angle is coherence_phase.",
+        diagonal_policy="masked_nan",
+        sign_convention="A positive angle at (source=a, target=b) means a leads b.",
+        quantity="complex",
+        formula=f"S_st / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_complex=True,
     ),
     "cross_spectral_density": _MeasureSpec(
@@ -227,6 +315,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="Complex, Hermitian cross-spectrum; unnormalized, so it scales with signal "
         "power. Use coherency for a normalized version.",
+        diagonal_policy="estimated",
         is_complex=True,
     ),
     "imaginary_coherency": _MeasureSpec(
@@ -234,7 +323,11 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Imaginary part of coherency",
         units="1",
         value_range=(-1.0, 1.0),
-        interpretation=f"Signed imaginary part of coherency; blind to zero-lag coupling. {_LEADS}",
+        interpretation="Signed imaginary part of coherency; blind to zero-lag coupling.",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
+        quantity="signed",
+        formula=f"Im(S_st) / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
     ),
     "partial_coherence": _MeasureSpec(
         "pairwise",
@@ -243,6 +336,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Magnitude-squared coherence after removing the linear influence of every "
         "other signal; near 0 for pairs coupled only through other signals.",
+        diagonal_policy="masked_nan",
+        quantity="squared_magnitude",
+        formula="|P_st|^2 / (P_ss * P_tt), where P is the (regularized) inverse of the "
+        "cross-spectral matrix",
     ),
     "corrected_imaginary_phase_locking_value": _MeasureSpec(
         "pairwise",
@@ -251,6 +348,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Phase locking with zero- and pi-lag contributions removed; insensitive to "
         "volume conduction.",
+        diagonal_policy="constant",
+        diagonal_value=0.0,
     ),
     "directed_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -259,6 +358,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Above 0.5, the source phase-leads the target; below 0.5 it lags; 0.5 is "
         "no preferred direction.",
+        diagonal_policy="constant",
+        diagonal_value=0.5,
         is_directed=True,
     ),
     "subset_pairwise_spectral_granger_prediction": _wilson_directed_spec(
@@ -268,6 +369,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="pairwise_spectral_granger_prediction for only the requested pairs; other "
         "entries are NaN.",
+        diagonal_policy="undefined_nan",
     ),
     "conditional_spectral_granger_prediction": _wilson_directed_spec(
         "pairwise",
@@ -276,6 +378,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="Spectral Granger causality from source to target conditioned on every "
         "other signal, removing influence relayed through observed signals.",
+        diagonal_policy="undefined_nan",
     ),
     "time_reversed_spectral_granger_prediction": _wilson_directed_spec(
         "pairwise",
@@ -285,6 +388,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Pairwise spectral Granger causality of the time-reversed data. Genuine "
         "directed influence reverses under time reversal; directionality that does "
         "not reverse suggests instantaneous mixing.",
+        diagonal_policy="undefined_nan",
     ),
     # Directed-transfer-function family (opt-in).
     "directed_transfer_function": _wilson_directed_spec(
@@ -294,6 +398,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Fraction of the target's inflow at each frequency that comes from the "
         "source, including indirect paths; sums to 1 over sources.",
+        diagonal_policy="estimated",
     ),
     "directed_coherence": _wilson_directed_spec(
         "pairwise",
@@ -303,6 +408,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Noise-weighted directed transfer function: the fraction of the target's "
         "power attributable to the source; sums to 1 over sources. Assumes "
         "uncorrelated innovations.",
+        diagonal_policy="estimated",
     ),
     "partial_directed_coherence": _wilson_directed_spec(
         "pairwise",
@@ -311,6 +417,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Direct influence from source to target, normalized by the source's total "
         "outflow; sums to 1 over targets.",
+        diagonal_policy="estimated",
     ),
     "generalized_partial_directed_coherence": _wilson_directed_spec(
         "pairwise",
@@ -319,6 +426,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Partial directed coherence with each signal scaled by its innovation "
         "variance, making it insensitive to differences in signal scale.",
+        diagonal_policy="estimated",
     ),
     "direct_directed_transfer_function": _wilson_directed_spec(
         "pairwise",
@@ -327,6 +435,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Direct (not relayed) influence from source to target. Normalized over all "
         "frequencies, so values are small: compare pairs, not against 1.",
+        diagonal_policy="estimated",
     ),
     "blockwise_spectral_granger_prediction": _wilson_directed_spec(
         "group_pairwise",
@@ -335,14 +444,21 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="Spectral Granger causality between groups of signals set by group_labels, "
         "from source_group to target_group.",
+        diagonal_policy="undefined_nan",
     ),
     "canonical_coherence": _MeasureSpec(
         "group_pairwise",
         long_name="Canonical coherence",
         units="1",
         value_range=(0.0, 1.0),
-        interpretation="Largest coherence between linear combinations of two groups of signals "
-        "(historical estimator; see canonical_coherency).",
+        interpretation="Largest magnitude-squared coherence between linear combinations of two "
+        "groups of signals, the squared first canonical correlation (the historical "
+        "estimator). A different estimator from canonical_coherency, not its square.",
+        diagonal_policy="masked_nan",
+        quantity="squared_magnitude",
+        formula="max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * "
+        "(b^H S_tt b)), with S_st the cross-spectral matrix from the source group's signals "
+        "to the target group's",
     ),
     "maximized_imaginary_coherency": _MeasureSpec(
         "group_pairwise",
@@ -351,6 +467,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Largest imaginary coherency between linear combinations of two groups; "
         "blind to zero-lag coupling.",
+        diagonal_policy="masked_nan",
     ),
     "multivariate_interaction_measure": _MeasureSpec(
         "group_pairwise",
@@ -359,14 +476,25 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, _INFINITY),
         interpretation="Total phase-lagged interaction between two groups (the sum of squared "
         "imaginary-coherency components); at most the smaller group's rank.",
+        diagonal_policy="masked_nan",
     ),
     "canonical_coherency": _MeasureSpec(
         "multivariate_components",
         long_name="Canonical coherency",
         units="1",
         value_range=(0.0, 1.0),
-        interpretation="Complex canonical coherency per component between two groups, with the "
-        "spatial filters and patterns that produce it.",
+        interpretation="Phase-optimized complex canonical coherency (Vidaurre et al. 2019) per "
+        "component between two groups, with the spatial filters and patterns that produce "
+        "it; its magnitude is the maximized coherence, not squared. A different estimator "
+        "from canonical_coherence, not its square root.",
+        diagonal_policy="not_applicable",
+        sign_convention="Conjugate convention: the score is magnitude * exp(-1j * phi), so with "
+        "single-channel groups it is conj(coherency) and a negative angle means the source "
+        "group leads. The phase is defined only up to the sign of the spatial filters.",
+        quantity="complex",
+        formula="max over a phase phi and real weights a, b of a^T Re(exp(-1j * phi) * S_st) b "
+        "/ sqrt((a^T Re(S_ss) a) * (b^T Re(S_tt) b)), times exp(-1j * phi), with S_st the "
+        "cross-spectral matrix from the source group's signals to the target group's",
         is_complex=True,
     ),
     "maximized_imaginary_coherency_components": _MeasureSpec(
@@ -376,6 +504,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="maximized_imaginary_coherency resolved into components, with the spatial "
         "filters and patterns that produce them.",
+        diagonal_policy="not_applicable",
     ),
     "delay": _MeasureSpec(
         "delay",
@@ -384,7 +513,9 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(-_INFINITY, _INFINITY),
         interpretation="Candidate delays in seconds, one per 2*pi phase ambiguity; the true delay is "
         "the candidate that is constant across frequency. Frequencies without "
-        f"significant coherence are NaN. {_LEADS}",
+        "significant coherence are NaN.",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
         is_directed=True,
     ),
     "global_coherence": _MeasureSpec(
@@ -394,6 +525,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(0.0, 1.0),
         interpretation="Fraction of the total cross-spectral power in each component; a large "
         "leading component indicates one dominant coherent network.",
+        diagonal_policy="not_applicable",
     ),
     "group_delay": _MeasureSpec(
         "group_delay",
@@ -402,7 +534,9 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(-_INFINITY, _INFINITY),
         interpretation="Delay in seconds from the slope of phase against frequency over "
         "frequency_range (every bin by default); "
-        f"check group_delay_r_value for the quality of the fit. {_LEADS}",
+        "check group_delay_r_value for the quality of the fit.",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
         is_directed=True,
     ),
     "phase_slope_index": _MeasureSpec(
@@ -413,7 +547,9 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Coherence-weighted slope of phase against frequency over "
         "frequency_range (every bin by default). "
         "Unnormalized, so judge it "
-        f"against a null distribution rather than a fixed threshold. {_LEADS}",
+        "against a null distribution rather than a fixed threshold.",
+        diagonal_policy="masked_nan",
+        sign_convention=_LEADS,
         is_directed=True,
     ),
 }
@@ -615,10 +751,10 @@ def _validate_method_names(methods: Sequence[str]) -> None:
     raise ValueError(" ".join(parts))
 
 
-def _measure_label_attrs(method: str, signal_units: str | None) -> dict[str, str]:
-    """``long_name``/``units`` attrs; no ``units`` when they are unknown."""
+def _measure_attrs(method: str, signal_units: str | None) -> dict[str, str | float]:
+    """The attrs of ``method``'s result variable (see :meth:`_MeasureSpec.result_attrs`);
+    an unregistered extension measure gets only its name as ``long_name``."""
     spec = _measure_spec(method)
     if spec is None:
         return {"long_name": method}
-    units = spec.units_for(signal_units)
-    return {"long_name": spec.long_name, **({"units": units} if units else {})}
+    return spec.result_attrs(signal_units)
