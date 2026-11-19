@@ -420,15 +420,25 @@ def _crop_frequency_range(
     ``result``'s frequency axis is the full grid, unless the measure
     ``consumed`` the range itself (``delay``, ``group_delay``,
     ``phase_slope_index``): it then holds only the selected bins already, or
-    has no frequency axis, and is not cut again.
+    has no frequency axis, and is not cut again. Every variable the range
+    applied to records it as ``frequency_range_json``: each variable of a
+    consuming measure, and each frequency-resolved variable of the others.
     """
-    if selection is None or "frequency" not in result.dims:
+    if selection is None:
         return result
-    if not consumed:
-        result = result.isel(frequency=selection.index)
-    return _with_frequency_attrs(
-        result, frequency_range_json=_canonical_json(selection.bounds)
-    )
+    record = {"frequency_range_json": _canonical_json(selection.bounds)}
+    if consumed:
+        if isinstance(result, xr.DataArray):
+            return result.assign_attrs(record)
+        return result.assign(
+            {
+                name: variable.assign_attrs(record)
+                for name, variable in result.data_vars.items()
+            }
+        )
+    if "frequency" not in result.dims:
+        return result
+    return _with_frequency_attrs(result.isel(frequency=selection.index), **record)
 
 
 def _decimate_and_reduce_frequencies(

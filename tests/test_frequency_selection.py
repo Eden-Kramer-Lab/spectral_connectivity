@@ -754,6 +754,40 @@ def test_fourier_connectivity_frequency_range_reaches_phase_slope_index(lagged_c
     )
 
 
+def test_the_wrapper_records_its_frequency_range_on_every_variable_it_applied_to(
+    lagged_time_series,
+):
+    """Cropped and consuming variables alike carry frequency_range_json, so
+    filtering variables by it finds the interval measures too; the interval
+    measures also record their requested and selected interval."""
+    result = multitaper_connectivity(
+        lagged_time_series,
+        method=["phase_slope_index", "coherence_magnitude", "delay", "group_delay"],
+        frequency_range=(10.0, 50.0),
+        **_LAGGED_TRANSFORM,
+    )
+    assert set(result.data_vars) == {
+        "phase_slope_index",
+        "coherence_magnitude",
+        "delay",
+        "group_delay",
+        "group_delay_slope",
+        "group_delay_r_value",
+    }
+    for name, variable in result.data_vars.items():
+        assert json.loads(variable.attrs["frequency_range_json"]) == [10.0, 50.0], name
+    assert "frequency_range_json" not in result.attrs
+    for name in ("phase_slope_index", "delay", "group_delay", "group_delay_r_value"):
+        assert result[name].attrs["frequency_interval_closed"] == "both"
+    single = multitaper_connectivity(
+        lagged_time_series,
+        method="phase_slope_index",
+        frequency_range=(10.0, 50.0),
+        **_LAGGED_TRANSFORM,
+    )
+    assert json.loads(single.attrs["frequency_range_json"]) == [10.0, 50.0]
+
+
 def test_one_frequency_range_crops_and_selects_the_same_bins_in_a_dataset(
     lagged_time_series, lagged_connectivity
 ):

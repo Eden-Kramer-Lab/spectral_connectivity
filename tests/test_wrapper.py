@@ -3745,13 +3745,15 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
         assert name not in coherence.coords
         assert name not in coherence.attrs
         assert name not in dataset.attrs
-    # phase_slope_index consumed frequency_range itself; it was not cropped.
+    # phase_slope_index consumed frequency_range itself, so it records the
+    # range but was neither cropped nor decimated.
     assert psi.attrs["selected_frequency_lower"] == 4.0
     assert psi.attrs["selected_frequency_upper"] == 50.0
-    assert json.loads(coherence.attrs["frequency_range_json"]) == [4.0, 50.0]
+    for variable in (coherence, psi):
+        assert json.loads(variable.attrs["frequency_range_json"]) == [4.0, 50.0]
     assert coherence.attrs["frequency_decimation"] == 2
+    assert "frequency_decimation" not in psi.attrs
     for key in ("frequency_range_json", "frequency_decimation"):
-        assert key not in psi.attrs
         assert key not in dataset.attrs
 
     banded = multitaper_connectivity(

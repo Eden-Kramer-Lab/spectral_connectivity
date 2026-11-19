@@ -348,6 +348,11 @@ facts needed to interpret it. Settings use one JSON record:
 | `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
 | `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs and for a transform of your own that leaves `frequencies` as `None`. |
 | `frequency_coordinate`, `time_coordinate` | External Fourier inputs: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). A transform of your own that leaves `frequencies` or `time` as `None` records the filled-in value. |
+| `frequency_range_json` | The wrapper's `frequency_range` as JSON `[low, high]`, on every variable it applied to: each frequency-resolved variable it cropped, and each variable of `delay`, `group_delay`, and `phase_slope_index`, which consumed it. Not on the Dataset itself. |
+| `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. |
+| `requested_frequency_lower`, `requested_frequency_upper` | `delay`, `group_delay`, and `phase_slope_index` only: the bounds given as `frequency_range` (or the deprecated `frequencies_of_interest`), in the frequency coordinate's units. Omitted when every bin is used. |
+| `selected_frequency_lower`, `selected_frequency_upper` | The same three measures: the lowest and highest bins in that interval, before any `frequency_resolution` subsampling. |
+| `frequency_interval_closed` | The same three measures: `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
 
 ```python
 >>> schema_result = multitaper_connectivity(
