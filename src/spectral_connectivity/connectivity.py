@@ -817,7 +817,7 @@ class Connectivity:
         # fourier_coefficients and expectation_type are validated in their
         # property setters (below), which also clear the cached intermediates so
         # reassigning either on an existing instance cannot serve stale results.
-        # _adopt_fourier_coefficients is a private fast path for from_multitaper:
+        # _adopt_fourier_coefficients is a private fast path for from_transform:
         # the fft() output is unshared, so it is frozen in place instead of
         # copied, avoiding a transient 2x peak of the largest array. It must not
         # be set for a caller-owned array (see _adopt_fourier_coefficients).
@@ -980,7 +980,7 @@ class Connectivity:
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
 
-        Used only by ``from_multitaper``, where ``value`` is ``transform.fft()``,
+        Used only by ``from_transform``, where ``value`` is ``transform.fft()``,
         which the ``SpectralTransform`` contract requires to be fresh and
         referenced nowhere else. This avoids a full copy of the largest array in
         the pipeline -- a transient ~2x peak on every construction, which can
@@ -988,7 +988,7 @@ class Connectivity:
 
         This is deliberately private and has no public ``copy=False`` surface: it
         is safe only when the array *and its writable NumPy base buffer* are
-        unshared, which ``from_multitaper`` relies on the transform for and
+        unshared, which ``from_transform`` relies on the transform for and
         cannot check.
         """
         self._set_fourier_coefficients(value, adopt=True)
@@ -1068,7 +1068,7 @@ class Connectivity:
         # coordinate-dependent methods stay consistent -- stale coordinates would
         # otherwise silently drop or misalign bins (e.g. phase_slope_index) or
         # raise (group_delay). Warn because any user-supplied coordinates (e.g.
-        # Hz frequencies from from_multitaper) are discarded.
+        # Hz frequencies from from_transform) are discarded.
         n_fft_samples = value.shape[-2]
         n_time_windows = value.shape[0]
         frequencies_stale = (
@@ -1151,9 +1151,11 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct from a spectral transform; the original name of from_transform.
+        """Construct from a spectral transform; the 2.x name of :meth:`from_transform`.
 
-        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`.
+        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`
+        and calls ``cls.from_transform`` with the same arguments, so a
+        subclass's ``from_transform`` applies to both names.
 
         Parameters
         ----------
@@ -1168,43 +1170,13 @@ class Connectivity:
             New Connectivity instance.
 
         """
-        init_kwargs: dict[str, Any] = {
-            "expectation_type": expectation_type,
-            "dtype": dtype,
-            "minimum_phase_tolerance": minimum_phase_tolerance,
-            "minimum_phase_max_iterations": minimum_phase_max_iterations,
-        }
-        # The optional SpectralTransform attributes must always reach the
-        # instance: a subclass that cannot accept them fails loudly here rather
-        # than silently treating a one-sided, weighted, or correlated spectrum as
-        # two-sided, unweighted, and independent. They are passed only when
-        # non-default so a subclass mirroring the older signature keeps working
-        # with a plain two-sided transform. The flags are checked before the
-        # (possibly expensive) fft() so a bad one fails fast; the coordinates
-        # and weights are read after it, which may set them.
-        if _transform_flag(multitaper_instance, "is_one_sided", False):
-            init_kwargs["is_one_sided"] = True
-        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
-            init_kwargs["observations_are_independent"] = False
-        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
-            init_kwargs["time_bins_are_independent"] = False
-        init_kwargs["fourier_coefficients"] = multitaper_instance.fft()
-        init_kwargs["time"] = multitaper_instance.time
-        init_kwargs["frequencies"] = multitaper_instance.frequencies
-        weights = _optional_transform_attribute(
-            multitaper_instance, "observation_weights", None
+        return cls.from_transform(
+            multitaper_instance,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
-        if weights is not None:
-            init_kwargs["observation_weights"] = weights
-        # The SpectralTransform contract requires fft() to return a freshly
-        # built, unshared array, so adopt it in place instead of copying (see
-        # Connectivity._adopt_fourier_coefficients). Only pass the private
-        # keyword when the subclass has not overridden __init__:
-        # an overriding subclass need not accept it, and passing it would raise
-        # TypeError. Such a subclass falls back to the defensive-copy path.
-        if cls.__init__ is Connectivity.__init__:
-            init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
 
     @classmethod
     def from_transform(
@@ -1217,8 +1189,9 @@ class Connectivity:
     ) -> "Connectivity":
         """Construct from any spectral transform.
 
-        This is the transform-neutral spelling of :meth:`from_multitaper`; the
-        older method remains fully supported.
+        .. versionadded:: 3.0
+           The canonical constructor; :meth:`from_multitaper`, its 2.x name,
+           calls it.
 
         Parameters
         ----------
@@ -1246,13 +1219,41 @@ class Connectivity:
         Connectivity
             New Connectivity instance.
         """
-        return cls.from_multitaper(
-            transform,
-            expectation_type=expectation_type,
-            dtype=dtype,
-            minimum_phase_tolerance=minimum_phase_tolerance,
-            minimum_phase_max_iterations=minimum_phase_max_iterations,
-        )
+        init_kwargs: dict[str, Any] = {
+            "expectation_type": expectation_type,
+            "dtype": dtype,
+            "minimum_phase_tolerance": minimum_phase_tolerance,
+            "minimum_phase_max_iterations": minimum_phase_max_iterations,
+        }
+        # The optional SpectralTransform attributes must always reach the
+        # instance: a subclass that cannot accept them fails loudly here rather
+        # than silently treating a one-sided, weighted, or correlated spectrum as
+        # two-sided, unweighted, and independent. They are passed only when
+        # non-default so a subclass mirroring the older signature keeps working
+        # with a plain two-sided transform. The flags are checked before the
+        # (possibly expensive) fft() so a bad one fails fast; the coordinates
+        # and weights are read after it, which may set them.
+        if _transform_flag(transform, "is_one_sided", False):
+            init_kwargs["is_one_sided"] = True
+        if not _transform_flag(transform, "observations_are_independent", True):
+            init_kwargs["observations_are_independent"] = False
+        if not _transform_flag(transform, "time_bins_are_independent", True):
+            init_kwargs["time_bins_are_independent"] = False
+        init_kwargs["fourier_coefficients"] = transform.fft()
+        init_kwargs["time"] = transform.time
+        init_kwargs["frequencies"] = transform.frequencies
+        weights = _optional_transform_attribute(transform, "observation_weights", None)
+        if weights is not None:
+            init_kwargs["observation_weights"] = weights
+        # The SpectralTransform contract requires fft() to return a freshly
+        # built, unshared array, so adopt it in place instead of copying (see
+        # Connectivity._adopt_fourier_coefficients). Only pass the private
+        # keyword when the subclass has not overridden __init__:
+        # an overriding subclass need not accept it, and passing it would raise
+        # TypeError. Such a subclass falls back to the defensive-copy path.
+        if cls.__init__ is Connectivity.__init__:
+            init_kwargs["_adopt_fourier_coefficients"] = True
+        return cls(**init_kwargs)
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.

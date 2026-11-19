@@ -1139,7 +1139,7 @@ def multitaper_connectivity(
         time_window_duration=time_window_duration,
         **kwargs,
     )
-    # Resolve group labels before Connectivity.from_multitaper runs the FFT, so
+    # Resolve group labels before Connectivity.from_transform runs the FFT, so
     # a missing or misplaced label fails fast. The constructor has validated the
     # input shape, so m.n_signals is the true signal count.
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
@@ -1149,7 +1149,7 @@ def multitaper_connectivity(
     # immutable transform. The private formatter below never accepts a separate
     # Multitaper, so data and labels cannot be paired accidentally.
     metadata = m._provenance_metadata()
-    shared_connectivity = Connectivity.from_multitaper(m)
+    shared_connectivity = Connectivity.from_transform(m)
     # Validate labels and build shared provenance once; both are invariant across
     # the requested measures.
     signal_labels = _validated_signal_labels(signal_names, shared_connectivity.n_signals)
