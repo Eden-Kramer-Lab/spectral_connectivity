@@ -217,12 +217,12 @@ directly with results from 2.x.
   self-value is 1 at nonzero power), `undefined_nan` where the estimator has
   none (the Granger family), `constant` for identities, to within rounding
   and for signals with power (0 for `imaginary_coherence`, where the signed
-  `imaginary_coherency` is masked; `diagonal_nan_for_zero_power` marks the
-  measures whose flat-signal self-connection is NaN), `rounding_noise` for the corrected imaginary PLV, whose nominal 0
+  `imaginary_coherency` is masked), `rounding_noise` for the corrected imaginary PLV, whose nominal 0
   is computed from amplified rounding residues and can be visibly nonzero,
   `estimated` for data-dependent self-values, and `not_applicable`, with
-  `diagonal_value` and `diagonal_nan_for_zero_power` recorded beside a
-  constant or rounding-noise policy. `group_delay_slope` and
+  `diagonal_value` recorded beside a constant or rounding-noise policy;
+  `nan_for_zero_power_signal` marks the measures for which every entry
+  involving a zero-power (flat) signal, the diagonal included, is NaN. `group_delay_slope` and
   `group_delay_r_value` carry their own records. No
   diagonal value changed; the cookbook shows how to mask or fill diagonals
   uniformly. Band reduction keeps these attributes true of the band values:

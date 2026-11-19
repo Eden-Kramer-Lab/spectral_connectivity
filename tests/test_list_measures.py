@@ -626,57 +626,82 @@ def test_nominal_diagonal_holds_with_one_or_two_observations(
     _assert_nominal_diagonal(measure, variable, _diagonal(variable))
 
 
-# Measures whose self-connection of a zero-power (flat) signal is NaN, although
-# their diagonal otherwise holds its nominal value: they normalize by each
-# signal's amplitude, which is zero there. The phase lag indices keep theirs.
-_NAN_FOR_ZERO_POWER = {
-    "imaginary_coherence",
-    "phase_locking_value",
-    "pairwise_phase_consistency",
-    "corrected_imaginary_phase_locking_value",
-}
 _NOMINAL_DIAGONALS = [m for m in list_measures() if m.diagonal_value is not None]
+_FLAT_SIGNAL, _FLAT_SIGNAL_GROUP = "3", "b"
 
 
 @pytest.fixture(scope="module")
-def flat_channel_results(coupled_time_series):
-    """The measures with a nominal diagonal, and group_delay, with signal "3" flat."""
+def flat_signal_results(coupled_time_series):
+    """Every measure, and its other variables, with signal "3" flat (all zeros).
+
+    One call computes them all except subset Granger, whose ``pairs`` no other
+    measure accepts; its pairs include the flat signal.
+    """
     flat = coupled_time_series.copy()
     flat[..., -1] = 0.0
-    names = [measure.name for measure in _NOMINAL_DIAGONALS] + ["group_delay"]
+    settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
+    subset = "subset_pairwise_spectral_granger_prediction"
     with warnings.catch_warnings():
         # A flat signal makes the normalized measures warn; that is expected.
         warnings.simplefilter("ignore")
-        return {
-            name: multitaper_connectivity(
-                flat, sampling_frequency=500, time_window_duration=0.5, method=name
+        merged = multitaper_connectivity(
+            flat,
+            method=[measure.name for measure in list_measures() if measure.name != subset],
+            group_labels=_GROUPS,
+            **settings,
+        )
+        subset_result = multitaper_connectivity(
+            flat, method=subset, connectivity_kwargs={"pairs": [(0, 3), (1, 0)]}, **settings
+        )
+    return merged.assign({subset: subset_result})
+
+
+def _entries_involving_the_flat_signal(variable):
+    """The entries of ``variable`` that depend on the flat signal: its rows and
+    columns of a signal-pair axis, its group's of a group axis, and otherwise
+    (a group-pair connection or a whole-system component) every entry."""
+    for axes, label in (
+        (("source", "target"), _FLAT_SIGNAL),
+        (("source_group", "target_group"), _FLAT_SIGNAL_GROUP),
+    ):
+        present = [axis for axis in axes if axis in variable.dims]
+        if present:
+            return np.concatenate(
+                [variable.sel({axis: label}).values.ravel() for axis in present]
             )
-            for name in names
-        }
+    return variable.values.ravel()
+
+
+_VALUE_VARIABLES = [
+    *((measure.name, measure) for measure in list_measures()),
+    *_COMPANION_SPECS.items(),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "record"), _VALUE_VARIABLES, ids=[n for n, _ in _VALUE_VARIABLES]
+)
+def test_nan_for_zero_power_signal_matches_what_a_flat_signal_gives(
+    flat_signal_results, name, record
+):
+    """The flag is set exactly where every entry involving a zero-power signal,
+    the diagonal included, is NaN."""
+    entries = _entries_involving_the_flat_signal(flat_signal_results[name])
+    assert record.nan_for_zero_power_signal == bool(np.isnan(entries).all())
 
 
 @pytest.mark.parametrize("measure", _NOMINAL_DIAGONALS, ids=lambda measure: measure.name)
-def test_a_zero_power_signal_keeps_or_masks_the_nominal_diagonal(
-    flat_channel_results, measure
+def test_a_flat_signal_keeps_the_nominal_diagonal_unless_it_is_nan(
+    flat_signal_results, measure
 ):
-    """A flat signal's self-connection is NaN exactly for the measures that say
-    so; every signal with power keeps the nominal value."""
-    variable = flat_channel_results[measure.name]
-    assert measure.diagonal_nan_for_zero_power == (measure.name in _NAN_FOR_ZERO_POWER)
-    flat_self = variable.sel(source="3", target="3").values
-    if measure.diagonal_nan_for_zero_power:
-        assert np.isnan(flat_self).all()
-    else:
+    """A flat signal's self-connection keeps the nominal value where the flag
+    is not set; every signal with power keeps it."""
+    variable = flat_signal_results[measure.name]
+    if not measure.nan_for_zero_power_signal:
+        flat_self = variable.sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL).values
         _assert_nominal_diagonal(measure, variable, flat_self)
-    live = variable.isel(source=[0, 1, 2], target=[0, 1, 2])
+    live = variable.drop_sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL)
     _assert_nominal_diagonal(measure, live, _diagonal(live))
-
-
-def test_group_delay_correlation_diagonal_is_one_for_a_zero_power_signal(
-    flat_channel_results,
-):
-    r_value = flat_channel_results["group_delay"]["group_delay_r_value"]
-    np.testing.assert_array_equal(_diagonal(r_value), 1.0)
 
 
 def test_documented_diagonals_are_the_registered_ones():
@@ -712,7 +737,6 @@ _OPTIONAL_MEASURE_ATTRS = (
     "quantity",
     "formula",
     "diagonal_value",
-    "diagonal_nan_for_zero_power",
 )
 
 
@@ -733,10 +757,9 @@ def _expected_measure_attrs(measure):
         if getattr(measure, key) is not None:
             expected[key] = getattr(measure, key)
     if measure.diagonal_value is not None:
-        # Which constant, and whether a flat signal is the exception, as
-        # NetCDF-safe scalars (a flag is stored as 0/1).
         expected["diagonal_value"] = measure.diagonal_value
-        expected["diagonal_nan_for_zero_power"] = int(measure.diagonal_nan_for_zero_power)
+    # A flag is stored as 0/1: NetCDF has no boolean.
+    expected["nan_for_zero_power_signal"] = int(measure.nan_for_zero_power_signal)
     return expected
 
 

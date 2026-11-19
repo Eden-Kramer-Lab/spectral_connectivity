@@ -46,10 +46,10 @@ class _MeasureSpec:
     - ``"estimated"``: the estimator's value, which depends on the data.
     - ``"not_applicable"``: the result has no self-connection entries.
 
-    ``diagonal_nan_for_zero_power`` marks a ``"constant"`` or
-    ``"rounding_noise"`` measure that normalizes by each signal's amplitude,
-    so a zero-power (flat) signal's self-connection is NaN instead of
-    ``diagonal_value``; the others keep the value for a flat signal too.
+    ``nan_for_zero_power_signal`` marks a measure for which every entry
+    involving a zero-power (flat) signal, the diagonal included, is NaN: it
+    normalizes by each signal's amplitude. Where it is not set, a flat signal
+    can still give some NaN entries, or finite ones.
 
     ``sign_convention`` says which signal leads when a measure's sign or angle
     shows it. ``quantity`` and ``formula`` define the coherency family's values
@@ -82,7 +82,7 @@ class _MeasureSpec:
         "not_applicable",
     ]
     diagonal_value: float | None = None
-    diagonal_nan_for_zero_power: bool = False
+    nan_for_zero_power_signal: bool = False
     sign_convention: str | None = None
     quantity: (
         Literal["magnitude", "squared_magnitude", "signed", "phase", "complex"] | None
@@ -103,9 +103,6 @@ class _MeasureSpec:
                 "diagonal_value is the value of a constant or rounding_noise "
                 "diagonal, and only that."
             )
-            raise ValueError(msg)
-        if self.diagonal_nan_for_zero_power and not nominal:
-            msg = "diagonal_nan_for_zero_power qualifies a nominal diagonal value."
             raise ValueError(msg)
 
     @property
@@ -149,17 +146,15 @@ class _MeasureSpec:
             "sign_convention": self.sign_convention,
             "quantity": self.quantity,
             "formula": self.formula,
-            # Which value a constant or rounding_noise diagonal holds, and
-            # whether a flat signal's is NaN instead (0/1: NetCDF has no bool).
+            # The value a constant or rounding_noise diagonal holds.
             "diagonal_value": self.diagonal_value,
-            "diagonal_nan_for_zero_power": (
-                None if self.diagonal_value is None else int(self.diagonal_nan_for_zero_power)
-            ),
         }
         return {
             "long_name": self.long_name,
             "interpretation": self.interpretation,
             "diagonal_policy": self.diagonal_policy,
+            # 0/1: NetCDF has no boolean.
+            "nan_for_zero_power_signal": int(self.nan_for_zero_power_signal),
             **{key: value for key, value in optional.items() if value is not None},
         }
 
@@ -212,6 +207,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Linear coupling at each frequency: 0 is none, 1 is a perfectly consistent "
         "amplitude and phase relationship. Biased upward when trials x tapers is small.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         quantity="squared_magnitude",
         formula=f"|S_st|^2 / (S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
@@ -223,6 +219,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         value_range=(-_PI, _PI),
         interpretation="Mean phase difference in radians.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         quantity="phase",
         formula=f"angle(S_st), the angle of coherency, where {_CROSS_SPECTRUM}",
@@ -258,7 +255,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "such as volume conduction.",
         diagonal_policy="constant",
         diagonal_value=0.0,
-        diagonal_nan_for_zero_power=True,
+        nan_for_zero_power_signal=True,
         quantity="magnitude",
         formula=f"|Im(S_st)| / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
         is_default=True,
@@ -272,7 +269,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         f"{_DEBIASED} Lower bound is -1 / (n_observations - 1).",
         diagonal_policy="constant",
         diagonal_value=1.0,
-        diagonal_nan_for_zero_power=True,
+        nan_for_zero_power_signal=True,
         is_default=True,
     ),
     "pairwise_spectral_granger_prediction": _wilson_directed_spec(
@@ -306,7 +303,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "amplitude: 0 is random, 1 is constant. Biased upward with few observations.",
         diagonal_policy="constant",
         diagonal_value=1.0,
-        diagonal_nan_for_zero_power=True,
+        nan_for_zero_power_signal=True,
         is_default=True,
     ),
     "power": _MeasureSpec(
@@ -338,6 +335,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         interpretation="Complex coherency: its squared magnitude is "
         "magnitude_squared_coherence and its angle is coherence_phase.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention="A positive angle at (source=a, target=b) means a leads b.",
         quantity="complex",
         formula=f"S_st / sqrt(S_ss * S_tt), where {_CROSS_SPECTRUM}",
@@ -388,7 +386,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         # sqrt(1 - Re^2) of order sqrt(eps).
         diagonal_policy="rounding_noise",
         diagonal_value=0.0,
-        diagonal_nan_for_zero_power=True,
+        nan_for_zero_power_signal=True,
     ),
     "directed_phase_lag_index": _MeasureSpec(
         "pairwise",
@@ -555,6 +553,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "the candidate that is constant across frequency. Frequencies without "
         "significant coherence are NaN.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
     ),
@@ -576,6 +575,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "frequency_range (every bin by default); "
         "check group_delay_r_value for the quality of the fit.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
     ),
@@ -589,6 +589,7 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         "Unnormalized, so judge it "
         "against a null distribution rather than a fixed threshold.",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
         is_directed=True,
     ),
@@ -607,6 +608,7 @@ _COMPANION_SPECS: dict[str, _MeasureSpec] = {
         "frequency_range, from the linear fit group_delay is computed from "
         "(group_delay = slope / (2*pi)).",
         diagonal_policy="masked_nan",
+        nan_for_zero_power_signal=True,
         sign_convention=_LEADS,
     ),
     "group_delay_r_value": _MeasureSpec(

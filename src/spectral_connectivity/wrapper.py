@@ -134,12 +134,9 @@ class MeasureInfo:
     diagonal_value : float or None
         The value of a ``"constant"`` diagonal, or the nominal value of a
         ``"rounding_noise"`` one; ``None`` otherwise.
-    diagonal_nan_for_zero_power : bool
-        Whether a zero-power (flat) signal's self-connection is NaN instead of
-        ``diagonal_value``, as for the measures that normalize by amplitude
-        (``imaginary_coherence``, ``phase_locking_value``,
-        ``pairwise_phase_consistency``, and
-        ``corrected_imaginary_phase_locking_value``).
+    nan_for_zero_power_signal : bool
+        Whether every entry involving a zero-power (flat) signal, the diagonal
+        included, is NaN, as for the measures that normalize by amplitude.
     sign_convention : str or None
         Which signal leads when the sign or angle shows it; ``None`` for
         measures whose sign carries no lead/lag.
@@ -167,7 +164,7 @@ class MeasureInfo:
     interpretation: str
     diagonal_policy: str
     diagonal_value: float | None
-    diagonal_nan_for_zero_power: bool
+    nan_for_zero_power_signal: bool
     sign_convention: str | None
     quantity: str | None
     formula: str | None
@@ -249,7 +246,7 @@ def list_measures(
                 interpretation=spec.interpretation,
                 diagonal_policy=spec.diagonal_policy,
                 diagonal_value=spec.diagonal_value,
-                diagonal_nan_for_zero_power=spec.diagonal_nan_for_zero_power,
+                nan_for_zero_power_signal=spec.nan_for_zero_power_signal,
                 sign_convention=spec.sign_convention,
                 quantity=spec.quantity,
                 formula=spec.formula,
@@ -1027,7 +1024,8 @@ def multitaper_connectivity(
     self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
     ``"constant"``, ``"rounding_noise"``, ``"estimated"``, or
     ``"not_applicable"``; a ``"constant"`` or ``"rounding_noise"`` one adds
-    ``diagonal_value`` and ``diagonal_nan_for_zero_power`` (0 or 1).
+    ``diagonal_value``. ``nan_for_zero_power_signal`` (0 or 1) says whether
+    every entry involving a zero-power signal is NaN.
     ``group_delay``'s other value variables,
     ``group_delay_slope`` and ``group_delay_r_value``, record their own.
 
