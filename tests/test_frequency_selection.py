@@ -1079,33 +1079,52 @@ def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
     assert cropped.frequency.values[[0, -1]].tolist() == [10.0, 30.0]
 
 
-def test_selected_bounds_and_validity_describe_the_interval_before_subsampling(
-    lagged_time_series, morlet_transform
-):
-    """With frequency_resolution, PSI sums every fourth bin of 5-50 Hz on the
-    0.5 Hz grid (last one 49 Hz), but the recorded interval and the Morlet
-    validity cover every bin of the range, as documented."""
+def test_selected_bounds_describe_the_interval_before_subsampling(lagged_time_series):
+    """With frequency_resolution=2, PSI on the 0.5 Hz grid sums every fourth
+    bin of 5-50 Hz, the last at 49 Hz: its value is that of (5, 49), yet the
+    record names the requested interval, up to 50 Hz."""
+    settings = {"sampling_frequency": 500, "method": "phase_slope_index"}
+    resolution = {"frequency_resolution": 2.0}
     psi = multitaper_connectivity(
         lagged_time_series,
-        sampling_frequency=500,
-        method="phase_slope_index",
         frequency_range=(5.0, 50.0),
-        connectivity_kwargs={"frequency_resolution": 2.0},
+        connectivity_kwargs=resolution,
+        **settings,
     )
+    up_to_last_summed = multitaper_connectivity(
+        lagged_time_series,
+        frequency_range=(5.0, 49.0),
+        connectivity_kwargs=resolution,
+        **settings,
+    )
+    np.testing.assert_array_equal(psi.values, up_to_last_summed.values)
     assert (psi.attrs["selected_frequency_lower"], psi.attrs["selected_frequency_upper"]) == (
         5.0,
         50.0,
     )
-    summed = np.arange(5.0, 50.0 + 0.25, 0.5)[::4]
-    assert summed[-1] == 49.0
+    assert up_to_last_summed.attrs["selected_frequency_upper"] == 49.0
 
-    transform = morlet_transform
-    morlet_psi = connectivity_to_xarray(
+
+def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
+    """valid_time covers every bin of the interval, so it can be stricter than
+    the bins PSI sums: here the 12 Hz wavelet (20 cycles) is far longer than
+    the others, and PSI with every second bin (10, 14, 18 Hz) skips it."""
+    transform = MorletWavelet(
+        np.random.default_rng(320).standard_normal((256, 5, 2)),
+        64,
+        np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
+        n_cycles=np.array([3.0, 20.0, 3.0, 3.0, 3.0, 3.0]),
+        edge_mode="nan",
+    )
+    validity = to_host(transform.valid_time_frequency)
+    summed = validity[:, [0, 2, 4]].all(axis=1)
+    every_bin = validity.all(axis=1)
+    # Some times are valid for every summed bin but not for the skipped 12 Hz bin.
+    assert (summed & ~every_bin).any()
+    psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
-        frequency_range=(4.0, 20.0),
-        frequency_resolution=8.0,  # every second bin: 4, 12, 20 Hz
+        frequency_range=(10.0, 20.0),
+        frequency_resolution=4.0,  # a step of two 2 Hz bins
     )
-    np.testing.assert_array_equal(
-        morlet_psi.valid_time, to_host(transform.valid_time_frequency).all(axis=1)
-    )
+    np.testing.assert_array_equal(psi.valid_time, every_bin)
