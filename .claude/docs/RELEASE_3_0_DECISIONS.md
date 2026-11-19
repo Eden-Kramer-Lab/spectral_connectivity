@@ -344,7 +344,7 @@ to trigger an exact zero pivot consistently across LAPACK builds.
 
 **Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
 `77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
-Implemented and validated locally on 2026-11-19: 2,057 tests passed with 16
+Implemented and validated locally on 2026-11-19: 2,142 tests passed with 16
 skips on the main CPU environment; all 70 source doctests, Ruff
 formatting/lint, and mypy passed.
 
@@ -434,7 +434,10 @@ Rulings where the rules above were silent:
   bands on float32 and float64 grids, and 38 of 40 recorded float64 and
   float32 outputs are bit-identical to `4266d7c`/`77e83ce`; the other two are
   a float32 tuple band where those development builds had departed from
-  v2.0.1.
+  v2.0.1. Open-ended bands (`(10.1, inf)`, `(-inf, 20.3)`, `(-inf, inf)`,
+  `(0.3, inf)`) match the 2.0.1 wheel in all 48 tuple, list, ndarray,
+  keyword, and positional cases; NaN, `(inf, inf)`, one-value, and
+  three-value bands raise by design.
 - [x] New helper keywords match the wrappers and give identical results.
 - [x] Unchanged Wilson input spectra: the recorded factorization input is the
   same with and without `frequency_range`, and the cropped result equals the
