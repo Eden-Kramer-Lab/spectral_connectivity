@@ -147,9 +147,9 @@ class MeasureInfo:
         measures whose sign carries no lead/lag.
     quantity : str or None
         For the coherency family, the form of the value: ``"magnitude"``,
-        ``"squared_magnitude"``, ``"signed"`` (a real part with its sign),
-        ``"phase"`` (an angle in radians), or ``"complex"``; ``None`` for
-        other measures.
+        ``"squared_magnitude"``, ``"signed"`` (a real-valued component with
+        its sign, e.g. the imaginary part of coherency), ``"phase"`` (an angle
+        in radians), or ``"complex"``; ``None`` for other measures.
     formula : str or None
         For the coherency family, the definition of the value; ``None`` for
         other measures.

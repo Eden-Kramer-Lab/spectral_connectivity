@@ -528,9 +528,10 @@ is removed in 4.0.
   of `multitaper_connectivity`, `fourier_connectivity`, `connectivity_to_xarray`
   and `Connectivity.jackknife`: use `magnitude_squared_coherence`, the same
   calculation under a name that says it is squared (as SciPy's
-  `scipy.signal.coherence` documents). It is the default result variable and
-  the one entry in `DEFAULT_METHODS`, `list_measures()`, and the measure
-  table; the old name is not listed or computed by default. A result requested
+  `scipy.signal.coherence` documents). It is the default result variable, and
+  the name (not the old one) that appears in `DEFAULT_METHODS`,
+  `list_measures()`, and the measure table; the old name is not listed or
+  computed by default. A result requested
   by the old name keeps the variable name `coherence_magnitude` and records
   `measure="coherence_magnitude"` (the name asked for), so 2.x selectors keep
   working and a saved file says which name produced it; its values and other
