@@ -203,6 +203,20 @@ measure. Shared spectra are cached, so this is cheaper than separate calls.
 
 ```
 
+`power` is indexed by `source` on purpose: in a Dataset it shares the `source`
+axis of the pairwise measures, so `result["power"].sel(source="0")` is the
+power of the signal whose row `result["magnitude_squared_coherence"].sel(
+source="0")` holds. The component measures' filters and patterns use a
+`signal` axis instead, because each holds weights over the same channels for
+both sides of a connection (`side="source"` and `side="target"`). For a
+standalone channel axis, rename it:
+
+```python
+>>> result["power"].rename(source="signal").dims
+('time', 'frequency', 'signal')
+
+```
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and

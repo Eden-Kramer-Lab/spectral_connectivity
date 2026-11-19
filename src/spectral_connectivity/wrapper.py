@@ -998,6 +998,11 @@ def multitaper_connectivity(
     self-connection holds: ``"masked_nan"``, ``"undefined_nan"``,
     ``"constant"``, ``"estimated"``, or ``"not_applicable"``.
 
+    ``power`` has a ``source`` axis, the one it shares with the pairwise
+    measures in a Dataset; component filters and patterns index channels
+    along ``signal`` because they cover both sides of a connection. Use
+    ``power.rename(source="signal")`` for a standalone channel axis.
+
     Real-valued results write with any NetCDF engine (booleans are stored as
     0/1). Complex results (``coherency``, ``cross_spectral_density``,
     ``canonical_coherency``, and the global-coherence vectors) need an engine
