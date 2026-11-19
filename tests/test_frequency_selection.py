@@ -10,6 +10,7 @@ check. So an edge written as a decimal still selects the bin a coordinate
 stores for it when that bin drifted by at most a millionth of its spacing.
 """
 
+import inspect
 import json
 import warnings
 
@@ -18,6 +19,7 @@ import pytest
 import xarray as xr
 
 from spectral_connectivity import Connectivity, MorletWavelet, Multitaper
+from spectral_connectivity._measure_registry import _FREQUENCY_RANGE_MEASURES, _MEASURE_SPECS
 from spectral_connectivity.connectivity import (
     _frequency_interval_mask,
     _uniform_grid_spacing,
@@ -516,6 +518,17 @@ def test_adjacent_bands_share_their_endpoint_bin_without_double_counting_power()
 # --- Measures that consume a frequency interval --------------------------------
 
 _SELECTING_MEASURES = ("delay", "group_delay", "phase_slope_index")
+
+
+def test_the_registry_names_the_measures_that_consume_frequency_range():
+    """The registry property agrees with the measures' signatures, so the
+    wrappers route frequency_range to exactly the measures that accept it."""
+    assert _FREQUENCY_RANGE_MEASURES == _SELECTING_MEASURES
+    for name, spec in _MEASURE_SPECS.items():
+        parameters = inspect.signature(getattr(Connectivity, name)).parameters
+        assert spec.consumes_frequency_range == ("frequency_range" in parameters), name
+
+
 _LAGGED_TRANSFORM = {"sampling_frequency": 500, "time_window_duration": 0.5}
 
 

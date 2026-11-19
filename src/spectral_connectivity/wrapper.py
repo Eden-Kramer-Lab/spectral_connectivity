@@ -28,11 +28,11 @@ from spectral_connectivity._input_handling import (
 )
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
+    _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
     _requested_methods,
     _requires_two_sided,
-    _selects_frequency_range,
     _validate_method_names,
 )
 from spectral_connectivity._provenance import (
@@ -433,7 +433,7 @@ def connectivity_to_xarray(
             kwargs.get("frequency_range"),
             kwargs.get("frequencies_of_interest"),
         )
-        if _selects_frequency_range(method)
+        if _consumes_frequency_range(method)
         else None
     )
     result = _connectivity_result_to_xarray(
@@ -603,7 +603,7 @@ def _format_and_reduce_measures(
         frequency_bands=frequency_bands,
     )
     frequencies = to_numpy(connectivity.frequencies)
-    consuming_methods = frozenset(m for m in methods if _selects_frequency_range(m))
+    consuming_methods = frozenset(m for m in methods if _consumes_frequency_range(m))
     # One selection per call, on the full grid: the interval measures' results
     # and attributes and the crop of every other result read it.
     selection = _select_measure_frequencies(

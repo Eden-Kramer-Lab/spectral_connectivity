@@ -8,7 +8,11 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
-from spectral_connectivity._measure_registry import _reduces_frequency
+from spectral_connectivity._measure_registry import (
+    _FREQUENCY_RANGE_MEASURES,
+    _listed,
+    _reduces_frequency,
+)
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
 from spectral_connectivity.connectivity import _frequency_interval_mask, _FrequencySelection
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
@@ -334,8 +338,8 @@ def _check_frequency_operations(
     """Reject the wrappers' frequency operations a request cannot honor.
 
     Runs before any measure is computed. ``frequency_range`` reaches the
-    measures that consume an interval as their own keyword, so it is a wrapper
-    argument only. ``frequency_bands`` and ``frequency_decimation`` act on the
+    measures that consume an interval (``_FREQUENCY_RANGE_MEASURES``) as their
+    own keyword, so it is a wrapper argument only. ``frequency_bands`` and ``frequency_decimation`` act on the
     frequency axis of frequency-resolved variables; ``phase_slope_index`` and
     ``group_delay`` have already reduced theirs over ``frequency_range``, so
     those variables are left as computed, never reduced a second time. A
@@ -346,8 +350,8 @@ def _check_frequency_operations(
         msg = (
             "frequency_range was given inside connectivity_kwargs; pass "
             "frequency_range=(low, high) to the wrapper itself. It selects the bins "
-            "delay, group_delay, and phase_slope_index consume and crops every "
-            "other measure to the same bins."
+            f"{_listed(_FREQUENCY_RANGE_MEASURES)} consume and crops every other "
+            "measure to the same bins."
         )
         raise ValueError(msg)
     if not is_positive_integer(frequency_decimation):
@@ -384,9 +388,9 @@ def _crop_frequency_range(
 
     ``selection`` is the call's ``frequency_range``, resolved once on the full
     grid. ``result``'s frequency axis is that grid, unless the measure
-    ``consumed`` the range itself (``delay``, ``group_delay``,
-    ``phase_slope_index``): it then holds only the selected bins already, or
-    has no frequency axis, and is not cut again. Every variable the range
+    ``consumed`` the range itself (``_MeasureSpec.consumes_frequency_range``):
+    it then holds only the selected bins already, or has no frequency axis,
+    and is not cut again. Every variable the range
     applied to records it as ``frequency_range_json``: each variable of a
     consuming measure, and each frequency-resolved variable of the others.
     """
