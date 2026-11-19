@@ -35,19 +35,17 @@ _EXACT_GRID = np.arange(0.0, 51.0, 2.0)
 
 
 @pytest.mark.parametrize(
-    ("bounds", "closed", "expected"),
+    ("bounds", "expected"),
     [
-        pytest.param((10.0, 20.0), "both", [10, 12, 14, 16, 18, 20], id="both-on-bins"),
-        pytest.param((10.0, 20.0), "neither", [12, 14, 16, 18], id="neither-on-bins"),
-        pytest.param((9.0, 21.0), "both", [10, 12, 14, 16, 18, 20], id="both-off-bins"),
-        pytest.param((9.0, 21.0), "neither", [10, 12, 14, 16, 18, 20], id="neither-off"),
-        pytest.param((10.0, 10.0), "both", [10], id="both-single-bin"),
-        pytest.param((0.0, 50.0), "both", list(range(0, 51, 2)), id="both-whole-grid"),
+        pytest.param((10.0, 20.0), [10, 12, 14, 16, 18, 20], id="on-bins"),
+        pytest.param((9.0, 21.0), [10, 12, 14, 16, 18, 20], id="off-bins"),
+        pytest.param((10.0, 10.0), [10], id="single-bin"),
+        pytest.param((0.0, 50.0), list(range(0, 51, 2)), id="whole-grid"),
     ],
 )
-def test_bounds_on_bins_are_included_only_when_closed_on_both_sides(bounds, closed, expected):
+def test_bounds_on_bins_are_included(bounds, expected):
     mask, selected_bounds = _frequency_interval_mask(
-        "frequency_range", bounds, _EXACT_GRID, closed=closed
+        "frequency_range", bounds, _EXACT_GRID, closed="both"
     )
     np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
     assert selected_bounds == bounds
@@ -363,6 +361,20 @@ def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
     np.testing.assert_array_equal(mask, _released_band_mask(band, grid))
 
 
+@pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        pytest.param((10.0, 20.0), [12, 14, 16, 18], id="on-bins"),
+        pytest.param((9.0, 21.0), [10, 12, 14, 16, 18, 20], id="off-bins"),
+    ],
+)
+def test_neither_excludes_bins_on_the_bounds(bounds, expected):
+    mask, _ = _frequency_interval_mask(
+        "frequencies_of_interest", bounds, _EXACT_GRID, closed="neither"
+    )
+    np.testing.assert_array_equal(_EXACT_GRID[mask], expected)
+
+
 def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
     """Guard for the test above: its float32 cases exercise both promotions."""
     as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTH_GRID)
@@ -412,22 +424,20 @@ def test_float32_bounds_on_a_float64_grid_use_float32_rounding():
 
 
 @pytest.mark.parametrize(
-    ("bounds", "closed", "message"),
+    ("bounds", "message"),
     [
-        ([10.0], "both", "must be two finite values"),
-        ([10.0, 20.0, 30.0], "both", "must be two finite values"),
-        ([20.0, 10.0], "both", r"low <= high"),
-        ([np.nan, 10.0], "both", "must be two finite values"),
-        ([0.0, np.inf], "both", "must be two finite values"),
-        ([10.0, 10.0], "neither", r"low < high"),
-        ([12.6, 13.5], "both", "contains no frequency bin"),
-        ([60.0, 70.0], "neither", "contains no frequency bin"),
-        ([10.0, 12.0], "neither", "contains no frequency bin"),
+        ([10.0], "must be two finite values"),
+        ([10.0, 20.0, 30.0], "must be two finite values"),
+        ([20.0, 10.0], r"low <= high"),
+        ([np.nan, 10.0], "must be two finite values"),
+        ([0.0, np.inf], "must be two finite values"),
+        ([12.6, 13.5], "contains no frequency bin"),
+        ([60.0, 70.0], "contains no frequency bin"),
     ],
 )
-def test_invalid_or_empty_intervals_raise_naming_the_argument(bounds, closed, message):
+def test_invalid_or_empty_intervals_raise_naming_the_argument(bounds, message):
     with pytest.raises(ValueError, match=message) as error:
-        _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID, closed=closed)
+        _frequency_interval_mask("frequency_range", bounds, _EXACT_GRID, closed="both")
     assert str(error.value).startswith("frequency_range")
 
 
@@ -546,17 +556,16 @@ def _deprecated(connectivity, measure, *args, **kwargs):
 
 @pytest.mark.parametrize("measure", _SELECTING_MEASURES)
 def test_frequency_range_consumes_the_bins_on_its_bounds(lagged_connectivity, measure):
-    """frequency_range=(10, 50) uses the 10 and 50 Hz bins: it equals the
-    exclusive selection of (9, 51), whose edges lie between bins, and differs
-    from the exclusive selection of (10, 50)."""
+    """frequency_range=(10, 50) uses the 10 and 50 Hz bins: it equals
+    (9, 51), whose bounds lie between bins and enclose them, and differs from
+    (11, 49), which leaves them out."""
     inclusive = _call(lagged_connectivity, measure, frequency_range=(10.0, 50.0))
     np.testing.assert_array_equal(
-        inclusive,
-        _deprecated(lagged_connectivity, measure, frequencies_of_interest=(9.0, 51.0)),
+        inclusive, _call(lagged_connectivity, measure, frequency_range=(9.0, 51.0))
     )
-    exclusive = _deprecated(lagged_connectivity, measure, frequencies_of_interest=(10.0, 50.0))
-    assert inclusive.shape != exclusive.shape or not np.allclose(
-        inclusive, exclusive, equal_nan=True
+    without_edges = _call(lagged_connectivity, measure, frequency_range=(11.0, 49.0))
+    assert inclusive.shape != without_edges.shape or not np.allclose(
+        inclusive, without_edges, equal_nan=True
     )
 
 
