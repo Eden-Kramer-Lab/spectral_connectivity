@@ -1978,7 +1978,7 @@ def hann_morlet_coefficients():
     wavelet = MorletWavelet(
         rng.standard_normal((600, 4, 3)),
         200.0,
-        [10.0, 20.0],
+        frequencies=[10.0, 20.0],
         smoothing_time=0.1,
         smoothing_kernel="hann",
     )
@@ -2086,7 +2086,7 @@ def _morlet_connectivity_with_nan_edges():
     observation weights; returns those (time, frequency) bins."""
     rng = np.random.default_rng(6)
     wavelet = MorletWavelet(
-        rng.standard_normal((600, 4, 2)), 200.0, [10.0, 20.0], edge_mode="nan"
+        rng.standard_normal((600, 4, 2)), 200.0, frequencies=[10.0, 20.0], edge_mode="nan"
     )
     conn = Connectivity.from_transform(wavelet)
     return conn, ~to_host(wavelet.valid_time_frequency)
@@ -2481,7 +2481,7 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     rng = np.random.default_rng(7)
     data = rng.standard_normal((600, 3, 3))
     wavelet = MorletWavelet(
-        data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
+        data, 200.0, frequencies=[10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
     )
     weighted = Connectivity.from_transform(wavelet)
     assert np.isfinite(weighted.power()).any()

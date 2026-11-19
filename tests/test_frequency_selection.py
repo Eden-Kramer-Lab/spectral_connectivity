@@ -73,7 +73,7 @@ def morlet_transform():
     return MorletWavelet(
         np.random.default_rng(319).standard_normal((192, 5, 2)),
         64,
-        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
+        frequencies=np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
         edge_mode="nan",
     )
 
@@ -1151,7 +1151,7 @@ def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
     transform = MorletWavelet(
         np.random.default_rng(320).standard_normal((256, 5, 2)),
         64,
-        np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
+        frequencies=np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
         n_cycles=np.array([3.0, 20.0, 3.0, 3.0, 3.0, 3.0]),
         edge_mode="nan",
     )

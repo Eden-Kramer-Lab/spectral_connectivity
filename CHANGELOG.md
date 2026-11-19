@@ -101,7 +101,10 @@ directly with results from 2.x.
   callers can check whether a cross-spectrum is resolved finely enough in
   frequency to trust the directed measures built on it (an under-resolved
   spectrum can converge yet reconstruct poorly).
-- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
+- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Each
+  takes `time_series` and `sampling_frequency` positionally and every other
+  setting by keyword (e.g. `MorletWavelet(x, fs, frequencies=[4, 8, 16])`);
+  `Multitaper` keeps its released positional order. Morlet
   output is explicitly one-sided and rejects Wilson-factorized directed
   measures, which require a full two-sided spectrum. Morlet coefficients are
   scaled so that `power()` is the one-sided PSD in signal²/Hz, on the same

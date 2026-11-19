@@ -2942,7 +2942,7 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
         transform = MorletWavelet(
             np.random.default_rng(324).standard_normal((2400, 1, 2)),
             200,
-            np.array([4.0, 8.0, 16.0, 32.0]),
+            frequencies=np.array([4.0, 8.0, 16.0, 32.0]),
             smoothing_time=0.5,
             edge_mode="nan",
         )
@@ -2971,7 +2971,7 @@ def test_frequency_band_reduce_after_time_selection():
     transform = MorletWavelet(
         np.random.default_rng(325).standard_normal((1500, 2, 3)),
         250,
-        np.arange(5.0, 45.0, 5.0),
+        frequencies=np.arange(5.0, 45.0, 5.0),
         smoothing_time=0.3,
         edge_mode="nan",
     )
@@ -3534,7 +3534,7 @@ def test_connectivity_to_xarray_shares_alternative_transform_provenance():
         method="magnitude_squared_coherence",
     )
     morlet = connectivity_to_xarray(
-        MorletWavelet(data, 64, np.array([4.0, 8.0, 16.0])),
+        MorletWavelet(data, 64, frequencies=np.array([4.0, 8.0, 16.0])),
         method="magnitude_squared_coherence",
     )
 
@@ -3555,7 +3555,7 @@ def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
     transform = MorletWavelet(
         data,
         64,
-        np.array([4.0, 8.0, 16.0]),
+        frequencies=np.array([4.0, 8.0, 16.0]),
         smoothing_time=0.25,
         edge_mode="nan",
     )
@@ -3570,7 +3570,7 @@ def test_morlet_results_keep_their_coordinate_labels(method, tmp_path):
     coordinates' long_name and units, and they survive a NetCDF round trip."""
     data = np.random.default_rng(320).standard_normal((192, 5, 2))
     morlet = connectivity_to_xarray(
-        MorletWavelet(data, 64, np.array([4.0, 8.0, 12.0, 16.0])),
+        MorletWavelet(data, 64, frequencies=np.array([4.0, 8.0, 12.0, 16.0])),
         method=method,
     )
     reference = connectivity_to_xarray(Multitaper(data, sampling_frequency=64), method="power")
@@ -3597,7 +3597,7 @@ def test_band_label_survives_the_validity_mask():
     must not replace the labeled band coordinate with an unlabeled one."""
     data = np.random.default_rng(321).standard_normal((192, 5, 2))
     power = connectivity_to_xarray(
-        MorletWavelet(data, 64, np.array([4.0, 8.0, 12.0, 16.0])), method="power"
+        MorletWavelet(data, 64, frequencies=np.array([4.0, 8.0, 12.0, 16.0])), method="power"
     )
     reduced = frequency_band_reduce(power, {"theta": (4.0, 12.0)})
     assert "valid_time_band" in reduced.coords
@@ -3612,7 +3612,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
     transform = MorletWavelet(
         data,
         64,
-        frequencies,
+        frequencies=frequencies,
         smoothing_time=0.25,
         edge_mode="nan",
     )
