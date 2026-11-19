@@ -463,11 +463,14 @@ Rulings where the rules above were silent:
 
 - **Alias resolution.** `_DEPRECATED_MEASURE_NAMES` in `connectivity.py` (next
   to `_NON_MEASURE_METHODS`, so the registry and `jackknife` share it) maps
-  `coherence_magnitude` to `magnitude_squared_coherence`. The registry has one
-  record, under the canonical name; `_measure_spec` resolves an alias to it.
-  The wrappers warn once per request where the method names are read
-  (`_requested_methods`, `connectivity_to_xarray`) and compute through the
-  canonical method, so the method's own warning does not fire a second time.
+  `coherence_magnitude` to `magnitude_squared_coherence`, and
+  `_resolve_deprecated_measure_name` beside it writes the one warning and
+  returns the canonical name, for the alias method, `jackknife`, and the
+  wrappers' single entry point, `_requested_methods` (also used by
+  `connectivity_to_xarray`). That entry point rejects both spellings,
+  validates, and resolves once; everything downstream works with canonical
+  names, and only the result variable's name and `measure` use the requested
+  one. The registry has one record, under the canonical name.
 - **Provenance.** A result requested by the old name keeps the variable name
   and records `measure="coherence_magnitude"`; every other attribute is the
   canonical measure's. No extra "canonical measure" attribute is added: the
@@ -503,15 +506,23 @@ Rulings where the rules above were silent:
   times its real part. `value_range` is the theoretical range, which rounding
   can cross (PPC's self-value reaches 1 + 1e-15).
 - **Flat signals.** `constant` holds for signals with nonzero power.
-  `diagonal_nan_for_zero_power` marks the four measures that normalize by
-  amplitude (`imaginary_coherence`, `phase_locking_value`,
-  `pairwise_phase_consistency`, and the corrected imaginary PLV), whose
-  flat-signal self-connection is NaN; the phase lag indices keep theirs.
+  `nan_for_zero_power_signal` (0/1 on every measure variable) marks the
+  measures for which every entry involving a zero-power signal, the diagonal
+  included, is NaN; a test derives it from a flat-channel run of every
+  measure and companion. It holds for the coherence measures, PLV, PPC, the
+  corrected imaginary PLV, and the delay measures; not for the phase lag
+  indices, the cross-spectrum, `imaginary_coherency` (0, not NaN, off the
+  diagonal), partial coherence, the Granger and transfer-function families,
+  or measures without signal-pair axes.
+- **One vocabulary.** `_DIAGONAL_POLICIES` in the registry defines the six
+  policies (with the constant policy's rounding bound) and
+  `_NAN_FOR_ZERO_POWER_SIGNAL` the flag; the ranges page's policy table is
+  generated from them, and other docs refer to it.
 - **Recorded nominal value.** Beside `constant` or `rounding_noise`, a
-  variable records `diagonal_value` (a float) and
-  `diagonal_nan_for_zero_power` (0/1).
-- **Companion records.** `group_delay_slope` and `group_delay_r_value` have
-  their own registry records (`_COMPANION_SPECS`, not listed as measures):
+  variable records `diagonal_value` (a float).
+- **Companion records.** A `_VariableSpec` holds what a result variable needs;
+  `_MeasureSpec` extends it, and group delay's record declares
+  `group_delay_slope` and `group_delay_r_value` as its companions:
   interpretation, group delay's sign convention, an unbounded slope and a
   [-1, 1] correlation. Group membership and spatial vectors, filters, and
   patterns carry no measure record.
