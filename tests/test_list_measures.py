@@ -778,6 +778,7 @@ def test_signed_and_phase_measures_state_their_sign_convention():
         "phase_lag_index",
         "weighted_phase_lag_index",
         "canonical_coherency",
+        "directed_phase_lag_index",
         "delay",
         "group_delay",
         "phase_slope_index",

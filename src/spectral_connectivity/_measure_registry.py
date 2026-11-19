@@ -394,10 +394,11 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Directed phase lag index",
         units="1",
         value_range=(0.0, 1.0),
-        interpretation="Above 0.5, the source phase-leads the target; below 0.5 it lags; 0.5 is "
-        "no preferred direction.",
+        interpretation="Fraction of observations in which the source's phase leads the target's "
+        "(a tie counts half), (1 + phase_lag_index) / 2; 0.5 is no preferred direction.",
         diagonal_policy="constant",
         diagonal_value=0.5,
+        sign_convention="Above 0.5 at (source=a, target=b) means a leads b; below 0.5, a lags b.",
         is_directed=True,
     ),
     "subset_pairwise_spectral_granger_prediction": _wilson_directed_spec(

@@ -39,7 +39,7 @@ the constant every diagonal entry has, to within rounding.
 | `imaginary_coherency` | [-1, 1] | 1 | NaN (masked) | Signed imaginary part of coherency; blind to zero-lag coupling. Positive (source=a, target=b) means a leads b. |
 | `partial_coherence` | [0, 1] | 1 | NaN (masked) | Magnitude-squared coherence after removing the linear influence of every other signal; near 0 for pairs coupled only through other signals. |
 | `corrected_imaginary_phase_locking_value` | [0, 1] | 1 | 0, plus rounding noise (NaN for a zero-power signal) | Phase locking with zero- and pi-lag contributions removed; insensitive to volume conduction. |
-| `directed_phase_lag_index` | [0, 1] | 1 | 0.5 | Above 0.5, the source phase-leads the target; below 0.5 it lags; 0.5 is no preferred direction. |
+| `directed_phase_lag_index` | [0, 1] | 1 | 0.5 | Fraction of observations in which the source's phase leads the target's (a tie counts half), (1 + phase_lag_index) / 2; 0.5 is no preferred direction. Above 0.5 at (source=a, target=b) means a leads b; below 0.5, a lags b. |
 | `subset_pairwise_spectral_granger_prediction` | [0, ∞) | 1 | NaN (undefined) | pairwise_spectral_granger_prediction for only the requested pairs; other entries are NaN. |
 | `conditional_spectral_granger_prediction` | [0, ∞) | 1 | NaN (undefined) | Spectral Granger causality from source to target conditioned on every other signal, removing influence relayed through observed signals. |
 | `time_reversed_spectral_granger_prediction` | [0, ∞) | 1 | NaN (undefined) | Pairwise spectral Granger causality of the time-reversed data. Genuine directed influence reverses under time reversal; directionality that does not reverse suggests instantaneous mixing. |
