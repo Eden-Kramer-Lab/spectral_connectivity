@@ -88,9 +88,9 @@ def _coordinate_attrs(
 ) -> tuple[dict[Hashable, Any], dict[Hashable, Any]]:
     """``(time_attrs, frequency_attrs)`` metadata for a result's coordinates.
 
-    ``fourier_connectivity`` records normalized (cycles/sample) frequencies,
-    whether filled in or declared by the input coordinate, and when it filled
-    in window-index time, so those must not be labeled Hz and seconds.
+    The shared attrs record normalized (cycles/sample) frequencies, whether
+    filled in or declared by an input coordinate, and window-index time filled
+    in for an input that gave none, so those must not be labeled Hz and seconds.
     """
     frequency_attrs: dict[Hashable, Any]
     time_attrs: dict[Hashable, Any]

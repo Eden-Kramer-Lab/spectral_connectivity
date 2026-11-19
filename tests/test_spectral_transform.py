@@ -245,8 +245,11 @@ def test_an_attribute_error_inside_a_capability_property_propagates(coefficients
     [
         np.linspace(0.0, 250.0, N_FFT_SAMPLES),  # one-sided, is_one_sided not set
         np.fft.fftshift(FFT_FREQUENCIES),
+        np.roll(FFT_FREQUENCIES, 1),
+        -FFT_FREQUENCIES,  # uniform after fftshift, but decreasing
+        FFT_FREQUENCIES + FFT_FREQUENCIES[1] / 2,  # uniform, but no zero bin first
     ],
-    ids=["one_sided_unflagged", "fftshifted"],
+    ids=["one_sided_unflagged", "fftshifted", "rolled", "sign_flipped", "offset"],
 )
 def test_two_sided_frequencies_must_be_in_fft_order(coefficients, frequencies):
     """Two-sided coefficients are folded assuming numpy.fft order, so any other
