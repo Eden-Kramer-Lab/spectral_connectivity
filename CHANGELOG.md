@@ -449,10 +449,14 @@ directly with results from 2.x.
   Nyquist or between two adjacent bins, previously gave all-NaN `group_delay`
   results and an empty `delay` frequency axis. Their xarray results record the
   requested bounds (`requested_frequency_lower`/`_upper`, omitted when every
-  bin is used), the lowest and highest bins consumed
-  (`selected_frequency_lower`/`_upper`), and `frequency_interval_closed`
-  (`"both"`, or `"neither"` for the deprecated keyword) on each of their
-  variables, and a Morlet result's `valid_time` covers exactly those bins.
+  bin is used), the lowest and highest bins in the interval
+  (`selected_frequency_lower`/`_upper`, before any `frequency_resolution`
+  subsampling, which can make `phase_slope_index` sum only some of them), and
+  `frequency_interval_closed` (`"both"`, or `"neither"` for the deprecated
+  keyword) on each of their variables. A Morlet result's `valid_time` is `True`
+  only where every bin of the interval has full support, so with
+  `frequency_resolution` it can be stricter than the bins
+  `phase_slope_index` actually sums.
 - `multitaper_connectivity` and `fourier_connectivity` pass their
   `frequency_range` to `delay`, `group_delay`, and `phase_slope_index` instead
   of refusing it for the frequency-reduced measures, so the wrapper and a

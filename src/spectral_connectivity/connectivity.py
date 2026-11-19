@@ -5811,12 +5811,17 @@ def _bandpass(
 
 @dataclass(frozen=True)
 class _FrequencySelection:
-    """The bins a frequency-selecting measure consumes, and how they were chosen.
+    """The interval of bins a frequency-selecting measure draws from.
+
+    The interval is taken before any ``frequency_resolution`` subsampling:
+    ``phase_slope_index`` with ``frequency_resolution`` sums only every
+    independent step of these bins, and ``group_delay``'s significance test
+    can leave some out of its fit.
 
     Attributes
     ----------
     mask : NDArray[bool], shape (n_frequencies,)
-        Host mask of the consumed bins.
+        Host mask of the bins in the interval.
     requested : (float, float) or None
         The requested bounds; ``None`` when every bin is used.
     closed : {"both", "neither"}
@@ -5831,7 +5836,8 @@ class _FrequencySelection:
         """Result attributes recording the interval, in the units of ``frequencies``.
 
         The requested bounds are omitted when every bin is used; the selected
-        bounds are the lowest and highest bins consumed.
+        bounds are the lowest and highest bins in the interval, before any
+        ``frequency_resolution`` subsampling.
         """
         selected = to_numpy(frequencies)[self.mask]
         attrs: dict[str, Any] = {}

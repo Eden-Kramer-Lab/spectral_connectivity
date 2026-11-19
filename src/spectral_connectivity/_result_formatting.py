@@ -73,7 +73,8 @@ def _check_method_accepts_kwargs(
 def _measure_frequency_selection(
     connectivity: Connectivity, kwargs: Mapping[str, Any]
 ) -> _FrequencySelection:
-    """The bins a ``delay``, ``group_delay``, or ``phase_slope_index`` call consumed.
+    """The interval of bins a ``delay``, ``group_delay``, or ``phase_slope_index``
+    call drew from, before any ``frequency_resolution`` subsampling.
 
     Resolved from its keyword arguments by the rule the measure itself used.
     Its :meth:`~_FrequencySelection.attrs` go on the measure's own variables

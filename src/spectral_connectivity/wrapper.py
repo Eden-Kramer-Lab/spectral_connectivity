@@ -465,10 +465,12 @@ def connectivity_to_xarray(
         elif "time" in result.dims:
             # PSI and group delay aggregate a frequency interval. They have no
             # frequency dimension on which a 2-D coordinate can live, so expose
-            # whether every frequency the measure consumed has full
-            # wavelet/smoothing support at each time point.
-            consumed = _measure_frequency_selection(connectivity, kwargs).mask
-            valid_time = validity[:, consumed].all(axis=1)
+            # whether every bin of the interval has full wavelet/smoothing
+            # support at each time point. With frequency_resolution PSI sums
+            # only some of those bins, so this is conservative: it can be False
+            # where every bin PSI summed was valid, never True where one was not.
+            interval = _measure_frequency_selection(connectivity, kwargs).mask
+            valid_time = validity[:, interval].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
     return _with_frequency_grid_metadata(result)

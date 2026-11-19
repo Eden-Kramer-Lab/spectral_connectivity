@@ -948,3 +948,40 @@ def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
     assert factorized[0].shape[-3] == 2 * (full.sizes["frequency"] - 1)
     np.testing.assert_array_equal(cropped.values, full.sel(frequency=slice(10.0, 30.0)).values)
     assert cropped.frequency.values[[0, -1]].tolist() == [10.0, 30.0]
+
+
+def test_selected_bounds_and_validity_describe_the_interval_before_subsampling(
+    lagged_time_series,
+):
+    """With frequency_resolution, PSI sums every fourth bin of 5-50 Hz on the
+    0.5 Hz grid (last one 49 Hz), but the recorded interval and the Morlet
+    validity cover every bin of the range, as documented."""
+    psi = multitaper_connectivity(
+        lagged_time_series,
+        sampling_frequency=500,
+        method="phase_slope_index",
+        frequency_range=(5.0, 50.0),
+        connectivity_kwargs={"frequency_resolution": 2.0},
+    )
+    assert (psi.attrs["selected_frequency_lower"], psi.attrs["selected_frequency_upper"]) == (
+        5.0,
+        50.0,
+    )
+    summed = np.arange(5.0, 50.0 + 0.25, 0.5)[::4]
+    assert summed[-1] == 49.0
+
+    transform = MorletWavelet(
+        np.random.default_rng(319).standard_normal((192, 5, 2)),
+        64,
+        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
+        edge_mode="nan",
+    )
+    morlet_psi = connectivity_to_xarray(
+        transform,
+        method="phase_slope_index",
+        frequency_range=(4.0, 20.0),
+        frequency_resolution=8.0,  # every second bin: 4, 12, 20 Hz
+    )
+    np.testing.assert_array_equal(
+        morlet_psi.valid_time, to_host(transform.valid_time_frequency).all(axis=1)
+    )

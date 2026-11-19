@@ -234,7 +234,12 @@ cropped. The frequency-reduced measures record the interval on their variables:
 ```
 
 `requested_frequency_lower`/`_upper` hold the bounds as given and
-`selected_frequency_lower`/`_upper` the lowest and highest bins consumed. Phase
+`selected_frequency_lower`/`_upper` the lowest and highest bins in the
+interval, before any `frequency_resolution` subsampling (with it,
+`phase_slope_index` sums only every independent step of those bins, so its last
+summed bin can lie below `selected_frequency_upper`). A Morlet result's
+`valid_time` is likewise `True` only where every bin of the interval has full
+support, which can be stricter than the bins `phase_slope_index` sums. Phase
 slope and group delay have no frequency axis, so `frequency_bands` and
 `frequency_decimation` leave them as computed over `frequency_range`; call once
 per band for band values. `delay` keeps its frequency axis and is cropped,
