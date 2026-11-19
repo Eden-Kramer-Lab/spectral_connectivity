@@ -681,26 +681,14 @@ def _validate_fft_workers(fft_workers: int | None) -> None:
         raise ValueError(msg)
 
 
-def _validate_window_durations(
+def _validate_window_step(
     time_window_duration: float | None,
     time_window_step: float | None,
 ) -> None:
-    """Reject non-positive window durations and warn when steps leave gaps."""
-    if time_window_duration is not None and time_window_duration <= 0:
-        msg = (
-            f"time_window_duration must be positive, got {time_window_duration}.\n"
-            "\n"
-            "The time window duration is the length of each analysis window in seconds.\n"
-            "It determines the frequency resolution: Δf ≈ 2 * time_halfbandwidth_product / time_window_duration.\n"
-            "\n"
-            "Examples:\n"
-            "  - 1.0 second window with NW=3 → ~6 Hz resolution\n"
-            "  - 0.5 second window with NW=3 → ~12 Hz resolution\n"
-            "\n"
-            "Use None (default) to analyze the entire time series without windowing."
-        )
-        raise ValueError(msg)
+    """Reject a non-positive window step and warn when steps leave gaps.
 
+    ``time_window_duration`` must already be positive or ``None``.
+    """
     if time_window_step is not None and time_window_step <= 0:
         msg = (
             f"time_window_step must be positive, got {time_window_step}.\n"
@@ -746,7 +734,7 @@ class _WindowedFourierTransform:
     scaffolding.
 
     A subclass constructor validates its own arguments in its own order, using
-    :func:`_validate_fft_workers`, :func:`_validate_window_durations`, and
+    :func:`_validate_fft_workers`, :func:`_validate_window_step`, and
     :meth:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
     read-only snapshot of the input (``_immutable_array_snapshot``), before
     those checks read it, and calls :meth:`_set_window_state`, which
@@ -1666,7 +1654,22 @@ class Multitaper(_WindowedFourierTransform):
                 stacklevel=stacklevel_outside_package(),
             )
 
-        _validate_window_durations(time_window_duration, time_window_step)
+        # Validate time_window_duration
+        if time_window_duration is not None and time_window_duration <= 0:
+            msg = (
+                f"time_window_duration must be positive, got {time_window_duration}.\n"
+                "\n"
+                "The time window duration is the length of each analysis window in seconds.\n"
+                "It determines the frequency resolution: Δf ≈ 2 * time_halfbandwidth_product / time_window_duration.\n"
+                "\n"
+                "Examples:\n"
+                "  - 1.0 second window with NW=3 → ~6 Hz resolution\n"
+                "  - 0.5 second window with NW=3 → ~12 Hz resolution\n"
+                "\n"
+                "Use None (default) to analyze the entire time series without windowing."
+            )
+            raise ValueError(msg)
+        _validate_window_step(time_window_duration, time_window_step)
         self._warn_about_unusual_time_series()
 
         self.sampling_frequency = sampling_frequency
@@ -2118,11 +2121,12 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         # The window and step are fixed in samples from here on; their
-        # durations are what the time_window_* properties report. A step
-        # duration that rounds to zero samples is rejected here.
+        # durations are what the time_window_* properties report. The window
+        # has at least 2 samples, so only a step duration that rounds to zero
+        # samples is rejected here.
         resolved_duration = window_samples / sampling_frequency
         resolved_step_duration = step_samples / sampling_frequency
-        _validate_window_durations(resolved_duration, resolved_step_duration)
+        _validate_window_step(resolved_duration, resolved_step_duration)
         self._warn_about_unusual_time_series()
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
