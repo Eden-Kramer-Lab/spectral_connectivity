@@ -205,6 +205,18 @@ directly with results from 2.x.
   `direct_directed_transfer_function`) by name. They are opt-in (not in the
   default set) and, like the spectral Granger measures, are oriented so
   `sel(source=a, target=b)` is the influence from `a` to `b`.
+- `multitaper_connectivity` names the common multitaper settings
+  (`time_window_step`, `time_halfbandwidth_product`, `n_tapers`, and
+  `detrend_type`, keyword-only, with `Multitaper`'s defaults, beside the
+  released `sampling_frequency` and `time_window_duration`) and takes every
+  other `Multitaper` setting in a `transform_kwargs` mapping, as measure
+  settings go in `connectivity_kwargs`. The released positional order is
+  unchanged. A misspelled key in either mapping raises `TypeError`; a common
+  setting inside `transform_kwargs` raises `ValueError`, so a setting cannot be
+  given two values. `connectivity_to_xarray` gains `connectivity_kwargs` and a
+  keyword-only `group_labels` (also accepted in the mapping, not both), and
+  checks every measure setting before computing anything. Provenance does not
+  depend on the route that supplied a setting.
 - `list_measures()` enumerates every wrapper-supported `method` name with its
   output category, a one-line description sourced from the `Connectivity`
   method docstring, and whether it is a default and/or directed measure;

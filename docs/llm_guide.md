@@ -92,6 +92,11 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 - `time_window_duration` defaults to the whole recording (one window). Set it,
   and `time_window_step`, for a time-resolved result.
+- The common settings `time_window_duration`, `time_window_step`,
+  `time_halfbandwidth_product`, `n_tapers`, and `detrend_type` are named
+  arguments of `multitaper_connectivity`. Put any other `Multitaper` setting in
+  `transform_kwargs={...}` and measure settings in `connectivity_kwargs={...}`;
+  a misspelled key raises instead of being ignored.
 - Multitaper frequency resolution is the full DPSS concentration bandwidth,
   `2 * time_halfbandwidth_product / time_window_duration` Hz. It describes
   spectral smoothing; FFT bin spacing also depends on the FFT length and

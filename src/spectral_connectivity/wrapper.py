@@ -1,7 +1,9 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import difflib
+import inspect
 import warnings
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Collection, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, Literal
@@ -40,6 +42,7 @@ from spectral_connectivity._provenance import (
 )
 from spectral_connectivity._result_formatting import (
     UnsupportedMeasureError,
+    _check_method_accepts_kwargs,
     _connectivity_result_to_xarray,
 )
 from spectral_connectivity.connectivity import (
@@ -394,11 +397,107 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
         )
 
 
+# The Multitaper settings multitaper_connectivity takes as named arguments; the
+# others go in transform_kwargs.
+_NAMED_TRANSFORM_SETTINGS = (
+    "sampling_frequency",
+    "time_window_duration",
+    "time_window_step",
+    "time_halfbandwidth_product",
+    "n_tapers",
+    "detrend_type",
+)
+_TRANSFORM_KWARGS_SETTINGS = tuple(
+    name
+    for name in inspect.signature(Multitaper).parameters
+    if name != "time_series" and name not in _NAMED_TRANSFORM_SETTINGS
+)
+
+
+def _setting_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A copy of a ``*_kwargs`` mapping argument; ``None`` is empty."""
+    return {} if value is None else dict(value)
+
+
+def _unknown_setting_message(problem: str, key: Any, valid: Collection[str]) -> str:
+    """``"<problem> '<key>'."`` and the closest names in ``valid``."""
+    message = f"{problem} {key!r}."
+    close = difflib.get_close_matches(str(key), list(valid), n=3)
+    if close:
+        message += f" Did you mean {', '.join(map(repr, close))}?"
+    return message
+
+
+def _merge_legacy_settings(
+    function: str,
+    mapping_name: str,
+    mapping: dict[str, Any],
+    legacy: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Settings from ``mapping_name`` and from ``function``'s legacy ``**kwargs``.
+
+    A key given by both routes raises ``ValueError`` naming both.
+    """
+    for key in legacy:
+        if key in mapping:
+            msg = (
+                f"{key} was given both inside {mapping_name} and as a keyword argument "
+                f"of {function}; pass it once, in {mapping_name}."
+            )
+            raise ValueError(msg)
+    return {**mapping, **legacy}
+
+
+def _transform_settings(
+    transform_kwargs: Mapping[str, Any] | None, legacy: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The advanced ``Multitaper`` settings of a ``multitaper_connectivity`` call.
+
+    Every key must be a ``Multitaper`` setting that is not one of the wrapper's
+    named arguments, so a setting reaches the transform by exactly one route.
+    """
+    mapping = _setting_mapping(transform_kwargs)
+    for key in mapping:
+        if key in _NAMED_TRANSFORM_SETTINGS:
+            msg = (
+                f"{key} was given inside transform_kwargs; it is a named argument of "
+                f"multitaper_connectivity, so pass it once, as {key}=..., not in the "
+                "mapping."
+            )
+            raise ValueError(msg)
+        if key not in _TRANSFORM_KWARGS_SETTINGS:
+            msg = _unknown_setting_message(
+                "transform_kwargs got an unexpected key", key, _TRANSFORM_KWARGS_SETTINGS
+            )
+            msg += (
+                f" It accepts the Multitaper settings {', '.join(_TRANSFORM_KWARGS_SETTINGS)}."
+            )
+            raise TypeError(msg)
+    for key in legacy:
+        if key not in _TRANSFORM_KWARGS_SETTINGS:
+            msg = _unknown_setting_message(
+                "multitaper_connectivity() got an unexpected keyword argument",
+                key,
+                (*_TRANSFORM_KWARGS_SETTINGS, *_NAMED_TRANSFORM_SETTINGS),
+            )
+            msg += (
+                " Measure settings go in connectivity_kwargs and advanced Multitaper "
+                "settings in transform_kwargs."
+            )
+            raise TypeError(msg)
+    return _merge_legacy_settings(
+        "multitaper_connectivity", "transform_kwargs", mapping, legacy
+    )
+
+
 def connectivity_to_xarray(
     m: Any,
     method: str = "magnitude_squared_coherence",
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
+    *,
+    group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
+    connectivity_kwargs: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Calculate one connectivity measure and return a labeled array.
@@ -435,10 +534,20 @@ def connectivity_to_xarray(
         With exactly 2 signals, reduce a pairwise measure to the ordered pair
         (first source, last target), keeping ``source`` and ``target`` as
         scalar coordinates.
+    group_labels : sequence, optional
+        One label per signal naming its group, required by the group measures
+        (see :func:`multitaper_connectivity`). It may instead be given in
+        ``connectivity_kwargs``, but not both.
+    connectivity_kwargs : mapping, optional
+        Settings for the measure, e.g. ``{"frequency_range": (4, 12)}`` for
+        ``delay``, ``group_delay``, and ``phase_slope_index``, or ``{"pairs":
+        ...}`` for ``subset_pairwise_spectral_granger_prediction``. A key the
+        measure does not take raises ``TypeError``. There is no
+        ``transform_kwargs``: ``m`` is already built.
     **kwargs
-        Keyword arguments for the measure (e.g. ``group_labels``, or
-        ``frequency_range`` for ``delay``, ``group_delay``, and
-        ``phase_slope_index``).
+        Measure settings given directly as keyword arguments, the 2.x route;
+        pass them in ``connectivity_kwargs`` instead. A setting in both raises
+        ``ValueError``.
 
     Returns
     -------
@@ -464,7 +573,24 @@ def connectivity_to_xarray(
         )
         raise TypeError(msg)
     (method,), output_names, _ = _requested_methods(method, ())
+    measure_settings = _merge_legacy_settings(
+        "connectivity_to_xarray",
+        "connectivity_kwargs",
+        _setting_mapping(connectivity_kwargs),
+        kwargs,
+    )
+    # A misspelled setting fails before any work, whichever route it took.
+    _check_method_accepts_kwargs(
+        method,
+        getattr(Connectivity, method),
+        {key: value for key, value in measure_settings.items() if key != "group_labels"},
+    )
     connectivity = Connectivity.from_transform(m)
+    group_labels, measure_settings, group_methods = _resolve_group_labels(
+        [method], measure_settings, group_labels, connectivity.n_signals
+    )
+    if group_methods:
+        measure_settings["group_labels"] = group_labels
     provenance_metadata = getattr(m, "_provenance_metadata", None)
     if provenance_metadata is not None:
         metadata = provenance_metadata()
@@ -487,8 +613,8 @@ def connectivity_to_xarray(
     selection = (
         _select_measure_frequencies(
             to_numpy(connectivity.frequencies),
-            kwargs.get("frequency_range"),
-            kwargs.get("frequencies_of_interest"),
+            measure_settings.get("frequency_range"),
+            measure_settings.get("frequencies_of_interest"),
         )
         if _consumes_frequency_range(method)
         else None
@@ -501,7 +627,7 @@ def connectivity_to_xarray(
         shared_attrs,
         frequency_selection=selection,
         result_name=output_names[method],
-        **kwargs,
+        **measure_settings,
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
     if valid_time_frequency is not None:
@@ -785,6 +911,11 @@ def multitaper_connectivity(
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
     *,
+    time_window_step: float | None = None,
+    time_halfbandwidth_product: float = 3,
+    n_tapers: int | None = None,
+    detrend_type: str | None = "constant",
+    transform_kwargs: Mapping[str, Any] | None = None,
     group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
@@ -883,10 +1014,28 @@ def multitaper_connectivity(
         whose variables can have incompatible axes such as ``power``'s), squeeze
         is ignored with a warning.
     connectivity_kwargs : dict, optional
-        Extra keyword arguments for the *measure* (a ``Connectivity`` method),
-        e.g. ``pairs`` for ``subset_pairwise_spectral_granger_prediction`` or
-        ``n_components`` for ``canonical_coherency``; passed to every requested
-        measure. Transform settings do not go here (see ``**kwargs``).
+        Settings for the *measure* (a ``Connectivity`` method), e.g. ``pairs``
+        for ``subset_pairwise_spectral_granger_prediction`` or ``n_components``
+        for ``canonical_coherency``; passed to every requested measure, so a
+        key a requested measure does not take raises ``TypeError``. Transform
+        settings do not go here (see ``transform_kwargs``).
+    time_window_step : float, optional
+        Step between successive windows in seconds, rounded to the nearest
+        sample; defaults to the window duration (no overlap).
+    time_halfbandwidth_product : float, default=3
+        DPSS time-half-bandwidth product ``NW``; the concentration bandwidth is
+        ``2 * NW / time_window_duration`` Hz.
+    n_tapers : int, optional
+        Number of DPSS tapers; defaults to ``floor(2 * NW) - 1``.
+    detrend_type : {"constant", "linear"} or None, default="constant"
+        Detrending applied to each window before the FFT; ``None`` for none.
+    transform_kwargs : mapping, optional
+        Advanced ``Multitaper`` settings by name, e.g. ``{"n_fft_samples": 1024,
+        "start_time": 0.5, "taper_weighting": "adaptive", "fft_workers": -1}``.
+        Every key must be a ``Multitaper`` setting (a misspelled one raises
+        ``TypeError``). The common settings above are named arguments of this
+        function and cannot also be given here (``ValueError``), so each
+        setting has one value.
     group_labels : sequence, optional
         One label per signal naming the group it belongs to; labels are scalars
         such as integers or area names (``"CA1"``), and missing values
@@ -896,7 +1045,7 @@ def multitaper_connectivity(
         ``blockwise_spectral_granger_prediction`` and
         ``maximized_imaginary_coherency_components``); an error is raised if no
         requested measure takes it (labels are passed only to the measures that
-        do).
+        do). It may instead be given in ``connectivity_kwargs``, but not both.
     frequency_range : (float, float), optional
         Frequency interval ``(low, high)``, both endpoints included; a bin lies
         on a bound when they differ by at most one part in a million of the
@@ -936,10 +1085,10 @@ def multitaper_connectivity(
         DataArray dimension containing signals or channels. Common names such as
         ``"signal"`` and ``"channel"`` are inferred automatically.
     **kwargs
-        Extra keyword arguments for the *transform* (``Multitaper``), e.g.
-        ``time_halfbandwidth_product``, ``n_tapers``, ``time_window_step``,
-        ``taper_weighting`` (or ``fft_workers=-1`` to parallelize the CPU FFT
-        across all cores). Measure settings do not go here (see
+        Advanced ``Multitaper`` settings given directly as keyword arguments,
+        the 2.x route; pass them in ``transform_kwargs`` instead. A setting in
+        both raises ``ValueError``, and a name that is not a ``Multitaper``
+        setting raises ``TypeError``. Measure settings do not go here (see
         ``connectivity_kwargs``).
 
     Returns
@@ -1096,7 +1245,8 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
-    explicit_start_time = kwargs.get("start_time", _UNSET)
+    transform_settings = _transform_settings(transform_kwargs, kwargs)
+    explicit_start_time = transform_settings.get("start_time", _UNSET)
     (
         time_series_data,
         signal_names,
@@ -1123,7 +1273,7 @@ def multitaper_connectivity(
         )
         raise ValueError(msg)
     if inferred_start_time is not None and explicit_start_time is _UNSET:
-        kwargs["start_time"] = inferred_start_time
+        transform_settings["start_time"] = inferred_start_time
     # The default set (DEFAULT_METHODS) is portably serializable; complex,
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
@@ -1137,7 +1287,11 @@ def multitaper_connectivity(
         time_series=time_series_data,
         sampling_frequency=sampling_frequency,
         time_window_duration=time_window_duration,
-        **kwargs,
+        time_window_step=time_window_step,
+        time_halfbandwidth_product=time_halfbandwidth_product,
+        n_tapers=n_tapers,
+        detrend_type=detrend_type,
+        **transform_settings,
     )
     # Resolve group labels before Connectivity.from_transform runs the FFT, so
     # a missing or misplaced label fails fast. The constructor has validated the
@@ -1166,7 +1320,10 @@ def multitaper_connectivity(
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
         group_methods=group_methods,
-        transform_settings_hint="pass it to multitaper_connectivity directly",
+        transform_settings_hint=(
+            "pass it to multitaper_connectivity: by name for the common settings "
+            f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
+        ),
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
