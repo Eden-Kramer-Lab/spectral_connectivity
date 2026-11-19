@@ -537,9 +537,13 @@ def _frequency_interval_mask(
     from a nonzero start keeps the bin its decimal bound names, while a bound
     1e-3 of the spacing away from a bin does not select it.
 
-    ``closed="neither"`` is the historical exclusive selection
-    ``low < f < high``, compared exactly in float64, so the deprecated keyword
-    keeps selecting the bins it always has.
+    ``closed="neither"`` is v2.0.1's exclusive selection, evaluated as v2.0.1
+    did: ``(bounds[0] < frequencies) & (frequencies < bounds[1])`` on the
+    bounds as the caller gave them and the grid as stored. NumPy's promotion
+    then compares a Python-number bound with a float32 grid in float32, and an
+    ndarray bound in float64, exactly as in v2.0.1, so the deprecated keyword
+    selects the bins it selected there. Validation converts the bounds to
+    floats, but the mask never uses the converted values.
 
     Parameters
     ----------
@@ -583,7 +587,7 @@ def _frequency_interval_mask(
     grid = values.astype(np.float64)
     mask: NDArray[np.bool_]
     if closed == "neither":
-        mask = (lower < grid) & (grid < upper)
+        mask = (stored_lower < values) & (values < stored_upper)
     else:
         grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
         on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)

@@ -254,24 +254,79 @@ def test_the_rounded_grids_have_edge_bins_that_exact_comparison_drops():
     assert not float32[12] <= 1.2
 
 
+def _released_band_mask(frequencies_of_interest, frequencies):
+    """The bin mask of v2.0.1's ``_bandpass``, verbatim: the band as the caller
+    gave it compared against the grid in its stored dtype, so a Python float
+    bound meets a float32 grid in float32 and an ndarray bound in float64."""
+    return (frequencies_of_interest[0] < frequencies) & (
+        frequencies < frequencies_of_interest[1]
+    )
+
+
+_FLOAT32_TENTH_GRID = np.linspace(0, 6.3, 64).astype(np.float32)
+_BAND_FORMS = {
+    "tuple": tuple,
+    "list": list,
+    "ndarray": lambda band: np.asarray(band, dtype=float),
+}
+
+
 @pytest.mark.parametrize(
     "grid",
     [
         pytest.param(np.arange(64) * 0.1, id="decimal-rounded-float64"),
-        pytest.param(np.linspace(0, 6.3, 64).astype(np.float32), id="float32"),
+        pytest.param(_FLOAT32_TENTH_GRID, id="float32"),
     ],
 )
-@pytest.mark.parametrize("bounds", [(0.3, 0.7), (0.7, 1.2), (1.0, 5.0)])
-def test_neither_is_the_historical_exact_exclusive_comparison(grid, bounds):
-    """The deprecated exclusive selection is kept bit for bit, including where
-    a rounded grid puts a bin just inside an edge. The reference is the
-    comparison the exclusive selection has always made."""
-    band = np.asarray(bounds, dtype=float)
-    historical = (band[0] < grid) & (grid < band[1])
-    mask, _ = _frequency_interval_mask(
-        "frequencies_of_interest", bounds, grid, closed="neither"
+@pytest.mark.parametrize("form", list(_BAND_FORMS))
+@pytest.mark.parametrize("bounds", [(0.3, 0.7), (0.7, 1.2), (1.0, 5.0), (1, 5)])
+def test_neither_is_the_released_exclusive_comparison(grid, form, bounds):
+    """The deprecated exclusive selection is v2.0.1's, bit for bit: on a
+    float32 grid a Python-number band is compared in float32, so float32(0.3)
+    excludes the 0.3 bin, while an ndarray band is compared in float64."""
+    band = _BAND_FORMS[form](bounds)
+    mask, _ = _frequency_interval_mask("frequencies_of_interest", band, grid, closed="neither")
+    np.testing.assert_array_equal(mask, _released_band_mask(band, grid))
+
+
+def test_the_released_comparison_depends_on_the_band_form_on_float32_grids():
+    """Guard for the test above: its float32 cases exercise both promotions."""
+    as_tuple = _released_band_mask((0.3, 0.7), _FLOAT32_TENTH_GRID)
+    as_array = _released_band_mask(np.array([0.3, 0.7]), _FLOAT32_TENTH_GRID)
+    assert np.flatnonzero(as_tuple).tolist() == [4, 5, 6]
+    assert np.flatnonzero(as_array).tolist() == [3, 4, 5, 6, 7]
+
+
+@pytest.mark.parametrize("form", list(_BAND_FORMS))
+@pytest.mark.parametrize("positional", [False, True], ids=["keyword", "positional"])
+@pytest.mark.parametrize("measure", ["delay", "phase_slope_index"])
+def test_deprecated_calls_on_a_float32_grid_consume_the_released_bins(
+    form, positional, measure
+):
+    """End to end on a float32 0.1 Hz grid: every v2.0.1 call form consumes
+    the bins v2.0.1 consumed, and the warning's frequency_range keeps them."""
+    rng = np.random.default_rng(1)
+    shape = (1, 4, 3, 2000, 2)
+    grid = np.fft.fftfreq(2000, d=1 / 200).astype(np.float32)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        expectation_type="trials_tapers",
+        frequencies=grid,
     )
-    np.testing.assert_array_equal(mask, historical)
+    band = _BAND_FORMS[form]((10.1, 20.3))
+    released = _released_band_mask(band, connectivity.frequencies)
+    args, kwargs = ((band,), {}) if positional else ((), {"frequencies_of_interest": band})
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest") as record:
+        deprecated = getattr(connectivity, measure)(*args, **kwargs)
+    selected = connectivity.frequencies[released]
+    suggestion = f"frequency_range=({float(selected[0])!r}, {float(selected[-1])!r})"
+    assert suggestion in str(record[0].message)
+    migrated = getattr(connectivity, measure)(
+        frequency_range=(float(selected[0]), float(selected[-1]))
+    )
+    np.testing.assert_array_equal(deprecated, migrated)
+    if measure == "delay":
+        assert deprecated.shape[1] == released.sum()
 
 
 def test_float32_bounds_on_a_float64_grid_use_float32_rounding():

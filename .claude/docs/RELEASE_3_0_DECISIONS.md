@@ -362,9 +362,13 @@ Rulings where the rules above were silent:
   `np.arange(1.0, 100.0, 0.1)` is `15.200000000000014`), and cumulative-sum
   grids keep the bins their decimal bounds name; a bound 1e-3 of the spacing
   from a bin does not select it.
-  `"neither"` keeps the exact float64 comparison so the
-  deprecated keyword selects bit-for-bit the bins it always has (rule 5); on a
-  rounded grid that can include a bin within rounding of an edge, as before.
+  `"neither"` evaluates v2.0.1's expression, `(band[0] < frequencies) &
+  (frequencies < band[1])`, on the band as the caller gave it and the grid as
+  stored, so the deprecated keyword selects the bins it selected in v2.0.1
+  (rule 5): a Python-number band meets a float32 grid in float32, an ndarray
+  band in float64. On a rounded grid that can include a bin within rounding of
+  an edge, as in v2.0.1. (Development builds before this step compared in
+  float64 and gained edge bins on float32 grids.)
 - **Positional slot.** `frequencies_of_interest` was the first positional
   parameter in v2.0.1, so it stays there as the deprecated route (by keyword or
   position); `frequency_range` is keyword-only. A 2.x positional band therefore
@@ -391,9 +395,12 @@ Rulings where the rules above were silent:
   (`tests/test_frequency_selection.py`, cookbook "Select a frequency range",
   and the `delay` docstring example, now 91 bins for 5-50 Hz).
 - [x] Old exclusive-edge calls warn at the caller with an exact migration
-  example and agree with the historical selection (bit-identical outputs of 40
-  recorded `frequencies_of_interest` cases against both `4266d7c` and
-  `77e83ce`).
+  example and agree with the released selection: v2.0.1 itself and this
+  branch give the same `delay` bin counts for 30 tuple, list, and ndarray
+  bands on float32 and float64 grids, and 38 of 40 recorded float64 and
+  float32 outputs are bit-identical to `4266d7c`/`77e83ce`; the other two are
+  a float32 tuple band where those development builds had departed from
+  v2.0.1.
 - [x] New helper keywords match the wrappers and give identical results.
 - [x] Unchanged Wilson input spectra: the recorded factorization input is the
   same with and without `frequency_range`, and the cropped result equals the
