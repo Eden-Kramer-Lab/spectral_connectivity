@@ -55,16 +55,21 @@ returns a trial axis (see its row).
 | `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: it never changed a result beyond rounding, and memory is now bounded automatically. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
-| `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
+| `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` and the complex `coherency` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure and not `coherency` (complex arrays do not serialize portably across xarray versions and NetCDF engines), so `result["coherency"]` on a default result raises `KeyError`; request `method=[..., "coherency"]` or `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name. `coherence_magnitude` is now `magnitude_squared_coherence` (row below) |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
-| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls do not warn; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0. Both forms return the corrected interval (the `power_confidence_intervals` row above), not 2.x's numbers: the interval 2.0.1 returned for `ci=c` is 3.0's `ci=2c-1` (2.0.1's `ci=0.95` is 3.0's `ci=0.9`) |
 | `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "subset_pairwise_spectral_granger_prediction", pairs=[(0, 1)])`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"pairs": [(0, 1)]}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`, and `frequency_range`) stay named arguments of every wrapper that takes them and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `Connectivity.from_multitaper(m)`, or a `Connectivity` subclass overriding `from_multitaper` | Use `Connectivity.from_transform(m)`, which takes the same arguments (the first is named `transform`, not `multitaper_instance`) and builds the same instance from any spectral transform. Neither name calls the other, so move a subclass's override to `from_transform` and change its `super().from_multitaper(...)` to `super().from_transform(...)` (an override still calling `super().from_multitaper` works but warns). `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `minimum_phase_decomposition(S)` stopped after 60 Wilson iterations by default | The default `max_iterations` is 500, so spectra that need more iterations converge instead of warning; pass `max_iterations=60` for the 2.x cap. `tolerance` and `max_iterations` keep their positions and still work positionally or by keyword |
-| Result attributes `mt_sampling_frequency`, `mt_n_trials`, `mt_n_signals`, `mt_frequency_resolution`, and the other scalar `mt_*` settings | Read `sampling_frequency`, `n_trials`, `n_signals`, `spectral_bandwidth` (with `spectral_bandwidth_definition="full_dpss_concentration_bandwidth"` for generated DPSS tapers; custom tapers record none, while their `mt_frequency_resolution` stays the nominal NW-based value), and the `estimator` and `execution` records of `transform_parameters_json` (optional settings as JSON `null`); see the [result schema reference](docs/cookbook.md#result-schema-and-transform-bandwidth). The 15 `mt_*` keys 2.0.1 wrote stay on Multitaper results as compatibility copies with the same values through 3.x and are removed in 4.0; attribute dictionaries cannot warn when read, so search your code for `mt_` |
+| Result attributes `mt_sampling_frequency`, `mt_n_trials`, `mt_n_signals`, `mt_frequency_resolution`, and the other scalar `mt_*` settings | Read `sampling_frequency`, `n_trials`, `n_signals`, `spectral_bandwidth` (with `spectral_bandwidth_definition="full_dpss_concentration_bandwidth"` for generated DPSS tapers; custom tapers record none, while their `mt_frequency_resolution` stays the nominal NW-based value), `nyquist_frequency` (for `mt_nyquist_frequency`), and the `estimator` and `execution` records of `transform_parameters_json` for the other settings (optional settings as JSON `null`); see the [result schema reference](docs/cookbook.md#result-schema-and-transform-bandwidth). 15 of the 16 `mt_*` keys 2.0.1 wrote stay on Multitaper results as compatibility copies through 3.x and are removed in 4.0; attribute dictionaries cannot warn when read, so search your code for `mt_`. The copies hold the values 3.0 computes, which equal 2.0.1's except where the window is not a whole number of samples (`mt_time_window_duration`, `mt_time_window_step`, and `mt_frequency_resolution` follow the realized window; next row) and in NetCDF-safe types (cookbook). The 16th, `mt_summarize_parameters`, held a bound method and is no longer written |
+| Window durations and steps given in seconds: 2.x truncated a step to whole samples (`time_window_step=0.57` at 100 Hz stepped 56 samples, giving 17 windows of 1000 samples) and reported the requested window (`time_window_duration=0.505` at 100 Hz analyzed 50 samples but reported 0.505 s and `frequency_resolution` 11.88 Hz for NW=3) | A step is rounded to the nearest sample (57 samples, 16 windows), so window counts, `time` coordinates, and averaged values change; the window itself was already rounded. `time_window_duration`, `time_window_step`, `frequency_resolution`, and their `mt_*` copies describe the realized window (0.5 s and 12 Hz above). To analyze 2.x's windows, pass the sample counts: `n_time_samples_per_step=int(time_window_step * sampling_frequency)` (and `n_time_samples_per_window`) |
+| `multitaper_connectivity(..., method=[...], squeeze=True)` with two signals and several measures returned each variable's `[..., 0, 1]` pair as `(time, frequency)` | `squeeze=True` applies only to a single-method (DataArray) request, which keeps the selected pair as scalar `source`/`target` coordinates; for several measures it is ignored with a `UserWarning` and the variables keep their `source`/`target` axes: request one method at a time, or select with `.sel(source=..., target=...)` |
+| `power_fisher_z_transform(spectrum1, n_obs1)` without `spectrum2` compared against a baseline of 0 and returned NaN | `spectrum2` defaults to 1.0, so the one-sample test compares `log(spectrum1)` with `log(1) = 0`; pass `spectrum2` for any other baseline |
+| `from spectral_connectivity.transforms import tridisolve, tridi_inverse_iteration` (public helpers of the 2.x DPSS solver) | Removed with that solver (the tapers now come from SciPy's exact `scipy.signal.windows.dpss`); for tridiagonal problems use `scipy.linalg.solve_banded` or `scipy.linalg.eigh_tridiagonal` |
+| Names reachable through `spectral_connectivity.connectivity` in 2.x: the `EXPECTATION` dict of averaging functions, and the re-imported `minimum_phase_decomposition`, `coherence_fisher_z_transform`, and `get_normal_distribution_p_values` | `EXPECTATION_AXES` maps each `expectation_type` to the axes it averages (tuples, not functions). Import the others from their own modules: `spectral_connectivity.minimum_phase_decomposition` and `spectral_connectivity.statistics` |
 | *Unreleased:* `frequency_band_reduce(result, bands=..., reduction=...)` | `frequency_band_reduce(result, frequency_bands, frequency_reduction=...)`, the wrappers' names; the band mapping stays the second positional argument and `frequency_reduction`/`circular` are keyword-only. The old keywords raise `TypeError` |
 | *Unreleased:* Component results' `connection_seed_group` coordinate and `side=["seed", "target"]` | `connection_source_group` and `side=["source", "target"]`, the source/target vocabulary of every labeled result: `.sel(side="seed")` raises `KeyError` |
 | *Unreleased:* Transform-prefixed result attributes (`stft_*`, `welch_*`, `morlet_*`, `fourier_*`), `mt_*` copies of settings 2.0.1 never recorded (`mt_fft_workers`, `mt_taper_weighting`, `mt_adaptive_tolerance`, `mt_adaptive_max_iterations`), and `backend="CPU"`/`"GPU"` | The shared keys of the result schema (`transform`, `sampling_frequency`, `n_observations`, ...), settings in `transform_parameters_json` (`fft_workers` under `execution`), and lowercase `backend="cpu"`/`"gpu"` |
@@ -587,11 +592,29 @@ returns a trial axis (see its row).
   still passes it, by keyword or in its released position, raises a
   `TypeError` that names `blocks`, says it had no effect on results, and says
   to drop it, before any computation. It is not kept as a deprecated alias.
+- `dpss_windows(interp_from=..., interp_kind=...)`: the tapers come from
+  SciPy's exact solver, so there is nothing to interpolate.
+- `tridisolve` and `tridi_inverse_iteration` from
+  `spectral_connectivity.transforms`, public helpers of the 2.x DPSS solver;
+  use `scipy.linalg.solve_banded` or `scipy.linalg.eigh_tridiagonal`.
+- `partial_directed_coherence(keep_cupy=...)`: public measures return NumPy
+  arrays.
+- `Multitaper`'s default `sampling_frequency=1000`: the rate is required.
+- `spectral_connectivity.connectivity.EXPECTATION` (a dict of averaging
+  functions), replaced by `EXPECTATION_AXES` (the axes each
+  `expectation_type` averages), and the module's incidental re-imports of
+  `minimum_phase_decomposition`, `coherence_fisher_z_transform`, and
+  `get_normal_distribution_p_values`; import them from
+  `spectral_connectivity.minimum_phase_decomposition` and
+  `spectral_connectivity.statistics`.
+- The `mt_summarize_parameters` result attribute, which held a bound method
+  rather than a value.
 
 ### Deprecated
 
-Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
-where noted), warns with a `DeprecationWarning` that names its replacement, and
+Each deprecated spelling keeps its 2.x meaning through 3.x and gives the same
+values as its replacement (where the replacement's values differ from 2.x, the
+entry says so), warns with a `DeprecationWarning` that names its replacement, and
 is removed in 4.0.
 
 - `coherence_magnitude`, as the `Connectivity` method and as a `method` string
@@ -631,10 +654,13 @@ is removed in 4.0.
   count is every observation averaged into the estimate (tapers x trials), not
   the taper count, so the old name invited intervals far too wide for
   multi-trial averages. The argument keeps its first position, so positional
-  calls such as `power_confidence_intervals(25, power, 0.95)` are unchanged
+  calls such as `power_confidence_intervals(25, power, 0.95)` keep working
   and do not warn; `n_tapers` is accepted by keyword only and gives the same
   interval as `n_observations`. `power` and `ci` (the confidence level, in
-  `[0.5, 1)`) are unchanged. Giving both names raises `ValueError`.
+  `[0.5, 1)`) keep their names and positions. Giving both names raises
+  `ValueError`. Neither form reproduces 2.x's numbers: both return the
+  corrected interval (see Fixed), and the interval 2.0.1 returned for `ci=c`
+  is 3.0's `ci=2c-1`.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
@@ -781,6 +807,8 @@ is removed in 4.0.
 - Statistical helpers validate observation counts, confidence levels, spectra,
   firing rates, p-values, and correction methods. Power confidence intervals
   and log-power bias/variance use the corrected formulas.
+  `power_fisher_z_transform`'s `spectrum2` defaults to 1.0: the 2.x default of
+  0 made every one-sample test NaN (`log(0)`).
 - Multitaper, DPSS, detrending, coordinate, FFT-size, window-size, frequency-step,
   and `fft_workers` inputs now fail early with parameter-specific errors.
 - The wrapper accepts documented 2-D `(time, channels)` input and produces
