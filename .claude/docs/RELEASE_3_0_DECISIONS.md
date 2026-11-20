@@ -624,9 +624,10 @@ Rulings where the rules above were silent:
   `Connectivity` rejects any dtype that is not complex: a value bound there by
   position used to be read as float64 (`None`) and silently drop every
   coefficient's imaginary part.
-- **One deprecation template.** `utils.warn_deprecated` writes every 2.x
-  deprecation warning (the measure-name resolver, `from_multitaper`,
-  `n_tapers=`, and plain-keyword settings) as "<old> is deprecated and will be
+- **One deprecation template.** `utils.warn_deprecated` writes the
+  measure-name, `from_multitaper`, `n_tapers=`, and plain-keyword deprecation
+  warnings (not step 3's `frequencies_of_interest` warning, which states an
+  exact replacement interval) as "<old> is deprecated and will be
   removed in 4.0; use <new>, which <outcome>.", attributed with
   `stacklevel_outside_package()`.
 - **fourier_connectivity (owner's ruling).** New in 3.0, so every parameter

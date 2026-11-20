@@ -161,8 +161,11 @@ def close_names(name: str, valid: Iterable[str], limit: int = 3) -> list[str]:
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
     """Warn that ``old`` is deprecated, at the first caller outside the package.
 
-    The one template of the package's 2.x deprecations: ``"<old> is deprecated
-    and will be removed in 4.0; use <new>, which <outcome>."``. ``old`` and
+    The template of the deprecated measure names, ``from_multitaper``,
+    ``power_confidence_intervals(n_tapers=)``, and the wrappers' plain-keyword
+    settings: ``"<old> is deprecated and will be removed in 4.0; use <new>,
+    which <outcome>."``. The ``frequencies_of_interest`` warning, which gives an
+    exact replacement interval, is composed separately. ``old`` and
     ``new`` are written as the caller would write them (``"method='x'"``,
     ``"Connectivity.from_transform()"``).
     """
