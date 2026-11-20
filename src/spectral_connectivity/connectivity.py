@@ -414,6 +414,45 @@ def _transform_flag(transform: Any, name: str, default: bool) -> bool:
     )
 
 
+def _uniform_grid_spacing(frequencies: Any) -> float | None:
+    """Step of a uniformly spaced frequency grid, or ``None`` if it is not one.
+
+    The measures that combine adjacent bins, the FFT-order check of two-sided
+    frequencies, and the ``frequency_bin_spacing`` recorded on results share
+    this definition. Every step must lie within one
+    part in a million of the mean step, plus the rounding of the two values it
+    separates in the coordinate's own precision (two units in the last place
+    each). A uniform grid stored as float32 is therefore still uniform, however
+    fine its step, while a grid rounded to a few decimals is uniform only if
+    that rounding is within one part in a million of the step. The step is
+    negative for a decreasing grid, and a grid with fewer than two values or
+    with a non-finite value has none.
+
+    Parameters
+    ----------
+    frequencies : array, shape (n_frequencies,)
+        The frequency coordinate, on the host or the device.
+
+    Returns
+    -------
+    float or None
+        The mean step, in the coordinate's units.
+    """
+    stored = to_numpy(frequencies)
+    if not np.issubdtype(stored.dtype, np.floating):
+        stored = stored.astype(float)
+    if stored.size < 2 or not np.all(np.isfinite(stored)):
+        return None
+    # The distance to the next representable value, in the stored precision.
+    last_place = np.spacing(np.abs(stored)).astype(float)
+    values = stored.astype(float)
+    spacing = float((values[-1] - values[0]) / (values.size - 1))
+    rounding = 2 * (last_place[:-1] + last_place[1:])
+    if np.all(np.abs(np.diff(values) - spacing) <= 1e-6 * abs(spacing) + rounding):
+        return spacing
+    return None
+
+
 def _require_fft_order(frequencies: Any) -> None:
     """Raise unless two-sided ``frequencies`` are uniformly spaced in FFT order.
 
@@ -423,22 +462,19 @@ def _require_fft_order(frequencies: Any) -> None:
     mislabel frequencies.
     """
     values = to_numpy(frequencies)
-    # Allow for the coordinate's own rounding (e.g. float32 from netCDF), which
-    # the grid step inherits, but never less strictly than 1e-9.
-    precision = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
-    rtol = max(1e-9, 8 * float(np.finfo(precision).eps))
-    values = values.astype(float)
     if values.size == 0:
         return
     if values.size == 1:
         in_order = bool(values[0] == 0.0)
     else:
-        step = values[1] - values[0] if values.size > 2 else abs(values[1])
-        expected = np.fft.fftfreq(values.size, d=1.0 / (step * values.size))
-        in_order = bool(step > 0) and np.allclose(
-            values, expected, rtol=rtol, atol=max(abs(step) * rtol, np.finfo(float).eps)
+        # FFT order puts the zero bin first, and fftshift then sorts the bins
+        # into one increasing, uniformly spaced grid.
+        spacing = _uniform_grid_spacing(np.fft.fftshift(values))
+        in_order = (
+            spacing is not None and spacing > 0 and abs(float(values[0])) <= 1e-6 * spacing
         )
     if not in_order:
+        values = values.astype(float)
         msg = (
             f"frequencies must be uniformly spaced in standard FFT order (zero and "
             f"positive bins followed by negative bins, as numpy.fft.fftfreq); got "
@@ -1087,8 +1123,9 @@ class Connectivity:
         interpret one bin step as one frequency step; a wavelet transform can
         expose an arbitrary grid, on which those combinations are meaningless.
         """
-        steps = np.diff(to_numpy(self.frequencies))
-        if steps.size and not np.allclose(steps, steps[0], rtol=1e-6, atol=0.0):
+        frequencies = to_numpy(self.frequencies)
+        if frequencies.size >= 2 and _uniform_grid_spacing(frequencies) is None:
+            steps = np.diff(frequencies)
             msg = (
                 f"{measure} requires uniformly spaced frequencies because it "
                 f"combines adjacent frequency bins, but the grid steps range "

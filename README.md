@@ -247,8 +247,9 @@ stft_coherence = Connectivity.from_transform(stft).coherence_magnitude()
 Which transform? Use `Multitaper` for stationary spectra with controlled
 variance, `ShortTimeFourierTransform`/`Welch` for a simple single-window or
 segment-averaged estimate, and `MorletWavelet` for time-resolved analysis at
-specific frequencies. `Welch`'s frequency resolution is `1 / segment_duration`
-Hz, so set `segment_duration` explicitly for electrophysiology data.
+specific frequencies. `Welch`'s spectral bandwidth
+(`equivalent_noise_bandwidth`) is `1.5 / segment_duration` Hz for its Hann
+window, so set `segment_duration` explicitly for electrophysiology data.
 `MorletWavelet.valid_time_frequency` identifies bins with full in-record support;
 the xarray wrapper carries it as a two-dimensional coordinate.
 

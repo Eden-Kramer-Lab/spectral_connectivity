@@ -279,6 +279,10 @@ def test_every_transform_records_a_numpy_rate_as_a_float(transform_class, extra,
     transform = transform_class(ts, sampling_frequency=np.array(500.0), **extra)
     assert type(transform.sampling_frequency) is float
     attrs = connectivity_to_xarray(transform, method="power").attrs
-    rate = attrs[f"{prefix}sampling_frequency"]
+    rate = attrs["sampling_frequency"]
     assert type(rate) is float
+    if prefix == "mt_":
+        assert attrs["mt_sampling_frequency"] == rate
+    else:
+        assert not any(key.startswith(prefix) for key in attrs)
     assert rate == 500.0

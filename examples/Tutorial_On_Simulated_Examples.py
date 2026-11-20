@@ -76,7 +76,7 @@ axes[1].plot(connectivity.frequencies, connectivity.power().squeeze())
 axes[1].set_title("Frequency Domain")
 
 # %%
-# The spectrum peaks at 200 Hz (within one frequency-resolution bin) and,
+# The spectrum peaks at 200 Hz (within the frequency resolution, the taper bandwidth) and,
 # away from the peak, sits at the white-noise floor 2 * noise_level**2 / fs.
 power = connectivity.power()[0, :, 0]
 frequencies = connectivity.frequencies
@@ -133,7 +133,7 @@ axes[1].set_title("Frequency Domain")
 axes[1].set_xlim((0, 100))
 
 # %%
-# The spectrum peaks at 30 Hz (within one frequency-resolution bin) and,
+# The spectrum peaks at 30 Hz (within the frequency resolution, the taper bandwidth) and,
 # away from the peak, sits at the white-noise floor 2 * noise_level**2 / fs.
 power = connectivity.power()[0, :, 0]
 frequencies = connectivity.frequencies

@@ -239,6 +239,114 @@ True
 
 ```
 
+## Result schema and transform bandwidth
+
+The xarray interfaces share `output_schema_version=1`. Common provenance is on
+the Dataset and each measure variable, so extracting a variable retains the
+facts needed to interpret it. Settings use one JSON record:
+
+| Attribute | Meaning |
+| --- | --- |
+| `transform` | `multitaper`, `stft`, `welch`, `morlet`, or `external_fourier`. |
+| `sampling_frequency` | Physical sampling rate in Hz, included only when known. |
+| `n_trials`, `n_signals` | Known trial and signal counts; an arbitrary external observation axis is not labeled as trials. |
+| `n_observations` | Raw count averaged by the expectation, using the actual retained tapers/segments. |
+| `expectation_type` | Axes averaged to form each spectral estimate. |
+| `observations_are_independent`, `time_bins_are_independent` | Recorded independence assumptions, stored as 0/1 for NetCDF. The raw observation count is not an effective independent sample size. |
+| `backend` | `cpu` or `gpu`, reflecting the imported backend. |
+| `transform_parameters_json` | Remaining settings in `estimator` and `execution` records; optional settings use JSON `null`. |
+| `spectral_bandwidth`, `spectral_bandwidth_definition`, `spectral_bandwidth_units` | Qualified estimator bandwidth, when defined. |
+| `frequency_bin_spacing`, `frequency_bin_spacing_units` | Spacing of the uniform frequency grid as returned, after the wrapper's cropping and decimation. Omitted for irregular/singleton grids and outputs without a frequency axis. xarray selections such as `.isel`/`.sel` keep attrs unchanged, so recompute spacing from the `frequency` coordinate after selecting bins yourself. |
+| `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
+| `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs and for a transform of your own that leaves `frequencies` as `None`. |
+| `frequency_coordinate`, `time_coordinate` | External Fourier inputs: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). A transform of your own that leaves `frequencies` or `time` as `None` records the filled-in value. |
+
+```python
+>>> schema_result = multitaper_connectivity(
+...     time_series, sampling_frequency=500, time_window_duration=0.5,
+...     time_halfbandwidth_product=2, method="power",
+... )
+>>> schema_result.attrs["output_schema_version"], schema_result.attrs["transform"]
+(1, 'multitaper')
+>>> schema_result.attrs["n_trials"], schema_result.attrs["n_observations"]
+(4, 12)
+>>> schema_result.attrs["spectral_bandwidth"], schema_result.attrs["frequency_bin_spacing"]
+(8.0, 2.0)
+>>> import json
+>>> settings = json.loads(schema_result.attrs["transform_parameters_json"])
+>>> settings["estimator"]["time_halfbandwidth_product"]
+2
+>>> settings["execution"] == {"fft_workers": None}
+True
+
+```
+
+Multitaper's familiar `frequency_resolution` name describes **full DPSS
+concentration bandwidth**, `2 * NW / window_duration` Hz. The property,
+`estimate_frequency_resolution`, `suggest_parameters(desired_freq_resolution=...)`,
+and the returned `frequency_resolution` key remain supported without warnings.
+STFT and Welch use `equivalent_noise_bandwidth`: for periodic Hann windows of
+at least three samples it is `1.5 / window_duration` Hz. Their output can have
+the same FFT grid as Multitaper while describing different spectral smoothing.
+For example, a 0.5-second window with NW=2 has 8 Hz DPSS concentration bandwidth
+and 3 Hz Hann equivalent noise bandwidth. Zero-padding or frequency decimation
+changes grid spacing while preserving estimator bandwidth.
+
+Custom tapers and Morlet outputs omit `spectral_bandwidth`: no width
+convention is defined for them. Power and cross-spectral density omit `units` when input
+units are unknown. External Fourier defaults use `cycles/sample` frequencies
+and window-index time; these do not establish a physical sampling rate.
+Supplied Fourier coordinates preserve their attrs; a DataArray frequency
+coordinate declaring `units="cycles/sample"` also stays normalized. Supported
+frequency units are `Hz` and `cycles/sample`, compared ignoring case and
+whitespace. `Hz` may also be spelled `Hertz`, `cps`, `1/s`, `cycles/s`, `s-1`,
+`s^-1`, or `s**-1` (with `s`, `sec`, or `second`, and `cycle` or `cycles`), and
+`cycles/sample` as `cycle/sample`. Convert other units, such as `kHz` or
+`rad/s`, before calling the wrapper. An empty `units` is treated as unstated,
+so the default applies. The top-level `frequency_units` is the canonical
+spelling, while the returned `frequency` coordinate otherwise keeps the
+supplied attrs as given.
+Whether external coefficients were one-sided is an input setting, recorded as
+`is_one_sided` in `transform_parameters_json`; it does not describe the
+returned frequency grid. A labeled or explicitly declared trial axis, or the
+trial axis of a 4-D/5-D NumPy array, supplies `n_trials`, while an arbitrary
+observation axis supplies only the raw observation count.
+Unambiguous scalar recording coordinates such as `subject`/`session` keep
+their attrs; one named like a coordinate or variable of the result (e.g.
+`frequency`, or `band` when `frequency_bands` is given) is dropped with a
+warning. Coefficients without a time dimension that keep a numeric scalar time
+coordinate, as after `isel(time=0)`, use it as the time of their single window.
+Labels along averaged trial axes are omitted.
+
+The result-schema migration is separate from the supported public property and
+helper names:
+
+| Previous metadata | Schema version 1 |
+| --- | --- |
+| `mt_sampling_frequency`, `mt_n_trials`, `mt_n_signals` | `sampling_frequency`, `n_trials`, `n_signals`. |
+| `mt_frequency_resolution` | `spectral_bandwidth`, qualified as `full_dpss_concentration_bandwidth`, for generated DPSS tapers. Custom tapers have no `spectral_bandwidth`; their `mt_frequency_resolution` stays the nominal NW-based value. |
+| Other scalar `mt_*` settings | `transform_parameters_json`, with optional settings as JSON `null`. |
+
+The 15 scalar `mt_*` attributes released in 2.0.1 remain compatibility copies
+through 3.x and will be removed in 4.0: `mt_detrend_type`, `mt_is_low_bias`,
+`mt_sampling_frequency`, `mt_start_time`, `mt_time_halfbandwidth_product`,
+`mt_n_fft_samples`, `mt_n_signals`, `mt_n_tapers`, `mt_n_time_samples_per_step`,
+`mt_n_time_samples_per_window`, `mt_n_trials`, `mt_time_window_duration`,
+`mt_time_window_step`, `mt_frequency_resolution`, and `mt_nyquist_frequency`.
+Attribute dictionaries cannot warn on access. These keys are documented as
+deprecated. New settings such as FFT workers or adaptive weighting do not get
+legacy copies.
+
+The copies equal their 2.0.1 values but are stored as scalars NetCDF can save,
+so three representations differ: `mt_is_low_bias` is `1` or `0` instead of a
+`bool`, `mt_start_time` and `mt_sampling_frequency` are floats, and a `None`
+setting such as `mt_detrend_type` is the string `"None"`. Compare them with
+`==`, not `is`. `mt_time_window_duration`, `mt_time_window_step`, and
+`mt_frequency_resolution` describe the window actually analyzed, which is a
+whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
+report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
+and 11.88 Hz. `estimate_frequency_resolution` uses the duration it is given.
+
 ## Pass a labeled DataArray
 
 `time_series` may be an `xarray.DataArray`. Dimension names, not positions,
@@ -253,7 +361,7 @@ frequency and the signal labels become the `source`/`target` coordinates:
 ...     coords={"time": np.arange(1000) / 500, "signal": ["CA1", "CA3", "PFC"]},
 ... )
 >>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
->>> coherence.attrs["mt_sampling_frequency"]
+>>> coherence.attrs["sampling_frequency"]
 500.0
 >>> coherence.source.values.tolist()
 ['CA1', 'CA3', 'PFC']
@@ -271,7 +379,7 @@ For other dimension names, say which dimension plays which role:
 ...     trial_dim="epoch",
 ...     signal_dim="channel",
 ... )
->>> coherence.attrs["mt_sampling_frequency"], coherence.target.values.tolist()
+>>> coherence.attrs["sampling_frequency"], coherence.target.values.tolist()
 (500.0, ['CA1', 'CA3', 'PFC'])
 
 ```
@@ -311,7 +419,7 @@ If you hit an error or a warning:
 >>> elapsed = stamped.assign_coords(
 ...     time=(stamped.time - stamped.time[0]) / np.timedelta64(1, "s")
 ... )
->>> multitaper_connectivity(elapsed, method="coherence_magnitude").attrs["mt_sampling_frequency"]
+>>> multitaper_connectivity(elapsed, method="coherence_magnitude").attrs["sampling_frequency"]
 500.0
 
 ```
