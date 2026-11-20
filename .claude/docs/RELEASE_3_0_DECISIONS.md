@@ -580,8 +580,9 @@ Rulings where the rules above were silent:
 
 **Scope:** D9, D11, D12, D14, D16, D24, and D29. **Branch:**
 `refactor/signatures-and-routing`, based on step 4's final head `23877e7`.
-Implemented and validated locally on 2026-11-19, including the review fixes:
-2,394 tests passed with 16 skips on the main CPU environment, and 2,279 passed
+Implemented and validated locally on 2026-11-19, including the review fixes
+and the final review's:
+2,400 tests passed with 16 skips on the main CPU environment, and 2,285 passed
 with 101 skips on Python 3.10 with the NumPy 1.24/SciPy 1.11.1/xarray
 2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on the floors),
 Ruff formatting/lint, and mypy passed; the benchmark's 22 arrays are
