@@ -16,8 +16,10 @@ directed phase lag index) means `i` leads `j`.
 ## Measures
 
 Generated from `list_measures()`. Ranges are the estimators' theoretical
-bounds; a computed value can lie outside one by rounding. For complex measures
-the range bounds the magnitude. "Observations" are trials × tapers. The Diagonal column is what a
+bounds. A computed value can lie outside one by rounding, and by more on
+degenerate input: with complex64 coefficients and fewer observations than a
+group's channels, `canonical_coherency`'s magnitude has exceeded 1 by up to 2.8e-3.
+For complex measures the range bounds the magnitude. "Observations" are trials × tapers. The Diagonal column is what a
 self-connection holds (see [Diagonal values](#diagonal-values)); a number is
 the constant every diagonal entry has, to within rounding. Flat signal is NaN
 where every entry involving a zero-power signal is NaN.

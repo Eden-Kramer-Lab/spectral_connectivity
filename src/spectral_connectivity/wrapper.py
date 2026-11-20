@@ -108,8 +108,9 @@ class MeasureInfo:
         ``"s"``, or ``"(input units)^2/Hz"`` for a spectral density.
     value_range : tuple of float
         ``(lower, upper)`` theoretical bounds of the values, or of their
-        magnitude when ``is_complex``; ``inf`` marks an unbounded side. A
-        computed value can lie outside them by rounding.
+        magnitude when ``is_complex``; ``inf`` marks an unbounded side. When a
+        computed value can lie outside them is stated in
+        ``docs/CONNECTIVITY_METRIC_RANGES.md``.
     is_complex : bool
         Whether the values are complex.
     dims : tuple of str
@@ -1011,8 +1012,8 @@ def multitaper_connectivity(
     Each measure variable also records how to read it, from the same record
     :func:`list_measures` returns: ``interpretation``, ``sign_convention``
     (measures whose sign or angle says which signal leads),
-    ``value_range_lower``/``value_range_upper`` (theoretical bounds, which
-    rounding can cross; an unbounded side omitted;
+    ``value_range_lower``/``value_range_upper`` (theoretical bounds, see
+    ``docs/CONNECTIVITY_METRIC_RANGES.md``; an unbounded side omitted;
     ``value_range_applies_to="magnitude"`` for complex measures), ``quantity``
     and ``formula`` (the coherency family), and ``diagonal_policy``, what a
     self-connection holds (defined in ``docs/CONNECTIVITY_METRIC_RANGES.md``);

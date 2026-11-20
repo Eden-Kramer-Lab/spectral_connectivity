@@ -22,8 +22,9 @@ class _VariableSpec:
 
     ``units`` follows UDUNITS spelling, with ``"1"`` marking a dimensionless
     score and ``None`` a spectral density, whose units derive from the input's
-    (see :meth:`units_for`). ``value_range`` is the theoretical range, which a
-    computed value can cross by rounding. ``diagonal_policy`` is one of
+    (see :meth:`units_for`). ``value_range`` is the theoretical range (see
+    docs/CONNECTIVITY_METRIC_RANGES.md for when a computed value can lie
+    outside it). ``diagonal_policy`` is one of
     :data:`_DIAGONAL_POLICIES`, which defines each; ``diagonal_value`` is the
     value of a ``"constant"`` or the nominal value of a ``"rounding_noise"``
     one. ``nan_for_zero_power_signal`` is defined by
