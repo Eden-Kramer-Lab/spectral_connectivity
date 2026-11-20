@@ -19,6 +19,10 @@ from spectral_connectivity import (
     fourier_connectivity,
 )
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
+from spectral_connectivity.simulate import (
+    simulate_lagged_broadband,
+    simulate_shared_oscillation,
+)
 from spectral_connectivity.statistics import power_confidence_intervals
 from spectral_connectivity.wrapper import connectivity_to_xarray, multitaper_connectivity
 
@@ -117,6 +121,34 @@ def test_fourier_connectivity_takes_settings_after_signal_names_by_keyword_only(
     coefficients = np.ones((4, 8, 2), dtype=complex)
     with pytest.raises(TypeError, match="positional argument"):
         fourier_connectivity(coefficients, None, None, "power", None, False)
+
+
+def test_lagged_broadband_names_its_delays_in_samples():
+    """New in 3.0: the delays are ``lags_samples`` (no ``lags`` alias), and
+    ``n_trials`` defaults to one trial."""
+    assert _positional_names(simulate_lagged_broadband) == [
+        "lags_samples",
+        "noise_levels",
+        "n_time_samples",
+        "n_trials",
+        "random_state",
+    ]
+    assert inspect.signature(simulate_lagged_broadband).parameters["n_trials"].default == 1
+
+
+def test_shared_oscillation_takes_its_amplitudes_by_keyword_only():
+    """New in 3.0: ``n_trials`` defaults to one trial, so the required
+    ``amplitudes`` after it is keyword-only."""
+    assert _positional_names(simulate_shared_oscillation) == [
+        "frequency",
+        "sampling_frequency",
+        "n_time_samples",
+        "n_trials",
+    ]
+    parameters = inspect.signature(simulate_shared_oscillation).parameters
+    assert parameters["n_trials"].default == 1
+    assert "amplitudes" in _keyword_only_names(simulate_shared_oscillation)
+    assert parameters["amplitudes"].default is inspect.Parameter.empty
 
 
 @pytest.mark.parametrize(

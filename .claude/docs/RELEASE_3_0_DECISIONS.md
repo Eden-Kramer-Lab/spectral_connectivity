@@ -744,10 +744,12 @@ Rulings where the rules above were silent:
   `tridisolve`/`tridi_inverse_iteration`, `connectivity.EXPECTATION` and the
   module's re-imports, and `mt_summarize_parameters`. D2 and D28 record that
   only `Multitaper.frequency_resolution` follows a rounded window.
-- **Schema reference test.** `tests/test_schema_reference.py` reads the
-  cookbook's attribute table and fails for any attribute a result of any
-  transform, measure, or wrapper option carries that the table does not
-  name; `input_attrs_json` was the one missing.
+- **Schema reference test.** A test in `tests/test_result_schema.py` reads
+  the cookbook's attribute table and checks both directions: every
+  attribute a result of any transform, measure, or wrapper option carries is
+  named there (`input_attrs_json` was the one missing), and every name there
+  is carried by some probed result. Generating the table from one code
+  record would remove the check's need to parse it; that is left for 3.x.
 - **D20 and copied channel metadata.** D20 adds `long_name` (and units where
   they apply) to the coordinates the package creates: band edges, connection
   labels, and `source`/`target`. Channel metadata copied from an input

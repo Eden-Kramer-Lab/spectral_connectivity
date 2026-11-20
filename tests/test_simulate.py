@@ -107,27 +107,13 @@ def test_lagged_broadband_rejects_negative_or_fractional_lags(lags_samples):
         )
 
 
-def test_lagged_broadband_names_its_delays_in_samples():
-    """The delays are ``lags_samples``; the unreleased ``lags`` has no alias."""
-    by_keyword = simulate_lagged_broadband(
-        lags_samples=(0, 3), noise_levels=0.1, n_time_samples=50, random_state=0
-    )
-    by_position = simulate_lagged_broadband((0, 3), 0.1, 50, random_state=0)
-    np.testing.assert_array_equal(by_keyword, by_position)
-    with pytest.raises(TypeError, match="lags"):
-        simulate_lagged_broadband(
-            lags=(0, 3), noise_levels=0.1, n_time_samples=50, random_state=0
-        )
-
-
 @pytest.mark.parametrize(
     ("trial_kwargs", "expected_shape"),
-    [({}, (50, 1, 3)), ({"n_trials": 4}, (50, 4, 3)), ({"n_trials": None}, (50, 3))],
-    ids=["default_one_trial", "trials", "none_omits_trial_axis"],
+    [({}, (50, 1, 3)), ({"n_trials": 4}, (50, 4, 3))],
+    ids=["default_one_trial", "trials"],
 )
 def test_lagged_broadband_shape(trial_kwargs, expected_shape):
-    """``(time, trial, signal)`` with one trial by default, like ``simulate_MVAR``;
-    ``n_trials=None`` omits the trial axis."""
+    """``(time, trial, signal)`` with one trial by default, like ``simulate_MVAR``."""
     time_series = simulate_lagged_broadband(
         (0, 2, 5), noise_levels=0.1, n_time_samples=50, random_state=0, **trial_kwargs
     )
@@ -136,10 +122,12 @@ def test_lagged_broadband_shape(trial_kwargs, expected_shape):
 
 
 def test_lagged_broadband_without_trial_axis_is_the_single_trial():
-    """``n_trials=None`` returns the default single trial's values, bit for bit."""
+    """``n_trials=None`` returns the default single trial as ``(time, signal)``,
+    bit for bit."""
     kwargs = {"lags_samples": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64}
     one_trial = simulate_lagged_broadband(**kwargs, random_state=5)
     no_trial_axis = simulate_lagged_broadband(**kwargs, n_trials=None, random_state=5)
+    assert no_trial_axis.shape == (64, 2)
     np.testing.assert_array_equal(one_trial[:, 0, :], no_trial_axis)
 
 
@@ -227,15 +215,6 @@ def test_shared_oscillation_shape(trial_kwargs, expected_shape):
     )
     assert time_series.shape == expected_shape
     assert time_series.dtype == np.float64
-
-
-def test_shared_oscillation_takes_amplitudes_by_keyword():
-    """``amplitudes`` is keyword-only and required: a call that still passes it
-    as the fifth positional argument raises instead of being misread."""
-    with pytest.raises(TypeError, match="positional"):
-        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 300, 5, [1.0, 0.5])
-    with pytest.raises(TypeError, match="amplitudes"):
-        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 300, 5)
 
 
 def test_shared_oscillation_frequency_dominates_spectrum():
