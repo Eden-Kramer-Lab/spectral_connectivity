@@ -628,7 +628,9 @@ setting such as `mt_detrend_type` is the string `"None"`. Compare them with
 `mt_frequency_resolution` describe the window actually analyzed, which is a
 whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
 report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
-and 11.88 Hz. `estimate_frequency_resolution` uses the duration it is given.
+and 11.88 Hz. With custom `tapers`, `mt_n_tapers` is the number supplied, where
+2.0.1 reported `floor(2 * NW - 1)` whatever their number (5 for two tapers at
+the default NW=3). `estimate_frequency_resolution` uses the duration it is given.
 
 ## Pass a labeled DataArray
 
