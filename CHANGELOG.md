@@ -222,8 +222,11 @@ directly with results from 2.x.
   keyword-only `group_labels` (also accepted in the mapping, not both), and a
   keyword-only `frequency_range` that, as in the other wrappers, the interval
   measures consume and every other measure is cropped to (it is rejected
-  inside `connectivity_kwargs`), and checks every measure setting before
-  computing anything. Provenance does not
+  inside `connectivity_kwargs`). Every wrapper checks the name and route of
+  every setting, and that `group_labels` is given once and only with a group
+  measure, before computing anything. The one such check that comes later is
+  `connectivity_to_xarray`'s missing-`group_labels` error, raised after the
+  transform's FFT because it quotes the signal count. Provenance does not
   depend on the route that supplied a setting.
 - `list_measures()` enumerates every wrapper-supported `method` name with its
   output category, a one-line description sourced from the `Connectivity`

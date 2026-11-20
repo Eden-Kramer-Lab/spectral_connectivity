@@ -659,10 +659,13 @@ def connectivity_to_xarray(
     consumes_range = _consumes_frequency_range(method)
     if consumes_range and frequency_range is not None:
         measure_settings["frequency_range"] = frequency_range
-    connectivity = Connectivity.from_transform(m)
     group_labels, measure_settings, group_methods = _resolve_group_labels(
-        [method], measure_settings, group_labels, connectivity.n_signals
+        [method], measure_settings, group_labels
     )
+    connectivity = Connectivity.from_transform(m)
+    # Only the missing-labels message needs the signal count, which a custom
+    # transform may expose only through its coefficients, so it follows the FFT.
+    _require_group_labels([method], group_labels, connectivity.n_signals)
     if group_methods:
         measure_settings["group_labels"] = group_labels
     provenance_metadata = getattr(m, "_provenance_metadata", None)
@@ -765,11 +768,12 @@ def _resolve_group_labels(
     methods: Sequence[str],
     connectivity_kwargs: Mapping[str, Any] | None,
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
-    n_signals: int,
 ) -> tuple[Sequence[Hashable] | NDArray[Any] | None, dict[str, Any], frozenset[str]]:
     """Resolve ``group_labels`` from the argument or ``connectivity_kwargs``.
 
-    Runs before any spectral work so a missing or misplaced label fails fast.
+    Needs no signal count, so every wrapper runs it before any spectral work
+    and a misplaced label fails fast; :func:`_require_group_labels` checks
+    for missing labels once the signal count is known.
 
     Parameters
     ----------
@@ -779,8 +783,6 @@ def _resolve_group_labels(
         The caller's measure keyword arguments; copied, never mutated.
     group_labels : sequence, array or None
         The ``group_labels=`` argument.
-    n_signals : int
-        Number of signals, quoted in the missing-labels message.
 
     Returns
     -------
@@ -794,8 +796,8 @@ def _resolve_group_labels(
     Raises
     ------
     ValueError
-        If the labels are given both ways, given with no group measure
-        requested, or missing while a group measure is requested.
+        If the labels are given both ways, or given with no group measure
+        requested.
     """
     label_free_kwargs = _setting_mapping("connectivity_kwargs", connectivity_kwargs)
     legacy_labels = label_free_kwargs.pop("group_labels", None)
@@ -815,6 +817,20 @@ def _resolve_group_labels(
             "list_measures(category='multivariate_components')) or drop group_labels."
         )
         raise ValueError(msg)
+    return group_labels, label_free_kwargs, frozenset(group_methods)
+
+
+def _require_group_labels(
+    methods: Sequence[str],
+    group_labels: Sequence[Hashable] | NDArray[Any] | None,
+    n_signals: int,
+) -> None:
+    """Raise if a group measure in ``methods`` was requested without ``group_labels``.
+
+    The message quotes ``n_signals``, the one fact
+    :func:`_resolve_group_labels` does not need.
+    """
+    group_methods = [method for method in methods if _is_group_measure(method)]
     if group_methods and group_labels is None:
         msg = (
             f"group_labels is required for {', '.join(group_methods)}: group measures "
@@ -825,7 +841,6 @@ def _resolve_group_labels(
             "measure in this call)."
         )
         raise ValueError(msg)
-    return group_labels, label_free_kwargs, frozenset(group_methods)
 
 
 def _format_and_reduce_measures(
@@ -1363,6 +1378,9 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
+    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+        method, connectivity_kwargs, group_labels
+    )
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -1378,12 +1396,10 @@ def multitaper_connectivity(
         detrend_type=detrend_type,
         **transform_settings,
     )
-    # Resolve group labels before Connectivity.from_transform runs the FFT, so
-    # a missing or misplaced label fails fast. The constructor has validated the
-    # input shape, so m.n_signals is the true signal count.
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
-        method, connectivity_kwargs, group_labels, m.n_signals
-    )
+    # Check for missing labels before Connectivity.from_transform runs the FFT.
+    # The constructor has validated the input shape, so m.n_signals is the true
+    # signal count.
+    _require_group_labels(method, group_labels, m.n_signals)
     # Capture metadata and build the shared calculation object from the same
     # immutable transform. The private formatter below never accepts a separate
     # Multitaper, so data and labels cannot be paired accidentally.
@@ -1665,6 +1681,9 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
+    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
+        methods, connectivity_kwargs, group_labels
+    )
     connectivity = Connectivity(
         coefficient_data,
         expectation_type="trials_tapers",
@@ -1675,9 +1694,7 @@ def fourier_connectivity(
         minimum_phase_max_iterations=minimum_phase_max_iterations,
         is_one_sided=one_sided,
     )
-    group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
-        methods, connectivity_kwargs, group_labels, connectivity.n_signals
-    )
+    _require_group_labels(methods, group_labels, connectivity.n_signals)
     if frequencies is None:
         # Without a frequency coordinate two-sidedness cannot be verified, so an
         # *assumed* two-sided spectrum (is_one_sided=None) must not let one-sided

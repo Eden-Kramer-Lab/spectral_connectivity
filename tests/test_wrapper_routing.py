@@ -487,3 +487,32 @@ def test_fourier_connectivity_checks_settings_before_the_coefficients():
             method="power",
             connectivity_kwargs={"bogus": 1},
         )
+
+
+_LABEL_ROUTING_ERRORS = {
+    "both-routes": (
+        {"group_labels": [0, 0, 1], "connectivity_kwargs": {"group_labels": [0, 0, 1]}},
+        "canonical_coherence",
+        "group_labels was given both",
+    ),
+    "no-group-measure": (
+        {"group_labels": [0, 0, 1]},
+        "magnitude_squared_coherence",
+        "none of the requested measures compares groups",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_LABEL_ROUTING_ERRORS))
+def test_a_misrouted_group_labels_fails_before_the_fft(time_series, multitaper, no_fft, case):
+    """Labels given two ways, or given with no group measure, need no signal
+    count, so every wrapper rejects them before any spectral work: no
+    transform FFT, and for fourier_connectivity before the coefficients are
+    checked (these are real-valued, which Connectivity would reject)."""
+    kwargs, method, match = _LABEL_ROUTING_ERRORS[case]
+    with pytest.raises(ValueError, match=match):
+        multitaper_connectivity(time_series, sampling_frequency=500, method=method, **kwargs)
+    with pytest.raises(ValueError, match=match):
+        connectivity_to_xarray(multitaper, method, **kwargs)
+    with pytest.raises(ValueError, match=match):
+        fourier_connectivity(np.ones((4, 8, 3)), is_one_sided=False, method=method, **kwargs)
