@@ -17,7 +17,7 @@ import scipy.special
 import scipy.stats
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import to_numpy
+from spectral_connectivity.utils import to_numpy, warn_deprecated
 
 
 @dataclass(frozen=True)
@@ -893,29 +893,40 @@ def coherence_rate_adjustment(
 
 
 def power_confidence_intervals(
-    n_tapers: int,
+    n_observations: int | None = None,
     power: NDArray[np.floating] | float = 1,
     ci: float = 0.95,
+    *,
+    n_tapers: int | None = None,
 ) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
     Uses chi-squared distribution to compute confidence bounds for power
     spectral density estimates from multitaper analysis.
 
+    .. versionchanged:: 3.0
+       The count is named ``n_observations``; it keeps its position, so
+       positional calls are unchanged. ``n_tapers=`` still works through 3.x
+       with a ``DeprecationWarning`` and is removed in 4.0.
+
     Parameters
     ----------
-    n_tapers : int
+    n_observations : int
         Number of independent observations averaged into each power estimate:
         tapers times trials (``Connectivity.n_observations``), not the taper
         count alone unless a single trial was averaged. It sets the chi-squared
-        degrees of freedom ``2 * n_tapers``, as in :func:`power_bias` and
+        degrees of freedom ``2 * n_observations``, as in :func:`power_bias` and
         :func:`power_variance`. Passing only the taper count for a multi-trial
         average makes the interval far too wide (about 100% coverage instead of
         95% for 5 tapers x 5 trials).
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
     ci : float, default=0.95
-        Confidence level, must be in range [0.5, 1.0).
+        Confidence level: the probability mass inside the two-sided interval
+        (0.95 for a 95% interval), in the range [0.5, 1.0).
+    n_tapers : int, optional
+        Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
+        Giving both raises ``ValueError``.
 
     Returns
     -------
@@ -928,11 +939,11 @@ def power_confidence_intervals(
     --------
     >>> import numpy as np
     >>> # Single power estimate from 5 observations (5 tapers x 1 trial)
-    >>> lower, upper = power_confidence_intervals(n_tapers=5, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(n_observations=5, power=1.0, ci=0.95)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.488, 3.080]
     >>> # Averaging 5 tapers x 5 trials gives 25 observations, a much tighter interval
-    >>> lower, upper = power_confidence_intervals(n_tapers=25, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(n_observations=25, power=1.0, ci=0.95)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.700, 1.545]
     >>> # Multiple power estimates
@@ -946,12 +957,34 @@ def power_confidence_intervals(
     .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
            data analysis: a guide for the practicing neuroscientist (MIT Press).
     """
-    if not np.isfinite(n_tapers) or int(n_tapers) != n_tapers or n_tapers < 1:
+    if n_tapers is not None:
+        if n_observations is not None:
+            msg = (
+                "power_confidence_intervals was given both n_observations and its "
+                "deprecated name n_tapers; pass only n_observations."
+            )
+            raise ValueError(msg)
+        warn_deprecated(
+            "power_confidence_intervals(n_tapers=...)",
+            "power_confidence_intervals(n_observations=...)",
+            "gives the same interval; the count is every averaged observation, "
+            "tapers x trials",
+        )
+        n_observations = n_tapers
+    if n_observations is None:
+        msg = "power_confidence_intervals() missing required argument: 'n_observations'"
+        raise TypeError(msg)
+    if (
+        not np.isfinite(n_observations)
+        or int(n_observations) != n_observations
+        or n_observations < 1
+    ):
         msg = (
-            f"n_tapers must be a finite positive integer, got {n_tapers}. It is the "
-            f"number of averaged observations (tapers x trials) and sets the "
-            f"chi-squared degrees of freedom (2 * n_tapers); a non-positive, "
-            f"non-finite, or fractional value gives NaN or meaningless intervals."
+            f"n_observations must be a finite positive integer, got {n_observations}. "
+            "It is the number of averaged observations (tapers x trials) and sets "
+            "the chi-squared degrees of freedom (2 * n_observations); a "
+            "non-positive, non-finite, or fractional value gives NaN or "
+            "meaningless intervals."
         )
         raise ValueError(msg)
     if not 0.5 <= ci < 1.0:
@@ -976,7 +1009,7 @@ def power_confidence_intervals(
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
     # previous behavior) produces an interval with coverage 2 * ci - 1 (a
     # requested 95% interval only covered ~90%).
-    degrees_of_freedom = 2 * n_tapers
+    degrees_of_freedom = 2 * n_observations
     alpha = 1 - ci
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power

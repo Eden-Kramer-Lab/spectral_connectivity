@@ -1,3 +1,4 @@
+import inspect
 import subprocess
 import sys
 import warnings
@@ -357,11 +358,11 @@ def test_power_bias_and_variance_match_log_chi2_moments():
 def test_power_confidence_intervals_coverage():
     """A nominal 95% CI must actually cover the true power ~95% of the time."""
     rng = np.random.default_rng(2)
-    n_tapers = 8
-    nu = 2 * n_tapers
+    n_observations = 8
+    nu = 2 * n_observations
     true_power = 3.0
     estimates = true_power * rng.chisquare(nu, size=200_000) / nu
-    lower, upper = power_confidence_intervals(n_tapers, estimates, ci=0.95)
+    lower, upper = power_confidence_intervals(n_observations, estimates, ci=0.95)
     coverage = np.mean((lower <= true_power) & (true_power <= upper))
     assert np.isclose(coverage, 0.95, atol=0.01)
 
@@ -369,11 +370,11 @@ def test_power_confidence_intervals_coverage():
 def test_power_confidence_intervals_count_every_averaged_observation():
     """Degrees of freedom are 2 * (tapers x trials), not 2 * tapers alone.
 
-    ``n_tapers`` keeps its historical name but must be the number of
-    independent observations averaged into the estimate: 5 tapers x 5 trials
-    is 25 observations and a chi-square with 50 degrees of freedom. Following
-    a "number of tapers" reading with a multi-trial average gives ~100%
-    coverage instead of 95%, so the parameter doc must say so.
+    The count is the number of independent observations averaged into the
+    estimate: 5 tapers x 5 trials is 25 observations and a chi-square with 50
+    degrees of freedom. Following a "number of tapers" reading with a
+    multi-trial average gives ~100% coverage instead of 95%, so the parameter
+    is named ``n_observations`` and its doc says so.
     """
     import scipy.stats
 
@@ -385,6 +386,49 @@ def test_power_confidence_intervals_count_every_averaged_observation():
     doc = power_confidence_intervals.__doc__ or ""
     assert "trials" in doc
     assert "n_observations" in doc
+
+
+def test_power_confidence_intervals_keeps_its_released_argument_order():
+    """The released positional order (count, power, ci) is unchanged; only the
+    count's name changed, and the old name is a keyword-only alias."""
+    parameters = inspect.signature(power_confidence_intervals).parameters
+    positional = [
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert positional == ["n_observations", "power", "ci"]
+    assert parameters["n_tapers"].kind is inspect.Parameter.KEYWORD_ONLY
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        by_position = power_confidence_intervals(25, np.array([0.5, 2.0]), 0.9)
+        by_keyword = power_confidence_intervals(
+            n_observations=25, power=np.array([0.5, 2.0]), ci=0.9
+        )
+    np.testing.assert_array_equal(by_position, by_keyword)
+
+
+def test_power_confidence_intervals_n_tapers_is_a_deprecated_alias():
+    power = np.array([0.5, 1.0, 2.0])
+    canonical = power_confidence_intervals(n_observations=25, power=power, ci=0.99)
+    with pytest.warns(DeprecationWarning, match="n_observations") as record:
+        deprecated = power_confidence_intervals(n_tapers=25, power=power, ci=0.99)
+    (warning,) = record
+    assert warning.filename == __file__
+    assert "removed in 4.0" in str(warning.message)
+    np.testing.assert_array_equal(deprecated, canonical)
+
+
+def test_power_confidence_intervals_rejects_both_count_spellings():
+    with pytest.raises(ValueError, match=r"n_observations.*n_tapers"):
+        power_confidence_intervals(25, n_tapers=25)
+    with pytest.raises(ValueError, match=r"n_observations.*n_tapers"):
+        power_confidence_intervals(n_observations=25, n_tapers=25)
+
+
+def test_power_confidence_intervals_requires_the_count():
+    with pytest.raises(TypeError, match="n_observations"):
+        power_confidence_intervals()
 
 
 def test_power_fisher_z_transform_one_sample_is_finite():
@@ -448,7 +492,7 @@ def test_power_confidence_intervals_rejects_out_of_range_ci(bad_ci):
     with pytest.raises(
         ValueError, match=r"Confidence level `ci` must be in the range \[0\.5, 1\.0\)"
     ):
-        power_confidence_intervals(n_tapers=5, power=1.0, ci=bad_ci)
+        power_confidence_intervals(n_observations=5, power=1.0, ci=bad_ci)
 
 
 def test_import_does_not_change_numpy_error_state():
@@ -526,10 +570,10 @@ def test_power_fisher_z_transform_rejects_nonfinite_spectrum(bad_spectrum):
         power_fisher_z_transform(np.array([1.0, bad_spectrum]), n_obs1=50, spectrum2=1.0)
 
 
-@pytest.mark.parametrize("bad_n_tapers", [0, -3, np.nan, np.inf, 2.5])
-def test_power_confidence_intervals_rejects_invalid_n_tapers(bad_n_tapers):
-    with pytest.raises(ValueError, match="n_tapers must be a finite positive integer"):
-        power_confidence_intervals(n_tapers=bad_n_tapers, power=1.0, ci=0.95)
+@pytest.mark.parametrize("bad_count", [0, -3, np.nan, np.inf, 2.5])
+def test_power_confidence_intervals_rejects_invalid_n_observations(bad_count):
+    with pytest.raises(ValueError, match="n_observations must be a finite positive integer"):
+        power_confidence_intervals(n_observations=bad_count, power=1.0, ci=0.95)
 
 
 @pytest.mark.parametrize("bad_n_obs1", [1, 0, np.nan, np.inf, 2.5])
@@ -555,7 +599,7 @@ def test_coherence_fisher_z_transform_rejects_invalid_n_obs2(bad_n_obs2):
 def test_power_confidence_intervals_rejects_invalid_power(bad_power):
     """Negative or non-finite power must raise, not return reversed/NaN bounds."""
     with pytest.raises(ValueError, match="power must be finite and non-negative"):
-        power_confidence_intervals(n_tapers=5, power=bad_power, ci=0.95)
+        power_confidence_intervals(n_observations=5, power=bad_power, ci=0.95)
 
 
 # Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and

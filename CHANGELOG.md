@@ -54,6 +54,7 @@ directly with results from 2.x.
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
+| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 
 ### Added
 
@@ -544,6 +545,14 @@ is removed in 4.0.
   working and a saved file says which name produced it; its values and other
   attributes are those of `magnitude_squared_coherence`. Requesting both names
   in one call raises `ValueError`.
+- `power_confidence_intervals(n_tapers=...)`: use `n_observations=...`. The
+  count is every observation averaged into the estimate (tapers x trials), not
+  the taper count, so the old name invited intervals far too wide for
+  multi-trial averages. The argument keeps its first position, so positional
+  calls such as `power_confidence_intervals(25, power, 0.95)` are unchanged
+  and do not warn; `n_tapers` is accepted by keyword only and gives the same
+  interval as `n_observations`. `power` and `ci` (the confidence level, in
+  `[0.5, 1)`) are unchanged. Giving both names raises `ValueError`.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
@@ -782,8 +791,9 @@ is removed in 4.0.
   `minimum_phase_max_iterations` instead of a regularization parameter no
   Granger method has.
 - `coherence_fisher_z_transform` accepts scalar coherency, and
-  `power_confidence_intervals` documents that `n_tapers` is the number of
-  averaged observations (tapers x trials), not the taper count.
+  `power_confidence_intervals` documents that its count is the number of
+  averaged observations (tapers x trials), not the taper count, and names it
+  `n_observations` (see Deprecated).
 - The simulated-examples tutorial no longer stores a local absolute path in a
   warning output, and `help(spectral_connectivity)` links both the AI-assistant
   guide and `llms.txt`.
