@@ -211,11 +211,11 @@ def test_one_sided_power_and_csd_return_detached_arrays():
     power *= 2.0
     np.testing.assert_allclose(connectivity.power(), power / 2.0, equal_nan=True)
 
-    coherence_before = connectivity.coherence_magnitude()
+    coherence_before = connectivity.magnitude_squared_coherence()
     csd = connectivity.cross_spectral_density()
     csd *= 3.0
     np.testing.assert_allclose(
-        connectivity.coherence_magnitude(), coherence_before, equal_nan=True
+        connectivity.magnitude_squared_coherence(), coherence_before, equal_nan=True
     )
 
 
@@ -482,7 +482,7 @@ def test_partial_coherence_removes_mediated_link_on_simulated_chain():
         deviation = np.mean(np.abs(partial[:, i, j] - expected[:, i, j]))
         assert deviation < 0.05, ((i, j), deviation)
     assert partial[:, 0, 2].max() < 0.05
-    assert connectivity.coherence_magnitude()[0, :, 0, 2].max() > 0.5
+    assert connectivity.magnitude_squared_coherence()[0, :, 0, 2].max() > 0.5
 
 
 @pytest.mark.parametrize("regularization", [-1, np.inf, np.nan, True, [0.1]])
@@ -1707,7 +1707,7 @@ def test_directed_coherence_warns_on_material_cross_power():
 def test_single_signal_connectivity_raises_but_power_works():
     """Connectivity on a single signal raises; power() still works."""
     c = Connectivity(fourier_coefficients=np.ones((1, 2, 1, 4, 1), dtype=complex))
-    for method in (c.coherence_magnitude, c.phase_locking_value, c.global_coherence):
+    for method in (c.magnitude_squared_coherence, c.phase_locking_value, c.global_coherence):
         with pytest.raises(ValueError, match="at least 2 signals"):
             method()
     with pytest.raises(ValueError, match="at least 2 signals"):
@@ -2344,7 +2344,7 @@ def test_jackknife_requires_three_observations():
     shape = (1, 2, 1, 8, 2)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
     with pytest.raises(ValueError, match="at least 3 observations"):
-        connectivity.jackknife("coherence_magnitude")
+        connectivity.jackknife("magnitude_squared_coherence")
 
 
 def test_jackknife_rejects_structured_result_measures():
@@ -2360,7 +2360,7 @@ def test_jackknife_rejects_structured_result_measures():
 @pytest.mark.parametrize(
     ("measure", "expected"),
     [
-        ("coherence_magnitude", "fisher_squared"),
+        ("magnitude_squared_coherence", "fisher_squared"),
         ("partial_coherence", "fisher_squared"),
         ("phase_locking_value", "fisher"),
         ("imaginary_coherence", "fisher"),
@@ -2389,7 +2389,7 @@ def test_jackknife_auto_transformation_matches_the_measure_range(measure, expect
 
 @pytest.mark.parametrize(
     ("method", "transformation"),
-    [("phase_locking_value", "fisher"), ("coherence_magnitude", "fisher_squared")],
+    [("phase_locking_value", "fisher"), ("magnitude_squared_coherence", "fisher_squared")],
 )
 def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation):
     """A duplicated channel saturates the off-diagonal pair, which the Fisher
@@ -2399,7 +2399,7 @@ def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation
     Regression: every PLV jackknife warned, counting the diagonal (142 entries
     here instead of 66), and off-diagonal values a few ulp below 1 -- pinned by
     the atanh clip all the same -- were not counted (48 instead of 66 for
-    coherence_magnitude).
+    magnitude_squared_coherence).
     """
     from spectral_connectivity import Multitaper
 
@@ -2485,7 +2485,7 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     )
     weighted = Connectivity.from_transform(wavelet)
     assert np.isfinite(weighted.power()).any()
-    assert np.isfinite(weighted.coherence_magnitude()).any()
+    assert np.isfinite(weighted.magnitude_squared_coherence()).any()
     adaptive = Multitaper(data, 200.0, taper_weighting="adaptive")
     assert np.isfinite(to_host(adaptive.fft())).all()
     conn = Connectivity.from_multitaper(Multitaper(data, 200.0))
@@ -3006,8 +3006,8 @@ def test_nyquist_bin_count(n_fft_samples, expected_n_frequencies):
 
     c = Connectivity(fourier_coefficients=fourier_coefficients)
 
-    # coherence_magnitude reports only the non-negative frequencies
-    coherence = c.coherence_magnitude()
+    # magnitude_squared_coherence reports only the non-negative frequencies
+    coherence = c.magnitude_squared_coherence()
 
     assert coherence.shape[-3] == expected_n_frequencies, (
         f"Expected {expected_n_frequencies} frequencies, got {coherence.shape[-3]}"
@@ -4256,10 +4256,10 @@ def test_connectivity_jackknife_recomputes_leave_one_out_measure():
     )
     connectivity = Connectivity(coefficients)
 
-    result = connectivity.jackknife("coherence_magnitude")
+    result = connectivity.jackknife("magnitude_squared_coherence")
 
     assert result.n_observations == 12
-    # coherence_magnitude is magnitude-*squared* coherence, so auto resolves to
+    # magnitude_squared_coherence is magnitude-*squared* coherence, so auto resolves to
     # the atanh(sqrt(.)) variance-stabilizing transform, not plain atanh.
     assert result.transformation == "fisher_squared"
     assert result.estimate.shape == (1, 9, 2, 2)
@@ -4304,7 +4304,7 @@ def test_connectivity_jackknife_documents_and_accepts_fisher_squared():
     assert "fisher_squared" in get_args(annotation)
     assert "fisher_squared" in (Connectivity.jackknife.__doc__ or "")
     result = Connectivity(coefficients).jackknife(
-        "coherence_magnitude", transformation="fisher_squared"
+        "magnitude_squared_coherence", transformation="fisher_squared"
     )
     assert result.transformation == "fisher_squared"
 
@@ -4354,7 +4354,7 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
 # (see test_partial_coherence_warns_when_signals_outnumber_observations), and
 # null-space garbage for the three used here, so no saturation is asserted.
 SINGLE_OBSERVATION_DEGENERATE_MEASURES = {
-    "coherence_magnitude": [1.0],
+    "magnitude_squared_coherence": [1.0],
     "phase_locking_value": [1.0],
     "partial_coherence": None,
     "phase_lag_index": [-1.0, 1.0],
@@ -4373,7 +4373,7 @@ def test_single_observation_normalized_measure_warns(measure):
         (1, 1, 1, 16, 3)
     )
     connectivity = Connectivity(coefficients)
-    # coherence_magnitude reports through the shared coherency, hence no name match.
+    # magnitude_squared_coherence reports through the shared coherency, hence no name match.
     with pytest.warns(UserWarning, match="is computed from a single observation"):
         result = getattr(connectivity, measure)()
     # And the degenerate result is indeed saturated at its extreme value(s).
@@ -4541,7 +4541,7 @@ def _warning_cases():
     return {
         "single_observation": (
             "single",
-            lambda: Connectivity(one_observation).coherence_magnitude(),
+            lambda: Connectivity(one_observation).magnitude_squared_coherence(),
         ),
         "single_observation_through_wrapper": (
             "single",
@@ -4549,12 +4549,12 @@ def _warning_cases():
                 single_trial_series,
                 sampling_frequency=256,
                 time_halfbandwidth_product=1,
-                method="coherence_magnitude",
+                method="magnitude_squared_coherence",
             ),
         ),
         "zero_power_coherence": (
             "zero",
-            lambda: Connectivity(with_dead_channel()).coherence_magnitude(),
+            lambda: Connectivity(with_dead_channel()).magnitude_squared_coherence(),
         ),
         "zero_magnitude_plv": (
             "zero magnitude",

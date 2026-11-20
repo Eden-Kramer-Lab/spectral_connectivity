@@ -219,7 +219,7 @@ def test_coherence_magnitude_phase_offset(snapshot):
     connectivity = Connectivity.from_multitaper(multitaper)
 
     outputs = {
-        "coherence_magnitude": connectivity.coherence_magnitude(),
+        "coherence_magnitude": connectivity.magnitude_squared_coherence(),
         "frequencies": connectivity.frequencies,
     }
     on_peak, off_peak = _on_and_off_peak(
@@ -301,7 +301,7 @@ def test_coherogram_phase_change(snapshot):
     connectivity = Connectivity.from_multitaper(multitaper)
 
     outputs = {
-        "coherence_magnitude": connectivity.coherence_magnitude(),
+        "coherence_magnitude": connectivity.magnitude_squared_coherence(),
         "time": connectivity.time,
     }
     frequencies = connectivity.frequencies
@@ -481,7 +481,7 @@ def _phase_measure_outputs(connectivity, name, method):
 def test_coherence_with_trials(phase_offset_trials, snapshot):
     """Coherence with trial structure, 200 Hz, pi/2 phase offset."""
     outputs, on_peak, off_peak = _phase_measure_outputs(
-        phase_offset_trials, "coherence_magnitude", "coherence_magnitude"
+        phase_offset_trials, "coherence_magnitude", "magnitude_squared_coherence"
     )
     assert on_peak[0, 1] > 0.95
     assert np.median(off_peak) < 0.05

@@ -12,7 +12,7 @@ from numpy.typing import NDArray
 from spectral_connectivity._input_handling import _SignalMetadata
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
-    _measure_label_attrs,
+    _measure_attrs,
 )
 from spectral_connectivity._provenance import _canonical_json, _store_provenance_item
 from spectral_connectivity.connectivity import (
@@ -100,15 +100,25 @@ def _coordinate_attrs(
     return time_attrs, frequency_attrs
 
 
-def _delay_units(shared_attrs: Mapping[str, Any]) -> tuple[str, str]:
-    """``(delay_units, slope_units)`` for the result's frequency coordinate.
+# Units of the variables recorded in seconds or per Hz, on a normalized
+# (cycles/sample) frequency grid: a delay is in the reciprocal units of
+# frequency, so there it is in samples.
+_NORMALIZED_GRID_UNITS = {
+    "delay": "samples",
+    "group_delay": "samples",
+    "group_delay_slope": "rad/(cycles/sample)",
+}
 
-    A delay is in the reciprocal units of frequency, so on a normalized
-    (cycles/sample) grid it is in samples.
-    """
-    if shared_attrs.get("frequency_units") == "cycles/sample":
-        return "samples", "rad/(cycles/sample)"
-    return "s", "rad/Hz"
+
+def _grid_units(variable_name: str, shared_attrs: Mapping[str, Any]) -> dict[str, str]:
+    """A ``units`` override for ``variable_name`` where the frequency units
+    require one (a normalized grid); otherwise none."""
+    if (
+        shared_attrs.get("frequency_units") == "cycles/sample"
+        and variable_name in _NORMALIZED_GRID_UNITS
+    ):
+        return {"units": _NORMALIZED_GRID_UNITS[variable_name]}
+    return {}
 
 
 def _connectivity_result_to_xarray(
@@ -121,9 +131,15 @@ def _connectivity_result_to_xarray(
     signal_metadata: _SignalMetadata | None = None,
     transform_settings_hint: str | None = None,
     frequency_selection: _FrequencySelection | None = None,
+    result_name: str | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
     """Format one result from an already-built ``Connectivity`` instance.
+
+    ``method`` is the canonical measure name. ``result_name`` (default
+    ``method``) is the name the caller requested, which names the result
+    variable and its ``measure`` attribute, so a deprecated name requested
+    explicitly keeps its 2.x variable name.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
     one transform, so the caller validates/builds them once and passes them in.
@@ -135,6 +151,7 @@ def _connectivity_result_to_xarray(
     measure's own variables rather than becoming scalar coordinates a Dataset
     would broadcast onto every other variable.
     """
+    name = method if result_name is None else result_name
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
     _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
@@ -168,7 +185,7 @@ def _connectivity_result_to_xarray(
 
     # Copy the shared provenance so per-measure keys never leak across measures.
     attrs = dict(shared_attrs)
-    attrs["measure"] = method
+    attrs["measure"] = name
     attrs["measure_kwargs_json"] = _canonical_json(kwargs)
     for key, value in kwargs.items():
         _store_provenance_item(attrs, "arg_", key, value)
@@ -206,9 +223,7 @@ def _connectivity_result_to_xarray(
     signal_coordinates.update(target_extras)
     measure_attrs = {
         **attrs,
-        **_measure_label_attrs(
-            method, None if signal_metadata is None else signal_metadata.units
-        ),
+        **_measure_attrs(method, None if signal_metadata is None else signal_metadata.units),
     }
 
     if output_kind in {"pairwise", "power"}:
@@ -234,7 +249,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
 
@@ -245,7 +260,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source", "target"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
         if squeeze and connectivity.n_signals == 2:
@@ -292,7 +307,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "source_group", "target_group"),
-            name=method,
+            name=name,
             attrs=measure_attrs,
         )
 
@@ -330,11 +345,11 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords=coordinates,
             dims=("time", "frequency", "candidate", "source", "target"),
-            name=method,
+            name=name,
             attrs={
                 **measure_attrs,
                 **selection.attrs(),
-                "units": _delay_units(shared_attrs)[0],
+                **_grid_units(method, shared_attrs),
             },
         )
 
@@ -355,7 +370,7 @@ def _connectivity_result_to_xarray(
             connectivity_mat,
             coords={"time": base_coordinates["time"], **signal_coordinates},
             dims=("time", "source", "target"),
-            name=method,
+            name=name,
             attrs={
                 **measure_attrs,
                 **_required_selection(method, frequency_selection).attrs(),
@@ -363,24 +378,26 @@ def _connectivity_result_to_xarray(
         )
 
     if output_kind == "group_delay":
-        delay, slope, r_value = numerical_result
-        delay_units, slope_units = _delay_units(shared_attrs)
+        assert measure_spec is not None  # a registered output kind
         interval_attrs = _required_selection(method, frequency_selection).attrs()
         dataset_coordinates = {
             "time": base_coordinates["time"],
             **signal_coordinates,
         }
+        # The measure's own variable, then its companions, in the order the
+        # measure returns their values.
         variables = {
-            "group_delay": ("Group delay", np.asarray(delay), delay_units),
-            "group_delay_slope": ("phase slope", np.asarray(slope), slope_units),
-            "group_delay_r_value": (
-                "phase-frequency correlation",
-                np.asarray(r_value),
-                "1",
-            ),
+            name: measure_attrs,
+            **{
+                companion_name: {**attrs, **companion.result_attrs(None)}
+                for companion_name, companion in measure_spec.companions
+            },
         }
         data_vars: dict[str, xr.DataArray] = {}
-        for name, (long_name, values, units) in variables.items():
+        for (variable_name, own_attrs), values in zip(
+            variables.items(), numerical_result, strict=True
+        ):
+            values = np.asarray(values)
             if values.shape != (
                 len(connectivity.time),
                 connectivity.n_signals,
@@ -388,17 +405,15 @@ def _connectivity_result_to_xarray(
             ):
                 msg = f"The method '{method}' returned an invalid shape."
                 raise ValueError(msg)
-            variable_attrs = {
-                **attrs,
-                **interval_attrs,
-                "long_name": long_name,
-                "units": units,
-            }
-            data_vars[name] = xr.DataArray(
+            data_vars[variable_name] = xr.DataArray(
                 values,
                 coords=dataset_coordinates,
                 dims=("time", "source", "target"),
-                attrs=variable_attrs,
+                attrs={
+                    **own_attrs,
+                    **interval_attrs,
+                    **_grid_units(variable_name, shared_attrs),
+                },
             )
         return xr.Dataset(data_vars, attrs=attrs)
 
@@ -465,17 +480,17 @@ def _connectivity_result_to_xarray(
             # coordinates used by group-pairwise results so the two contracts
             # never alias (and are silently overwritten) when merged in one
             # Dataset.
-            "connection_seed_group": (
+            "connection_source_group": (
                 "connection",
                 numerical_result.connections[:, 0],
-                {"long_name": "Seed group of the connection"},
+                {"long_name": "Source group of the connection"},
             ),
             "connection_target_group": (
                 "connection",
                 numerical_result.connections[:, 1],
                 {"long_name": "Target group of the connection"},
             ),
-            "side": ("side", ["seed", "target"], {"long_name": "Side of the connection"}),
+            "side": ("side", ["source", "target"], {"long_name": "Side of the connection"}),
             "signal": ("signal", signal_labels, {"long_name": "Signal"}),
             "group": ("group", numerical_result.group_labels, {"long_name": "Signal group"}),
         }
@@ -484,7 +499,7 @@ def _connectivity_result_to_xarray(
             for name, (values, attrs) in extra_signal_coordinates.items()
         }
         data_vars = {
-            method: xr.DataArray(
+            name: xr.DataArray(
                 numerical_result.scores,
                 coords={
                     key: component_coordinates[key]
@@ -493,7 +508,7 @@ def _connectivity_result_to_xarray(
                         "frequency",
                         "connection",
                         "component",
-                        "connection_seed_group",
+                        "connection_source_group",
                         "connection_target_group",
                     )
                 },
@@ -528,7 +543,7 @@ def _connectivity_result_to_xarray(
                 "frequency",
                 "connection",
                 "component",
-                "connection_seed_group",
+                "connection_source_group",
                 "connection_target_group",
                 "side",
                 "signal",
@@ -536,14 +551,14 @@ def _connectivity_result_to_xarray(
         }
         projection_coordinates.update(signal_extras)
         if numerical_result.filters is not None:
-            data_vars[f"{method}_filters"] = xr.DataArray(
+            data_vars[f"{name}_filters"] = xr.DataArray(
                 numerical_result.filters,
                 coords=projection_coordinates,
                 dims=projection_dims,
                 attrs={**attrs, "long_name": "Spatial filters"},
             )
         if numerical_result.patterns is not None:
-            data_vars[f"{method}_patterns"] = xr.DataArray(
+            data_vars[f"{name}_patterns"] = xr.DataArray(
                 numerical_result.patterns,
                 coords=projection_coordinates,
                 dims=projection_dims,

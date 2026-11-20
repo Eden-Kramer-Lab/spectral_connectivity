@@ -79,7 +79,7 @@ def test_coherence_magnitude_is_bounded_on_window_center_time_grid(time_window_d
 
     m = multitaper_connectivity(
         time_series,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         sampling_frequency=_GRID_SAMPLING_FREQUENCY,
         time_window_duration=time_window_duration,
     )
@@ -172,8 +172,13 @@ def test_connectivity_to_xarray_exposes_rich_multivariate_components():
         "side",
         "signal",
     )
-    assert result.connection_seed_group.values.tolist() == [10]
+    assert result.connection_source_group.values.tolist() == [10]
     assert result.connection_target_group.values.tolist() == [20]
+    assert result.side.values.tolist() == ["source", "target"]
+    # The source side's filter is NaN outside the source group (signals c, d).
+    source_filters = result.canonical_coherency_filters.sel(side="source")
+    assert np.isnan(source_filters.sel(signal=["c", "d"])).all()
+    assert np.isfinite(source_filters.sel(signal=["a", "b"])).all()
     assert result.group_membership.sel(group=10, signal="a").item()
     assert result.group_membership.attrs["output_schema_version"] == 1
     assert result.group_membership.attrs["transform"] == "multitaper"
@@ -312,13 +317,13 @@ def test_default_dataset_variables_share_window_center_time_grid(n_signals):
     # A one-item method list still returns a Dataset.
     cons = multitaper_connectivity(
         time_series,
-        method=["coherence_magnitude"],
+        method=["magnitude_squared_coherence"],
         sampling_frequency=_GRID_SAMPLING_FREQUENCY,
         time_window_duration=time_window_duration,
     )
     assert isinstance(cons, xr.Dataset)
-    assert tuple(cons.data_vars) == ("coherence_magnitude",)
-    np.testing.assert_allclose(cons["coherence_magnitude"].time.values, expected_time)
+    assert tuple(cons.data_vars) == ("magnitude_squared_coherence",)
+    np.testing.assert_allclose(cons["magnitude_squared_coherence"].time.values, expected_time)
 
 
 def test_default_dataset_frequency_grid_is_nonnegative_fft_bins():
@@ -377,7 +382,7 @@ def test_result_is_netcdf_serializable(tmp_path):
     result = multitaper_connectivity(
         time_series,
         sampling_frequency=500,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
     # No attribute value may be a callable.
     assert not any(callable(v) for v in result.attrs.values())
@@ -396,10 +401,10 @@ def test_accepts_documented_2d_input():
     data_2d = rng.standard_normal((512, 2))
     data_3d = data_2d[:, np.newaxis, :]
     result_2d = multitaper_connectivity(
-        data_2d, sampling_frequency=500, method="coherence_magnitude"
+        data_2d, sampling_frequency=500, method="magnitude_squared_coherence"
     )
     result_3d = multitaper_connectivity(
-        data_3d, sampling_frequency=500, method="coherence_magnitude"
+        data_3d, sampling_frequency=500, method="magnitude_squared_coherence"
     )
     np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
 
@@ -407,7 +412,7 @@ def test_accepts_documented_2d_input():
 # Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
 # are deliberately unsorted, so per-signal power exposes a data/label
 # mispairing, a channel reversal, or a label sort (a symmetric two-signal
-# measure such as coherence_magnitude cannot).
+# measure such as magnitude_squared_coherence cannot).
 _UNSORTED_LABELS = ["right", "left"]
 _CHANNEL_SCALE = np.array([5.0, 1.0])
 
@@ -462,7 +467,7 @@ def test_explicit_signal_names_override_dataarray_coordinate():
     result = multitaper_connectivity(
         data,
         sampling_frequency=256,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         signal_names=["first", "second"],
     )
 
@@ -479,7 +484,7 @@ def test_dataarray_without_final_coordinate_uses_default_labels():
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # bare unlabeled input must not warn
         result = multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
+            data, sampling_frequency=256, method="magnitude_squared_coherence"
         )
     assert result.coords["source"].values.tolist() == ["0", "1"]
 
@@ -495,7 +500,7 @@ def test_dataarray_non_1d_final_coordinate_warns_and_uses_default_labels():
     )
     with pytest.warns(UserWarning, match="not a 1-D index coordinate"):
         result = multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
+            data, sampling_frequency=256, method="magnitude_squared_coherence"
         )
     assert result.coords["source"].values.tolist() == ["0", "1"]
 
@@ -509,7 +514,7 @@ def test_dataarray_labels_on_non_index_coordinate_warn():
     )
     with pytest.warns(UserWarning, match="not a 1-D index coordinate"):
         result = multitaper_connectivity(
-            data, sampling_frequency=256, method="coherence_magnitude"
+            data, sampling_frequency=256, method="magnitude_squared_coherence"
         )
     assert result.coords["source"].values.tolist() == ["0", "1"]
 
@@ -522,7 +527,7 @@ def test_dataarray_integer_final_coordinate_is_preserved():
         coords={"channel": [10, 20]},
     )
     result = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
+        data, sampling_frequency=256, method="magnitude_squared_coherence"
     )
     assert result.coords["source"].values.tolist() == [10, 20]
     assert result.sel(source=10).coords["source"].item() == 10
@@ -538,7 +543,7 @@ def test_dataarray_datetime_signal_coordinate_is_preserved():
     )
 
     result = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
+        data, sampling_frequency=256, method="magnitude_squared_coherence"
     )
 
     assert result.source.dtype == np.dtype("datetime64[ns]")
@@ -957,9 +962,9 @@ def test_dataarray_infers_sampling_frequency_from_time_coordinate():
         coords={"time": time, "channel": ["a", "b", "c"]},
     )
 
-    inferred = multitaper_connectivity(data, method="coherence_magnitude")
+    inferred = multitaper_connectivity(data, method="magnitude_squared_coherence")
     explicit = multitaper_connectivity(
-        data, sampling_frequency=sampling_frequency, method="coherence_magnitude"
+        data, sampling_frequency=sampling_frequency, method="magnitude_squared_coherence"
     )
 
     xr.testing.assert_identical(inferred, explicit)
@@ -1016,7 +1021,7 @@ def test_array_without_sampling_frequency_is_rejected():
     with pytest.raises(ValueError, match="sampling_frequency is required"):
         multitaper_connectivity(
             np.random.default_rng(31).standard_normal((256, 2)),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         )
 
 
@@ -1028,7 +1033,7 @@ def test_dataarray_without_time_coordinate_requires_sampling_frequency():
         coords={"channel": ["left", "right"]},
     )
     with pytest.raises(ValueError, match="sampling_frequency is required"):
-        multitaper_connectivity(data, method="coherence_magnitude")
+        multitaper_connectivity(data, method="magnitude_squared_coherence")
 
 
 def test_dataarray_sample_coordinate_cannot_infer_sampling_frequency():
@@ -1039,7 +1044,7 @@ def test_dataarray_sample_coordinate_cannot_infer_sampling_frequency():
         coords={"sample": np.arange(256)},
     )
     with pytest.raises(ValueError, match="Cannot infer sampling_frequency"):
-        multitaper_connectivity(data, method="coherence_magnitude")
+        multitaper_connectivity(data, method="magnitude_squared_coherence")
 
 
 def test_dataarray_nonuniform_time_coordinate_cannot_infer_sampling_frequency():
@@ -1049,7 +1054,7 @@ def test_dataarray_nonuniform_time_coordinate_cannot_infer_sampling_frequency():
     times[50:] += 0.5  # break regular spacing
     data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": times})
     with pytest.raises(ValueError, match="not uniformly spaced"):
-        multitaper_connectivity(data, method="coherence_magnitude")
+        multitaper_connectivity(data, method="magnitude_squared_coherence")
 
 
 def test_dataarray_accumulated_time_coordinate_is_accepted_as_uniform():
@@ -1193,7 +1198,9 @@ def test_dataarray_role_absent_at_dimensionality_is_rejected_with_reshape_hint()
         dims=("time", "trial"),
     )
     with pytest.raises(ValueError, match="has no trial axis"):
-        multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="magnitude_squared_coherence"
+        )
 
 
 class _DaskProtocolArray:
@@ -1235,7 +1242,9 @@ def test_dataarray_dask_backing_is_rejected():
     )
     assert isinstance(data.data, _DaskProtocolArray)  # premise: backing kept lazy
     with pytest.raises(TypeError, match="multitaper_connectivity received a dask-backed"):
-        multitaper_connectivity(data, sampling_frequency=256, method="coherence_magnitude")
+        multitaper_connectivity(
+            data, sampling_frequency=256, method="magnitude_squared_coherence"
+        )
 
 
 def test_fourier_dataarray_dask_backing_is_rejected_by_name():
@@ -1246,7 +1255,7 @@ def test_fourier_dataarray_dask_backing_is_rejected_by_name():
         _DaskProtocolArray(coefficients), dims=("trial", "frequency", "channel")
     )
     with pytest.raises(TypeError, match="fourier_connectivity received a dask-backed"):
-        fourier_connectivity(data, method="coherence_magnitude")
+        fourier_connectivity(data, method="magnitude_squared_coherence")
 
 
 def test_dask_protocol_backing_is_rejected_without_optional_dependency():
@@ -1272,7 +1281,7 @@ def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
 
     # Single-method DataArray result.
     result = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
+        data, sampling_frequency=256, method="magnitude_squared_coherence"
     )
     assert json.loads(result.attrs["input_attrs_json"]) == input_attrs
     # Namespacing keeps caller metadata from clobbering our own provenance.
@@ -1282,10 +1291,12 @@ def test_dataarray_input_attrs_are_carried_into_provenance(tmp_path):
     ds = multitaper_connectivity(
         data,
         sampling_frequency=256,
-        method=["coherence_magnitude", "imaginary_coherence"],
+        method=["magnitude_squared_coherence", "imaginary_coherence"],
     )
     assert json.loads(ds.attrs["input_attrs_json"]) == input_attrs
-    assert json.loads(ds["coherence_magnitude"].attrs["input_attrs_json"]) == input_attrs
+    assert (
+        json.loads(ds["magnitude_squared_coherence"].attrs["input_attrs_json"]) == input_attrs
+    )
 
     # Provenance must remain NetCDF-serializable.
     ds.to_netcdf(tmp_path / "input_attrs.nc")
@@ -1324,7 +1335,7 @@ def test_plain_ndarray_input_has_no_input_namespace():
     result = multitaper_connectivity(
         np.random.default_rng(21).standard_normal((256, 2)),
         sampling_frequency=256,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
     assert not any(key.startswith("input_") for key in result.attrs)
 
@@ -1443,7 +1454,7 @@ def test_result_netcdf_serializable_with_detrend_none(tmp_path):
     result = multitaper_connectivity(
         time_series,
         sampling_frequency=500,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         detrend_type=None,
     )
     # None is encoded as a string so the attribute is still recorded.
@@ -1474,12 +1485,12 @@ def test_fft_workers_does_not_change_results():
 
     # The wrapper forwards fft_workers via **kwargs; results are equivalent.
     baseline = multitaper_connectivity(
-        time_series, sampling_frequency=500, method="coherence_magnitude"
+        time_series, sampling_frequency=500, method="magnitude_squared_coherence"
     )
     parallel = multitaper_connectivity(
         time_series,
         sampling_frequency=500,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         fft_workers=-1,
     )
     np.testing.assert_allclose(baseline.values, parallel.values, rtol=1e-10, atol=1e-12)
@@ -1566,7 +1577,7 @@ def test_fft_workers_is_actually_forwarded_to_scipy():
         multitaper_connectivity(
             time_series,
             sampling_frequency=500,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             fft_workers=2,
         )
     assert 2 in recorded  # the taper-projection FFT received workers=2
@@ -1669,7 +1680,7 @@ def test_connectivity_to_xarray_accepts_device_backed_validity_mask():
             return _DeviceLike(host_mask)
 
     result = connectivity_to_xarray(
-        DeviceMaskTransform(transform), method="coherence_magnitude"
+        DeviceMaskTransform(transform), method="magnitude_squared_coherence"
     )
     np.testing.assert_array_equal(result["valid_time_frequency"].values, host_mask)
 
@@ -1692,7 +1703,7 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
         multitaper_connectivity(
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
-            method=["coherence_magnitude", "phase_slope_index"],
+            method=["magnitude_squared_coherence", "phase_slope_index"],
             connectivity_kwargs={"frequency_resolution": 5.0},
         )
 
@@ -1705,7 +1716,7 @@ def test_transform_setting_in_connectivity_kwargs_points_to_multitaper_connectiv
         multitaper_connectivity(
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             connectivity_kwargs={"time_halfbandwidth_product": 4},
         )
     message = str(excinfo.value)
@@ -1724,7 +1735,7 @@ def test_transform_setting_in_connectivity_kwargs_points_to_the_fourier_transfor
             coefficients,
             frequencies=frequencies,
             time=time,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             connectivity_kwargs={"time_halfbandwidth_product": 4},
         )
     message = str(excinfo.value)
@@ -1736,7 +1747,9 @@ def test_connectivity_to_xarray_gives_no_transform_settings_hint():
     """Its caller built the transform, so there is no wrapper to point to."""
     transform = Multitaper(np.random.default_rng(13).standard_normal((256, 2, 3)), 250)
     with pytest.raises(TypeError, match="does not accept keyword argument") as excinfo:
-        connectivity_to_xarray(transform, "coherence_magnitude", time_halfbandwidth_product=4)
+        connectivity_to_xarray(
+            transform, "magnitude_squared_coherence", time_halfbandwidth_product=4
+        )
     assert "transform setting" not in str(excinfo.value)
 
 
@@ -1823,7 +1836,7 @@ _GROUP_LABEL_ERRORS = {
         r"group_labels is required for[\s\S]*group_labels=",
     ),
     "no_group_measure": (
-        {"method": "coherence_magnitude", "group_labels": [0, 1]},
+        {"method": "magnitude_squared_coherence", "group_labels": [0, 1]},
         "none of the requested measures compares groups",
     ),
     "given_twice": (
@@ -1868,15 +1881,15 @@ def test_group_labels_reach_every_group_measure_in_a_batch(four_signal_noise, la
     result = multitaper_connectivity(
         four_signal_noise,
         sampling_frequency=1000,
-        method=["canonical_coherence", "coherence_magnitude"],
+        method=["canonical_coherence", "magnitude_squared_coherence"],
         **label_arguments,
     )
     assert isinstance(result, xr.Dataset)
     assert result["canonical_coherence"].sizes["source_group"] == 2
-    assert result["coherence_magnitude"].sizes["source"] == 4
+    assert result["magnitude_squared_coherence"].sizes["source"] == 4
     # The labels reached the group measure only.
     assert "arg_group_labels_json" in result["canonical_coherence"].attrs
-    assert "arg_group_labels_json" not in result["coherence_magnitude"].attrs
+    assert "arg_group_labels_json" not in result["magnitude_squared_coherence"].attrs
 
 
 def test_group_labels_recorded_in_provenance(four_signal_noise):
@@ -1884,7 +1897,7 @@ def test_group_labels_recorded_in_provenance(four_signal_noise):
     result = multitaper_connectivity(
         four_signal_noise,
         sampling_frequency=1000,
-        method=["canonical_coherence", "coherence_magnitude"],
+        method=["canonical_coherence", "magnitude_squared_coherence"],
         group_labels=labels,
     )
     assert json.loads(result["canonical_coherence"].attrs["arg_group_labels_json"]) == labels
@@ -1914,11 +1927,11 @@ def test_group_labels_none_in_connectivity_kwargs_means_no_labels(four_signal_no
     with_none = multitaper_connectivity(
         four_signal_noise,
         sampling_frequency=1000,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         connectivity_kwargs={"group_labels": None},
     )
     without = multitaper_connectivity(
-        four_signal_noise, sampling_frequency=1000, method="coherence_magnitude"
+        four_signal_noise, sampling_frequency=1000, method="magnitude_squared_coherence"
     )
     xr.testing.assert_identical(with_none, without)
     with pytest.raises(ValueError, match="group_labels is required for"):
@@ -1954,7 +1967,7 @@ def test_multi_method_shares_single_fft(monkeypatch):
 
     rng = np.random.default_rng(0)
     time_series = rng.standard_normal((512, 4, 3))
-    methods = ["coherence_magnitude", "coherence_phase", "imaginary_coherence"]
+    methods = ["magnitude_squared_coherence", "coherence_phase", "imaginary_coherence"]
 
     original_fft = Multitaper.fft
     calls = {"n": 0}
@@ -1983,7 +1996,7 @@ def test_shared_connectivity_matches_per_method_construction():
 
     rng = np.random.default_rng(1)
     time_series = rng.standard_normal((512, 4, 3))
-    methods = ["coherence_magnitude", "coherence_phase", "imaginary_coherence"]
+    methods = ["magnitude_squared_coherence", "coherence_phase", "imaginary_coherence"]
 
     shared = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
 
@@ -2020,12 +2033,13 @@ def test_default_method_set_is_explicit_and_ordered():
 
     The exact tuple (including order) is locked: xarray preserves insertion
     order, so the default Dataset's variable/iteration/serialization order is
-    part of the public contract. The allowlist is kept in alphabetical order.
+    part of the public contract. It keeps the alphabetical order of the 2.x
+    allowlist, with magnitude_squared_coherence in the place of its 2.x name.
     """
     from spectral_connectivity.wrapper import DEFAULT_METHODS
 
     expected = (
-        "coherence_magnitude",
+        "magnitude_squared_coherence",
         "coherence_phase",
         "debiased_squared_phase_lag_index",
         "debiased_squared_weighted_phase_lag_index",
@@ -2128,7 +2142,7 @@ def test_from_transform_subclass_overriding_init_keeps_transform_contract():
     np.testing.assert_array_equal(to_host(sub.frequencies), to_host(base.frequencies))
     np.testing.assert_allclose(sub.power(), base.power())
     np.testing.assert_allclose(
-        sub.coherence_magnitude(), base.coherence_magnitude(), equal_nan=True
+        sub.magnitude_squared_coherence(), base.magnitude_squared_coherence(), equal_nan=True
     )
 
 
@@ -2155,9 +2169,9 @@ def test_result_carries_provenance_metadata():
             sampling_frequency=500,
             time_halfbandwidth_product=2,
         ),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
-    assert da.attrs["measure"] == "coherence_magnitude"
+    assert da.attrs["measure"] == "magnitude_squared_coherence"
     assert da.attrs["measure_kwargs_json"] == "{}"
     assert da.attrs["package"] == "spectral_connectivity"
     assert da.attrs["package_version"] == version("spectral_connectivity")
@@ -2253,7 +2267,7 @@ def test_broken_measure_in_batch_propagates_not_implemented(monkeypatch):
         multitaper_connectivity(
             rng.standard_normal((256, 4, 2)),
             sampling_frequency=256,
-            method=["coherence_magnitude", "broken_measure"],
+            method=["magnitude_squared_coherence", "broken_measure"],
         )
 
 
@@ -2287,9 +2301,9 @@ def test_multitaper_connectivity_merges_nonstandard_dataset_in_batch():
     result = multitaper_connectivity(
         rng.standard_normal((256, 4, 3)),
         sampling_frequency=500,
-        method=["coherence_magnitude", "global_coherence"],
+        method=["magnitude_squared_coherence", "global_coherence"],
     )
-    assert "coherence_magnitude" in result
+    assert "magnitude_squared_coherence" in result
     assert "global_coherence" in result
     assert "global_coherence_vectors" in result
 
@@ -2299,7 +2313,7 @@ def test_frequency_bands_on_mixed_dataset_leaves_frequency_free_variables():
     # axis (group_delay): band reduction applies to the former and passes the
     # latter through unchanged, rather than erroring on the frequency-free var.
     time_series = np.random.default_rng(452).standard_normal((512, 4, 3))
-    methods = ["coherence_magnitude", "group_delay"]
+    methods = ["magnitude_squared_coherence", "group_delay"]
     bands = {"alpha": (8, 12), "beta": (13, 30)}
     result = multitaper_connectivity(
         time_series,
@@ -2309,17 +2323,17 @@ def test_frequency_bands_on_mixed_dataset_leaves_frequency_free_variables():
     )
     unreduced = multitaper_connectivity(time_series, sampling_frequency=200, method=methods)
 
-    assert result["coherence_magnitude"].dims == ("time", "band", "source", "target")
+    assert result["magnitude_squared_coherence"].dims == ("time", "band", "source", "target")
     assert result["group_delay"].dims == ("time", "source", "target")
     assert result.band.values.tolist() == ["alpha", "beta"]
     for name, (lower, upper) in bands.items():
         expected = (
-            unreduced["coherence_magnitude"]
+            unreduced["magnitude_squared_coherence"]
             .sel(frequency=slice(lower, upper))
             .mean("frequency")
         )
         xr.testing.assert_allclose(
-            result["coherence_magnitude"].sel(band=name, drop=True), expected
+            result["magnitude_squared_coherence"].sel(band=name, drop=True), expected
         )
     xr.testing.assert_identical(result["group_delay"], unreduced["group_delay"])
 
@@ -2345,7 +2359,7 @@ def test_multitaper_connectivity_merges_rich_multivariate_datasets():
 
 def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_not_collide():
     # A group-pairwise measure uses source_group/target_group as *dimensions*;
-    # components use connection_seed_group/connection_target_group as per-
+    # components use connection_source_group/connection_target_group as per-
     # connection coordinates. Merging them must keep the per-connection labels
     # intact rather than overwrite them with the group dimension index.
     result = multitaper_connectivity(
@@ -2356,7 +2370,7 @@ def test_multitaper_connectivity_group_pairwise_and_components_coordinates_do_no
     )
     assert result["target_group"].dims == ("target_group",)
     assert result["connection_target_group"].dims == ("connection",)
-    assert result.connection_seed_group.values.tolist() == [0]
+    assert result.connection_source_group.values.tolist() == [0]
     assert result.connection_target_group.values.tolist() == [1]
 
 
@@ -2404,7 +2418,7 @@ def test_metadata_survives_netcdf_round_trip(tmp_path):
     try:
         assert reloaded.coords["time"].attrs["units"] == "s"
         assert reloaded.coords["frequency"].attrs["units"] == "Hz"
-        var = reloaded["coherence_magnitude"]
+        var = reloaded["magnitude_squared_coherence"]
         assert var.attrs["package"] == "spectral_connectivity"
         assert var.attrs["backend"] in ("cpu", "gpu")
         assert var.attrs["expectation_type"] == "trials_tapers"
@@ -2429,7 +2443,7 @@ def test_backend_provenance_reflects_imported_backend_not_env(monkeypatch):
     rng = np.random.default_rng(0)
     da = connectivity_to_xarray(
         Multitaper(rng.standard_normal((256, 5, 3)), sampling_frequency=500),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
     # Matches the actually-imported backend, not the toggled env var. (Left
     # backend-agnostic so the suite can also run under the GPU backend.)
@@ -2462,7 +2476,7 @@ def test_multitaper_connectivity_rejects_duplicate_signal_names():
         multitaper_connectivity(
             rng.standard_normal((256, 3, 2)),
             sampling_frequency=256,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             signal_names=["a", "a"],
         )
 
@@ -2474,7 +2488,7 @@ def test_multitaper_connectivity_rejects_duplicate_nan_signal_names():
         multitaper_connectivity(
             rng.standard_normal((256, 3, 2)),
             sampling_frequency=256,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             signal_names=[float("nan"), float("nan")],
         )
 
@@ -2486,7 +2500,7 @@ def test_multitaper_connectivity_rejects_structured_signal_names():
         multitaper_connectivity(
             rng.standard_normal((256, 3, 2)),
             sampling_frequency=256,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             signal_names=[("region", 1), ("region", 2)],
         )
 
@@ -2534,7 +2548,7 @@ def test_multitaper_connectivity_squeeze_retains_pair_labels():
     da = multitaper_connectivity(
         rng.standard_normal((256, 5, 2)),
         sampling_frequency=256,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         signal_names=["x", "y"],
         squeeze=True,
     )
@@ -2549,7 +2563,7 @@ def test_multitaper_connectivity_squeeze_warns_and_keeps_matrix_for_many_signals
         da = multitaper_connectivity(
             rng.standard_normal((256, 5, 3)),
             sampling_frequency=256,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             squeeze=True,
         )
     assert da.dims == ("time", "frequency", "source", "target")
@@ -2574,11 +2588,11 @@ def test_multitaper_connectivity_squeeze_ignored_for_multi_measure_dataset():
             squeeze=True,
         )
     assert "power" in ds.data_vars
-    assert ds["coherence_magnitude"].dims == ("time", "frequency", "source", "target")
+    assert ds["magnitude_squared_coherence"].dims == ("time", "frequency", "source", "target")
     assert ds["power"].dims == ("time", "frequency", "source")
     # No Dataset-wide scalar coordinate leaked onto the wrong variable.
     assert "target" not in ds["power"].coords
-    assert ds["coherence_magnitude"].sizes["source"] == 2
+    assert ds["magnitude_squared_coherence"].sizes["source"] == 2
 
 
 @pytest.fixture(scope="module")
@@ -2760,14 +2774,14 @@ def test_fourier_connectivity_matches_multitaper_adapter():
     )
     expected = connectivity_to_xarray(
         transform,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         signal_names=["a", "b", "c"],
     )
     actual = fourier_connectivity(
         transform.fft(),
         frequencies=transform.frequencies,
         time=transform.time,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         signal_names=["a", "b", "c"],
     )
 
@@ -2819,7 +2833,7 @@ def test_multitaper_frequency_crop_decimation_and_band_mean():
     time_series = np.random.default_rng(303).standard_normal((256, 3))
     frequency_kwargs = {
         "sampling_frequency": 128,
-        "method": "coherence_magnitude",
+        "method": "magnitude_squared_coherence",
         "frequency_range": (8, 32),
         "frequency_decimation": 2,
     }
@@ -2932,7 +2946,7 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
             smoothing_time=0.5,
             edge_mode="nan",
         )
-    coherence = connectivity_to_xarray(transform, method="coherence_magnitude")
+    coherence = connectivity_to_xarray(transform, method="magnitude_squared_coherence")
     power = connectivity_to_xarray(transform, method="power")
     bands = {"low": (4, 8), "all": (4, 32)}
     mean = frequency_band_reduce(coherence, bands)
@@ -2961,7 +2975,7 @@ def test_frequency_band_reduce_after_time_selection():
         smoothing_time=0.3,
         edge_mode="nan",
     )
-    result = connectivity_to_xarray(transform, method="coherence_magnitude")
+    result = connectivity_to_xarray(transform, method="magnitude_squared_coherence")
     reduced = frequency_band_reduce(result.isel(time=10), {"a": (5, 15), "b": (20, 40)})
     assert "time" not in reduced.dims
     assert "band" in reduced.dims
@@ -2998,8 +3012,8 @@ def test_frequency_band_integral_is_restricted_to_spectral_densities():
         [0.25, 0.5],
         dims=("frequency",),
         coords={"frequency": [1.0, 2.0]},
-        name="coherence_magnitude",
-        attrs={"measure": "coherence_magnitude"},
+        name="magnitude_squared_coherence",
+        attrs={"measure": "magnitude_squared_coherence"},
     )
     with pytest.raises(ValueError, match="defined only for power"):
         frequency_band_reduce(score, {"low": (1, 2)}, frequency_reduction="integral")
@@ -3015,7 +3029,7 @@ def test_multitaper_frequency_crop_and_decimation_select_correct_bins():
     result = multitaper_connectivity(
         np.random.default_rng(313).standard_normal((256, 2)),
         sampling_frequency=128,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         frequency_range=(8.5, 32),
         frequency_decimation=2,
     )
@@ -3325,7 +3339,9 @@ def test_fourier_connectivity_warns_on_one_sided_input_declared_two_sided():
         )
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        fourier_connectivity(one_sided, method="coherence_magnitude", is_one_sided=False)
+        fourier_connectivity(
+            one_sided, method="magnitude_squared_coherence", is_one_sided=False
+        )
         fourier_connectivity(one_sided, is_one_sided=False)
 
 
@@ -3350,7 +3366,7 @@ def test_fourier_connectivity_allows_unlabeled_undirected_measure():
         (4, 8, 2)
     ) + 1j * np.random.default_rng(315).standard_normal((4, 8, 2))
     result = fourier_connectivity(
-        coefficients, method="coherence_magnitude", is_one_sided=False
+        coefficients, method="magnitude_squared_coherence", is_one_sided=False
     )
 
     # Eight two-sided bins keep DC through Nyquist on a normalized grid.
@@ -3371,7 +3387,7 @@ def test_fourier_connectivity_accepts_one_sided_functional_input():
     result = fourier_connectivity(
         coefficients,
         frequencies=np.linspace(0, 40, 9),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
 
     assert result.dims == ("time", "frequency", "source", "target")
@@ -3421,11 +3437,15 @@ def test_fourier_connectivity_warns_when_sidedness_is_assumed():
     rng = np.random.default_rng(323)
     coefficients = rng.standard_normal((6, 16, 2)) + 1j * rng.standard_normal((6, 16, 2))
     with pytest.warns(UserWarning, match="assuming a two-sided"):
-        fourier_connectivity(coefficients, method="coherence_magnitude")
+        fourier_connectivity(coefficients, method="magnitude_squared_coherence")
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        fourier_connectivity(coefficients, method="coherence_magnitude", is_one_sided=False)
-        fourier_connectivity(coefficients, method="coherence_magnitude", is_one_sided=True)
+        fourier_connectivity(
+            coefficients, method="magnitude_squared_coherence", is_one_sided=False
+        )
+        fourier_connectivity(
+            coefficients, method="magnitude_squared_coherence", is_one_sided=True
+        )
 
 
 def test_fourier_connectivity_infers_one_bin_positive_input_as_one_sided():
@@ -3475,7 +3495,7 @@ def test_fourier_connectivity_explicit_one_sided_without_frequencies():
     coefficients = rng.standard_normal((4, 9, 2)) + 1j * rng.standard_normal((4, 9, 2))
     result = fourier_connectivity(
         coefficients,
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
         is_one_sided=True,
     )
 
@@ -3493,7 +3513,7 @@ def test_fourier_connectivity_rejects_fftshifted_coordinate():
         fourier_connectivity(
             coefficients,
             frequencies=np.fft.fftshift(np.fft.fftfreq(8, d=0.01)),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         )
 
 
@@ -3503,7 +3523,7 @@ def test_fourier_connectivity_rejects_a_non_bool_sidedness(value):
         fourier_connectivity(
             np.ones((3, 8, 2), dtype=np.complex128),
             is_one_sided=value,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         )
 
 
@@ -3511,11 +3531,11 @@ def test_connectivity_to_xarray_shares_alternative_transform_provenance():
     data = np.random.default_rng(304).standard_normal((128, 3, 2))
     welch = connectivity_to_xarray(
         Welch(data, sampling_frequency=64, n_time_samples_per_segment=32),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
     morlet = connectivity_to_xarray(
         MorletWavelet(data, 64, np.array([4.0, 8.0, 16.0])),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
 
     assert welch.attrs["transform"] == "welch"
@@ -3544,7 +3564,7 @@ def test_connectivity_to_xarray_exposes_morlet_invalid_edges():
     np.testing.assert_array_equal(result.isnull().all("source"), ~result.valid_time_frequency)
 
 
-@pytest.mark.parametrize("method", ["coherence_magnitude", "power", "delay"])
+@pytest.mark.parametrize("method", ["magnitude_squared_coherence", "power", "delay"])
 def test_morlet_results_keep_their_coordinate_labels(method, tmp_path):
     """Attaching the validity mask must not strip the time and frequency
     coordinates' long_name and units, and they survive a NetCDF round trip."""
@@ -3639,7 +3659,7 @@ def test_fourier_connectivity_default_coordinates_are_labeled_as_such():
     rng = np.random.default_rng(40)
     coefficients = rng.standard_normal((3, 8, 2)) + 1j * rng.standard_normal((3, 8, 2))
     result = fourier_connectivity(
-        coefficients, method="coherence_magnitude", is_one_sided=False
+        coefficients, method="magnitude_squared_coherence", is_one_sided=False
     )
     assert result.frequency.attrs == {
         "long_name": "Normalized frequency",
@@ -3655,7 +3675,7 @@ def test_fourier_connectivity_provided_coordinates_keep_physical_units():
         coefficients,
         frequencies=np.fft.fftfreq(8, 1 / 100),
         time=np.array([1.5]),  # 3-D input: (observations, frequencies, signals)
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
     assert result.frequency.attrs == {"long_name": "Frequency", "units": "Hz"}
     assert result.time.attrs == {"long_name": "Window center time", "units": "s"}
@@ -3715,7 +3735,7 @@ def test_fourier_connectivity_rejects_non_numeric_time(time):
             coefficients,
             frequencies=np.fft.fftfreq(8, 1 / 100),
             time=time,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         )
 
 
@@ -3723,7 +3743,10 @@ def test_frequency_coordinate_attrs_do_not_depend_on_measure_order():
     """delay built its frequency coordinate with only ``units``; merged first,
     it dropped the long_name every other measure sets."""
     time_series = np.random.default_rng(43).standard_normal((1000, 3, 2))
-    for methods in (["delay", "coherence_magnitude"], ["coherence_magnitude", "delay"]):
+    for methods in (
+        ["delay", "magnitude_squared_coherence"],
+        ["magnitude_squared_coherence", "delay"],
+    ):
         result = multitaper_connectivity(time_series, sampling_frequency=500, method=methods)
         assert result.frequency.attrs == {"long_name": "Frequency", "units": "Hz"}, methods
 
@@ -3736,11 +3759,11 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
     dataset = multitaper_connectivity(
         time_series,
         sampling_frequency=500,
-        method=["coherence_magnitude", "phase_slope_index"],
+        method=["magnitude_squared_coherence", "phase_slope_index"],
         frequency_range=(4, 50),
         frequency_decimation=2,
     )
-    coherence, psi = dataset.coherence_magnitude, dataset.phase_slope_index
+    coherence, psi = dataset.magnitude_squared_coherence, dataset.phase_slope_index
     # Both variables record the interval frequency_range selected: coherence
     # was cropped to it and phase_slope_index consumed it, uncropped and
     # undecimated. The Dataset itself carries no frequency record.
@@ -3761,10 +3784,10 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
     banded = multitaper_connectivity(
         time_series,
         sampling_frequency=500,
-        method=["coherence_magnitude", "phase_slope_index"],
+        method=["magnitude_squared_coherence", "phase_slope_index"],
         frequency_bands={"beta": (13, 30)},
     )
-    assert banded.coherence_magnitude.attrs["frequency_reduction"] == "mean"
+    assert banded.magnitude_squared_coherence.attrs["frequency_reduction"] == "mean"
     for key in ("frequency_bands_json", "frequency_reduction"):
         assert key not in banded.phase_slope_index.attrs
         assert key not in banded.attrs
@@ -3841,7 +3864,7 @@ def test_per_signal_input_coordinates_follow_source_and_target(labeled_channels)
     """Non-index coordinates on the signal dimension (e.g. brain region) are
     carried onto the source/target axes instead of being dropped."""
     coherence = multitaper_connectivity(
-        labeled_channels, sampling_frequency=500, method="coherence_magnitude"
+        labeled_channels, sampling_frequency=500, method="magnitude_squared_coherence"
     )
     assert coherence.source_region.values.tolist() == ["CA1", "PFC"]
     assert coherence.target_region.values.tolist() == ["CA1", "PFC"]
@@ -3852,7 +3875,10 @@ def test_per_signal_input_coordinates_follow_source_and_target(labeled_channels)
     assert power.source_region.values.tolist() == ["CA1", "PFC"]
 
     squeezed = multitaper_connectivity(
-        labeled_channels, sampling_frequency=500, method="coherence_magnitude", squeeze=True
+        labeled_channels,
+        sampling_frequency=500,
+        method="magnitude_squared_coherence",
+        squeeze=True,
     )
     assert squeezed.source_region.item() == "CA1"
     assert squeezed.target_region.item() == "PFC"
@@ -3886,7 +3912,7 @@ def test_every_result_coordinate_is_described():
     assert power.source_region.attrs == {"long_name": "Brain region"}
     assert power.source_depth.attrs == {"units": "mm"}
 
-    coherence = multitaper_connectivity(data, method="coherence_magnitude")
+    coherence = multitaper_connectivity(data, method="magnitude_squared_coherence")
     assert coherence.target_region.attrs == {"long_name": "Brain region"}
 
     components = multitaper_connectivity(
@@ -3946,7 +3972,7 @@ def test_band_integral_of_a_density_drops_the_per_hz_unit(labeled_channels):
 @pytest.mark.parametrize(
     ("method", "units"),
     [
-        ("coherence_magnitude", "1"),
+        ("magnitude_squared_coherence", "1"),
         ("coherence_phase", "rad"),
         ("phase_locking_value", "1"),
         ("pairwise_spectral_granger_prediction", "1"),
@@ -3973,7 +3999,7 @@ def test_large_array_input_attrs_are_summarized():
         attrs={"subject": "m1", "raw_trace": np.arange(50_000.0), "montage": [1, 2, 3]},
     )
     result = multitaper_connectivity(
-        data, sampling_frequency=256, method="coherence_magnitude"
+        data, sampling_frequency=256, method="magnitude_squared_coherence"
     )
     record = json.loads(result.attrs["input_attrs_json"])
     assert record["subject"] == "m1"
@@ -4047,7 +4073,7 @@ _TWO_SIGNAL_COEFFICIENTS = _WARNING_RNG.standard_normal(
         pytest.param(
             "squeeze=True but",
             lambda: multitaper_connectivity(
-                _THREE_SIGNALS, 256, method="coherence_magnitude", squeeze=True
+                _THREE_SIGNALS, 256, method="magnitude_squared_coherence", squeeze=True
             ),
             id="squeeze_with_many_signals",
         ),
@@ -4056,7 +4082,7 @@ _TWO_SIGNAL_COEFFICIENTS = _WARNING_RNG.standard_normal(
             lambda: multitaper_connectivity(
                 _THREE_SIGNALS,
                 256,
-                method=["coherence_magnitude", "phase_locking_value"],
+                method=["magnitude_squared_coherence", "phase_locking_value"],
                 squeeze=True,
             ),
             id="squeeze_with_many_measures",
@@ -4064,7 +4090,7 @@ _TWO_SIGNAL_COEFFICIENTS = _WARNING_RNG.standard_normal(
         pytest.param(
             "no frequency coordinate",
             lambda: fourier_connectivity(
-                _TWO_SIGNAL_COEFFICIENTS, method="coherence_magnitude"
+                _TWO_SIGNAL_COEFFICIENTS, method="magnitude_squared_coherence"
             ),
             id="fourier_without_frequencies",
         ),

@@ -58,7 +58,7 @@ from spectral_connectivity import list_measures, multitaper_connectivity
 coherence = multitaper_connectivity(
     signal + noise,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     time_halfbandwidth_product=10,
 )
 coherence
@@ -292,10 +292,10 @@ plt.ylabel("Power")
 plt.xlabel("Frequency")
 
 # %% [markdown]
-# Now let's say we want to compute the coherence, a measure of how stable the phase relationships are between the two signals. We use the `coherence_magnitude` method to compute this.
+# Now let's say we want to compute the coherence, a measure of how stable the phase relationships are between the two signals. We use the `magnitude_squared_coherence` method to compute this.
 
 # %%
-coherence = connectivity.coherence_magnitude()
+coherence = connectivity.magnitude_squared_coherence()
 coherence.shape
 
 # %% [markdown]
@@ -320,7 +320,7 @@ connectivity = Connectivity.from_multitaper(
     multitaper, expectation_type="trials_tapers"
 )
 
-coherence = connectivity.coherence_magnitude()
+coherence = connectivity.magnitude_squared_coherence()
 coherence.shape
 
 # %% [markdown]
@@ -341,7 +341,7 @@ time_grid, freq_grid = np.meshgrid(
 mesh = plt.pcolormesh(
     time_grid,
     freq_grid,
-    connectivity.coherence_magnitude()[..., 0, 1].squeeze().T,
+    connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze().T,
     vmin=0.0,
     vmax=1.0,
     cmap="viridis",
@@ -363,7 +363,7 @@ coherence = multitaper_connectivity(
     sampling_frequency=sampling_frequency,
     time_halfbandwidth_product=5,
     time_window_duration=2.0,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
 )
 
 coherence

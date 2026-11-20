@@ -31,7 +31,7 @@ something the wrapper does not expose.
 >>> coherence = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     signal_names=["a", "b"],
 ... )
 >>> coherence.dims
@@ -129,6 +129,19 @@ Prefer the wrapper's labeled results so you never index these by hand.
   are biased upward when trials × tapers is small. The debiased measures
   (`pairwise_phase_consistency`, `debiased_squared_*`) are unbiased, so they
   can be slightly negative; that is noise, not negative coupling.
+- **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
+  take `abs(coherency)` for the unsquared magnitude. Its 2.x name,
+  `coherence_magnitude`, is deprecated: do not write new code with it, and
+  index default results by the new name. A measure variable's `quantity` and
+  `formula` attrs say which form a coherency-family value has.
+- **Diagonals differ by measure.** A self-connection is NaN for coherence (a
+  mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
+  `phase_locking_value`, to within rounding (NaN for a flat, zero-power
+  signal). Read a variable's
+  `diagonal_policy` attr, and before averaging over pairs mask a pairwise
+  variable `v` with
+  `v.where(v.source != v.target)` (not a whole Dataset, whose `power` has no
+  `target` axis).
 - **Directed measures need a two-sided spectrum.** The Granger and
   directed-transfer-function families work with `multitaper_connectivity`, but
   not with Morlet wavelets or other one-sided coefficients, which raise a
@@ -154,7 +167,7 @@ Prefer the wrapper's labeled results so you never index these by hand.
 >>> bands = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method=["coherence_magnitude", "coherence_phase"],
+...     method=["magnitude_squared_coherence", "coherence_phase"],
 ...     signal_names=["a", "b"],
 ...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
 ... )
@@ -175,7 +188,7 @@ error, and confidence interval by leaving out one trial or taper at a time:
 >>> connectivity = Connectivity.from_transform(
 ...     Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=2)
 ... )
->>> result = connectivity.jackknife("coherence_magnitude")
+>>> result = connectivity.jackknife("magnitude_squared_coherence")
 >>> result.estimate.shape == result.standard_error.shape
 True
 

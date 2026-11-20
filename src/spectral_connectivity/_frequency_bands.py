@@ -95,6 +95,20 @@ _BAND_INTEGRAL_LONG_NAMES = {
     "cross_spectral_density": "Band cross-power",
 }
 
+# What a band value is, by reduction. A reduced variable's ``interpretation``
+# and ``formula`` describe one frequency bin, so the reduction is named in
+# them; its range, sign convention, quantity, and diagonal policy hold of the
+# band values as they are (a mean or integral of values within a range stays
+# within it, and a NaN or constant diagonal stays one).
+_BAND_VALUE_DESCRIPTIONS = {
+    "mean": "the mean over the band's frequency bins",
+    "circular_mean": (
+        "the circular mean (the angle of the mean unit phasor) over the band's frequency bins"
+    ),
+    "complex_mean": "the complex (vector) mean over the band's frequency bins",
+    "integral": "the integral over the band",
+}
+
 
 def _reduce_frequency_bands(
     result: xr.DataArray | xr.Dataset,
@@ -179,6 +193,17 @@ def _reduce_frequency_bands(
             )
             raise ValueError(msg)
 
+        if frequency_reduction == "integral":
+            reduction = "integral"
+        elif (
+            circular
+            if circular is not None
+            else measure == "coherence_phase" or data.attrs.get("units") == "rad"
+        ):
+            reduction = "circular_mean"
+        else:
+            reduction = "complex_mean" if np.iscomplexobj(data) else "mean"
+
         reduced_bands: list[xr.DataArray] = []
         band_validity: list[xr.DataArray] = []
         for mask, (low, high) in band_masks_and_bounds:
@@ -200,11 +225,7 @@ def _reduce_frequency_bands(
                 for name, coordinate in reduced.coords.items():
                     if name in selected.coords:
                         coordinate.attrs.update(selected.coords[name].attrs)
-            elif (
-                circular
-                if circular is not None
-                else measure == "coherence_phase" or data.attrs.get("units") == "rad"
-            ):
+            elif reduction == "circular_mean":
                 # Circular mean prevents phases near -pi and +pi from
                 # spuriously cancelling toward zero.
                 phase_vectors = xr.apply_ufunc(np.exp, 1j * selected)
@@ -259,6 +280,14 @@ def _reduce_frequency_bands(
         )
         reduced = reduced.transpose(*desired_dims)
         reduced.attrs = dict(data.attrs)
+        description = _BAND_VALUE_DESCRIPTIONS[reduction]
+        if "interpretation" in reduced.attrs:
+            reduced.attrs["interpretation"] = (
+                f"Each value is {description} of the per-frequency values. "
+                f"{reduced.attrs['interpretation']}"
+            )
+        if "formula" in reduced.attrs:
+            reduced.attrs["formula"] = f"{description} of {reduced.attrs['formula']}"
         if frequency_reduction == "integral":
             # Integrating a density over frequency removes its per-Hz unit; a
             # unit that does not end in /Hz cannot be converted, so it is dropped.

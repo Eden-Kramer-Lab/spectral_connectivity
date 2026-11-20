@@ -297,7 +297,7 @@ def test_host_coefficients_are_moved_to_the_device(xp):
     connectivity = Connectivity(_coefficients(np.random.default_rng(0)))
     assert isinstance(connectivity._fourier_coefficients, xp.ndarray)
     power = connectivity.power()
-    coherence = connectivity.coherence_magnitude()
+    coherence = connectivity.magnitude_squared_coherence()
     assert isinstance(power, np.ndarray)
     assert np.isfinite(power).all()
     assert isinstance(coherence, np.ndarray)
@@ -383,7 +383,7 @@ def test_multitaper_transform_runs_on_the_device(xp):
         rng.standard_normal((256, 3, 2)), sampling_frequency=256, detrend_type="linear"
     )
     assert isinstance(multitaper.fft(), _DeviceArray)
-    coherence = Connectivity.from_multitaper(multitaper).coherence_magnitude()
+    coherence = Connectivity.from_multitaper(multitaper).magnitude_squared_coherence()
     assert isinstance(coherence, np.ndarray)  # public results come back to the host
     assert np.isfinite(coherence[..., 0, 1]).all()
 
@@ -448,12 +448,12 @@ def test_fourier_connectivity_accepts_device_frequencies_and_time(xp, monkeypatc
         xp.asarray(coefficients),
         frequencies=xp.asarray(frequencies),
         time=xp.asarray(time),
-        method="coherence_magnitude",
+        method="magnitude_squared_coherence",
     )
 
     monkeypatch.undo()  # back to the NumPy backend for the reference
     host = fourier_connectivity(
-        coefficients, frequencies=frequencies, time=time, method="coherence_magnitude"
+        coefficients, frequencies=frequencies, time=time, method="magnitude_squared_coherence"
     )
     np.testing.assert_array_equal(on_device.time, time)
     np.testing.assert_allclose(on_device.values, host.values, rtol=1e-12)

@@ -28,9 +28,9 @@ For all array parameters and returns, specify:
 #### Examples
 
 ```python
-def coherence_magnitude(data: NDArray[np.complex128]) -> NDArray[np.float64]:
+def magnitude_squared_coherence(data: NDArray[np.complex128]) -> NDArray[np.float64]:
     """
-    Calculate coherence magnitude between signals.
+    Calculate the magnitude-squared coherence between signals.
 
     Parameters
     ----------
@@ -40,7 +40,7 @@ def coherence_magnitude(data: NDArray[np.complex128]) -> NDArray[np.float64]:
     Returns
     -------
     coherence : NDArray[float64], shape (n_freqs, n_channels, n_channels)
-        Magnitude of coherence between channel pairs.
+        Squared magnitude of the coherency between channel pairs.
     """
 ```
 

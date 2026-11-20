@@ -1953,8 +1953,8 @@ def test_morlet_uniform_weights_take_unweighted_path(edge_mode):
     )
     np.testing.assert_allclose(connectivity.power(), weighted.power(), rtol=1e-12)
     np.testing.assert_allclose(
-        connectivity.coherence_magnitude(),
-        weighted.coherence_magnitude(),
+        connectivity.magnitude_squared_coherence(),
+        weighted.magnitude_squared_coherence(),
         rtol=1e-12,
         equal_nan=True,
     )

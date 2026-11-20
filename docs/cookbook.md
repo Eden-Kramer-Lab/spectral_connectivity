@@ -30,7 +30,7 @@ category and a one-line description. Use it instead of guessing method strings.
 >>> len(list_measures())
 35
 >>> [m.name for m in list_measures(default_only=True)][:3]
-['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
 >>> [m.name for m in list_measures(directed=True)][:2]
 ['pairwise_spectral_granger_prediction', 'directed_phase_lag_index']
 >>> next(m for m in list_measures() if m.name == "phase_slope_index").requires_two_sided
@@ -50,7 +50,7 @@ Passing an unknown name raises a helpful error rather than an obscure
 ... )
 Traceback (most recent call last):
     ...
-ValueError: 'coherence' is not a known connectivity measure. Did you mean: 'coherence_magnitude', 'coherence_phase', 'imaginary_coherence', 'partial_coherence', 'directed_coherence'? Call spectral_connectivity.list_measures() to see the 35 available measures.
+ValueError: 'coherence' is not a known connectivity measure. Did you mean: 'magnitude_squared_coherence', 'coherence_phase', 'imaginary_coherence', 'partial_coherence', 'directed_coherence'? Call spectral_connectivity.list_measures() to see the 35 available measures.
 
 ```
 
@@ -64,7 +64,7 @@ axes.
 >>> coherence = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     time_halfbandwidth_product=3,
 ... )
 >>> type(coherence).__name__
@@ -72,7 +72,35 @@ axes.
 >>> coherence.dims
 ('time', 'frequency', 'source', 'target')
 >>> coherence.name
-'coherence_magnitude'
+'magnitude_squared_coherence'
+>>> coherence.attrs["quantity"]  # |coherency|^2, not |coherency|
+'squared_magnitude'
+
+```
+
+Before 3.0 this measure was named `coherence_magnitude`. A default result now
+holds `magnitude_squared_coherence` and no `coherence_magnitude`, so 2.x code
+that indexes a default result by the old name fails loudly. Requesting the old
+name explicitly still works through 3.x, with a `DeprecationWarning`: the
+result keeps the old variable name and records `measure="coherence_magnitude"`,
+the name asked for, with the same values. The old name is removed in 4.0.
+
+```python
+>>> import warnings
+>>> default = multitaper_connectivity(time_series, sampling_frequency=500)
+>>> "magnitude_squared_coherence" in default, "coherence_magnitude" in default
+(True, False)
+>>> with warnings.catch_warnings(record=True) as caught:
+...     warnings.simplefilter("always")
+...     old = multitaper_connectivity(
+...         time_series, sampling_frequency=500, method="coherence_magnitude"
+...     )
+>>> [warning.category.__name__ for warning in caught]
+['DeprecationWarning']
+>>> old.name, old.attrs["measure"]
+('coherence_magnitude', 'coherence_magnitude')
+>>> bool(old.equals(default["magnitude_squared_coherence"]))
+True
 
 ```
 
@@ -88,6 +116,52 @@ Default signal labels are the string indices `"0"`, `"1"`, `"2"`; pass
 ('time', 'frequency')
 >>> band = coherence.sel(frequency=slice(30, 50))
 >>> float(band.frequency.min()) >= 30.0
+True
+
+```
+
+## Mask or fill the diagonal
+
+A self-connection (`source` equal to `target`) does not hold the same kind of
+value for every measure, and each variable's `diagonal_policy` attribute says
+which it is. Coherence is NaN there by the package's choice (`masked_nan`),
+although self-coherence is 1 for a signal with nonzero power; the imaginary
+part of coherency is 0 for a signal with itself, which `imaginary_coherence`
+returns (`constant`) and the signed `imaginary_coherency` masks with NaN.
+A constant holds to within rounding, and only for signals with power: where
+`nan_for_zero_power_signal` is set, as for `imaginary_coherence`, a flat
+signal's entries are NaN. The policy table in
+`docs/CONNECTIVITY_METRIC_RANGES.md` defines each policy and lists its
+measures.
+
+```python
+>>> default = multitaper_connectivity(time_series, sampling_frequency=500)
+>>> default["magnitude_squared_coherence"].attrs["diagonal_policy"]
+'masked_nan'
+>>> default["imaginary_coherence"].attrs["diagonal_policy"]
+'constant'
+>>> imaginary = default["imaginary_coherence"]
+>>> self_imaginary = imaginary.sel(source="0", target="0")
+>>> bool(np.allclose(self_imaginary, imaginary.attrs["diagonal_value"]))  # to rounding
+True
+
+```
+
+To treat every self-connection alike, compare the `source` and `target`
+labels, which gives a `(source, target)` mask, and apply it to each variable
+with both axes (not to `power`, which has only `source`). For a group measure
+compare `source_group` with `target_group`.
+
+```python
+>>> self_connection = imaginary.source == imaginary.target
+>>> masked = imaginary.where(~self_connection)  # NaN, like imaginary_coherency
+>>> bool(masked.sel(source="0", target="0").isnull().all())
+True
+>>> coherence = default["magnitude_squared_coherence"]
+>>> filled = coherence.where(~self_connection, 1.0)  # self-coherence at nonzero power
+>>> float(filled.sel(source="1", target="1").min())
+1.0
+>>> bool(filled.sel(source="0", target="1").equals(coherence.sel(source="0", target="1")))
 True
 
 ```
@@ -122,15 +196,29 @@ measure. Shared spectra are cached, so this is cheaper than separate calls.
 >>> result = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method=["power", "coherence_magnitude"],
+...     method=["power", "magnitude_squared_coherence"],
 ...     time_halfbandwidth_product=3,
 ... )
 >>> type(result).__name__
 'Dataset'
 >>> sorted(result.data_vars)
-['coherence_magnitude', 'power']
+['magnitude_squared_coherence', 'power']
 >>> result["power"].dims
 ('time', 'frequency', 'source')
+
+```
+
+`power` is indexed by `source` on purpose: in a Dataset it shares the `source`
+axis of the pairwise measures, so `result["power"].sel(source="0")` is the
+power of the signal whose row `result["magnitude_squared_coherence"].sel(
+source="0")` holds. The component measures' filters and patterns use a
+`signal` axis instead, because each holds weights over the same channels for
+both sides of a connection (`side="source"` and `side="target"`). For a
+standalone channel axis, rename it:
+
+```python
+>>> result["power"].rename(source="signal").dims
+('time', 'frequency', 'signal')
 
 ```
 
@@ -157,6 +245,52 @@ instead of by signal.
 
 ```
 
+The component measures (`canonical_coherency`,
+`maximized_imaginary_coherency_components`) return a Dataset with one
+`connection` per pair of groups. Each connection names its
+`connection_source_group` and `connection_target_group`, and the spatial
+filters and patterns have a `side` axis, `"source"` or `"target"`, over the
+`signal` axis; a side's entries for signals outside its group are NaN.
+
+```python
+>>> components = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=500,
+...     method="canonical_coherency",
+...     group_labels=["CA1", "CA1", "PFC"],
+... )
+>>> components["canonical_coherency"].dims
+('time', 'frequency', 'connection', 'component')
+>>> components.connection_source_group.values.tolist()
+['CA1']
+>>> components.connection_target_group.values.tolist()
+['PFC']
+>>> filters = components["canonical_coherency_filters"]
+>>> filters.dims
+('time', 'frequency', 'connection', 'component', 'side', 'signal')
+>>> filters.side.values.tolist()
+['source', 'target']
+>>> source_filters = filters.sel(side="source", connection=0, component=0)
+>>> bool(source_filters.sel(signal="2").isnull().all())  # signal 2 is in PFC
+True
+
+```
+
+`canonical_coherence` and `canonical_coherency` are different estimators, and
+neither is the square or square root of the other. `canonical_coherence` is
+the historical squared canonical correlation (complex channel weights);
+`canonical_coherency` is the phase-optimized CaCoh (real weights and one
+phase), whose magnitude is the unsquared maximized coherence. Their attributes
+say so:
+
+```python
+>>> between_areas.attrs["quantity"], components["canonical_coherency"].attrs["quantity"]
+('squared_magnitude', 'complex')
+>>> print(between_areas.attrs["formula"])
+max over complex weights a, b of |a^H S_st b|^2 / ((a^H S_ss a) * (b^H S_tt b)), with S_st the cross-spectral matrix from the source group's signals to the target group's
+
+```
+
 ## Collapse into frequency bands
 
 Pass `frequency_bands` to average (or integrate) each measure within named
@@ -166,7 +300,7 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 >>> banded = multitaper_connectivity(
 ...     time_series,
 ...     sampling_frequency=500,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
 ...     time_halfbandwidth_product=3,
 ... )
@@ -185,7 +319,7 @@ at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
 ```python
 >>> settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
 >>> cropped = multitaper_connectivity(
-...     time_series, method="coherence_magnitude", frequency_range=(10, 50), **settings
+...     time_series, method="magnitude_squared_coherence", frequency_range=(10, 50), **settings
 ... )
 >>> cropped.frequency.values[[0, -1]].tolist()
 [10.0, 50.0]
@@ -215,7 +349,7 @@ Below, bin 142 of `np.arange(1.0, 100.0, 0.1)` is stored as
 ...     coords={"frequency": frequencies},
 ... )
 >>> edge = fourier_connectivity(
-...     coefficients, method="coherence_magnitude", frequency_range=(10, 15.2)
+...     coefficients, method="magnitude_squared_coherence", frequency_range=(10, 15.2)
 ... )
 >>> round(float(edge.frequency[-1]), 9), edge.sizes["frequency"]
 (15.2, 53)
@@ -287,7 +421,7 @@ the multitaper step and use `fourier_connectivity`. NumPy inputs may use the
 ... )
 >>> frequencies = np.linspace(0, 250, 16)
 >>> byo = fourier_connectivity(
-...     coefficients, frequencies=frequencies, method="coherence_magnitude"
+...     coefficients, frequencies=frequencies, method="magnitude_squared_coherence"
 ... )
 >>> byo.dims
 ('time', 'frequency', 'source', 'target')
@@ -332,7 +466,7 @@ coherence are unaffected.
 >>> transform = HannTransform(time_series, sampling_frequency=500)
 >>> isinstance(transform, SpectralTransform)
 True
->>> Connectivity.from_transform(transform).coherence_magnitude().shape
+>>> Connectivity.from_transform(transform).magnitude_squared_coherence().shape
 (1, 501, 3, 3)
 
 ```
@@ -362,6 +496,14 @@ facts needed to interpret it. Settings use one JSON record:
 | `selected_frequency_lower`, `selected_frequency_upper` | The lowest and highest bins in that interval, before any `frequency_resolution` subsampling or `frequency_decimation`. |
 | `frequency_interval_closed` | `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
 | `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. Decimation and band reduction keep the interval record, which still names the interval they were drawn from; the `frequency` (or `band`) coordinate shows what was returned. |
+| `measure`, `measure_kwargs_json` | The measure name the caller requested and its keyword arguments, on each measure's variables. A result requested by a deprecated name (`coherence_magnitude`) records that name, and its variable has that name too. |
+| `long_name`, `units`, `interpretation` | How to read the measure variable, from `list_measures()`. With `sign_convention`, the value range, and `diagonal_policy` (below), these are on each measure variable and on `group_delay`'s other value variables, `group_delay_slope` and `group_delay_r_value` (range [-1, 1], with the slope's sign), which have their own; group membership and spatial vectors, filters, and patterns carry none. Band reduction names its reduction (mean, circular mean, complex mean, or integral) at the start of `interpretation` and `formula`, and an integral rewrites `long_name` and `units`; cropping and decimation change none of the measure attributes. |
+| `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
+| `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The estimator's theoretical range (see `docs/CONNECTIVITY_METRIC_RANGES.md` for when a computed value can lie outside it); an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
+| `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
+| `diagonal_policy` | What a self-connection holds, one of the policies defined in the policy table of `docs/CONNECTIVITY_METRIC_RANGES.md` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay_slope` and `group_delay_r_value`, whose diagonals differ. |
+| `diagonal_value` | Where the policy is `constant` or `rounding_noise`: the (nominal) value, a float. Omitted for the other policies. |
+| `nan_for_zero_power_signal` | 1 if every entry involving a zero-power (flat) signal is NaN, else 0 (defined below the policy table). On each measure variable. |
 
 ```python
 >>> schema_result = multitaper_connectivity(
@@ -462,7 +604,7 @@ frequency and the signal labels become the `source`/`target` coordinates:
 ...     dims=("time", "trial", "signal"),
 ...     coords={"time": np.arange(1000) / 500, "signal": ["CA1", "CA3", "PFC"]},
 ... )
->>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+>>> coherence = multitaper_connectivity(da, method="magnitude_squared_coherence")
 >>> coherence.attrs["sampling_frequency"]
 500.0
 >>> coherence.source.values.tolist()
@@ -476,7 +618,7 @@ For other dimension names, say which dimension plays which role:
 >>> custom = da.rename(time="t", trial="epoch", signal="channel")
 >>> coherence = multitaper_connectivity(
 ...     custom,
-...     method="coherence_magnitude",
+...     method="magnitude_squared_coherence",
 ...     time_dim="t",
 ...     trial_dim="epoch",
 ...     signal_dim="channel",
@@ -521,7 +663,7 @@ If you hit an error or a warning:
 >>> elapsed = stamped.assign_coords(
 ...     time=(stamped.time - stamped.time[0]) / np.timedelta64(1, "s")
 ... )
->>> multitaper_connectivity(elapsed, method="coherence_magnitude").attrs["sampling_frequency"]
+>>> multitaper_connectivity(elapsed, method="magnitude_squared_coherence").attrs["sampling_frequency"]
 500.0
 
 ```

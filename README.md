@@ -79,7 +79,7 @@ from spectral_connectivity import multitaper_connectivity
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     time_halfbandwidth_product=3,
 )
 # -> DataArray with dims (time, frequency, source, target)
@@ -88,7 +88,7 @@ coherence = multitaper_connectivity(
 measures = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method=["coherence_magnitude", "imaginary_coherence", "phase_locking_value"],
+    method=["magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value"],
 )
 ```
 
@@ -112,7 +112,7 @@ params = suggest_parameters(
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     time_halfbandwidth_product=params["time_halfbandwidth_product"],
     time_window_duration=params["time_window_duration"],
 )
@@ -139,7 +139,7 @@ Crop, decimate, or aggregate the frequency coordinate without losing labels:
 band_connectivity = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
-    method="coherence_magnitude",
+    method="magnitude_squared_coherence",
     frequency_range=(4, 100),
     frequency_bands={"theta": (4, 8), "alpha": (8, 13), "beta": (13, 30)},
 )
@@ -196,7 +196,7 @@ c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
 power = c.power()  # spectral power
-coherence = c.coherence_magnitude()
+coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)
 # Exact Vidaurre CaCoh is complex and component-resolved. Rich MIC uses the
@@ -207,7 +207,9 @@ mic = c.maximized_imaginary_coherency_components(brain_area_labels, n_components
 
 The xarray interfaces preserve these non-pairwise contracts as labeled axes:
 group measures use `source_group`/`target_group`; CaCoh and rich MIC use
-`connection`, `component`, `side`, and `signal` plus group-membership metadata;
+`connection`, `component`, `side` (`"source"` or `"target"`, the connection's
+`connection_source_group` or `connection_target_group`), and `signal` plus
+group-membership metadata;
 delay exposes a `candidate` axis; global coherence returns score and vector
 variables; and group delay returns delay, slope, and correlation variables.
 `frequency_range=(low, high)` includes both endpoints. Phase slope, group delay,
@@ -244,7 +246,7 @@ wavelet = MorletWavelet(
     edge_mode="nan",
 )
 
-stft_coherence = Connectivity.from_transform(stft).coherence_magnitude()
+stft_coherence = Connectivity.from_transform(stft).magnitude_squared_coherence()
 ```
 
 Which transform? Use `Multitaper` for stationary spectra with controlled
@@ -289,7 +291,7 @@ Functional
 
 1. coherency
 2. cross_spectral_density
-3. coherence_magnitude and coherence_phase
+3. magnitude_squared_coherence and coherence_phase
 4. imaginary_coherence and signed imaginary_coherency
 5. partial_coherence
 6. canonical_coherence and exact complex canonical_coherency (CaCoh)

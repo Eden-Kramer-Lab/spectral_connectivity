@@ -96,33 +96,33 @@ def composite_results(time_series):
         smoothing_time=0.2,
         edge_mode="nan",
     )
-    morlet = connectivity_to_xarray(morlet_transform, "coherence_magnitude")
+    morlet = connectivity_to_xarray(morlet_transform, "magnitude_squared_coherence")
     return {
         "default_dataset": multitaper_connectivity(time_series, sampling_frequency=500),
         "band_reduced": multitaper_connectivity(
             time_series,
             sampling_frequency=500,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             frequency_bands={"theta": (4, 8), "gamma": (30, 50)},
         ),
         "squeezed": multitaper_connectivity(
             time_series[..., :2],
             sampling_frequency=500,
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
             squeeze=True,
         ),
         "fourier_two_sided": fourier_connectivity(
             two_sided,
             frequencies=np.fft.fftfreq(64, 1 / 100),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         ),
         "fourier_one_sided": fourier_connectivity(
             one_sided,
             frequencies=np.fft.rfftfreq(64, 1 / 100),
-            method="coherence_magnitude",
+            method="magnitude_squared_coherence",
         ),
         "fourier_unlabeled": fourier_connectivity(
-            two_sided, method="coherence_magnitude", is_one_sided=False
+            two_sided, method="magnitude_squared_coherence", is_one_sided=False
         ),
         "morlet_validity": morlet,
         "labeled_input": multitaper_connectivity(
@@ -136,7 +136,7 @@ def composite_results(time_series):
                 attrs={"units": "uV", "subject": "rat-1"},
             ),
             sampling_frequency=500,
-            method=["power", "coherence_magnitude"],
+            method=["power", "magnitude_squared_coherence"],
         ),
         "morlet_band": frequency_band_reduce(morlet, {"lo": (4, 8)}),
         "stft": connectivity_to_xarray(
@@ -211,3 +211,18 @@ def test_complex_results_roundtrip_with_netcdf4_auto_complex(measure_results, tm
         opener = xr.open_dataset if isinstance(result, xr.Dataset) else xr.open_dataarray
         with opener(path, engine="netcdf4", auto_complex=True) as loaded:
             xr.testing.assert_identical(loaded.load(), result)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_component_selectors_survive_a_roundtrip(measure_results, engine, tmp_path):
+    """Component results are selected by ``side`` and the connection's source
+    and target groups, and those selectors work the same on a saved file."""
+    result = measure_results["maximized_imaginary_coherency_components"]
+    loaded = _roundtrip(result, tmp_path / "result.nc", _engine(engine))
+    assert loaded.side.values.tolist() == ["source", "target"]
+    assert loaded.connection_source_group.values.tolist() == ["a"]
+    assert loaded.connection_target_group.values.tolist() == ["b"]
+    patterns = "maximized_imaginary_coherency_components_patterns"
+    xr.testing.assert_identical(
+        loaded[patterns].sel(side="target"), result[patterns].sel(side="target")
+    )

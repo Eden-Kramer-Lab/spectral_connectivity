@@ -52,6 +52,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
+| `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 
 ### Added
@@ -83,7 +84,12 @@ directly with results from 2.x.
   filters, patterns, connections, and group membership. The new
   `maximized_imaginary_coherency_components` exposes the same rich result schema
   for multiple MIC singular components; the historical score-only APIs remain
-  available unchanged. Both are vectorized over the time/frequency axes on the
+  available unchanged. In the wrappers' results each connection names its
+  `connection_source_group` and `connection_target_group`, and filters and
+  patterns have a `side` axis, `"source"` or `"target"`, over a `signal` axis.
+  `canonical_coherency` is a different estimator from the historical
+  `canonical_coherence` (the squared canonical correlation), not its square
+  root: its magnitude is the unsquared, phase-optimized coherence. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
 - `Connectivity.clear_cache()` releases the intermediates cached for reuse
@@ -195,9 +201,29 @@ directly with results from 2.x.
   most common tasks (functional and directed connectivity, reading the labeled
   output, frequency bands, and bringing your own Fourier coefficients).
 - `MeasureInfo` records what each measure's values mean: `long_name`, `units`,
-  `value_range`, `is_complex`, the result's `dims`, and an `interpretation`
-  that includes the sign convention. The measure table in
-  `docs/CONNECTIVITY_METRIC_RANGES.md` is generated from it.
+  `value_range`, `is_complex`, the result's `dims`, an `interpretation`, the
+  `sign_convention` of measures whose sign or angle says which signal leads,
+  the `diagonal_policy` (and `diagonal_value`) of its self-connections, and,
+  for the coherency family, a `quantity` (`magnitude`, `squared_magnitude`,
+  `signed`, `phase`, or `complex`) and `formula`. The measure table in
+  `docs/CONNECTIVITY_METRIC_RANGES.md`, with its Diagonal column and a formula
+  table, is generated from it.
+- Each measure variable of a wrapper result records how to read it in
+  NetCDF-safe attributes from the same registry: `interpretation`,
+  `sign_convention`, `value_range_lower`/`value_range_upper` (an unbounded side
+  is omitted; complex measures add `value_range_applies_to="magnitude"`),
+  `quantity` and `formula` for the coherency family, `diagonal_policy`
+  (`masked_nan`, `undefined_nan`, `constant`, `rounding_noise`, `estimated`, or
+  `not_applicable`, defined in the policy table of
+  `docs/CONNECTIVITY_METRIC_RANGES.md`) with `diagonal_value` beside a nominal
+  value, and `nan_for_zero_power_signal`. `group_delay_slope` and
+  `group_delay_r_value` carry their own records. No
+  diagonal value changed; the cookbook shows how to mask or fill diagonals
+  uniformly. Band reduction keeps these attributes true of the band values:
+  `interpretation` and `formula` name the reduction (mean, circular mean,
+  complex mean, or integral) that made each value, and the range, sign
+  convention, `quantity`, and `diagonal_policy`, which hold of the band values,
+  are kept.
 - Every `Connectivity` measure's docstring has a runnable example, and every
   directed measure states its array orientation.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
@@ -492,6 +518,19 @@ Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
 where noted), warns with a `DeprecationWarning` that names its replacement, and
 is removed in 4.0.
 
+- `coherence_magnitude`, as the `Connectivity` method and as a `method` string
+  of `multitaper_connectivity`, `fourier_connectivity`, `connectivity_to_xarray`
+  and `Connectivity.jackknife`: use `magnitude_squared_coherence`, the same
+  calculation under a name that says it is squared (as SciPy's
+  `scipy.signal.coherence` documents). It is the default result variable, and
+  the name (not the old one) that appears in `DEFAULT_METHODS`,
+  `list_measures()`, and the measure table; the old name is not listed or
+  computed by default. A result requested
+  by the old name keeps the variable name `coherence_magnitude` and records
+  `measure="coherence_magnitude"` (the name asked for), so 2.x selectors keep
+  working and a saved file says which name produced it; its values and other
+  attributes are those of `magnitude_squared_coherence`. Requesting both names
+  in one call raises `ValueError`.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
@@ -577,7 +616,7 @@ is removed in 4.0.
   figures are now labeled correctly.
 - Warnings from `Connectivity` measures, the spectral Granger kernels, and the
   Wilson factorization now name the user's line. Several pointed inside the
-  package instead (e.g. `coherence_magnitude`'s single-observation warning, and
+  package instead (e.g. `magnitude_squared_coherence`'s single-observation warning, and
   every Granger NaN-pair warning reached through `multitaper_connectivity`),
   which also defeated per-module warning filters.
 - The input warnings raised while `multitaper_connectivity` builds its

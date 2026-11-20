@@ -70,6 +70,32 @@ logger = getLogger(__name__)
 _NON_MEASURE_METHODS = frozenset(
     {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
 )
+# Measure names released in 2.x and replaced in 3.0, mapped to the canonical
+# name. Each still works through 3.x with a DeprecationWarning and is removed
+# in 4.0; the canonical measure is the one registered and listed.
+_DEPRECATED_MEASURE_NAMES: dict[str, str] = {
+    "coherence_magnitude": "magnitude_squared_coherence",
+}
+
+
+def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
+    """The canonical name of ``method``; a deprecated name warns at the caller.
+
+    ``spelling`` writes a name the way the caller did, e.g. ``"method={!r}"``,
+    for the old and new spellings in the warning.
+    """
+    canonical = _DEPRECATED_MEASURE_NAMES.get(method)
+    if canonical is None:
+        return method
+    warnings.warn(
+        f"{spelling.format(method)} is deprecated and will be removed in 4.0; use "
+        f"{spelling.format(canonical)}, which gives the same values.",
+        DeprecationWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+    return canonical
+
+
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -104,9 +130,11 @@ class MultivariateConnectivityResult:
 
     ``scores`` has shape ``(..., frequency, connection, component)``. Filters
     and patterns, when present, append ``(side, signal)`` where side 0 is the
-    first group and side 1 is the second. Entries for signals outside a side's
-    group are NaN. ``connections`` contains the corresponding group-label pair
-    for each connection and ``group_membership`` has shape ``(group, signal)``.
+    connection's source (first) group and side 1 its target (second) group;
+    the xarray wrappers label them ``side="source"`` and ``side="target"``.
+    Entries for signals outside a side's group are NaN. ``connections``
+    contains the corresponding group-label pair for each connection and
+    ``group_membership`` has shape ``(group, signal)``.
 
     Attributes
     ----------
@@ -118,7 +146,9 @@ class MultivariateConnectivityResult:
         connection cannot supply (its smaller group has fewer channels than the
         requested ``n_components``) is NaN.
     connections : NDArray, shape (connection, 2)
-        The ``(first_group_label, second_group_label)`` pair for each connection.
+        The ``(source_group_label, target_group_label)`` pair for each
+        connection, the wrappers' ``connection_source_group`` and
+        ``connection_target_group`` coordinates.
     group_labels : NDArray, shape (group,)
         Sorted unique group labels.
     group_membership : NDArray[bool], shape (group, signal)
@@ -763,7 +793,7 @@ class Connectivity:
     ... )
     >>> coeffs[:, :, :, 10, 1] = coeffs[:, :, :, 10, 0] * np.exp(1j * phase_diff)
     >>> conn = Connectivity(coeffs, expectation_type="trials_tapers")
-    >>> coherence = conn.coherence_magnitude()
+    >>> coherence = conn.magnitude_squared_coherence()
     >>> coherence.shape  # (n_times, non-negative freqs, n_signals, n_signals)
     (50, 51, 2, 2)
     >>> print(f"Peak coherence: {np.max(coherence[:, 10, 0, 1]):.3f}")
@@ -920,9 +950,9 @@ class Connectivity:
         >>> rng = np.random.default_rng(0)
         >>> fourier_coefficients = rng.standard_normal((1, 5, 3, 16, 4)) + 0j
         >>> connectivity = Connectivity(fourier_coefficients)
-        >>> coherence = connectivity.coherence_magnitude()
+        >>> coherence = connectivity.magnitude_squared_coherence()
         >>> connectivity.clear_cache()
-        >>> bool(np.array_equal(connectivity.coherence_magnitude(), coherence, equal_nan=True))
+        >>> bool(np.array_equal(connectivity.magnitude_squared_coherence(), coherence, equal_nan=True))
         True
         """
         # Discovering descriptors avoids a second, hand-maintained registry that
@@ -1670,7 +1700,7 @@ class Connectivity:
         This is the reduced result of ``_expectation_cross_spectral_matrix()``.
         It is reused within a measure (``coherency`` divides it by power) and
         across measures that share one ``Connectivity`` instance
-        (``coherence_magnitude``, ``coherence_phase``, ``imaginary_coherence``,
+        (``magnitude_squared_coherence``, ``coherence_phase``, ``imaginary_coherence``,
         pairwise spectral Granger). Only the reduced ``(..., n_signals,
         n_signals)`` form is cached, never the observation-resolved
         ``_cross_spectral_matrix``. Invalidated with the other cached
@@ -1915,8 +1945,10 @@ class Connectivity:
         ----------
         method : str
             Name of a public, real-valued connectivity measure to recompute,
-            e.g. ``"coherence_magnitude"``. Complex-valued and tuple-valued
-            measures are not supported.
+            e.g. ``"magnitude_squared_coherence"``. Complex-valued and
+            tuple-valued measures are not supported. The deprecated
+            ``"coherence_magnitude"`` is accepted with a ``DeprecationWarning``
+            through 3.x.
         confidence_level : float, default=0.95
             Two-sided coverage of the interval, in (0, 1). The critical value
             is Student t with ``n_observations - 1`` degrees of freedom.
@@ -1926,7 +1958,7 @@ class Connectivity:
 
             - ``"log"`` for ``power``;
             - ``"fisher_squared"`` (``atanh(sqrt(.))``) for the
-              magnitude-squared measures in ``[0, 1]``: ``coherence_magnitude``
+              magnitude-squared measures in ``[0, 1]``: ``magnitude_squared_coherence``
               and ``partial_coherence``;
             - ``"fisher"`` (``atanh(.)``) for the magnitudes in ``[0, 1]``:
               ``phase_locking_value`` and ``imaginary_coherence``. For these
@@ -1979,7 +2011,7 @@ class Connectivity:
         (``"auto"``) 95% intervals, with independent complex-Gaussian
         observations and 5 to 100 observations per dataset:
 
-        - ``coherence_magnitude`` (``fisher_squared``): 94-95% when the true
+        - ``magnitude_squared_coherence`` (``fisher_squared``): 94-95% when the true
           ``|coherency|`` is 0.3-0.8, but at zero true coherence the interval
           excludes 0 in 11-15% of datasets, and more observations do not help
           (the estimated magnitude's spread shrinks with ``n`` at the same
@@ -2028,6 +2060,7 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
+        method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
             method.startswith("_")
@@ -2131,7 +2164,7 @@ class Connectivity:
         if transformation == "auto":
             if method == "power":
                 resolved_transformation = "log"
-            elif method in {"coherence_magnitude", "partial_coherence"}:
+            elif method in {"magnitude_squared_coherence", "partial_coherence"}:
                 # These return magnitude-*squared* coherence, whose
                 # variance-stabilizing transform is atanh(sqrt(.)), not atanh(.).
                 resolved_transformation = "fisher_squared"
@@ -2272,7 +2305,9 @@ class Connectivity:
         complex_coherency : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Complex coherency between all signal pairs; Hermitian in the signal
-            pair, with its angle given by :meth:`coherence_phase`.
+            pair, with its angle given by :meth:`coherence_phase`. The diagonal
+            is NaN: the package masks self-coherency, which is 1 for a signal
+            with nonzero power.
 
         Notes
         -----
@@ -2313,7 +2348,7 @@ class Connectivity:
         """Device-native complex coherency (see the public ``coherency``).
 
         Kept on the active array namespace (``xp``) so internal consumers --
-        ``coherence_magnitude``/``coherence_phase``, ``group_delay``, ``delay``,
+        ``magnitude_squared_coherence``/``coherence_phase``, ``group_delay``, ``delay``,
         ``phase_slope_index`` -- operate on device arrays without a premature
         host transfer; the public ``coherency`` converts the result to NumPy.
         """
@@ -2340,6 +2375,7 @@ class Connectivity:
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Phase angles in radians. Positive ``[..., i, j]`` means signal ``i``
             leads signal ``j``; the result is antisymmetric in the signal pair.
+            The diagonal is NaN, the angle of coherency's masked diagonal.
 
         Notes
         -----
@@ -2373,23 +2409,29 @@ class Connectivity:
         return phase
 
     @_asnumpy
-    def coherence_magnitude(self) -> NDArray[np.floating]:
+    def magnitude_squared_coherence(self) -> NDArray[np.floating]:
         """Return the magnitude squared of the complex coherency.
 
-        Note that the squared modulus of coherency (originally a complex quantity)
-        is the magnitude-squared coherence (i.e., the normalized, real component
-        of coherency). This value should be bounded by 0 and 1.
+        ``|S_ij|^2 / (S_ii * S_jj)``, the squared modulus of :meth:`coherency`,
+        with ``S_ij = E[X_i conj(X_j)]``. This is the quantity
+        :func:`scipy.signal.coherence` calls coherence.
+
+        .. versionadded:: 3.0
+           The canonical name of the calculation 2.x called
+           ``coherence_magnitude``, which is deprecated.
 
         Returns
         -------
-        magnitude : array
+        magnitude_squared_coherence : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Magnitude-squared coherence values (symmetric in the signal pair).
+            The diagonal is NaN: the package masks self-coherence, which is 1
+            for a signal with nonzero power.
 
         Notes
         -----
-        **Range**: [0, 1]. Implementation may produce tiny numerical excursions
-        beyond bounds due to floating-point precision.
+        **Range**: [0, 1]; values are clipped to it, removing floating-point
+        excursions beyond the bounds.
 
         References
         ----------
@@ -2409,15 +2451,34 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> coherence = connectivity.coherence_magnitude()
+        >>> coherence = connectivity.magnitude_squared_coherence()
         >>> coherence.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
         >>> round(float(coherence[0, 20, 0, 1]), 1)  # strong coupling at 10 Hz (bin 20)
         0.6
+        >>> # The squared magnitude of coherency, not its magnitude.
+        >>> coherency = connectivity.coherency()
+        >>> bool(np.allclose(coherence[0, 20, 0, 1], abs(coherency[0, 20, 0, 1]) ** 2))
+        True
         """
         magnitude = _squared_magnitude(self._coherency())
         clipped: NDArray[np.floating] = xp.clip(magnitude, 0, 1)
         return clipped
+
+    def coherence_magnitude(self) -> NDArray[np.floating]:
+        """Return magnitude-squared coherence (deprecated name).
+
+        .. deprecated:: 3.0
+           Use :meth:`magnitude_squared_coherence`, which returns the same
+           values. ``coherence_magnitude`` is removed in 4.0.
+
+        Returns
+        -------
+        magnitude_squared_coherence : array
+            Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
+        """
+        _resolve_deprecated_measure_name("coherence_magnitude", "Connectivity.{}()")
+        return self.magnitude_squared_coherence()
 
     @_asnumpy
     def imaginary_coherence(self) -> NDArray[np.floating]:
@@ -2437,11 +2498,16 @@ class Connectivity:
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
             Imaginary coherence magnitudes (symmetric in the signal pair; see
             :meth:`imaginary_coherency` for the signed, lead/lag-aware version).
+            The diagonal is 0 (to within rounding), the imaginary part of a
+            signal's coherency with itself, except for a zero-power signal,
+            whose entries are all NaN.
 
         Notes
         -----
-        **Range**: [0, 1]. Magnitude version of imaginary part of coherency.
-        Raw imaginary component ranges in [-1, 1].
+        **Range**: [0, 1]. ``|Im(S_ij)| / sqrt(S_ii * S_jj)``, the magnitude of
+        :meth:`imaginary_coherency`, which ranges in [-1, 1]. The two differ on
+        the diagonal: 0 here, NaN there, where the package masks it like
+        :meth:`coherency`.
 
         References
         ----------
@@ -2496,8 +2562,12 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: ``[-1, 1]``.  The diagonal and pairs involving zero-power
-        signals are undefined and returned as NaN, matching :meth:`coherency`.
+        **Range**: ``[-1, 1]``. ``Im(S_ij) / sqrt(S_ii * S_jj)``. Pairs
+        involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
+        them with ``nan + 0j``, whose imaginary part is 0, so use
+        :meth:`power` to find such signals. The diagonal is NaN, a mask
+        matching :meth:`coherency`: the imaginary part of a signal's coherency
+        with itself is 0, which :meth:`imaginary_coherence` returns there.
 
         Examples
         --------
@@ -2549,7 +2619,8 @@ class Connectivity:
 
         Notes
         -----
-        **Range**: ``[0, 1]``. The diagonal is undefined and returned as NaN.
+        **Range**: ``[0, 1]``. The diagonal is NaN: the package masks a
+        signal's partial coherence with itself, which is 1.
         This undirected measure is distinct from partial directed coherence.
         Regularization stabilizes inversion but also changes the estimand, so
         analyses should report a non-default value.
@@ -2575,7 +2646,7 @@ class Connectivity:
         >>> partial.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 3, 3)
         >>> # Signals 1 and 2 are coherent, but not once signal 0 is accounted for (10 Hz).
-        >>> bool(connectivity.coherence_magnitude()[0, 20, 1, 2] > 0.5)
+        >>> bool(connectivity.magnitude_squared_coherence()[0, 20, 1, 2] > 0.5)
         True
         >>> bool(partial[0, 20, 1, 2] < 0.05)
         True
@@ -2689,9 +2760,16 @@ class Connectivity:
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
         """Return the historical magnitude-squared canonical correlation.
 
-        The canonical coherence finds two sets of weights such that the
-        coherence between the linear combination of group1 and the linear
-        combination of group2 is maximized.
+        The canonical coherence finds two sets of complex weights such that the
+        magnitude-squared coherence between the linear combination of group1
+        and the linear combination of group2 is maximized:
+        ``max_{a, b} |a^H S_12 b|^2 / ((a^H S_11 a) (b^H S_22 b))``, the square
+        of the groups' first canonical correlation. For two single-signal
+        groups it is :meth:`magnitude_squared_coherence`.
+
+        This is a different estimator from :meth:`canonical_coherency`, which
+        maximizes over real weights and one phase and reports the unsquared
+        coherence; neither is the square or square root of the other.
 
         Parameters
         ----------
@@ -2702,14 +2780,15 @@ class Connectivity:
         -------
         canonical_coherence : array
             Shape ``(n_time_windows, n_nonnegative_frequencies, n_groups, n_groups)``.
-            The maximal coherence for each group pair (symmetric; NaN diagonal).
+            The maximal coherence for each group pair (symmetric). The diagonal
+            is NaN: a group with itself is not computed.
         labels : array, shape (n_groups,)
             The sorted unique group labels that correspond to `n_groups`.
 
         Notes
         -----
         **Range**: [0, 1]. Maximal coherence values are bounded like
-        coherence magnitude.
+        magnitude-squared coherence.
 
         Trials x tapers are the observations. A group pair with more signals
         than observations has intersecting observation subspaces, which forces
@@ -2751,6 +2830,14 @@ class Connectivity:
         >>> labels
         array(['a', 'b'], dtype='<U1')
         >>> bool(coherence[0, 20, 0, 1] > 0.5)  # strong a-b coupling at 10 Hz (bin 20)
+        True
+        >>> # For single-signal groups it is the pairwise magnitude-squared coherence.
+        >>> two = Connectivity.from_transform(
+        ...     Multitaper(signals[..., [0, 2]], sampling_frequency=500)
+        ... )
+        >>> single, _ = two.canonical_coherence(["a", "b"])
+        >>> pairwise = two.magnitude_squared_coherence()
+        >>> bool(np.allclose(single[..., 0, 1], pairwise[..., 0, 1]))
         True
         """
         labels, group_indices, _ = self._validated_group_indices(group_labels)
@@ -2888,7 +2975,15 @@ class Connectivity:
         the maximised coherence and phase encoded using MNE's
         ``magnitude * exp(-1j * phi)`` convention.
 
-        Unlike the historical :meth:`canonical_coherence`, this method returns
+        The first component's score is
+        ``max_{phi, a, b} a^T Re(exp(-1j phi) S_12) b / sqrt((a^T Re(S_11) a)
+        (b^T Re(S_22) b)) * exp(-1j phi)`` over real weights ``a``, ``b``: its
+        magnitude is the maximized coherence, not squared. For two
+        single-signal groups the score is ``conj`` of :meth:`coherency`.
+
+        Unlike the historical :meth:`canonical_coherence`, a different
+        estimator (the squared canonical correlation over complex weights,
+        neither the square nor the square root of this one), this method returns
         component-resolved scores, spatial filters, and Haufe-style patterns.
         Additional components are extracted by CCA-style deflation in the
         whitened space: each is sought in the orthogonal complement of the
@@ -2973,6 +3068,13 @@ class Connectivity:
         >>> result.filters.shape  # (..., n_connections, n_components, side, n_signals)
         (1, 501, 1, 1, 2, 4)
         >>> bool(abs(result.scores[0, 20, 0, 0]) > 0.5)  # |CaCoh| at 10 Hz (bin 20)
+        True
+        >>> # For single-signal groups the score is the conjugate coherency, unsquared.
+        >>> two = Connectivity.from_transform(
+        ...     Multitaper(signals[..., [0, 2]], sampling_frequency=500)
+        ... )
+        >>> score = two.canonical_coherency(["a", "b"]).scores[0, 20, 0, 0]
+        >>> bool(np.isclose(score, np.conj(two.coherency()[0, 20, 0, 1])))
         True
         """
         return self._multivariate_component_result(
@@ -3642,7 +3744,7 @@ class Connectivity:
         """
         # Clip to the documented [0, 1] range: |mean of unit-magnitude entries|
         # is <= 1 mathematically, but floating-point rounding can leave it a few
-        # ulp above 1 (matching the bounds clipping coherence_magnitude applies).
+        # ulp above 1 (matching the bounds clipping magnitude_squared_coherence applies).
         return xp.clip(xp.abs(self._phase_locking_value()), 0.0, 1.0)
 
     @_asnumpy
@@ -3660,7 +3762,14 @@ class Connectivity:
         Notes
         -----
         **Range**: ``[0, 1]``.  Exact zero- or pi-lag locking has a zero
-        numerator and denominator and is defined as zero.
+        numerator and denominator and is defined as zero. A signal with
+        itself is such a case, but its PLV is computed: rounding can leave its
+        real part just below 1 and its imaginary part of rounding size, and
+        the square root in the denominator amplifies that by about
+        ``1 / sqrt(eps)``. The diagonal is therefore rounding noise below about
+        ``sqrt(eps)`` of the computation precision (1.5e-8 in float64,
+        3.5e-4 in float32), and exactly 0 only where the rounding cancels.
+        A zero-power signal's PLV is NaN, and so is its diagonal entry here.
 
         References
         ----------
@@ -5226,7 +5335,8 @@ class Connectivity:
             convention as ``delay``.
         r_value : array, shape (..., n_signals, n_signals)
             Correlation coefficient of the linear phase-frequency fit, with the
-            sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``).
+            sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``). The
+            diagonal is 1, where ``delay`` and ``slope`` are NaN.
 
         Notes
         -----

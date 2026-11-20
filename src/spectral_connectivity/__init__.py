@@ -22,7 +22,7 @@ Examples
 >>> from spectral_connectivity import multitaper_connectivity
 >>> time_series = np.random.default_rng(0).standard_normal((1000, 5, 2))
 >>> coherence = multitaper_connectivity(
-...     time_series, sampling_frequency=500, method="coherence_magnitude"
+...     time_series, sampling_frequency=500, method="magnitude_squared_coherence"
 ... )
 >>> coherence.dims
 ('time', 'frequency', 'source', 'target')

@@ -272,7 +272,7 @@ def test_familiar_multitaper_names_remain_the_single_supported_spelling(data):
     assert not hasattr(mt, "concentration_bandwidth")
 
 
-@pytest.mark.parametrize("method", ["power", ["power", "coherence_magnitude"]])
+@pytest.mark.parametrize("method", ["power", ["power", "magnitude_squared_coherence"]])
 def test_spacing_describes_returned_grid_after_crop_and_decimation(data, method):
     result = multitaper_connectivity(
         data,
@@ -292,7 +292,7 @@ def test_spacing_describes_returned_grid_after_crop_and_decimation(data, method)
             assert variable.attrs["frequency_bin_spacing"] == 6
 
 
-@pytest.mark.parametrize("method", ["power", ["power", "coherence_magnitude"]])
+@pytest.mark.parametrize("method", ["power", ["power", "magnitude_squared_coherence"]])
 def test_band_reduction_drops_obsolete_spacing_but_keeps_provenance(data, method):
     full = multitaper_connectivity(data, 64, time_window_duration=0.5, method=method)
     reduced = frequency_band_reduce(full, {"low": (4, 12)})
@@ -482,7 +482,7 @@ def test_scalar_recording_identifiers_survive_without_trial_conditions(data, ext
     assert result.attrs["n_trials"] == 3
 
 
-@pytest.mark.parametrize("method", ["power", ["power", "coherence_magnitude"]])
+@pytest.mark.parametrize("method", ["power", ["power", "magnitude_squared_coherence"]])
 def test_band_reduction_discards_input_coordinates_named_like_its_own(data, method):
     """An input scalar named like a band coordinate never describes the bands."""
     labeled = xr.DataArray(
@@ -625,7 +625,9 @@ def test_scalar_coordinate_named_like_a_measure_does_not_replace_it(data):
         data, dims=("time", "trial", "signal"), coords={"power": 5, "subject": "rat-1"}
     )
     with pytest.warns(UserWarning, match=r"\['power'\]"):
-        result = multitaper_connectivity(labeled, 64, method=["power", "coherence_magnitude"])
+        result = multitaper_connectivity(
+            labeled, 64, method=["power", "magnitude_squared_coherence"]
+        )
     assert "power" in result.data_vars
     assert "frequency" in result["power"].dims
     assert result.subject.item() == "rat-1"

@@ -11,7 +11,7 @@ it and checks that the fixture recorded the same values).
 # The one-taper phase measures use 1e-9: cross-platform BLAS/FFT roundoff (the
 # fixture was generated on macOS) reaches ~5e-12 on Linux and Windows.
 MEASURES = {
-    "coh": ("coherence_magnitude", "sqrt", 3, 1e-12),
+    "coh": ("magnitude_squared_coherence", "sqrt", 3, 1e-12),
     "imcoh": ("imaginary_coherency", "identity", 3, 1e-12),
     "psi": ("phase_slope_index", "identity", 3, 1e-12),
     "cacoh": ("canonical_coherency", "abs", 3, 1e-7),

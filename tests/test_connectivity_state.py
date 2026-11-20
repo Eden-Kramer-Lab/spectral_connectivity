@@ -102,7 +102,7 @@ def test_coherence_measures_retain_only_power_and_cross_spectrum():
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
     constructed = set(c.__dict__)
 
-    c.coherence_magnitude()
+    c.magnitude_squared_coherence()
     c.coherence_phase()
     c.imaginary_coherence()
 
@@ -117,7 +117,7 @@ def test_clear_cache_frees_intermediates_and_preserves_results():
     c = Connectivity(fourier_coefficients=fourier, expectation_type="trials_tapers")
     constructed = set(c.__dict__)
     measures = [
-        "coherence_magnitude",
+        "magnitude_squared_coherence",
         "weighted_phase_lag_index",
         "directed_transfer_function",
     ]
@@ -166,12 +166,12 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
 
     c = Connectivity(fourier_coefficients=fourier)
     power_before = c.power().copy()
-    coherence_before = c.coherence_magnitude().copy()
+    coherence_before = c.magnitude_squared_coherence().copy()
 
     # Mutating the caller's original array must not reach the warmed instance.
     fourier[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
-    np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
+    np.testing.assert_array_equal(c.magnitude_squared_coherence(), coherence_before)
 
     # The getter returns an independent, read-only copy: an in-place edit raises
     # loudly rather than silently vanishing against a discarded object.
@@ -186,7 +186,7 @@ def test_fourier_coefficients_are_an_immutable_snapshot():
         returned.flags.writeable = True
     returned[...] = 0.0
     np.testing.assert_array_equal(c.power(), power_before)
-    np.testing.assert_array_equal(c.coherence_magnitude(), coherence_before)
+    np.testing.assert_array_equal(c.magnitude_squared_coherence(), coherence_before)
 
 
 def test_fourier_coefficients_getter_returns_fresh_independent_copy():
@@ -324,7 +324,7 @@ def test_from_multitaper_adoption_matches_copy_numerically():
     copied = Connectivity(to_device(m.fft()))  # forces the copy path
 
     np.testing.assert_array_equal(adopted.power(), copied.power())
-    for measure in ("coherence_magnitude", "imaginary_coherence"):
+    for measure in ("magnitude_squared_coherence", "imaginary_coherence"):
         a = getattr(adopted, measure)()
         b = getattr(copied, measure)()
         # equal including matching NaN positions (the coherence diagonal)
@@ -491,7 +491,9 @@ def test_from_multitaper_connectivity_is_picklable():
     conn = Connectivity.from_multitaper(m)
 
     restored = pickle.loads(pickle.dumps(conn))
-    np.testing.assert_allclose(restored.coherence_magnitude(), conn.coherence_magnitude())
+    np.testing.assert_allclose(
+        restored.magnitude_squared_coherence(), conn.magnitude_squared_coherence()
+    )
 
 
 class _SlottedConnectivity(Connectivity):
@@ -521,4 +523,6 @@ def test_pickle_and_copy_preserve_subclass_slots(subclass):
         copy.deepcopy(conn),
     ):
         assert clone.extra_metadata == {"subject": "s1"}
-        np.testing.assert_allclose(clone.coherence_magnitude(), conn.coherence_magnitude())
+        np.testing.assert_allclose(
+            clone.magnitude_squared_coherence(), conn.magnitude_squared_coherence()
+        )

@@ -1,7 +1,8 @@
 # 3.0 API and result consistency decisions
 
 **Status: step 1 merged; step 2 implemented and validated locally; step 3
-(D4, D23) implemented on `refactor/frequency-selection`, see below.**
+(D4, D23) implemented on `refactor/frequency-selection`; step 4 (D5-D8, D25)
+implemented on `refactor/coherence-naming`, see below.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -447,6 +448,132 @@ Rulings where the rules above were silent:
 - [x] Additive band-power integrals for adjacent inclusive bands; their means
   share the endpoint bin.
 - [ ] Issue #101 entry for the `frequencies_of_interest` alias (orchestrator).
+
+## Step 4 implementation
+
+**Scope:** D5-D8 and D25, the last bullet of "Rules for the shared metadata",
+and the D6 migration row. **Branch:** `refactor/coherence-naming`, based on
+step 3's final head (now `0480d01`). Implemented and validated locally on
+2026-11-19: 2,239 tests passed with 16 skips on the main CPU environment, and
+2,124 passed with 101 skips on Python 3.10 with the NumPy 1.24/SciPy
+1.11.1/xarray 2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on the
+floors), Ruff formatting/lint, and mypy passed.
+
+Rulings where the rules above were silent:
+
+- **Alias resolution.** `_DEPRECATED_MEASURE_NAMES` in `connectivity.py` (next
+  to `_NON_MEASURE_METHODS`, so the registry and `jackknife` share it) maps
+  `coherence_magnitude` to `magnitude_squared_coherence`, and
+  `_resolve_deprecated_measure_name` beside it writes the one warning and
+  returns the canonical name, for the alias method, `jackknife`, and the
+  wrappers' single entry point, `_requested_methods` (also used by
+  `connectivity_to_xarray`). That entry point rejects both spellings,
+  validates, and resolves once; everything downstream works with canonical
+  names, and only the result variable's name and `measure` use the requested
+  one. The registry has one record, under the canonical name.
+- **Provenance.** A result requested by the old name keeps the variable name
+  and records `measure="coherence_magnitude"`; every other attribute is the
+  canonical measure's. No extra "canonical measure" attribute is added: the
+  migration table maps the name.
+- **Both spellings.** A `method` list naming both raises `ValueError`.
+  `connectivity_to_xarray`'s default `method` becomes the canonical name, so
+  its default result variable changes like the wrappers'.
+- **jackknife.** It accepts the old name with one warning and uses the
+  canonical name throughout, so its automatic `fisher_squared` scale is kept
+  (an unknown name would fall to `identity`).
+- **Diagonal policy vocabulary.** `masked_nan` (a package mask of a defined
+  self-value), `undefined_nan` (no self-connection: the Granger family),
+  `constant` (registry `diagonal_value`: 0, 0.5, or 1, to within the
+  rounding of the averages behind it, which NumPy 2 often makes exact and
+  NumPy 1.24 does not), `rounding_noise` (nominally `diagonal_value`, but
+  computed from rounding residues the formula amplifies), `estimated`
+  (cross-spectral density, transfer-function family), `not_applicable`
+  (power, global coherence, component measures). A group with itself in
+  `canonical_coherence`, MIC, and MIM is `masked_nan` (computable, not
+  computed); `delay`, `group_delay`, and `phase_slope_index` inherit
+  coherency's mask. `group_delay_r_value`'s diagonal is 1 (`constant`) where
+  delay and slope are NaN, so each `group_delay` variable records its own.
+- **Rounding of diagonals.** `corrected_imaginary_phase_locking_value` is
+  `rounding_noise` with nominal value 0, not `constant`: its self-connection is
+  the 0/0 it defines as 0, but computed as `|Im(PLV)|` (of order eps) over
+  `sqrt(1 - Re(PLV)^2)` (of order sqrt(eps) when `Re` rounds just below 1), so
+  it is noise below about sqrt(eps), measured up to 6e-10 in float64 and 2e-5
+  at complex64 precision under NumPy 1.24. Tests bound a constant diagonal by
+  `4 * (n_observations + 4) * eps` (about 4 eps per normalized term, n eps for
+  the sum, and PPC's factor 2n/(n - 1) <= 4; it holds with one and two
+  observations), the `rounding_noise` diagonal by `sqrt(eps)`, and the
+  cross-spectral density diagonal's imaginary part by `n_observations * eps`
+  times its real part. `value_range` is the theoretical range, which rounding
+  can cross (PPC's self-value reaches 1 + 1e-15).
+- **Flat signals.** `constant` holds for signals with nonzero power.
+  `nan_for_zero_power_signal` (0/1 on every measure variable) marks the
+  measures for which every entry involving a zero-power signal, the diagonal
+  included, is NaN; a test derives it from a flat-channel run of every
+  measure and companion. It holds for the coherence measures, PLV, PPC, the
+  corrected imaginary PLV, and the delay measures; not for the phase lag
+  indices, the cross-spectrum, `imaginary_coherency` (0, not NaN, off the
+  diagonal), partial coherence, the Granger and transfer-function families,
+  or measures without signal-pair axes.
+- **One vocabulary.** `_DIAGONAL_POLICIES` in the registry defines the six
+  policies (with the constant policy's rounding bound) and
+  `_NAN_FOR_ZERO_POWER_SIGNAL` the flag; the ranges page's policy table is
+  generated from them, and other docs refer to it.
+- **Recorded nominal value.** Beside `constant` or `rounding_noise`, a
+  variable records `diagonal_value` (a float).
+- **Companion records.** A `_VariableSpec` holds what a result variable needs;
+  `_MeasureSpec` extends it, and group delay's record declares
+  `group_delay_slope` and `group_delay_r_value` as its companions:
+  interpretation, group delay's sign convention, an unbounded slope and a
+  [-1, 1] correlation. Group membership and spatial vectors, filters, and
+  patterns carry no measure record.
+- **dPLI.** Its lead/lag reading moved to `sign_convention`; `interpretation`
+  says what the value is (the fraction of observations in which the source
+  leads, `(1 + phase_lag_index) / 2`), so its row in the generated table
+  changed.
+- **Interpretation attributes.** `interpretation`, `sign_convention`,
+  `value_range_lower`/`value_range_upper` (an infinite side omitted, since not
+  every engine round-trips a bare infinity; `value_range_applies_to=
+  "magnitude"` on complex measures), and `diagonal_policy` go on every
+  measure variable from `_MeasureSpec.result_attrs`. The lead/lag sentence
+  moved from `interpretation` into `sign_convention`; the generated table
+  joins them, so its text is unchanged. `quantity` and `formula` are stated
+  for the coherency family only (the coherence measures, partial coherence,
+  and the two canonical estimators), where the decision rows ask for them.
+- **Band-reduced attributes.** Cropping and decimation select bins and keep
+  every measure attribute. Band reduction, where it rewrites `long_name` and
+  `units`, prefixes `interpretation` and `formula` with the reduction that
+  made each value ("Each value is the mean / circular mean / complex mean /
+  integral over the band ..."), since both describe one bin; the value range,
+  `value_range_applies_to`, `sign_convention`, `quantity`, and
+  `diagonal_policy` hold of band values and are kept.
+- **Commit order.** The canonical name lands first with the old name working
+  silently (same alias resolution, no warning), then the mechanical move of
+  tests and docs, then the warnings, so every commit passes on its own.
+- **Snapshots and fixtures.** The notebook snapshot keys keep their stored
+  names; the mne-connectivity fixture was regenerated (mne-connectivity
+  0.9.0) because its table names our method, and only `our_methods` changed.
+  The benchmark's `--compare` looks a renamed measure up under its old name.
+
+### Step 4 acceptance checklist
+
+- [x] Numerical identity of aliases: the method, the method strings of all
+  three wrappers, and `jackknife` agree exactly with the canonical name
+  (`tests/test_coherence_naming.py`); every registered measure's every
+  variable is bit-identical to the parent `0480d01`, and the benchmark passes at 0.
+- [x] D6 migration example: the default Dataset has no `coherence_magnitude`
+  and old indexing raises (cookbook, CHANGELOG migration row, tests).
+- [x] Explicitly requested old names work, keep their variable names, record
+  them, and warn at the caller's line; package internals do not warn.
+- [x] Unchanged documented diagonals: tests pin every measure's diagonal
+  against its recorded policy and value, with rounding bounds that hold on the
+  minimum-dependency floors too.
+- [x] Component serialization: `connection_source_group`,
+  `connection_target_group`, and `side=["source", "target"]` round-trip with
+  every engine and select the same values.
+- [x] Power's `source` axis and `power.rename(source="signal")` documented.
+- [x] Measure attributes stay true after cropping, decimation, and band
+  reduction (density, coherence, phase, and complex measures).
+- [ ] Issue #101 entry for the `coherence_magnitude` alias (orchestrator).
 
 ## Verification performed for this sheet
 

@@ -179,7 +179,9 @@ class TestCanonicalCoherence:
         assert off_peak.max() < 0.5
         # Group 2 is internally coherent at 40 Hz, so the low between-group
         # value there is not simply an absence of signal.
-        coherence_at_40_hz = conn.coherence_magnitude()[0, np.argmin(np.abs(frequencies - 40))]
+        coherence_at_40_hz = conn.magnitude_squared_coherence()[
+            0, np.argmin(np.abs(frequencies - 40))
+        ]
         assert coherence_at_40_hz[3, 4] > 0.9
 
     @pytest.mark.parametrize(
@@ -239,7 +241,7 @@ class TestCanonicalCoherence:
         """With one signal per group, canonical coherence is the pairwise coherence.
 
         The only linear combination of a single signal is the signal itself, so
-        the maximal between-group coherence is exactly ``coherence_magnitude``.
+        the maximal between-group coherence is exactly ``magnitude_squared_coherence``.
         """
         time_series = self.rng.standard_normal((50, 5, 3))
         conn = Connectivity.from_multitaper(
@@ -249,7 +251,11 @@ class TestCanonicalCoherence:
         )
         canonical_coh, _ = conn.canonical_coherence(np.array([0, 1, 2]))
         np.testing.assert_allclose(
-            canonical_coh, conn.coherence_magnitude(), rtol=0, atol=1e-12, equal_nan=True
+            canonical_coh,
+            conn.magnitude_squared_coherence(),
+            rtol=0,
+            atol=1e-12,
+            equal_nan=True,
         )
 
     @pytest.mark.parametrize("extra", ["duplicate", "scaled_duplicate", "dead"])
@@ -1218,7 +1224,7 @@ class TestAdvancedConnectivityIntegration:
         )
         conn = Connectivity.from_multitaper(m)
 
-        coherence = conn.coherence_magnitude()
+        coherence = conn.magnitude_squared_coherence()
         canonical_coh, _ = conn.canonical_coherence(np.arange(n_signals))
         np.testing.assert_allclose(
             canonical_coh, coherence, rtol=0, atol=1e-12, equal_nan=True

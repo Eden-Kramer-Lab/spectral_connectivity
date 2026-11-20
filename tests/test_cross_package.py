@@ -83,7 +83,9 @@ def test_coherence_matches_nitime(nitime_series):
             "sides": "onesided",
         },
     )  # (n_signals, n_signals, n_frequencies)
-    coherence = connectivity.coherence_magnitude()[0]  # (n_frequencies, n_signals, n_signals)
+    coherence = connectivity.magnitude_squared_coherence()[
+        0
+    ]  # (n_frequencies, n_signals, n_signals)
     off_diagonal = ~np.eye(3, dtype=bool)
     np.testing.assert_allclose(
         coherence[:, off_diagonal],
@@ -176,7 +178,7 @@ def test_measures_match_mne_connectivity_reference(
     ============== ============================================= ==== =====
     MNE            this package                                  NW   atol
     ============== ============================================= ==== =====
-    coh            sqrt(coherence_magnitude)                     3    1e-12
+    coh            sqrt(magnitude_squared_coherence)                     3    1e-12
     imcoh          imaginary_coherency                           3    1e-12
     psi            phase_slope_index over the same (10, 60) Hz   3    1e-12
     cacoh          abs(canonical_coherency component 1)          3    1e-7

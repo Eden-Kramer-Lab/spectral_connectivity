@@ -17,6 +17,7 @@ from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     MeasureInfo,
+    frequency_band_reduce,
 )
 
 
@@ -35,7 +36,10 @@ def test_every_public_connectivity_measure_is_registered():
     """
     import inspect
 
-    from spectral_connectivity.connectivity import _NON_MEASURE_METHODS
+    from spectral_connectivity.connectivity import (
+        _DEPRECATED_MEASURE_NAMES,
+        _NON_MEASURE_METHODS,
+    )
 
     public_methods = {
         name
@@ -43,13 +47,18 @@ def test_every_public_connectivity_measure_is_registered():
         if not name.startswith("_")
         and inspect.isfunction(inspect.getattr_static(Connectivity, name))
     }
-    assert public_methods - _NON_MEASURE_METHODS == set(_MEASURE_SPECS)
+    # A deprecated name is a method standing for a registered measure.
+    assert set(_DEPRECATED_MEASURE_NAMES) <= public_methods
+    assert set(_DEPRECATED_MEASURE_NAMES.values()) <= set(_MEASURE_SPECS)
+    assert public_methods - _NON_MEASURE_METHODS - set(_DEPRECATED_MEASURE_NAMES) == set(
+        _MEASURE_SPECS
+    )
 
 
 def test_returns_measureinfo_records_with_populated_fields():
     """Records expose name, category, description, and capability flags."""
     coherence = next(
-        measure for measure in list_measures() if measure.name == "coherence_magnitude"
+        measure for measure in list_measures() if measure.name == "magnitude_squared_coherence"
     )
     assert isinstance(coherence, MeasureInfo)
     assert coherence.category == "pairwise"
@@ -83,7 +92,7 @@ def test_directed_filter_selects_directed_measures():
 
     undirected = list_measures(directed=False)
     assert all(not measure.is_directed for measure in undirected)
-    assert "coherence_magnitude" in {measure.name for measure in undirected}
+    assert "magnitude_squared_coherence" in {measure.name for measure in undirected}
 
 
 def test_directionality_is_independent_of_spectrum_requirement():
@@ -117,6 +126,11 @@ def test_invalid_category_lists_valid_categories():
     assert "pairwise" in message
 
 
+_MEASURES = {measure.name: measure for measure in list_measures()}
+# The other value variables of a measure's Dataset, by variable name.
+_COMPANIONS = {
+    name: companion for spec in _MEASURE_SPECS.values() for name, companion in spec.companions
+}
 _GROUPS = ["a", "a", "b", "b"]
 _MEASURE_KWARGS = {
     "canonical_coherence": {"group_labels": _GROUPS},
@@ -264,7 +278,7 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
 # What users get when ``method`` is omitted. Pinned explicitly: every other
 # check derives the default set from the same registry flag it would test.
 _DEFAULT_MEASURES = {
-    "coherence_magnitude",
+    "magnitude_squared_coherence",
     "coherence_phase",
     "debiased_squared_phase_lag_index",
     "debiased_squared_weighted_phase_lag_index",
@@ -329,7 +343,7 @@ def test_units_name_the_input_dependence_of_spectral_densities():
     units = {measure.name: measure.units for measure in list_measures()}
     assert units["power"] == "(input units)^2/Hz"
     assert units["cross_spectral_density"] == "(input units)^2/Hz"
-    assert units["coherence_magnitude"] == "1"
+    assert units["magnitude_squared_coherence"] == "1"
     assert units["group_delay"] == "s"
 
 
@@ -449,3 +463,462 @@ def test_wrapper_returns_directed_connectivity_arrays_unchanged(
     # The two computations agree only to roundoff (it varies with the BLAS);
     # swapped axes would differ by orders of magnitude, since 0 -> 1 dominates.
     np.testing.assert_allclose(result.values, expected, rtol=1e-9, atol=1e-12)
+
+
+# What the documentation states about each value variable (the measures and
+# group delay's companions), pinned so that a change to a measure's diagonal,
+# or to what the registry says about it, fails:
+# (diagonal_policy, diagonal_value, nan_for_zero_power_signal).
+_DOCUMENTED_DIAGONALS = {
+    "magnitude_squared_coherence": ("masked_nan", None, True),
+    "coherence_phase": ("masked_nan", None, True),
+    "debiased_squared_phase_lag_index": ("constant", 0.0, False),
+    "debiased_squared_weighted_phase_lag_index": ("constant", 0.0, False),
+    "imaginary_coherence": ("constant", 0.0, True),
+    "pairwise_phase_consistency": ("constant", 1.0, True),
+    "pairwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "phase_lag_index": ("constant", 0.0, False),
+    "phase_locking_value": ("constant", 1.0, True),
+    "power": ("not_applicable", None, False),
+    "weighted_phase_lag_index": ("constant", 0.0, False),
+    "coherency": ("masked_nan", None, True),
+    "cross_spectral_density": ("estimated", None, False),
+    "imaginary_coherency": ("masked_nan", None, False),
+    "partial_coherence": ("masked_nan", None, False),
+    "corrected_imaginary_phase_locking_value": ("rounding_noise", 0.0, True),
+    "directed_phase_lag_index": ("constant", 0.5, False),
+    "subset_pairwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "conditional_spectral_granger_prediction": ("undefined_nan", None, False),
+    "time_reversed_spectral_granger_prediction": ("undefined_nan", None, False),
+    "directed_transfer_function": ("estimated", None, False),
+    "directed_coherence": ("estimated", None, False),
+    "partial_directed_coherence": ("estimated", None, False),
+    "generalized_partial_directed_coherence": ("estimated", None, False),
+    "direct_directed_transfer_function": ("estimated", None, False),
+    "blockwise_spectral_granger_prediction": ("undefined_nan", None, False),
+    "canonical_coherence": ("masked_nan", None, False),
+    "maximized_imaginary_coherency": ("masked_nan", None, False),
+    "multivariate_interaction_measure": ("masked_nan", None, False),
+    "canonical_coherency": ("not_applicable", None, False),
+    "maximized_imaginary_coherency_components": ("not_applicable", None, False),
+    "delay": ("masked_nan", None, True),
+    "global_coherence": ("not_applicable", None, False),
+    "group_delay": ("masked_nan", None, True),
+    "group_delay_slope": ("masked_nan", None, True),
+    "group_delay_r_value": ("constant", 1.0, False),
+    "phase_slope_index": ("masked_nan", None, True),
+}
+# Every value variable and its record: the measures, then their companions.
+_VALUE_VARIABLES = [
+    *((measure.name, measure) for measure in list_measures()),
+    *_COMPANIONS.items(),
+]
+
+# Pairs of axes whose shared labels form a variable's diagonal.
+_PAIR_AXES = (("source", "target"), ("source_group", "target_group"))
+
+
+def _diagonal(variable):
+    """The self-connection entries of a variable with a pair of axes, or None.
+
+    Shape ``(n_signals, ...)``: one slice per signal (or group).
+    """
+    for first, second in _PAIR_AXES:
+        if first in variable.dims and second in variable.dims:
+            return np.stack(
+                [
+                    variable.sel({first: label, second: label}).values
+                    for label in variable[first].values
+                ]
+            )
+    return None
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_diagonal_matches_its_policy(coupled_results, measure):
+    """The recorded ``diagonal_policy`` describes the values on the diagonal."""
+    _assert_diagonal_matches(
+        measure, _main_variable(coupled_results[measure.name], measure.name)
+    )
+
+
+def _rounding(variable, policy="constant"):
+    """How far ``variable``'s values may lie from an exact value by rounding:
+    the bounds that ``_DIAGONAL_POLICIES`` derives, ``4 * (n_observations + 4)
+    * eps`` for an average and ``sqrt(eps)`` for a ``rounding_noise`` diagonal."""
+    eps = np.finfo(np.real(variable.values).dtype).eps
+    if policy == "rounding_noise":
+        return np.sqrt(eps)
+    return 4 * (variable.attrs["n_observations"] + 4) * eps
+
+
+def _assert_diagonal_matches(measure, variable):
+    """``variable``'s diagonal holds what ``measure.diagonal_policy`` says."""
+    diagonal = _diagonal(variable)
+    if measure.diagonal_policy == "not_applicable":
+        assert diagonal is None
+    elif measure.diagonal_policy in {"masked_nan", "undefined_nan"}:
+        assert np.isnan(diagonal).all()
+    elif measure.diagonal_value is not None:
+        _assert_nominal_diagonal(measure, variable, diagonal)
+    else:
+        assert measure.diagonal_policy == "estimated"
+        assert np.isfinite(diagonal).all()
+        assert np.ptp(np.abs(diagonal)) > 0  # data-dependent, not a constant
+
+
+def _assert_nominal_diagonal(measure, variable, diagonal):
+    """``diagonal`` (entries of ``variable``) holds ``measure.diagonal_value``
+    to within the rounding its policy allows."""
+    np.testing.assert_allclose(
+        diagonal,
+        measure.diagonal_value,
+        rtol=0,
+        atol=_rounding(variable, measure.diagonal_policy),
+    )
+
+
+# Measures that need at least two observations (a debiasing factor n - 1).
+_NEED_TWO_OBSERVATIONS = {
+    "debiased_squared_phase_lag_index",
+    "debiased_squared_weighted_phase_lag_index",
+    "pairwise_phase_consistency",
+}
+
+
+@pytest.mark.parametrize(
+    ("measure", "n_trials"),
+    [
+        pytest.param(measure, n_trials, id=f"{measure.name}-{n_trials}")
+        for measure in list_measures()
+        if measure.diagonal_value is not None
+        for n_trials in (1, 2)
+        if n_trials > 1 or measure.name not in _NEED_TWO_OBSERVATIONS
+    ],
+)
+def test_nominal_diagonal_holds_with_one_or_two_observations(
+    coupled_time_series, measure, n_trials
+):
+    """With one taper per trial, the fewest observations a measure accepts,
+    where rounding is least averaged out: the tolerance still holds."""
+    with warnings.catch_warnings():
+        # One observation makes the normalized measures warn that they are
+        # degenerate; that is expected here.
+        warnings.simplefilter("ignore")
+        variable = multitaper_connectivity(
+            coupled_time_series[:, :n_trials],
+            sampling_frequency=500,
+            time_window_duration=0.5,
+            time_halfbandwidth_product=1,
+            method=measure.name,
+        )
+    assert variable.attrs["n_observations"] == n_trials  # one taper per trial
+    _assert_nominal_diagonal(measure, variable, _diagonal(variable))
+
+
+_FLAT_SIGNAL, _FLAT_SIGNAL_GROUP = "3", "b"
+
+
+@pytest.fixture(scope="module")
+def flat_signal_results(coupled_time_series):
+    """Every measure, and its other variables, with signal "3" flat (all zeros).
+
+    One call computes them all except subset Granger, whose ``pairs`` no other
+    measure accepts; its pairs include the flat signal.
+    """
+    flat = coupled_time_series.copy()
+    flat[..., -1] = 0.0
+    settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
+    subset = "subset_pairwise_spectral_granger_prediction"
+    with warnings.catch_warnings():
+        # A flat signal makes the normalized measures warn; that is expected.
+        warnings.simplefilter("ignore")
+        merged = multitaper_connectivity(
+            flat,
+            method=[measure.name for measure in list_measures() if measure.name != subset],
+            group_labels=_GROUPS,
+            **settings,
+        )
+        subset_result = multitaper_connectivity(
+            flat, method=subset, connectivity_kwargs={"pairs": [(0, 3), (1, 0)]}, **settings
+        )
+    return merged.assign({subset: subset_result})
+
+
+def _entries_involving_the_flat_signal(variable):
+    """The entries of ``variable`` that depend on the flat signal: its rows and
+    columns of a signal-pair axis, its group's of a group axis, and otherwise
+    (a group-pair connection or a whole-system component) every entry."""
+    for axes, label in (
+        (("source", "target"), _FLAT_SIGNAL),
+        (("source_group", "target_group"), _FLAT_SIGNAL_GROUP),
+    ):
+        present = [axis for axis in axes if axis in variable.dims]
+        if present:
+            return np.concatenate(
+                [variable.sel({axis: label}).values.ravel() for axis in present]
+            )
+    return variable.values.ravel()
+
+
+@pytest.mark.parametrize(
+    ("name", "record"), _VALUE_VARIABLES, ids=[n for n, _ in _VALUE_VARIABLES]
+)
+def test_nan_for_zero_power_signal_matches_what_a_flat_signal_gives(
+    flat_signal_results, name, record
+):
+    """The flag is set exactly where every entry involving a zero-power signal,
+    the diagonal included, is NaN."""
+    entries = _entries_involving_the_flat_signal(flat_signal_results[name])
+    assert record.nan_for_zero_power_signal == bool(np.isnan(entries).all())
+
+
+@pytest.mark.parametrize(
+    ("name", "record"),
+    [
+        pytest.param(name, record, id=name)
+        for name, record in _VALUE_VARIABLES
+        if record.diagonal_value is not None and not record.nan_for_zero_power_signal
+    ],
+)
+def test_a_flat_signal_keeps_the_nominal_diagonal_unless_it_is_nan(
+    flat_signal_results, name, record
+):
+    """Where the flag is not set, a flat signal's self-connection keeps the
+    nominal value (group delay's fit correlation included)."""
+    variable = flat_signal_results[name]
+    flat_self = variable.sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL).values
+    _assert_nominal_diagonal(record, variable, flat_self)
+
+
+def test_group_delay_companions_have_their_documented_range_and_sign():
+    """The slope is unbounded; the fit correlation lies in [-1, 1]; both read
+    their sign as group delay does."""
+    companions = dict(_MEASURE_SPECS["group_delay"].companions)
+    assert companions["group_delay_slope"].value_range == (-np.inf, np.inf)
+    assert companions["group_delay_r_value"].value_range == (-1.0, 1.0)
+    for companion in companions.values():
+        assert companion.sign_convention == _MEASURES["group_delay"].sign_convention
+
+
+def test_imaginary_coherency_is_zero_not_nan_for_a_flat_signal(flat_signal_results):
+    """As its docstring says: coherency masks a flat signal's pairs with
+    nan + 0j, and the imaginary part of that is 0."""
+    variable = flat_signal_results["imaginary_coherency"]
+    flat_pairs = variable.sel(source=_FLAT_SIGNAL).drop_sel(target=_FLAT_SIGNAL)
+    np.testing.assert_array_equal(flat_pairs, 0.0)
+
+
+def test_documented_diagonals_are_the_registered_ones():
+    registered = {
+        name: (record.diagonal_policy, record.diagonal_value, record.nan_for_zero_power_signal)
+        for name, record in _VALUE_VARIABLES
+    }
+    assert registered == _DOCUMENTED_DIAGONALS
+
+
+def test_cross_spectral_density_diagonal_is_the_power_spectrum(coupled_results):
+    """The diagonal is the power, real to within the rounding of its average."""
+    csd = coupled_results["cross_spectral_density"]
+    diagonal = np.diagonal(csd.values, axis1=-2, axis2=-1)
+    np.testing.assert_allclose(
+        diagonal.real, coupled_results["power"].values, rtol=1e-12, atol=0
+    )
+    assert np.all(np.abs(diagonal.imag) <= _rounding(csd) * diagonal.real)
+
+
+_OPTIONAL_MEASURE_ATTRS = (
+    "value_range_lower",
+    "value_range_upper",
+    "value_range_applies_to",
+    "sign_convention",
+    "quantity",
+    "formula",
+    "diagonal_value",
+)
+
+
+def _expected_measure_attrs(measure):
+    """The attrs a measure variable takes from its registry record."""
+    lower, upper = measure.value_range
+    expected = {
+        "interpretation": measure.interpretation,
+        "diagonal_policy": measure.diagonal_policy,
+    }
+    if np.isfinite(lower):
+        expected["value_range_lower"] = lower
+    if np.isfinite(upper):
+        expected["value_range_upper"] = upper
+    if getattr(measure, "is_complex", False):
+        expected["value_range_applies_to"] = "magnitude"
+    for key in ("sign_convention", "quantity", "formula"):
+        if getattr(measure, key, None) is not None:
+            expected[key] = getattr(measure, key)
+    if measure.diagonal_value is not None:
+        expected["diagonal_value"] = measure.diagonal_value
+    # A flag is stored as 0/1: NetCDF has no boolean.
+    expected["nan_for_zero_power_signal"] = int(measure.nan_for_zero_power_signal)
+    return expected
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_measure_variable_records_how_to_read_it(coupled_results, measure):
+    """Interpretation, sign convention, theoretical range, and diagonal policy
+    are on the measure's own variable, so an extracted variable keeps them; an
+    unbounded side of the range and facts a measure does not state are absent."""
+    _assert_records_how_to_read(
+        measure, _main_variable(coupled_results[measure.name], measure.name)
+    )
+
+
+def _assert_records_how_to_read(record, variable, **rewritten):
+    """``variable`` carries ``record``'s attrs, with any ``rewritten`` ones, and
+    no fact the record omits."""
+    expected = {**_expected_measure_attrs(record), **rewritten}
+    assert {key: variable.attrs.get(key) for key in expected} == expected
+    absent = set(_OPTIONAL_MEASURE_ATTRS) - set(expected)
+    assert not absent & set(variable.attrs)
+
+
+# Dataset variables that are not measure values: group membership and the
+# spatial vectors, filters, and patterns. They carry provenance and labels,
+# not a measure's interpretation, range, or diagonal.
+_AUXILIARY_VARIABLES = {
+    "group_membership",
+    "global_coherence_vectors",
+    *(
+        f"{measure.name}_{kind}"
+        for measure in list_measures(category="multivariate_components")
+        for kind in ("filters", "patterns")
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "measure",
+    [m for m in list_measures() if _CATEGORY_STRUCTURE[m.category][0] is xr.Dataset],
+    ids=lambda measure: measure.name,
+)
+def test_every_variable_of_a_dataset_result_records_how_to_read_it(coupled_results, measure):
+    """A measure's companion variables (group delay's slope and fit
+    correlation) carry their own record, whose range and diagonal hold of their
+    values; the auxiliary variables carry none. (The measure's own variable is
+    checked by ``test_measure_variable_records_how_to_read_it``.)"""
+    companions = dict(_MEASURE_SPECS[measure.name].companions)
+    for name, variable in coupled_results[measure.name].data_vars.items():
+        if name in _AUXILIARY_VARIABLES:
+            assert not {"interpretation", "diagonal_policy"} & set(variable.attrs), name
+        elif name != measure.name:
+            record = companions[name]
+            _assert_records_how_to_read(record, variable)
+            finite = variable.values[np.isfinite(variable.values)]
+            assert (
+                record.value_range[0] <= finite.min() <= finite.max() <= record.value_range[1]
+            )
+            _assert_diagonal_matches(record, variable)
+
+
+def test_coherence_family_states_its_formula_and_quantity():
+    measures = _MEASURES
+    quantities = {
+        "magnitude_squared_coherence": "squared_magnitude",
+        "partial_coherence": "squared_magnitude",
+        "canonical_coherence": "squared_magnitude",
+        "coherence_phase": "phase",
+        "coherency": "complex",
+        "canonical_coherency": "complex",
+        "imaginary_coherence": "magnitude",
+        "imaginary_coherency": "signed",
+    }
+    assert {name: m.quantity for name, m in measures.items() if m.quantity} == quantities
+    assert {name for name, m in measures.items() if m.formula} == set(quantities)
+
+
+def test_signed_and_phase_measures_state_their_sign_convention():
+    """Every measure whose sign or angle says which signal leads names how."""
+    signed = {
+        "coherence_phase",
+        "coherency",
+        "imaginary_coherency",
+        "phase_lag_index",
+        "weighted_phase_lag_index",
+        "canonical_coherency",
+        "directed_phase_lag_index",
+        "delay",
+        "group_delay",
+        "phase_slope_index",
+    }
+    assert {m.name for m in list_measures() if m.sign_convention} == signed
+
+
+_BANDS = {"low": (4.0, 40.0), "high": (40.0, 120.0)}
+
+
+@pytest.mark.parametrize(
+    ("name", "frequency_reduction", "description"),
+    [
+        ("power", "integral", "the integral over the band"),
+        ("cross_spectral_density", "integral", "the integral over the band"),
+        (
+            "magnitude_squared_coherence",
+            "mean",
+            "the mean over the band's frequency bins",
+        ),
+        (
+            "coherence_phase",
+            "mean",
+            (
+                "the circular mean (the angle of the mean unit phasor) over the band's "
+                "frequency bins"
+            ),
+        ),
+        (
+            "coherency",
+            "mean",
+            "the complex (vector) mean over the band's frequency bins",
+        ),
+    ],
+)
+def test_band_reduction_keeps_each_measure_attribute_true(
+    coupled_results, name, frequency_reduction, description
+):
+    """A band value is a reduction of the per-frequency measure, so the attrs
+    that describe single bins (interpretation, formula) say which reduction it
+    is; the range, sign convention, quantity, and diagonal policy still hold of
+    the band values unchanged."""
+    measure = _MEASURES[name]
+    reduced = frequency_band_reduce(
+        _main_variable(coupled_results[name], name),
+        _BANDS,
+        frequency_reduction=frequency_reduction,
+    )
+    rewritten = {
+        "interpretation": f"Each value is {description} of the per-frequency values. "
+        f"{measure.interpretation}"
+    }
+    if measure.formula is not None:
+        rewritten["formula"] = f"{description} of {measure.formula}"
+    _assert_records_how_to_read(measure, reduced, **rewritten)
+
+    values = np.abs(reduced.values) if measure.is_complex else reduced.values
+    finite = values[np.isfinite(values)]
+    assert finite.size > 0
+    lower, upper = measure.value_range
+    assert lower - _rounding(reduced) <= finite.min()
+    assert finite.max() <= upper + _rounding(reduced)
+    _assert_diagonal_matches(measure, reduced)
+
+
+def test_cropping_and_decimation_leave_measure_attributes_unchanged(coupled_time_series):
+    """Selecting bins does not change what each bin's value means."""
+    names = ["power", "magnitude_squared_coherence", "coherence_phase", "coherency"]
+    result = multitaper_connectivity(
+        coupled_time_series,
+        sampling_frequency=500,
+        time_window_duration=0.5,
+        method=names,
+        frequency_range=(10.0, 100.0),
+        frequency_decimation=3,
+    )
+    for name in names:
+        _assert_records_how_to_read(_MEASURES[name], result[name])

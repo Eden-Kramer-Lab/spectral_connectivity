@@ -33,7 +33,6 @@ from spectral_connectivity._measure_registry import (
     _measure_description,
     _requested_methods,
     _requires_two_sided,
-    _validate_method_names,
 )
 from spectral_connectivity._provenance import (
     _shared_provenance_attrs,
@@ -108,8 +107,10 @@ class MeasureInfo:
         Units of the values: ``"1"`` for a dimensionless score, ``"rad"``,
         ``"s"``, or ``"(input units)^2/Hz"`` for a spectral density.
     value_range : tuple of float
-        ``(lower, upper)`` bounds of the values, or of their magnitude when
-        ``is_complex``; ``inf`` marks an unbounded side.
+        ``(lower, upper)`` theoretical bounds of the values, or of their
+        magnitude when ``is_complex``; ``inf`` marks an unbounded side. When a
+        computed value can lie outside them is stated in
+        ``docs/CONNECTIVITY_METRIC_RANGES.md``.
     is_complex : bool
         Whether the values are complex.
     dims : tuple of str
@@ -118,7 +119,30 @@ class MeasureInfo:
         ``global_coherence``, ...) are Datasets whose variable named ``name``
         has these dimensions.
     interpretation : str
-        How to read the values, including the sign convention where one exists.
+        How to read the values.
+    diagonal_policy : str
+        What a self-connection (a signal, or group, with itself) holds:
+        ``"masked_nan"``, ``"undefined_nan"``, ``"constant"``,
+        ``"rounding_noise"``, ``"estimated"``, or ``"not_applicable"``, as
+        defined in the diagonal-policy table of
+        ``docs/CONNECTIVITY_METRIC_RANGES.md``.
+    diagonal_value : float or None
+        The value of a ``"constant"`` diagonal (to within rounding), or the
+        nominal value of a ``"rounding_noise"`` one; ``None`` otherwise.
+    nan_for_zero_power_signal : bool
+        Whether every entry involving a zero-power (flat) signal, the diagonal
+        included, is NaN.
+    sign_convention : str or None
+        Which signal leads when the sign or angle shows it; ``None`` for
+        measures whose sign carries no lead/lag.
+    quantity : str or None
+        For the coherency family, the form of the value: ``"magnitude"``,
+        ``"squared_magnitude"``, ``"signed"`` (a real-valued component with
+        its sign, e.g. the imaginary part of coherency), ``"phase"`` (an angle
+        in radians), or ``"complex"``; ``None`` for other measures.
+    formula : str or None
+        For the coherency family, the definition of the value; ``None`` for
+        other measures.
     """
 
     name: str
@@ -133,6 +157,12 @@ class MeasureInfo:
     is_complex: bool
     dims: tuple[str, ...]
     interpretation: str
+    diagonal_policy: str
+    diagonal_value: float | None
+    nan_for_zero_power_signal: bool
+    sign_convention: str | None
+    quantity: str | None
+    formula: str | None
 
 
 def list_measures(
@@ -148,6 +178,9 @@ def list_measures(
     together with each measure's output category, a one-line description, and
     whether it is in the default set and/or directional, and what its values
     mean: units, range, result dimensions, and how to read the direction.
+    A deprecated name (``"coherence_magnitude"``, now
+    ``"magnitude_squared_coherence"``) is still accepted through 3.x but is
+    not listed: it is the same measure.
 
     Parameters
     ----------
@@ -172,7 +205,7 @@ def list_measures(
     --------
     >>> from spectral_connectivity import list_measures
     >>> [m.name for m in list_measures(default_only=True)][:3]
-    ['coherence_magnitude', 'coherence_phase', 'debiased_squared_phase_lag_index']
+    ['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
     >>> next(m for m in list_measures() if m.name == "power").description
     'Return the one-sided power spectral density of the signal.'
     """
@@ -206,6 +239,12 @@ def list_measures(
                 is_complex=spec.is_complex,
                 dims=spec.dims,
                 interpretation=spec.interpretation,
+                diagonal_policy=spec.diagonal_policy,
+                diagonal_value=spec.diagonal_value,
+                nan_for_zero_power_signal=spec.nan_for_zero_power_signal,
+                sign_convention=spec.sign_convention,
+                quantity=spec.quantity,
+                formula=spec.formula,
             )
         )
     return measures
@@ -282,6 +321,12 @@ def frequency_band_reduce(
         recorded in ``attrs["frequency_bands_json"]``. An integral is in the
         density's ``units`` without the ``/Hz`` (e.g. ``(uV)^2/Hz`` becomes
         ``(uV)^2``) and is labeled ``"Band power"`` or ``"Band cross-power"``.
+        A measure variable's ``interpretation`` and ``formula``, which describe
+        one frequency bin, name the reduction that made each band value (e.g.
+        ``"Each value is the mean over the band's frequency bins of the
+        per-frequency values. ..."``); its value range, sign convention,
+        ``quantity``, and ``diagonal_policy`` hold of the band values and are
+        kept.
 
     Notes
     -----
@@ -351,7 +396,7 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
 
 def connectivity_to_xarray(
     m: Any,
-    method: str = "coherence_magnitude",
+    method: str = "magnitude_squared_coherence",
     signal_names: Sequence[_SignalLabel] | None = None,
     squeeze: bool = False,
     **kwargs: Any,
@@ -376,8 +421,13 @@ def connectivity_to_xarray(
         :class:`~spectral_connectivity.transforms.SpectralTransform` works; the
         result of one that is not built in records its class name as
         ``transform`` and none of the built-in transforms' settings.
-    method : str, default="coherence_magnitude"
+    method : str, default="magnitude_squared_coherence"
         Measure name from :func:`list_measures`.
+
+        .. versionchanged:: 3.0
+           The default is ``"magnitude_squared_coherence"``, so the default
+           result is named that; 2.x defaulted to ``"coherence_magnitude"``,
+           which still works when requested, with a ``DeprecationWarning``.
     signal_names : sequence, optional
         Labels for the ``source``/``target`` coordinates; defaults to
         ``"0"``, ``"1"``, ....
@@ -406,7 +456,14 @@ def connectivity_to_xarray(
     >>> connectivity_to_xarray(mt).dims
     ('time', 'frequency', 'source', 'target')
     """
-    _validate_method_names([method])
+    if not isinstance(method, str):
+        msg = (  # type: ignore[unreachable]  # user input
+            "method must be a single measure name (a string) for "
+            f"connectivity_to_xarray, got {method!r}; to compute several measures "
+            "call it once per measure."
+        )
+        raise TypeError(msg)
+    (method,), output_names, _ = _requested_methods(method, ())
     connectivity = Connectivity.from_transform(m)
     provenance_metadata = getattr(m, "_provenance_metadata", None)
     if provenance_metadata is not None:
@@ -443,6 +500,7 @@ def connectivity_to_xarray(
         squeeze,
         shared_attrs,
         frequency_selection=selection,
+        result_name=output_names[method],
         **kwargs,
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
@@ -581,9 +639,14 @@ def _format_and_reduce_measures(
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
+    output_names: Mapping[str, str],
     signal_metadata: _SignalMetadata | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Format the requested measures to xarray and apply frequency reduction.
+
+    ``methods`` are canonical names; ``output_names`` maps each to the name the
+    caller requested, which names its result variable (see
+    :func:`_requested_methods`).
 
     Shared tail of :func:`multitaper_connectivity` and :func:`fourier_connectivity`:
     passes the already-resolved ``group_labels`` (see :func:`_resolve_group_labels`)
@@ -647,6 +710,7 @@ def _format_and_reduce_measures(
             signal_metadata=signal_metadata,
             transform_settings_hint=transform_settings_hint,
             frequency_selection=selection if consumes_range else None,
+            result_name=output_names[method],
             **measure_kwargs(method),
         )
         if frequency_range is None or consumes_range:
@@ -798,7 +862,9 @@ def multitaper_connectivity(
         available by name and return labeled DataArrays or Datasets with their
         component, group, candidate-delay, or frequency-reduced dimensions.
         Examples:
-        "coherence_magnitude", "imaginary_coherence", "phase_locking_value".
+        "magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value".
+        The 2.x name ``"coherence_magnitude"`` still works through 3.x with a
+        ``DeprecationWarning`` and keeps that variable name; it is removed in 4.0.
     signal_names : sequence of scalar, optional
         Scalar, non-missing, unique xarray-compatible coordinate labels for signal
         channels. Integer labels must fit the signed 32-bit range for portable
@@ -899,7 +965,7 @@ def multitaper_connectivity(
     >>> # Compute coherence
     >>> coherence = multitaper_connectivity(
     ...     data, sampling_frequency=500,
-    ...     method="coherence_magnitude",
+    ...     method="magnitude_squared_coherence",
     ...     signal_names=["Signal_1", "Signal_2"]
     ... )
     >>> coherence.dims
@@ -908,10 +974,10 @@ def multitaper_connectivity(
     >>> # Compute multiple measures
     >>> measures = multitaper_connectivity(
     ...     data, sampling_frequency=500,
-    ...     method=["coherence_magnitude", "imaginary_coherence"]
+    ...     method=["magnitude_squared_coherence", "imaginary_coherence"]
     ... )
     >>> list(measures.data_vars)
-    ['coherence_magnitude', 'imaginary_coherence']
+    ['magnitude_squared_coherence', 'imaginary_coherence']
 
     >>> # An xarray.DataArray labels axes by dimension name and can supply the
     >>> # sampling rate and channel labels itself (no sampling_frequency needed).
@@ -921,7 +987,7 @@ def multitaper_connectivity(
     ...     dims=("time", "channel"),
     ...     coords={"time": t, "channel": ["Signal_1", "Signal_2"]},
     ... )
-    >>> coherence = multitaper_connectivity(da, method="coherence_magnitude")
+    >>> coherence = multitaper_connectivity(da, method="magnitude_squared_coherence")
     >>> coherence.coords["source"].values.tolist()
     ['Signal_1', 'Signal_2']
 
@@ -949,6 +1015,24 @@ def multitaper_connectivity(
     coordinates on an input DataArray's signal dimension (e.g. ``region``) are
     carried as ``source_<name>``/``target_<name>`` with their attrs unchanged,
     so those attrs must be NetCDF-serializable to save the result.
+
+    Each measure variable also records how to read it, from the same record
+    :func:`list_measures` returns: ``interpretation``, ``sign_convention``
+    (measures whose sign or angle says which signal leads),
+    ``value_range_lower``/``value_range_upper`` (theoretical bounds, see
+    ``docs/CONNECTIVITY_METRIC_RANGES.md``; an unbounded side omitted;
+    ``value_range_applies_to="magnitude"`` for complex measures), ``quantity``
+    and ``formula`` (the coherency family), and ``diagonal_policy``, what a
+    self-connection holds (defined in ``docs/CONNECTIVITY_METRIC_RANGES.md``);
+    a policy with a nominal value adds ``diagonal_value``. ``nan_for_zero_power_signal`` (0 or 1) says whether
+    every entry involving a zero-power signal is NaN.
+    ``group_delay``'s other value variables,
+    ``group_delay_slope`` and ``group_delay_r_value``, record their own.
+
+    ``power`` has a ``source`` axis, the one it shares with the pairwise
+    measures in a Dataset; component filters and patterns index channels
+    along ``signal`` because they cover both sides of a connection. Use
+    ``power.rename(source="signal")`` for a standalone channel axis.
 
     Real-valued results write with any NetCDF engine (booleans are stored as
     0/1). Complex results (``coherency``, ``cross_spectral_density``,
@@ -978,8 +1062,10 @@ def multitaper_connectivity(
       compatibility copies through 3.x, removed in 4.0. The supported
       ``Multitaper.frequency_resolution`` property and parameter helpers retain
       their names and values. New transform/execution settings get no copies.
-    - ``measure`` and ``measure_kwargs_json`` -- the measure name and a canonical,
-      JSON-normalized representation of its keyword arguments.
+    - ``measure`` and ``measure_kwargs_json`` -- the measure name as requested
+      and a canonical, JSON-normalized representation of its keyword
+      arguments. A result requested by the deprecated ``"coherence_magnitude"``
+      records that name, and its variable has that name too.
     - ``arg_<key>`` / ``arg_<key>_json`` -- each measure keyword argument
       individually for quick inspection; a scalar is stored as-is under
       ``arg_<key>``, while a structured or non-finite value is stored as a JSON
@@ -1041,7 +1127,7 @@ def multitaper_connectivity(
     # The default set (DEFAULT_METHODS) is portably serializable; complex,
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
-    method, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -1085,6 +1171,7 @@ def multitaper_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        output_names=output_names,
         signal_metadata=signal_metadata,
     )
     _warn_label_orientation_changed(method)
@@ -1323,7 +1410,7 @@ def fourier_connectivity(
         is_one_sided=one_sided,
     )
     # No default measure needs a two-sided spectrum, so the defaults suit any input.
-    methods, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )
@@ -1439,5 +1526,6 @@ def fourier_connectivity(
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        output_names=output_names,
         signal_metadata=signal_metadata,
     )

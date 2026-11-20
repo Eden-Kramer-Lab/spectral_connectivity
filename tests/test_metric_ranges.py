@@ -71,14 +71,14 @@ def connectivity_obj(simple_synthetic_data):
 
 def test_coherence_magnitude_range(connectivity_obj):
     """Test that coherence magnitude is in [0, 1]."""
-    coherence = connectivity_obj.coherence_magnitude()
+    coherence = connectivity_obj.magnitude_squared_coherence()
     assert _in_range(coherence, 0, 1), "Coherence magnitude should be in [0, 1]"
 
 
 def test_coherence_bound_is_approached(connectivity_obj):
     """The phase-locked 10 Hz pair reaches coherence near 1, so the [0, 1] range
     checks above are not satisfied merely by small values."""
-    coherence = connectivity_obj.coherence_magnitude()
+    coherence = connectivity_obj.magnitude_squared_coherence()
     ten_hz = np.argmin(np.abs(connectivity_obj.frequencies - 10.0))
     assert coherence[0, ten_hz, 0, 1] > 0.95
 

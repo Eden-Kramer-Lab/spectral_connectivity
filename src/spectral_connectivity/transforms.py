@@ -655,7 +655,7 @@ class SpectralTransform(Protocol):
     >>> isinstance(transform, SpectralTransform)
     True
     >>> connectivity = Connectivity.from_transform(transform)
-    >>> connectivity.coherence_magnitude().shape  # (time, frequency, signal, signal)
+    >>> connectivity.magnitude_squared_coherence().shape  # (time, frequency, signal, signal)
     (1, 9, 2, 2)
     """
 

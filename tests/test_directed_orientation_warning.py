@@ -33,7 +33,7 @@ _UNCHANGED = [
         {measure.name for measure in list_measures(directed=True)}
         - _ORIENTATION_CHANGED_MEASURES
     ),
-    "coherence_magnitude",
+    "magnitude_squared_coherence",
 ]
 
 
@@ -113,7 +113,7 @@ def test_wrapper_warns_once_about_its_labels(time_series):
     methods = [
         "pairwise_spectral_granger_prediction",
         "directed_transfer_function",
-        "coherence_magnitude",
+        "magnitude_squared_coherence",
     ]
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
@@ -138,7 +138,7 @@ def test_wrapper_is_silent_for_unchanged_measures(time_series):
             method=[
                 "directed_phase_lag_index",
                 "time_reversed_spectral_granger_prediction",
-                "coherence_magnitude",
+                "magnitude_squared_coherence",
             ],
         )
     assert _orientation_warnings(record) == []
