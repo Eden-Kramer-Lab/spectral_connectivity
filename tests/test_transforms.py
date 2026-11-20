@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import numpy as np
 import pytest
 import scipy.fft
+import xarray as xr
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
 from spectral_connectivity import _backend
@@ -996,6 +997,64 @@ def test_fft():
         ),
         rtol=1e-10,
         atol=1e-12,
+    )
+
+
+_EVERY_TRANSFORM = pytest.mark.parametrize(
+    "construct",
+    [
+        lambda x: Multitaper(x, sampling_frequency=1000),
+        lambda x: ShortTimeFourierTransform(x, sampling_frequency=1000),
+        lambda x: Welch(x, sampling_frequency=1000, n_time_samples_per_segment=50),
+        lambda x: MorletWavelet(
+            x, sampling_frequency=1000, frequencies=np.array([50.0, 100.0])
+        ),
+    ],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch", "MorletWavelet"],
+)
+
+
+@_EVERY_TRANSFORM
+@pytest.mark.parametrize(
+    "dims",
+    [("trial", "time", "signal"), ("time", "channel", "epoch"), ("unit", "samples", "run")],
+    ids="-".join,
+)
+def test_transforms_refuse_a_dataarray_whose_dimension_names_contradict_its_axes(
+    construct, dims
+):
+    """A transform reads its input by position, as (time, trial, signal). A
+    labeled input whose names put a role on another axis would be transformed
+    along the wrong one without any sign of it, so it is refused; the message
+    names each misplaced dimension and both ways out."""
+    labeled = xr.DataArray(np.random.default_rng(43).standard_normal((40, 100, 2)), dims=dims)
+    with pytest.raises(
+        ValueError,
+        match=r"(?s)reads .* by position.*transpose.*\.values.*multitaper_connectivity",
+    ):
+        construct(labeled)
+
+
+@_EVERY_TRANSFORM
+@pytest.mark.parametrize(
+    "dims",
+    [
+        ("time", "trial", "signal"),
+        ("samples", "epochs", "channels"),
+        ("dim_0", "dim_1", "dim_2"),
+        ("time", "session", "signal"),
+    ],
+    ids="-".join,
+)
+def test_transforms_read_a_dataarray_whose_names_agree_with_its_axes_by_position(
+    construct, dims
+):
+    """Names in the transform's own order, and names that say nothing about
+    the role of an axis, leave the input read as the same array."""
+    time_series = np.random.default_rng(44).standard_normal((100, 4, 2))
+    labeled = xr.DataArray(time_series, dims=dims)
+    np.testing.assert_array_equal(
+        to_host(construct(labeled).fft()), to_host(construct(time_series).fft())
     )
 
 

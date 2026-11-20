@@ -48,7 +48,7 @@ their rows).
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
 | `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
-| `multitaper_connectivity` and `Multitaper` read an `xarray.DataArray` by position, as `(time, trial, signal)`, whatever its dimension names (2-D input raised `ValueError`) | **`multitaper_connectivity` assigns axis roles from the DataArray's dimension names** and transposes the input itself; it also accepts 2-D `(time, signal)` input. Names it cannot map (such as the default `dim_0`, `dim_1`, `dim_2`) raise `ValueError`: pass `time_dim`, `trial_dim`, and `signal_dim`. `Multitaper` itself still reads a DataArray by position and takes no `*_dim` arguments: transpose to `(time, trial, signal)` before constructing it |
+| `multitaper_connectivity` and `Multitaper` read an `xarray.DataArray` by position, as `(time, trial, signal)`, whatever its dimension names (2-D input raised `ValueError`) | **`multitaper_connectivity` assigns axis roles from the DataArray's dimension names** and transposes the input itself; it also accepts 2-D `(time, signal)` input. Names it cannot map (such as the default `dim_0`, `dim_1`, `dim_2`) raise `ValueError`: pass `time_dim`, `trial_dim`, and `signal_dim`. `Multitaper` itself still reads a DataArray by position and takes no `*_dim` arguments, but now raises `ValueError` for one whose dimension names put time, trials, or signals on another axis (2.x transformed it along the wrong axis without a sign): transpose to `(time, trial, signal)` before constructing it |
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` returned `\|H_ij\|^2 / sqrt(sum_k \|H_ik\|^2)` for target `i` and source `j`: its noise variance, placed on the target axis, cancelled, so the result ignored the noise covariance, was not normalized, and exceeded 1 | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `coherence_fisher_z_transform(coherency, n_obs1)` without a second sample returned `NaN` for three or more observations and `±inf` for two, and raised `ZeroDivisionError` for one, because its `n_obs2=0` default was used as a sample size. `group_delay` and `delay` found their significant frequencies with it, so with three or more observations they found none: `group_delay` returned `NaN` delays and slopes, and `delay` returned only the constants `2πk` between signals | The one-sample z-score has no second-sample terms, and `group_delay` and `delay` use the exact zero-coherence null distribution, so both return estimates at the frequencies with significant coherence. 2.x output of these two methods with three or more observations is not usable: recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
@@ -705,6 +705,15 @@ is removed in 4.0.
   `dtype` now is) was read as float64 and silently discarded the imaginary
   part of every coefficient, and an integer failed only when a measure first
   used it (`power` did not).
+- `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
+  refuse an `xarray.DataArray` whose dimension names put time, trials, or
+  signals on another axis than their positional `(time, trial, signal)`. They
+  read a labeled input by position, so 2.x `Multitaper` transformed, say, a
+  `(trial, time, signal)` array along its trial axis and returned a plausible
+  result of the wrong quantity. The `ValueError` names each misplaced
+  dimension and the transpose to apply; names that say nothing of a role
+  (`dim_0`, `session`) are still read by position, and
+  `multitaper_connectivity` assigns axes from dimension names itself.
 - `Multitaper` reports the supplied column count for custom tapers. For DPSS,
   `n_tapers` keeps describing the requested count after low-bias filtering,
   so repeated wrapper calls retain the same taper-count provenance.

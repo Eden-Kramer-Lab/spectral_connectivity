@@ -703,6 +703,11 @@ If you hit an error or a warning:
   name the roles with `time_dim`, `trial_dim` and `signal_dim`. When a single
   unrecognized dimension is left for the one remaining role, it is assigned by
   elimination and a warning names the mapping.
+- The transform classes (`Multitaper`, `ShortTimeFourierTransform`, `Welch`,
+  `MorletWavelet`) read a DataArray by position, as `(time, trial, signal)`,
+  and take no `*_dim` arguments. One whose dimension names put time, trials or
+  signals on another axis raises `ValueError` naming the transpose to apply;
+  names that say nothing of a role (`dim_0`, `session`) are read by position.
 - Inferring the rate needs enough coordinate precision: pass
   `sampling_frequency` for low-precision or large-offset time coordinates.
 - Signal labels must be unique, non-missing, NetCDF-compatible scalars

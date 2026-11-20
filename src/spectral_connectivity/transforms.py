@@ -674,6 +674,50 @@ class SpectralTransform(Protocol):
         """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
 
 
+# The axis each role is on in a transform's input.
+_INPUT_AXIS_ROLES = ("time", "trial", "signal")
+
+
+def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
+    """Reject a labeled input whose dimension names put a role on another axis.
+
+    A transform reads ``time_series`` by position. An ``xarray.DataArray``
+    named, say, ``(trial, time, signal)`` would be transformed along its trial
+    axis and give a plausible result of the wrong quantity, so it is refused.
+    Names that say nothing of an axis's role (``dim_0``, ``session``) are not
+    evidence either way and are read by position.
+    """
+    dimensions = getattr(time_series, "dims", None)
+    if dimensions is None or len(dimensions) != len(_INPUT_AXIS_ROLES):
+        return
+    # Imported here: the wrapper's input handling sits above the transforms.
+    from spectral_connectivity._input_handling import _dimension_role
+
+    misplaced = [
+        f"{dimension!r} is on the {expected} axis"
+        for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=True)
+        if _dimension_role(dimension) not in (None, expected)
+    ]
+    if misplaced:
+        # Name the order to transpose to when the names give all three roles.
+        named = {_dimension_role(dimension): dimension for dimension in dimensions}
+        order = [named.get(role) for role in _INPUT_AXIS_ROLES]
+        target = (
+            ", ".join(repr(dimension) for dimension in order)
+            if None not in order
+            else "time_dim, trial_dim, signal_dim"
+        )
+        msg = (
+            f"{transform} reads time_series by position, as (time, trial, signal), "
+            f"but its dimensions are named {tuple(dimensions)!r}: "
+            f"{'; '.join(misplaced)}. Transpose it first, "
+            f"time_series.transpose({target}), or pass time_series.values if the "
+            "names are wrong and the axes are already in that order. "
+            "multitaper_connectivity assigns axes from dimension names itself."
+        )
+        raise ValueError(msg)
+
+
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
     """Reject a time series that is not ``(n_time_samples, n_trials, n_signals)``.
 
@@ -1383,6 +1427,12 @@ class Multitaper(_WindowedFourierTransform):
 
         **Important:** If your data is 1D or 2D, use `prepare_time_series()`
         helper function to convert it to the required 3D format.
+
+        An ``xarray.DataArray`` is read by position, like any array; one whose
+        dimension names put time, trials, or signals on another axis raises
+        ``ValueError`` (transpose it first, or use
+        :func:`~spectral_connectivity.multitaper_connectivity`, which assigns
+        axes from dimension names).
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     time_halfbandwidth_product : float, default=3
@@ -1616,6 +1666,7 @@ class Multitaper(_WindowedFourierTransform):
         adaptive_tolerance: float = 1e-8,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
+        _check_labeled_axis_order(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         self.fft_workers = fft_workers
@@ -2049,7 +2100,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     detrend_type : {"constant", "linear"} or None, default="constant"
@@ -2112,6 +2165,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         ):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
+        _check_labeled_axis_order(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2289,7 +2343,9 @@ class Welch:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     segment_duration : float, optional
@@ -2342,6 +2398,7 @@ class Welch:
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
         # np.shape reads arrays' own shape (no copy) and also measures nested lists.
+        _check_labeled_axis_order(time_series, type(self).__name__)
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(
@@ -2588,7 +2645,9 @@ class MorletWavelet:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second (Hz).
     frequencies : ndarray, shape (n_frequencies,)
@@ -2663,6 +2722,7 @@ class MorletWavelet:
         zero_mean: bool = True,
         start_time: float = 0.0,
     ) -> None:
+        _check_labeled_axis_order(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
