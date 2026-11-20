@@ -775,13 +775,16 @@ def test_power_units_are_known_only_when_input_states_them(data, units):
 
 _COOKBOOK = Path(__file__).parents[1] / "docs" / "cookbook.md"
 _SCHEMA_SECTION = "## Result schema and transform bandwidth"
+_COMPATIBILITY_LIST_START = "remain compatibility copies"
 # Measures that need a uniform frequency grid, which a Morlet transform lacks.
 _UNIFORM_GRID_CATEGORIES = {"delay", "group_delay", "phase_slope"}
 
 
 def _documented_attribute_names():
     """The names the cookbook's schema reference documents, read from its text:
-    the first column of its attribute table and the ``mt_*`` keys it lists."""
+    the first column of its attribute table and the list of ``mt_*``
+    compatibility keys (only that list: the prose after it mentions some keys
+    again, and must not document one the list dropped)."""
     text = _COOKBOOK.read_text(encoding="utf-8")
     section = text.split(_SCHEMA_SECTION, 1)[1].split("\n## ", 1)[0]
     table_names = [
@@ -790,7 +793,8 @@ def _documented_attribute_names():
         if row.startswith("| `")
         for name in re.findall(r"`([^`]+)`", row.split("|")[1])
     ]
-    return sorted(set(table_names + re.findall(r"`(mt_\w+)`", section)))
+    compatibility_list = section.split(_COMPATIBILITY_LIST_START, 1)[1].split(".\n", 1)[0]
+    return sorted(set(table_names + re.findall(r"`(mt_\w+)`", compatibility_list)))
 
 
 def _name_pattern(name):
