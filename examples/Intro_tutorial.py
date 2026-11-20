@@ -67,7 +67,7 @@ coherence
 # The result is labeled by `time`, `frequency`, `source`, and `target`. There is a single `time` value because the transform used one window covering the whole recording, labeled by its center; time resolution comes later. We select the pair of signals by name, crop to 100-300 Hz, and plot against frequency. The coherence peaks at the simulated 200 Hz:
 
 # %%
-coherence.sel(source="0", target="1", frequency=slice(100, 300)).plot(x="frequency")
+coherence.sel(source="0", target="1", frequency=slice(100, 300)).plot(x="frequency");
 
 # %% [markdown]
 # `list_measures` enumerates the valid `method` names. With `default_only=True` it returns the measures computed when `method` is omitted:
@@ -302,7 +302,7 @@ coherence.shape
 # The coherence comes in shape (n_frequencies, n_signals, n_signals). Because it is symmetric, we only have to plot the relationship from signal1 to signal2. We can see that the signal is more coherent at 200 Hz.
 
 # %%
-plt.plot(connectivity.frequencies, coherence[:, 0, 1])
+plt.plot(connectivity.frequencies, coherence[:, 0, 1]);
 
 # %% [markdown]
 # ### Adding in time
@@ -350,7 +350,7 @@ plt.ylim((0, 300))
 plt.xlim(time_extent)
 plt.xlabel("Time")
 plt.ylabel("Frequency")
-plt.colorbar()
+plt.colorbar();
 
 # %% [markdown]
 # ### Time-resolved connectivity with the wrapper
@@ -380,7 +380,7 @@ coherence.sel(frequency=slice(100, 300))
 # %%
 coherence.sel(frequency=slice(100, 300)).plot(
     x="time", y="frequency", row="source", col="target"
-)
+);
 
 # %% [markdown]
 # Fully explaining using xarray arrays is beyond the scope of this tutorial, but see the [xarray documentation](https://docs.xarray.dev/en/stable/) to explore all the possibilities.

@@ -648,7 +648,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 4)
-plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1]);
 
 # %%
 # Coherence is near 1 at 200 Hz and at the noise level away from it. The
@@ -732,7 +732,7 @@ multitaper = Multitaper(
 )
 connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 4)
-plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
+plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1]);
 
 # %%
 # Coherence at 200 Hz is well below 1 but far above the off-peak chance level,
@@ -2250,7 +2250,7 @@ axis_handles[4, 1].bar(
     [1, 2], [psi[..., 0, 1].squeeze(), psi[..., 1, 0].squeeze()], color=["b", "g"]
 )
 axis_handles[4, 1].set_xlim((0.5, 2.5))
-axis_handles[4, 1].axhline(0, color="black")
+axis_handles[4, 1].axhline(0, color="black");
 
 # %%
 # Signal 1 leads: the phase slope index [0, 1] is positive and [1, 0] is its negative.
@@ -2350,7 +2350,7 @@ axis_handles[4, 1].bar(
     [1, 2], [psi[..., 0, 1].squeeze(), psi[..., 1, 0].squeeze()], color=["b", "g"]
 )
 axis_handles[4, 1].set_xlim((0.5, 2.5))
-axis_handles[4, 1].axhline(0, color="black")
+axis_handles[4, 1].axhline(0, color="black");
 
 # %%
 # Signal 2 leads: the phase slope index [0, 1] is negative and [1, 0] is its negative.
@@ -2780,7 +2780,7 @@ magnitude_squared_coherence = multitaper_connectivity(
 magnitude_squared_coherence
 
 # %%
-magnitude_squared_coherence.plot(col="source", row="target", x="time")
+magnitude_squared_coherence.plot(col="source", row="target", x="time");
 
 # %%
 # The labeled result holds the same numbers as `Connectivity.magnitude_squared_coherence`
