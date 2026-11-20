@@ -498,7 +498,12 @@ def test_simulators_accept_numpy_integer_counts():
 
 def test_shared_oscillation_has_no_two_dimensional_form():
     """Only the lagged-broadband simulator omits the trial axis for ``n_trials=None``."""
-    with pytest.raises(ValueError, match="pass n_trials=1"):
+    with pytest.raises(ValueError, match="no 2-D form, so pass n_trials=1"):
         simulate_shared_oscillation(
             _FREQUENCY, _SAMPLING_FREQUENCY, 50, n_trials=None, amplitudes=[1.0]
+        )
+    # The 2-D hint is for None only; another bad count gets the plain message.
+    with pytest.raises(ValueError, match=r"positive integer; got 0$"):
+        simulate_shared_oscillation(
+            _FREQUENCY, _SAMPLING_FREQUENCY, 50, n_trials=0, amplitudes=[1.0]
         )

@@ -12,6 +12,8 @@ default; ``simulate_lagged_broadband(..., n_trials=None)`` omits the trial axis.
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from spectral_connectivity.utils import is_positive_integer
+
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
     """Return ``random_state`` if it is a Generator, else a Generator seeded by it."""
@@ -37,14 +39,15 @@ def _per_signal(
     return np.broadcast_to(values_array.reshape(-1), (n_signals,))
 
 
-def _check_count(value: object, name: str, hint: str = "") -> None:
-    """Raise ``ValueError`` unless ``value`` is a positive integer (not a bool)."""
-    if (
-        isinstance(value, (bool, np.bool_))
-        or not isinstance(value, (int, np.integer))
-        or value < 1
-    ):
-        msg = f"{name} must be a positive integer{hint}; got {value!r}"
+def _check_count(value: object, name: str, hint: str = "", *, hint_if_none: str = "") -> None:
+    """Raise ``ValueError`` unless ``value`` is a positive integer (not a bool).
+
+    ``hint`` follows the requirement in the message; ``hint_if_none``
+    replaces it when ``value`` is None.
+    """
+    if not is_positive_integer(value):
+        suffix = hint_if_none if value is None else hint
+        msg = f"{name} must be a positive integer{suffix}; got {value!r}"
         raise ValueError(msg)
 
 
@@ -175,8 +178,8 @@ def simulate_lagged_broadband(
     n_time_samples : int
         Number of time samples per signal.
     n_trials : int or None, default=1
-        Number of independent trials. None returns a 2-D array with no trial
-        axis, holding the same values as the default single trial.
+        Number of independent trials. None draws the default single trial and
+        returns it without its trial axis, as a 2-D array.
     random_state : int, np.random.Generator, or None, optional
         Seed or generator for reproducible results.
 
@@ -266,8 +269,10 @@ def simulate_lagged_broadband(
     rng = _generator(random_state)
 
     max_lag = int(lags_array.max())
-    extra_shape = () if n_trials is None else (n_trials,)
-    source = rng.standard_normal((n_time_samples + max_lag, *extra_shape))
+    # n_trials=None is the single trial without its trial axis.
+    source = rng.standard_normal(
+        (n_time_samples + max_lag, 1 if n_trials is None else n_trials)
+    )
     time_series = np.stack(
         # Python ints, so a narrow dtype such as int8 cannot overflow the bounds.
         [
@@ -275,8 +280,9 @@ def simulate_lagged_broadband(
             for lag in lags_array.tolist()
         ],
         axis=-1,
-    )
-    return _add_noise(time_series, noise_array, rng)
+    )  # (n_time_samples, n_trials, n_signals)
+    noisy = _add_noise(time_series, noise_array, rng)
+    return noisy[:, 0, :] if n_trials is None else noisy
 
 
 def simulate_shared_oscillation(
@@ -379,7 +385,7 @@ def simulate_shared_oscillation(
     _check_count(
         n_trials,
         "n_trials",
-        "; simulate_shared_oscillation always returns a trial axis, so pass "
+        hint_if_none="; simulate_shared_oscillation has no 2-D form, so pass "
         "n_trials=1 for a single trial",
     )
     n_signals = amplitudes_array.size
