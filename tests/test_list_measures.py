@@ -689,6 +689,14 @@ def test_a_flat_signal_keeps_the_nominal_diagonal_unless_it_is_nan(
     _assert_nominal_diagonal(measure, variable, flat_self)
 
 
+def test_imaginary_coherency_is_zero_not_nan_for_a_flat_signal(flat_signal_results):
+    """As its docstring says: coherency masks a flat signal's pairs with
+    nan + 0j, and the imaginary part of that is 0."""
+    variable = flat_signal_results["imaginary_coherency"]
+    flat_pairs = variable.sel(source=_FLAT_SIGNAL).drop_sel(target=_FLAT_SIGNAL)
+    np.testing.assert_array_equal(flat_pairs, 0.0)
+
+
 def test_documented_diagonals_are_the_registered_ones():
     registered = {
         name: (record.diagonal_policy, record.diagonal_value, record.nan_for_zero_power_signal)

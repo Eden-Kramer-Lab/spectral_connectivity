@@ -2563,10 +2563,11 @@ class Connectivity:
         Notes
         -----
         **Range**: ``[-1, 1]``. ``Im(S_ij) / sqrt(S_ii * S_jj)``. Pairs
-        involving zero-power signals are undefined and returned as NaN. The
-        diagonal is NaN too, a mask matching :meth:`coherency`: the imaginary
-        part of a signal's coherency with itself is 0, which
-        :meth:`imaginary_coherence` returns there.
+        involving a zero-power signal are 0, not NaN: :meth:`coherency` masks
+        them with ``nan + 0j``, whose imaginary part is 0, so use
+        :meth:`power` to find such signals. The diagonal is NaN, a mask
+        matching :meth:`coherency`: the imaginary part of a signal's coherency
+        with itself is 0, which :meth:`imaginary_coherence` returns there.
 
         Examples
         --------
