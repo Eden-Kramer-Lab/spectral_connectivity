@@ -355,7 +355,7 @@ plt.colorbar()
 # %% [markdown]
 # ### Time-resolved connectivity with the wrapper
 #
-# `multitaper_connectivity` accepts the same transform settings as `Multitaper`, so the time-resolved coherence above is a single call, and its output is a labeled array: one always knows what the dimensions are, and xarray makes plotting easy.
+# `multitaper_connectivity` takes the common transform settings by name and any other `Multitaper` setting in `transform_kwargs`, so the time-resolved coherence above is a single call, and its output is a labeled array: one always knows what the dimensions are, and xarray makes plotting easy.
 
 # %%
 coherence = multitaper_connectivity(
