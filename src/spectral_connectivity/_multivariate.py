@@ -652,7 +652,8 @@ def _estimate_global_coherence(
     # eigenvalues (Cimenser et al. 2011). The eigenvalues are the squared
     # singular values of the coefficient matrix (up to the shared 1/n_estimates
     # factor), and their sum equals the squared Frobenius norm, so normalizing
-    # by it makes the measure scale-invariant and bounded in [0, 1].
+    # by it bounds the measure in [0, 1] and makes it invariant to rescaling
+    # every signal by the same factor (not to rescaling signals separately).
     #
     # Rescale by the maximum coefficient magnitude first. The fraction is
     # invariant to this rescaling, but computing the sum of squares directly on

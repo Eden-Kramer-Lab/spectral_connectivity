@@ -3724,8 +3724,11 @@ class Connectivity:
         index it with ``all_frequencies`` rather than ``frequencies``.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
-        in that component, so the measure is scale-invariant and the components
-        sum to at most 1.
+        in that component, so the components sum to at most 1 and rescaling
+        every signal by the same factor leaves them unchanged. Rescaling
+        signals separately does change them: the decomposition is of the
+        signals as given, so put them on a common scale first if their units
+        differ.
 
         **Algorithm**: when the number of estimates (``n_trials * n_tapers``)
         is at least ``n_signals`` and ``n_signals`` is small
@@ -5301,8 +5304,8 @@ class Connectivity:
         Notes
         -----
         **Range**: [0, 1]. Like :meth:`directed_transfer_function`, this
-        returns the squared quantity; SCoT and ConnectiviPy report its square
-        root, ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
+        returns the squared quantity; its square root is the amplitude form
+        ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
         each signal with itself (``kappa_ii = 1``).
 
         References
