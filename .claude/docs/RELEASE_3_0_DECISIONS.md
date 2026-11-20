@@ -559,7 +559,7 @@ Rulings where the rules above were silent:
 - [x] Numerical identity of aliases: the method, the method strings of all
   three wrappers, and `jackknife` agree exactly with the canonical name
   (`tests/test_coherence_naming.py`); every registered measure's every
-  variable is bit-identical to `67005e8`, and the benchmark passes at 0.
+  variable is bit-identical to the parent `0480d01`, and the benchmark passes at 0.
 - [x] D6 migration example: the default Dataset has no `coherence_magnitude`
   and old indexing raises (cookbook, CHANGELOG migration row, tests).
 - [x] Explicitly requested old names work, keep their variable names, record
