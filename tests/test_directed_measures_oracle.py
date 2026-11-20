@@ -586,7 +586,6 @@ def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
 # autocovariance is still 3% of its peak at lag 32, so it wraps around a
 # 64-point grid.
 _SLOW_CHAIN_COEFFICIENTS = np.array([[[0.9, 0.0, 0.0], [0.6, 0.8, 0.0], [0.0, 0.5, 0.7]]])
-_SLOW_CHAIN_NOISE = np.diag([1.0, 0.5, 2.0])
 
 
 @pytest.mark.parametrize("n_fft", [64, 65])
@@ -597,7 +596,7 @@ def test_pairwise_granger_is_defined_on_a_grid_the_spectrum_wraps_around(n_fft):
     and non-negative, however coarse the grid. On an even grid the factor
     once missed the spectrum (the lag ``n_fft / 2`` was dropped from the
     causal projection), the ratio turned negative, and bins came back NaN."""
-    _, _, S = _analytic_var(_SLOW_CHAIN_COEFFICIENTS, _SLOW_CHAIN_NOISE, n_fft)
+    _, _, S = _analytic_var(_SLOW_CHAIN_COEFFICIENTS, _CHAIN_NOISE, n_fft)
     connectivity = Connectivity(
         fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S)
     )

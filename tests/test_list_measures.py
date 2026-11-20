@@ -8,6 +8,7 @@ import xarray as xr
 
 from spectral_connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     Multitaper,
     list_measures,
     multitaper_connectivity,
@@ -273,6 +274,54 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
                 compute(**kwargs)
         else:
             compute(**kwargs)
+
+
+# The measures that describe one signal at a time: defined for a single signal,
+# and not fixed by a single observation.
+_SINGLE_SIGNAL_MEASURES = {"power", "cross_spectral_density"}
+
+
+def _complex_noise(shape, seed):
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_every_measure_between_signals_refuses_a_single_signal(measure):
+    """A measure of a relationship between signals raises the same error for
+    one signal, whichever intermediate it reads; the other two are defined."""
+    connectivity = Connectivity(_complex_noise((1, 4, 3, 16, 1), seed=31))
+    compute = getattr(connectivity, measure.name)
+    if measure.name in _SINGLE_SIGNAL_MEASURES:
+        assert np.isfinite(compute()).all()
+        return
+    kwargs = _MEASURE_KWARGS.get(measure.name, {})
+    one_signal_kwargs = {
+        **({"group_labels": ["a"]} if "group_labels" in kwargs else {}),
+        **({"pairs": [(0, 0)]} if "pairs" in kwargs else {}),
+    }
+    with pytest.raises(ValueError, match="at least 2 signals"):
+        compute(**one_signal_kwargs)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_every_measure_between_signals_announces_a_single_observation(measure):
+    """One observation fixes or breaks every measure that relates signals, so
+    each warns or raises there instead of returning a value silently."""
+    connectivity = Connectivity(_complex_noise((1, 1, 1, 16, 4), seed=32))
+    raised = False
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            getattr(connectivity, measure.name)(**_MEASURE_KWARGS.get(measure.name, {}))
+        except ValueError:
+            raised = True
+    warned = any(
+        issubclass(warning.category, UserWarning)
+        and not issubclass(warning.category, DirectedOrientationWarning)
+        for warning in caught
+    )
+    assert (raised or warned) == (measure.name not in _SINGLE_SIGNAL_MEASURES)
 
 
 # What users get when ``method`` is omitted. Pinned explicitly: every other

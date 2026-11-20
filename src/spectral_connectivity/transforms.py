@@ -690,39 +690,44 @@ def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
     dimensions = getattr(time_series, "dims", None)
     if dimensions is None or len(dimensions) != len(_INPUT_AXIS_ROLES):
         return
-    # Imported here: the wrapper's input handling sits above the transforms.
-    from spectral_connectivity._input_handling import _dimension_role
+    # The naming rules belong to the wrapper's layer, above this module, so
+    # the dependency on them stays local to this check.
+    from spectral_connectivity._input_handling import (
+        _dimension_role,
+        _resolve_dataarray_dimensions,
+    )
 
     misplaced = [
         f"{dimension!r} is on the {expected} axis"
         for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=True)
         if _dimension_role(dimension) not in (None, expected)
     ]
-    if misplaced:
-        # Spell out the transpose only when the names determine it: all three
-        # roles named, or two named, which leaves the third dimension for the
-        # remaining role.
-        named = {_dimension_role(dimension): dimension for dimension in dimensions}
-        unnamed = named.pop(None, None)
-        missing = [role for role in _INPUT_AXIS_ROLES if role not in named]
-        if len(missing) == 1 and len(named) == 2:
-            named[missing[0]] = unnamed
-        if len(named) == len(_INPUT_AXIS_ROLES):
-            order = ", ".join(repr(named[role]) for role in _INPUT_AXIS_ROLES)
-            advice = f"Transpose it first, time_series.transpose({order})"
-        else:
-            advice = (
-                "Transpose it to (time, trial, signal) order first "
-                "(time_series.transpose with the dimension names in that order)"
+    if not misplaced:
+        return
+    # Spell out the transpose only when the names determine it by the wrapper's
+    # own rules: all three roles named once, or two named and one dimension
+    # that is not a frequency axis left for the third.
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # its notice of the elimination
+            order = _resolve_dataarray_dimensions(
+                time_series, time_dim=None, trial_dim=None, signal_dim=None
             )
-        msg = (
-            f"{transform} reads time_series by position, as (time, trial, signal), "
-            f"but its dimensions are named {tuple(dimensions)!r}: "
-            f"{'; '.join(misplaced)}. {advice}, or pass time_series.values if the "
-            "names are wrong and the axes are already in that order. "
-            "multitaper_connectivity assigns axes from dimension names itself."
+    except ValueError:
+        advice = (
+            "Transpose it to (time, trial, signal) order first "
+            "(time_series.transpose with the dimension names in that order)"
         )
-        raise ValueError(msg)
+    else:
+        advice = f"Transpose it first, time_series.transpose({', '.join(map(repr, order))})"
+    msg = (
+        f"{transform} reads time_series by position, as (time, trial, signal), "
+        f"but its dimensions are named {tuple(dimensions)!r}: "
+        f"{'; '.join(misplaced)}. {advice}, or pass time_series.values if the "
+        "names are wrong and the axes are already in that order. "
+        "multitaper_connectivity assigns axes from dimension names itself."
+    )
+    raise ValueError(msg)
 
 
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
@@ -2413,8 +2418,8 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
-        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
         _check_labeled_axis_order(time_series, type(self).__name__)
+        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(

@@ -4434,23 +4434,6 @@ def test_multiple_observations_group_measure_does_not_warn(measure):
         _rank_one_measure_magnitudes(connectivity, measure)
 
 
-def test_global_coherence_counts_trials_and_tapers_as_observations():
-    # Global coherence decomposes the trials x tapers coefficients whatever the
-    # expectation type, so one trial with four tapers is four observations there
-    # although the expectation over trials averages one.
-    rng = np.random.default_rng(711)
-    shape = (1, 1, 4, 16, 4)
-    connectivity = Connectivity(
-        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
-        expectation_type="trials",
-    )
-    assert connectivity.n_observations == 1
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        global_coherence, _ = connectivity.global_coherence()
-    assert np.all(global_coherence < 1.0 - 1e-6)
-
-
 def test_single_observation_warning_counts_what_each_measure_averages():
     """A measure of the averaged cross-spectrum warns when its expectation
     averages one observation. Global coherence decomposes trials x tapers in
@@ -4463,6 +4446,7 @@ def test_single_observation_warning_counts_what_each_measure_averages():
 
     # One trial and three tapers, averaged over trials: one observation each.
     over_trials = Connectivity(coefficients((1, 1, 3, 16, 4)), expectation_type="trials")
+    assert over_trials.n_observations == 1
     with pytest.warns(
         UserWarning,
         match=r"single observation \(n_observations == 1\).*time_halfbandwidth_product",
@@ -4470,7 +4454,8 @@ def test_single_observation_warning_counts_what_each_measure_averages():
         over_trials.imaginary_coherence()
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        over_trials.global_coherence()
+        global_coherence, _ = over_trials.global_coherence()
+    assert np.all(global_coherence < 1.0 - 1e-6)
 
     # Five windows of one trial and one taper, averaged over time: five observations.
     over_time = Connectivity(coefficients((5, 1, 1, 16, 4)), expectation_type="time")

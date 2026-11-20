@@ -135,6 +135,11 @@ _RANK_ONE_GROUP_CONSEQUENCE = (
     "number of signals in each group (for two single-signal groups, by one "
     "phase difference)"
 )
+# And how it fixes the canonical coherency.
+_RANK_ONE_CANONICAL_CONSEQUENCE = (
+    "the leading canonical coherency of every group pair is mathematically "
+    "forced to magnitude 1 (apparent perfect connectivity)"
+)
 
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
@@ -1889,6 +1894,7 @@ class Connectivity:
             expectation keeps.
 
         """
+        self._validate_multiple_signals()
         pair_indices = xp.asarray(pairs, dtype=int)
         if pair_indices.ndim != 2 or pair_indices.shape[1] != 2:
             msg = "pairs must have shape (n_pairs, 2)."
@@ -3327,8 +3333,7 @@ class Connectivity:
         regularization = _validated_regularization(regularization)
         self._warn_single_observation_degenerate(
             method,
-            "the leading canonical coherency of every group pair is mathematically "
-            "forced to magnitude 1 (apparent perfect connectivity)"
+            _RANK_ONE_CANONICAL_CONSEQUENCE
             if method == "canonical_coherency"
             else _RANK_ONE_GROUP_CONSEQUENCE,
         )
@@ -4773,7 +4778,6 @@ class Connectivity:
         >>> bool(np.isnan(granger[0, 20, 0, 2]))  # pair (0, 2) was not requested
         True
         """
-        self._validate_multiple_signals()
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
         result = _estimate_subset_spectral_granger_prediction(

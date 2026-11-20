@@ -22,17 +22,12 @@ from spectral_connectivity.minimum_phase_decomposition import (
     minimum_phase_reconstruction_error,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
+from tests._var_oracle import _analytic_var
 
 
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
-    """Analytic cross-spectrum S(f) of a VAR on the full FFT grid."""
-    n_lags, n_signals, _ = coefficients.shape
-    omega = 2 * np.pi * np.arange(n_fft) / n_fft
-    A = np.tile(np.eye(n_signals, dtype=complex), (n_fft, 1, 1))
-    for lag in range(n_lags):
-        A -= coefficients[lag][None] * np.exp(-1j * omega * (lag + 1))[:, None, None]
-    H = np.linalg.inv(A)
-    return (H @ noise_covariance.astype(complex) @ H.conj().swapaxes(-1, -2))[None]
+    """Analytic cross-spectrum S(f) of a VAR on the full FFT grid, as one window."""
+    return _analytic_var(coefficients, noise_covariance, n_fft)[2][None]
 
 
 def _cross_spectrum_of(signals):
