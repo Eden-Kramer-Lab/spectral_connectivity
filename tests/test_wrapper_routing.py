@@ -251,7 +251,7 @@ def test_connectivity_kwargs_reach_the_measure_of_connectivity_to_xarray(multita
 
 
 def test_connectivity_to_xarray_legacy_keywords_warn_once_and_match_the_mapping(multitaper):
-    settings = {"frequency_range": (20.0, 80.0), "frequency_resolution": 10.0}
+    settings = {"frequency_resolution": 10.0}
     canonical = connectivity_to_xarray(
         multitaper, "phase_slope_index", connectivity_kwargs=settings
     )
@@ -267,12 +267,46 @@ def test_connectivity_to_xarray_legacy_keywords_warn_once_and_match_the_mapping(
 
 
 def test_connectivity_to_xarray_rejects_a_measure_setting_given_twice(multitaper):
-    with pytest.raises(ValueError, match=r"frequency_range.*connectivity_kwargs.*keyword"):
+    with pytest.raises(
+        ValueError, match=r"frequency_resolution.*connectivity_kwargs.*keyword"
+    ):
+        connectivity_to_xarray(
+            multitaper,
+            "phase_slope_index",
+            connectivity_kwargs={"frequency_resolution": 10.0},
+            frequency_resolution=20.0,
+        )
+
+
+def test_connectivity_to_xarray_takes_frequency_range_by_name_like_the_wrappers(
+    multitaper,
+):
+    """frequency_range is a named argument of every wrapper: the interval
+    measures consume it, any other measure is cropped to it, and it does not
+    go in connectivity_kwargs."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        psi = connectivity_to_xarray(
+            multitaper, "phase_slope_index", frequency_range=(20.0, 80.0)
+        )
+        cropped = connectivity_to_xarray(
+            multitaper, "magnitude_squared_coherence", frequency_range=(20.0, 80.0)
+        )
+    full = connectivity_to_xarray(multitaper, "magnitude_squared_coherence")
+    expected = Connectivity.from_transform(multitaper).phase_slope_index(
+        frequency_range=(20.0, 80.0)
+    )
+    np.testing.assert_array_equal(psi.values, expected)
+    in_range = (full.frequency >= 20.0) & (full.frequency <= 80.0)
+    np.testing.assert_array_equal(cropped.values, full.values[:, in_range.values])
+    np.testing.assert_array_equal(cropped.frequency, full.frequency[in_range])
+    assert cropped.attrs["frequency_interval_closed"] == "both"
+    assert cropped.attrs["requested_frequency_lower"] == 20.0
+    with pytest.raises(ValueError, match="pass frequency_range="):
         connectivity_to_xarray(
             multitaper,
             "phase_slope_index",
             connectivity_kwargs={"frequency_range": (20.0, 80.0)},
-            frequency_range=(10.0, 90.0),
         )
 
 

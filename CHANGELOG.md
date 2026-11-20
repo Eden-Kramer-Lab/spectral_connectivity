@@ -55,7 +55,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 | `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
-| `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "delay", frequency_range=(4, 12))`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"frequency_range": (4, 12)}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`) stay named arguments and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "subset_pairwise_spectral_granger_prediction", pairs=[(0, 1)])`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"pairs": [(0, 1)]}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`, and `frequency_range`) stay named arguments of every wrapper that takes them and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `Connectivity.from_multitaper(m)` | Use `Connectivity.from_transform(m)`, which takes the same arguments and builds the same instance from any spectral transform. `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `minimum_phase_decomposition(S)` stopped after 60 Wilson iterations by default | The default `max_iterations` is 500, so spectra that need more iterations converge instead of warning; pass `max_iterations=60` for the 2.x cap. `tolerance` and `max_iterations` keep their positions and still work positionally or by keyword |
 
@@ -218,9 +218,12 @@ directly with results from 2.x.
   settings go in `connectivity_kwargs`. The released positional order is
   unchanged. A misspelled key in either mapping raises `TypeError`; a common
   setting inside `transform_kwargs` raises `ValueError`, so a setting cannot be
-  given two values. `connectivity_to_xarray` gains `connectivity_kwargs` and a
-  keyword-only `group_labels` (also accepted in the mapping, not both), and
-  checks every measure setting before computing anything. Provenance does not
+  given two values. `connectivity_to_xarray` gains `connectivity_kwargs`, a
+  keyword-only `group_labels` (also accepted in the mapping, not both), and a
+  keyword-only `frequency_range` that, as in the other wrappers, the interval
+  measures consume and every other measure is cropped to (it is rejected
+  inside `connectivity_kwargs`), and checks every measure setting before
+  computing anything. Provenance does not
   depend on the route that supplied a setting.
 - `list_measures()` enumerates every wrapper-supported `method` name with its
   output category, a one-line description sourced from the `Connectivity`

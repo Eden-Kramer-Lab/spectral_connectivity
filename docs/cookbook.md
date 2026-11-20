@@ -250,8 +250,8 @@ go in `connectivity_kwargs`:
 Each setting has one route, so a common setting placed in `transform_kwargs`
 raises `ValueError` instead of silently competing with its named argument, and
 a misspelled key in either mapping raises `TypeError`. `connectivity_to_xarray`
-takes an existing transform, so it has `connectivity_kwargs` (and
-`group_labels`) but no `transform_kwargs`.
+takes an existing transform, so it has `connectivity_kwargs` (and the named
+`group_labels` and `frequency_range`) but no `transform_kwargs`.
 
 Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
 `multitaper_connectivity(x, fs, n_fft_samples=512)`. That still works

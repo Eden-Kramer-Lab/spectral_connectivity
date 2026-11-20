@@ -219,19 +219,20 @@ def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
         transform,
         method="delay",
         signal_names=["a", "b"],
-        connectivity_kwargs={"frequency_range": (8, 40), "n_range": 1},
+        frequency_range=(8, 40),
+        connectivity_kwargs={"n_range": 1},
     )
     psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
         signal_names=["a", "b"],
-        connectivity_kwargs={"frequency_range": (8, 40)},
+        frequency_range=(8, 40),
     )
     group_delay = connectivity_to_xarray(
         transform,
         method="group_delay",
         signal_names=["a", "b"],
-        connectivity_kwargs={"frequency_range": (8, 40)},
+        frequency_range=(8, 40),
     )
 
     assert delay.dims == ("time", "frequency", "candidate", "source", "target")
@@ -3643,7 +3644,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         delay = connectivity_to_xarray(
             transform,
             method="delay",
-            connectivity_kwargs={"frequency_range": band},
+            frequency_range=band,
         )
     np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
     np.testing.assert_array_equal(
@@ -3655,7 +3656,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         group_delay = connectivity_to_xarray(
             transform,
             method="group_delay",
-            connectivity_kwargs={"frequency_range": band},
+            frequency_range=band,
         )
     assert "frequency" not in group_delay.dims
     assert group_delay.valid_time.dims == ("time",)

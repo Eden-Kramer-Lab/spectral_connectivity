@@ -774,7 +774,7 @@ def test_results_record_the_requested_and_selected_interval(
     result = connectivity_to_xarray(
         Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
         method=measure,
-        connectivity_kwargs=kwargs,
+        **kwargs,
     )
     for variable in _measure_variables(result):
         assert {key: variable.attrs[key] for key in expected} == expected
@@ -1165,9 +1165,7 @@ def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
     psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
-        connectivity_kwargs={
-            "frequency_range": (10.0, 20.0),
-            "frequency_resolution": 4.0,  # a step of two 2 Hz bins
-        },
+        frequency_range=(10.0, 20.0),
+        connectivity_kwargs={"frequency_resolution": 4.0},  # a step of two 2 Hz bins
     )
     np.testing.assert_array_equal(psi.valid_time, every_bin)

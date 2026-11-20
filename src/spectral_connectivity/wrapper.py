@@ -574,6 +574,7 @@ def connectivity_to_xarray(
     squeeze: bool = False,
     *,
     group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
+    frequency_range: tuple[float, float] | None = None,
     connectivity_kwargs: Mapping[str, Any] | None = None,
     **kwargs: Any,
 ) -> xr.DataArray | xr.Dataset:
@@ -615,10 +616,16 @@ def connectivity_to_xarray(
         One label per signal naming its group, required by the group measures
         (see :func:`multitaper_connectivity`). It may instead be given in
         ``connectivity_kwargs``, but not both.
+    frequency_range : (float, float), optional
+        Frequency interval ``(low, high)``, both endpoints included, as in
+        :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
+        ``phase_slope_index`` consume only those bins, and any other measure
+        is computed from the full spectrum and cropped to them. Pass it here,
+        not in ``connectivity_kwargs``.
     connectivity_kwargs : mapping, optional
-        Settings for the measure, e.g. ``{"frequency_range": (4, 12)}`` for
-        ``delay``, ``group_delay``, and ``phase_slope_index``, or ``{"pairs":
-        ...}`` for ``subset_pairwise_spectral_granger_prediction``. A key the
+        Settings for the measure, e.g. ``{"pairs": [(0, 1)]}`` for
+        ``subset_pairwise_spectral_granger_prediction`` or
+        ``{"frequency_resolution": 10.0}`` for ``phase_slope_index``. A key the
         measure does not take raises ``TypeError``. There is no
         ``transform_kwargs``: ``m`` is already built.
     **kwargs
@@ -659,13 +666,20 @@ def connectivity_to_xarray(
         _setting_mapping("connectivity_kwargs", connectivity_kwargs),
         kwargs,
     )
-    # A misspelled setting fails before any work, whichever route it took.
+    # A misspelled or misplaced setting fails before any work, whichever route
+    # it took; frequency_range is a named argument here as in every wrapper.
+    _check_frequency_operations(
+        [method], measure_settings, frequency_decimation=1, frequency_bands=None
+    )
     _check_method_accepts_kwargs(
         method,
         getattr(Connectivity, method),
         {key: value for key, value in measure_settings.items() if key != "group_labels"},
         several_measures=False,
     )
+    consumes_range = _consumes_frequency_range(method)
+    if consumes_range and frequency_range is not None:
+        measure_settings["frequency_range"] = frequency_range
     connectivity = Connectivity.from_transform(m)
     group_labels, measure_settings, group_methods = _resolve_group_labels(
         [method], measure_settings, group_labels, connectivity.n_signals
@@ -690,14 +704,15 @@ def connectivity_to_xarray(
             metadata["time_coordinate"] = "index"
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     shared_attrs = _shared_provenance_attrs(connectivity, metadata)
-    # The call's interval, resolved once; the result and its validity read it.
+    # The call's interval, resolved once; the result, its crop, and its
+    # validity read it.
     selection = (
         _select_measure_frequencies(
             to_numpy(connectivity.frequencies),
-            measure_settings.get("frequency_range"),
-            measure_settings.get("frequencies_of_interest"),
+            frequency_range,
+            measure_settings.get("frequencies_of_interest") if consumes_range else None,
         )
-        if _consumes_frequency_range(method)
+        if consumes_range or frequency_range is not None
         else None
     )
     result = _connectivity_result_to_xarray(
@@ -706,7 +721,7 @@ def connectivity_to_xarray(
         signal_labels,
         squeeze,
         shared_attrs,
-        frequency_selection=selection,
+        frequency_selection=selection if consumes_range else None,
         result_name=output_names[method],
         **measure_settings,
     )
@@ -723,8 +738,8 @@ def connectivity_to_xarray(
         validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
         if "frequency" in result.dims:
             # delay keeps only the bins of its interval; every other
-            # frequency-resolved result keeps the full grid.
-            bins = slice(None) if selection is None else selection.mask
+            # frequency-resolved result keeps the full grid until it is cropped.
+            bins = selection.mask if consumes_range and selection is not None else slice(None)
             result = result.assign_coords(
                 valid_time_frequency=(("time", "frequency"), validity[:, bins], validity_attrs)
             )
@@ -738,6 +753,9 @@ def connectivity_to_xarray(
             assert selection is not None  # PSI and group delay consume an interval
             valid_time = validity[:, selection.mask].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
+    if frequency_range is not None and not consumes_range:
+        assert selection is not None  # resolved above whenever a range is given
+        result = _crop_frequency_range(result, selection)
     _warn_label_orientation_changed([method])
     _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     return _with_frequency_grid_metadata(result)
