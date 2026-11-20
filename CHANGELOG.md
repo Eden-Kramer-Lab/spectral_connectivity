@@ -650,7 +650,9 @@ is removed in 4.0.
   are named arguments and never warn. A setting given both in the mapping and
   as a plain keyword raises `ValueError`, and a name the transform or measure
   does not take, in either mapping or as a plain keyword, raises `TypeError`
-  before any computation.
+  before any computation. A plain `frequencies_of_interest=...` to
+  `connectivity_to_xarray` gets only its own deprecation, which names the
+  `frequency_range` that replaces it.
 - `power_confidence_intervals(n_tapers=...)`: use `n_observations=...`. The
   count is every observation averaged into the estimate (tapers x trials), not
   the taper count, so the old name invited intervals far too wide for

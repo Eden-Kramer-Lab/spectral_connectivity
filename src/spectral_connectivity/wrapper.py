@@ -466,8 +466,11 @@ def _warn_legacy_settings(function: str, mapping_name: str, legacy: Mapping[str,
     """Warn once, at the caller, that ``legacy`` settings belong in ``mapping_name``.
 
     Called just before the wrapper returns, so a call that is rejected for any
-    reason does not warn first.
+    reason does not warn first. A deprecated ``frequencies_of_interest`` is
+    left out: its own warning gives the ``frequency_range`` that replaces it,
+    and moving it into the mapping would only keep a deprecated keyword.
     """
+    legacy = {key: value for key, value in legacy.items() if key != "frequencies_of_interest"}
     if not legacy:
         return
     old = ", ".join(f"{key}=..." for key in legacy)

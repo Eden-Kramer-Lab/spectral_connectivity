@@ -32,6 +32,7 @@ from spectral_connectivity.wrapper import (
     multitaper_connectivity,
 )
 from tests._backend_helpers import to_host
+from tests._deprecation_helpers import warns_once_at_the_call
 
 # Bins 0, 2, ..., 50 Hz: every bound below is either exactly a bin or between bins.
 _EXACT_GRID = np.arange(0.0, 51.0, 2.0)
@@ -1089,6 +1090,25 @@ def test_deprecated_keyword_through_the_wrapper_warns_at_the_caller(
             frequency_range=(10.0, 50.0),
             **_LAGGED_TRANSFORM,
         )
+
+
+def test_a_plain_deprecated_band_points_only_to_frequency_range(
+    lagged_time_series, lagged_connectivity
+):
+    """``connectivity_to_xarray(m, measure, frequencies_of_interest=...)`` warns
+    once, with the ``frequency_range`` migration; it is not also told to move
+    the deprecated keyword into ``connectivity_kwargs``."""
+    multitaper = Multitaper(lagged_time_series, **_LAGGED_TRANSFORM)
+    result, message = warns_once_at_the_call(
+        lambda: connectivity_to_xarray(
+            multitaper, "phase_slope_index", frequencies_of_interest=(10.0, 50.0)
+        ),
+        "frequency_range=(12.0, 48.0)",
+    )
+    assert "connectivity_kwargs={" not in message
+    np.testing.assert_array_equal(
+        result.values, lagged_connectivity.phase_slope_index(frequency_range=(12.0, 48.0))
+    )
 
 
 def test_wilson_factorization_sees_the_full_two_sided_spectrum(monkeypatch):
