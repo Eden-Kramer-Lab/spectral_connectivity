@@ -456,6 +456,13 @@ def connectivity_to_xarray(
     >>> connectivity_to_xarray(mt).dims
     ('time', 'frequency', 'source', 'target')
     """
+    if not isinstance(method, str):
+        msg = (  # type: ignore[unreachable]  # user input
+            "method must be a single measure name (a string) for "
+            f"connectivity_to_xarray, got {method!r}; to compute several measures "
+            "call it once per measure."
+        )
+        raise TypeError(msg)
     (method,), output_names, _ = _requested_methods(method, ())
     connectivity = Connectivity.from_transform(m)
     provenance_metadata = getattr(m, "_provenance_metadata", None)

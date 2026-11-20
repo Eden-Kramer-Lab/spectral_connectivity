@@ -12,6 +12,20 @@ from spectral_connectivity.wrapper import (
 )
 
 
+@pytest.mark.parametrize(
+    "method",
+    [None, ["power", "phase_locking_value"], ["power"]],
+    ids=["none", "two-names", "one-name-list"],
+)
+def test_connectivity_to_xarray_rejects_a_method_that_is_not_one_name(method):
+    """connectivity_to_xarray computes one measure, named by a string."""
+    transform = Multitaper(
+        np.random.default_rng(0).standard_normal((256, 3, 2)), sampling_frequency=100
+    )
+    with pytest.raises(TypeError, match="method must be a single measure name"):
+        connectivity_to_xarray(transform, method)
+
+
 def test_time_halfbandwidth_product_kwarg_passthrough():
     """The documented Multitaper keyword reaches the transform through the wrapper.
 
