@@ -447,11 +447,14 @@ def suggest_parameters(
             # Adjust NW to give us at least min_n_windows
             time_window_duration = max_window_for_min_windows
             # Recalculate NW to achieve target resolution with this window.
-            # Rounding drops floating-point error, which at a boundary such as
-            # 30 Hz * 0.1 s / 2 = 1.4999999999999998 would cost a taper.
-            time_halfbandwidth_product = round(
-                desired_freq_resolution * time_window_duration / 2.0, 12
-            )
+            # The taper count is floor(2 * NW) - 1, so floating-point error just
+            # below a whole 2 * NW, such as 30 Hz * 0.1 s = 2.9999999999999996,
+            # would cost a taper: only such a value is raised to that whole.
+            twice_nw = desired_freq_resolution * time_window_duration
+            whole = np.ceil(twice_nw)
+            if twice_nw < whole and np.isclose(twice_nw, whole, rtol=1e-12, atol=0.0):
+                twice_nw = type(twice_nw)(whole)
+            time_halfbandwidth_product = twice_nw / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
 
@@ -669,6 +672,63 @@ class SpectralTransform(Protocol):
 
     def fft(self) -> NDArray[np.complexfloating]:
         """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
+
+
+# The axis each role is on in a transform's input.
+_INPUT_AXIS_ROLES = ("time", "trial", "signal")
+
+
+def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
+    """Reject a labeled input whose dimension names put a role on another axis.
+
+    A transform reads ``time_series`` by position. An ``xarray.DataArray``
+    named, say, ``(trial, time, signal)`` would be transformed along its trial
+    axis and give a plausible result of the wrong quantity, so it is refused.
+    Names that say nothing of an axis's role (``dim_0``, ``session``) are not
+    evidence either way and are read by position.
+    """
+    dimensions = getattr(time_series, "dims", None)
+    # A labeled 3-D array; a Dataset also has ``dims`` but no axis order.
+    if dimensions is None or getattr(time_series, "ndim", None) != len(_INPUT_AXIS_ROLES):
+        return
+    # The naming rules belong to the wrapper's layer, above this module, so
+    # the dependency on them stays local to this check.
+    from spectral_connectivity._input_handling import (
+        _dimension_role,
+        _resolve_dataarray_dimensions,
+    )
+
+    misplaced = [
+        f"{dimension!r} is on the {expected} axis"
+        for dimension, expected in zip(dimensions, _INPUT_AXIS_ROLES, strict=True)
+        if _dimension_role(dimension) not in (None, expected)
+    ]
+    if not misplaced:
+        return
+    # Spell out the transpose only when the names determine it by the wrapper's
+    # own rules: all three roles named once, or two named and one dimension
+    # that is not a frequency axis left for the third.
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # its notice of the elimination
+            order = _resolve_dataarray_dimensions(
+                time_series, time_dim=None, trial_dim=None, signal_dim=None
+            )
+    except ValueError:
+        advice = (
+            "Transpose it to (time, trial, signal) order first "
+            "(time_series.transpose with the dimension names in that order)"
+        )
+    else:
+        advice = f"Transpose it first, time_series.transpose({', '.join(map(repr, order))})"
+    msg = (
+        f"{transform} reads time_series by position, as (time, trial, signal), "
+        f"but its dimensions are named {tuple(dimensions)!r}: "
+        f"{'; '.join(misplaced)}. {advice}, or pass time_series.values if the "
+        "names are wrong and the axes are already in that order. "
+        "multitaper_connectivity assigns axes from dimension names itself."
+    )
+    raise ValueError(msg)
 
 
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
@@ -1380,6 +1440,12 @@ class Multitaper(_WindowedFourierTransform):
 
         **Important:** If your data is 1D or 2D, use `prepare_time_series()`
         helper function to convert it to the required 3D format.
+
+        An ``xarray.DataArray`` is read by position, like any array; one whose
+        dimension names put time, trials, or signals on another axis raises
+        ``ValueError`` (transpose it first, or use
+        :func:`~spectral_connectivity.multitaper_connectivity`, which assigns
+        axes from dimension names).
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     time_halfbandwidth_product : float, default=3
@@ -1399,7 +1465,9 @@ class Multitaper(_WindowedFourierTransform):
         - NW = 5+: Heavy smoothing, 9+ tapers, very strong variance reduction
 
         **Examples:**
-        For 1 Hz frequency resolution with 1 second windows: use NW ≤ 0.5
+        For 2 Hz frequency resolution with 1 second windows: use NW = 1, the
+        smallest allowed (one taper); 1 Hz resolution needs a window of at
+        least 2 seconds
         For 5 Hz frequency resolution with 1 second windows: use NW ≤ 2.5
         For 10 Hz frequency resolution with 1 second windows: use NW ≤ 5
 
@@ -1432,6 +1500,9 @@ class Multitaper(_WindowedFourierTransform):
         Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
         to be fast for the FFT algorithm: scipy.fft.next_fast_len, on the GPU
         backend too, so the default frequency grid is the same on CPU and GPU.
+        The directed measures (spectral Granger, DTF, PDC) depend slightly
+        on this length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     n_time_samples_per_window : int, optional
         Number of samples per time window. Computed (to the nearest sample)
         from time_window_duration if not provided; when both are given they
@@ -1611,6 +1682,7 @@ class Multitaper(_WindowedFourierTransform):
         adaptive_tolerance: float = 1e-8,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
+        _check_labeled_axis_order(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         self.fft_workers = fft_workers
@@ -2044,7 +2116,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     detrend_type : {"constant", "linear"} or None, default="constant"
@@ -2060,6 +2134,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the window
         length, which may zero-pad (e.g. a 257-sample window gives 264 bins);
         pass the window length explicitly for an unpadded frequency grid.
+        The directed measures (spectral Granger, DTF, PDC) depend slightly
+        on this length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     n_time_samples_per_window : int, optional
         Window length in samples (alternative to ``time_window_duration``).
     n_time_samples_per_step : int, optional
@@ -2107,6 +2184,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         ):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
+        _check_labeled_axis_order(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2284,7 +2362,9 @@ class Welch:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second; required because it labels the frequency axis and scales power.
     segment_duration : float, optional
@@ -2305,6 +2385,9 @@ class Welch:
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the segment
         length, which may zero-pad (e.g. a 257-sample segment gives 264 bins);
         pass the segment length explicitly for an unpadded frequency grid.
+        The directed measures (spectral Granger, DTF, PDC) depend slightly
+        on this length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     fft_workers : int, optional
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """
@@ -2336,6 +2419,7 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
+        _check_labeled_axis_order(time_series, type(self).__name__)
         # np.shape reads arrays' own shape (no copy) and also measures nested lists.
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
@@ -2583,7 +2667,9 @@ class MorletWavelet:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input.
+        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        ``xarray.DataArray`` is read by position; one whose dimension names
+        put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
         Samples per second (Hz).
     frequencies : ndarray, shape (n_frequencies,)
@@ -2658,6 +2744,7 @@ class MorletWavelet:
         zero_mean: bool = True,
         start_time: float = 0.0,
     ) -> None:
+        _check_labeled_axis_order(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
@@ -3083,6 +3170,9 @@ class MorletWavelet:
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
+        # The smoothing window and step as used: whole decimated samples.
+        smoothed = self.smoothing_time is not None
+        rate = self.sampling_frequency
         return {
             "transform": self._transform_name,
             "decimation": self.decimation,
@@ -3097,8 +3187,12 @@ class MorletWavelet:
             "padding_mode": self.padding_mode,
             "smoothing_frequency": self.smoothing_frequency,
             "smoothing_kernel": self.smoothing_kernel,
-            "smoothing_step": self.smoothing_step,
-            "smoothing_time": self.smoothing_time,
+            "smoothing_step": (
+                self._smoothing_step_samples * self.decimation / rate if smoothed else None
+            ),
+            "smoothing_time": (
+                self._smoothing_samples * self.decimation / rate if smoothed else None
+            ),
             "zero_mean": self.zero_mean,
         }
 

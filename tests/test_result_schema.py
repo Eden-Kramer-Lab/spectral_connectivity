@@ -154,6 +154,49 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
         assert parameters["estimator"]["frequencies"] == [4, 8, 16]
 
 
+@pytest.mark.parametrize(
+    ("smoothing_step", "realized_step"),
+    [(None, 0.12), (0.057, 0.06)],
+    ids=["default", "given"],
+)
+def test_morlet_records_the_smoothing_window_and_step_it_used(
+    data, smoothing_step, realized_step
+):
+    """Like the windowed transforms' durations, the recorded smoothing is what
+    was used: whole decimated samples (12 and 6 of them at 100 Hz here), not
+    the 0.123 s and 0.057 s requested."""
+    transform = MorletWavelet(
+        data,
+        sampling_frequency=200,
+        frequencies=np.array([20.0, 40.0]),
+        decimation=2,
+        smoothing_time=0.123,
+        smoothing_step=smoothing_step,
+    )
+    result = connectivity_to_xarray(transform, "power")
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["smoothing_time"] == pytest.approx(0.12, rel=1e-12)
+    assert estimator["smoothing_step"] == pytest.approx(realized_step, rel=1e-12)
+    np.testing.assert_allclose(np.diff(result.time.values), realized_step, rtol=1e-12)
+
+
+def test_morlet_records_a_whole_sample_smoothing_window_exactly():
+    """100 samples of 3 ms are 0.3 s, not the 0.30000000000000004 that
+    dividing by the decimated rate (1000 / 3) gives."""
+    transform = MorletWavelet(
+        np.random.default_rng(911).standard_normal((900, 3, 2)),
+        sampling_frequency=1000,
+        frequencies=np.array([50.0, 100.0]),
+        decimation=3,
+        smoothing_time=0.3,
+    )
+    estimator = json.loads(
+        connectivity_to_xarray(transform, "power").attrs["transform_parameters_json"]
+    )["estimator"]
+    assert estimator["smoothing_time"] == 0.3
+    assert estimator["smoothing_step"] == 0.3
+
+
 def test_only_released_multitaper_attributes_are_compatibility_copies(data):
     result = connectivity_to_xarray(
         Multitaper(
@@ -534,6 +577,26 @@ def test_nyquist_follows_from_the_sampling_rate_when_the_transform_omits_it(data
     )
 
 
+@pytest.mark.parametrize("recorded", ["nyquist_frequency", "mt_nyquist_frequency"])
+def test_dataset_built_from_result_variables_uses_their_nyquist_frequency(data, recorded):
+    """A Dataset assembled from result variables has no attributes of its own;
+    each variable's record, under the 3.0 name or the 2.x one, still says a
+    cropped grid's last bin is interior."""
+    full = multitaper_connectivity(data, sampling_frequency=64, method="power")
+    band = {"upper": (4, 8)}
+    cropped = full.sel(frequency=slice(0, 8))
+    for name in {"nyquist_frequency", "mt_nyquist_frequency"} - {recorded}:
+        del cropped.attrs[name]
+    assert cropped.attrs[recorded] == 32
+    assembled = xr.Dataset({"power": cropped})
+    assert "nyquist_frequency" not in assembled.attrs
+    xr.testing.assert_allclose(
+        frequency_band_reduce(assembled, band, frequency_reduction="integral")["power"],
+        frequency_band_reduce(full, band, frequency_reduction="integral"),
+        rtol=1e-12,
+    )
+
+
 def test_group_membership_carries_only_shared_provenance():
     """The membership table is shared by every group measure of a result."""
     signals = np.random.default_rng(911).standard_normal((128, 6, 4))
@@ -610,6 +673,85 @@ def test_rounded_two_sided_grid_is_in_fft_order(data):
     result = fourier_connectivity(coefficients, method="power")
     assert result.attrs["frequency_bin_spacing"] == pytest.approx(1 / 3, rel=1e-6)
     assert result.attrs["sampling_frequency"] == pytest.approx(128 / 3, rel=1e-6)
+
+
+def _power_up_to(result, top):
+    """Power integrated from 0 Hz to ``top``, as a band ending on that bin."""
+    return frequency_band_reduce(
+        result, {"all": (0.0, top)}, frequency_reduction="integral"
+    ).values
+
+
+@pytest.mark.parametrize("n_fft", [90, 89], ids=["even", "odd"])
+@pytest.mark.parametrize(
+    "stored",
+    [lambda grid: grid.astype(np.float32), lambda grid: np.round(grid, 7)],
+    ids=["float32", "rounded"],
+)
+def test_two_sided_grid_rounding_does_not_lose_the_nyquist_bin(data, n_fft, stored):
+    """The rate is read from the bin farthest from 0 Hz, the Nyquist bin of an
+    even-length grid, so one bin's rounding is not multiplied by the FFT
+    length and a band ending on that bin still integrates its whole cell."""
+    data = data[:n_fft]
+    exact_grid = np.fft.fftfreq(n_fft, 1 / 250)
+    exact = fourier_connectivity(_fourier_dataarray(data, exact_grid), method="power")
+    result = fourier_connectivity(_fourier_dataarray(data, stored(exact_grid)), method="power")
+
+    assert result.attrs["sampling_frequency"] == pytest.approx(250, rel=1e-6)
+    if n_fft % 2 == 0:
+        assert result.attrs["sampling_frequency"] == 250
+        assert result.attrs["nyquist_frequency"] == float(result.frequency[-1])
+    np.testing.assert_allclose(
+        _power_up_to(result, float(result.frequency[-1])),
+        _power_up_to(exact, float(exact.frequency[-1])),
+        rtol=1e-6,
+    )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [lambda frequency: frequency.astype(np.float32), lambda frequency: frequency.round(7)],
+    ids=["float32", "rounded"],
+)
+def test_stored_frequency_coordinate_keeps_its_nyquist_bin(data, stored):
+    """A result's coordinate stored as float32 (e.g. by netCDF) or rounded to a
+    few decimals is still on the recorded Nyquist frequency, 64/3 Hz here,
+    which neither holds exactly. NumPy 2 compares a float32 bin with the
+    recorded value in float32, so the float32 case fails without the rule only
+    on NumPy 1.x; the rounded case fails without it on any."""
+    result = multitaper_connectivity(data, sampling_frequency=128 / 3, method="power")
+    nyquist = result.attrs["nyquist_frequency"]
+    rounded = result.assign_coords(frequency=stored(result.frequency))
+    assert float(rounded.frequency[-1]) != nyquist
+    np.testing.assert_allclose(
+        _power_up_to(rounded, nyquist), _power_up_to(result, nyquist), rtol=1e-6
+    )
+
+
+def test_float32_grid_of_an_odd_length_records_its_rate_in_its_own_precision(data):
+    """An odd-length grid has no Nyquist bin to read the rate from. Its top
+    bin, 100/3 Hz, is not a float32 number, but the rate it gives is 100 in the
+    grid's own precision."""
+    grid = np.fft.fftfreq(3, 1 / 100).astype(np.float32)
+    result = fourier_connectivity(_fourier_dataarray(data[:3], grid), method="power")
+    assert result.attrs["sampling_frequency"] == 100.0
+    assert result.attrs["nyquist_frequency"] == 50.0
+
+
+def test_integer_grid_reaching_its_dtype_minimum_records_a_positive_rate():
+    """The Nyquist bin of this int8 grid is -128, whose absolute value int8
+    cannot hold; the rate is taken after converting it to floating point."""
+    grid = np.fft.fftfreq(256, 1 / 256).astype(np.int8)
+    assert grid[128] == -128
+    coefficients = _fourier_dataarray(
+        np.random.default_rng(912).standard_normal((256, 3, 2)), grid
+    )
+    with warnings.catch_warnings():
+        # Other steps still overflow on such a grid; only the rate is checked.
+        warnings.simplefilter("ignore")
+        result = fourier_connectivity(coefficients, method="power")
+    assert result.attrs["sampling_frequency"] == 256.0
+    assert result.attrs["nyquist_frequency"] == 128.0
 
 
 def test_float32_uniform_grid_is_uniform_for_phase_slope(data):
@@ -711,10 +853,28 @@ def test_scalar_fourier_time_coordinate_is_the_time_of_the_single_window(data):
         fourier_connectivity(one_window, time=[3.0], method="power")
 
 
+@pytest.mark.parametrize(
+    ("name", "value"), [("window", 256), ("windows", 8), ("time_window", 0.5)]
+)
+def test_scalar_coordinate_named_like_a_window_is_not_taken_for_its_time(data, name, value):
+    """Only a scalar coordinate named time or times is the single window's
+    time. A window's length or count is as likely under these names as its
+    time, so they stay recording identifiers and the window keeps its index."""
+    coefficients = _fourier_dataarray(data, np.fft.fftfreq(128, 1 / 64)).assign_coords(
+        {name: value}
+    )
+    result = fourier_connectivity(coefficients, method="power")
+    assert result.time.values.tolist() == [0]
+    assert result.attrs["time_coordinate"] == "index"
+    assert result.coords[name].item() == value
+
+
 def test_coordinate_units_express_normalized_delay_without_claiming_seconds(data):
     coefficients = _fourier_dataarray(data, np.fft.fftfreq(128), "cycles/sample")
-    result = fourier_connectivity(coefficients, method="group_delay")
-    assert result.group_delay.attrs["units"] == "samples"
+    result = fourier_connectivity(coefficients, method=["group_delay", "delay"])
+    for delay in (result.group_delay, result.delay):
+        assert delay.attrs["units"] == "samples"
+        assert "in seconds" not in delay.attrs["interpretation"]
 
 
 @pytest.mark.parametrize(

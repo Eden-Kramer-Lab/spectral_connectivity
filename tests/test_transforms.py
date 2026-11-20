@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import numpy as np
 import pytest
 import scipy.fft
+import xarray as xr
 from nitime.algorithms.spectral import dpss_windows as nitime_dpss_windows
 
 from spectral_connectivity import _backend
@@ -996,6 +997,98 @@ def test_fft():
         ),
         rtol=1e-10,
         atol=1e-12,
+    )
+
+
+_EVERY_TRANSFORM = pytest.mark.parametrize(
+    "construct",
+    [
+        lambda x: Multitaper(x, sampling_frequency=1000),
+        lambda x: ShortTimeFourierTransform(x, sampling_frequency=1000),
+        lambda x: Welch(x, sampling_frequency=1000, n_time_samples_per_segment=50),
+        lambda x: MorletWavelet(
+            x, sampling_frequency=1000, frequencies=np.array([50.0, 100.0])
+        ),
+    ],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch", "MorletWavelet"],
+)
+
+
+@_EVERY_TRANSFORM
+@pytest.mark.parametrize(
+    "dims",
+    [("trial", "time", "signal"), ("time", "channel", "epoch"), ("unit", "samples", "run")],
+    ids="-".join,
+)
+def test_transforms_refuse_a_dataarray_whose_dimension_names_contradict_its_axes(
+    construct, dims
+):
+    """A transform reads its input by position, as (time, trial, signal). A
+    labeled input whose names put a role on another axis would be transformed
+    along the wrong one without any sign of it, so it is refused; the message
+    names each misplaced dimension and both ways out."""
+    labeled = xr.DataArray(np.random.default_rng(43).standard_normal((40, 100, 2)), dims=dims)
+    with pytest.raises(
+        ValueError,
+        match=r"(?s)reads .* by position.*transpose.*\.values.*multitaper_connectivity",
+    ):
+        construct(labeled)
+
+
+@pytest.mark.parametrize(
+    ("dims", "advice"),
+    [
+        (("trial", "time", "signal"), "time_series.transpose('time', 'trial', 'signal')"),
+        # Two named roles leave the third dimension for the remaining one.
+        (("run", "time", "signal"), "time_series.transpose('time', 'run', 'signal')"),
+        (("dim_0", "trial", "time"), "time_series.transpose('time', 'trial', 'dim_0')"),
+        # One named role leaves two axes unassigned, so no call can be spelled out.
+        (("dim_0", "dim_1", "time"), "Transpose it to (time, trial, signal) order"),
+        # Nor when two names claim one role, or the remaining one is a frequency axis.
+        (("time", "samples", "trial"), "Transpose it to (time, trial, signal) order"),
+        (("time", "signal", "frequency"), "Transpose it to (time, trial, signal) order"),
+    ],
+    ids=lambda value: "-".join(value) if isinstance(value, tuple) else None,
+)
+def test_axis_order_error_spells_out_only_the_transpose_the_names_determine(dims, advice):
+    """The suggested call must run as written: a placeholder such as
+    ``time_dim`` is not a variable the user has."""
+    labeled = xr.DataArray(np.zeros((40, 100, 2)), dims=dims)
+    with pytest.raises(ValueError, match="reads time_series by position") as error:
+        Multitaper(labeled, sampling_frequency=1000)
+    assert advice in str(error.value)
+    assert "time_dim" not in str(error.value)
+    assert "None" not in str(error.value)
+
+
+def test_axis_order_check_applies_to_labeled_arrays_only():
+    """A Dataset has dimension names but is not an array: it gets xarray's own
+    refusal to become one, not a failure inside the axis-order check."""
+    dataset = xr.Dataset({"lfp": (("trial", "time", "signal"), np.zeros((4, 100, 2)))})
+    with pytest.raises(TypeError, match="Dataset"):
+        Multitaper(dataset, sampling_frequency=1000)
+
+
+@_EVERY_TRANSFORM
+@pytest.mark.parametrize(
+    "dims",
+    [
+        ("time", "trial", "signal"),
+        ("samples", "epochs", "channels"),
+        ("dim_0", "dim_1", "dim_2"),
+        ("time", "session", "signal"),
+    ],
+    ids="-".join,
+)
+def test_transforms_read_a_dataarray_whose_names_agree_with_its_axes_by_position(
+    construct, dims
+):
+    """Names in the transform's own order, and names that say nothing about
+    the role of an axis, leave the input read as the same array."""
+    time_series = np.random.default_rng(44).standard_normal((100, 4, 2))
+    labeled = xr.DataArray(time_series, dims=dims)
+    np.testing.assert_array_equal(
+        to_host(construct(labeled).fft()), to_host(construct(time_series).fft())
     )
 
 

@@ -431,8 +431,10 @@ def _warn_nan_granger_pairs(
         f"{unit} pair(s): {listing} ({indexing}in at least one time window). The "
         "spectral factorization for those pairs was singular or did not "
         "converge, or the target has no power; this usually means duplicated, "
-        "linearly dependent, or dead (zero-power) channels, so check those "
-        "channels. If they are valid but highly correlated, a larger "
+        "linearly dependent, or dead (zero-power) channels, or too few "
+        "observations (trials x tapers) for the spectrum to have full rank, so "
+        "check those channels and the number of observations. If the channels "
+        "are valid but highly correlated, a larger "
         "minimum_phase_max_iterations (a Connectivity argument) may let the "
         "factorization converge.",
         UserWarning,

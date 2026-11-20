@@ -41,9 +41,6 @@ from spectral_connectivity._multivariate import (
     _mic_components,
     _normalize_fourier_coefficients,
 )
-from spectral_connectivity.minimum_phase_decomposition import (
-    minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
-)
 from spectral_connectivity.statistics import (
     JackknifeResult,
     adjust_for_multiple_comparisons,
@@ -68,9 +65,7 @@ logger = getLogger(__name__)
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset(
-    {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
-)
+_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife"})
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -92,9 +87,17 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     return canonical
 
 
+# In 2.x blocks was meant only to chunk the cross-spectral computation, but it
+# also changed the phase-lag-index measures (see the migration guide).
 _BLOCKS_REMOVED = (
-    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
-    "automatically), so drop it."
+    "blocks was removed in 3.0 (memory is bounded automatically), so drop it. "
+    "Recompute phase-lag-index measures that 2.x computed with blocks >= 1: "
+    "blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index, "
+    "and larger values did not return valid results."
+)
+# Where 2.x took blocks by position, which is dtype's position now.
+_BLOCKS_POSITION = (
+    "In 2.x, blocks took this position (third in from_multitaper, fifth in Connectivity)."
 )
 
 
@@ -119,13 +122,35 @@ def _validated_complex_dtype(dtype: Any) -> Any:
         if dtype is None or (
             isinstance(dtype, (int, np.integer)) and not isinstance(dtype, bool)
         ):
-            msg += (
-                " In 2.x, blocks took this position (third in from_multitaper, fifth "
-                f"in Connectivity). {_BLOCKS_REMOVED} Pass dtype by keyword."
-            )
+            msg += f" {_BLOCKS_POSITION} {_BLOCKS_REMOVED} Pass dtype by keyword."
         raise TypeError(msg)
     return dtype
 
+
+# How a single observation fixes the maximized imaginary coherency and the
+# multivariate interaction measure (1, and 1 or 2, for a group pair with more
+# than two signals in total), for the single-observation warning.
+_RANK_ONE_GROUP_CONSEQUENCE = (
+    "the cross-spectral matrix has rank one and the value is fixed by the "
+    "number of signals in each group (for two single-signal groups, by one "
+    "phase difference)"
+)
+# What adds observations along each axis an expectation can average, for the
+# same warning.
+_MORE_OBSERVATIONS = {
+    "time": "more time windows",
+    "trials": "more trials",
+    "tapers": (
+        "more tapers (for Multitaper, a larger time_halfbandwidth_product or "
+        "n_tapers; for MorletWavelet, smoothing_time, which collects neighboring "
+        "coefficients on that axis)"
+    ),
+}
+# And how it fixes the canonical coherency.
+_RANK_ONE_CANONICAL_CONSEQUENCE = (
+    "the leading canonical coherency of every group pair is mathematically "
+    "forced to magnitude 1 (apparent perfect connectivity)"
+)
 
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
@@ -273,14 +298,26 @@ def _rejects_removed_blocks(caller: str) -> Callable[[Callable[_P, _R]], Callabl
     """Reject 2.x's ``blocks=`` keyword with a message that says to drop it.
 
     Its released position is ``dtype``'s now, where
-    :func:`_validated_complex_dtype` recognizes it.
+    :func:`_validated_complex_dtype` recognizes it. 2.x's ``blocks`` by
+    position with ``dtype`` by keyword would bind ``dtype`` twice, so that
+    form is recognized here, before Python reports it without naming
+    ``blocks``.
     """
 
     def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        dtype_position = list(inspect.signature(function).parameters).index("dtype")
+
         @wraps(function)
         def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             if "blocks" in kwargs:
                 msg = f"{caller} got blocks={kwargs['blocks']!r}. {_BLOCKS_REMOVED}"
+                raise TypeError(msg)
+            if "dtype" in kwargs and len(args) > dtype_position:
+                msg = (
+                    f"{caller} got {args[dtype_position]!r} by position where dtype "
+                    f"is, and dtype by keyword. {_BLOCKS_POSITION} {_BLOCKS_REMOVED} "
+                    "Pass dtype by keyword only."
+                )
                 raise TypeError(msg)
             return function(*args, **kwargs)
 
@@ -589,6 +626,29 @@ def _nearest_bin_gap(grid: NDArray[np.float64]) -> NDArray[np.float64]:
     return gap
 
 
+def _bins_on_bounds(values: NDArray[Any], bounds: Sequence[Any]) -> list[NDArray[np.bool_]]:
+    """Which frequency bins lie on each bound, by the rule of :func:`_frequency_interval_mask`.
+
+    Parameters
+    ----------
+    values : array, shape (n_frequencies,)
+        The frequency grid on the host, in its stored precision.
+    bounds : sequence of float
+        Each bound in its stored precision (a float32 scalar stays float32).
+
+    Returns
+    -------
+    list of NDArray[bool], shape (n_frequencies,)
+        One mask per bound.
+    """
+    grid = values.astype(np.float64)
+    grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
+    return [
+        np.abs(grid - float(bound)) <= grid_allowance + 2 * _last_place(bound)
+        for bound in bounds
+    ]
+
+
 def _frequency_interval_mask(
     label: str, bounds: Any, frequencies: Any
 ) -> tuple[NDArray[np.bool_], tuple[float, float]]:
@@ -652,9 +712,7 @@ def _frequency_interval_mask(
         raise ValueError(invalid)
 
     grid = values.astype(np.float64)
-    grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
-    on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)
-    on_upper = np.abs(grid - upper) <= grid_allowance + 2 * _last_place(stored_upper)
+    on_lower, on_upper = _bins_on_bounds(values, (stored_lower, stored_upper))
     mask: NDArray[np.bool_] = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
     if not mask.any():
         msg = (
@@ -1377,7 +1435,8 @@ class Connectivity:
                 f"fourier_coefficients has {n_signals} signal "
                 f"(shape[-1] == {n_signals}).\n"
                 f"Connectivity quantifies relationships between pairs of "
-                f"signals; for a single signal use power() instead.\n"
+                f"signals; for a single signal use power() instead "
+                f"(method='power' in multitaper_connectivity).\n"
                 f"If you sliced to one channel, keep the signal axis, e.g. "
                 f"fourier_coefficients[..., [channel_index]] rather than "
                 f"fourier_coefficients[..., channel_index]."
@@ -1502,31 +1561,46 @@ class Connectivity:
             "every magnitude-normalized value is mathematically forced to 1 "
             "(apparent perfect connectivity)"
         ),
+        *,
+        n_trials_by_tapers: int | None = None,
     ) -> None:
         """Warn that a normalized measure is degenerate for one observation.
 
         Coherency, the phase-locking value, and every measure derived from
         them normalize each cross-spectral entry by its magnitude; the
         phase-lag family averages the sign of one imaginary cross-spectrum per
-        observation; partial coherence inverts a rank-one cross-spectral
-        matrix. With a single observation (one trial times one taper/window --
-        e.g. a single-trial
-        :class:`~spectral_connectivity.transforms.MorletWavelet` transform
-        without ``smoothing_time``) the result is fixed by that normalization
-        rather than by the data (``consequence`` states how for ``measure``),
-        so the measure reports perfect connectivity or a perfectly consistent
-        lag between unrelated signals and carries no information. This is a
-        silent-failure trap rather than an error, so it warns instead of
-        raising.
+        observation; partial coherence inverts, and the group measures and
+        global coherence decompose, a rank-one cross-spectral matrix. With a
+        single observation (one trial times one taper/window -- e.g. a
+        single-trial :class:`~spectral_connectivity.transforms.MorletWavelet`
+        transform without ``smoothing_time``) the result is fixed by that
+        normalization rather than by the data (``consequence`` states how for
+        ``measure``), so the measure reports perfect connectivity or a
+        perfectly consistent lag between unrelated signals and carries no
+        information. This is a silent-failure trap rather than an error, so it
+        warns instead of raising. ``n_trials_by_tapers`` is the count for a
+        measure that decomposes trials x tapers whatever the expectation type,
+        in place of :attr:`n_observations`.
         """
-        if self.n_observations < 2:
+        if n_trials_by_tapers is None:
+            count, counted = self.n_observations, "n_observations"
+            averaged = self.expectation_type.split("_")
+        else:
+            count, counted = n_trials_by_tapers, "n_trials * n_tapers"
+            averaged = ["trials", "tapers"]
+        if count < 2:
+            # Offer only what raises this count: the axes it is taken over.
+            remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
+            if n_trials_by_tapers is None and len(averaged) < len(_MORE_OBSERVATIONS):
+                remedies.append(
+                    "an expectation_type that averages more axes than "
+                    f"{self.expectation_type!r}"
+                )
             warnings.warn(
                 f"{measure} is computed from a single observation "
-                f"(n_observations == n_trials * n_tapers == 1), so {consequence} "
+                f"({counted} == 1), so {consequence} "
                 "regardless of the data, and the result carries no information. "
-                "Provide multiple trials/tapers, or set smoothing_time on "
-                "MorletWavelet to collect neighboring coefficients on the "
-                "observation axis.",
+                f"Use {', or '.join(remedies)}.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
@@ -1837,6 +1911,7 @@ class Connectivity:
             expectation keeps.
 
         """
+        self._validate_multiple_signals()
         pair_indices = xp.asarray(pairs, dtype=int)
         if pair_indices.ndim != 2 or pair_indices.shape[1] != 2:
             msg = "pairs must have shape (n_pairs, 2)."
@@ -1998,33 +2073,6 @@ class Connectivity:
         measures that rely on it warn.
         """
         return self._time_bins_are_independent
-
-    @_asnumpy
-    def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:
-        """Return the relative reconstruction error of the Wilson factorization.
-
-        This diagnostic checks how faithfully the cached minimum-phase factor
-        reconstructs the expected cross-spectral matrix. One value is returned
-        per retained batch (normally time-window) dimension. Values near machine
-        precision indicate a faithful factorization; large values suggest that
-        the spectrum is too coarsely resolved for directed-connectivity measures.
-        Non-converged factorizations return ``NaN``.
-
-        Returns
-        -------
-        array, shape (...,)
-            Maximum relative reconstruction error for each sub-spectrum.
-
-        Notes
-        -----
-        A full two-sided spectrum is required, as for the directed measures that
-        use the Wilson factorization.
-        """
-        self._require_two_sided_spectrum("minimum_phase_reconstruction_error")
-        return _minimum_phase_reconstruction_error(
-            self._expectation_cross_spectral_matrix(),
-            self._minimum_phase_factor,
-        )
 
     def jackknife(
         self,
@@ -2638,6 +2686,11 @@ class Connectivity:
         >>> bool(imaginary_coherence[0, 20, 0, 1] > 0.2)
         True
         """
+        self._warn_single_observation_degenerate(
+            "imaginary_coherence",
+            "coherency has magnitude 1 for every pair and each value is the "
+            "absolute sine of one phase difference",
+        )
         imaginary_coh = xp.abs(
             _divide_masking_zero_denominator(
                 self._nonnegative_cross_spectral_matrix().imag,
@@ -2958,9 +3011,11 @@ class Connectivity:
             if len(group_indices[first]) + len(group_indices[second]) > n_observations
         ]
         if degenerate_pairs:
+            pairs = ", ".join(f"({first}, {second})" for first, second in degenerate_pairs)
             warnings.warn(
-                f"canonical_coherence uses {n_observations} observations (trials x "
-                f"tapers), fewer than the signals in group pair(s) {degenerate_pairs}; "
+                f"canonical_coherence uses {n_observations} "
+                f"observation{'' if n_observations == 1 else 's'} (trials x "
+                f"tapers), fewer than the signals in group pair(s) {pairs}; "
                 "their canonical coherence is forced to 1 regardless of the data. "
                 "Provide more trials or tapers, or use smaller groups.",
                 UserWarning,
@@ -3293,6 +3348,12 @@ class Connectivity:
             msg = f"n_components must be a positive integer, got {n_components!r}."
             raise ValueError(msg)
         regularization = _validated_regularization(regularization)
+        self._warn_single_observation_degenerate(
+            method,
+            _RANK_ONE_CANONICAL_CONSEQUENCE
+            if method == "canonical_coherency"
+            else _RANK_ONE_GROUP_CONSEQUENCE,
+        )
         rank_cap = rank if rank is not None else self.n_signals
         # ``pairs`` is the single connection ordering shared by the capacities,
         # the ``connections`` labels, and the main loop below.
@@ -3477,6 +3538,7 @@ class Connectivity:
         True
         """
         return self._group_imaginary_coherency(
+            "maximized_imaginary_coherency",
             group_labels,
             lambda whitened: xp.clip(
                 xp.linalg.svd(whitened, full_matrices=False, compute_uv=False)[..., 0],
@@ -3550,6 +3612,7 @@ class Connectivity:
         True
         """
         return self._group_imaginary_coherency(
+            "multivariate_interaction_measure",
             group_labels,
             lambda whitened: xp.sum(whitened**2, axis=(-2, -1)),
             rank=rank,
@@ -3558,6 +3621,7 @@ class Connectivity:
 
     def _group_imaginary_coherency(
         self,
+        measure: str,
         group_labels: NDArray[np.integer],
         reduce: Callable[[BackendArray], BackendArray],
         *,
@@ -3580,6 +3644,7 @@ class Connectivity:
         labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
+        self._warn_single_observation_degenerate(measure, _RANK_ONE_GROUP_CONSEQUENCE)
 
         spectrum = self._nonnegative_cross_spectral_matrix()
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
@@ -3650,6 +3715,10 @@ class Connectivity:
             of all components, and a returned component does not depend on
             how many are returned. It is not an estimation rank like the
             ``rank`` of the group measures.
+
+            .. versionchanged:: 3.0
+               Components are always strongest first. 2.x returned them
+               weakest first when ``1 < max_rank < n_signals - 1``.
         max_workspace_elements : int, default=16_000_000
             Approximate working-set target, in array elements, for the batched
             decomposition: frequency bins are processed in chunks sized so the
@@ -3682,8 +3751,11 @@ class Connectivity:
         index it with ``all_frequencies`` rather than ``frequencies``.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
-        in that component, so the measure is scale-invariant and the components
-        sum to at most 1.
+        in that component, so the components sum to at most 1 and rescaling
+        every signal by the same factor leaves them unchanged. Rescaling
+        signals separately does change them: the decomposition is of the
+        signals as given, so put them on a common scale first if their units
+        differ.
 
         **Algorithm**: when the number of estimates (``n_trials * n_tapers``)
         is at least ``n_signals`` and ``n_signals`` is small
@@ -3731,6 +3803,12 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         _, n_trials, n_tapers, _, n_signals = self._fourier_coefficients.shape
+        self._warn_single_observation_degenerate(
+            "global_coherence",
+            "the cross-spectral matrix has rank one: its first component holds "
+            "all of the power, and global coherence is forced to 1",
+            n_trials_by_tapers=n_trials * n_tapers,
+        )
 
         # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
         # coefficient matrix has at most min(n_signals, n_trials * n_tapers)
@@ -4601,11 +4679,16 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -4682,6 +4765,14 @@ class Connectivity:
             pairs not requested (and the diagonal) are NaN. Output ``[..., i, j]``
             is the influence of signal ``i`` on signal ``j`` (``i -> j``).
 
+        Notes
+        -----
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         Examples
         --------
         >>> import numpy as np
@@ -4742,9 +4833,14 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -4803,8 +4899,7 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         **Range**: ``[0, ∞)``. The measure is a log-ratio of a total to an
@@ -4816,6 +4911,12 @@ class Connectivity:
         system once, plus one ``(n_signals - 1)``-channel system per source),
         each shared by every target. The full-system factorization is cached
         and shared with the other directed measures.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -4896,6 +4997,14 @@ class Connectivity:
         labels : array, shape (n_groups,)
             Sorted unique group labels.
 
+        Notes
+        -----
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         Examples
         --------
         >>> import numpy as np
@@ -4964,6 +5073,12 @@ class Connectivity:
         **Range**: [0, 1] (normalized). Represents proportion of inflow
         via transfer function; each target's values sum to 1 over sources
         (``result.sum(axis=-2)`` is 1).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5034,6 +5149,12 @@ class Connectivity:
         ``S_ii = (H Cov H^H)_ii`` also contains cross-power between correlated
         sources that this diagonal formula omits, so the values are approximate.
         A ``UserWarning`` is emitted in that case.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5128,6 +5249,12 @@ class Connectivity:
         **Range**: [0, 1]. Normalized direct coupling measure; each source's
         values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
 
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         References
         ----------
         .. [1] Baccala, L.A., and Sameshima, K. (2001). Partial directed
@@ -5188,6 +5315,12 @@ class Connectivity:
         -----
         **Range**: [0, 1]. Normalized, scaled by noise variance; each source's
         values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5259,9 +5392,15 @@ class Connectivity:
         Notes
         -----
         **Range**: [0, 1]. Like :meth:`directed_transfer_function`, this
-        returns the squared quantity; SCoT and ConnectiviPy report its square
-        root, ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
+        returns the squared quantity; its square root is the amplitude form
+        ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
         each signal with itself (``kappa_ii = 1``).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------

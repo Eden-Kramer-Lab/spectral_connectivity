@@ -743,9 +743,9 @@ def coherence_significance_pvalue(
         msg = (
             f"n_observations must be a finite integer >= 2 for the "
             f"zero-coherence null distribution (Beta(1, n_observations - 1)), "
-            f"got {n_observations}. With fewer observations the coherence "
-            f"estimate is degenerate; a non-finite or non-integer count gives a "
-            f"NaN or degenerate p-value."
+            f"got {n_observations}. Use at least 2 observations (trials x "
+            f"tapers): with fewer the coherence estimate is degenerate, and a "
+            f"non-finite or non-integer count gives a NaN or degenerate p-value."
         )
         raise ValueError(msg)
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(

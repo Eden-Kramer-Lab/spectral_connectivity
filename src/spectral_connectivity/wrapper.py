@@ -12,11 +12,13 @@ import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity._frequency_bands import (
+    _BAND_INTEGRAL_LONG_NAMES,
     _check_frequency_operations,
     _crop_frequency_range,
     _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
+    _with_frequency_attrs,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -32,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
+    _reduces_frequency,
     _requested_methods,
     _requires_two_sided,
     _warn_deprecated_measure_names,
@@ -353,14 +356,28 @@ def frequency_band_reduce(
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
 
-    The Nyquist frequency is ``result``'s ``nyquist_frequency`` provenance attr
-    (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
-    wherever that is known), or the released ``mt_nyquist_frequency``
-    compatibility attr. If neither is recorded, the last bin of a grid
-    starting at 0 Hz is taken to be the Nyquist bin, so reduce such a result
-    before cropping it. Existing ``band``, ``band_lower``, ``band_upper``, or
-    ``valid_time_band`` coordinates are discarded, with a warning: band
-    reduction defines its own.
+    An integral covers the cells of the bins ``result`` has. If ``result`` was
+    cropped first, by ``frequency_range`` or ``sel``, the part of a band that
+    lay in the cell of a dropped bin is gone: a band whose edge falls between
+    the last kept bin and its dropped neighbour comes out low by that part
+    (up to half a bin's cell at each end: 2.5% of a 20 Hz band per end on
+    1 Hz bins). Integrate before cropping, since a band limits itself, or
+    crop at least one bin wider than the bands.
+    :func:`multitaper_connectivity` and :func:`fourier_connectivity`
+    integrate the uncropped grid themselves when given ``frequency_range``
+    together with ``frequency_bands``. Results of
+    :func:`connectivity_to_xarray` (the route for
+    ``ShortTimeFourierTransform``, ``Welch``, and ``MorletWavelet``) are
+    integrated here, so leave its ``frequency_range`` unset for them.
+
+    The Nyquist frequency is each variable's ``nyquist_frequency`` provenance
+    attr (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
+    wherever that is known) or the released ``mt_nyquist_frequency``
+    compatibility attr, and otherwise ``result``'s own. If none is recorded,
+    the last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
+    reduce such a result before cropping it. Existing ``band``,
+    ``band_lower``, ``band_upper``, or ``valid_time_band`` coordinates are
+    discarded, with a warning: band reduction defines its own.
     """
     return _with_frequency_grid_metadata(
         _reduce_frequency_bands(
@@ -581,8 +598,9 @@ def connectivity_to_xarray(
        For ``pairwise_spectral_granger_prediction`` and
        ``subset_pairwise_spectral_granger_prediction``,
        ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
-       2.x wrapper rejected the transfer-function measures, and
-       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
+       2.x wrapper rejected the transfer-function measures and could not return
+       ``phase_slope_index``, ``group_delay``, or ``delay``, whose
+       ``Connectivity`` arrays were already source first.
 
     Parameters
     ----------
@@ -615,7 +633,10 @@ def connectivity_to_xarray(
         :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
         ``phase_slope_index`` consume only those bins, and any other measure
         is computed from the full spectrum and cropped to them. Pass it here,
-        not in ``connectivity_kwargs``.
+        not in ``connectivity_kwargs``. Leave it unset for a result whose bands
+        :func:`frequency_band_reduce` will integrate: a band edge between the
+        last kept bin and its dropped neighbour loses the part of the band in
+        that neighbour's cell.
     connectivity_kwargs : mapping, optional
         Settings for the measure, e.g. ``{"pairs": [(0, 1)]}`` for
         ``subset_pairwise_spectral_granger_prediction`` or
@@ -896,6 +917,19 @@ def _format_and_reduce_measures(
         connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
     )
 
+    # An integral leaves its densities uncropped, so a band inside the range
+    # also integrates the part of it lying in the cell of a bin just outside
+    # the range. A request the reduction refuses is cropped as any other.
+    kept = (
+        (selection.mask, selection.requested)
+        if frequency_range is not None
+        and selection.requested is not None
+        and frequency_bands is not None
+        and frequency_reduction == "integral"
+        and all(m in _BAND_INTEGRAL_LONG_NAMES or _reduces_frequency(m) for m in methods)
+        else None
+    )
+
     def measure_kwargs(method: str) -> Mapping[str, Any]:
         """Keyword arguments for one measure: ``group_labels`` reaches group
         measures only, and ``frequency_range`` the measures that consume it."""
@@ -935,6 +969,8 @@ def _format_and_reduce_measures(
         )
         if frequency_range is None or consumes_range:
             return result
+        if kept is not None:
+            return _with_frequency_attrs(result, **selection.attrs())
         return _crop_frequency_range(result, selection)
 
     if return_dataarray:
@@ -993,6 +1029,7 @@ def _format_and_reduce_measures(
         frequency_reduction=frequency_reduction,
         # The computed grid's, before the crop can make an interior bin the last.
         nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
+        kept=kept,
     )
 
 
@@ -1031,8 +1068,9 @@ def multitaper_connectivity(
        For ``pairwise_spectral_granger_prediction`` and
        ``subset_pairwise_spectral_granger_prediction``,
        ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
-       2.x wrapper rejected the transfer-function measures, and
-       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
+       2.x wrapper rejected the transfer-function measures and could not return
+       ``phase_slope_index``, ``group_delay``, or ``delay``, whose
+       ``Connectivity`` arrays were already source first.
 
     Parameters
     ----------
@@ -1168,7 +1206,13 @@ def multitaper_connectivity(
         Band reduction. Integration is restricted to ``power`` and
         ``cross_spectral_density``, where it yields band power/covariance;
         adjacent band integrals add up to their union without counting a
-        shared edge bin twice (see :func:`frequency_band_reduce`).
+        shared edge bin twice (see :func:`frequency_band_reduce`). A band
+        inside ``frequency_range`` integrates the same with and without the
+        range, even when its edge falls between bins (given
+        ``frequency_decimation=1``; otherwise the kept bins start at the first
+        bin in the range). A band reaching past the range is cut at the
+        range's bounds, or at the outer edge of the first or last selected
+        bin's cell where that lies further out.
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.
@@ -1540,8 +1584,9 @@ def fourier_connectivity(
     time : array, shape (n_time,), optional
         Center time of each window in seconds; defaults to window indices.
         Taken from the DataArray time coordinate when not given, including a
-        numeric scalar one on coefficients without a time dimension (as left by
-        ``isel(time=0)``), which is the time of the single window.
+        numeric scalar coordinate named ``time`` or ``times`` on coefficients
+        without a time dimension (as left by ``isel(time=0)``), which is the
+        time of the single window.
     method : str or list of str, optional
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a
@@ -1791,11 +1836,26 @@ def fourier_connectivity(
         # sampling rate in Hz. Retain it for integration after cropping.
         metadata["nyquist_frequency"] = 0.5
     elif not one_sided and all_frequencies.size > 1:
-        # FFT-order bins are sampling_frequency / n_fft apart (bin 1 is -spacing
-        # when n_fft == 2), so the rate follows and places the Nyquist bin,
-        # which only an even n_fft has.
-        metadata["sampling_frequency"] = float(all_frequencies.size * abs(all_frequencies[1]))
-        metadata["nyquist_frequency"] = metadata["sampling_frequency"] / 2
+        # Bin n_fft // 2 of an FFT-order grid is the farthest from 0 Hz, so its
+        # rounding moves the rate least. For an even n_fft it is the Nyquist
+        # bin itself: the recorded Nyquist frequency is that bin's stored value
+        # whatever the grid's rounding. An odd n_fft has no Nyquist bin: its top
+        # bin is n_fft // 2 bins of sampling_frequency / n_fft above zero. The
+        # arithmetic stays in the grid's precision (float32 at least), which
+        # rounds the rate back to within a unit in its last place: a 3-bin
+        # float32 grid of a 100 Hz rate records 100.0.
+        n_fft = all_frequencies.size
+        precision = np.result_type(all_frequencies.dtype, np.float32).type
+        # Converted before abs: an integer grid's Nyquist bin can be its
+        # dtype's minimum, which has no absolute value in that dtype.
+        top = abs(precision(all_frequencies[n_fft // 2]))
+        sampling_frequency = (
+            precision(2) * top
+            if n_fft % 2 == 0
+            else top * precision(n_fft) / precision(n_fft // 2)
+        )
+        metadata["sampling_frequency"] = float(sampling_frequency)
+        metadata["nyquist_frequency"] = float(sampling_frequency) / 2
     shared_attrs = _shared_provenance_attrs(
         connectivity,
         metadata,

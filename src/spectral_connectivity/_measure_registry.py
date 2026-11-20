@@ -588,7 +588,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Delay",
         units="s",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Candidate delays in seconds, one per 2*pi phase ambiguity; the true delay is "
+        interpretation="Candidate delays in the reciprocal units of frequency (seconds for Hz), "
+        "one per 2*pi phase ambiguity; the true delay is "
         "the candidate that is constant across frequency. Frequencies without "
         "significant coherence are NaN.",
         diagonal_policy="masked_nan",
@@ -610,8 +611,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Group delay",
         units="s",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Delay in seconds from the slope of phase against frequency over "
-        "frequency_range (every bin by default); "
+        interpretation="Delay in the reciprocal units of frequency (seconds for Hz), from the "
+        "slope of phase against frequency over frequency_range (every bin by default); "
         "check group_delay_r_value for the quality of the fit.",
         diagonal_policy="masked_nan",
         nan_for_zero_power_signal=True,

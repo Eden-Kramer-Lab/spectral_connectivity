@@ -3246,12 +3246,23 @@ def test_frequency_band_integral_of_odd_fft_last_bin_is_not_nyquist(path):
 
 @pytest.mark.parametrize(
     ("band", "frequency_range"),
-    [((0.0, 4.0), (0.0, 4.0)), ((4.0, 8.0), (0.0, 8.0)), ((10.0, 30.0), (0.0, 30.0))],
+    [
+        ((0.0, 4.0), (0.0, 4.0)),
+        ((4.0, 8.0), (0.0, 8.0)),
+        ((10.0, 30.0), (0.0, 30.0)),
+        # Edges between the 1 Hz bins: the 10 and 31 Hz bins are outside the
+        # range, but part of each one's cell is inside the band.
+        ((10.3, 30.6), (10.3, 30.6)),
+        ((10.3, 30.6), (10.3, 40.0)),
+        ((10.3, 30.6), (5.5, 30.6)),
+    ],
 )
 def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_range):
     """Only the true Nyquist bin is undoubled. Cropping the grid with
     frequency_range must not turn its new last bin into a Nyquist bin, or a
-    band ending at the crop edge integrates that bin twice (+3% to +15%)."""
+    band ending at the crop edge integrates that bin twice (+3% to +15%). Nor
+    may it drop the part of a band that lies in the cell of a bin just outside
+    the range (up to about -3% for a band edge between these 1 Hz bins)."""
     time_series = np.random.default_rng(51).standard_normal((20000, 1, 1))
     kwargs = {
         "sampling_frequency": 1000,
@@ -3263,6 +3274,201 @@ def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_ran
     uncropped = multitaper_connectivity(time_series, **kwargs)
     cropped = multitaper_connectivity(time_series, frequency_range=frequency_range, **kwargs)
     np.testing.assert_allclose(cropped.values, uncropped.values, rtol=1e-12)
+
+
+def _one_hz_power(**kwargs):
+    """Power on 1 Hz bins (0 to 500 Hz) of fixed white noise."""
+    time_series = np.random.default_rng(51).standard_normal((20000, 1, 1))
+    return multitaper_connectivity(
+        time_series,
+        sampling_frequency=1000,
+        time_window_duration=1.0,
+        method="power",
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    ("frequency_range", "integrated"),
+    [
+        pytest.param((10.0, 30.0), (9.5, 30.5), id="bounds-on-bins"),
+        pytest.param((10.3, 30.6), (10.3, 30.6), id="bounds-between-bins"),
+        pytest.param((10.3, 30.0), (10.3, 30.5), id="one-of-each"),
+    ],
+)
+def test_band_reaching_past_frequency_range_is_cut_at_the_range_or_its_bins_cells(
+    frequency_range, integrated
+):
+    """A band wider than frequency_range is integrated over the range, and out
+    to the outer edge of the first or last selected bin's cell where that lies
+    beyond the range's bound. A bound on a 1 Hz bin keeps that bin's whole cell
+    (half a bin further); a bound between bins is where the band stops."""
+    np.testing.assert_allclose(
+        _one_hz_power(
+            frequency_range=frequency_range,
+            frequency_bands={"wide": (0.0, 100.0)},
+            frequency_reduction="integral",
+        ).values,
+        frequency_band_reduce(
+            _one_hz_power(), {"wide": integrated}, frequency_reduction="integral"
+        ).values,
+        rtol=1e-12,
+    )
+
+
+def test_band_integral_of_a_range_on_bins_equals_reducing_the_cropped_result():
+    """With the range's bounds on bins, the wrapper's band integral is what
+    frequency_band_reduce gives for the cropped result."""
+    bands = {"wide": (0.0, 100.0)}
+    np.testing.assert_allclose(
+        _one_hz_power(
+            frequency_range=(10.0, 30.0), frequency_bands=bands, frequency_reduction="integral"
+        ).values,
+        frequency_band_reduce(
+            _one_hz_power(frequency_range=(10.0, 30.0)), bands, frequency_reduction="integral"
+        ).values,
+        rtol=1e-12,
+    )
+
+
+def test_band_integral_records_the_frequency_range_like_a_cropped_result():
+    """The densities of an integral are left uncropped, but the result records
+    the range it was limited to as a cropped result does."""
+    kwargs = {"frequency_range": (10.3, 30.6), "frequency_bands": {"band": (12.0, 20.0)}}
+    integral = _one_hz_power(frequency_reduction="integral", **kwargs)
+    mean = _one_hz_power(**kwargs)
+    names = (
+        "requested_frequency_lower",
+        "requested_frequency_upper",
+        "selected_frequency_lower",
+        "selected_frequency_upper",
+        "frequency_interval_closed",
+    )
+    assert {name: integral.attrs[name] for name in names} == {
+        "requested_frequency_lower": 10.3,
+        "requested_frequency_upper": 30.6,
+        "selected_frequency_lower": 11.0,
+        "selected_frequency_upper": 30.0,
+        "frequency_interval_closed": "both",
+    }
+    assert {name: mean.attrs[name] for name in names} == {
+        name: integral.attrs[name] for name in names
+    }
+
+
+def test_band_integral_needs_two_bins_inside_frequency_range():
+    """The range (10.6, 11.4) selects the 11 Hz bin only, as a crop to it would."""
+    with pytest.raises(ValueError, match="at least two frequency bins"):
+        _one_hz_power(
+            frequency_range=(10.6, 11.4),
+            frequency_bands={"band": (10.6, 11.4)},
+            frequency_reduction="integral",
+        )
+
+
+def test_band_integral_refuses_a_band_with_no_bin_inside_frequency_range():
+    """Bands are bands of the bins frequency_range selects, though the grid is
+    left uncropped, and the message counts those bins."""
+    with pytest.raises(
+        ValueError,
+        match=r"Band 'above' \(40, 50\) contains no frequency bin.*the 21 bins span 10 to 30",
+    ):
+        _one_hz_power(
+            frequency_range=(10.0, 30.0),
+            frequency_bands={"above": (40.0, 50.0)},
+            frequency_reduction="integral",
+        )
+
+
+def test_band_integral_beside_phase_slope_index_equals_the_integral_alone():
+    """phase_slope_index consumes frequency_range itself and has no frequency
+    axis to integrate; power beside it is integrated as it is on its own."""
+    time_series = np.random.default_rng(53).standard_normal((2000, 4, 2))
+    kwargs = {
+        "sampling_frequency": 1000,
+        "time_window_duration": 1.0,  # 1 Hz bins, so both band edges lie between bins
+        "frequency_range": (10.3, 30.6),
+        "frequency_bands": {"band": (10.3, 30.6)},
+        "frequency_reduction": "integral",
+    }
+    both = multitaper_connectivity(
+        time_series, method=["power", "phase_slope_index"], **kwargs
+    )
+    alone = multitaper_connectivity(time_series, method="power", **kwargs)
+    np.testing.assert_array_equal(both.power.values, alone.values)
+    assert "band" not in both.phase_slope_index.dims
+
+
+def test_band_integral_on_a_nonuniform_grid_uses_the_uncropped_grids_cells():
+    """The cells of the bins frequency_range selects are those of the whole
+    grid: on a logarithmic grid the first and last reach to the midpoints of
+    their real neighbours, rather than where a cropped grid would mirror them."""
+    rng = np.random.default_rng(54)
+    frequencies = np.geomspace(1.0, 50.0, 33)
+    coefficients = rng.standard_normal((12, 33, 2)) + 1j * rng.standard_normal((12, 33, 2))
+    kwargs = {"frequencies": frequencies, "method": "power", "is_one_sided": True}
+    low_cell = (frequencies[9] + frequencies[10]) / 2
+    high_cell = (frequencies[20] + frequencies[21]) / 2
+    np.testing.assert_allclose(
+        fourier_connectivity(
+            coefficients,
+            frequency_range=(frequencies[10], frequencies[20]),
+            frequency_bands={"wide": (0.0, 100.0)},
+            frequency_reduction="integral",
+            **kwargs,
+        ).values,
+        frequency_band_reduce(
+            fourier_connectivity(coefficients, **kwargs),
+            {"wide": (low_cell, high_cell)},
+            frequency_reduction="integral",
+        ).values,
+        rtol=1e-12,
+    )
+
+
+def test_decimated_band_integral_keeps_the_part_of_the_range_between_kept_bins():
+    """With frequency_decimation the kept bins start at the first bin in
+    frequency_range (11, 13, ..., 29 Hz here, each a 2 Hz cell). The band's
+    30 to 30.6 Hz lies in the cell of the next bin on that lattice, 31 Hz."""
+    band = {"band": (10.3, 30.6)}
+    lattice = _one_hz_power().isel(frequency=slice(1, None, 2))
+    assert lattice.frequency.values[5] == 11.0
+    np.testing.assert_allclose(
+        _one_hz_power(
+            frequency_range=(10.3, 30.6),
+            frequency_decimation=2,
+            frequency_bands=band,
+            frequency_reduction="integral",
+        ).values,
+        frequency_band_reduce(lattice, band, frequency_reduction="integral").values,
+        rtol=1e-12,
+    )
+
+
+def test_integral_with_frequency_range_still_refuses_other_measures():
+    """Leaving power uncropped for the integral must not change which requests
+    are refused, or how."""
+    time_series = np.random.default_rng(53).standard_normal((2000, 4, 2))
+    with pytest.raises(ValueError, match="defined only for power and cross_spectral_density"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=1000,
+            method=["power", "delay"],
+            frequency_range=(10.3, 30.6),
+            frequency_bands={"band": (10.3, 30.6)},
+            frequency_reduction="integral",
+        )
+
+
+@pytest.mark.parametrize("frequency_reduction", ["mean", "integral"])
+def test_band_reduced_dataarray_keeps_its_name(frequency_reduction):
+    """The weighted sum of an integral comes back unnamed from older xarray
+    (2023.1); a band result is named like its input under either reduction."""
+    power = _one_hz_power()
+    reduced = frequency_band_reduce(
+        power, {"band": (10.0, 30.0)}, frequency_reduction=frequency_reduction
+    )
+    assert reduced.name == power.name == "power"
 
 
 def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():

@@ -580,3 +580,30 @@ def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
     # innovations can leave a small residual in the original direction.
     assert np.nanmax(reversed_gc[..., 1, 0]) > 0.5
     assert np.nanmax(reversed_gc[..., 1, 0]) > 10 * np.nanmax(reversed_gc[..., 0, 1])
+
+
+# Signal 0 drives 1 and 1 drives 2, with poles at 0.9, 0.8 and 0.7: the
+# autocovariance is still 3% of its peak at lag 32, so it wraps around a
+# 64-point grid.
+_SLOW_CHAIN_COEFFICIENTS = np.array([[[0.9, 0.0, 0.0], [0.6, 0.8, 0.0], [0.0, 0.5, 0.7]]])
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_pairwise_granger_is_defined_on_a_grid_the_spectrum_wraps_around(n_fft):
+    """Spectral Granger is a log-ratio of a signal's power to the part its own
+    past explains. The Wilson factor reproduces the spectrum on the grid it
+    was given, so that part never exceeds the power and every bin is finite
+    and non-negative, however coarse the grid. On an even grid the factor
+    once missed the spectrum (the lag ``n_fft / 2`` was dropped from the
+    causal projection), the ratio turned negative, and bins came back NaN."""
+    _, _, S = _analytic_var(_SLOW_CHAIN_COEFFICIENTS, _CHAIN_NOISE, n_fft)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        granger = connectivity.pairwise_spectral_granger_prediction()[0]
+
+    off_diagonal = ~np.eye(3, dtype=bool)
+    assert np.isfinite(granger[:, off_diagonal]).all()
+    assert (granger[:, off_diagonal] >= 0).all()

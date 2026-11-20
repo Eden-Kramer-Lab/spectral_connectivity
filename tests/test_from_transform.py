@@ -135,13 +135,43 @@ def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(mult
     _assert_same_connectivity(deprecated, canonical)
 
 
-_BLOCKS_MESSAGE = r"blocks.*removed in 3\.0.*no effect on results.*drop it"
+@pytest.mark.parametrize(
+    "setting", [{"minimum_phase_max_iterations": 1}, {"minimum_phase_tolerance": 0.5}], ids=str
+)
+def test_from_multitaper_forwards_the_factorization_settings(multitaper, setting):
+    """A directed measure computed through the 2.x name is the one
+    from_transform computes with the same Wilson settings, which here differs
+    from the default's."""
+
+    def granger(connectivity):
+        with warnings.catch_warnings():
+            # Stopping the factorization early is the point; it warns.
+            warnings.simplefilter("ignore")
+            return connectivity.pairwise_spectral_granger_prediction()
+
+    with pytest.warns(DeprecationWarning, match="from_multitaper"):
+        deprecated = Connectivity.from_multitaper(multitaper, **setting)
+    canonical = granger(Connectivity.from_transform(multitaper, **setting))
+    np.testing.assert_array_equal(granger(deprecated), canonical)
+    assert not np.array_equal(
+        canonical, granger(Connectivity.from_transform(multitaper)), equal_nan=True
+    )
+
+
+# 2.x's blocks changed the phase-lag-index measures, so the message says to
+# recompute them and how they changed, not that it had no effect.
+_BLOCKS_MESSAGE = (
+    r"blocks.*removed in 3\.0.*drop it.*"
+    r"Recompute phase-lag-index measures that 2\.x computed with blocks >= 1.*"
+    r"blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index.*"
+    r"larger values did not return valid results"
+)
 
 
 @pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
 def test_blocks_by_keyword_is_rejected_with_its_own_message(multitaper, blocks):
-    """2.x's blocks (removed in 3.0) never changed a value; every keyword use
-    of it fails with a message that says so, before anything is computed."""
+    """Every keyword use of 2.x's blocks (removed in 3.0) fails, before anything
+    is computed, with a message naming the measures it changed in 2.x."""
     with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
         Connectivity(multitaper.fft(), blocks=blocks)
     with warnings.catch_warnings():
@@ -150,6 +180,30 @@ def test_blocks_by_keyword_is_rejected_with_its_own_message(multitaper, blocks):
             Connectivity.from_multitaper(multitaper, blocks=blocks)
     with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
         Connectivity.from_transform(multitaper, blocks=blocks)
+
+
+@pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
+def test_positional_blocks_with_keyword_dtype_is_rejected_with_its_own_message(
+    multitaper, blocks
+):
+    """2.x accepted blocks by position followed by dtype by keyword. That
+    binds dtype twice now, and the message names blocks instead of Python's
+    "got multiple values for argument 'dtype'"."""
+    coefficients, frequencies, time = (
+        multitaper.fft(),
+        multitaper.frequencies,
+        multitaper.time,
+    )
+    with pytest.raises(TypeError, match=rf"fifth in Connectivity.*{_BLOCKS_MESSAGE}"):
+        Connectivity(
+            coefficients, "trials_tapers", frequencies, time, blocks, dtype=np.complex64
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=rf"third in from_multitaper.*{_BLOCKS_MESSAGE}"):
+            Connectivity.from_multitaper(
+                multitaper, "trials_tapers", blocks, dtype=np.complex64
+            )
 
 
 @pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)

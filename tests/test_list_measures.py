@@ -8,6 +8,7 @@ import xarray as xr
 
 from spectral_connectivity import (
     Connectivity,
+    DirectedOrientationWarning,
     Multitaper,
     list_measures,
     multitaper_connectivity,
@@ -273,6 +274,54 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
                 compute(**kwargs)
         else:
             compute(**kwargs)
+
+
+# The measures that describe one signal at a time: defined for a single signal,
+# and not fixed by a single observation.
+_SINGLE_SIGNAL_MEASURES = {"power", "cross_spectral_density"}
+
+
+def _complex_noise(shape, seed):
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_every_measure_between_signals_refuses_a_single_signal(measure):
+    """A measure of a relationship between signals raises the same error for
+    one signal, whichever intermediate it reads; the other two are defined."""
+    connectivity = Connectivity(_complex_noise((1, 4, 3, 16, 1), seed=31))
+    compute = getattr(connectivity, measure.name)
+    if measure.name in _SINGLE_SIGNAL_MEASURES:
+        assert np.isfinite(compute()).all()
+        return
+    kwargs = _MEASURE_KWARGS.get(measure.name, {})
+    one_signal_kwargs = {
+        **({"group_labels": ["a"]} if "group_labels" in kwargs else {}),
+        **({"pairs": [(0, 0)]} if "pairs" in kwargs else {}),
+    }
+    with pytest.raises(ValueError, match="at least 2 signals"):
+        compute(**one_signal_kwargs)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_every_measure_between_signals_announces_a_single_observation(measure):
+    """One observation fixes or breaks every measure that relates signals, so
+    each warns or raises there instead of returning a value silently."""
+    connectivity = Connectivity(_complex_noise((1, 1, 1, 16, 4), seed=32))
+    raised = False
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            getattr(connectivity, measure.name)(**_MEASURE_KWARGS.get(measure.name, {}))
+        except ValueError:
+            raised = True
+    warned = any(
+        issubclass(warning.category, UserWarning)
+        and not issubclass(warning.category, DirectedOrientationWarning)
+        for warning in caught
+    )
+    assert (raised or warned) == (measure.name not in _SINGLE_SIGNAL_MEASURES)
 
 
 # What users get when ``method`` is omitted. Pinned explicitly: every other
@@ -849,6 +898,57 @@ def test_signed_and_phase_measures_state_their_sign_convention():
         "phase_slope_index",
     }
     assert {m.name for m in list_measures() if m.sign_convention} == signed
+
+
+# How each sign convention reads the value at (source="a", target="b") when
+# signal "a" leads signal "b", keyed by the wording that states it.
+_LEADING_SOURCE_READINGS = {
+    "Positive (source=a, target=b) means a leads b.": lambda value: value > 0,
+    "A positive angle at (source=a, target=b) means a leads b.": (
+        lambda value: np.angle(value) > 0
+    ),
+    "Above 0.5 at (source=a, target=b) means a leads b; below 0.5, a lags b.": (
+        lambda value: value > 0.5
+    ),
+    "a negative angle means the source group leads.": lambda value: np.angle(value) < 0,
+}
+
+
+@pytest.mark.parametrize("name", sorted(m.name for m in list_measures() if m.sign_convention))
+def test_sign_convention_reads_a_planted_lead_correctly(name):
+    """Signal "a" leads "b" by 3 samples (6 ms, 0.6 to 1.7 rad over 15-45 Hz).
+    The value at (source="a", target="b") must be what the measure's sign
+    convention says a lead looks like, so its wording cannot be inverted
+    without failing here."""
+    rng = np.random.default_rng(0)
+    leader = rng.standard_normal((1003, 20))
+    signals = np.stack([leader[3:], leader[:-3]], axis=-1)
+    signals += 0.5 * rng.standard_normal(signals.shape)
+    result = multitaper_connectivity(
+        signals,
+        sampling_frequency=500,
+        method=name,
+        signal_names=["a", "b"],
+        frequency_range=(15, 45),
+        **({"group_labels": ["a", "b"]} if name == "canonical_coherency" else {}),
+    )
+    variable = result[name] if isinstance(result, xr.Dataset) else result
+    convention = variable.attrs["sign_convention"]
+    readings = [
+        reads for wording, reads in _LEADING_SOURCE_READINGS.items() if wording in convention
+    ]
+    assert len(readings) == 1, convention
+
+    if name == "canonical_coherency":
+        assert result.connection_source_group.item() == "a"
+        values = variable.values
+    elif name == "delay":
+        values = variable.sel(source="a", target="b", candidate=0).values
+    else:
+        values = variable.sel(source="a", target="b").values
+    values = values[~np.isnan(values)]
+    assert values.size > 0
+    assert np.all(readings[0](values))
 
 
 _BANDS = {"low": (4.0, 40.0), "high": (40.0, 120.0)}

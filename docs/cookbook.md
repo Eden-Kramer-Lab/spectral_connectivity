@@ -187,6 +187,14 @@ Directed measures are opt-in by name. The result reads `source -> target`:
 
 ```
 
+Directed measures come from a factorization of the estimated spectrum. Use
+windows longer than the slowest correlation in the data: nothing warns when a
+window is too short. The values also depend slightly on the FFT length
+(`transform_kwargs={"n_fft_samples": ...}`). Zero-padding to twice the window
+removes that dependence, at about twice the cost, but in simulation it did not
+bring the values closer to the true ones unless the window was too short. The
+Notes of `spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition` give the sizes.
+
 ## Compute several measures at once
 
 Pass a list of methods to get an `xarray.Dataset` with one variable per
@@ -438,6 +446,18 @@ True
 
 ```
 
+Integrate before cropping. `frequency_band_reduce` covers the cells of the bins
+its input has, so on a result already cropped by `frequency_range` or `sel`, a
+band whose edge falls between the last kept bin and its dropped neighbour
+comes out low by the part of the band in that neighbour's cell (up to half a
+bin's cell at each end: 2.5% of a 20 Hz band per end on 1 Hz bins). A band
+limits itself, so reduce the uncropped
+result, or crop at least one bin wider than the bands. `multitaper_connectivity`
+and `fourier_connectivity` integrate the uncropped grid themselves when given
+`frequency_range` together with `frequency_bands`; for
+`ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results, which go
+through `connectivity_to_xarray`, leave its `frequency_range` unset.
+
 Before 3.0 these three measures took `frequencies_of_interest=(low, high)`,
 which excludes a bin lying on either edge. It still works through 3.x, with
 results recording `frequency_interval_closed="neither"` and a
@@ -540,7 +560,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `long_name`, `units`, `interpretation` | How to read the measure variable, from `list_measures()`. With `sign_convention`, the value range, and `diagonal_policy` (below), these are on each measure variable and on `group_delay`'s other value variables, `group_delay_slope` and `group_delay_r_value` (range [-1, 1], with the slope's sign), which have their own; group membership and spatial vectors, filters, and patterns carry none. Band reduction names its reduction (mean, circular mean, complex mean, or integral) at the start of `interpretation` and `formula`, and an integral rewrites `long_name` and `units`; cropping and decimation change none of the measure attributes. |
 | `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
 | `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The estimator's theoretical range (see `docs/CONNECTIVITY_METRIC_RANGES.md` for when a computed value can lie outside it); an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
-| `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real part, `phase`, or `complex`, and its definition; omitted for other measures. |
+| `quantity`, `formula` | For the coherency family, whether the value is a `magnitude`, `squared_magnitude`, `signed` real-valued component, `phase`, or `complex`, and its definition; omitted for other measures. |
 | `diagonal_policy` | What a self-connection holds, one of the policies defined in the policy table of `docs/CONNECTIVITY_METRIC_RANGES.md` (see "Mask or fill the diagonal"). On each measure variable, and on `group_delay_slope` and `group_delay_r_value`, whose diagonals differ. |
 | `diagonal_value` | Where the policy is `constant` or `rounding_noise`: the (nominal) value, a float. Omitted for the other policies. |
 | `nan_for_zero_power_signal` | 1 if every entry involving a zero-power (flat) signal is NaN, else 0 (defined below the policy table). On each measure variable. |
@@ -598,8 +618,11 @@ observation axis supplies only the raw observation count.
 Unambiguous scalar recording coordinates such as `subject`/`session` keep
 their attrs; one named like a coordinate or variable of the result (e.g.
 `frequency`, or `band` when `frequency_bands` is given) is dropped with a
-warning. Coefficients without a time dimension that keep a numeric scalar time
-coordinate, as after `isel(time=0)`, use it as the time of their single window.
+warning. Coefficients without a time dimension that keep a numeric scalar
+coordinate named `time` (or `times`), as after `isel(time=0)`, use it as the
+time of their single window; a scalar under another name of a time dimension,
+such as `window`, stays an identifier, since it may hold a window's length
+(pass `time=[...]` to use it as the time).
 Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
@@ -626,7 +649,12 @@ setting such as `mt_detrend_type` is the string `"None"`. Compare them with
 `mt_frequency_resolution` describe the window actually analyzed, which is a
 whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
 report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
-and 11.88 Hz. `estimate_frequency_resolution` uses the duration it is given.
+and 11.88 Hz. `mt_n_time_samples_per_step` is the step rounded to the nearest
+sample, where 2.0.1 truncated it (57, not 56, for a 0.57 s step at 100 Hz).
+With custom `tapers`, `mt_n_tapers` is the number supplied, where 2.0.1
+reported the DPSS count instead (`n_tapers` if given, else `floor(2 * NW - 1)`:
+5 for two tapers at the default NW=3). `estimate_frequency_resolution` uses the
+duration it is given.
 
 ## Pass a labeled DataArray
 
@@ -683,6 +711,12 @@ If you hit an error or a warning:
   name the roles with `time_dim`, `trial_dim` and `signal_dim`. When a single
   unrecognized dimension is left for the one remaining role, it is assigned by
   elimination and a warning names the mapping.
+- The transform classes (`Multitaper`, `ShortTimeFourierTransform`, `Welch`,
+  `MorletWavelet`) read a DataArray by position, as `(time, trial, signal)`,
+  and take no `*_dim` arguments. One whose dimension names put time, trials or
+  signals on another axis raises `ValueError` naming the misplaced dimensions
+  and, when the names determine it, the transpose to apply;
+  names that say nothing of a role (`dim_0`, `session`) are read by position.
 - Inferring the rate needs enough coordinate precision: pass
   `sampling_frequency` for low-precision or large-offset time coordinates.
 - Signal labels must be unique, non-missing, NetCDF-compatible scalars

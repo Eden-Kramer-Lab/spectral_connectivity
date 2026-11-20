@@ -187,7 +187,8 @@ def _get_causal_signal(
     """Extract causal part of linear predictor (plus operator).
 
     Implements the "plus" operator from the Wilson algorithm by:
-    1. Taking half the roots on the unit circle (zero lag)
+    1. Taking half the roots on the unit circle (zero lag, and on an even grid
+       the lag ``n / 2``, which is its own negative there)
     2. Taking all roots inside the unit circle (positive lags)
     3. Making zero-lag term upper triangular
 
@@ -239,8 +240,15 @@ def _get_causal_signal(
     # CuPy array is a GPU-only footgun).
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
-    # Take only the roots inside the unit circle (positive lags)
-    linear_predictor_coefficients[..., (n_lags + 1) // 2 :, :, :] = 0
+    # Take only the roots inside the unit circle (positive lags). On an even
+    # grid the lag n_lags / 2 is its own negative, exp(i * pi * k) at bin k, so
+    # like lag 0 it is half causal: the projection of a Hermitian function
+    # plus its conjugate transpose must give that function back. Dropping the
+    # lag instead left it unconstrained, and the iteration settled on a factor
+    # with G^-1 S G^-H = I + (-1)^k C in place of I.
+    if n_lags % 2 == 0:
+        linear_predictor_coefficients[..., n_lags // 2, :, :] *= 0.5
+    linear_predictor_coefficients[..., n_lags // 2 + 1 :, :, :] = 0
     if n_fft_samples is not None:
         return rfft(linear_predictor_coefficients, axis=-3)
     return fft(linear_predictor_coefficients, axis=-3)
@@ -323,81 +331,6 @@ def _all_finite_units(
         True where every element of that sub-spectrum is finite.
     """
     return xp.isfinite(factor).reshape(*batch_shape, -1).all(axis=-1)
-
-
-def minimum_phase_reconstruction_error(
-    cross_spectral_matrix: NDArray[np.complexfloating],
-    minimum_phase_factor: NDArray[np.complexfloating] | None = None,
-    *,
-    tolerance: float = 1e-8,
-    max_iterations: int = 500,
-) -> NDArray[np.floating]:
-    """Relative reconstruction error of a Wilson factorization, per sub-spectrum.
-
-    The Wilson iteration's convergence test only measures the change between
-    successive iterates; a stable iterate does not guarantee ``G Gᴴ ≈ S``. When
-    the cross-spectrum is under-resolved in frequency (its autocovariance has not
-    decayed within the window, so the periodic factorization aliases), the
-    iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
-    biasing every directed-connectivity measure built on it (spectral Granger,
-    DTF, PDC). This is an opt-in diagnostic: it returns
-    ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum -- the entrywise
-    maximum absolute residual over every frequency and matrix entry, relative
-    to the entrywise maximum magnitude of ``S`` -- so callers can check
-    factorization quality explicitly.
-
-    ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
-    FFT order, as required by the factorization itself. This module-level
-    function cannot verify that from the array alone (a one-sided spectrum has
-    the same shape); the :meth:`Connectivity.minimum_phase_reconstruction_error
-    <spectral_connectivity.Connectivity.minimum_phase_reconstruction_error>`
-    method enforces it from the transform's declared sidedness.
-
-    A relative error near machine precision indicates a faithful factorization;
-    values of a few percent are typical for finite-resolution estimated spectra;
-    tens of percent or more indicate the spectrum is too coarsely resolved to
-    trust the directed measures -- use a longer FFT (larger ``n_fft_samples`` /
-    ``n_time_samples_per_window``). The error is deliberately *not* raised as a
-    warning during factorization: it does not cleanly separate an under-resolved
-    spectrum from a merely short or noisy one, so an always-on threshold would
-    either cry wolf on ordinary short-window analyses or miss real problems.
-
-    Parameters
-    ----------
-    cross_spectral_matrix : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        The two-sided cross-spectral matrix (standard FFT order, positive and
-        negative frequencies) that was (or will be) factored.
-    minimum_phase_factor : NDArray[complexfloating], optional
-        A precomputed factor from :func:`minimum_phase_decomposition`. If omitted,
-        the factorization is computed here with ``tolerance`` / ``max_iterations``.
-    tolerance, max_iterations
-        Passed to :func:`minimum_phase_decomposition` when it must be computed.
-
-    Returns
-    -------
-    relative_error : NDArray[floating], shape (...,)
-        Entrywise max-abs relative reconstruction error per sub-spectrum (the
-        leading batch dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN``
-        where the factor is non-finite (the factorization did not converge).
-        An array of the active backend: CuPy on the GPU, even for NumPy input.
-    """
-    # Accept host (NumPy) arrays on the GPU backend; a no-op for device arrays.
-    cross_spectral_matrix = xp.asarray(cross_spectral_matrix)
-    if minimum_phase_factor is None:
-        minimum_phase_factor = minimum_phase_decomposition(
-            cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
-        )
-    minimum_phase_factor = xp.asarray(minimum_phase_factor)
-    batch_shape = cross_spectral_matrix.shape[:-3]
-    reconstructed = xp.matmul(minimum_phase_factor, _conjugate_transpose(minimum_phase_factor))
-    reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
-    residual: NDArray[np.floating] = xp.max(
-        xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
-    )
-    scale: NDArray[np.floating] = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
-    scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
-    return residual / scale
 
 
 def _singular_matrix_mask(
@@ -661,8 +594,9 @@ def minimum_phase_decomposition(
     ...     cross_spec, tolerance=1e-8, max_iterations=500
     ... )
     >>> # The factor reconstructs the input: G @ G^H == S.
-    >>> error = minimum_phase_reconstruction_error(cross_spec, min_phase)
-    >>> bool(error.max() < 1e-6)
+    >>> from spectral_connectivity.utils import to_numpy
+    >>> factor = to_numpy(min_phase)  # a CuPy array on the GPU backend
+    >>> bool(np.allclose(factor @ factor.conj().swapaxes(-1, -2), cross_spec))
     True
 
     Notes
@@ -685,15 +619,37 @@ def minimum_phase_decomposition(
     An indefinite or non-finite ``S`` has no such square root and is returned as
     NaN with the non-convergence warning.
 
-    Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
-    factorization assumes the cross-spectrum is resolved finely enough in
-    frequency that the corresponding autocovariance decays within the analysis
-    window; an under-resolved (aliased) spectrum can satisfy the successive-
-    iterate convergence test yet reconstruct ``S`` poorly, silently biasing the
-    directed-connectivity measures built on it. Use
-    :func:`minimum_phase_reconstruction_error` to check factorization quality
-    explicitly, and a longer FFT (larger ``n_fft_samples`` /
-    ``n_time_samples_per_window``) if the error is large.
+    A fixed point of the iteration satisfies ``G Gᴴ = S`` at every frequency
+    bin. That does not make the directed measures accurate. Two limits remain,
+    and nothing here detects either:
+
+    - The grid. The factor is that of the spectrum's periodic extension on the
+      grid, so lags of ``S`` beyond ``n_fft_samples / 2`` wrap around. A
+      spectrum estimated from windows of ``N`` samples has lags out to
+      ``N - 1``, which wrap on a grid of ``N`` bins, so the directed measures
+      depend on the FFT length. In simulations, zero-padding the transform to
+      ``n_fft_samples = 2 * N`` moved spectral Granger prediction by about
+      2e-2 (RMS over frequencies) for a 1000-sample recording, and padding
+      further moved it by less than 1e-3. Padding is not a gain in accuracy in
+      general: against the generating model's true values the error of
+      spectral Granger, DTF, and PDC was the same with and without it (within
+      1%) for well-resolved recordings, and 4-9% lower for DTF and PDC only
+      where the window was too short for the signal. It costs about twice the
+      time and frequency bins.
+    - The window. An estimate from a window shorter than the slowest
+      correlation in the data is smoothed in frequency, which no FFT length
+      repairs. Use a longer window.
+
+    .. versionchanged:: 3.0
+       On an even-length grid the lag ``n_fft_samples / 2`` is its own
+       negative, so half of it belongs to the causal part, as with lag 0.
+       Before 3.0 the causal projection dropped it. The iteration then
+       converged to a factor with ``G⁻¹ S G⁻ᴴ = I + (-1)ᵏ C`` at bin ``k``
+       instead of ``I``: it missed the spectrum by the size of that lag
+       (0.2-10% for spectra estimated from simulated data, more for short
+       windows and highly correlated channels) and added a bin-to-bin
+       alternation to every measure derived from it. Odd-length grids were
+       not affected.
 
     References
     ----------

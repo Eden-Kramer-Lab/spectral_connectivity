@@ -162,22 +162,6 @@ def test_cross_spectrum(axis, dtype):
     assert np.allclose(expected_cross_spectral_matrix, this_Conn._cross_spectral_matrix)
 
 
-def test_minimum_phase_reconstruction_error_is_exposed_on_connectivity():
-    """The public diagnostic evaluates the factor used by directed measures."""
-    target_cross_spectrum = np.array([[2.0, 0.4], [0.4, 1.0]])
-    cholesky_factor = np.linalg.cholesky(target_cross_spectrum)
-    taper_coefficients = (np.sqrt(2.0) * cholesky_factor.T).astype(np.complex128)
-    coefficients = np.broadcast_to(taper_coefficients[:, np.newaxis, :], (2, 16, 2))[
-        np.newaxis, np.newaxis
-    ].copy()
-    connectivity = Connectivity(coefficients)
-
-    error = connectivity.minimum_phase_reconstruction_error()
-
-    assert error.shape == (1,)
-    assert error[0] < 1e-7
-
-
 @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
@@ -1708,10 +1692,13 @@ def test_single_signal_connectivity_raises_but_power_works():
     """Connectivity on a single signal raises; power() still works."""
     c = Connectivity(fourier_coefficients=np.ones((1, 2, 1, 4, 1), dtype=complex))
     for method in (c.magnitude_squared_coherence, c.phase_locking_value, c.global_coherence):
-        with pytest.raises(ValueError, match="at least 2 signals"):
+        with pytest.raises(ValueError, match=r"(?s)at least 2 signals.*method='power'"):
             method()
     with pytest.raises(ValueError, match="at least 2 signals"):
         c.canonical_coherence(group_labels=np.array([0]))
+    # A pair of the one signal with itself is in range, yet is not a pair.
+    with pytest.raises(ValueError, match="at least 2 signals"):
+        c.subset_pairwise_spectral_granger_prediction([(0, 0)])
     # Power is well-defined for a single signal.
     power = c.power()
     assert power.shape[-1] == 1
@@ -2432,10 +2419,10 @@ def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation
 
 @pytest.mark.parametrize(
     "method",
-    ["minimum_phase_reconstruction_error", "from_transform", "from_multitaper"],
+    ["clear_cache", "from_transform", "from_multitaper"],
 )
 def test_jackknife_rejects_public_non_measure_methods(method):
-    """Diagnostics and alternate constructors are not connectivity measures."""
+    """Helpers and alternate constructors are not connectivity measures."""
     rng = np.random.default_rng(10)
     shape = (1, 3, 2, 16, 2)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
@@ -4353,7 +4340,10 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
 # coherence inverts a rank-one cross-spectrum: forced to 1 only for two signals
 # (see test_partial_coherence_warns_when_signals_outnumber_observations), and
 # null-space garbage for the three used here, so no saturation is asserted.
+# Imaginary coherence is the absolute sine of one phase difference: fixed by a
+# coherency of magnitude 1, but at no single value.
 SINGLE_OBSERVATION_DEGENERATE_MEASURES = {
+    "imaginary_coherence": None,
     "magnitude_squared_coherence": [1.0],
     "phase_locking_value": [1.0],
     "partial_coherence": None,
@@ -4396,6 +4386,128 @@ def test_multiple_observations_normalized_measure_does_not_warn(measure):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         getattr(connectivity, measure)()
+
+
+# Measures of signal groups, or of all signals at once, that the rank-one
+# cross-spectral matrix of a single observation fixes whatever the data, with
+# the value each takes for two groups of two signals.
+SINGLE_OBSERVATION_RANK_ONE_MEASURES = {
+    "canonical_coherency": 1.0,
+    "global_coherence": 1.0,
+    "maximized_imaginary_coherency": 1.0,
+    "maximized_imaginary_coherency_components": 1.0,
+    "multivariate_interaction_measure": 2.0,
+}
+
+
+def _rank_one_measure_magnitudes(connectivity, measure):
+    """Magnitudes of a global or two-group measure's defined values."""
+    if measure == "global_coherence":
+        return connectivity.global_coherence()[0]
+    result = getattr(connectivity, measure)([0, 0, 1, 1])
+    if isinstance(result, tuple):
+        return result[0][..., 0, 1]
+    return np.abs(result.scores)
+
+
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_RANK_ONE_MEASURES))
+def test_single_observation_group_measure_warns(measure):
+    # Independent noise, yet one observation fixes the value: that must warn
+    # rather than be returned silently.
+    rng = np.random.default_rng(709)
+    shape = (1, 1, 1, 16, 4)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(UserWarning, match=f"{measure} is computed from a single observation"):
+        magnitudes = _rank_one_measure_magnitudes(connectivity, measure)
+    np.testing.assert_allclose(
+        magnitudes, SINGLE_OBSERVATION_RANK_ONE_MEASURES[measure], atol=1e-6
+    )
+
+
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_RANK_ONE_MEASURES))
+def test_multiple_observations_group_measure_does_not_warn(measure):
+    rng = np.random.default_rng(710)
+    shape = (1, 4, 3, 16, 4)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _rank_one_measure_magnitudes(connectivity, measure)
+
+
+def test_single_observation_warning_counts_what_each_measure_averages():
+    """A measure of the averaged cross-spectrum warns when its expectation
+    averages one observation, and global coherence, which decomposes trials x
+    tapers in every window, when there is one trial and one taper. Each
+    message names the count that is 1 and offers only what would raise it."""
+    rng = np.random.default_rng(712)
+
+    def coefficients(shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    def single_observation_message(compute):
+        with pytest.warns(UserWarning, match="single observation") as record:
+            compute()
+        return next(
+            str(warning.message)
+            for warning in record
+            if "single observation" in str(warning.message)
+        )
+
+    # One trial and one taper, averaged over both: either axis would help.
+    message = single_observation_message(
+        Connectivity(coefficients((1, 1, 1, 16, 4))).imaginary_coherence
+    )
+    assert "(n_observations == 1)" in message
+    assert "more trials" in message
+    assert "time_halfbandwidth_product" in message
+
+    # One trial and three tapers, averaged over trials: tapers are not averaged,
+    # so only more trials, or an expectation that averages tapers too, would help.
+    over_trials = Connectivity(coefficients((1, 1, 3, 16, 4)), expectation_type="trials")
+    assert over_trials.n_observations == 1
+    message = single_observation_message(over_trials.imaginary_coherence)
+    assert "(n_observations == 1)" in message
+    assert "more trials" in message
+    assert "averages more axes than 'trials'" in message
+    assert "time_halfbandwidth_product" not in message
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        global_coherence, _ = over_trials.global_coherence()
+    assert np.all(global_coherence < 1.0 - 1e-6)
+
+    # Five windows of one trial and one taper, averaged over time: five
+    # observations, but global coherence still has one trial x taper per window.
+    over_time = Connectivity(coefficients((5, 1, 1, 16, 4)), expectation_type="time")
+    message = single_observation_message(over_time.global_coherence)
+    assert "(n_trials * n_tapers == 1)" in message
+    assert "time_halfbandwidth_product" in message
+    assert "expectation_type" not in message
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        over_time.imaginary_coherence()
+
+
+def test_granger_nan_warning_names_too_few_observations_as_a_cause():
+    """One observation gives every pair a rank-one spectrum that cannot be
+    factored. The warning must not only send the user to look for bad channels."""
+    rng = np.random.default_rng(713)
+    shape = (1, 1, 1, 16, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(UserWarning, match="NaN at every frequency.*too few observations"):
+        granger = connectivity.pairwise_spectral_granger_prediction()
+    assert np.isnan(granger).all()
+
+
+def test_canonical_coherence_warning_reads_plainly():
+    """One observation is singular, and group labels print as the user gave them."""
+    rng = np.random.default_rng(714)
+    shape = (1, 1, 1, 8, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(
+        UserWarning,
+        match=r"uses 1 observation \(trials x tapers\).*group pair\(s\) \(CA1, PFC\)",
+    ):
+        connectivity.canonical_coherence(np.array(["CA1", "CA1", "PFC"]))
 
 
 def test_canonical_coherence_warns_when_groups_outnumber_observations():
@@ -4542,6 +4654,14 @@ def _warning_cases():
         "single_observation": (
             "single",
             lambda: Connectivity(one_observation).magnitude_squared_coherence(),
+        ),
+        "single_observation_global_coherence": (
+            "single",
+            lambda: Connectivity(one_observation).global_coherence(),
+        ),
+        "single_observation_group_measure": (
+            "single",
+            lambda: Connectivity(one_observation).maximized_imaginary_coherency([0, 0, 1]),
         ),
         "single_observation_through_wrapper": (
             "single",
