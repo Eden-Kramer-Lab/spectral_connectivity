@@ -1459,11 +1459,12 @@ def fourier_connectivity(
         With more than 2 signals a warning is issued and the full matrix is
         returned; for ``power`` squeeze is a no-op. Length-one ``time`` is kept.
     connectivity_kwargs : dict, optional
-        Extra keyword arguments for the *measure* (a ``Connectivity`` method),
-        e.g. ``pairs`` for ``subset_pairwise_spectral_granger_prediction`` or
-        ``n_components`` for ``canonical_coherency``; passed to every requested
-        measure. Transform settings do not go here: they belong to the transform
-        that produced ``fourier_coefficients``.
+        Settings for the *measure* (a ``Connectivity`` method), e.g. ``pairs``
+        for ``subset_pairwise_spectral_granger_prediction`` or ``n_components``
+        for ``canonical_coherency``; passed to every requested measure, so a
+        key a requested measure does not take raises ``TypeError``. Transform
+        settings do not go here: they belong to the transform that produced
+        ``fourier_coefficients``.
     is_one_sided : bool, optional
         Declare whether the coefficients cover only non-negative frequencies.
         When no frequency coordinate is available the sidedness cannot be

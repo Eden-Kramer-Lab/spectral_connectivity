@@ -73,9 +73,14 @@ coherence = multitaper_connectivity(
 # -> DataArray with dims (time, frequency, source, target)
 ```
 
-Extra keyword arguments, like `time_halfbandwidth_product` here, configure the
-multitaper transform. Options for the measure itself go in
-`connectivity_kwargs`, and group measures take `group_labels` (see the
+The common multitaper settings, like `time_halfbandwidth_product` here, are
+named arguments: `time_window_duration`, `time_window_step`,
+`time_halfbandwidth_product`, `n_tapers`, and `detrend_type`. Any other
+`Multitaper` setting goes in `transform_kwargs={...}` (e.g.
+`transform_kwargs={"n_fft_samples": 1024}`), options for the measure itself go
+in `connectivity_kwargs={...}`, and group measures take `group_labels` (see
+[setting transform and measure options](cookbook.md#set-transform-and-measure-options)
+and the
 [group-measures recipe](cookbook.md#group-measures-canonical-coherence-between-areas)).
 
 Multitaper's frequency resolution means full DPSS concentration bandwidth,
