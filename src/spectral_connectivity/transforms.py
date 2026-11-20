@@ -3083,6 +3083,9 @@ class MorletWavelet:
         )
 
     def _provenance_metadata(self) -> dict[str, Any]:
+        # The smoothing window and step as used: whole decimated samples.
+        smoothed = self.smoothing_time is not None
+        output_rate = self.sampling_frequency / self.decimation
         return {
             "transform": self._transform_name,
             "decimation": self.decimation,
@@ -3097,8 +3100,8 @@ class MorletWavelet:
             "padding_mode": self.padding_mode,
             "smoothing_frequency": self.smoothing_frequency,
             "smoothing_kernel": self.smoothing_kernel,
-            "smoothing_step": self.smoothing_step,
-            "smoothing_time": self.smoothing_time,
+            "smoothing_step": self._smoothing_step_samples / output_rate if smoothed else None,
+            "smoothing_time": self._smoothing_samples / output_rate if smoothed else None,
             "zero_mean": self.zero_mean,
         }
 

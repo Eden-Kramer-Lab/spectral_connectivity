@@ -154,6 +154,32 @@ def test_transforms_share_known_facts_and_native_settings(data, name, n_observat
         assert parameters["estimator"]["frequencies"] == [4, 8, 16]
 
 
+@pytest.mark.parametrize(
+    ("smoothing_step", "realized_step"),
+    [(None, 0.12), (0.057, 0.06)],
+    ids=["default", "given"],
+)
+def test_morlet_records_the_smoothing_window_and_step_it_used(
+    data, smoothing_step, realized_step
+):
+    """Like the windowed transforms' durations, the recorded smoothing is what
+    was used: whole decimated samples (12 and 6 of them at 100 Hz here), not
+    the 0.123 s and 0.057 s requested."""
+    transform = MorletWavelet(
+        data,
+        sampling_frequency=200,
+        frequencies=np.array([20.0, 40.0]),
+        decimation=2,
+        smoothing_time=0.123,
+        smoothing_step=smoothing_step,
+    )
+    result = connectivity_to_xarray(transform, "power")
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["smoothing_time"] == pytest.approx(0.12, rel=1e-12)
+    assert estimator["smoothing_step"] == pytest.approx(realized_step, rel=1e-12)
+    np.testing.assert_allclose(np.diff(result.time.values), realized_step, rtol=1e-12)
+
+
 def test_only_released_multitaper_attributes_are_compatibility_copies(data):
     result = connectivity_to_xarray(
         Multitaper(

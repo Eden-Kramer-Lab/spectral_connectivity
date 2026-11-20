@@ -307,6 +307,9 @@ returns a trial axis (see its row).
   Welch, Morlet, and external Fourier inputs, lowercase `backend="cpu"`/`"gpu"`,
   and one canonical `transform_parameters_json` record separating estimator
   and execution settings. Optional structured settings use JSON `null`.
+  Durations in it are the ones used, in whole samples: a `MorletWavelet`'s
+  `smoothing_time` and `smoothing_step` are its realized smoothing window and
+  step (`smoothing_time=0.123` at 100 Hz after decimation records 0.12).
   Only the 15 scalar `mt_*` attributes released in 2.0.1 remain, as deprecated
   compatibility copies until 4.0. They are stored as scalars NetCDF can save:
   `mt_is_low_bias` as 0/1, `mt_start_time` and `mt_sampling_frequency` as
