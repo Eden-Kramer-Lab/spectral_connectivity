@@ -158,12 +158,12 @@ def test_from_multitaper_forwards_the_factorization_settings(multitaper, setting
     )
 
 
-# 2.x's blocks changed the phase-lag-index measures (blocks=1 reversed the sign of
-# phase_lag_index and weighted_phase_lag_index), so the message must not say it
-# had no effect.
+# 2.x's blocks changed the phase-lag-index measures, so the message says to
+# recompute them and how they changed, not that it had no effect.
 _BLOCKS_MESSAGE = (
-    r"blocks.*removed in 3\.0.*drop it.*Recompute.*phase-lag-index.*"
-    r"blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index"
+    r"blocks.*removed in 3\.0.*drop it.*Recompute phase-lag-index measures.*"
+    r"blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index.*"
+    r"larger values did not return valid results"
 )
 
 

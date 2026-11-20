@@ -449,10 +449,11 @@ def suggest_parameters(
             # Recalculate NW to achieve target resolution with this window.
             # The taper count is floor(2 * NW) - 1, so floating-point error just
             # below a whole 2 * NW, such as 30 Hz * 0.1 s = 2.9999999999999996,
-            # would cost a taper: only such a value is snapped to that whole.
+            # would cost a taper: only such a value is raised to that whole.
             twice_nw = desired_freq_resolution * time_window_duration
-            if np.isclose(twice_nw, np.round(twice_nw), rtol=1e-12, atol=0.0):
-                twice_nw = float(np.round(twice_nw))
+            whole = float(np.ceil(twice_nw))
+            if np.isclose(twice_nw, whole, rtol=1e-12, atol=0.0):
+                twice_nw = whole
             time_halfbandwidth_product = twice_nw / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
@@ -3089,7 +3090,7 @@ class MorletWavelet:
     def _provenance_metadata(self) -> dict[str, Any]:
         # The smoothing window and step as used: whole decimated samples.
         smoothed = self.smoothing_time is not None
-        output_rate = self.sampling_frequency / self.decimation
+        rate = self.sampling_frequency
         return {
             "transform": self._transform_name,
             "decimation": self.decimation,
@@ -3104,8 +3105,12 @@ class MorletWavelet:
             "padding_mode": self.padding_mode,
             "smoothing_frequency": self.smoothing_frequency,
             "smoothing_kernel": self.smoothing_kernel,
-            "smoothing_step": self._smoothing_step_samples / output_rate if smoothed else None,
-            "smoothing_time": self._smoothing_samples / output_rate if smoothed else None,
+            "smoothing_step": (
+                self._smoothing_step_samples * self.decimation / rate if smoothed else None
+            ),
+            "smoothing_time": (
+                self._smoothing_samples * self.decimation / rate if smoothed else None
+            ),
             "zero_mean": self.zero_mean,
         }
 

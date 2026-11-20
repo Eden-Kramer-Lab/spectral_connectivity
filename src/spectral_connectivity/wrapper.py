@@ -1191,8 +1191,11 @@ def multitaper_connectivity(
         adjacent band integrals add up to their union without counting a
         shared edge bin twice (see :func:`frequency_band_reduce`). A band
         inside ``frequency_range`` integrates the same with and without the
-        range, even when its edge falls between bins; one reaching past the
-        range is limited to the cells of the bins the range selects.
+        range, even when its edge falls between bins (given
+        ``frequency_decimation=1``; otherwise the kept bins start at the first
+        bin in the range). A band reaching past the range is cut at the
+        range's bounds, or at the outer edge of the first or last selected
+        bin's cell where that lies further out.
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.
@@ -1816,17 +1819,23 @@ def fourier_connectivity(
         # sampling rate in Hz. Retain it for integration after cropping.
         metadata["nyquist_frequency"] = 0.5
     elif not one_sided and all_frequencies.size > 1:
-        # Bin n_fft // 2 of an FFT-order grid is the farthest from 0 Hz. For an
-        # even n_fft it is the Nyquist bin itself, so the recorded Nyquist
-        # frequency is that bin's stored value whatever the grid's rounding.
-        # An odd n_fft has no Nyquist bin: its top bin is (n_fft - 1) / 2 bins
-        # of sampling_frequency / n_fft above zero.
+        # Bin n_fft // 2 of an FFT-order grid is the farthest from 0 Hz, so its
+        # rounding moves the rate least. For an even n_fft it is the Nyquist
+        # bin itself: the recorded Nyquist frequency is that bin's stored value
+        # whatever the grid's rounding. An odd n_fft has no Nyquist bin: its top
+        # bin is n_fft // 2 bins of sampling_frequency / n_fft above zero. The
+        # arithmetic stays in the grid's precision, so a float32 grid of a
+        # 100 Hz rate records 100.0.
         n_fft = all_frequencies.size
-        nyquist_frequency = abs(float(all_frequencies[n_fft // 2]))
-        if n_fft % 2 == 1:
-            nyquist_frequency *= n_fft / (n_fft - 1)
-        metadata["sampling_frequency"] = 2 * nyquist_frequency
-        metadata["nyquist_frequency"] = nyquist_frequency
+        precision = np.result_type(all_frequencies.dtype, np.float32).type
+        top = precision(abs(all_frequencies[n_fft // 2]))
+        sampling_frequency = (
+            precision(2) * top
+            if n_fft % 2 == 0
+            else top * precision(n_fft) / precision(n_fft // 2)
+        )
+        metadata["sampling_frequency"] = float(sampling_frequency)
+        metadata["nyquist_frequency"] = float(sampling_frequency) / 2
     shared_attrs = _shared_provenance_attrs(
         connectivity,
         metadata,

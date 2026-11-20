@@ -288,6 +288,17 @@ class TestSuggestParameters:
         assert params["time_halfbandwidth_product"] == 1.5
         assert params["n_tapers"] == 2
 
+    def test_rounding_error_above_a_taper_boundary_is_left_alone(self):
+        """0.9 Hz over a (5000 / 300) / 3 s window is 2 * NW = 5.000000000000001.
+        Error above a whole number costs no taper, so NW and the resolution
+        keep the values 2.0.1 gave."""
+        params = suggest_parameters(
+            sampling_frequency=300, signal_duration=5000 / 300, desired_freq_resolution=0.9
+        )
+        assert params["time_halfbandwidth_product"] == 2.5000000000000004
+        assert params["frequency_resolution"] == 0.9
+        assert params["n_tapers"] == 4
+
     def test_single_requested_taper_does_not_warn(self):
         """Only a resolution target can leave one taper by surprise."""
         params = suggest_parameters(

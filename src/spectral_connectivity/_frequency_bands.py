@@ -15,7 +15,7 @@ from spectral_connectivity._measure_registry import (
 )
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
 from spectral_connectivity.connectivity import (
-    _bins_on_bound,
+    _bins_on_bounds,
     _frequency_interval_mask,
     _FrequencySelection,
 )
@@ -53,11 +53,12 @@ def _band_integration_weights(
     bin on a band's bound (:func:`_frequency_interval_mask`), so a coordinate
     stored as float32 still has its Nyquist bin.
 
-    ``kept`` limits the band to the cells of the bins ``frequency_range``
-    selects and to the range itself. That is what integrating the cropped grid
-    gives, plus any part of the band that lies inside the range but in the
-    cell of a bin just outside it, which a crop would drop: a band inside the
-    range integrates the same with and without the range.
+    ``kept`` limits the band to the span of the range and the cells of the
+    bins ``frequency_range`` selects, whichever reaches further at each end.
+    The cells are those of this uncropped grid. A crop would drop the part of
+    the band that lies inside the range but in the cell of a bin just outside
+    it, so a band inside the range integrates the same with and without the
+    range.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -71,7 +72,11 @@ def _band_integration_weights(
         lower = np.maximum(lower, 0.0)
     if frequencies[0] == 0.0:
         scale[0] = 2.0
-    if nyquist_frequency is not None and _bins_on_bound(frequencies, nyquist_frequency)[-1]:
+    # The last bin and its neighbour are all the rule needs.
+    if (
+        nyquist_frequency is not None
+        and _bins_on_bounds(frequencies[-2:], (nyquist_frequency,))[0][-1]
+    ):
         upper[-1] = frequencies[-1]
         scale[-1] = 2.0
     if kept is not None:

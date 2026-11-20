@@ -92,13 +92,13 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     return canonical
 
 
-# In 2.x blocks was meant only to chunk the cross-spectral computation, but its
-# block filling assumed a Hermitian result, which the real, antisymmetric
-# phase-lag-index terms are not.
+# In 2.x blocks was meant only to chunk the cross-spectral computation, but it
+# also changed the phase-lag-index measures (see the migration guide).
 _BLOCKS_REMOVED = (
     "blocks was removed in 3.0 (memory is bounded automatically), so drop it. "
-    "Recompute any phase-lag-index measure obtained with blocks in 2.x: it changed "
-    "them (blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index)."
+    "Recompute phase-lag-index measures obtained with blocks in 2.x: blocks=1 "
+    "reversed the sign of phase_lag_index and weighted_phase_lag_index, and larger "
+    "values did not return valid results."
 )
 
 
@@ -593,28 +593,27 @@ def _nearest_bin_gap(grid: NDArray[np.float64]) -> NDArray[np.float64]:
     return gap
 
 
-def _bins_on_bound(values: NDArray[Any], bound: Any) -> NDArray[np.bool_]:
-    """Which frequency bins lie on ``bound``, by the rule of :func:`_frequency_interval_mask`.
+def _bins_on_bounds(values: NDArray[Any], bounds: Sequence[Any]) -> list[NDArray[np.bool_]]:
+    """Which frequency bins lie on each bound, by the rule of :func:`_frequency_interval_mask`.
 
     Parameters
     ----------
     values : array, shape (n_frequencies,)
         The frequency grid on the host, in its stored precision.
-    bound : float
-        The bound in its stored precision (a float32 scalar stays float32).
+    bounds : sequence of float
+        Each bound in its stored precision (a float32 scalar stays float32).
 
     Returns
     -------
-    NDArray[bool], shape (n_frequencies,)
+    list of NDArray[bool], shape (n_frequencies,)
+        One mask per bound.
     """
     grid = values.astype(np.float64)
-    allowance = (
-        _GRID_SPACING_RTOL * _nearest_bin_gap(grid)
-        + 2 * _last_place(values)
-        + 2 * _last_place(bound)
-    )
-    on_bound: NDArray[np.bool_] = np.abs(grid - float(bound)) <= allowance
-    return on_bound
+    grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
+    return [
+        np.abs(grid - float(bound)) <= grid_allowance + 2 * _last_place(bound)
+        for bound in bounds
+    ]
 
 
 def _frequency_interval_mask(
@@ -680,8 +679,7 @@ def _frequency_interval_mask(
         raise ValueError(invalid)
 
     grid = values.astype(np.float64)
-    on_lower = _bins_on_bound(values, stored_lower)
-    on_upper = _bins_on_bound(values, stored_upper)
+    on_lower, on_upper = _bins_on_bounds(values, (stored_lower, stored_upper))
     mask: NDArray[np.bool_] = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
     if not mask.any():
         msg = (

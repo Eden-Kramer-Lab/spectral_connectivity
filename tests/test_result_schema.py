@@ -180,6 +180,23 @@ def test_morlet_records_the_smoothing_window_and_step_it_used(
     np.testing.assert_allclose(np.diff(result.time.values), realized_step, rtol=1e-12)
 
 
+def test_morlet_records_a_whole_sample_smoothing_window_exactly():
+    """100 samples of 3 ms are 0.3 s, not the 0.30000000000000004 that
+    dividing by the decimated rate (1000 / 3) gives."""
+    transform = MorletWavelet(
+        np.random.default_rng(911).standard_normal((900, 3, 2)),
+        sampling_frequency=1000,
+        frequencies=np.array([50.0, 100.0]),
+        decimation=3,
+        smoothing_time=0.3,
+    )
+    estimator = json.loads(
+        connectivity_to_xarray(transform, "power").attrs["transform_parameters_json"]
+    )["estimator"]
+    assert estimator["smoothing_time"] == 0.3
+    assert estimator["smoothing_step"] == 0.3
+
+
 def test_only_released_multitaper_attributes_are_compatibility_copies(data):
     result = connectivity_to_xarray(
         Multitaper(
@@ -560,12 +577,18 @@ def test_nyquist_follows_from_the_sampling_rate_when_the_transform_omits_it(data
     )
 
 
-def test_dataset_built_from_result_variables_uses_their_nyquist_frequency(data):
+@pytest.mark.parametrize("recorded", ["nyquist_frequency", "mt_nyquist_frequency"])
+def test_dataset_built_from_result_variables_uses_their_nyquist_frequency(data, recorded):
     """A Dataset assembled from result variables has no attributes of its own;
-    each variable's record still says a cropped grid's last bin is interior."""
+    each variable's record, under the 3.0 name or the 2.x one, still says a
+    cropped grid's last bin is interior."""
     full = multitaper_connectivity(data, sampling_frequency=64, method="power")
     band = {"upper": (4, 8)}
-    assembled = xr.Dataset({"power": full.sel(frequency=slice(0, 8))})
+    cropped = full.sel(frequency=slice(0, 8))
+    for name in {"nyquist_frequency", "mt_nyquist_frequency"} - {recorded}:
+        del cropped.attrs[name]
+    assert cropped.attrs[recorded] == 32
+    assembled = xr.Dataset({"power": cropped})
     assert "nyquist_frequency" not in assembled.attrs
     xr.testing.assert_allclose(
         frequency_band_reduce(assembled, band, frequency_reduction="integral")["power"],
@@ -675,7 +698,6 @@ def test_two_sided_grid_rounding_does_not_lose_the_nyquist_bin(data, n_fft, stor
     result = fourier_connectivity(_fourier_dataarray(data, stored(exact_grid)), method="power")
 
     assert result.attrs["sampling_frequency"] == pytest.approx(250, rel=1e-6)
-    assert result.attrs["nyquist_frequency"] == result.attrs["sampling_frequency"] / 2
     if n_fft % 2 == 0:
         assert result.attrs["sampling_frequency"] == 250
         assert result.attrs["nyquist_frequency"] == float(result.frequency[-1])
@@ -686,16 +708,34 @@ def test_two_sided_grid_rounding_does_not_lose_the_nyquist_bin(data, n_fft, stor
     )
 
 
-def test_float32_frequency_coordinate_keeps_its_nyquist_bin(data):
-    """A result's coordinate stored as float32 (e.g. by netCDF) is still on the
-    recorded Nyquist frequency, 64/3 Hz here, which float32 cannot hold exactly."""
+@pytest.mark.parametrize(
+    "stored",
+    [lambda frequency: frequency.astype(np.float32), lambda frequency: frequency.round(7)],
+    ids=["float32", "rounded"],
+)
+def test_stored_frequency_coordinate_keeps_its_nyquist_bin(data, stored):
+    """A result's coordinate stored as float32 (e.g. by netCDF) or rounded to a
+    few decimals is still on the recorded Nyquist frequency, 64/3 Hz here,
+    which neither holds exactly. NumPy 2 compares a float32 bin with the
+    recorded value in float32, so the float32 case fails without the rule only
+    on NumPy 1.x; the rounded case fails without it on any."""
     result = multitaper_connectivity(data, sampling_frequency=128 / 3, method="power")
     nyquist = result.attrs["nyquist_frequency"]
-    stored = result.assign_coords(frequency=result.frequency.astype(np.float32))
-    assert float(stored.frequency[-1]) != nyquist
+    rounded = result.assign_coords(frequency=stored(result.frequency))
+    assert float(rounded.frequency[-1]) != nyquist
     np.testing.assert_allclose(
-        _power_up_to(stored, nyquist), _power_up_to(result, nyquist), rtol=1e-6
+        _power_up_to(rounded, nyquist), _power_up_to(result, nyquist), rtol=1e-6
     )
+
+
+def test_float32_grid_of_an_odd_length_records_its_rate_in_its_own_precision(data):
+    """An odd-length grid has no Nyquist bin to read the rate from. Its top
+    bin, 100/3 Hz, is not a float32 number, but the rate it gives is 100 in the
+    grid's own precision."""
+    grid = np.fft.fftfreq(3, 1 / 100).astype(np.float32)
+    result = fourier_connectivity(_fourier_dataarray(data[:3], grid), method="power")
+    assert result.attrs["sampling_frequency"] == 100.0
+    assert result.attrs["nyquist_frequency"] == 50.0
 
 
 def test_float32_uniform_grid_is_uniform_for_phase_slope(data):
@@ -801,9 +841,9 @@ def test_scalar_fourier_time_coordinate_is_the_time_of_the_single_window(data):
     ("name", "value"), [("window", 256), ("windows", 8), ("time_window", 0.5)]
 )
 def test_scalar_coordinate_named_like_a_window_is_not_taken_for_its_time(data, name, value):
-    """Only a scalar coordinate named time is the single window's time. A
-    window's length or count is as likely under these names as its time, so
-    they stay recording identifiers and the window keeps its index."""
+    """Only a scalar coordinate named time or times is the single window's
+    time. A window's length or count is as likely under these names as its
+    time, so they stay recording identifiers and the window keeps its index."""
     coefficients = _fourier_dataarray(data, np.fft.fftfreq(128, 1 / 64)).assign_coords(
         {name: value}
     )
