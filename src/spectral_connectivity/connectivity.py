@@ -1241,22 +1241,23 @@ class Connectivity:
             New Connectivity instance.
 
         """
-        # Checked before the warning too, so a 2.x blocks in dtype's position
-        # fails without first warning about the name.
-        _validated_complex_dtype(dtype)
-        warn_deprecated(
-            f"{cls.__name__}.from_multitaper()",
-            f"{cls.__name__}.from_transform()",
-            "takes the same arguments (the first is named transform, not "
-            "multitaper_instance) and builds the same instance",
-        )
-        return cls._from_transform(
+        instance = cls._from_transform(
             multitaper_instance,
             expectation_type=expectation_type,
             dtype=dtype,
             minimum_phase_tolerance=minimum_phase_tolerance,
             minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
+        # Warned once the instance is built, as the wrappers do, so a rejected
+        # call (a 2.x blocks in dtype's position, a bad expectation type, ...)
+        # shows only its error.
+        warn_deprecated(
+            f"{cls.__name__}.from_multitaper()",
+            f"{cls.__name__}.from_transform()",
+            "takes the same arguments (the first is named transform, not "
+            "multitaper_instance) and builds the same instance",
+        )
+        return instance
 
     @classmethod
     @_rejects_removed_blocks("Connectivity.from_transform()")

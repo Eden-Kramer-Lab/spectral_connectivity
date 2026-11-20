@@ -840,3 +840,18 @@ def test_jackknife_rejects_unknown_transformation():
         jackknife_confidence_interval(
             np.array(1.0), np.array([1.0, 2.0]), transformation="bogus"
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"n_tapers": 0}, "n_observations must be a finite positive integer"),
+        ({"n_tapers": 5, "ci": 1.5}, "Confidence level"),
+        ({"n_tapers": 5, "power": -1.0}, "power must be finite"),
+    ],
+)
+def test_a_rejected_n_tapers_call_does_not_warn(kwargs, match):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(ValueError, match=match):
+            power_confidence_intervals(**kwargs)

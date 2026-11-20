@@ -232,3 +232,12 @@ def test_the_from_multitaper_warning_names_the_renamed_first_argument(multitaper
         Connectivity.from_multitaper(multitaper_instance=multitaper)
     assert "transform" in str(record[0].message).split("use", 1)[1]
     assert "multitaper_instance" in str(record[0].message)
+
+
+def test_a_rejected_from_multitaper_call_does_not_warn(multitaper):
+    """The deprecation is raised once the instance is built, so a call that
+    is rejected shows only its error, as the wrappers do."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(ValueError, match="expectation_type"):
+            Connectivity.from_multitaper(multitaper, expectation_type="bogus")

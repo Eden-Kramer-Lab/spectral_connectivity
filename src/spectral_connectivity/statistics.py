@@ -964,12 +964,6 @@ def power_confidence_intervals(
                 "deprecated name n_tapers; pass only n_observations."
             )
             raise ValueError(msg)
-        warn_deprecated(
-            "power_confidence_intervals(n_tapers=...)",
-            "power_confidence_intervals(n_observations=...)",
-            "gives the same interval; the count is every averaged observation, "
-            "tapers x trials",
-        )
         n_observations = n_tapers
     if n_observations is None:
         msg = "power_confidence_intervals() missing required argument: 'n_observations'"
@@ -1004,6 +998,14 @@ def power_confidence_intervals(
             "density); got a non-finite or negative value."
         )
         raise ValueError(msg)
+    # Warned only once the call is valid, so a rejected call shows its error.
+    if n_tapers is not None:
+        warn_deprecated(
+            "power_confidence_intervals(n_tapers=...)",
+            "power_confidence_intervals(n_observations=...)",
+            "gives the same interval; the count is every averaged observation, "
+            "tapers x trials",
+        )
     # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
     # evenly between the two tails, so the chi-squared quantiles are taken at
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
