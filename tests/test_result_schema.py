@@ -815,8 +815,10 @@ def test_scalar_coordinate_named_like_a_window_is_not_taken_for_its_time(data, n
 
 def test_coordinate_units_express_normalized_delay_without_claiming_seconds(data):
     coefficients = _fourier_dataarray(data, np.fft.fftfreq(128), "cycles/sample")
-    result = fourier_connectivity(coefficients, method="group_delay")
-    assert result.group_delay.attrs["units"] == "samples"
+    result = fourier_connectivity(coefficients, method=["group_delay", "delay"])
+    for delay in (result.group_delay, result.delay):
+        assert delay.attrs["units"] == "samples"
+        assert "in seconds" not in delay.attrs["interpretation"]
 
 
 @pytest.mark.parametrize(
