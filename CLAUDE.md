@@ -118,6 +118,11 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
   `docs/generate_measure_table.py` and `tests/test_docs.py` fails when it is
   stale; `docs/cookbook.md` and `docs/llm_guide.md` are doctested by
   `tests/test_cookbook.py`
+- The paper-examples tutorial is tested against the models it simulates:
+  `tests/test_tutorial_paper_examples.py` executes the definitions in
+  `examples/Tutorial_Using_Paper_Examples.py` (nothing is plotted) and compares
+  each example with its model's true values from `tests/_var_oracle.py`, so a
+  change to an example's model or settings there changes what is tested
 - Tests include both CPU and GPU code paths when available (GPU paths run only
   where CuPy is installed). The whole suite runs on either backend:
   `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest` (pick an idle

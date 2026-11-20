@@ -652,10 +652,14 @@ plot_directional(*Wen_example1(), time_halfbandwidth_product=1)
 # ![image.png](attachment:image.png)
 
 
+# %% [markdown]
+# All five signals in this model resonate near 40 Hz, within 0.6 Hz of each other, and their noise is correlated, so the trials have to be long enough for the tapers to tell the resonances apart. Tapers average the spectrum over `time_halfbandwidth_product / trial duration` on either side of each frequency, which is 0.15 Hz for the 20 s trials simulated here. With 5 s trials (0.6 Hz) the same analysis shows a partial directed coherence from x3 to x5 of 0.19 at 40 Hz, an influence the model does not have.
+
+
 # %%
 def Wen_example2():
     sampling_frequency = 200
-    n_time_samples, n_lags, n_signals = 1000, 4, 5
+    n_time_samples, n_lags, n_signals = 4000, 4, 5
     coefficients = np.zeros((n_lags, n_signals, n_signals))
 
     coefficients[0, 0, 0] = 0.55

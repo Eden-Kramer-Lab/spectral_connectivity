@@ -1085,6 +1085,14 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 - The simulated-examples tutorial no longer stores a local absolute path in a
   warning output, and `help(spectral_connectivity)` links both the AI-assistant
   guide and `llms.txt`.
+- The paper-examples tutorial simulates 20 s trials for Wen example 2, where it
+  simulated 5 s (as it has since 2.x). The model's five signals resonate within
+  0.6 Hz of each other near 40 Hz, and with 5 s trials the tapers blended them:
+  the partial directed coherence showed an influence of x3 on x5, 0.19 at 40
+  Hz, that the model does not have, and pairwise spectral Granger from x4 to
+  x5 read 6.5 where the model has 4.3. Every example of that tutorial is now
+  tested against the true values of the model it simulates
+  (`tests/test_tutorial_paper_examples.py`).
 
 ### Performance
 
