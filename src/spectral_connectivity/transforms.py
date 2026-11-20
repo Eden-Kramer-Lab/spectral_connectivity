@@ -688,7 +688,8 @@ def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
     evidence either way and are read by position.
     """
     dimensions = getattr(time_series, "dims", None)
-    if dimensions is None or len(dimensions) != len(_INPUT_AXIS_ROLES):
+    # A labeled 3-D array; a Dataset also has ``dims`` but no axis order.
+    if dimensions is None or getattr(time_series, "ndim", None) != len(_INPUT_AXIS_ROLES):
         return
     # The naming rules belong to the wrapper's layer, above this module, so
     # the dependency on them stays local to this check.

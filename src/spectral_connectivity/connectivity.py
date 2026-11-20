@@ -135,6 +135,17 @@ _RANK_ONE_GROUP_CONSEQUENCE = (
     "number of signals in each group (for two single-signal groups, by one "
     "phase difference)"
 )
+# What adds observations along each axis an expectation can average, for the
+# same warning.
+_MORE_OBSERVATIONS = {
+    "time": "more time windows",
+    "trials": "more trials",
+    "tapers": (
+        "more tapers (for Multitaper, a larger time_halfbandwidth_product or "
+        "n_tapers; for MorletWavelet, smoothing_time, which collects neighboring "
+        "coefficients on that axis)"
+    ),
+}
 # And how it fixes the canonical coherency.
 _RANK_ONE_CANONICAL_CONSEQUENCE = (
     "the leading canonical coherency of every group pair is mathematically "
@@ -1573,17 +1584,23 @@ class Connectivity:
         """
         if n_trials_by_tapers is None:
             count, counted = self.n_observations, "n_observations"
+            averaged = self.expectation_type.split("_")
         else:
             count, counted = n_trials_by_tapers, "n_trials * n_tapers"
+            averaged = ["trials", "tapers"]
         if count < 2:
+            # Offer only what raises this count: the axes it is taken over.
+            remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
+            if n_trials_by_tapers is None and len(averaged) < len(_MORE_OBSERVATIONS):
+                remedies.append(
+                    "an expectation_type that averages more axes than "
+                    f"{self.expectation_type!r}"
+                )
             warnings.warn(
                 f"{measure} is computed from a single observation "
                 f"({counted} == 1), so {consequence} "
                 "regardless of the data, and the result carries no information. "
-                "Use more trials or tapers (for Multitaper, a larger "
-                "time_halfbandwidth_product or n_tapers), or set smoothing_time "
-                "on MorletWavelet to collect neighboring coefficients on the "
-                "observation axis.",
+                f"Use {', or '.join(remedies)}.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )

@@ -4436,31 +4436,52 @@ def test_multiple_observations_group_measure_does_not_warn(measure):
 
 def test_single_observation_warning_counts_what_each_measure_averages():
     """A measure of the averaged cross-spectrum warns when its expectation
-    averages one observation. Global coherence decomposes trials x tapers in
-    every window, so it warns for one trial and one taper however many windows
-    there are. Each message says which count is 1 and how to raise it."""
+    averages one observation, and global coherence, which decomposes trials x
+    tapers in every window, when there is one trial and one taper. Each
+    message names the count that is 1 and offers only what would raise it."""
     rng = np.random.default_rng(712)
 
     def coefficients(shape):
         return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
 
-    # One trial and three tapers, averaged over trials: one observation each.
+    def single_observation_message(compute):
+        with pytest.warns(UserWarning, match="single observation") as record:
+            compute()
+        return next(
+            str(warning.message)
+            for warning in record
+            if "single observation" in str(warning.message)
+        )
+
+    # One trial and one taper, averaged over both: either axis would help.
+    message = single_observation_message(
+        Connectivity(coefficients((1, 1, 1, 16, 4))).imaginary_coherence
+    )
+    assert "(n_observations == 1)" in message
+    assert "more trials" in message
+    assert "time_halfbandwidth_product" in message
+
+    # One trial and three tapers, averaged over trials: tapers are not averaged,
+    # so only more trials, or an expectation that averages tapers too, would help.
     over_trials = Connectivity(coefficients((1, 1, 3, 16, 4)), expectation_type="trials")
     assert over_trials.n_observations == 1
-    with pytest.warns(
-        UserWarning,
-        match=r"single observation \(n_observations == 1\).*time_halfbandwidth_product",
-    ):
-        over_trials.imaginary_coherence()
+    message = single_observation_message(over_trials.imaginary_coherence)
+    assert "(n_observations == 1)" in message
+    assert "more trials" in message
+    assert "averages more axes than 'trials'" in message
+    assert "time_halfbandwidth_product" not in message
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         global_coherence, _ = over_trials.global_coherence()
     assert np.all(global_coherence < 1.0 - 1e-6)
 
-    # Five windows of one trial and one taper, averaged over time: five observations.
+    # Five windows of one trial and one taper, averaged over time: five
+    # observations, but global coherence still has one trial x taper per window.
     over_time = Connectivity(coefficients((5, 1, 1, 16, 4)), expectation_type="time")
-    with pytest.warns(UserWarning, match=r"single observation \(n_trials \* n_tapers == 1\)"):
-        over_time.global_coherence()
+    message = single_observation_message(over_time.global_coherence)
+    assert "(n_trials * n_tapers == 1)" in message
+    assert "time_halfbandwidth_product" in message
+    assert "expectation_type" not in message
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         over_time.imaginary_coherence()

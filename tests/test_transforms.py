@@ -1061,6 +1061,14 @@ def test_axis_order_error_spells_out_only_the_transpose_the_names_determine(dims
     assert "None" not in str(error.value)
 
 
+def test_axis_order_check_applies_to_labeled_arrays_only():
+    """A Dataset has dimension names but is not an array: it gets xarray's own
+    refusal to become one, not a failure inside the axis-order check."""
+    dataset = xr.Dataset({"lfp": (("trial", "time", "signal"), np.zeros((4, 100, 2)))})
+    with pytest.raises(TypeError, match="Dataset"):
+        Multitaper(dataset, sampling_frequency=1000)
+
+
 @_EVERY_TRANSFORM
 @pytest.mark.parametrize(
     "dims",
