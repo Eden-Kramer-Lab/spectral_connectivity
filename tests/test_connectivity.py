@@ -1712,6 +1712,9 @@ def test_single_signal_connectivity_raises_but_power_works():
             method()
     with pytest.raises(ValueError, match="at least 2 signals"):
         c.canonical_coherence(group_labels=np.array([0]))
+    # A pair of the one signal with itself is in range, yet is not a pair.
+    with pytest.raises(ValueError, match="at least 2 signals"):
+        c.subset_pairwise_spectral_granger_prediction([(0, 0)])
     # Power is well-defined for a single signal.
     power = c.power()
     assert power.shape[-1] == 1

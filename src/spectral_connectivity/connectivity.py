@@ -4784,6 +4784,7 @@ class Connectivity:
         >>> bool(np.isnan(granger[0, 20, 0, 2]))  # pair (0, 2) was not requested
         True
         """
+        self._validate_multiple_signals()
         self._require_two_sided_spectrum("subset_pairwise_spectral_granger_prediction")
         pairs = np.array(pairs)
         result = _estimate_subset_spectral_granger_prediction(
