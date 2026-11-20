@@ -16,6 +16,7 @@ from spectral_connectivity import (
     Multitaper,
     ShortTimeFourierTransform,
     Welch,
+    fourier_connectivity,
 )
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 
@@ -97,6 +98,23 @@ def test_new_transforms_reject_a_positional_setting(make, third):
     time_series = np.zeros((200, 1, 2))
     with pytest.raises(TypeError, match="positional argument"):
         make(time_series, 100, third)
+
+
+def test_fourier_connectivity_takes_settings_after_signal_names_by_keyword_only():
+    """New in 3.0 (absent from v2.0.1), so its signature is set directly."""
+    assert _positional_names(fourier_connectivity) == [
+        "fourier_coefficients",
+        "frequencies",
+        "time",
+        "method",
+        "signal_names",
+    ]
+    assert {"squeeze", "connectivity_kwargs", "is_one_sided"} <= set(
+        _keyword_only_names(fourier_connectivity)
+    )
+    coefficients = np.ones((4, 8, 2), dtype=complex)
+    with pytest.raises(TypeError, match="positional argument"):
+        fourier_connectivity(coefficients, None, None, "power", None, False)
 
 
 @pytest.mark.parametrize(

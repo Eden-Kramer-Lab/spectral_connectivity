@@ -165,7 +165,10 @@ directly with results from 2.x.
   noise on a matched power-spectral-density scale and warns if the iteration
   does not converge.
 - `fourier_connectivity` accepts externally computed Fourier coefficients as
-  NumPy arrays or labeled DataArrays. Functional measures support one-sided
+  NumPy arrays or labeled DataArrays. It takes `fourier_coefficients`,
+  `frequencies`, `time`, `method`, and `signal_names` positionally and every
+  other setting (`squeeze`, `connectivity_kwargs`, `is_one_sided`, ...) by
+  keyword. Functional measures support one-sided
   coefficients (inferred from a labeled non-negative frequency coordinate or
   declared with `is_one_sided=True`), while directed factorization still
   requires a full two-sided spectrum. High-level results can be cropped,
