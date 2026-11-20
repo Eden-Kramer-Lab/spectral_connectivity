@@ -152,6 +152,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
   directed-transfer-function families work with `multitaper_connectivity`, but
   not with Morlet wavelets or other one-sided coefficients, which raise a
   `ValueError`.
+- **Directed measures need long windows, and padding helps.** They come from a
+  factorization of the estimated spectrum. A window shorter than the slowest
+  correlation in the data gives unreliable values with no warning. For any
+  window, pass `transform_kwargs={"n_fft_samples": n}` with `n` at least twice
+  the window's sample count: on the default FFT length the estimate's own lags
+  wrap around the frequency grid.
 - **Group measures need labels.** Pass `group_labels=...` (one label per
   signal, e.g. `["CA1", "CA1", "PFC"]`) directly to `multitaper_connectivity`
   or `fourier_connectivity` for `canonical_coherence`,

@@ -41,8 +41,8 @@ their rows).
 | Previous behavior | New behavior / required action |
 | --- | --- |
 | `multitaper_connectivity` labeled pairwise and subset spectral Granger prediction with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); it rejected the transfer-function measures and could not return `phase_slope_index`, `group_delay`, or `delay` (all three raised), whose `Connectivity` arrays were already source first | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
-| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1). `np.swapaxes(old, -1, -2)` converts stored 2.x DTF, PDC, gPDC, and spectral Granger arrays (to about 1e-5 relative) when they were computed from at least as many observations (trials x tapers) as signals; directed coherence and dDTF values also changed (see their rows). With fewer observations than signals (a single observation, for pairwise and subset Granger) 2.x returned finite values from a Wilson factorization that had not converged, where 3.0 returns `NaN` with a warning: discard those stored arrays |
-| Every measure built on the Wilson factorization (the spectral Granger family, DTF, directed coherence, PDC, gPDC, dDTF) used, on an even FFT length, a factor that did not reproduce the spectrum: it ignored the lag `n_fft_samples / 2`, missing the spectrum by 0.2-10% in simulations and adding a bin-to-bin alternation to the measures | The factor reproduces the spectrum on even and odd FFT lengths alike. Recompute directed measures: values change by 1e-3 to 1e-2 for long, well-resolved recordings, and by much more for short windows, few observations, or highly correlated channels. |
+| `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1). `np.swapaxes(old, -1, -2)` gives stored 2.x DTF, PDC, gPDC, and spectral Granger arrays the new orientation. It reproduces the 3.0 values (to about 1e-5 relative) only where the FFT length was odd and there were at least as many observations (trials x tapers) as signals; on an even FFT length the values changed too (next row). Directed coherence and dDTF values also changed (see their rows). With fewer observations than signals (a single observation, for pairwise and subset Granger) 2.x returned finite values from a Wilson factorization that had not converged, where 3.0 returns `NaN` with a warning: discard those stored arrays |
+| Every measure built on the Wilson factorization (the spectral Granger family, DTF, directed coherence, PDC, gPDC, dDTF) used, on an even FFT length, a factor that did not reproduce the spectrum: it ignored the lag `n_fft_samples / 2`, missing the spectrum by 0.2-10% in simulations and adding a bin-to-bin alternation to the measures | The factor reproduces the spectrum on even and odd FFT lengths alike. Recompute directed measures that used an even FFT length (the default length is often even): in a long, well-resolved recording the largest change was 5e-4 to 2e-2 for DTF and PDC and 1e-3 to 0.2 for spectral Granger in the cases run, and it was far larger (up to the whole range of DTF) for short windows, few observations, or highly correlated channels. Values from an odd FFT length are unchanged |
 | `global_coherence` returned the squared singular values of the observations' coefficient matrix divided by the number of observations, and its default call raised for some inputs with one or two observations (three signals with one observation; six signals with two) | Returns each component's fraction of the total coherent power, in `[0, 1]`, for any number of observations. It is unchanged when every signal is rescaled by the same factor, but not when signals are rescaled separately (one of four channels x10 moved values by up to 0.6): put signals on a common scale first |
 | `global_coherence(max_rank=k)` returned its components weakest first when `1 < k < n_signals - 1` (the sparse solver's order) and strongest first otherwise | Always strongest first, the values and their vectors alike, so `[..., 0]` is the largest component. Code that indexed a component of such a result now reads a different one: reverse the component axis of stored 2.x results, or re-index |
 | `weighted_phase_lag_index` was about 0 for small-amplitude data, whatever the true value: at 1 kHz it began to fail at a standard deviation of 1e-6 and was about 1e-17 at every frequency by 3e-7 (MEG in tesla, for example) | Invariant to the data's amplitude. Recompute weighted phase-lag results obtained from data stored in small units |
@@ -480,11 +480,13 @@ their rows).
   pairwise spectral Granger and its subset form, the directed transfer
   function, directed coherence, (generalized) partial directed coherence, and
   the direct directed transfer function returned `[..., target, source]`.
-  `np.swapaxes(old, -1, -2)` converts stored 2.x pairwise Granger, DTF, PDC,
-  and generalized PDC arrays computed from at least as many observations as
-  signals; directed coherence and the direct DTF also changed in value, and
-  with fewer observations than signals the transfer-function measures are now
-  `NaN` (see the migration guide).
+  `np.swapaxes(old, -1, -2)` gives stored 2.x arrays the new orientation. It
+  reproduces the 3.0 values of pairwise Granger, DTF, PDC, and generalized PDC
+  only where the FFT length was odd and there were at least as many
+  observations as signals: on an even FFT length every directed value changed
+  (see Fixed), directed coherence and the direct DTF changed in value
+  regardless, and with fewer observations than signals the transfer-function
+  measures are now `NaN` (see the migration guide).
 - The array backend is selected once, in `spectral_connectivity._backend`,
   instead of in each module: an unrecognized `SPECTRAL_CONNECTIVITY_ENABLE_GPU`
   value now warns (2.x silently used the CPU), and the "Using CPU/GPU" message
@@ -733,20 +735,29 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   as did a real or integer dtype, and an integer count failed only when a
   measure first used it (`power` did not). 2.x read `dtype=None` as its
   complex128 default.
-- The Wilson factorization behind every directed measure (the spectral
-  Granger family, `directed_transfer_function`, `directed_coherence`,
+- The Wilson factorization behind every directed measure (the spectral Granger
+  family, `directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,
   `direct_directed_transfer_function`) reproduces the spectrum on an
   even-length FFT grid. There the lag `n_fft_samples / 2` is its own negative,
-  so half of it is causal, as with lag 0; the causal projection dropped it,
-  and the iteration converged to a factor `G` with `G⁻¹ S G⁻ᴴ = I + (-1)ᵏ C`
-  at bin `k` instead of `I`. In simulations from known VAR models the factor
-  missed the spectrum by a median 0.2-10% (largest for short windows, few
-  observations, and highly correlated channels) and now does so by about
-  1e-9; DTF error against the model's true values fell in 39-40 of 40
-  datasets in every setting tried, by 5-40%, and spectral Granger error in
-  most. Values change by 1e-3 to 1e-2 for long, well-resolved recordings and
-  by much more in the settings above. Odd-length grids were not affected.
+  so half of it is causal, as with lag 0; the causal projection dropped it, and
+  the iteration converged to a factor `G` with `G⁻¹ S G⁻ᴴ = I + (-1)ᵏ C` at bin
+  `k` instead of `I`. In simulations from known VAR models the factor missed
+  the spectrum by a median 0.2-10% (largest for short windows, few
+  observations, and highly correlated channels) and now does so by about 1e-9.
+  Odd-length grids were not affected, and 2.x has the same defect. Over 42
+  simulated settings of two to five signals (40 datasets each), the error of
+  spectral Granger, DTF, and PDC against a finely sampled factorization of the
+  same estimate fell in at least 33 of the 40 datasets in 37 settings, by a
+  median 40-50% (about 10% against the model's true values), and the old
+  factor's `NaN` Granger values (up to 1% of them) are gone. The other five
+  settings are 50-sample windows of a sharply resonant signal (pole radius
+  0.99), where every estimate is poor: there spectral Granger (four settings)
+  or DTF and PDC (one) came out worse by 0.01-0.14. Directed measures from a
+  window shorter than the slowest correlation in the data remain unreliable,
+  and zero-padding the FFT to at least twice the window reduces what the
+  frequency grid itself contributes; the notes of `minimum_phase_decomposition`
+  give the sizes.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
   refuse an `xarray.DataArray` whose dimension names put time, trials, or
   signals on another axis than their positional `(time, trial, signal)`. They

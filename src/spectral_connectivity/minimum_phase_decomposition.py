@@ -357,7 +357,8 @@ def minimum_phase_reconstruction_error(
     reproduces ``S`` at every bin and still differs from the factor of the
     underlying spectrum, which biases spectral Granger, DTF, and PDC. This
     function cannot detect that; use a window long enough for the slowest
-    correlation in the data.
+    correlation in the data, and zero-pad the transform (see the notes of
+    :func:`minimum_phase_decomposition`).
 
     ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
     FFT order, as required by the factorization itself. The function cannot
@@ -688,12 +689,21 @@ def minimum_phase_decomposition(
 
     A fixed point of the iteration satisfies ``G Gᴴ = S`` at every frequency
     bin (:func:`minimum_phase_reconstruction_error` measures the residual). That
-    does not make the directed measures accurate for a spectrum that is
-    under-resolved in frequency: when the autocovariance has not decayed within
-    ``n_fft_samples / 2`` lags, the factor is that of the spectrum's periodic
-    extension on the grid, not of the underlying spectrum, and nothing here
-    detects it. Use a window long enough for the slowest correlation in the
-    data.
+    does not make the directed measures accurate. Two limits remain, and
+    nothing here detects either:
+
+    - The grid. The factor is that of the spectrum's periodic extension on the
+      grid, so lags of ``S`` beyond ``n_fft_samples / 2`` wrap around. A
+      spectrum estimated from windows of ``N`` samples has lags out to
+      ``N - 1``, which wrap on a grid of ``N`` bins. Zero-padding the transform
+      (``n_fft_samples >= 2 * N``) removes most of this: in simulations the
+      error of spectral Granger prediction against a finely sampled
+      factorization of the same estimate fell from 2e-2 to 4e-4 for a
+      1000-sample recording, and from 0.3-0.6 to 0.2-0.3 for 50-sample windows
+      of a sharply resonant signal.
+    - The window. An estimate from a window shorter than the slowest
+      correlation in the data is smoothed in frequency, and padding does not
+      restore what the window lost. Use a longer window.
 
     .. versionchanged:: 3.0
        On an even-length grid the lag ``n_fft_samples / 2`` is its own

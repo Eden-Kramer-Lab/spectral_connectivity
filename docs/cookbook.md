@@ -187,6 +187,12 @@ Directed measures are opt-in by name. The result reads `source -> target`:
 
 ```
 
+Directed measures come from a factorization of the estimated spectrum. Use
+windows longer than the slowest correlation in the data, and zero-pad the FFT
+to at least twice the window (`transform_kwargs={"n_fft_samples": ...}`), which
+removes most of the frequency grid's effect on the factor; the notes of
+`minimum_phase_decomposition` give the sizes.
+
 ## Compute several measures at once
 
 Pass a list of methods to get an `xarray.Dataset` with one variable per
