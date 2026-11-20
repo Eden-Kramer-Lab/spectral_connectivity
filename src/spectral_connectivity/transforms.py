@@ -1399,7 +1399,9 @@ class Multitaper(_WindowedFourierTransform):
         - NW = 5+: Heavy smoothing, 9+ tapers, very strong variance reduction
 
         **Examples:**
-        For 1 Hz frequency resolution with 1 second windows: use NW ≤ 0.5
+        For 2 Hz frequency resolution with 1 second windows: use NW = 1, the
+        smallest allowed (one taper); 1 Hz resolution needs a window of at
+        least 2 seconds
         For 5 Hz frequency resolution with 1 second windows: use NW ≤ 2.5
         For 10 Hz frequency resolution with 1 second windows: use NW ≤ 5
 
