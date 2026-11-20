@@ -539,15 +539,19 @@ def _check_measure_settings(
     methods: Sequence[str],
     connectivity_kwargs: Mapping[str, Any] | None,
     *,
-    transform_settings_hint: str,
-    frequency_decimation: int,
-    frequency_bands: Mapping[str, tuple[float, float]] | None,
+    transform_settings_hint: str | None,
+    frequency_decimation: int = 1,
+    frequency_bands: Mapping[str, tuple[float, float]] | None = None,
 ) -> None:
-    """Reject a ``connectivity_kwargs`` key before any spectral work.
+    """Reject a measure setting before any spectral work.
 
-    Every requested measure must take every key (``group_labels`` is routed to
-    the group measures separately), and the frequency options must suit the
-    measures (see :func:`_check_frequency_operations`).
+    The one check of every wrapper's measure settings (``connectivity_kwargs``,
+    merged with ``connectivity_to_xarray``'s plain keywords): every requested
+    measure must take every key (``group_labels`` is routed to the group
+    measures separately), and the frequency options must suit the measures
+    (see :func:`_check_frequency_operations`). ``transform_settings_hint``
+    says where a transform setting goes instead (see
+    :func:`_check_method_accepts_kwargs`).
     """
     settings = _setting_mapping("connectivity_kwargs", connectivity_kwargs)
     _check_frequency_operations(
@@ -668,15 +672,7 @@ def connectivity_to_xarray(
     )
     # A misspelled or misplaced setting fails before any work, whichever route
     # it took; frequency_range is a named argument here as in every wrapper.
-    _check_frequency_operations(
-        [method], measure_settings, frequency_decimation=1, frequency_bands=None
-    )
-    _check_method_accepts_kwargs(
-        method,
-        getattr(Connectivity, method),
-        {key: value for key, value in measure_settings.items() if key != "group_labels"},
-        several_measures=False,
-    )
+    _check_measure_settings([method], measure_settings, transform_settings_hint=None)
     consumes_range = _consumes_frequency_range(method)
     if consumes_range and frequency_range is not None:
         measure_settings["frequency_range"] = frequency_range
@@ -860,7 +856,6 @@ def _format_and_reduce_measures(
     connectivity_kwargs: Mapping[str, Any],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
     group_methods: frozenset[str],
-    transform_settings_hint: str,
     frequency_range: tuple[float, float] | None,
     frequency_decimation: int,
     frequency_bands: Mapping[str, tuple[float, float]] | None,
@@ -882,9 +877,8 @@ def _format_and_reduce_measures(
     crop/decimation/band reduction. ``frequency_range`` is passed to the
     measures that consume an interval and crops each other result before they
     are merged, so every variable keeps the same bins. ``connectivity_kwargs``
-    must be label-free; ``transform_settings_hint`` tells a rejected keyword
-    argument where transform settings go for the calling wrapper. The callers
-    check the settings first (see :func:`_check_measure_settings`).
+    must be label-free, and the callers check it first (see
+    :func:`_check_measure_settings`).
     """
     frequencies = to_numpy(connectivity.frequencies)
     consuming_methods = frozenset(m for m in methods if _consumes_frequency_range(m))
@@ -929,7 +923,6 @@ def _format_and_reduce_measures(
             squeeze,
             shared_attrs,
             signal_metadata=signal_metadata,
-            transform_settings_hint=transform_settings_hint,
             frequency_selection=selection if consumes_range else None,
             result_name=output_names[method],
             **measure_kwargs(method),
@@ -1377,14 +1370,13 @@ def multitaper_connectivity(
     # remain opt-in by name.
     method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
     # Every measure setting is checked before the transform runs its FFT.
-    transform_settings_hint = (
-        "pass it to multitaper_connectivity: by name for the common settings "
-        f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
-    )
     _check_measure_settings(
         method,
         connectivity_kwargs,
-        transform_settings_hint=transform_settings_hint,
+        transform_settings_hint=(
+            "pass it to multitaper_connectivity: by name for the common settings "
+            f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
+        ),
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
     )
@@ -1430,7 +1422,6 @@ def multitaper_connectivity(
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
         group_methods=group_methods,
-        transform_settings_hint=transform_settings_hint,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1665,6 +1656,16 @@ def fourier_connectivity(
             )
         one_sided = bool(is_one_sided) if is_one_sided is not None else False
 
+    # No default measure needs a two-sided spectrum, so the defaults suit any input.
+    # The request and its settings are checked before the coefficients are copied.
+    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    _check_measure_settings(
+        methods,
+        connectivity_kwargs,
+        transform_settings_hint="set it on the transform that produced fourier_coefficients",
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
     connectivity = Connectivity(
         coefficient_data,
         expectation_type="trials_tapers",
@@ -1674,16 +1675,6 @@ def fourier_connectivity(
         minimum_phase_tolerance=minimum_phase_tolerance,
         minimum_phase_max_iterations=minimum_phase_max_iterations,
         is_one_sided=one_sided,
-    )
-    # No default measure needs a two-sided spectrum, so the defaults suit any input.
-    methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
-    transform_settings_hint = "set it on the transform that produced fourier_coefficients"
-    _check_measure_settings(
-        methods,
-        connectivity_kwargs,
-        transform_settings_hint=transform_settings_hint,
-        frequency_decimation=frequency_decimation,
-        frequency_bands=frequency_bands,
     )
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
@@ -1795,7 +1786,6 @@ def fourier_connectivity(
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
         group_methods=group_methods,
-        transform_settings_hint=transform_settings_hint,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,

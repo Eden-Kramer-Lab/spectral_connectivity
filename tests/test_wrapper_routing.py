@@ -12,7 +12,12 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity import (
+    Connectivity,
+    Multitaper,
+    fourier_connectivity,
+    multitaper_connectivity,
+)
 from spectral_connectivity.wrapper import connectivity_to_xarray
 
 _COMMON_TRANSFORM_SETTINGS = (
@@ -528,3 +533,27 @@ def test_one_measure_is_not_told_its_settings_reach_every_requested_measure(time
         with pytest.raises(TypeError, match=r"Did you mean.*'frequency_range'") as excinfo:
             call()
         assert "every requested method" not in str(excinfo.value)
+
+
+def test_a_self_key_gets_the_packages_own_message(time_series):
+    """``self`` is not a measure setting, so it is rejected like any unknown
+    key instead of reaching Python's "multiple values for argument" error."""
+    with pytest.raises(TypeError, match=r"power does not accept keyword argument\(s\) 'self'"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"self": 1},
+        )
+
+
+def test_fourier_connectivity_checks_settings_before_the_coefficients():
+    """Real-valued coefficients would be rejected when Connectivity is built;
+    the misspelled key is reported first, before they are copied."""
+    with pytest.raises(TypeError, match="does not accept keyword argument"):
+        fourier_connectivity(
+            np.ones((4, 8, 2)),
+            is_one_sided=False,
+            method="power",
+            connectivity_kwargs={"bogus": 1},
+        )

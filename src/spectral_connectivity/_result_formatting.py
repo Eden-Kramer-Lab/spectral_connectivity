@@ -39,29 +39,31 @@ def _check_method_accepts_kwargs(
     method: str,
     measure: Callable[..., Any],
     kwargs: Mapping[str, Any],
-    transform_settings_hint: str | None = None,
+    transform_settings_hint: str | None,
     *,
-    several_measures: bool = True,
+    several_measures: bool,
 ) -> None:
     """Raise an actionable error when ``kwargs`` names a parameter ``measure``
     does not accept.
 
-    The message suggests the measure's own parameters a rejected name most
-    likely misspells. When ``several_measures`` were requested it adds that
-    ``connectivity_kwargs`` is broadcast to every requested method, so a
-    keyword needed by one measure (e.g. ``pairs``) reaches the others.
-    ``transform_settings_hint`` completes the sentence "If <keyword> is a
-    transform setting, ..." for the calling wrapper; ``None``
-    (``connectivity_to_xarray``, whose transform is already built) adds no hint.
+    ``measure`` is the ``Connectivity`` method as found on the class, so its
+    ``self`` is not a setting. The message suggests the measure's own
+    parameters a rejected name most likely misspells. When
+    ``several_measures`` were requested it adds that ``connectivity_kwargs``
+    is broadcast to every requested method, so a keyword needed by one measure
+    (e.g. ``pairs``) reaches the others. ``transform_settings_hint`` completes
+    the sentence "If <keyword> is a transform setting, ..." for the calling
+    wrapper; ``None`` (``connectivity_to_xarray``, whose transform is already
+    built) adds no hint.
     """
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         return
-    rejected = sorted(set(kwargs) - set(parameters))
+    own = [name for name in parameters if name != "self"]
+    rejected = sorted(set(kwargs) - set(own))
     if rejected:
         names = ", ".join(map(repr, rejected))
         msg = f"{method} does not accept keyword argument(s) {names}."
-        own = [name for name in parameters if name != "self"]
         suggestions = [match for name in rejected for match in close_names(str(name), own)]
         if suggestions:
             msg += f" Did you mean {', '.join(map(repr, dict.fromkeys(suggestions)))}?"
@@ -138,7 +140,6 @@ def _connectivity_result_to_xarray(
     shared_attrs: Mapping[str, Any],
     *,
     signal_metadata: _SignalMetadata | None = None,
-    transform_settings_hint: str | None = None,
     frequency_selection: _FrequencySelection | None = None,
     result_name: str | None = None,
     **kwargs: Any,
@@ -151,10 +152,10 @@ def _connectivity_result_to_xarray(
     explicitly keeps its 2.x variable name.
 
     ``signal_labels`` and ``shared_attrs`` are invariant across the measures of
-    one transform, so the caller validates/builds them once and passes them in.
-    ``transform_settings_hint`` is passed to the keyword-argument check so a
-    rejected keyword gets the calling wrapper's hint. ``frequency_selection``
-    is the call's interval, resolved once by the caller from the same keyword
+    one transform, so the caller validates/builds them once and passes them in,
+    as it checks ``kwargs`` against the measure first (see
+    :func:`_check_method_accepts_kwargs`). ``frequency_selection`` is the call's
+    interval, resolved once by the caller from the same keyword
     arguments the measure receives; the measures that consume an interval need
     it for their frequency coordinate and interval attributes, which go on the
     measure's own variables rather than becoming scalar coordinates a Dataset
@@ -163,7 +164,6 @@ def _connectivity_result_to_xarray(
     name = method if result_name is None else result_name
     measure_spec = _MEASURE_SPECS.get(method)
     measure = getattr(connectivity, method)
-    _check_method_accepts_kwargs(method, measure, kwargs, transform_settings_hint)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
     token = _warn_orientation_change.set(False)
