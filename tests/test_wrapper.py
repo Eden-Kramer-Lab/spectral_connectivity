@@ -214,48 +214,36 @@ def test_connectivity_to_xarray_exposes_delay_and_frequency_reduced_results():
         transform,
         method="delay",
         signal_names=["a", "b"],
-        frequencies_of_interest=(8, 40),
+        frequency_range=(8, 40),
         n_range=1,
     )
     psi = connectivity_to_xarray(
         transform,
         method="phase_slope_index",
         signal_names=["a", "b"],
-        frequencies_of_interest=(8, 40),
+        frequency_range=(8, 40),
     )
     group_delay = connectivity_to_xarray(
         transform,
         method="group_delay",
         signal_names=["a", "b"],
-        frequencies_of_interest=(8, 40),
+        frequency_range=(8, 40),
     )
 
     assert delay.dims == ("time", "frequency", "candidate", "source", "target")
     assert delay.candidate.values.tolist() == [-1, 0, 1]
-    assert np.all((delay.frequency > 8) & (delay.frequency < 40))
+    assert delay.frequency.values[[0, -1]].tolist() == [8, 40]
     assert psi.dims == ("time", "source", "target")
-    assert psi.attrs["frequency_band_lower"] == 8
-    assert psi.attrs["frequency_band_upper"] == 40
-    assert group_delay.group_delay.attrs["frequency_band_lower"] == 8
-    assert group_delay.group_delay.attrs["frequency_band_upper"] == 40
+    assert psi.attrs["requested_frequency_lower"] == 8
+    assert psi.attrs["requested_frequency_upper"] == 40
+    assert group_delay.group_delay.attrs["requested_frequency_lower"] == 8
+    assert group_delay.group_delay.attrs["requested_frequency_upper"] == 40
     assert set(group_delay.data_vars) == {
         "group_delay",
         "group_delay_slope",
         "group_delay_r_value",
     }
     assert group_delay.group_delay.attrs["units"] == "s"
-
-
-def test_frequency_operations_reject_already_reduced_output():
-    data = np.random.default_rng(428).standard_normal((256, 4, 2))
-    with pytest.raises(ValueError, match="no frequency dimension"):
-        multitaper_connectivity(
-            data,
-            sampling_frequency=128,
-            method="phase_slope_index",
-            connectivity_kwargs={"frequencies_of_interest": (8, 40)},
-            frequency_range=(10, 30),
-        )
 
 
 def test_fourier_connectivity_exposes_global_dataset():
@@ -1705,7 +1693,7 @@ def test_batch_kwargs_not_accepted_by_a_method_raise_actionable_error():
             rng.standard_normal((256, 2, 3)),
             sampling_frequency=250,
             method=["coherence_magnitude", "phase_slope_index"],
-            connectivity_kwargs={"frequencies_of_interest": [5.0, 50.0]},
+            connectivity_kwargs={"frequency_resolution": 5.0},
         )
 
 
@@ -2674,10 +2662,9 @@ _LAGGED_BAND = (5.0, 100.0)
 _LAGGED_KWARGS = {
     "subset_pairwise_spectral_granger_prediction": {"pairs": [(0, 1)]},
     "blockwise_spectral_granger_prediction": {"group_labels": ["A", "B", "C"]},
-    "phase_slope_index": {"frequencies_of_interest": list(_LAGGED_BAND)},
-    "delay": {"frequencies_of_interest": list(_LAGGED_BAND)},
-    "group_delay": {"frequencies_of_interest": list(_LAGGED_BAND)},
 }
+# Measures that consume a frequency interval get the band as frequency_range.
+_LAGGED_INTERVAL_MEASURES = frozenset({"phase_slope_index", "delay", "group_delay"})
 
 
 def _directed_entry(values: xr.DataArray) -> float:
@@ -2719,6 +2706,7 @@ def test_remaining_directed_measures_are_oriented_source_to_target(method, lagge
         method=method,
         signal_names=["x", "y", "z"],
         connectivity_kwargs=_LAGGED_KWARGS.get(method, {}),
+        frequency_range=_LAGGED_BAND if method in _LAGGED_INTERVAL_MEASURES else None,
     )
     values = result[method] if isinstance(result, xr.Dataset) else result
     if method == "blockwise_spectral_granger_prediction":
@@ -2851,6 +2839,44 @@ def test_multitaper_frequency_crop_decimation_and_band_mean():
         xr.testing.assert_allclose(result.sel(band=name, drop=True), expected)
 
 
+def test_frequency_band_reduce_takes_the_wrappers_band_keywords():
+    """The helper spells its band options as the wrappers do, with the mapping
+    still positional, so a wrapper call and a helper call read the same and
+    give the same result."""
+    parameters = inspect.signature(frequency_band_reduce).parameters
+    assert list(parameters) == ["result", "frequency_bands", "frequency_reduction", "circular"]
+    assert parameters["frequency_bands"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in ("frequency_reduction", "circular"):
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["frequency_reduction"].default == "mean"
+    assert parameters["circular"].default is None
+    for wrapper in (multitaper_connectivity, fourier_connectivity):
+        wrapper_parameters = inspect.signature(wrapper).parameters
+        assert "frequency_bands" in wrapper_parameters
+        assert wrapper_parameters["frequency_reduction"].default == "mean"
+
+    time_series = np.random.default_rng(57).standard_normal((512, 3, 2))
+    kwargs = {"sampling_frequency": 128, "method": "power"}
+    bands = {"theta": (4.0, 8.0), "alpha": (8.0, 12.0)}
+    power = multitaper_connectivity(time_series, **kwargs)
+    for reduction in ("mean", "integral"):
+        xr.testing.assert_identical(
+            frequency_band_reduce(power, bands, frequency_reduction=reduction),
+            multitaper_connectivity(
+                time_series, frequency_bands=bands, frequency_reduction=reduction, **kwargs
+            ),
+        )
+    xr.testing.assert_identical(
+        frequency_band_reduce(power, frequency_bands=bands),
+        frequency_band_reduce(power, bands),
+    )
+    # The unreleased spellings are gone, not aliased.
+    with pytest.raises(TypeError, match="bands"):
+        frequency_band_reduce(power, bands=bands)
+    with pytest.raises(TypeError, match="reduction"):
+        frequency_band_reduce(power, bands, reduction="integral")
+
+
 def test_frequency_band_reduce_uses_circular_phase_mean():
     """Phases straddling the branch cut average near pi, not zero."""
     phase = xr.DataArray(
@@ -2910,7 +2936,7 @@ def test_frequency_band_mean_propagates_nan_and_keeps_band_validity():
     power = connectivity_to_xarray(transform, method="power")
     bands = {"low": (4, 8), "all": (4, 32)}
     mean = frequency_band_reduce(coherence, bands)
-    integral = frequency_band_reduce(power, bands, reduction="integral")
+    integral = frequency_band_reduce(power, bands, frequency_reduction="integral")
 
     validity = to_host(transform.valid_time_frequency)
     expected_valid = np.stack([validity[:, :2].all(axis=1), validity.all(axis=1)], 1)
@@ -2959,7 +2985,9 @@ def test_single_bin_band_integral_preserves_nan():
         attrs={"measure": "power"},
     )
 
-    reduced = frequency_band_reduce(power, {"invalid": (10.0, 10.0)}, reduction="integral")
+    reduced = frequency_band_reduce(
+        power, {"invalid": (10.0, 10.0)}, frequency_reduction="integral"
+    )
 
     assert np.isnan(reduced.sel(band="invalid")).all()
     assert not reduced.valid_time_band.sel(band="invalid").any()
@@ -2974,7 +3002,7 @@ def test_frequency_band_integral_is_restricted_to_spectral_densities():
         attrs={"measure": "coherence_magnitude"},
     )
     with pytest.raises(ValueError, match="defined only for power"):
-        frequency_band_reduce(score, {"low": (1, 2)}, reduction="integral")
+        frequency_band_reduce(score, {"low": (1, 2)}, frequency_reduction="integral")
 
 
 def test_multitaper_frequency_crop_and_decimation_select_correct_bins():
@@ -3005,7 +3033,9 @@ def test_frequency_band_integral_equals_analytic_area():
         name="power",
         attrs={"measure": "power"},
     )
-    reduced = frequency_band_reduce(flat_power, {"band": (1.0, 5.0)}, reduction="integral")
+    reduced = frequency_band_reduce(
+        flat_power, {"band": (1.0, 5.0)}, frequency_reduction="integral"
+    )
     # The integral of the constant 2.0 over [1, 5] Hz is 2 * (5 - 1) = 8.
     assert float(reduced.sel(band="band")) == pytest.approx(8.0)
 
@@ -3035,7 +3065,7 @@ def test_frequency_band_integral_is_exact_for_any_band_edges(flat_density_on_2hz
     one-bin band)."""
     low, high = bounds
     reduced = frequency_band_reduce(
-        flat_density_on_2hz_grid, {"band": bounds}, reduction="integral"
+        flat_density_on_2hz_grid, {"band": bounds}, frequency_reduction="integral"
     )
     assert float(reduced.sel(band="band")) == pytest.approx(2.0 * (high - low))
 
@@ -3046,7 +3076,7 @@ def test_frequency_band_integrals_of_adjacent_bands_add_up(flat_density_on_2hz_g
     reduced = frequency_band_reduce(
         density,
         {"low": (10.0, 17.3), "high": (17.3, 30.0), "both": (10.0, 30.0)},
-        reduction="integral",
+        frequency_reduction="integral",
     )
     assert float(reduced.sel(band="low") + reduced.sel(band="high")) == pytest.approx(
         float(reduced.sel(band="both"))
@@ -3059,7 +3089,9 @@ def test_frequency_band_integral_of_power_recovers_the_variance():
     power = multitaper_connectivity(
         time_series, sampling_frequency=500, method="power", time_window_duration=1.0
     ).mean("time")
-    reduced = frequency_band_reduce(power, {"all": (0.0, 250.0)}, reduction="integral")
+    reduced = frequency_band_reduce(
+        power, {"all": (0.0, 250.0)}, frequency_reduction="integral"
+    )
     assert float(reduced.sel(band="all").squeeze()) == pytest.approx(9.0, rel=0.03)
 
 
@@ -3082,7 +3114,9 @@ def test_frequency_band_integral_over_every_bin_is_parseval_exact(n_fft_samples)
     assert power.frequency.size == n_fft_samples // 2 + 1
     spacing = float(power.frequency[1] - power.frequency[0])
     integral = float(
-        frequency_band_reduce(power, {"all": (0.0, 50.0)}, reduction="integral").squeeze()
+        frequency_band_reduce(
+            power, {"all": (0.0, 50.0)}, frequency_reduction="integral"
+        ).squeeze()
     )
     assert integral == pytest.approx(
         float(power.sum("frequency").squeeze()) * spacing, rel=1e-12
@@ -3106,7 +3140,9 @@ def test_frequency_band_integral_counts_the_nyquist_bin_fully():
     assert float(power.frequency[-1]) == 50.0
     spacing = float(power.frequency[1] - power.frequency[0])
     integral = float(
-        frequency_band_reduce(power, {"all": (0.0, 50.0)}, reduction="integral").squeeze()
+        frequency_band_reduce(
+            power, {"all": (0.0, 50.0)}, frequency_reduction="integral"
+        ).squeeze()
     )
     # Most of the power sits in the Nyquist bin, so this exercises its weight.
     assert float(power.isel(frequency=-1).squeeze()) * spacing > 0.8 * integral
@@ -3155,7 +3191,7 @@ def test_frequency_band_integral_of_odd_fft_last_bin_is_not_nyquist(path):
     elif path == "frequency_band_reduce":
 
         def integrate(bands):
-            return frequency_band_reduce(power, bands, reduction="integral")
+            return frequency_band_reduce(power, bands, frequency_reduction="integral")
 
     else:
         coefficients = Multitaper(
@@ -3203,7 +3239,7 @@ def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_ran
 
 def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():
     """Folding the DC and Nyquist cells must keep adjacent bands additive and
-    must not touch ``reduction="mean"``."""
+    must not touch ``frequency_reduction="mean"``."""
     frequencies = np.arange(0.0, 51.0, 2.0)
     density = xr.DataArray(
         np.random.default_rng(48).uniform(0.5, 3.0, frequencies.size),
@@ -3215,7 +3251,7 @@ def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged()
     reduced = frequency_band_reduce(
         density,
         {"low": (0.0, 0.7), "mid": (0.7, 49.2), "high": (49.2, 50.0), "all": (0.0, 50.0)},
-        reduction="integral",
+        frequency_reduction="integral",
     )
     assert float(
         reduced.sel(band="low") + reduced.sel(band="mid") + reduced.sel(band="high")
@@ -3575,7 +3611,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         delay = connectivity_to_xarray(
             transform,
             method="delay",
-            frequencies_of_interest=band,
+            frequency_range=band,
         )
     np.testing.assert_array_equal(delay.frequency, [8.0, 12.0])
     np.testing.assert_array_equal(
@@ -3587,7 +3623,7 @@ def test_morlet_validity_aligns_with_nonstandard_xarray_shapes():
         group_delay = connectivity_to_xarray(
             transform,
             method="group_delay",
-            frequencies_of_interest=band,
+            frequency_range=band,
         )
     assert "frequency" not in group_delay.dims
     assert group_delay.valid_time.dims == ("time",)
@@ -3705,15 +3741,21 @@ def test_frequency_provenance_stays_on_the_variables_it_describes():
         frequency_decimation=2,
     )
     coherence, psi = dataset.coherence_magnitude, dataset.phase_slope_index
-    assert "frequency_band_lower" not in coherence.coords
-    assert "frequency_band_lower" not in coherence.attrs
-    # phase_slope_index used its own (default, full) band, not frequency_range.
-    assert psi.attrs["frequency_band_lower"] == 0.0
-    assert psi.attrs["frequency_band_upper"] == 250.0
-    assert json.loads(coherence.attrs["frequency_range_json"]) == [4.0, 50.0]
+    # Both variables record the interval frequency_range selected: coherence
+    # was cropped to it and phase_slope_index consumed it, uncropped and
+    # undecimated. The Dataset itself carries no frequency record.
+    for variable in (coherence, psi):
+        assert variable.attrs["selected_frequency_lower"] == 4.0
+        assert variable.attrs["selected_frequency_upper"] == 50.0
+        assert variable.attrs["frequency_interval_closed"] == "both"
+        assert "selected_frequency_lower" not in variable.coords
     assert coherence.attrs["frequency_decimation"] == 2
-    for key in ("frequency_range_json", "frequency_decimation"):
-        assert key not in psi.attrs
+    assert "frequency_decimation" not in psi.attrs
+    for key in (
+        "selected_frequency_lower",
+        "frequency_interval_closed",
+        "frequency_decimation",
+    ):
         assert key not in dataset.attrs
 
     banded = multitaper_connectivity(
@@ -3896,7 +3938,7 @@ def test_band_integral_of_a_density_drops_the_per_hz_unit(labeled_channels):
             labeled_channels, sampling_frequency=500, method="power"
         ).assign_attrs(units="uV**2 Hz**-1"),
         {"theta": (4.0, 8.0)},
-        reduction="integral",
+        frequency_reduction="integral",
     )
     assert "units" not in unlabeled_units.attrs  # an unparsed density unit is not kept
 

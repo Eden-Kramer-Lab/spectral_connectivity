@@ -11,9 +11,11 @@ import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity._frequency_bands import (
+    _check_frequency_operations,
+    _crop_frequency_range,
+    _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
-    _select_and_reduce_frequencies,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -26,6 +28,7 @@ from spectral_connectivity._input_handling import (
 )
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
+    _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
     _requested_methods,
@@ -46,7 +49,7 @@ from spectral_connectivity.connectivity import (
     _SILENCE_ORIENTATION_WARNING,
     Connectivity,
     DirectedOrientationWarning,
-    _frequencies_in_band,
+    _select_measure_frequencies,
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
@@ -210,24 +213,33 @@ def list_measures(
 
 def frequency_band_reduce(
     result: xr.DataArray | xr.Dataset,
-    bands: Mapping[str, tuple[float, float]],
+    frequency_bands: Mapping[str, tuple[float, float]],
     *,
-    reduction: Literal["mean", "integral"] = "mean",
+    frequency_reduction: Literal["mean", "integral"] = "mean",
     circular: bool | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Reduce a frequency-resolved result into labeled frequency bands.
 
-    ``reduction="mean"`` averages the already-computed connectivity score over
-    the bins in each inclusive band. Phase is treated specially: a
+    The ``frequency_bands`` and ``frequency_reduction`` arguments mean what they
+    mean in :func:`multitaper_connectivity` and :func:`fourier_connectivity`,
+    applied to an already-computed result.
+
+    ``frequency_reduction="mean"`` averages the already-computed connectivity
+    score over the bins in each band, both endpoints included, so adjacent
+    bands such as ``(4, 8)`` and ``(8, 12)`` both average a bin lying at
+    exactly 8 Hz. Phase is treated specially: a
     ``coherence_phase`` result uses a circular mean, while complex-valued
-    measures use their ordinary complex (vector) mean. ``reduction="integral"``
+    measures use their ordinary complex (vector) mean.
+    ``frequency_reduction="integral"``
     integrates a spectral density over ``[low, high]`` and is intentionally
     restricted to ``power`` and ``cross_spectral_density``, where it represents
     band power/covariance rather than a frequency-averaged score. Each bin
     stands for the frequency cell between the midpoints to its neighbours, and
     contributes its density times the part of that cell inside the band, so
     band edges need not fall on bins, a one-bin band is not zero, and adjacent
-    bands add up to their union. On a one-sided grid starting at 0 Hz the DC
+    bands add up to their union: a bin on their shared endpoint contributes
+    half its cell to each, so no power is counted twice. On a one-sided grid
+    starting at 0 Hz the DC
     bin and the Nyquist bin (present for an even FFT length) own only the
     half-cell toward their neighbour but count with a full spacing, matching
     the one-sided convention in which those two bins are not doubled;
@@ -238,9 +250,23 @@ def frequency_band_reduce(
     ----------
     result : xarray.DataArray or xarray.Dataset
         Result with a one-dimensional ``frequency`` coordinate.
-    bands : mapping of str to (float, float)
-        Inclusive lower and upper frequency bounds in the coordinate's units.
-    reduction : {"mean", "integral"}, default="mean"
+    frequency_bands : mapping of str to (float, float)
+        Band names and their ``(low, high)`` bounds in the coordinate's units,
+        both endpoints included. Bin ``f`` lies on bound ``b`` when
+        ``abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))``, where
+        ``gap(f)`` is the distance from ``f`` to its nearest neighbouring bin
+        (zero for a single bin) and ``ulp`` is the unit in the last place of
+        each value in its own stored precision (float32 for a float32
+        coordinate or bound, float64 for a Python number); a bound farther
+        from every bin is an ordinary edge between bins. A decimal bound names
+        a bin only when the bin's stored value has drifted from that decimal by
+        at most one part in a million of its spacing (plus rounding). Float32
+        coordinates, ``0.1 * k``, ``np.linspace``, ``rfftfreq``, and
+        ``np.arange(1.0, 100.0, 0.1)`` stay within that;
+        ``np.arange(1000.0, 1100.0, 0.001)``, whose bins drift by up to 2.4e-6
+        of its spacing, and float32 cumulative sums do not, so for them take
+        bounds from the coordinate itself.
+    frequency_reduction : {"mean", "integral"}, default="mean"
         Scientifically defined reduction to apply within each band.
     circular : bool, optional
         Use a circular mean (for phase angles in radians). By default it is
@@ -285,10 +311,15 @@ def frequency_band_reduce(
     return _with_frequency_grid_metadata(
         _reduce_frequency_bands(
             result,
-            bands,
-            reduction=reduction,
+            frequency_bands,
+            frequency_reduction=frequency_reduction,
             circular=circular,
-            nyquist_frequency=_nyquist_frequency(result),
+            nyquist_frequency=_nyquist_frequency(
+                result.attrs,
+                np.asarray(result.coords["frequency"].values)
+                if "frequency" in result.coords
+                else None,
+            ),
         )
     )
 
@@ -355,7 +386,9 @@ def connectivity_to_xarray(
         (first source, last target), keeping ``source`` and ``target`` as
         scalar coordinates.
     **kwargs
-        Keyword arguments for the measure (e.g. ``group_labels``).
+        Keyword arguments for the measure (e.g. ``group_labels``, or
+        ``frequency_range`` for ``delay``, ``group_delay``, and
+        ``phase_slope_index``).
 
     Returns
     -------
@@ -393,8 +426,24 @@ def connectivity_to_xarray(
             metadata["time_coordinate"] = "index"
     signal_labels = _validated_signal_labels(signal_names, connectivity.n_signals)
     shared_attrs = _shared_provenance_attrs(connectivity, metadata)
+    # The call's interval, resolved once; the result and its validity read it.
+    selection = (
+        _select_measure_frequencies(
+            to_numpy(connectivity.frequencies),
+            kwargs.get("frequency_range"),
+            kwargs.get("frequencies_of_interest"),
+        )
+        if _consumes_frequency_range(method)
+        else None
+    )
     result = _connectivity_result_to_xarray(
-        connectivity, method, signal_labels, squeeze, shared_attrs, **kwargs
+        connectivity,
+        method,
+        signal_labels,
+        squeeze,
+        shared_attrs,
+        frequency_selection=selection,
+        **kwargs,
     )
     valid_time_frequency = getattr(m, "valid_time_frequency", None)
     if valid_time_frequency is not None:
@@ -408,41 +457,21 @@ def connectivity_to_xarray(
             raise ValueError(msg)
         validity_attrs = {"long_name": "Full wavelet and smoothing support is in-record"}
         if "frequency" in result.dims:
-            full_validity = xr.DataArray(
-                validity,
-                coords={
-                    "time": np.asarray(connectivity.time),
-                    "frequency": np.asarray(connectivity.frequencies),
-                },
-                dims=("time", "frequency"),
-                attrs=validity_attrs,
-            )
-            # Delay and other nonstandard schemas may retain only a requested
-            # frequency band. Select the matching validity bins rather than
-            # attaching the transform's full frequency axis to the result.
-            result_frequencies = np.asarray(result.coords["frequency"])
-            aligned_validity = full_validity.sel(frequency=result_frequencies)
-            # Attach the values alone: a DataArray would bring its own, unlabeled
-            # time and frequency coordinates and replace the result's.
+            # delay keeps only the bins of its interval; every other
+            # frequency-resolved result keeps the full grid.
+            bins = slice(None) if selection is None else selection.mask
             result = result.assign_coords(
-                valid_time_frequency=(
-                    ("time", "frequency"),
-                    aligned_validity.values,
-                    validity_attrs,
-                )
+                valid_time_frequency=(("time", "frequency"), validity[:, bins], validity_attrs)
             )
         elif "time" in result.dims:
-            # PSI and group delay aggregate a frequency band. They have no
+            # PSI and group delay aggregate a frequency interval. They have no
             # frequency dimension on which a 2-D coordinate can live, so expose
-            # whether every frequency contributing to each time point has full
-            # wavelet/smoothing support.
-            frequencies = np.asarray(connectivity.frequencies)
-            frequency_band = kwargs.get("frequencies_of_interest")
-            if frequency_band is None:
-                frequency_index = np.ones(frequencies.shape, dtype=bool)
-            else:
-                frequency_index = _frequencies_in_band(frequencies, frequency_band)
-            valid_time = validity[:, frequency_index].all(axis=1)
+            # whether every bin of the interval has full wavelet/smoothing
+            # support at each time point. With frequency_resolution PSI sums
+            # only some of those bins, so this is conservative: it can be False
+            # where every bin PSI summed was valid, never True where one was not.
+            assert selection is not None  # PSI and group delay consume an interval
+            valid_time = validity[:, selection.mask].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
     return _with_frequency_grid_metadata(result)
@@ -561,16 +590,37 @@ def _format_and_reduce_measures(
     to ``group_methods`` only, honors ``squeeze`` only for a single-measure
     DataArray, formats each measure (skipping structurally-unsupported ones in a
     multi-measure batch), merges the survivors, and applies any frequency
-    crop/decimation/band reduction. ``connectivity_kwargs`` must be label-free;
-    ``transform_settings_hint`` tells a rejected keyword argument where transform
-    settings go for the calling wrapper.
+    crop/decimation/band reduction. ``frequency_range`` is passed to the
+    measures that consume an interval and crops each other result before they
+    are merged, so every variable keeps the same bins. ``connectivity_kwargs``
+    must be label-free; ``transform_settings_hint`` tells a rejected keyword
+    argument where transform settings go for the calling wrapper.
     """
+    _check_frequency_operations(
+        methods,
+        connectivity_kwargs,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
+    frequencies = to_numpy(connectivity.frequencies)
+    consuming_methods = frozenset(m for m in methods if _consumes_frequency_range(m))
+    # One selection per call, on the full grid: the interval measures' results
+    # and attributes and the crop of every other result read it.
+    selection = _select_measure_frequencies(
+        frequencies,
+        frequency_range,
+        connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
+    )
 
     def measure_kwargs(method: str) -> Mapping[str, Any]:
-        """Keyword arguments for one measure: ``group_labels`` reaches group measures only."""
+        """Keyword arguments for one measure: ``group_labels`` reaches group
+        measures only, and ``frequency_range`` the measures that consume it."""
+        kwargs = dict(connectivity_kwargs)
         if method in group_methods:
-            return {**connectivity_kwargs, "group_labels": group_labels}
-        return connectivity_kwargs
+            kwargs["group_labels"] = group_labels
+        if frequency_range is not None and method in consuming_methods:
+            kwargs["frequency_range"] = frequency_range
+        return kwargs
 
     if squeeze and not return_dataarray:
         # squeeze reduces a pairwise measure to a (time, frequency) array whose
@@ -585,33 +635,31 @@ def _format_and_reduce_measures(
         )
         squeeze = False
 
-    if return_dataarray:
-        result: xr.DataArray | xr.Dataset = _connectivity_result_to_xarray(
+    def formatted(method: str, squeeze: bool) -> xr.DataArray | xr.Dataset:
+        """One measure's labeled result, cut to the call's ``frequency_range``."""
+        consumes_range = method in consuming_methods
+        result = _connectivity_result_to_xarray(
             connectivity,
-            methods[0],
+            method,
             signal_labels,
             squeeze,
             shared_attrs,
             signal_metadata=signal_metadata,
             transform_settings_hint=transform_settings_hint,
-            **measure_kwargs(methods[0]),
+            frequency_selection=selection if consumes_range else None,
+            **measure_kwargs(method),
         )
+        if frequency_range is None or consumes_range:
+            return result
+        return _crop_frequency_range(result, selection)
+
+    if return_dataarray:
+        result: xr.DataArray | xr.Dataset = formatted(methods[0], squeeze)
     else:
         formatted_results: list[xr.DataArray | xr.Dataset] = []
         for this_method in methods:
             try:
-                formatted_results.append(
-                    _connectivity_result_to_xarray(
-                        connectivity,
-                        this_method,
-                        signal_labels,
-                        False,
-                        shared_attrs,
-                        signal_metadata=signal_metadata,
-                        transform_settings_hint=transform_settings_hint,
-                        **measure_kwargs(this_method),
-                    )
-                )
+                formatted_results.append(formatted(this_method, False))
             except UnsupportedMeasureError as error:  # noqa: PERF203 -- per-measure skip
                 # A measure whose result shape does not fit the xarray layout can
                 # be skipped in a batch. _connectivity_result_to_xarray raises
@@ -654,12 +702,13 @@ def _format_and_reduce_measures(
                 if name not in reserved
             }
         )
-    return _select_and_reduce_frequencies(
+    return _decimate_and_reduce_frequencies(
         result,
-        frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
         frequency_reduction=frequency_reduction,
+        # The computed grid's, before the crop can make an interior bin the last.
+        nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
     )
 
 
@@ -783,16 +832,34 @@ def multitaper_connectivity(
         requested measure takes it (labels are passed only to the measures that
         do).
     frequency_range : (float, float), optional
-        Inclusive frequency interval retained in the labeled result.
+        Frequency interval ``(low, high)``, both endpoints included; a bin lies
+        on a bound when they differ by at most one part in a million of the
+        bin's spacing, plus rounding (see :func:`frequency_band_reduce`).
+        ``delay``, ``group_delay``, and
+        ``phase_slope_index`` receive it as their own ``frequency_range`` and
+        consume only those bins; every other measure is computed from the full
+        spectrum (Wilson-factorized measures factorize all of it) and then
+        cropped to the same bins. Pass it here, not in ``connectivity_kwargs``.
     frequency_decimation : int, default=1
         Keep every Nth frequency bin after applying ``frequency_range``.
+        ``phase_slope_index`` and ``group_delay`` have no frequency axis and are
+        left as computed over ``frequency_range``; to make them combine fewer
+        bins, pass ``connectivity_kwargs={"frequency_resolution": ...}``.
     frequency_bands : mapping of str to (float, float), optional
-        Reduce the selected bins into named, inclusive bands. With
+        Reduce the selected bins into named bands, both endpoints included, so
+        adjacent bands sharing an endpoint both average a bin lying on it. With
         ``frequency_reduction="mean"``, scores are averaged, complex measures
         use a complex vector mean, and ``coherence_phase`` uses a circular mean.
+        ``delay`` is frequency-resolved and is averaged like any score;
+        ``phase_slope_index`` and ``group_delay`` are left as computed over
+        ``frequency_range`` (call once per band, with ``frequency_range``, for
+        band values). Requesting ``frequency_bands`` or ``frequency_decimation``
+        with only those two measures raises ``ValueError``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Band reduction. Integration is restricted to ``power`` and
-        ``cross_spectral_density``, where it yields band power/covariance.
+        ``cross_spectral_density``, where it yields band power/covariance;
+        adjacent band integrals add up to their union without counting a
+        shared edge bin twice (see :func:`frequency_band_reduce`).
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.
@@ -1151,13 +1218,21 @@ def fourier_connectivity(
         requested measure takes it (labels are passed only to the measures that
         do).
     frequency_range : (float, float), optional
-        Inclusive ``(low, high)`` bounds in Hz to keep before any decimation
-        or band reduction.
+        ``(low, high)`` bounds, in the units of the frequency coordinate, to
+        keep before any decimation or band reduction; both endpoints are
+        included, to within one part in a million of the bin spacing plus
+        rounding (see :func:`frequency_band_reduce`). ``delay``, ``group_delay``, and
+        ``phase_slope_index`` consume only these bins; other measures are
+        computed from every bin and cropped, as in
+        :func:`multitaper_connectivity`.
     frequency_decimation : int, default=1
-        Keep every ``frequency_decimation``-th frequency bin.
+        Keep every ``frequency_decimation``-th frequency bin of the
+        frequency-resolved measures.
     frequency_bands : mapping of str to (float, float), optional
-        Named inclusive bands to reduce the frequency axis into; see
-        :func:`frequency_band_reduce`.
+        Named bands, both endpoints included, to reduce the frequency axis of
+        the frequency-resolved measures into; see :func:`frequency_band_reduce`
+        and :func:`multitaper_connectivity` for ``phase_slope_index`` and
+        ``group_delay``.
     frequency_reduction : {"mean", "integral"}, default="mean"
         Within-band reduction used with ``frequency_bands``.
     time_dim, trial_dim, taper_dim, frequency_dim, signal_dim : hashable, optional

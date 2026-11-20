@@ -1836,7 +1836,7 @@ def test_delay_significance_rejects_non_uniform_weights(measure):
         )
     )
     with pytest.raises(ValueError, match="non-uniform observation_weights"):
-        getattr(weighted, measure)(frequencies_of_interest=(10, 40))
+        getattr(weighted, measure)(frequency_range=(10, 40))
 
 
 def test_morlet_boxcar_edge_mask_error_names_edge_mode():

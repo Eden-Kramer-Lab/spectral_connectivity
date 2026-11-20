@@ -52,6 +52,7 @@ directly with results from 2.x.
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
+| `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
 
 ### Added
 
@@ -146,9 +147,22 @@ directly with results from 2.x.
   declared with `is_one_sided=True`), while directed factorization still
   requires a full two-sided spectrum. High-level results can be cropped,
   decimated, or reduced into named frequency bands; phase uses a circular mean
-  and integration is restricted to spectral densities. The standalone
-  `frequency_band_reduce(result, bands, reduction=...)` applies the same
-  band reduction to an already-computed labeled result. Datasets holding
+  and integration is restricted to spectral densities. `frequency_range` and
+  each band of `frequency_bands` include both endpoints. Bin `f` lies on bound
+  `b` when `abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) + ulp(b))`, with `gap(f)`
+  the distance to its nearest neighbouring bin and `ulp` each value's unit in
+  the last place in its own stored precision: the allowances the uniform-grid
+  check uses; a bound farther from every bin is an ordinary edge between bins.
+  A decimal bound names a bin only when the bin's stored value has drifted
+  from that decimal by at most one part in a million of its spacing (plus
+  rounding): float32 coordinates, `0.1 * k`, `np.linspace`, `rfftfreq`, and
+  `np.arange(1.0, 100.0, 0.1)` stay within that, while
+  `np.arange(1000.0, 1100.0, 0.001)` (drift up to 2.4e-6 of its spacing) and
+  float32 cumulative sums do not; take bounds from the coordinate for those.
+  The standalone
+  `frequency_band_reduce(result, frequency_bands, frequency_reduction=...)`
+  applies the same band reduction, with the wrappers' keywords, to an
+  already-computed labeled result. Datasets holding
   spatial filters, patterns, or global-coherence vectors are rejected, since
   their sign and phase are arbitrary per frequency; reduce the score variable
   instead.
@@ -432,11 +446,34 @@ directly with results from 2.x.
   raises a clear error instead of a broadcast failure, and `MorletWavelet` no
   longer accepts `NaN`. A single-element array such as `time[0]` of a column
   time axis is accepted as one start time.
-- `frequencies_of_interest` for `phase_slope_index`, `delay`, and `group_delay`
-  is validated (two finite values, lower < upper, at least one frequency bin
-  strictly inside) and its band edges are documented as exclusive. A band with
-  no bin, such as one beyond Nyquist or between two adjacent bins, previously
-  gave all-NaN `group_delay` results and an empty `delay` frequency axis.
+- `phase_slope_index`, `delay`, and `group_delay` take
+  `frequency_range=(low, high)`, which includes both endpoints, to choose the
+  bins they consume. It is validated: two finite values, lower <= upper, and
+  at least one frequency bin selected. Their xarray results record the
+  requested bounds (`requested_frequency_lower`/`_upper`, omitted when every
+  bin is used), the lowest and highest bins in the interval
+  (`selected_frequency_lower`/`_upper`, before any `frequency_resolution`
+  subsampling, which can make `phase_slope_index` sum only some of them), and
+  `frequency_interval_closed` (`"both"`, or `"neither"` for the deprecated
+  keyword) on each of their variables. A Morlet result's `valid_time` is `True`
+  only where every bin of the interval has full support, so with
+  `frequency_resolution` it can be stricter than the bins
+  `phase_slope_index` actually sums.
+- `multitaper_connectivity` and `fourier_connectivity` pass their
+  `frequency_range` to `delay`, `group_delay`, and `phase_slope_index`, so the
+  wrapper and a direct `Connectivity` call consume the same bins. Every other
+  measure is computed from the full spectrum (the Wilson factorization sees the
+  whole two-sided spectrum) and cropped to the same bins, so a Dataset mixing
+  them shares one frequency axis. `frequency_bands`
+  and `frequency_decimation` reduce the frequency-resolved variables, `delay`
+  included, and leave `phase_slope_index` and `group_delay` as computed over
+  `frequency_range`; requesting either with only those two measures raises.
+  `frequency_range` inside `connectivity_kwargs` is rejected in favor of the
+  wrapper argument. The range is selected once per call, on the full grid, and
+  every variable it applied to, cropped or consuming, records the same
+  `requested_frequency_*`, `selected_frequency_*`, and
+  `frequency_interval_closed` attributes; decimation and band reduction keep
+  them and record themselves.
 - The `taper_weighting="adaptive"` documentation states that the Thomson
   weights are applied per signal, so coherence between signals with different
   spectra is shrunk by the cosine similarity of their weight vectors and cannot
@@ -448,6 +485,31 @@ directly with results from 2.x.
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
+
+### Deprecated
+
+Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
+where noted), warns with a `DeprecationWarning` that names its replacement, and
+is removed in 4.0.
+
+- `frequencies_of_interest` of `delay`, `group_delay`, and
+  `phase_slope_index`, by keyword or as the first positional argument: use the
+  keyword-only `frequency_range`. The deprecated form excludes bins on both
+  edges and, for every band of two values with a bin inside it, selects the
+  bins 2.x selected, including on float32 grids and for open-ended bands such
+  as `(10, np.inf)`: it evaluates 2.x's `band[0] < frequencies < band[1]` on
+  the band as given. Its results record `frequency_interval_closed="neither"`,
+  and an infinite bound records no `requested_frequency_*` for that side. Its
+  warning names the finite `frequency_range` that reproduces the same bins,
+  e.g. on a 2 Hz grid `frequencies_of_interest=(10, 50)` is
+  `frequency_range=(12.0, 48.0)`. Unlike 2.x it is validated: a band that is
+  not exactly two values (2.x silently used the first two of a longer one), a
+  NaN bound, lower >= upper, or a band with no bin strictly inside (one beyond
+  Nyquist, between two adjacent bins, or `(5, 5)`) raises `ValueError`. For a
+  band with no bin inside, 2.x returned an empty `delay` frequency axis, while
+  `phase_slope_index` failed with an unrelated `IndexError` and `group_delay`
+  with an unrelated `ValueError` (a zero-size reduction). Giving both
+  spellings raises `ValueError`.
 
 ### Fixed
 
@@ -599,7 +661,7 @@ directly with results from 2.x.
   state, and backend reporting now reflects the backend actually imported.
 - `simulate_MVAR` preserves the signal axis for single-signal, multi-trial
   simulations.
-- `frequency_band_reduce(reduction="integral")` half-counted the DC and Nyquist
+- `frequency_band_reduce(frequency_reduction="integral")` half-counted the DC and Nyquist
   bins of a one-sided spectrum; integrating `power` over every bin now equals
   `sum(power) * spacing` (Parseval), so a band that includes DC on undetrended
   data is no longer short by half the DC cell. The Nyquist bin is the bin at the

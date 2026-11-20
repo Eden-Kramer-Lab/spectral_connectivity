@@ -105,7 +105,9 @@ coherence = multitaper_connectivity(
 
 The wrapper also provides coordinate-aware frequency cropping, decimation, and
 named-band reduction through `frequency_range`, `frequency_decimation`, and
-`frequency_bands`. Phase bands use a circular mean, complex results use a
+`frequency_bands`. Ranges and bands include both endpoints, and `delay`,
+`group_delay`, and `phase_slope_index` consume only the bins of
+`frequency_range`. Phase bands use a circular mean, complex results use a
 complex-vector mean, and integration is limited to power/cross-spectral density.
 
 Use `fourier_connectivity` when coefficients were computed elsewhere. It accepts

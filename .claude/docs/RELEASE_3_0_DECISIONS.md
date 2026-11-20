@@ -1,6 +1,7 @@
 # 3.0 API and result consistency decisions
 
-**Status: step 1 merged; step 2 implemented and validated locally.**
+**Status: step 1 merged; step 2 implemented and validated locally; step 3
+(D4, D23) implemented on `refactor/frequency-selection`, see below.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -338,6 +339,114 @@ to trigger an exact zero pivot consistently across LAPACK builds.
   and tutorials covering the clarified names and STFT's renamed property.
   Run the full suite, source doctests, Ruff formatting/lint, mypy, and CI's
   minimum-dependency checks.
+
+## Step 3 implementation
+
+**Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
+`77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
+Implemented and validated locally on 2026-11-19: 2,142 tests passed with 16
+skips on the main CPU environment; all 70 source doctests, Ruff
+formatting/lint, and mypy passed.
+
+Rulings where the rules above were silent:
+
+- **Comparison rule.** One helper, `_frequency_interval_mask`, serves the
+  wrappers' crop, each named band, and the three interval measures. Under
+  `"both"` a bin `f` lies on a bound `b` when `|f - b| <= 1e-6 * gap(f) +
+  2 * (ulp(f) + ulp(b))`: `gap(f)` is the distance to its nearest neighbouring
+  bin (zero for a single bin) and each unit in the last place is in the
+  value's own stored precision. These are `_uniform_grid_spacing`'s two
+  allowances (one named `_GRID_SPACING_RTOL`, one `_last_place`), with the
+  local gap in place of the mean step so irregular grids are judged bin by
+  bin. A decimal bound names a bin when the bin has drifted from it by at
+  most one part in a million of its spacing (plus rounding): float32, `0.1 *
+  k`, `np.arange(1.0, 100.0, 0.1)` (bin 142 is `15.200000000000014`), and
+  float64 cumulative-sum grids do; `np.arange(1000.0, 1100.0, 0.001)` (drift up
+  to 2.4e-6 of its spacing) and float32 cumulative sums do not. A bound 1e-3 of
+  the spacing from a bin does not select it.
+  The deprecated keyword does not use that rule: its frozen selection,
+  `_frequencies_of_interest_mask`, has its own validation, so no change to
+  the canonical rule can alter what it accepts, and `_FrequencySelection`
+  records it in a `deprecated` field from which `frequency_interval_closed`
+  is derived. It evaluates v2.0.1's expression, `(band[0] < frequencies) &
+  (frequencies < band[1])`, on the band as the caller gave it and the grid as
+  stored, so the deprecated keyword selects the bins it selected in v2.0.1
+  (rule 5) under the same NumPy: a Python-number band meets a float32 grid in
+  float32, while an ndarray band's float64 scalar compares in float64 under
+  NumPy 2 (NEP 50) but is cast to float32 under NumPy 1.x, as in v2.0.1
+  itself (checked against the 2.0.1 wheel under both NumPy 2.5 and 1.24). On a rounded grid that can include a bin within rounding of
+  an edge, as in v2.0.1. (Development builds before this step compared in
+  float64 and gained edge bins on float32 grids.) It accepts infinite bounds
+  and selects exactly the bins v2.0.1 selects for an open-ended band; it
+  rejects a NaN bound, `low >= high`, and a band with no bin inside. A band
+  that is not exactly two values also raises, deliberately: v2.0.1 silently
+  used the first two elements of a longer band, which hides a caller's
+  mistake. An infinite bound records no `requested_frequency_*` attribute for
+  that side, so the interval attributes stay finite floats; the selected
+  bounds and `frequency_interval_closed="neither"` still describe the
+  interval, and `measure_kwargs_json` records the band as given.
+- **Positional slot.** `frequencies_of_interest` was the first positional
+  parameter in v2.0.1, so it stays there as the deprecated route (by keyword or
+  position); `frequency_range` is keyword-only. A 2.x positional band therefore
+  warns and keeps its exclusive meaning instead of silently gaining edge bins.
+- **Recorded attributes.** `requested_frequency_lower`/`_upper` (omitted when
+  every bin is used), `selected_frequency_lower`/`_upper` (lowest and highest
+  bins in the interval, before any `frequency_resolution` subsampling), and
+  `frequency_interval_closed` replace the unreleased
+  `frequency_band_lower`/`_upper` on each variable of the three measures.
+- **One interval record.** `_FrequencySelection.attrs()` is the single writer
+  of those five attributes for every variable a `frequency_range` applied to,
+  whether the wrapper cropped it or the estimator consumed the range. The
+  unreleased `frequency_range_json` is retired without an alias;
+  `measure_kwargs_json` and `arg_*` remain the generic record of a measure's
+  keyword arguments. Decimation and band reduction keep the interval record,
+  which names the interval they were drawn from, and add their own
+  (`frequency_decimation`, `frequency_bands_json`, `frequency_reduction`).
+- **Wrapper meaning.** `frequency_range` is selected once per call, on the
+  full grid, before any measure runs. It is passed to the interval measures,
+  which are not cut again, and that one selection crops every other result
+  before the merge. It is rejected inside `connectivity_kwargs`.
+  `frequency_bands` and `frequency_decimation` act on
+  frequency-resolved variables, `delay` included, and leave
+  `phase_slope_index`/`group_delay` as computed over `frequency_range`; a
+  request made only of those two raises.
+- **One selection, one record.** Each entry point
+  (`multitaper_connectivity`/`fourier_connectivity` and
+  `connectivity_to_xarray`) resolves a call's interval once, on the full grid,
+  into one `_FrequencySelection`, and passes it to the formatter, so the
+  coordinates, interval attributes, crop, and validity masks read the same
+  object. The estimators still resolve their own public keywords from the
+  caller's arguments as given (not floats re-derived from them, which would
+  lose a float32 bound's precision). Which measures consume the range is one
+  registry property, `_MeasureSpec.consumes_frequency_range`, derived from
+  `output_kind`.
+- **D23.** `frequency_band_reduce(result, frequency_bands, *,
+  frequency_reduction="mean", circular=None)` with no aliases; its error
+  messages name the canonical keywords.
+
+### Step 3 acceptance checklist
+
+- [x] Exact-edge examples: bounds on bins are included by the crop, bands, and
+  all three measures, including float32 and decimal-rounded grids
+  (`tests/test_frequency_selection.py`, cookbook "Select a frequency range",
+  and the `delay` docstring example, now 91 bins for 5-50 Hz).
+- [x] Old exclusive-edge calls warn at the caller with an exact migration
+  example and agree with the released selection: v2.0.1 itself and this
+  branch give the same `delay` bin counts for 30 tuple, list, and ndarray
+  bands on float32 and float64 grids, and 38 of 40 recorded float64 and
+  float32 outputs are bit-identical to `4266d7c`/`77e83ce`; the other two are
+  a float32 tuple band where those development builds had departed from
+  v2.0.1. Open-ended bands (`(10.1, inf)`, `(-inf, 20.3)`, `(-inf, inf)`,
+  `(0.3, inf)`) match the 2.0.1 wheel in all 48 tuple, list, ndarray,
+  keyword, and positional cases; NaN, `(inf, inf)`, one-value, and
+  three-value bands raise by design.
+- [x] New helper keywords match the wrappers and give identical results.
+- [x] Unchanged Wilson input spectra: the recorded factorization input is the
+  same with and without `frequency_range`, and the cropped result equals the
+  full result's slice.
+- [x] Additive band-power integrals for adjacent inclusive bands; their means
+  share the endpoint bin.
+- [ ] Issue #101 entry for the `frequencies_of_interest` alias (orchestrator).
 
 ## Verification performed for this sheet
 

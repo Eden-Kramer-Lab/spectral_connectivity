@@ -142,6 +142,11 @@ Prefer the wrapper's labeled results so you never index these by hand.
 - **Band summaries.** Use `frequency_bands={"theta": (4, 8)}` rather than
   averaging frequency bins by hand: phase measures get a circular mean and
   complex measures a complex mean.
+- **Frequency ranges include both endpoints.** `frequency_range=(8, 12)` keeps
+  the bins at 8 and 12 Hz. Pass it to the wrapper itself, also for
+  `phase_slope_index`, `group_delay`, and `delay`, which then consume only
+  those bins. Their old `frequencies_of_interest` excluded the edges and is
+  deprecated; do not write new code with it.
 - **GPU.** Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` *before* importing the
   package; setting it later has no effect.
 

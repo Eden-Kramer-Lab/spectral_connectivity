@@ -53,6 +53,15 @@ class _MeasureSpec:
         """Dimensions of the main variable before band reduction or squeezing."""
         return _CATEGORY_DIMS[self.output_kind]
 
+    @property
+    def consumes_frequency_range(self) -> bool:
+        """Whether the estimator selects the bins it uses with ``frequency_range``.
+
+        The wrappers pass their ``frequency_range`` to such a measure instead of
+        cropping its result.
+        """
+        return self.output_kind in _FREQUENCY_RANGE_KINDS
+
     def units_for(self, signal_units: str | None) -> str:
         """UDUNITS string of the values for input in ``signal_units``.
 
@@ -385,7 +394,8 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Group delay",
         units="s",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Delay in seconds from the slope of phase against frequency over the band; "
+        interpretation="Delay in seconds from the slope of phase against frequency over "
+        "frequency_range (every bin by default); "
         f"check group_delay_r_value for the quality of the fit. {_LEADS}",
         is_directed=True,
     ),
@@ -394,13 +404,22 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Phase slope index",
         units="1",
         value_range=(-_INFINITY, _INFINITY),
-        interpretation="Coherence-weighted slope of phase against frequency over the band. "
+        interpretation="Coherence-weighted slope of phase against frequency over "
+        "frequency_range (every bin by default). "
         "Unnormalized, so judge it "
         f"against a null distribution rather than a fixed threshold. {_LEADS}",
         is_directed=True,
     ),
 }
 
+
+# Output kinds whose estimator consumes a frequency interval.
+_FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})
+
+#: Measures that consume ``frequency_range``, in registry order.
+_FREQUENCY_RANGE_MEASURES: tuple[str, ...] = tuple(
+    name for name, spec in _MEASURE_SPECS.items() if spec.consumes_frequency_range
+)
 
 # Dimensions of each category's main variable before any band reduction or
 # squeezing.
@@ -431,6 +450,26 @@ def _is_group_measure(method: str) -> bool:
     """
     measure = getattr(Connectivity, method, None)
     return callable(measure) and "group_labels" in inspect.signature(measure).parameters
+
+
+def _consumes_frequency_range(method: str) -> bool:
+    """Whether a registered measure consumes ``frequency_range`` (see
+    :attr:`_MeasureSpec.consumes_frequency_range`)."""
+    spec = _MEASURE_SPECS.get(method)
+    return spec is not None and spec.consumes_frequency_range
+
+
+def _listed(names: Sequence[str]) -> str:
+    """``names`` as English prose: ``"a"``, ``"a and b"``, ``"a, b, and c"``."""
+    if len(names) < 3:
+        return " and ".join(names)
+    return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def _reduces_frequency(method: str) -> bool:
+    """Whether a registered measure's result has no frequency axis."""
+    spec = _MEASURE_SPECS.get(method)
+    return spec is not None and "frequency" not in spec.dims
 
 
 def _requested_methods(

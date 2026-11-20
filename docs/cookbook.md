@@ -177,6 +177,104 @@ bands. The `frequency` axis is replaced by a labeled `band` axis.
 
 ```
 
+## Select a frequency range
+
+`frequency_range=(low, high)` includes both endpoints. With 0.5-second windows
+at 500 Hz the bins are 2 Hz apart, so `(10, 50)` keeps the 10 and 50 Hz bins:
+
+```python
+>>> settings = {"sampling_frequency": 500, "time_window_duration": 0.5}
+>>> cropped = multitaper_connectivity(
+...     time_series, method="coherence_magnitude", frequency_range=(10, 50), **settings
+... )
+>>> cropped.frequency.values[[0, -1]].tolist()
+[10.0, 50.0]
+
+```
+
+Bin `f` lies on bound `b` when `abs(f - b) <= 1e-6 * gap(f) + 2 * (ulp(f) +
+ulp(b))`: within one part in a million of the distance to its nearest
+neighbouring bin, plus two units in the last place of each stored value; a
+bound farther from every bin is an ordinary edge between bins. A decimal bound
+names a bin only when the bin's stored value has drifted from that decimal by
+at most one part in a million of its spacing (plus rounding): float32
+coordinates, `0.1 * k`, `np.linspace`, `rfftfreq`, and
+`np.arange(1.0, 100.0, 0.1)` stay within that, while
+`np.arange(1000.0, 1100.0, 0.001)` (drift up to 2.4e-6 of its spacing) and
+float32 cumulative sums do not; take bounds from the coordinate for those.
+Below, bin 142 of `np.arange(1.0, 100.0, 0.1)` is stored as
+`15.200000000000014` and is still the 15.2 bin.
+
+```python
+>>> import xarray as xr
+>>> frequencies = np.arange(1.0, 100.0, 0.1)
+>>> coefficients = xr.DataArray(
+...     rng.standard_normal((8, frequencies.size, 2))
+...     + 1j * rng.standard_normal((8, frequencies.size, 2)),
+...     dims=("trial", "frequency", "signal"),
+...     coords={"frequency": frequencies},
+... )
+>>> edge = fourier_connectivity(
+...     coefficients, method="coherence_magnitude", frequency_range=(10, 15.2)
+... )
+>>> round(float(edge.frequency[-1]), 9), edge.sizes["frequency"]
+(15.2, 53)
+
+```
+
+`delay`, `group_delay`, and `phase_slope_index` receive the wrapper's
+`frequency_range` and consume only those bins; every other measure is computed
+from the full spectrum (the directed measures factorize all of it) and then
+cropped. Every variable the range applied to records the interval:
+
+```python
+>>> psi = multitaper_connectivity(
+...     time_series, method="phase_slope_index", frequency_range=(10, 50), **settings
+... )
+>>> psi.attrs["selected_frequency_lower"], psi.attrs["selected_frequency_upper"]
+(10.0, 50.0)
+>>> psi.attrs["frequency_interval_closed"]
+'both'
+
+```
+
+`requested_frequency_lower`/`_upper` hold the bounds as given and
+`selected_frequency_lower`/`_upper` the lowest and highest bins in the
+interval, before any `frequency_resolution` subsampling (with it,
+`phase_slope_index` sums only every independent step of those bins, so its last
+summed bin can lie below `selected_frequency_upper`). A Morlet result's
+`valid_time` is likewise `True` only where every bin of the interval has full
+support, which can be stricter than the bins `phase_slope_index` sums. Phase
+slope and group delay have no frequency axis, so `frequency_bands` and
+`frequency_decimation` leave them as computed over `frequency_range`; call once
+per band for band values. `delay` keeps its frequency axis and is cropped,
+decimated, and band-averaged like any other measure.
+
+Adjacent bands such as `(10, 20)` and `(20, 30)` both average a bin lying at
+exactly 20 Hz. Band integrals give each bin the part of its frequency cell
+inside the band, so they stay additive and count no power twice:
+
+```python
+>>> from spectral_connectivity import frequency_band_reduce
+>>> power = multitaper_connectivity(time_series, method="power", **settings)
+>>> band_power = frequency_band_reduce(
+...     power,
+...     {"low": (10, 20), "high": (20, 30), "both": (10, 30)},
+...     frequency_reduction="integral",
+... )
+>>> adjacent = band_power.sel(band="low") + band_power.sel(band="high")
+>>> bool(np.allclose(adjacent, band_power.sel(band="both")))
+True
+
+```
+
+Before 3.0 these three measures took `frequencies_of_interest=(low, high)`,
+which excludes a bin lying on either edge. It still works through 3.x, with
+results recording `frequency_interval_closed="neither"` and a
+`DeprecationWarning` naming the `frequency_range` that keeps the same bins:
+on this grid `phase_slope_index(frequencies_of_interest=(10, 50))` becomes
+`phase_slope_index(frequency_range=(12.0, 48.0))`. It is removed in 4.0.
+
 ## Bring your own Fourier coefficients
 
 If you already have Fourier coefficients (e.g. from a wavelet transform), skip
@@ -260,6 +358,10 @@ facts needed to interpret it. Settings use one JSON record:
 | `nyquist_frequency` | Nyquist frequency of the computed grid when known: in Hz when the sampling rate is known, 0.5 cycles/sample for normalized external grids. Used to integrate the Nyquist bin after cropping. |
 | `frequency_units` | `Hz` or `cycles/sample`, recorded for external Fourier inputs and for a transform of your own that leaves `frequencies` as `None`. |
 | `frequency_coordinate`, `time_coordinate` | External Fourier inputs: whether each coordinate was `provided` or filled in (`normalized` frequencies, window `index` time). A transform of your own that leaves `frequencies` or `time` as `None` records the filled-in value. |
+| `requested_frequency_lower`, `requested_frequency_upper` | The bounds given as `frequency_range` (or the deprecated `frequencies_of_interest`), in the frequency coordinate's units; an infinite bound of the deprecated keyword records nothing for that side. The interval record below is on every variable a `frequency_range` applied to: each frequency-resolved variable the wrappers cropped, and every variable of `delay`, `group_delay`, and `phase_slope_index`, which consume the interval and carry the record even without one (then every bin, with no requested bounds). Not on the Dataset itself. |
+| `selected_frequency_lower`, `selected_frequency_upper` | The lowest and highest bins in that interval, before any `frequency_resolution` subsampling or `frequency_decimation`. |
+| `frequency_interval_closed` | `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
+| `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. Decimation and band reduction keep the interval record, which still names the interval they were drawn from; the `frequency` (or `band`) coordinate shows what was returned. |
 
 ```python
 >>> schema_result = multitaper_connectivity(

@@ -748,7 +748,7 @@ class TestGroupDelay:
         # Standard (not relaxed) significance threshold: real coherence must be
         # detected for this to return anything.
         delay, slope, r_value = conn.group_delay(
-            frequencies_of_interest=[20, 80],
+            frequency_range=(20, 80),
             frequency_resolution=2.0,
             significance_threshold=0.05,
         )
@@ -769,7 +769,7 @@ class TestGroupDelay:
         assert np.abs(r_value[0, 0, 1]) > 0.9
 
     def test_group_delay_without_frequency_band(self):
-        """With no frequencies_of_interest, the whole band recovers signed lags.
+        """With no frequency_range, the whole band recovers signed lags.
 
         ``delay[..., i, j]`` is positive when signal ``i`` leads signal ``j``,
         i.e. ``(lags[j] - lags[i]) / sampling_frequency``.
@@ -822,10 +822,10 @@ class TestGroupDelay:
         conn = Connectivity.from_multitaper(m)
 
         delay1, _slope1, _r_value1 = conn.group_delay(
-            frequencies_of_interest=[10, 90], frequency_resolution=5.0
+            frequency_range=(10, 90), frequency_resolution=5.0
         )
         delay2, _slope2, _r_value2 = conn.group_delay(
-            frequencies_of_interest=[10, 90], frequency_resolution=10.0
+            frequency_range=(10, 90), frequency_resolution=10.0
         )
 
         n_signals = lags.size
@@ -863,12 +863,12 @@ class TestGroupDelay:
         conn = Connectivity.from_multitaper(m)
 
         delay_strict, _, _ = conn.group_delay(
-            frequencies_of_interest=[10, 90],
+            frequency_range=(10, 90),
             frequency_resolution=5.0,
             significance_threshold=1e-6,
         )
         delay_loose, _, _ = conn.group_delay(
-            frequencies_of_interest=[10, 90],
+            frequency_range=(10, 90),
             frequency_resolution=5.0,
             significance_threshold=0.05,
         )
@@ -900,7 +900,7 @@ class TestGroupDelay:
         conn = Connectivity.from_multitaper(m)
 
         delay, slope, r_value = conn.group_delay(
-            frequencies_of_interest=[10, 90], frequency_resolution=5.0
+            frequency_range=(10, 90), frequency_resolution=5.0
         )
 
         n_signals = lags.size
@@ -1022,13 +1022,12 @@ class TestGroupDelay:
         # Recompute a reference with the previous per-slice approach.
         frequencies = conn.frequencies
         from spectral_connectivity.connectivity import (
-            _bandpass,
             _find_significant_frequencies,
             _get_independent_frequency_step,
         )
 
         step = _get_independent_frequency_step(frequencies[1] - frequencies[0], None)
-        bandpassed, band_frequencies = _bandpass(conn.coherency(), frequencies, None)
+        bandpassed, band_frequencies = conn.coherency(), frequencies
         pairs = np.asarray(list(combinations(range(n_signals), 2)))
         bandpassed = bandpassed[..., pairs[:, 0], pairs[:, 1]]
         significant = _find_significant_frequencies(
@@ -1068,7 +1067,7 @@ class TestGroupDelay:
         conn = Connectivity.from_multitaper(m)
 
         delay, _slope, _r_value = conn.group_delay(
-            frequencies_of_interest=[10, 90], frequency_resolution=5.0
+            frequency_range=(10, 90), frequency_resolution=5.0
         )
 
         off_diagonal = ~np.eye(lags.size, dtype=bool)
@@ -1084,7 +1083,7 @@ class TestGroupDelay:
         conn = Connectivity.from_multitaper(
             Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
         )
-        _delay, slope, r_value = conn.group_delay(frequencies_of_interest=[10, 90])
+        _delay, slope, r_value = conn.group_delay(frequency_range=(10, 90))
 
         off_diagonal = ~np.eye(3, dtype=bool)
         assert (np.abs(r_value[..., off_diagonal]) > 0.9).all()  # premise: linear phase
@@ -1114,7 +1113,7 @@ class TestGroupDelay:
         assert abs(delay[0, 0, 1] - 1 / sampling_frequency) < 1e-4
 
         with pytest.warns(UserWarning, match="zero power"):
-            possible_delays = conn.delay(frequencies_of_interest=[20, 200], n_range=1)
+            possible_delays = conn.delay(frequency_range=(20, 200), n_range=1)
         zero_wrap = possible_delays[0, :, 1, 0, 1]
         assert np.isfinite(zero_wrap).mean() > 0.9
         assert abs(np.nanmedian(zero_wrap) - 1 / sampling_frequency) < 1e-4
@@ -1190,7 +1189,7 @@ class TestAdvancedConnectivityIntegration:
 
         # Group delay recovers the signed lags: [i, j] = (lags[j] - lags[i]) / fs.
         delay, slope, r_value = conn.group_delay(
-            frequencies_of_interest=[10, 100],
+            frequency_range=(10, 100),
             frequency_resolution=5.0,
             significance_threshold=0.05,
         )
@@ -1247,12 +1246,12 @@ class TestDelay:
             Multitaper(time_series, sampling_frequency=500, time_halfbandwidth_product=3)
         )
         n_range = 2
-        delays = conn.delay(frequencies_of_interest=[20, 100], n_range=n_range)
+        delays = conn.delay(frequency_range=(20, 100), n_range=n_range)
         forward, reverse = delays[..., 0, 1], delays[..., 1, 0]
         assert np.isfinite(forward).any()
         np.testing.assert_array_equal(reverse, -forward[..., ::-1])
         # Spelled out for k = +1: the reverse pair's candidate adds one cycle.
-        frequencies = conn.frequencies[(conn.frequencies > 20) & (conn.frequencies < 100)]
+        frequencies = conn.frequencies[(conn.frequencies >= 20) & (conn.frequencies <= 100)]
         reverse_phase = -forward[0, :, n_range] * 2 * np.pi * frequencies
         np.testing.assert_allclose(
             reverse[0, :, n_range + 1],
@@ -1289,7 +1288,7 @@ class TestDelay:
         conn = Connectivity.from_multitaper(m)
         n_range = 3
         possible_delays = conn.delay(
-            frequencies_of_interest=[20, 80],
+            frequency_range=(20, 80),
             frequency_resolution=2.0,
             significance_threshold=0.05,
             n_range=n_range,
