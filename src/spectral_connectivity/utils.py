@@ -143,6 +143,21 @@ def stacklevel_outside_package() -> int:
     return level
 
 
+def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
+    """Warn that ``old`` is deprecated, at the first caller outside the package.
+
+    The one template of the package's 2.x deprecations: ``"<old> is deprecated
+    and will be removed in 4.0; use <new>, which <outcome>."``. ``old`` and
+    ``new`` are written as the caller would write them (``"method='x'"``,
+    ``"Connectivity.from_transform()"``).
+    """
+    warnings.warn(
+        f"{old} is deprecated and will be removed in 4.0; use {new}, which {outcome}.",
+        DeprecationWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+
+
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:
     """Try to mark ``array`` read-only in place and return it.
 

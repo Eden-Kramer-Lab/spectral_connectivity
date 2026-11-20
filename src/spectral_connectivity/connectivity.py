@@ -57,6 +57,7 @@ from spectral_connectivity.utils import (
     mark_readonly_if_supported,
     stacklevel_outside_package,
     to_numpy,
+    warn_deprecated,
 )
 
 if TYPE_CHECKING:
@@ -87,12 +88,7 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     canonical = _DEPRECATED_MEASURE_NAMES.get(method)
     if canonical is None:
         return method
-    warnings.warn(
-        f"{spelling.format(method)} is deprecated and will be removed in 4.0; use "
-        f"{spelling.format(canonical)}, which gives the same values.",
-        DeprecationWarning,
-        stacklevel=stacklevel_outside_package(),
-    )
+    warn_deprecated(spelling.format(method), spelling.format(canonical))
     return canonical
 
 
