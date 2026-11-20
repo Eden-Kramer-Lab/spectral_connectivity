@@ -69,6 +69,12 @@ def _band_integration_weights(
     return weights
 
 
+def _recorded_nyquist_frequency(attrs: Mapping[Any, Any]) -> float | None:
+    """The Nyquist frequency recorded in a result's or variable's attributes."""
+    nyquist_frequency = attrs.get("nyquist_frequency", attrs.get("mt_nyquist_frequency"))
+    return None if nyquist_frequency is None else float(nyquist_frequency)
+
+
 def _nyquist_frequency(
     attrs: Mapping[Any, Any], frequencies: NDArray[np.floating] | None
 ) -> float | None:
@@ -83,9 +89,9 @@ def _nyquist_frequency(
     decimating it makes an interior bin the last one, so pass the grid before
     either.
     """
-    nyquist_frequency = attrs.get("nyquist_frequency", attrs.get("mt_nyquist_frequency"))
+    nyquist_frequency = _recorded_nyquist_frequency(attrs)
     if nyquist_frequency is not None:
-        return float(nyquist_frequency)
+        return nyquist_frequency
     if frequencies is None:
         return None
     if frequencies.ndim != 1 or frequencies.size < 2 or frequencies[0] != 0.0:
@@ -125,7 +131,9 @@ def _reduce_frequency_bands(
     """:func:`frequency_band_reduce` with the grid's Nyquist bin given.
 
     ``nyquist_frequency`` is the frequency of the one-sided spectrum's Nyquist
-    bin, or ``None`` if the grid does not reach it or is not one-sided.
+    bin, or ``None`` if the grid does not reach it or is not one-sided. A
+    variable that records its own (a Dataset assembled from result variables
+    has no attributes of its own) is integrated with that one.
     """
     if "frequency" not in result.dims:
         msg = "result must have a 'frequency' dimension."
@@ -208,11 +216,13 @@ def _reduce_frequency_bands(
         else:
             reduction = "complex_mean" if np.iscomplexobj(data) else "mean"
 
+        recorded_nyquist = _recorded_nyquist_frequency(data.attrs)
+        variable_nyquist = nyquist_frequency if recorded_nyquist is None else recorded_nyquist
         reduced_bands: list[xr.DataArray] = []
         band_validity: list[xr.DataArray] = []
         for mask, (low, high) in band_masks_and_bounds:
             if frequency_reduction == "integral":
-                weights = _band_integration_weights(frequencies, low, high, nyquist_frequency)
+                weights = _band_integration_weights(frequencies, low, high, variable_nyquist)
                 # Bins inside the band count for validity even with zero weight
                 # (a zero-width band), so an invalid bin is never read as zero.
                 used = np.flatnonzero((weights > 0) | mask)

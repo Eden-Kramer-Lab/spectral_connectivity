@@ -353,14 +353,14 @@ def frequency_band_reduce(
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
 
-    The Nyquist frequency is ``result``'s ``nyquist_frequency`` provenance attr
-    (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
-    wherever that is known), or the released ``mt_nyquist_frequency``
-    compatibility attr. If neither is recorded, the last bin of a grid
-    starting at 0 Hz is taken to be the Nyquist bin, so reduce such a result
-    before cropping it. Existing ``band``, ``band_lower``, ``band_upper``, or
-    ``valid_time_band`` coordinates are discarded, with a warning: band
-    reduction defines its own.
+    The Nyquist frequency is each variable's ``nyquist_frequency`` provenance
+    attr (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
+    wherever that is known) or the released ``mt_nyquist_frequency``
+    compatibility attr, and otherwise ``result``'s own. If none is recorded,
+    the last bin of a grid starting at 0 Hz is taken to be the Nyquist bin, so
+    reduce such a result before cropping it. Existing ``band``,
+    ``band_lower``, ``band_upper``, or ``valid_time_band`` coordinates are
+    discarded, with a warning: band reduction defines its own.
     """
     return _with_frequency_grid_metadata(
         _reduce_frequency_bands(

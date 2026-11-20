@@ -864,7 +864,10 @@ is removed in 4.0.
   `fourier_connectivity` reads the rate of a two-sided grid from its Nyquist bin
   (the bin farthest from 0 Hz) instead of multiplying the first bin's rounding
   by the FFT length, so float32 and rounded FFT-order grids record the right
-  `sampling_frequency` and keep theirs too. An integrated band is labeled `"Band power"`
+  `sampling_frequency` and keep theirs too. A Dataset assembled from result
+  variables, which has no attributes of its own, is integrated with each
+  variable's recorded Nyquist frequency instead of taking a cropped grid's
+  last bin for the Nyquist bin. An integrated band is labeled `"Band power"`
   or `"Band cross-power"` in `(units)^2` rather than keeping the density's
   `"Power spectral density"` label and `(units)^2/Hz`.
 - A window step given in seconds is rounded to the nearest sample instead of

@@ -534,6 +534,20 @@ def test_nyquist_follows_from_the_sampling_rate_when_the_transform_omits_it(data
     )
 
 
+def test_dataset_built_from_result_variables_uses_their_nyquist_frequency(data):
+    """A Dataset assembled from result variables has no attributes of its own;
+    each variable's record still says a cropped grid's last bin is interior."""
+    full = multitaper_connectivity(data, sampling_frequency=64, method="power")
+    band = {"upper": (4, 8)}
+    assembled = xr.Dataset({"power": full.sel(frequency=slice(0, 8))})
+    assert "nyquist_frequency" not in assembled.attrs
+    xr.testing.assert_allclose(
+        frequency_band_reduce(assembled, band, frequency_reduction="integral")["power"],
+        frequency_band_reduce(full, band, frequency_reduction="integral"),
+        rtol=1e-12,
+    )
+
+
 def test_group_membership_carries_only_shared_provenance():
     """The membership table is shared by every group measure of a result."""
     signals = np.random.default_rng(911).standard_normal((128, 6, 4))
