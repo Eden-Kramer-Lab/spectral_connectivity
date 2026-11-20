@@ -44,7 +44,7 @@ their rows).
 | `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1). `np.swapaxes(old, -1, -2)` converts stored 2.x DTF, PDC, gPDC, and spectral Granger arrays (to about 1e-5 relative) when they were computed from at least as many observations (trials x tapers) as signals; directed coherence and dDTF values also changed (see their rows). With fewer observations than signals (a single observation, for pairwise and subset Granger) 2.x returned finite values from a Wilson factorization that had not converged, where 3.0 returns `NaN` with a warning: discard those stored arrays |
 | `global_coherence` returned the squared singular values of the observations' coefficient matrix divided by the number of observations, and its default call raised for some inputs with one or two observations (three signals with one observation; six signals with two) | Returns each component's fraction of the total coherent power, in `[0, 1]`, for any number of observations. It is unchanged when every signal is rescaled by the same factor, but not when signals are rescaled separately (one of four channels x10 moved values by up to 0.6): put signals on a common scale first |
 | `global_coherence(max_rank=k)` returned its components weakest first when `1 < k < n_signals - 1` (the sparse solver's order) and strongest first otherwise | Always strongest first, the values and their vectors alike, so `[..., 0]` is the largest component. Code that indexed a component of such a result now reads a different one: reverse the component axis of stored 2.x results, or re-index |
-| `weighted_phase_lag_index` was about 0 for small-amplitude data, whatever the true value: at 1 kHz it was right for a standard deviation of 1e-6 and about 1e-17 at 1e-7 (MEG in tesla, for example) | Invariant to the data's amplitude. Recompute weighted phase-lag results obtained from data stored in small units |
+| `weighted_phase_lag_index` was about 0 for small-amplitude data, whatever the true value: at 1 kHz it began to fail at a standard deviation of 1e-6 and was about 1e-17 at every frequency by 3e-7 (MEG in tesla, for example) | Invariant to the data's amplitude. Recompute weighted phase-lag results obtained from data stored in small units |
 | The spectral Granger and transfer-function measures (DTF, PDC, directed coherence) depended on the data's units, through an absolute convergence threshold: values changed by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored in volts), and by more below that | Invariant to the data's scale. Recompute directed results obtained from small-amplitude data |
 | A zero-lag pair (a channel and a scaled copy of it) gave a `phase_lag_index` up to +-1, a `debiased_squared_phase_lag_index` up to 1, and a `debiased_squared_weighted_phase_lag_index` anywhere in [-1, 1], read from the sign of rounding noise (largest with few observations) | 0 for all three, and 0.5 for `directed_phase_lag_index`: "no phase lag" is judged relative to the pair's power |
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
@@ -912,8 +912,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   step. A `NaN` duration or a fractional sample count still fails there with
   NumPy's own message.
 - The wrapper accepts documented 2-D `(time, channels)` input and produces
-  NetCDF-serializable metadata. Unsupported batch measures are skipped without
-  swallowing genuine computation errors.
+  NetCDF-serializable metadata. A multi-measure request no longer drops a
+  measure that raises `NotImplementedError`: 2.x returned the other measures
+  without it.
 - The documentation build installs the current checkout on Read the Docs,
   confines generated sources to ignored directories, and the introductory
   tutorial no longer uses the removed `blocks` argument.
@@ -1000,20 +1001,19 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   seconds silently won for both (`time_window_step=0.2` with
   `n_time_samples_per_step=7` at 100 Hz stepped 20 samples).
 - `weighted_phase_lag_index` collapsed to about 0 for small-amplitude inputs
-  because of an absolute epsilon guard: at 1 kHz it was right for data with
-  standard deviation 1e-6 and about 1e-17, whatever the true value, at 1e-7
-  (MEG in tesla, for example). `debiased_squared_phase_lag_index` returned
-  `-1/(n-1)` on the diagonal and at the purely real DC and Nyquist bins, and
-  up to 1 for a zero-lag pair, instead of 0. The phase-lag family is now
-  invariant to the signal's amplitude scale
-  (`debiased_squared_weighted_phase_lag_index` still returns `NaN` when its
-  squared moment under- or overflows, at data scales of about 1e-100 or
-  1e100). "No phase lag" is judged relative to the pair's power, so a channel
-  paired with a scaled copy of itself (zero-lag coupling, whose imaginary
-  cross-spectrum is rounding noise rather than exactly 0) gives 0 for both,
-  and 0 for `phase_lag_index` (2.x: up to +-1 with a few observations, 0.3
-  with 100) and 0.5 for `directed_phase_lag_index` rather than a direction
-  read from the sign of that noise.
+  because of an absolute epsilon guard: at 1 kHz it began to fail for data with
+  a standard deviation of 1e-6 and was about 1e-17, whatever the true value, by
+  3e-7 (MEG in tesla, for example). `debiased_squared_phase_lag_index` returned
+  `-1/(n-1)` on the diagonal and at the purely real DC and Nyquist bins, and up
+  to 1 for a zero-lag pair, instead of 0. The phase-lag family is now invariant
+  to the signal's amplitude scale (`debiased_squared_weighted_phase_lag_index`
+  still returns `NaN` when its squared moment under- or overflows, at data
+  scales beyond about 1e-80 or 1e80). "No phase lag" is judged relative to the
+  pair's power, so a channel paired with a scaled copy of itself (zero-lag
+  coupling, whose imaginary cross-spectrum is rounding noise rather than
+  exactly 0) gives 0 for both, and 0 for `phase_lag_index` (2.x: up to +-1 with
+  a few observations, 0.3 with 100) and 0.5 for `directed_phase_lag_index`
+  rather than a direction read from the sign of that noise.
   `debiased_squared_weighted_phase_lag_index` is 0 there too, instead of a
   ratio of rounding errors (anywhere in [-1, 1] with a few observations, about
   0.2 with 100) or NaN (0 / 0 on the diagonal and at the purely real DC and
