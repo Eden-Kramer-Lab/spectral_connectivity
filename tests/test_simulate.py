@@ -95,14 +95,29 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
 
 
 @pytest.mark.parametrize(
-    "lags",
+    "lags_samples",
     [(-3, 0), (0, 1.5), (0, 3.0), [[0, 3]], 3],
     ids=["negative", "fractional", "whole_float", "2d", "scalar"],
 )
-def test_lagged_broadband_rejects_negative_or_fractional_lags(lags):
+def test_lagged_broadband_rejects_negative_or_fractional_lags(lags_samples):
     """Lags must be non-negative integers; a lead is a smaller lag, not a negative one."""
-    with pytest.raises(ValueError, match="non-negative integers"):
-        simulate_lagged_broadband(lags, noise_levels=0.1, n_time_samples=50, random_state=0)
+    with pytest.raises(ValueError, match="lags_samples must be non-negative integers"):
+        simulate_lagged_broadband(
+            lags_samples, noise_levels=0.1, n_time_samples=50, random_state=0
+        )
+
+
+def test_lagged_broadband_names_its_delays_in_samples():
+    """The delays are ``lags_samples``; the unreleased ``lags`` has no alias."""
+    by_keyword = simulate_lagged_broadband(
+        lags_samples=(0, 3), noise_levels=0.1, n_time_samples=50, random_state=0
+    )
+    by_position = simulate_lagged_broadband((0, 3), 0.1, 50, random_state=0)
+    np.testing.assert_array_equal(by_keyword, by_position)
+    with pytest.raises(TypeError, match="lags"):
+        simulate_lagged_broadband(
+            lags=(0, 3), noise_levels=0.1, n_time_samples=50, random_state=0
+        )
 
 
 @pytest.mark.parametrize(
@@ -120,7 +135,7 @@ def test_lagged_broadband_shape(n_trials, expected_shape):
 
 
 def test_lagged_broadband_cross_correlation_peaks_at_lag():
-    """Signal 1 repeats signal 0 ``lags[1] - lags[0]`` samples later."""
+    """Signal 1 repeats signal 0 ``lags_samples[1] - lags_samples[0]`` samples later."""
     lags = (2, 9)
     time_series = simulate_lagged_broadband(
         lags, noise_levels=0.1, n_time_samples=5000, random_state=0
@@ -135,7 +150,7 @@ def test_lagged_broadband_cross_correlation_peaks_at_lag():
 @pytest.mark.parametrize("leader", [0, 1])
 @pytest.mark.parametrize("n_trials", [None, 3])
 def test_lagged_broadband_reproduces_pair_helper_semantics(leader, n_trials):
-    """``lags=(0, L)`` slices one seeded source and adds one noise draw.
+    """``lags_samples=(0, L)`` slices one seeded source and adds one noise draw.
 
     Replays by hand the leader/follower construction (source first, then
     ``rng.normal(0, noise_sd, shape)``); the simulator must reproduce it bit for
@@ -309,7 +324,12 @@ def test_shared_oscillation_zero_amplitude_is_flat():
     [
         (
             simulate_lagged_broadband,
-            {"lags": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64, "n_trials": 2},
+            {
+                "lags_samples": (0, 4),
+                "noise_levels": [0.2, 0.5],
+                "n_time_samples": 64,
+                "n_trials": 2,
+            },
         ),
         (
             simulate_shared_oscillation,

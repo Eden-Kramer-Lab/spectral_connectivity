@@ -1879,7 +1879,7 @@ assert np.abs(np.median(off_peak_after)) < 0.1
 # %% [markdown]
 # ### Group Delay
 #
-# Group delay is the slope of the coherence phase across frequency, so it needs signals that are coherent across a band: a sinusoid delayed by a whole number of cycles is indistinguishable from the original. Each example here delays copies of one white-noise source by 10 ms with `simulate_lagged_broadband`. A positive `delay[..., i, j]` means signal `i` leads signal `j`.
+# Group delay is the slope of the coherence phase across frequency, so it needs signals that are coherent across a band: a sinusoid delayed by a whole number of cycles is indistinguishable from the original. Each example here delays copies of one white-noise source by 10 ms with `simulate_lagged_broadband`, whose `lags_samples` are whole samples: `round(time_lag * sampling_frequency)` converts the 10 ms to 10 samples at 1000 Hz. A positive `delay[..., i, j]` means signal `i` leads signal `j`.
 #
 # #### Signal \#1 leads Signal \#2
 
@@ -1889,8 +1889,8 @@ time_extent = (0, 1)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 1 leads signal 2 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (0, lag_samples)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (0, lag_samples)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -1898,8 +1898,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(5, 2, figsize=(12, 9), constrained_layout=True)
 axis_handles[0, 0].plot(time, signals[:, 0, 0], color="blue")
@@ -1993,8 +1993,8 @@ time_extent = (0, 1)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 2 leads signal 1 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -2002,8 +2002,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(5, 2, figsize=(12, 9), constrained_layout=True)
 axis_handles[0, 0].plot(time, signals[:, 0, 0], color="blue")
@@ -2097,8 +2097,8 @@ time_extent = (0, 2)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 2 leads signal 1 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -2106,8 +2106,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
 axis_handles[0, 0].plot(time, signals[:, 0, 0], color="blue")
@@ -2167,8 +2167,8 @@ time_extent = (0, 1)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 1 leads signal 2 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (0, lag_samples)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (0, lag_samples)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -2176,8 +2176,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(5, 2, figsize=(12, 9), constrained_layout=True)
 axis_handles[0, 0].plot(time, signals[:, 0, 0], color="blue")
@@ -2267,8 +2267,8 @@ time_extent = (0, 1)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 2 leads signal 1 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -2276,8 +2276,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(5, 2, figsize=(12, 9), constrained_layout=True)
 axis_handles[0, 0].plot(time, signals[:, 0, 0], color="blue")
@@ -2367,8 +2367,8 @@ time_extent = (0, 2)
 n_trials = 100
 time_halfbandwidth_product = 1
 time_lag = 0.010  # signal 2 leads signal 1 by 10 ms
-lag_samples = round(time_lag * sampling_frequency)
-lags = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
+lag_samples = round(time_lag * sampling_frequency)  # seconds to whole samples
+lags_samples = (lag_samples, 0)  # samples behind the shared source; the smaller lag leads
 noise_levels = [1.0, 0.5]
 
 n_time_samples = int(((time_extent[1] - time_extent[0]) * sampling_frequency) + 1)
@@ -2376,8 +2376,8 @@ time = np.arange(n_time_samples) / sampling_frequency
 
 # Both calls draw the same source (it is drawn before the noise), so `signals`
 # is exactly `data` without its noise. Shape (n_time_samples, n_trials, 2).
-signals = simulate_lagged_broadband(lags, 0.0, n_time_samples, n_trials, random_state=0)
-data = simulate_lagged_broadband(lags, noise_levels, n_time_samples, n_trials, random_state=0)
+signals = simulate_lagged_broadband(lags_samples, 0.0, n_time_samples, n_trials, random_state=0)
+data = simulate_lagged_broadband(lags_samples, noise_levels, n_time_samples, n_trials, random_state=0)
 
 fig, axis_handles = plt.subplots(
     2, 2, figsize=(12, 9), constrained_layout=True, sharex=True

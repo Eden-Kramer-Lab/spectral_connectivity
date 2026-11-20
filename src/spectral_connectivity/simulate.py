@@ -62,13 +62,16 @@ def simulate_MVAR(
 
     Generates time series data following the MVAR model:
     X(t) = sum(A_k * X(t-k)) + E(t), where A_k are coefficient matrices
-    and E(t) is multivariate Gaussian noise.
+    and E(t) is multivariate Gaussian noise. Time ``t`` and the lags ``k``
+    count samples.
 
     Parameters
     ----------
     coefficients : NDArray[floating], shape (n_lags, n_signals, n_signals)
-        MVAR coefficient matrices for each lag. Each A_k matrix defines
-        the linear influence of signals at lag k.
+        MVAR coefficient matrices for each lag. ``coefficients[k - 1]`` is
+        A_k, the linear influence of the signals ``k`` samples earlier: lags
+        are sample steps, so lag ``k`` is ``k / sampling_frequency`` seconds at
+        whatever rate the series is analyzed with.
     noise_covariance : NDArray[floating], shape (n_signals, n_signals), optional
         Covariance matrix of the noise process. If None, uses identity matrix
         (independent unit-variance noise).
@@ -127,7 +130,7 @@ def simulate_MVAR(
 
 
 def simulate_lagged_broadband(
-    lags: ArrayLike,
+    lags_samples: ArrayLike,
     noise_levels: ArrayLike,
     n_time_samples: int,
     n_trials: int | None = None,
@@ -135,18 +138,20 @@ def simulate_lagged_broadband(
 ) -> NDArray[np.floating]:
     """Noisy copies of one white-noise source, each delayed by whole samples.
 
-    Signal ``k`` is ``source[t - lags[k]] + noise_levels[k] * N(0, 1)``, so a
-    signal with a smaller lag leads one with a larger lag by their difference
-    in samples. The source is broadband on purpose: a sinusoid delayed by a
-    whole number of cycles is indistinguishable from the original and carries
-    no lag information for group delay or the phase slope index.
+    Signal ``k`` is ``source[t - lags_samples[k]] + noise_levels[k] * N(0, 1)``,
+    so a signal with a smaller lag leads one with a larger lag by their
+    difference in samples. The source is broadband on purpose: a sinusoid
+    delayed by a whole number of cycles is indistinguishable from the original
+    and carries no lag information for group delay or the phase slope index.
 
     Parameters
     ----------
-    lags : array_like of int, shape (n_signals,)
-        Delay of each signal behind the source, in samples. Must be
-        non-negative integers; express a lead as a smaller lag on the leading
-        signal, e.g. ``lags=(0, 3)`` for signal 0 leading signal 1 by 3 samples.
+    lags_samples : array_like of int, shape (n_signals,)
+        Delay of each signal behind the source, in whole samples (not
+        seconds). Must be non-negative integers; express a lead as a smaller
+        lag on the leading signal, e.g. ``lags_samples=(0, 3)`` for signal 0
+        leading signal 1 by 3 samples. Convert a delay in seconds with
+        ``round(delay * sampling_frequency)``, as in the second example.
     noise_levels : float or array_like of float, shape (n_signals,)
         Standard deviation of the independent Gaussian noise added to each
         signal. A scalar applies to every signal; 0 gives the pure delayed
@@ -172,8 +177,9 @@ def simulate_lagged_broadband(
 
     Notes
     -----
-    The source has ``n_time_samples + max(lags)`` samples and signal ``k`` is
-    its slice starting at ``max(lags) - lags[k]``, so no sample wraps around.
+    The source has ``n_time_samples + max(lags_samples)`` samples and signal
+    ``k`` is its slice starting at ``max(lags_samples) - lags_samples[k]``, so
+    no sample wraps around.
     The source is drawn first, then all of the noise in one draw of shape
     ``time_series.shape``.
 
@@ -181,7 +187,7 @@ def simulate_lagged_broadband(
     --------
     >>> import numpy as np
     >>> time_series = simulate_lagged_broadband(
-    ...     lags=(0, 3), noise_levels=0.0, n_time_samples=100, random_state=0
+    ...     lags_samples=(0, 3), noise_levels=0.0, n_time_samples=100, random_state=0
     ... )
     >>> time_series.shape
     (100, 2)
@@ -189,10 +195,27 @@ def simulate_lagged_broadband(
     >>> bool(np.array_equal(time_series[3:, 1], time_series[:-3, 0]))
     True
 
+    The delays are whole samples. For a delay given in seconds, round it to
+    the nearest sample at the sampling rate and pass that count:
+
+    >>> sampling_frequency = 1500.0  # Hz
+    >>> delay = 0.0102  # seconds: signal 0 should lead signal 1 by 10.2 ms
+    >>> lag_samples = round(delay * sampling_frequency)  # 15.3 samples, rounded
+    >>> lag_samples
+    15
+    >>> time_series = simulate_lagged_broadband(
+    ...     lags_samples=(0, lag_samples),
+    ...     noise_levels=0.0,
+    ...     n_time_samples=1000,
+    ...     random_state=0,
+    ... )
+    >>> lag_samples / sampling_frequency  # the delay actually simulated, in seconds
+    0.01
+
     """
-    lags_array = np.asarray(lags)
+    lags_array = np.asarray(lags_samples)
     if lags_array.size == 0:
-        msg = "lags must have at least one entry, one per signal"
+        msg = "lags_samples must have at least one entry, one per signal"
         raise ValueError(msg)
     if (
         lags_array.ndim != 1
@@ -200,9 +223,10 @@ def simulate_lagged_broadband(
         or np.any(lags_array < 0)
     ):
         msg = (
-            "lags must be non-negative integers (an integer dtype, so 3 rather "
-            "than 3.0); express a lead as a smaller lag on the leading signal, "
-            "e.g. lags=(0, 3)"
+            "lags_samples must be non-negative integers, in samples (an integer "
+            "dtype, so 3 rather than 3.0); convert a delay in seconds with "
+            "round(delay * sampling_frequency), and express a lead as a smaller "
+            "lag on the leading signal, e.g. lags_samples=(0, 3)"
         )
         raise ValueError(msg)
     n_signals = lags_array.size

@@ -69,8 +69,10 @@ directly with results from 2.x.
   line, so Python's default filter shows it once per call site.
 - Public simulators with planted, known structure in
   `spectral_connectivity.simulate`: `simulate_lagged_broadband` (noisy copies of
-  one white-noise source, each delayed by a whole number of samples, for a known
-  lead/lag) and `simulate_shared_oscillation` (one sinusoid shared by several
+  one white-noise source, each delayed by a whole number of samples given as
+  `lags_samples`, for a known lead/lag; convert a delay in seconds with
+  `round(delay * sampling_frequency)`) and `simulate_shared_oscillation` (one
+  sinusoid, its `frequency` and `sampling_frequency` in Hz, shared by several
   signals with per-signal amplitude, phase offset, and noise, optionally with a
   random phase per trial). The simulated-examples tutorial builds every case
   with them and asserts what each plot shows, so executing it checks the plots.
