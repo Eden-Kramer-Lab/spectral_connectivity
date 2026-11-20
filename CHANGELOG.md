@@ -52,7 +52,7 @@ returns a trial axis (see its row).
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
-| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: it never changed a result beyond rounding, and memory is now bounded automatically. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
+| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: memory is now bounded automatically. Recompute `phase_lag_index`, `weighted_phase_lag_index`, `debiased_squared_phase_lag_index`, and `debiased_squared_weighted_phase_lag_index` results that were obtained with `blocks`: in 2.x it changed them (`blocks=1` returned `phase_lag_index` and `weighted_phase_lag_index` with the opposite sign; larger values raised `IndexError` or returned other values), and 3.0 returns the values 2.x gave without `blocks`. Every other measure agreed with and without it to rounding. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` and the complex `coherency` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure and not `coherency` (complex arrays do not serialize portably across xarray versions and NetCDF engines), so `result["coherency"]` on a default result raises `KeyError`; request `method=[..., "coherency"]` or `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name. `coherence_magnitude` is now `magnitude_squared_coherence` (row below) |
@@ -589,11 +589,16 @@ returns a trial axis (see its row).
 ### Removed
 
 - `blocks` of `Connectivity` and `Connectivity.from_multitaper` (released in
-  2.0.1). It only chunked the cross-spectral computation and never changed a
-  result beyond rounding; memory is now bounded automatically. A call that
-  still passes it, by keyword or in its released position, raises a
-  `TypeError` that names `blocks`, says it had no effect on results, and says
-  to drop it, before any computation. It is not kept as a deprecated alias.
+  2.0.1). It was meant only to chunk the cross-spectral computation, and
+  memory is now bounded automatically. In 2.x it also changed the four
+  phase-lag-index measures, whose terms are not Hermitian as its block filling
+  assumed: `blocks=1` returned `phase_lag_index` and
+  `weighted_phase_lag_index` with the opposite sign, and larger values raised
+  `IndexError` or returned other values. Every other measure agreed with and
+  without it to rounding. A call that still passes it, by keyword or in its
+  released position, raises a `TypeError` that names `blocks`, says to drop
+  it, and says to recompute phase-lag-index results obtained with it, before
+  any computation. It is not kept as a deprecated alias.
 - `dpss_windows(interp_from=..., interp_kind=...)`: the tapers come from
   SciPy's exact solver, so there is nothing to interpolate.
 - `tridisolve` and `tridi_inverse_iteration` from

@@ -92,9 +92,13 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     return canonical
 
 
+# In 2.x blocks was meant only to chunk the cross-spectral computation, but its
+# block filling assumed a Hermitian result, which the real, antisymmetric
+# phase-lag-index terms are not.
 _BLOCKS_REMOVED = (
-    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
-    "automatically), so drop it."
+    "blocks was removed in 3.0 (memory is bounded automatically), so drop it. "
+    "Recompute any phase-lag-index measure obtained with blocks in 2.x: it changed "
+    "them (blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index)."
 )
 
 

@@ -135,13 +135,19 @@ def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(mult
     _assert_same_connectivity(deprecated, canonical)
 
 
-_BLOCKS_MESSAGE = r"blocks.*removed in 3\.0.*no effect on results.*drop it"
+# 2.x's blocks changed the phase-lag-index measures (blocks=1 reversed the sign of
+# phase_lag_index and weighted_phase_lag_index), so the message must not say it
+# had no effect.
+_BLOCKS_MESSAGE = (
+    r"blocks.*removed in 3\.0.*drop it.*Recompute.*phase-lag-index.*"
+    r"blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index"
+)
 
 
 @pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
 def test_blocks_by_keyword_is_rejected_with_its_own_message(multitaper, blocks):
-    """2.x's blocks (removed in 3.0) never changed a value; every keyword use
-    of it fails with a message that says so, before anything is computed."""
+    """Every keyword use of 2.x's blocks (removed in 3.0) fails, before anything
+    is computed, with a message naming the measures it changed in 2.x."""
     with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
         Connectivity(multitaper.fft(), blocks=blocks)
     with warnings.catch_warnings():
