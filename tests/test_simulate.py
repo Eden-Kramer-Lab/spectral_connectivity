@@ -121,17 +121,26 @@ def test_lagged_broadband_names_its_delays_in_samples():
 
 
 @pytest.mark.parametrize(
-    ("n_trials", "expected_shape"),
-    [(None, (50, 3)), (4, (50, 4, 3))],
-    ids=["no_trials", "trials"],
+    ("trial_kwargs", "expected_shape"),
+    [({}, (50, 1, 3)), ({"n_trials": 4}, (50, 4, 3)), ({"n_trials": None}, (50, 3))],
+    ids=["default_one_trial", "trials", "none_omits_trial_axis"],
 )
-def test_lagged_broadband_shape(n_trials, expected_shape):
-    """The trial axis is present only when ``n_trials`` is given."""
+def test_lagged_broadband_shape(trial_kwargs, expected_shape):
+    """``(time, trial, signal)`` with one trial by default, like ``simulate_MVAR``;
+    ``n_trials=None`` omits the trial axis."""
     time_series = simulate_lagged_broadband(
-        (0, 2, 5), noise_levels=0.1, n_time_samples=50, n_trials=n_trials, random_state=0
+        (0, 2, 5), noise_levels=0.1, n_time_samples=50, random_state=0, **trial_kwargs
     )
     assert time_series.shape == expected_shape
     assert time_series.dtype == np.float64
+
+
+def test_lagged_broadband_without_trial_axis_is_the_single_trial():
+    """``n_trials=None`` returns the default single trial's values, bit for bit."""
+    kwargs = {"lags_samples": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64}
+    one_trial = simulate_lagged_broadband(**kwargs, random_state=5)
+    no_trial_axis = simulate_lagged_broadband(**kwargs, n_trials=None, random_state=5)
+    np.testing.assert_array_equal(one_trial[:, 0, :], no_trial_axis)
 
 
 def test_lagged_broadband_cross_correlation_peaks_at_lag():
@@ -140,7 +149,7 @@ def test_lagged_broadband_cross_correlation_peaks_at_lag():
     time_series = simulate_lagged_broadband(
         lags, noise_levels=0.1, n_time_samples=5000, random_state=0
     )
-    signal0, signal1 = time_series[:, 0], time_series[:, 1]
+    signal0, signal1 = time_series[:, 0, 0], time_series[:, 0, 1]
     # np.correlate(a, v, "full")[i] = sum_n a[n + k] * v[n] with k = i - (len(v) - 1).
     cross_correlation = np.correlate(signal1, signal0, mode="full")
     shift = np.argmax(cross_correlation) - (signal0.size - 1)

@@ -74,7 +74,10 @@ directly with results from 2.x.
   `round(delay * sampling_frequency)`) and `simulate_shared_oscillation` (one
   sinusoid, its `frequency` and `sampling_frequency` in Hz, shared by several
   signals with per-signal amplitude, phase offset, and noise, optionally with a
-  random phase per trial). The simulated-examples tutorial builds every case
+  random phase per trial). Like `simulate_MVAR`, they return
+  `(time, trial, signal)` arrays with `n_trials=1` by default;
+  `simulate_lagged_broadband(..., n_trials=None)` returns `(time, signal)`.
+  The simulated-examples tutorial builds every case
   with them and asserts what each plot shows, so executing it checks the plots.
 - Spectral primitives and pairwise measures: one-sided
   `cross_spectral_density`, signed `imaginary_coherency`, `partial_coherence`,

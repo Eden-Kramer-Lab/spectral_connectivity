@@ -5,7 +5,8 @@ known directed coupling. ``simulate_lagged_broadband`` generates delayed noisy
 copies of one broadband source, with a known lead/lag between every pair of
 signals. ``simulate_shared_oscillation`` generates one sinusoid seen by several
 signals with known amplitudes and phase offsets. All return ``float64`` NumPy
-arrays with time on the first axis and signals on the last.
+arrays of shape ``(n_time_samples, n_trials, n_signals)``, one trial by
+default; ``simulate_lagged_broadband(..., n_trials=None)`` omits the trial axis.
 """
 
 import numpy as np
@@ -133,7 +134,7 @@ def simulate_lagged_broadband(
     lags_samples: ArrayLike,
     noise_levels: ArrayLike,
     n_time_samples: int,
-    n_trials: int | None = None,
+    n_trials: int | None = 1,
     random_state: int | np.random.Generator | None = None,
 ) -> NDArray[np.floating]:
     """Noisy copies of one white-noise source, each delayed by whole samples.
@@ -158,16 +159,17 @@ def simulate_lagged_broadband(
         source.
     n_time_samples : int
         Number of time samples per signal.
-    n_trials : int or None, optional
-        Number of independent trials. None (default) omits the trial axis.
+    n_trials : int or None, default=1
+        Number of independent trials. None returns a 2-D array with no trial
+        axis, holding the same values as the default single trial.
     random_state : int, np.random.Generator, or None, optional
         Seed or generator for reproducible results.
 
     Returns
     -------
-    time_series : NDArray[floating], shape (n_time_samples, n_signals) or (n_time_samples, n_trials, n_signals)
-        The delayed noisy copies; the trial axis is present only when
-        ``n_trials`` is given.
+    time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+        The delayed noisy copies, ``(time, trial, signal)`` like
+        ``simulate_MVAR``; ``(time, signal)`` when ``n_trials`` is None.
 
     Raises
     ------
@@ -190,9 +192,9 @@ def simulate_lagged_broadband(
     ...     lags_samples=(0, 3), noise_levels=0.0, n_time_samples=100, random_state=0
     ... )
     >>> time_series.shape
-    (100, 2)
+    (100, 1, 2)
     >>> # Signal 1 repeats signal 0 three samples later: signal 0 leads.
-    >>> bool(np.array_equal(time_series[3:, 1], time_series[:-3, 0]))
+    >>> bool(np.array_equal(time_series[3:, :, 1], time_series[:-3, :, 0]))
     True
 
     The delays are whole samples. For a delay given in seconds, round it to
