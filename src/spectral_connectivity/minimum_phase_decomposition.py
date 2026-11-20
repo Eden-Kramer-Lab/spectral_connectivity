@@ -359,19 +359,9 @@ def minimum_phase_reconstruction_error(
     function cannot detect that; use a window long enough for the slowest
     correlation in the data.
 
-    .. versionchanged:: 3.0
-       Before 3.0 the factor of an even-length grid did not reproduce ``S``
-       (see :func:`minimum_phase_decomposition`), and this error was read as a
-       sign of under-resolution. It was the size of the spectrum's
-       ``n_fft_samples / 2`` lag, which the iteration ignored, and it was
-       always tiny on an odd-length grid.
-
     ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
-    FFT order, as required by the factorization itself. This module-level
-    function cannot verify that from the array alone (a one-sided spectrum has
-    the same shape); the :meth:`Connectivity.minimum_phase_reconstruction_error
-    <spectral_connectivity.Connectivity.minimum_phase_reconstruction_error>`
-    method enforces it from the transform's declared sidedness.
+    FFT order, as required by the factorization itself. The function cannot
+    verify that from the array alone: a one-sided spectrum has the same shape.
 
     Parameters
     ----------

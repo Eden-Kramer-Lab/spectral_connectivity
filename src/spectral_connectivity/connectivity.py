@@ -41,9 +41,6 @@ from spectral_connectivity._multivariate import (
     _mic_components,
     _normalize_fourier_coefficients,
 )
-from spectral_connectivity.minimum_phase_decomposition import (
-    minimum_phase_reconstruction_error as _minimum_phase_reconstruction_error,
-)
 from spectral_connectivity.statistics import (
     JackknifeResult,
     adjust_for_multiple_comparisons,
@@ -68,9 +65,7 @@ logger = getLogger(__name__)
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
 # jackknife validation cannot drift apart.
-_NON_MEASURE_METHODS = frozenset(
-    {"clear_cache", "jackknife", "minimum_phase_reconstruction_error"}
-)
+_NON_MEASURE_METHODS = frozenset({"clear_cache", "jackknife"})
 # Measure names released in 2.x and replaced in 3.0, mapped to the canonical
 # name. Each still works through 3.x with a DeprecationWarning and is removed
 # in 4.0; the canonical measure is the one registered and listed.
@@ -2051,35 +2046,6 @@ class Connectivity:
         measures that rely on it warn.
         """
         return self._time_bins_are_independent
-
-    @_asnumpy
-    def minimum_phase_reconstruction_error(self) -> NDArray[np.floating]:
-        """Return the relative reconstruction error of the Wilson factorization.
-
-        This diagnostic checks how faithfully the cached minimum-phase factor
-        reconstructs the expected cross-spectral matrix. One value is returned
-        per retained batch (normally time-window) dimension. A converged
-        factorization reproduces the spectrum to about its convergence
-        tolerance; non-converged factorizations return ``NaN``. A small value
-        does not show that the spectrum is resolved finely enough in frequency
-        for the directed measures (see
-        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_reconstruction_error`).
-
-        Returns
-        -------
-        array, shape (...,)
-            Maximum relative reconstruction error for each sub-spectrum.
-
-        Notes
-        -----
-        A full two-sided spectrum is required, as for the directed measures that
-        use the Wilson factorization.
-        """
-        self._require_two_sided_spectrum("minimum_phase_reconstruction_error")
-        return _minimum_phase_reconstruction_error(
-            self._expectation_cross_spectral_matrix(),
-            self._minimum_phase_factor,
-        )
 
     def jackknife(
         self,
@@ -4685,8 +4651,7 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
@@ -4827,8 +4792,7 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         References
@@ -4888,8 +4852,7 @@ class Connectivity:
         Negative estimates within roundoff of zero -- above ``-100 * eps`` of
         the result dtype on the log-ratio scale, about ``-2e-14`` for float64
         -- are clipped to ``0``; materially negative bins below that threshold
-        (a degenerate factorization) are returned as ``NaN``; use
-        :meth:`minimum_phase_reconstruction_error` to diagnose them. Other
+        (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
 
         **Range**: ``[0, ∞)``. The measure is a log-ratio of a total to an

@@ -162,22 +162,6 @@ def test_cross_spectrum(axis, dtype):
     assert np.allclose(expected_cross_spectral_matrix, this_Conn._cross_spectral_matrix)
 
 
-def test_minimum_phase_reconstruction_error_is_exposed_on_connectivity():
-    """The public diagnostic evaluates the factor used by directed measures."""
-    target_cross_spectrum = np.array([[2.0, 0.4], [0.4, 1.0]])
-    cholesky_factor = np.linalg.cholesky(target_cross_spectrum)
-    taper_coefficients = (np.sqrt(2.0) * cholesky_factor.T).astype(np.complex128)
-    coefficients = np.broadcast_to(taper_coefficients[:, np.newaxis, :], (2, 16, 2))[
-        np.newaxis, np.newaxis
-    ].copy()
-    connectivity = Connectivity(coefficients)
-
-    error = connectivity.minimum_phase_reconstruction_error()
-
-    assert error.shape == (1,)
-    assert error[0] < 1e-7
-
-
 @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
 def test_power(dtype):
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 1, 1, 1, 2)
@@ -2435,10 +2419,10 @@ def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation
 
 @pytest.mark.parametrize(
     "method",
-    ["minimum_phase_reconstruction_error", "from_transform", "from_multitaper"],
+    ["clear_cache", "from_transform", "from_multitaper"],
 )
 def test_jackknife_rejects_public_non_measure_methods(method):
-    """Diagnostics and alternate constructors are not connectivity measures."""
+    """Helpers and alternate constructors are not connectivity measures."""
     rng = np.random.default_rng(10)
     shape = (1, 3, 2, 16, 2)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
