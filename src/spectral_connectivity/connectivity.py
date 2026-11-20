@@ -121,7 +121,7 @@ def _validated_complex_dtype(dtype: Any) -> Any:
         ):
             msg += (
                 " In 2.x, blocks took this position (third in from_multitaper, fifth "
-                f"in Connectivity): {_BLOCKS_REMOVED} Pass dtype by keyword."
+                f"in Connectivity). {_BLOCKS_REMOVED} Pass dtype by keyword."
             )
         raise TypeError(msg)
     return dtype
