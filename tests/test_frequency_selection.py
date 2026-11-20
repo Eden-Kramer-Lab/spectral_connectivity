@@ -522,6 +522,24 @@ def test_float32_bounds_on_a_float64_grid_use_float32_rounding():
     np.testing.assert_array_equal(np.flatnonzero(mask), np.arange(7, 13))
 
 
+def test_float32_grid_keeps_the_bins_its_decimal_bounds_name_above_20_hz():
+    """Above about 20 Hz a float32 bin 0.1 Hz apart is stored further from its
+    decimal than one part in a million of the spacing, so only the allowance
+    for the coordinate's own (float32) rounding keeps bins 203 and 256."""
+    grid = (np.arange(1000) * 0.1).astype(np.float32)
+    mask, _ = _frequency_interval_mask("frequency_range", (20.3, 25.6), grid)
+    np.testing.assert_array_equal(np.flatnonzero(mask), np.arange(203, 257))
+
+
+def test_float32_bounds_keep_the_bins_they_name_above_20_hz():
+    """Bounds read off a float32 copy of a float64 grid are allowed their own
+    (float32) rounding, not that of the float64 they are converted to."""
+    grid = np.arange(1000) * 0.1
+    stored = grid.astype(np.float32)
+    mask, _ = _frequency_interval_mask("frequency_range", (stored[301], stored[503]), grid)
+    np.testing.assert_array_equal(np.flatnonzero(mask), np.arange(301, 504))
+
+
 @pytest.mark.parametrize(
     ("bounds", "message"),
     [
