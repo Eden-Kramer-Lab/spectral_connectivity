@@ -1,7 +1,8 @@
 # 3.0 API and result consistency decisions
 
-**Status: all six steps implemented; step 1 merged, steps 2-6 in review as a
-stack of pull requests (see the table below).**
+**Status: all six steps implemented. Step 1 is merged; steps 2-4 and the
+internal base-class step are open pull requests; steps 5 and 6 are validated
+locally and not yet opened as pull requests (see the table below).**
 
 | Step | Decisions | Branch | Status |
 | --- | --- | --- | --- |
@@ -15,9 +16,6 @@ stack of pull requests (see the table below).**
 
 D10's step option and D22 remain deferred to 3.x, as decided. D13 and D15
 needed no code change.
-[PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
-merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
-on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
 The accepted naming decision keeps Multitaper's `frequency_resolution` and
 its existing helper names supported, with precise definitions and no synonyms.
 The subsequent UX review also retains released function spellings, `ci`,
@@ -682,9 +680,10 @@ Rulings where the rules above were silent:
 **Scope:** D17 and D31, the migration table and schema reference for the whole
 pass, and the issue #101 checklist. **Branch:**
 `refactor/simulators-and-migration`, based on step 5's head `743235f`.
-Implemented and validated locally on 2026-11-19: 2,399 tests passed with 16
-skips on the main CPU environment, and 2,284 passed with 101 skips on Python
-3.10 with the NumPy 1.24/SciPy 1.11.1/xarray 2023.1/Matplotlib 3.7 floors;
+Implemented and validated locally on 2026-11-19, including the review fixes:
+2,418 tests passed with 16 skips on the main CPU environment, and 2,303 passed
+with 101 skips on Python 3.10 with the NumPy 1.24/SciPy 1.11.1/xarray
+2023.1/Matplotlib 3.7 floors;
 all 70 source doctests (also on the floors), Ruff formatting/lint, and mypy
 passed. No numerical code changed, so no benchmark was run; the notebook
 snapshot tests' stored values are unchanged. All three tutorial notebooks
@@ -725,11 +724,45 @@ Rulings where the rules above were silent:
   section is the single schema reference; it gains `output_schema_version`,
   `package`/`package_version`, and the `arg_<name>` views. Each row was
   checked by running the old and new forms.
+- **Counts.** Both simulators raise `ValueError` naming `n_time_samples` or
+  `n_trials` for a count that is not a positive integer (zero, negative,
+  fractional, boolean); NumPy integers are accepted. `n_trials=None` stays
+  the lagged simulator's 2-D form, and the shared-oscillation message says
+  it has none. `simulate_MVAR` is released and is not changed.
+- **Rounding a delay.** The docstring says that Python's `round` sends an
+  exact half to the even neighbour and that a delay of half a sample or less
+  becomes 0; its doctest checks the simulated array, not only the printed
+  delay.
+- **Migration completeness.** The migration rows were checked against a
+  diff of every public name and signature between the 2.0.1 wheel and this
+  branch and against the same calls run under both, which added rows for the
+  default result's `coherency`, window-step rounding and the realized-window
+  properties, the corrected confidence interval behind both
+  `power_confidence_intervals` spellings, `squeeze=True` with several
+  measures, `power_fisher_z_transform`'s `spectrum2` default, the removed
+  `tridisolve`/`tridi_inverse_iteration`, `connectivity.EXPECTATION` and the
+  module's re-imports, and `mt_summarize_parameters`. D2 and D28 record that
+  only `Multitaper.frequency_resolution` follows a rounded window.
+- **Schema reference test.** `tests/test_schema_reference.py` reads the
+  cookbook's attribute table and fails for any attribute a result of any
+  transform, measure, or wrapper option carries that the table does not
+  name; `input_attrs_json` was the one missing.
+- **D20 and copied channel metadata.** D20 adds `long_name` (and units where
+  they apply) to the coordinates the package creates: band edges, connection
+  labels, and `source`/`target`. Channel metadata copied from an input
+  DataArray (e.g. `area` becoming `source_area`/`target_area`) keeps the attrs
+  it came with and gains none: the package cannot know what a user's
+  coordinate means, and a name-derived label would add no information. A
+  default description could be added in 3.x without breaking anything.
 - **Tutorial outputs.** The three tutorials were re-executed with
   nbconvert so their stored outputs show the final attributes. The stored
   Dataset reprs still list the 15 released `mt_*` compatibility copies,
   because every 3.x Multitaper result carries them; the tutorials are not
-  changed to hide them.
+  changed to hide them. Cells that ended with a plotting call end with `;`,
+  so no output is a `<... at 0x...>` repr, and the notebooks are executed
+  without per-cell timing metadata. What remains run-specific is the
+  development `package_version` (until a release is tagged) and the random
+  element ids of xarray's HTML repr, which every execution regenerates.
 
 ### Step 6 acceptance checklist
 
