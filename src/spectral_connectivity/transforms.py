@@ -1494,6 +1494,9 @@ class Multitaper(_WindowedFourierTransform):
         Length of FFT. If None, uses a value >= n_time_samples_per_window chosen
         to be fast for the FFT algorithm: scipy.fft.next_fast_len, on the GPU
         backend too, so the default frequency grid is the same on CPU and GPU.
+        For directed measures (spectral Granger, DTF, PDC) pass at least
+        twice the window length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     n_time_samples_per_window : int, optional
         Number of samples per time window. Computed (to the nearest sample)
         from time_window_duration if not provided; when both are given they
@@ -2125,6 +2128,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the window
         length, which may zero-pad (e.g. a 257-sample window gives 264 bins);
         pass the window length explicitly for an unpadded frequency grid.
+        For directed measures (spectral Granger, DTF, PDC) pass at least
+        twice the window length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     n_time_samples_per_window : int, optional
         Window length in samples (alternative to ``time_window_duration``).
     n_time_samples_per_step : int, optional
@@ -2373,6 +2379,9 @@ class Welch:
         FFT length. Defaults to ``scipy.fft.next_fast_len`` of the segment
         length, which may zero-pad (e.g. a 257-sample segment gives 264 bins);
         pass the segment length explicitly for an unpadded frequency grid.
+        For directed measures (spectral Granger, DTF, PDC) pass at least
+        twice the segment length: see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
     fft_workers : int, optional
         Worker threads for SciPy's CPU FFT (``-1`` uses all cores).
     """

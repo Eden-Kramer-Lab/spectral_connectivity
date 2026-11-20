@@ -4662,6 +4662,13 @@ class Connectivity:
 
         **Range**: [0, ∞). Non-negative values with no finite upper bound.
 
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         References
         ----------
         .. [1] Geweke, J. (1982). Measurement of Linear Dependence and
@@ -4737,6 +4744,15 @@ class Connectivity:
             pairs not requested (and the diagonal) are NaN. Output ``[..., i, j]``
             is the influence of signal ``i`` on signal ``j`` (``i -> j``).
 
+        Notes
+        -----
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         Examples
         --------
         >>> import numpy as np
@@ -4800,6 +4816,13 @@ class Connectivity:
         -- are clipped to ``0``; materially negative bins below that threshold
         (a degenerate factorization) are returned as ``NaN``. Other
         packages (FieldTrip, MVGC, mne-connectivity) return such values as-is.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -4870,6 +4893,13 @@ class Connectivity:
         system once, plus one ``(n_signals - 1)``-channel system per source),
         each shared by every target. The full-system factorization is cached
         and shared with the other directed measures.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -4950,6 +4980,15 @@ class Connectivity:
         labels : array, shape (n_groups,)
             Sorted unique group labels.
 
+        Notes
+        -----
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         Examples
         --------
         >>> import numpy as np
@@ -5018,6 +5057,13 @@ class Connectivity:
         **Range**: [0, 1] (normalized). Represents proportion of inflow
         via transfer function; each target's values sum to 1 over sources
         (``result.sum(axis=-2)`` is 1).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5088,6 +5134,13 @@ class Connectivity:
         ``S_ii = (H Cov H^H)_ii`` also contains cross-power between correlated
         sources that this diagonal formula omits, so the values are approximate.
         A ``UserWarning`` is emitted in that case.
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5182,6 +5235,13 @@ class Connectivity:
         **Range**: [0, 1]. Normalized direct coupling measure; each source's
         values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
 
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
+
         References
         ----------
         .. [1] Baccala, L.A., and Sameshima, K. (2001). Partial directed
@@ -5242,6 +5302,13 @@ class Connectivity:
         -----
         **Range**: [0, 1]. Normalized, scaled by noise variance; each source's
         values sum to 1 over targets (``result.sum(axis=-1)`` is 1).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------
@@ -5316,6 +5383,13 @@ class Connectivity:
         returns the squared quantity; its square root is the amplitude form
         ``|ffDTF| * |kappa|``. The diagonal is the full-frequency DTF of
         each signal with itself (``kappa_ii = 1``).
+
+        **Window and FFT length**: this measure comes from the Wilson
+        factorization of the estimated spectrum. It needs a window longer
+        than the slowest correlation in the data, and is more accurate on a
+        zero-padded grid (``n_fft_samples`` of at least twice the window):
+        see the Notes of
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
         ----------

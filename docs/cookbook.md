@@ -189,9 +189,11 @@ Directed measures are opt-in by name. The result reads `source -> target`:
 
 Directed measures come from a factorization of the estimated spectrum. Use
 windows longer than the slowest correlation in the data, and zero-pad the FFT
-to at least twice the window (`transform_kwargs={"n_fft_samples": ...}`), which
-removes most of the frequency grid's effect on the factor; the notes of
-`minimum_phase_decomposition` give the sizes.
+to at least twice the window (`transform_kwargs={"n_fft_samples": ...}`). For
+a long, well-resolved window that removes most of the frequency grid's effect
+on the factor; for a short window it helps less, and a longer window is the
+remedy. The result then has twice as many frequency bins. The Notes of
+`spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition` give the sizes.
 
 ## Compute several measures at once
 
@@ -712,7 +714,8 @@ If you hit an error or a warning:
 - The transform classes (`Multitaper`, `ShortTimeFourierTransform`, `Welch`,
   `MorletWavelet`) read a DataArray by position, as `(time, trial, signal)`,
   and take no `*_dim` arguments. One whose dimension names put time, trials or
-  signals on another axis raises `ValueError` naming the transpose to apply;
+  signals on another axis raises `ValueError` naming the misplaced dimensions
+  and, when the names determine it, the transpose to apply;
   names that say nothing of a role (`dim_0`, `session`) are read by position.
 - Inferring the rate needs enough coordinate precision: pass
   `sampling_frequency` for low-precision or large-offset time coordinates.
