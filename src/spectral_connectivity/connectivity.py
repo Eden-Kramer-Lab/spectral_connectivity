@@ -390,6 +390,13 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
 # False while the labeled wrapper or a jackknife replicate runs a measure: the
 # wrapper warns about its source/target labels instead, and a jackknife warns
 # once, for its full estimate.
+# The class whose from_transform the deprecated from_multitaper is calling, so
+# a from_transform override that calls super().from_multitaper (a half-done
+# rename) fails on re-entry instead of recursing without end.
+_from_multitaper_dispatch: ContextVar[type | None] = ContextVar(
+    "_from_multitaper_dispatch", default=None
+)
+
 _warn_orientation_change: ContextVar[bool] = ContextVar(
     "_warn_orientation_change", default=True
 )
@@ -1218,8 +1225,12 @@ class Connectivity:
         """Construct from a spectral transform (deprecated name).
 
         .. deprecated:: 3.0
-           Use :meth:`from_transform`, which takes the same arguments and
-           builds the same instance. ``from_multitaper`` is removed in 4.0.
+           Use :meth:`from_transform`, which takes the same arguments (the
+           first is named ``transform``) and builds the same instance.
+           ``from_multitaper`` is removed in 4.0. ``from_transform`` does not
+           call ``from_multitaper``, so a subclass that overrides
+           ``from_multitaper`` must move the override, and its ``super()``
+           call, to ``from_transform``.
 
         .. versionchanged:: 3.0
            The 2.x ``blocks`` argument (third, before ``dtype``) is removed;
@@ -1242,18 +1253,30 @@ class Connectivity:
             New Connectivity instance.
 
         """
+        if _from_multitaper_dispatch.get() is cls:
+            msg = (
+                f"{cls.__name__}.from_transform calls from_multitaper, which calls "
+                f"{cls.__name__}.from_transform: an override of from_transform must "
+                "call super().from_transform(...), not super().from_multitaper(...)."
+            )
+            raise TypeError(msg)
         warn_deprecated(
             f"{cls.__name__}.from_multitaper()",
             f"{cls.__name__}.from_transform()",
-            "takes the same arguments and builds the same instance",
+            "takes the same arguments (the first is named transform, not "
+            "multitaper_instance) and builds the same instance",
         )
-        return cls.from_transform(
-            multitaper_instance,
-            expectation_type=expectation_type,
-            dtype=dtype,
-            minimum_phase_tolerance=minimum_phase_tolerance,
-            minimum_phase_max_iterations=minimum_phase_max_iterations,
-        )
+        token = _from_multitaper_dispatch.set(cls)
+        try:
+            return cls.from_transform(
+                multitaper_instance,
+                expectation_type=expectation_type,
+                dtype=dtype,
+                minimum_phase_tolerance=minimum_phase_tolerance,
+                minimum_phase_max_iterations=minimum_phase_max_iterations,
+            )
+        finally:
+            _from_multitaper_dispatch.reset(token)
 
     @classmethod
     @_rejects_removed_blocks("Connectivity.from_transform()")

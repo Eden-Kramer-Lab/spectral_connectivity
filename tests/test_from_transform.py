@@ -193,3 +193,32 @@ def test_a_dtype_that_is_not_complex_is_rejected(multitaper, value):
 def test_a_complex_dtype_is_accepted(multitaper, value):
     connectivity = Connectivity.from_transform(multitaper, dtype=value)
     assert connectivity.magnitude_squared_coherence().shape[-2:] == (3, 3)
+
+
+class _HalfMigrated(Connectivity):
+    """A 2.x override renamed to from_transform, its super() call not yet."""
+
+    @classmethod
+    def from_transform(cls, transform, **kwargs):
+        instance = super().from_multitaper(transform, **kwargs)
+        instance.marker = "half migrated"
+        return instance
+
+
+def test_a_half_migrated_subclass_fails_at_once_with_the_fix(multitaper):
+    """from_multitaper calls cls.from_transform, so an override of
+    from_transform that still calls super().from_multitaper would recurse
+    without end; it fails on re-entry, naming the call to change."""
+    with (
+        pytest.warns(DeprecationWarning, match="from_multitaper") as record,
+        pytest.raises(TypeError, match=r"super\(\)\.from_transform"),
+    ):
+        _HalfMigrated.from_transform(multitaper)
+    assert len(record) == 1
+
+
+def test_the_from_multitaper_warning_names_the_renamed_first_argument(multitaper):
+    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
+        Connectivity.from_multitaper(multitaper_instance=multitaper)
+    assert "transform" in str(record[0].message).split("use", 1)[1]
+    assert "multitaper_instance" in str(record[0].message)
