@@ -161,7 +161,8 @@ def test_from_multitaper_forwards_the_factorization_settings(multitaper, setting
 # 2.x's blocks changed the phase-lag-index measures, so the message says to
 # recompute them and how they changed, not that it had no effect.
 _BLOCKS_MESSAGE = (
-    r"blocks.*removed in 3\.0.*drop it.*Recompute phase-lag-index measures.*"
+    r"blocks.*removed in 3\.0.*drop it.*"
+    r"Recompute phase-lag-index measures that 2\.x computed with blocks >= 1.*"
     r"blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index.*"
     r"larger values did not return valid results"
 )
@@ -179,6 +180,30 @@ def test_blocks_by_keyword_is_rejected_with_its_own_message(multitaper, blocks):
             Connectivity.from_multitaper(multitaper, blocks=blocks)
     with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
         Connectivity.from_transform(multitaper, blocks=blocks)
+
+
+@pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
+def test_positional_blocks_with_keyword_dtype_is_rejected_with_its_own_message(
+    multitaper, blocks
+):
+    """2.x accepted blocks by position followed by dtype by keyword. That
+    binds dtype twice now, and the message names blocks instead of Python's
+    "got multiple values for argument 'dtype'"."""
+    coefficients, frequencies, time = (
+        multitaper.fft(),
+        multitaper.frequencies,
+        multitaper.time,
+    )
+    with pytest.raises(TypeError, match=rf"fifth in Connectivity.*{_BLOCKS_MESSAGE}"):
+        Connectivity(
+            coefficients, "trials_tapers", frequencies, time, blocks, dtype=np.complex64
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=rf"third in from_multitaper.*{_BLOCKS_MESSAGE}"):
+            Connectivity.from_multitaper(
+                multitaper, "trials_tapers", blocks, dtype=np.complex64
+            )
 
 
 @pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)

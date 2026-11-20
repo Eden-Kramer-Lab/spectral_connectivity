@@ -438,6 +438,18 @@ True
 
 ```
 
+Integrate before cropping. `frequency_band_reduce` covers the cells of the bins
+its input has, so on a result already cropped by `frequency_range` or `sel`, a
+band whose edge falls between the last kept bin and its dropped neighbour
+comes out low by the part of the band in that neighbour's cell (up to half a
+bin's cell at each end: 2.5% of a 20 Hz band per end on 1 Hz bins). A band
+limits itself, so reduce the uncropped
+result, or crop at least one bin wider than the bands. `multitaper_connectivity`
+and `fourier_connectivity` integrate the uncropped grid themselves when given
+`frequency_range` together with `frequency_bands`; for
+`ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` results, which go
+through `connectivity_to_xarray`, leave its `frequency_range` unset.
+
 Before 3.0 these three measures took `frequencies_of_interest=(low, high)`,
 which excludes a bin lying on either edge. It still works through 3.x, with
 results recording `frequency_interval_closed="neither"` and a

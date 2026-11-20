@@ -356,6 +356,20 @@ def frequency_band_reduce(
     result gains a ``valid_time_band`` coordinate that is ``True`` only where
     every bin of the band had full support.
 
+    An integral covers the cells of the bins ``result`` has. If ``result`` was
+    cropped first, by ``frequency_range`` or ``sel``, the part of a band that
+    lay in the cell of a dropped bin is gone: a band whose edge falls between
+    the last kept bin and its dropped neighbour comes out low by that part
+    (up to half a bin's cell at each end: 2.5% of a 20 Hz band per end on
+    1 Hz bins). Integrate before cropping, since a band limits itself, or
+    crop at least one bin wider than the bands.
+    :func:`multitaper_connectivity` and :func:`fourier_connectivity`
+    integrate the uncropped grid themselves when given ``frequency_range``
+    together with ``frequency_bands``. Results of
+    :func:`connectivity_to_xarray` (the route for
+    ``ShortTimeFourierTransform``, ``Welch``, and ``MorletWavelet``) are
+    integrated here, so leave its ``frequency_range`` unset for them.
+
     The Nyquist frequency is each variable's ``nyquist_frequency`` provenance
     attr (0.5 cycles/sample on normalized Fourier grids, half the sampling rate
     wherever that is known) or the released ``mt_nyquist_frequency``
@@ -619,7 +633,10 @@ def connectivity_to_xarray(
         :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
         ``phase_slope_index`` consume only those bins, and any other measure
         is computed from the full spectrum and cropped to them. Pass it here,
-        not in ``connectivity_kwargs``.
+        not in ``connectivity_kwargs``. Leave it unset for a result whose bands
+        :func:`frequency_band_reduce` will integrate: a band edge between the
+        last kept bin and its dropped neighbour loses the part of the band in
+        that neighbour's cell.
     connectivity_kwargs : mapping, optional
         Settings for the measure, e.g. ``{"pairs": [(0, 1)]}`` for
         ``subset_pairwise_spectral_granger_prediction`` or
@@ -1824,11 +1841,14 @@ def fourier_connectivity(
         # bin itself: the recorded Nyquist frequency is that bin's stored value
         # whatever the grid's rounding. An odd n_fft has no Nyquist bin: its top
         # bin is n_fft // 2 bins of sampling_frequency / n_fft above zero. The
-        # arithmetic stays in the grid's precision, so a float32 grid of a
-        # 100 Hz rate records 100.0.
+        # arithmetic stays in the grid's precision (float32 at least), which
+        # rounds the rate back to within a unit in its last place: a 3-bin
+        # float32 grid of a 100 Hz rate records 100.0.
         n_fft = all_frequencies.size
         precision = np.result_type(all_frequencies.dtype, np.float32).type
-        top = precision(abs(all_frequencies[n_fft // 2]))
+        # Converted before abs: an integer grid's Nyquist bin can be its
+        # dtype's minimum, which has no absolute value in that dtype.
+        top = abs(precision(all_frequencies[n_fft // 2]))
         sampling_frequency = (
             precision(2) * top
             if n_fft % 2 == 0

@@ -738,6 +738,22 @@ def test_float32_grid_of_an_odd_length_records_its_rate_in_its_own_precision(dat
     assert result.attrs["nyquist_frequency"] == 50.0
 
 
+def test_integer_grid_reaching_its_dtype_minimum_records_a_positive_rate():
+    """The Nyquist bin of this int8 grid is -128, whose absolute value int8
+    cannot hold; the rate is taken after converting it to floating point."""
+    grid = np.fft.fftfreq(256, 1 / 256).astype(np.int8)
+    assert grid[128] == -128
+    coefficients = _fourier_dataarray(
+        np.random.default_rng(912).standard_normal((256, 3, 2)), grid
+    )
+    with warnings.catch_warnings():
+        # Other steps still overflow on such a grid; only the rate is checked.
+        warnings.simplefilter("ignore")
+        result = fourier_connectivity(coefficients, method="power")
+    assert result.attrs["sampling_frequency"] == 256.0
+    assert result.attrs["nyquist_frequency"] == 128.0
+
+
 def test_float32_uniform_grid_is_uniform_for_phase_slope(data):
     """A coordinate's own rounding (e.g. float32 from netCDF) is not irregularity."""
     coefficients = xr.DataArray(

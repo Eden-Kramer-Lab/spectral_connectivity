@@ -96,9 +96,13 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
 # also changed the phase-lag-index measures (see the migration guide).
 _BLOCKS_REMOVED = (
     "blocks was removed in 3.0 (memory is bounded automatically), so drop it. "
-    "Recompute phase-lag-index measures obtained with blocks in 2.x: blocks=1 "
-    "reversed the sign of phase_lag_index and weighted_phase_lag_index, and larger "
-    "values did not return valid results."
+    "Recompute phase-lag-index measures that 2.x computed with blocks >= 1: "
+    "blocks=1 reversed the sign of phase_lag_index and weighted_phase_lag_index, "
+    "and larger values did not return valid results."
+)
+# Where 2.x took blocks by position, which is dtype's position now.
+_BLOCKS_POSITION = (
+    "In 2.x, blocks took this position (third in from_multitaper, fifth in Connectivity)."
 )
 
 
@@ -123,10 +127,7 @@ def _validated_complex_dtype(dtype: Any) -> Any:
         if dtype is None or (
             isinstance(dtype, (int, np.integer)) and not isinstance(dtype, bool)
         ):
-            msg += (
-                " In 2.x, blocks took this position (third in from_multitaper, fifth "
-                f"in Connectivity). {_BLOCKS_REMOVED} Pass dtype by keyword."
-            )
+            msg += f" {_BLOCKS_POSITION} {_BLOCKS_REMOVED} Pass dtype by keyword."
         raise TypeError(msg)
     return dtype
 
@@ -277,14 +278,26 @@ def _rejects_removed_blocks(caller: str) -> Callable[[Callable[_P, _R]], Callabl
     """Reject 2.x's ``blocks=`` keyword with a message that says to drop it.
 
     Its released position is ``dtype``'s now, where
-    :func:`_validated_complex_dtype` recognizes it.
+    :func:`_validated_complex_dtype` recognizes it. 2.x's ``blocks`` by
+    position with ``dtype`` by keyword would bind ``dtype`` twice, so that
+    form is recognized here, before Python reports it without naming
+    ``blocks``.
     """
 
     def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        dtype_position = list(inspect.signature(function).parameters).index("dtype")
+
         @wraps(function)
         def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             if "blocks" in kwargs:
                 msg = f"{caller} got blocks={kwargs['blocks']!r}. {_BLOCKS_REMOVED}"
+                raise TypeError(msg)
+            if "dtype" in kwargs and len(args) > dtype_position:
+                msg = (
+                    f"{caller} got {args[dtype_position]!r} by position where dtype "
+                    f"is, and dtype by keyword. {_BLOCKS_POSITION} {_BLOCKS_REMOVED} "
+                    "Pass dtype by keyword only."
+                )
                 raise TypeError(msg)
             return function(*args, **kwargs)
 

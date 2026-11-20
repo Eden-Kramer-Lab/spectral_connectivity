@@ -299,6 +299,17 @@ class TestSuggestParameters:
         assert params["frequency_resolution"] == 0.9
         assert params["n_tapers"] == 4
 
+    def test_a_whole_taper_boundary_keeps_the_type_of_its_arguments(self):
+        """8 Hz over a 0.5 s window is 2 * NW = 4 exactly: nothing is raised to
+        it, so NumPy arguments still give a NumPy float, as in 2.0.1."""
+        params = suggest_parameters(
+            sampling_frequency=np.float64(500.0),
+            signal_duration=np.float64(1.5),
+            desired_freq_resolution=np.float64(8.0),
+        )
+        assert params["time_halfbandwidth_product"] == 2.0
+        assert isinstance(params["time_halfbandwidth_product"], np.float64)
+
     def test_single_requested_taper_does_not_warn(self):
         """Only a resolution target can leave one taper by surprise."""
         params = suggest_parameters(

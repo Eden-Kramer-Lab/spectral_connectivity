@@ -451,9 +451,9 @@ def suggest_parameters(
             # below a whole 2 * NW, such as 30 Hz * 0.1 s = 2.9999999999999996,
             # would cost a taper: only such a value is raised to that whole.
             twice_nw = desired_freq_resolution * time_window_duration
-            whole = float(np.ceil(twice_nw))
-            if np.isclose(twice_nw, whole, rtol=1e-12, atol=0.0):
-                twice_nw = whole
+            whole = np.ceil(twice_nw)
+            if twice_nw < whole and np.isclose(twice_nw, whole, rtol=1e-12, atol=0.0):
+                twice_nw = type(twice_nw)(whole)
             time_halfbandwidth_product = twice_nw / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)

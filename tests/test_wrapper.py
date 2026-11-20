@@ -3402,7 +3402,7 @@ def test_band_integral_beside_phase_slope_index_equals_the_integral_alone():
 def test_band_integral_on_a_nonuniform_grid_uses_the_uncropped_grids_cells():
     """The cells of the bins frequency_range selects are those of the whole
     grid: on a logarithmic grid the first and last reach to the midpoints of
-    their real neighbours, not as far as a cropped grid would mirror them."""
+    their real neighbours, rather than where a cropped grid would mirror them."""
     rng = np.random.default_rng(54)
     frequencies = np.geomspace(1.0, 50.0, 33)
     coefficients = rng.standard_normal((12, 33, 2)) + 1j * rng.standard_normal((12, 33, 2))

@@ -49,7 +49,7 @@ returns a trial axis (see its row).
 | `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
-| `coherence_fisher_z_transform(coherency, n_obs1)` without a second sample returned `NaN` for three or more observations and `±inf` for two, because its `n_obs2=0` default was used as a sample size. `group_delay` and `delay` found their significant frequencies with it, so with three or more observations they found none: `group_delay` was all `NaN` and `delay` returned only the constants `2πk` | The one-sample z-score has no second-sample terms, and `group_delay` and `delay` use the exact zero-coherence null distribution, so both return estimates at the frequencies with significant coherence. 2.x output of these two methods is not usable: recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
+| `coherence_fisher_z_transform(coherency, n_obs1)` without a second sample returned `NaN` for three or more observations and `±inf` for two, and raised `ZeroDivisionError` for one, because its `n_obs2=0` default was used as a sample size. `group_delay` and `delay` found their significant frequencies with it, so with three or more observations they found none: `group_delay` returned `NaN` delays and slopes, and `delay` returned only the constants `2πk` between signals | The one-sample z-score has no second-sample terms, and `group_delay` and `delay` use the exact zero-coherence null distribution, so both return estimates at the frequencies with significant coherence. 2.x output of these two methods with three or more observations is not usable: recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
@@ -595,15 +595,15 @@ returns a trial axis (see its row).
 ### Removed
 
 - `blocks` of `Connectivity` and `Connectivity.from_multitaper` (released in
-  2.0.1). It was meant only to chunk the cross-spectral computation, and
-  memory is now bounded automatically. In 2.x it also changed the four
-  phase-lag-index measures (see the migration guide): `blocks=1` returned
-  `phase_lag_index` and `weighted_phase_lag_index` with the opposite sign, and
-  larger values raised `IndexError` or returned constants. Every other measure
-  agreed with and without it to rounding. A call that still passes it, by keyword or in its
-  released position, raises a `TypeError` that names `blocks`, says to drop
-  it, and says to recompute phase-lag-index results obtained with it, before
-  any computation. It is not kept as a deprecated alias.
+  2.0.1). It was meant only to chunk the cross-spectral computation, and memory
+  is now bounded automatically. In 2.x it also changed the four phase-lag-index
+  measures (see the migration guide): `blocks=1` returned `phase_lag_index` and
+  `weighted_phase_lag_index` with the opposite sign, and larger values raised
+  `IndexError` or returned constants. Every other measure agreed with and
+  without it to rounding. A call that still passes it, by keyword or in its
+  released position, raises a `TypeError` that names `blocks`, says to drop it,
+  and says to recompute phase-lag-index results obtained with it, before any
+  computation. It is not kept as a deprecated alias.
 - `dpss_windows(interp_from=..., interp_kind=...)`: the tapers come from
   SciPy's exact solver, so there is nothing to interpolate.
 - `tridisolve` and `tridi_inverse_iteration` from
@@ -819,10 +819,11 @@ is removed in 4.0.
   runtime warnings; their documented finite-sample ranges are corrected.
 - Group delay and delay use the exact zero-coherence significance distribution.
   In 2.x their one-sample Fisher z-scores were `NaN` for three or more
-  observations (`coherence_fisher_z_transform` used its `n_obs2=0` default as
-  a sample size), so `group_delay` was all `NaN` and `delay` returned only the
-  constants `2πk`; the one-sample z-score now has no second-sample terms.
-  Undefined p-values are excluded consistently from BH and Bonferroni families.
+  observations (`coherence_fisher_z_transform` used its `n_obs2=0` default as a
+  sample size), so `group_delay` returned `NaN` delays and slopes and `delay`
+  only the constants `2πk` between signals; the one-sample z-score now has no
+  second-sample terms. Undefined p-values are excluded consistently from BH and
+  Bonferroni families.
 - Statistical helpers validate observation counts, confidence levels, spectra,
   firing rates, p-values, and correction methods. Power confidence intervals
   and log-power bias/variance use the corrected formulas.
@@ -873,13 +874,14 @@ is removed in 4.0.
   hold the Nyquist frequency exactly. The last bin is at `nyquist_frequency` by
   the rule that places a bin on a band's bound, so a coordinate stored as
   float32 (as netCDF often does) keeps it on NumPy 1.x too (NumPy 2 already
-  compared the two in float32), and `fourier_connectivity` reads a
-  two-sided grid's rate from the bin farthest from 0 Hz (the Nyquist bin of an
-  even-length grid), in the grid's own precision, instead of multiplying the
-  first bin's rounding by the FFT length, so float32 and rounded FFT-order
-  grids record the right `sampling_frequency`. A band
-  ending on the Nyquist bin of such a grid was short by half that bin's cell.
-  This entry and the next two concern `frequency_band_reduce`,
+  compared the two in float32), and `fourier_connectivity` reads a two-sided
+  grid's rate from the bin farthest from 0 Hz (the Nyquist bin of an
+  even-length grid), in the grid's own precision (float32 at least), instead of
+  multiplying the first bin's rounding by the FFT length, so float32 and
+  rounded FFT-order grids record the right `sampling_frequency` (exactly for an
+  even length, to within a unit in the grid's last place for an odd one). A
+  band ending on the Nyquist bin of such a grid was short by half that bin's
+  cell. This entry and the next two concern `frequency_band_reduce`,
   `frequency_range`, and `fourier_connectivity`, which 2.x did not have:
   nothing computed with 2.x is affected.
 - `frequency_band_reduce` integrates each variable of a Dataset with that
@@ -893,14 +895,20 @@ is removed in 4.0.
   same value with and without the range even when its edge falls between bins
   (without `frequency_decimation`, whose kept bins start at the first bin in
   the range). Cropping first dropped the part of the band lying in the cell of
-  a bin just outside the range (up to about 3% of a 20 Hz band on 0.5-1 Hz
-  bins). A band reaching past the range is cut at the range's bounds, or at
-  the outer edge of the first or last selected bin's cell where that lies
-  further out.
-- `suggest_parameters` no longer loses a taper to floating-point error when
-  the resolution and the shortened window put `2 * NW` on a whole number
-  (30 Hz over a 0.3 s record suggested NW 1.4999999999999998 and one taper;
-  now 1.5 and two). Its other suggestions keep their 2.0.1 values exactly.
+  a bin just outside the range (up to half a bin's cell at each end: 2.5% of a
+  20 Hz band per end on 1 Hz bins). A band reaching past the range is cut at
+  the range's bounds, or at the outer edge of the first or last selected bin's
+  cell where that lies further out. `frequency_band_reduce` cannot recover that
+  part from a result that was cropped first, by `frequency_range` or `sel`:
+  integrate before cropping, or crop at least one bin wider than the bands.
+  That is the only route for `ShortTimeFourierTransform`, `Welch`, and
+  `MorletWavelet` results, so leave `frequency_range` of
+  `connectivity_to_xarray` unset for them.
+- `suggest_parameters` no longer loses a taper to floating-point error (in
+  Python-float or float64 arguments) when the resolution and the shortened
+  window put `2 * NW` on a whole number (30 Hz over a 0.3 s record suggested NW
+  1.4999999999999998 and one taper; now 1.5 and two). Its other suggestions
+  keep their 2.0.1 values exactly.
 - A window step given in seconds is rounded to the nearest sample instead of
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
