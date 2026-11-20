@@ -629,7 +629,8 @@ is removed in 4.0.
   `measure="coherence_magnitude"` (the name asked for), so 2.x selectors keep
   working and a saved file says which name produced it; its values and other
   attributes are those of `magnitude_squared_coherence`. Requesting both names
-  in one call raises `ValueError`.
+  in one call raises `ValueError`. The wrappers warn only for a call that
+  succeeds, so a call rejected for another reason raises only its error.
 - `Connectivity.from_multitaper`: use `Connectivity.from_transform`, the
   canonical constructor for any spectral transform. The old name takes the
   same arguments (including its `multitaper_instance` keyword) and builds the

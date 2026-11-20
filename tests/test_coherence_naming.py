@@ -175,6 +175,38 @@ def test_requesting_both_spellings_is_rejected(time_series):
         multitaper_connectivity(time_series, sampling_frequency=500, method=[_NEW, _OLD])
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda series, m: multitaper_connectivity(
+                series, sampling_frequency=500, method=_OLD, transform_kwargs={"n_fft": 256}
+            ),
+            id="multitaper_connectivity",
+        ),
+        pytest.param(
+            lambda series, m: fourier_connectivity(
+                m.fft(), m.frequencies, method=_OLD, connectivity_kwargs={"n_range": 2}
+            ),
+            id="fourier_connectivity",
+        ),
+        pytest.param(
+            lambda series, m: connectivity_to_xarray(
+                m, _OLD, connectivity_kwargs={"n_range": 2}
+            ),
+            id="connectivity_to_xarray",
+        ),
+    ],
+)
+def test_a_rejected_call_does_not_warn_about_the_deprecated_name(
+    time_series, multitaper, call
+):
+    """A call that is then rejected raises only its error, not the deprecation
+    first (which ``-W error`` would raise in its place)."""
+    with pytest.raises(TypeError):
+        call(time_series, multitaper)
+
+
 def test_connectivity_to_xarray_defaults_to_the_canonical_name(multitaper):
     assert inspect.signature(connectivity_to_xarray).parameters["method"].default == _NEW
     assert connectivity_to_xarray(multitaper).name == _NEW

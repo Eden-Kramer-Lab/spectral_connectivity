@@ -34,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _measure_description,
     _requested_methods,
     _requires_two_sided,
+    _warn_deprecated_measure_names,
 )
 from spectral_connectivity._provenance import (
     _shared_provenance_attrs,
@@ -741,6 +742,7 @@ def connectivity_to_xarray(
     if frequency_range is not None and not consumes_range:
         assert selection is not None  # resolved above whenever a range is given
         result = _crop_frequency_range(result, selection)
+    _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed([method])
     _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     return _with_frequency_grid_metadata(result)
@@ -1431,6 +1433,7 @@ def multitaper_connectivity(
         output_names=output_names,
         signal_metadata=signal_metadata,
     )
+    _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
@@ -1795,7 +1798,7 @@ def fourier_connectivity(
         metadata,
         input_attrs=input_attrs,
     )
-    return _format_and_reduce_measures(
+    result = _format_and_reduce_measures(
         connectivity,
         methods,
         return_dataarray=return_dataarray,
@@ -1812,3 +1815,5 @@ def fourier_connectivity(
         output_names=output_names,
         signal_metadata=signal_metadata,
     )
+    _warn_deprecated_measure_names(output_names)
+    return result
