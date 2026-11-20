@@ -43,9 +43,11 @@ from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symm
 from spectral_connectivity.simulate import simulate_MVAR
 from tests._backend_helpers import to_host
 from tests._var_oracle import (
+    _analytic_directed_measures,
     _analytic_var,
     _companion_spectral_radius,
     _fourier_coefficients_with_cross_spectrum,
+    _pairwise_granger_from_state_space,
 )
 
 # A unidirectional VAR: signal 0 drives signal 1 (lower-triangular coefficients),
@@ -137,45 +139,6 @@ def test_non_causal_direction_is_zero(var_oracle, measure):
 # measure's normalization (row vs column, noise weighting) is identifiable.
 _CHAIN_NOISE = np.diag([1.0, 2.0, 0.5])
 _CHAIN_N_FFT = 256
-
-
-def _analytic_directed_measures(A, H, noise_covariance):
-    """Closed-form directed measures of a VAR on the non-negative FFT grid.
-
-    Results are in the native ``[target, source]`` layout (see the module
-    docstring). ``A`` and ``H`` are on the full FFT grid; ``noise_covariance``
-    must be diagonal (variances ``sigma``). Returns squared DTF, PDC, DC, gPDC,
-    and dDTF.
-    """
-    n_non_negative = A.shape[0] // 2 + 1
-    A, H = A[:n_non_negative], H[:n_non_negative]
-    sigma = np.diag(noise_covariance)
-    H2, A2 = np.abs(H) ** 2, np.abs(A) ** 2
-    # DTF / DC normalize each target row by its total inflow over sources.
-    dtf = H2 / H2.sum(axis=-1, keepdims=True)
-    dc = sigma * H2 / (sigma * H2).sum(axis=-1, keepdims=True)
-    # PDC / gPDC normalize each source column by its total outflow over targets.
-    pdc = A2 / A2.sum(axis=-2, keepdims=True)
-    weighted = A2 / sigma[:, np.newaxis]
-    gpdc = weighted / weighted.sum(axis=-2, keepdims=True)
-    # dDTF (Korzeniewska et al. 2003): chi^2_ij = ffDTF^2_ij * kappa^2_ij, the
-    # full-frequency DTF (inflow summed over sources and frequencies) times the
-    # squared partial coherence from the inverse spectral matrix
-    # G = A^H Sigma^-1 A, kappa^2_ij = |G_ij|^2 / (G_ii G_jj).
-    full_frequency_dtf = H2 / H2.sum(axis=(-1, -3), keepdims=True)
-    inverse_spectrum = np.conj(np.swapaxes(A, -1, -2)) @ np.linalg.inv(noise_covariance) @ A
-    g_diagonal = np.real(np.diagonal(inverse_spectrum, axis1=-2, axis2=-1))
-    partial_coherence = np.abs(inverse_spectrum) ** 2 / (
-        g_diagonal[..., :, np.newaxis] * g_diagonal[..., np.newaxis, :]
-    )
-    ddtf = full_frequency_dtf * partial_coherence
-    return {
-        "directed_transfer_function": dtf,
-        "partial_directed_coherence": pdc,
-        "directed_coherence": dc,
-        "generalized_partial_directed_coherence": gpdc,
-        "direct_directed_transfer_function": ddtf,
-    }
 
 
 @pytest.fixture(scope="module")
@@ -529,6 +492,41 @@ def test_conditional_granger_matches_state_space_oracle(
             np.testing.assert_allclose(
                 conditional[:, source, target], oracle, atol=atol, rtol=0
             )
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "noise_covariance"),
+    [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
+    ids=["chain", "dense_correlated"],
+)
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+def test_pairwise_granger_matches_state_space_oracle(
+    coefficients, noise_covariance, conjugate_symmetric
+):
+    """Pairwise Granger from the Wilson factor of each pair's spectrum agrees
+    with the innovations form of that pair obtained from a Riccati equation,
+    which factors nothing: influences in both directions, through other
+    signals, and with correlated innovations."""
+    n_fft = 1024
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        ),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        pairwise = connectivity.pairwise_spectral_granger_prediction()[0]
+    oracle = _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    assert oracle[:, off_diagonal].max() > 0.1
+    np.testing.assert_allclose(
+        pairwise[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
 
 
 def test_conditional_granger_removes_mediated_influence():
