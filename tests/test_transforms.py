@@ -1,3 +1,4 @@
+import re
 import tracemalloc
 import warnings
 from contextlib import nullcontext
@@ -18,6 +19,7 @@ from spectral_connectivity.transforms import (
     _multitaper_fft,
     _sliding_window,
     dpss_windows,
+    suggest_parameters,
 )
 from spectral_connectivity.wrapper import multitaper_connectivity
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
@@ -580,6 +582,66 @@ def test_multitaper_equal_duration_and_step_are_non_overlapping():
     assert m.fft().shape[0] == 1000 // 57
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        # A positive step that rounds to zero samples names the step and the rate.
+        (
+            {"time_window_duration": 0.5, "time_window_step": 0.0001},
+            r"n_time_samples_per_step resolved to 0.*time_window_step \(0\.0001\)",
+        ),
+        # A Hann window needs 2 samples, and the advice says which duration gives them.
+        (
+            {"time_window_duration": 0.0001},
+            (
+                r"n_time_samples_per_window resolved to 0, but each window needs at least 2 "
+                r"samples\. If you set time_window_duration \(0\.0001\).*use a duration >= 0\.004 s"
+            ),
+        ),
+        (
+            {"time_window_duration": 0.002},
+            r"n_time_samples_per_window resolved to 1, but each window needs at least 2 samples",
+        ),
+        (
+            {"n_time_samples_per_window": 1},
+            "n_time_samples_per_window must be an integer of at least 2",
+        ),
+        # Argument checks come before the window and step are resolved.
+        ({"time_window_duration": 0.002, "fft_workers": 0}, "fft_workers must be"),
+        (
+            {"time_window_duration": 0.5, "time_window_step": 0.0001, "start_time": np.nan},
+            "start_time must be a finite scalar",
+        ),
+    ],
+    ids=[
+        "step_rounds_to_zero",
+        "window_rounds_to_zero",
+        "window_rounds_to_one",
+        "one_sample",
+        "fft_workers",
+        "start",
+    ],
+)
+def test_stft_rejects_windows_and_steps_it_cannot_use(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        ShortTimeFourierTransform(np.ones((1000, 1, 1)), sampling_frequency=500, **kwargs)
+
+
+@pytest.mark.parametrize("sampling_frequency", [500.0, 300.0, 44100.0])
+def test_stft_advised_window_duration_is_accepted(sampling_frequency):
+    """Following the too-short-window advice gives the shortest Hann window."""
+    time_series = np.ones((1000, 1, 1))
+    with pytest.raises(ValueError, match="needs at least 2 samples") as error:
+        ShortTimeFourierTransform(
+            time_series, sampling_frequency, time_window_duration=0.1 / sampling_frequency
+        )
+    advised = float(re.search(r"use a duration >= (\S+) s", str(error.value)).group(1))
+    stft = ShortTimeFourierTransform(
+        time_series, sampling_frequency, time_window_duration=advised
+    )
+    assert stft.n_time_samples_per_window == 2
+
+
 def test_stft_explicit_step_is_not_re_truncated():
     """STFT forwards an explicit step both as a duration and a sample count;
     the sample count must survive the round trip through the duration."""
@@ -929,31 +991,32 @@ def test_fft():
     )
 
 
-def test_multitaper_requires_3d_input():
-    """Test that Multitaper requires 3D input array."""
+@pytest.mark.parametrize(
+    "construct",
+    [
+        lambda x: Multitaper(sampling_frequency=1000, time_series=x),
+        lambda x: ShortTimeFourierTransform(x, sampling_frequency=1000),
+        lambda x: Welch(x, sampling_frequency=1000, n_time_samples_per_segment=50),
+    ],
+    ids=["Multitaper", "ShortTimeFourierTransform", "Welch"],
+)
+def test_windowed_transforms_require_3d_input(construct):
+    """Non-3-D input fails with a message showing how to reshape it; nested
+    lists are converted like arrays."""
     rng = np.random.default_rng(42)
-    # 1D input should raise ValueError
-    time_series_1d = rng.standard_normal(100)
+    time_series = rng.standard_normal((100, 2, 2))
+    np.testing.assert_array_equal(
+        construct(time_series.tolist()).fft(), construct(time_series).fft()
+    )
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 1D"):
-        Multitaper(sampling_frequency=1000, time_series=time_series_1d)
-
-    # 2D input should raise ValueError with helpful message
-    time_series_2d = rng.standard_normal((100, 5))
+        construct(rng.standard_normal(100))
     with pytest.raises(
-        ValueError,
-        match=r"Expected 3D array.*got 2D.*Use prepare_time_series|np.newaxis",
+        ValueError, match=r"(?s)Expected 3D array.*got 2D.*prepare_time_series"
     ):
-        Multitaper(sampling_frequency=1000, time_series=time_series_2d)
-
-    # 4D input should raise ValueError
-    time_series_4d = rng.standard_normal((100, 10, 5, 3))
+        construct(rng.standard_normal((100, 5)))
     with pytest.raises(ValueError, match=r"Expected 3D array.*got 4D"):
-        Multitaper(sampling_frequency=1000, time_series=time_series_4d)
-
-    # 3D input should work
-    time_series_3d = rng.standard_normal((100, 10, 5))
-    m = Multitaper(sampling_frequency=1000, time_series=time_series_3d)
-    assert m.time_series.ndim == 3
+        construct(rng.standard_normal((100, 10, 5, 3)))
+    assert construct(rng.standard_normal((100, 10, 5))).fft().ndim == 5
 
 
 def test_prepare_time_series_single_trial():
@@ -1115,17 +1178,6 @@ def test_multitaper_rejects_negative_time_window_step():
         Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=0)
 
 
-def test_multitaper_warns_likely_transposed():
-    """Test that Multitaper warns when data appears to be transposed."""
-    rng = np.random.default_rng(42)
-    # Create time series where n_time < n_signals (likely transposed)
-    # Shape: (10 time points, 1 trial, 100 signals) - suspiciously few time points
-    time_series = rng.standard_normal((10, 1, 100))
-
-    with pytest.warns(UserWarning, match=r"data may be transposed"):
-        Multitaper(time_series=time_series, sampling_frequency=1000)
-
-
 def test_multitaper_warns_on_nan_input():
     """Test that Multitaper warns when input contains NaN or Inf values."""
     rng = np.random.default_rng(42)
@@ -1151,29 +1203,173 @@ def test_multitaper_warns_on_nan_input():
         Multitaper(time_series=time_series_neginf, sampling_frequency=1000)
 
 
-def test_multitaper_warns_on_large_time_halfbandwidth():
-    """Test that Multitaper warns when time_halfbandwidth_product is unusually large."""
-    rng = np.random.default_rng(42)
-    time_series = rng.standard_normal((100, 1, 1))
+_RNG = np.random.default_rng(42)
+_WITH_NAN = _RNG.standard_normal((100, 1, 1))
+_WITH_NAN[50, 0, 0] = np.nan
+_TRANSPOSED = _RNG.standard_normal((10, 1, 100))  # fewer time points than signals
+_LONG = _RNG.standard_normal((1000, 1, 1))
+_TWO_SIGNALS = _RNG.standard_normal((4000, 1, 2))
+_GAP = {"time_window_duration": 0.5, "time_window_step": 1.0}
+_GAP_IN_SAMPLES = {"n_time_samples_per_window": 100, "n_time_samples_per_step": 150}
+_LARGE_NW = {"time_halfbandwidth_product": 11}
+_POWER = {"method": "power"}
+# One iteration with an unreachable tolerance cannot converge.
+_UNCONVERGED = {
+    "time_halfbandwidth_product": 4,
+    "taper_weighting": "adaptive",
+    "adaptive_max_iterations": 1,
+    "adaptive_tolerance": 1e-15,
+}
+_SHORT_SMOOTHING = {"frequencies": [10.0, 40.0], "n_cycles": 7, "smoothing_time": 0.1}
+_BOTH_TARGETS = {
+    "sampling_frequency": 1000,
+    "signal_duration": 2.0,
+    "desired_freq_resolution": 5.0,
+    "desired_n_tapers": 7,
+}
+_ONE_TAPER = {
+    "sampling_frequency": 1000,
+    "signal_duration": 2.0,
+    "desired_freq_resolution": 4.0,
+}
+_NAN_MESSAGE = "Input time_series contains NaN"
+_TRANSPOSED_MESSAGE = "data may be transposed"
+_GAP_MESSAGE = "creates gaps"
+_LARGE_NW_MESSAGE = "unusually large"
+_ADAPTIVE_MESSAGE = "did not converge"
 
-    with pytest.warns(UserWarning, match=r"unusually large"):
-        Multitaper(
-            sampling_frequency=1000, time_series=time_series, time_halfbandwidth_product=15
-        )
+
+# Each call is written here, in the user's code, on the line of its lambda,
+# which is the line every warning must name. Welch and the wrapper build their
+# transforms inside the package. A Welch step never exceeds its segment, and
+# Welch has no NW.
+@pytest.mark.parametrize(
+    ("call", "message"),
+    [
+        pytest.param(lambda: Multitaper(_WITH_NAN, 1000), _NAN_MESSAGE, id="Multitaper-nan"),
+        pytest.param(
+            lambda: Multitaper(_TRANSPOSED, 1000),
+            _TRANSPOSED_MESSAGE,
+            id="Multitaper-transposed",
+        ),
+        pytest.param(
+            lambda: Multitaper(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="Multitaper-gap"
+        ),
+        pytest.param(
+            lambda: Multitaper(_LONG, 1000, **_LARGE_NW),
+            _LARGE_NW_MESSAGE,
+            id="Multitaper-large_nw",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_WITH_NAN, 1000), _NAN_MESSAGE, id="STFT-nan"
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_TRANSPOSED, 1000),
+            _TRANSPOSED_MESSAGE,
+            id="STFT-transposed",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_LONG, 1000, **_GAP), _GAP_MESSAGE, id="STFT-gap"
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_LONG, 1000, **_GAP_IN_SAMPLES),
+            _GAP_MESSAGE,
+            id="STFT-gap_in_samples",
+        ),
+        pytest.param(
+            lambda: Welch(_WITH_NAN, 1000, n_time_samples_per_segment=4),
+            _NAN_MESSAGE,
+            id="Welch-nan",
+        ),
+        pytest.param(
+            lambda: Welch(_TRANSPOSED, 1000, n_time_samples_per_segment=4),
+            _TRANSPOSED_MESSAGE,
+            id="Welch-transposed",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_WITH_NAN, 1000, **_POWER),
+            _NAN_MESSAGE,
+            id="wrapper-nan",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_TRANSPOSED, 1000, **_POWER),
+            _TRANSPOSED_MESSAGE,
+            id="wrapper-transposed",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_LONG, 1000, **_POWER, **_GAP),
+            _GAP_MESSAGE,
+            id="wrapper-gap",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_LONG, 1000, **_POWER, **_LARGE_NW),
+            _LARGE_NW_MESSAGE,
+            id="wrapper-large_nw",
+        ),
+        pytest.param(
+            lambda: Multitaper(_TWO_SIGNALS, 256, **_UNCONVERGED).fft(),
+            _ADAPTIVE_MESSAGE,
+            id="Multitaper-adaptive_not_converged",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(_TWO_SIGNALS, 256, **_POWER, **_UNCONVERGED),
+            _ADAPTIVE_MESSAGE,
+            id="wrapper-adaptive_not_converged",
+        ),
+        pytest.param(
+            lambda: dpss_windows(100, 0.5, 1),
+            "lowest-bias taper",
+            id="dpss_windows-no_low_bias_taper",
+        ),
+        pytest.param(
+            lambda: Welch(_LONG, 30000), "default segment length", id="Welch-default_segment"
+        ),
+        pytest.param(
+            lambda: MorletWavelet(_TWO_SIGNALS, 1000.0, **_SHORT_SMOOTHING),
+            "shorter than 4 wavelet standard deviations",
+            id="MorletWavelet-short_smoothing",
+        ),
+        pytest.param(
+            lambda: suggest_parameters(**_BOTH_TARGETS),
+            "were specified",
+            id="suggest_parameters-both_targets",
+        ),
+        pytest.param(
+            lambda: suggest_parameters(**_ONE_TAPER),
+            "leaves 1 taper",
+            id="suggest_parameters-one_taper",
+        ),
+    ],
+)
+def test_warnings_point_at_the_users_call(call, message):
+    """Each warning is a UserWarning that names the user's line, not package internals."""
+    # Record every warning: the wrapper also warns about NaN coefficients.
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    matching = [
+        (w.category, w.filename, w.lineno) for w in record if message in str(w.message)
+    ]
+    assert matching == [(UserWarning, __file__, call.__code__.co_firstlineno)]
 
 
-def test_multitaper_warns_on_step_larger_than_duration():
-    """Test that Multitaper warns when time_window_step > time_window_duration."""
-    rng = np.random.default_rng(42)
-    time_series = rng.standard_normal((1000, 1, 1))
-
-    with pytest.warns(UserWarning, match=r"creates gaps"):
-        Multitaper(
-            time_series=time_series,
-            sampling_frequency=1000,
-            time_window_duration=0.5,
-            time_window_step=1.0,
-        )
+@pytest.mark.parametrize(
+    ("time_series", "kwargs"),
+    [
+        (_WITH_NAN, {}),
+        (_TRANSPOSED, {}),
+        (_LONG, _GAP),
+        (_LONG, _GAP_IN_SAMPLES),
+    ],
+    ids=["nan", "transposed", "gap", "gap_in_samples"],
+)
+def test_stft_that_fails_to_construct_does_not_warn_first(time_series, kwargs):
+    """Input warnings come after every check, so an invalid STFT only raises."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="start_time must be a finite scalar"):
+            ShortTimeFourierTransform(time_series, 1000, start_time=np.nan, **kwargs)
+    assert record == []
 
 
 @pytest.mark.parametrize(
@@ -2102,6 +2298,42 @@ def test_welch_default_segment_warns_on_coarse_resolution():
         welch = Welch(data, sampling_frequency=30000)
     assert welch.equivalent_noise_bandwidth == pytest.approx(1.5 * 30000 / 256)
     assert "175.8 Hz equivalent noise bandwidth" in str(record[0].message)
+
+
+def test_welch_default_segment_reads_the_length_of_a_nested_list():
+    time_series = np.random.default_rng(918).standard_normal((600, 2, 2))
+    np.testing.assert_array_equal(
+        Welch(time_series.tolist(), sampling_frequency=100).fft(),
+        Welch(time_series, sampling_frequency=100).fft(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("time_series", "kwargs", "match"),
+    [
+        (
+            np.ones((1000, 1, 1)),
+            {"segment_duration": 0.001},
+            (
+                r"segment_duration=0\.001 s is 0 samples at sampling_frequency=500 Hz; a Welch "
+                r"segment needs at least 2 samples \(segment_duration >= 0\.004 s\)"
+            ),
+        ),
+        (
+            np.ones((1, 1, 1)),
+            {},
+            (
+                r"Welch needs a segment of at least 2 samples, but the time series has "
+                r"shape \(1, 1, 1\)"
+            ),
+        ),
+        (None, {}, r"Welch needs a segment of at least 2 samples.*has shape \(\)"),
+    ],
+    ids=["duration_rounds_to_zero", "one_sample_series", "none"],
+)
+def test_welch_reports_a_short_segment_in_its_own_terms(time_series, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        Welch(time_series, sampling_frequency=500, **kwargs)
 
 
 def test_welch_explicit_segment_does_not_warn():

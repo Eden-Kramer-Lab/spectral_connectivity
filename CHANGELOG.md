@@ -518,6 +518,12 @@ directly with results from 2.x.
   package instead (e.g. `coherence_magnitude`'s single-observation warning, and
   every Granger NaN-pair warning reached through `multitaper_connectivity`),
   which also defeated per-module warning filters.
+- The input warnings raised while `multitaper_connectivity` builds its
+  `Multitaper` (NaN or infinite input, likely transposed data, gaps between
+  windows, an unusually large `time_halfbandwidth_product`) now name the user's
+  line instead of the `Multitaper(...)` call inside `wrapper.py`. Their
+  categories and messages are unchanged. Every warning raised by a transform
+  now names the user's line.
 - `global_coherence` is reproducible run to run on the CPU backend when it
   decomposes bins one at a time (many signals and estimates). SciPy's `svds`
   started from a random vector, so the values varied at rounding level and the

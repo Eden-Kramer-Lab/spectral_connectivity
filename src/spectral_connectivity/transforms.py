@@ -34,6 +34,7 @@ from spectral_connectivity.utils import (
     _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
+    stacklevel_outside_package,
     to_numpy,
 )
 
@@ -63,26 +64,38 @@ TAPER_MULTIPLIER = 2.0
 MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS = 1.5
 
 
+def _duration_to_samples(duration: float, sampling_frequency: float) -> int:
+    """Nearest whole number of samples in ``duration`` seconds.
+
+    Rounds rather than truncates: ``step / fs * fs`` can land just below
+    ``step`` in floating point (e.g. 0.57 s at 100 Hz gives 56.99999...), and
+    ``int()`` would truncate to 56.
+    """
+    return int(np.around(duration * sampling_frequency))
+
+
 def _resolve_sample_count(
     explicit: int | None,
     duration: float | None,
     sampling_frequency: float,
     mismatch_message: str,
 ) -> int | None:
-    """Resolve a window/segment length from an explicit count or a duration.
+    """Resolve Welch's segment length from an explicit count or a duration.
 
     Returns the sample count when either ``explicit`` or ``duration`` is given
     (cross-checking that they agree when both are), or ``None`` when neither is
-    provided so the caller can apply its own default. Shared by the STFT window,
-    STFT step, and Welch segment resolution.
+    provided so the caller can apply its own default.
     """
     if explicit is not None:
         samples = int(explicit)
-        if duration is not None and int(np.around(duration * sampling_frequency)) != (samples):
+        if (
+            duration is not None
+            and _duration_to_samples(duration, sampling_frequency) != samples
+        ):
             raise ValueError(mismatch_message)
         return samples
     if duration is not None:
-        return int(np.around(duration * sampling_frequency))
+        return _duration_to_samples(duration, sampling_frequency)
     return None
 
 
@@ -384,7 +397,7 @@ def suggest_parameters(
             "This is typically not recommended as they have competing effects on the analysis. "
             "Using 'desired_freq_resolution' and ignoring 'desired_n_tapers'.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
         desired_n_tapers = None
 
@@ -482,7 +495,7 @@ def suggest_parameters(
             f"  - a longer signal (at least {min_signal_duration:.2f} s), or\n"
             f"  - a coarser frequency resolution (at least {min_freq_resolution:.2f} Hz).",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
     frequency_resolution = estimate_frequency_resolution(
         sampling_frequency, time_window_duration, time_halfbandwidth_product
@@ -658,7 +671,697 @@ class SpectralTransform(Protocol):
         """Return the coefficients, ``(n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)``."""
 
 
-class Multitaper:
+def _check_time_series_is_3d(time_series: BackendArray) -> None:
+    """Reject a time series that is not ``(n_time_samples, n_trials, n_signals)``.
+
+    The message shows how to reshape 1-D and 2-D input.
+    """
+    if time_series.ndim != 3:
+        error_msg = (
+            f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
+            f"but got {time_series.ndim}D array with shape {time_series.shape}.\n"
+            "\n"
+        )
+
+        if time_series.ndim == 1:
+            error_msg += (
+                "For a single time series, use:\n"
+                "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                "  >>> time_series_3d = prepare_time_series(time_series)\n"
+                "Or manually:\n"
+                "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
+            )
+        elif time_series.ndim == 2:
+            error_msg += (
+                "For 2D data, you must clarify the meaning of the second dimension.\n"
+                "\n"
+                "Use prepare_time_series() helper:\n"
+                "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
+                "  >>> # If shape is (n_time, n_signals) with 1 trial:\n"
+                "  >>> time_series_3d = prepare_time_series(time_series, axis='signals')\n"
+                "  >>> # If shape is (n_time, n_trials) with 1 signal:\n"
+                "  >>> time_series_3d = prepare_time_series(time_series, axis='trials')\n"
+                "\n"
+                "Or manually with np.newaxis:\n"
+                "  >>> # For (n_time, n_signals) → (n_time, 1, n_signals):\n"
+                "  >>> time_series_3d = time_series[:, np.newaxis, :]\n"
+                "  >>> # For (n_time, n_trials) → (n_time, n_trials, 1):\n"
+                "  >>> time_series_3d = time_series[:, :, np.newaxis]"
+            )
+        else:
+            error_msg += (
+                f"Arrays with {time_series.ndim} dimensions are not supported.\n"
+                "Expected shape: (n_time_samples, n_trials, n_signals)"
+            )
+
+        raise ValueError(error_msg)
+
+
+def _validate_fft_workers(fft_workers: int | None) -> None:
+    """Reject an ``fft_workers`` value that ``scipy.fft.fft(workers=...)`` cannot use."""
+    # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
+    # be a nonzero integer (a negative value counts back from os.cpu_count(),
+    # so -1 uses all cores) or None (SciPy's single-threaded default).
+    # Validate here so a bad value names this parameter, instead of surfacing
+    # a bare "workers must not be zero" ValueError or an opaque TypeError from
+    # deep inside fft(). bool is an int subclass, so reject it explicitly.
+    if fft_workers is not None and (
+        isinstance(fft_workers, bool)
+        or not isinstance(fft_workers, (int, np.integer))  # type: ignore[redundant-expr]  # user input
+        or fft_workers == 0
+    ):
+        msg = (
+            f"fft_workers must be None or a nonzero integer (the number of "
+            f"parallel FFT threads; -1 uses all cores), got {fft_workers!r}. "
+            f"It is forwarded to scipy.fft.fft(workers=...). Use None (the "
+            f"default) for SciPy's single-threaded FFT."
+        )
+        raise ValueError(msg)
+
+
+def _validate_window_step(
+    time_window_duration: float | None,
+    time_window_step: float | None,
+) -> None:
+    """Reject a non-positive window step and warn when steps leave gaps.
+
+    ``time_window_duration`` must already be positive or ``None``.
+    """
+    if time_window_step is not None and time_window_step <= 0:
+        msg = (
+            f"time_window_step must be positive, got {time_window_step}.\n"
+            "\n"
+            "The time window step is how far to advance the window for each computation (in seconds).\n"
+            "  - Small step: More time resolution, more overlapping windows, slower computation\n"
+            "  - Large step: Less overlap, faster computation, coarser time resolution\n"
+            "\n"
+            "Common choices:\n"
+            "  - step = duration: No overlap (consecutive windows)\n"
+            "  - step = duration/2: 50% overlap (recommended for most applications)\n"
+            "  - step < duration: More overlap, smoother temporal evolution\n"
+            "\n"
+            "Use None (default) to match time_window_duration (no overlap)."
+        )
+        raise ValueError(msg)
+
+    # Warn if time_window_step creates gaps between windows
+    if (
+        time_window_step is not None
+        and time_window_duration is not None
+        and time_window_step > time_window_duration
+    ):
+        warnings.warn(
+            f"time_window_step ({time_window_step}s) is larger than "
+            f"time_window_duration ({time_window_duration}s).\n"
+            "\n"
+            "This creates gaps between analysis windows - some data will not be analyzed.\n"
+            "If you want contiguous coverage, set step ≤ duration.\n"
+            "\n"
+            "If gaps are intended (e.g., sampling every Nth window), ignore this warning.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
+def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
+    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite."""
+    # Warn if data appears to be transposed (very few time points, many signals)
+    n_time, _, n_signals = time_series.shape
+    if n_time < n_signals:
+        warnings.warn(
+            f"Your time series has only {n_time} time points but {n_signals} signals. "
+            "This seems unusual and your data may be transposed.\n"
+            "\n"
+            "Expected shape: (n_time_samples, n_trials, n_signals)\n"
+            f"Your shape: {time_series.shape}\n"
+            "\n"
+            "If your data is transposed, use:\n"
+            "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
+            "\n"
+            "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+    # Warn if data contains NaN or Inf
+    if not xp.all(xp.isfinite(time_series)):
+        warnings.warn(
+            "Input time_series contains NaN or infinite values.\n"
+            "\n"
+            "This will produce invalid spectral estimates. Common causes:\n"
+            "  - Missing data or recording artifacts\n"
+            "  - Incorrect preprocessing (division by zero, log of negative)\n"
+            "  - Corrupted data files\n"
+            "\n"
+            "Suggestions:\n"
+            "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
+            "  - Remove bad segments or trials\n"
+            "  - Check your preprocessing pipeline\n"
+            "  - Verify data integrity\n"
+            "\n"
+            "For artifact removal, consider using MNE-Python or similar tools.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
+
+class _WindowedFourierTransform:
+    """Tapered sliding-window FFT shared by Multitaper and the Hann STFT.
+
+    Owns what the two transforms have in common: the window and step sample
+    counts and their durations, the FFT length, the time and frequency
+    coordinates, the windowed FFT itself, and the summary and provenance
+    scaffolding.
+
+    A subclass constructor validates its own arguments in its own order, using
+    :func:`_validate_fft_workers`, :func:`_validate_window_step`, and
+    :func:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
+    read-only snapshot of the input (``_immutable_array_snapshot``), and calls
+    :meth:`_set_window_state`, which validates the start time and sets the
+    other private fields annotated below. The subclass must also supply:
+
+    - ``sampling_frequency``, ``detrend_type``, and ``fft_workers``, fixed
+      after construction (immutable attributes on :class:`Multitaper`,
+      properties without setters on :class:`ShortTimeFourierTransform`);
+    - ``_transform_name``, and any attributes of its own that
+      :meth:`_provenance_metadata` should record, appended to the base's
+      ``_PROVENANCE_FIELDS``;
+    - :meth:`_tapers_for_fft`, the tapers applied to each window, of shape
+      ``(n_time_samples_per_window, n_tapers)``. Generated DPSS tapers and the
+      Hann window are unit-energy windows scaled by ``sqrt(sampling_frequency)``,
+      so ``power()`` is a density; custom :class:`Multitaper` tapers are used
+      as given;
+    - :meth:`_spectral_bandwidth_metadata`, the taper identity and its
+      qualified bandwidth;
+    - the public ``observations_are_independent``, ``summarize_parameters()``
+      (built with :meth:`_summary`), and ``__repr__`` (which :meth:`fft` logs);
+    - optionally :meth:`_weight_taper_coefficients`, which reweights the
+      coefficients of each taper.
+    """
+
+    #: The transform returns the full two-sided FFT spectrum (both positive and
+    #: negative frequencies), so consumers must not assume a one-sided layout.
+    is_one_sided = False
+    _transform_name: str
+    # Shortest window the subclass's tapers can use, in samples.
+    _MIN_WINDOW_SAMPLES = 1
+    # The shared window settings; a subclass extends the tuple with its own.
+    _PROVENANCE_FIELDS: tuple[str, ...] = (
+        "detrend_type",
+        "fft_workers",
+        "n_fft_samples",
+        "n_signals",
+        "n_time_samples_per_step",
+        "n_time_samples_per_window",
+        "n_trials",
+        "nyquist_frequency",
+        "sampling_frequency",
+        "start_time",
+        "time_window_duration",
+        "time_window_step",
+    )
+
+    if TYPE_CHECKING:
+        # Read here, provided by each subclass (see the class docstring).
+        @property
+        def sampling_frequency(self) -> float: ...
+
+        @property
+        def detrend_type(self) -> str | None: ...
+
+        @property
+        def fft_workers(self) -> int | None: ...
+
+    _time_series: BackendArray
+    _start_time: BackendArray
+    _time_window_duration: float | None
+    _time_window_step: float | None
+    _n_fft_samples: int | None
+    _n_time_samples_per_window: int | None
+    _n_samples_per_time_step: int | None
+
+    def _set_window_state(
+        self,
+        start_time: Any,
+        *,
+        time_window_duration: float | None,
+        time_window_step: float | None,
+        n_fft_samples: int | None,
+        n_time_samples_per_window: int | None,
+        n_time_samples_per_step: int | None,
+    ) -> None:
+        """Validate and store the start time, and store the window request.
+
+        The durations, sample counts, and FFT length are stored as given
+        (``None`` when not requested); the properties resolve and check them.
+
+        Raises
+        ------
+        ValueError
+            If ``start_time`` is not a finite scalar.
+        """
+        # ``time`` adds start_time to a 1-D array of window centers, so a
+        # per-trial array would either broadcast-fail or silently produce a 2-D
+        # time axis.
+        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
+        self._time_window_duration = time_window_duration
+        self._time_window_step = time_window_step
+        self._n_fft_samples = n_fft_samples
+        self._n_time_samples_per_window = n_time_samples_per_window
+        self._n_samples_per_time_step = n_time_samples_per_step
+
+    @property
+    def time_series(self) -> BackendArray:
+        """Independent read-only copy of the input time-series snapshot."""
+        return _readonly_array_copy(self._time_series)
+
+    @property
+    def start_time(self) -> BackendArray:
+        """Time of the first sample, in seconds.
+
+        Returns an independent read-only copy of the start-time coordinate.
+        """
+        return _readonly_array_copy(self._start_time)
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        """Native transform settings, serialized by the shared provenance builder."""
+        metadata: dict[str, Any] = {"transform": self._transform_name}
+        for attr in self._PROVENANCE_FIELDS:
+            value = getattr(self, attr)
+            value = to_numpy(value) if hasattr(value, "shape") else value
+            if isinstance(value, np.ndarray):
+                if value.dtype.kind not in "biufSU":  # exclude complex/object
+                    continue
+            elif value is not None and not isinstance(
+                value,
+                (str, bytes, bool, int, float, np.integer, np.floating, np.bool_),
+            ):
+                continue
+            metadata[attr] = value
+        metadata.update(self._spectral_bandwidth_metadata())
+        return metadata
+
+    def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
+        """Taper identity and its qualified spectral bandwidth."""
+        raise NotImplementedError
+
+    def _summary(
+        self,
+        title: str,
+        spectral_rows: list[tuple[str, Any]],
+        bandwidth_row: tuple[str, str],
+    ) -> str:
+        """Human-readable configuration summary shared by the windowed transforms.
+
+        ``spectral_rows`` follow the sampling frequency in "Spectral Parameters";
+        ``bandwidth_row`` heads "Frequency Analysis".
+        """
+        n_time_samples = self._time_series.shape[0]
+        signal_duration = n_time_samples / self.sampling_frequency
+        n_windows = int(
+            xp.floor(
+                (n_time_samples - self.n_time_samples_per_window)
+                / self.n_time_samples_per_step
+            )
+            + 1
+        )
+
+        # Determine overlap description
+        if self.time_window_step == self.time_window_duration:
+            overlap_desc = "(non-overlapping)"
+        else:
+            overlap_percent = (
+                100
+                * (self.time_window_duration - self.time_window_step)
+                / self.time_window_duration
+            )
+            overlap_desc = f"({overlap_percent:.0f}% overlap)"
+
+        spectral = "\n".join(
+            f"{label + ':':<31}{value}"
+            for label, value in [
+                ("Sampling frequency", f"{self.sampling_frequency:g} Hz"),
+                *spectral_rows,
+            ]
+        )
+        frequency_rows = [
+            bandwidth_row,
+            ("Nyquist frequency", f"{self.nyquist_frequency:.1f} Hz"),
+            ("Frequency range", f"0.0 - {self.nyquist_frequency:.1f} Hz"),
+            ("FFT samples", f"{self.n_fft_samples}"),
+        ]
+        width = max(22, max(len(label) + 2 for label, _ in frequency_rows))
+        frequency = "\n".join(
+            f"{label + ':':<{width}}{value}" for label, value in frequency_rows
+        )
+        return f"""{title}
+{"=" * (len(title) + 1)}
+
+Data Shape
+----------
+Time samples:    {n_time_samples} ({signal_duration:.2f} seconds)
+Signals:         {self.n_signals}
+Trials:          {self.n_trials}
+
+Spectral Parameters
+-------------------
+{spectral}
+
+Time Windowing
+--------------
+Window duration:  {self.time_window_duration:.3f} s ({self.n_time_samples_per_window} samples)
+Window step:      {self.time_window_step:.3f} s {overlap_desc}
+Number of windows: {n_windows}
+
+Frequency Analysis
+------------------
+{frequency}
+"""
+
+    @property
+    def time_window_duration(self) -> float:
+        """Window length in seconds, after rounding to whole samples.
+
+        Returns
+        -------
+        float
+            Duration in seconds of each time window actually analyzed,
+            ``n_time_samples_per_window / sampling_frequency`` (a requested
+            duration is rounded to the nearest sample).
+
+        """
+        return self.n_time_samples_per_window / self.sampling_frequency
+
+    @property
+    def time_window_step(self) -> float:
+        """Step between window starts in seconds, after rounding to whole samples.
+
+        Returns
+        -------
+        float
+            Step size in seconds between consecutive time windows actually
+            taken, ``n_time_samples_per_step / sampling_frequency`` (a
+            requested step is rounded to the nearest sample).
+
+        """
+        return self.n_time_samples_per_step / self.sampling_frequency
+
+    @property
+    def n_time_samples_per_window(self) -> int:
+        """Window length in samples.
+
+        An explicit ``n_time_samples_per_window`` is used as given. Otherwise,
+        if ``time_window_duration`` is set, the window is the nearest whole
+        number of samples in that duration. If neither is set, the window is
+        the whole time series.
+
+        Returns
+        -------
+        int
+            Number of time samples in each window.
+
+        Raises
+        ------
+        ValueError
+            If the resolved window is shorter than the transform's tapers
+            allow or longer than the time series.
+
+        """
+        # An explicit n_time_samples_per_window is used as given (a duration
+        # given with it was checked to agree at construction).
+        if self._n_time_samples_per_window is None:
+            if self._time_window_duration is None:
+                self._n_time_samples_per_window = self._time_series.shape[0]
+            else:
+                self._n_time_samples_per_window = _duration_to_samples(
+                    self._time_window_duration, self.sampling_frequency
+                )
+        assert self._n_time_samples_per_window is not None
+        # Validate the resolved window length regardless of which input path set
+        # it: an explicit n_time_samples_per_window=0 (or a duration rounding to
+        # 0) would divide by zero downstream, and an oversized window yields an
+        # empty transform.
+        n_time_samples = self._time_series.shape[0]
+        minimum = self._MIN_WINDOW_SAMPLES
+        if self._n_time_samples_per_window < minimum:
+            samples, count = (
+                ("1 sample", "a positive n_time_samples_per_window")
+                if minimum == 1
+                else (f"{minimum} samples", f"n_time_samples_per_window >= {minimum}")
+            )
+            msg = (
+                f"n_time_samples_per_window resolved to "
+                f"{self._n_time_samples_per_window}, but each window needs at "
+                f"least {samples}. If you set time_window_duration "
+                f"({self._time_window_duration}), it is too short for "
+                f"sampling_frequency ({self.sampling_frequency}); use a duration "
+                f">= {minimum / self.sampling_frequency} s. Otherwise pass {count}."
+            )
+            raise ValueError(msg)
+        if self._n_time_samples_per_window > n_time_samples:
+            msg = (
+                f"n_time_samples_per_window ({self._n_time_samples_per_window}) is "
+                f"larger than the signal length ({n_time_samples}); no window fits, "
+                f"which would yield an empty transform. Use a smaller window "
+                f"(time_window_duration <= "
+                f"{n_time_samples / self.sampling_frequency} s)."
+            )
+            raise ValueError(msg)
+        return self._n_time_samples_per_window
+
+    @property
+    def n_fft_samples(self) -> int:
+        """FFT length of each window, which is also the number of frequency bins.
+
+        An explicit ``n_fft_samples`` is used as given. Otherwise it is a
+        length at least ``n_time_samples_per_window`` that is fast for the FFT
+        (``scipy.fft.next_fast_len``), so windows may be zero-padded.
+
+        Returns
+        -------
+        int
+            Number of FFT samples.
+
+        Raises
+        ------
+        ValueError
+            If the requested ``n_fft_samples`` is smaller than
+            ``n_time_samples_per_window``.
+
+        """
+        if self._n_fft_samples is None:
+            self._n_fft_samples = default_fft_length(self.n_time_samples_per_window)
+        elif self._n_fft_samples < self.n_time_samples_per_window:
+            # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
+            # a too-small n_fft_samples silently discards most of each window.
+            msg = (
+                f"n_fft_samples ({self._n_fft_samples}) must be >= the number "
+                f"of time samples per window ({self.n_time_samples_per_window}).\n"
+                f"n_fft_samples is the FFT length (used for zero-padding), not "
+                f"the number of output frequency bins. A value smaller than the "
+                f"window length would silently truncate the signal before the "
+                f"FFT.\n"
+                f"Either omit n_fft_samples (it defaults to a fast length >= the "
+                f"window length) or set it >= {self.n_time_samples_per_window}."
+            )
+            raise ValueError(msg)
+        return self._n_fft_samples
+
+    @property
+    def frequencies(self) -> NDArray[np.floating]:
+        """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        Returns
+        -------
+        NDArray[float64], shape (n_fft_samples,)
+            Frequency values in Hz corresponding to FFT bins, as
+            ``numpy.fft.fftfreq`` orders them (non-negative frequencies first,
+            then negative).
+
+        """
+        return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
+
+    @property
+    def n_time_samples_per_step(self) -> int:
+        """Step between window starts, in samples.
+
+        An explicit `n_time_samples_per_step` is used as given. Otherwise, if
+        `time_window_step` is set, the step is the nearest whole number of
+        samples in that duration. If neither is set, the step defaults to the
+        window length (non-overlapping windows).
+
+        Returns
+        -------
+        int
+            Number of samples to advance between windows.
+
+        Raises
+        ------
+        ValueError
+            If the resolved step is shorter than one sample.
+
+        """
+        if self._n_samples_per_time_step is None:
+            if self._time_window_step is None:
+                self._n_samples_per_time_step = self.n_time_samples_per_window
+            else:
+                self._n_samples_per_time_step = _duration_to_samples(
+                    self._time_window_step, self.sampling_frequency
+                )
+        assert self._n_samples_per_time_step is not None
+        # Validate the resolved step regardless of which input path set it: an
+        # explicit n_time_samples_per_step=0 (or a step truncating to 0) would
+        # divide by zero when building the sliding windows.
+        if self._n_samples_per_time_step < 1:
+            msg = (
+                f"n_time_samples_per_step resolved to "
+                f"{self._n_samples_per_time_step}, but each step must advance at "
+                f"least 1 sample. If you set time_window_step "
+                f"({self._time_window_step}), it is too short for sampling_frequency "
+                f"({self.sampling_frequency}); use a step "
+                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
+                f"n_time_samples_per_step."
+            )
+            raise ValueError(msg)
+        return self._n_samples_per_time_step
+
+    @property
+    def time(self) -> NDArray[np.floating]:
+        """Center time of each window, in seconds.
+
+        Returns
+        -------
+        NDArray[float64], shape (n_time_windows,)
+            Time values in seconds for center of each time window, offset by
+            ``start_time``.
+
+        """
+        original_time = xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
+        # Label each window by its center time, as documented (the mean of the
+        # window's sample times equals the center for uniformly spaced samples).
+        window_center_time: NDArray[np.floating] = _sliding_window(
+            original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
+        ).mean(axis=-1)
+        center_time: NDArray[np.floating] = self._start_time + window_center_time
+        return center_time
+
+    @property
+    def n_signals(self) -> int:
+        """Number of signals in the time series.
+
+        Returns
+        -------
+        int
+            Number of signals in the time series.
+
+        """
+        return int(self._time_series.shape[-1])
+
+    @property
+    def n_trials(self) -> int:
+        """Number of trials in the time series.
+
+        Returns
+        -------
+        int
+            Number of trials in the time series.
+
+        """
+        return int(self._time_series.shape[1])
+
+    @property
+    def nyquist_frequency(self) -> float:
+        """Maximum resolvable frequency, in Hz.
+
+        Returns
+        -------
+        float
+            Nyquist frequency in Hz, ``sampling_frequency / 2``.
+
+        """
+        return self.sampling_frequency / 2
+
+    @property
+    def time_bins_are_independent(self) -> bool:
+        """Whether the time windows may be counted as independent observations.
+
+        An expectation that averages over time (``"time"``, ``"time_tapers"``,
+        ...) counts every window in ``n_observations``. Windows that share
+        samples are correlated, so beyond some overlap that count overstates
+        the effective sample size and biases the measures that rely on it
+        (pairwise phase consistency of independent signals, for example, is
+        no longer centered on 0). Like :class:`Welch`,
+        which treats segments overlapping by at most 50% as approximately
+        independent (Welch 1967; Percival & Walden 1993, sec. 6.17), windows
+        count as independent when ``n_time_samples_per_step`` is at least half
+        of ``n_time_samples_per_window``. :class:`Connectivity` warns when an
+        expectation averages over correlated time bins.
+
+        Returns
+        -------
+        bool
+            ``True`` when successive windows overlap by at most half.
+        """
+        return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
+
+    def fft(self) -> NDArray[np.complexfloating]:
+        """Compute the tapered Fourier coefficients of every time window.
+
+        Each window is detrended as ``detrend_type`` sets, multiplied by each
+        taper, and transformed with an FFT of length ``n_fft_samples``. A
+        transform with a ``taper_weighting`` other than ``"uniform"`` then
+        rescales each taper's coefficients by its weight.
+
+        Returns
+        -------
+        fourier_coefficients : array
+            Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+            Complex-valued Fourier coefficients, with one entry per taper on
+            the taper axis; a transform with a single window function, such as
+            a Hann window, has a singleton taper axis (``n_tapers`` is 1).
+
+        """
+        logger.info(self)
+        time_series = _sliding_window(
+            self._time_series,
+            window_size=self.n_time_samples_per_window,
+            step_size=self.n_time_samples_per_step,
+            axis=0,
+        )
+        if self.detrend_type is not None:
+            time_series = detrend(time_series, type=self.detrend_type)
+
+        coefficients = _multitaper_fft(
+            self._tapers_for_fft(),
+            time_series,
+            self.n_fft_samples,
+            self.sampling_frequency,
+            workers=self.fft_workers,
+        ).swapaxes(2, -1)
+        return self._weight_taper_coefficients(coefficients, time_series)
+
+    def _tapers_for_fft(self) -> NDArray[np.floating]:
+        """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
+        raise NotImplementedError
+
+    def _weight_taper_coefficients(
+        self,
+        coefficients: NDArray[np.complexfloating],
+        windows: NDArray[np.floating],  # noqa: ARG002 -- used by overrides
+    ) -> NDArray[np.complexfloating]:
+        """Reweight the coefficients of each taper; equal weights by default.
+
+        Parameters
+        ----------
+        coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+            Tapered Fourier coefficients.
+        windows : array, shape (n_time_windows, n_trials, n_signals, n_time_samples_per_window)
+            The detrended windows the coefficients were computed from.
+        """
+        return coefficients
+
+
+class Multitaper(_WindowedFourierTransform):
     """
     Multitaper spectral analysis for robust power spectral density estimation.
 
@@ -846,10 +1549,13 @@ class Multitaper:
     Trials: 100, Signals: 5
     """
 
-    #: Multitaper returns the full two-sided FFT spectrum (both positive and
-    #: negative frequencies), so consumers must not assume a one-sided layout.
-    is_one_sided = False
     _transform_name = "multitaper"
+    if TYPE_CHECKING:
+        # Plain attributes here. Declared for type checking only, so the API
+        # docs do not list them undocumented.
+        sampling_frequency: float
+        detrend_type: str | None
+        fft_workers: int | None
 
     _IMMUTABLE_PUBLIC_PARAMETERS = frozenset(
         {
@@ -864,25 +1570,14 @@ class Multitaper:
         }
     )
     _PROVENANCE_FIELDS: tuple[str, ...] = (
-        "detrend_type",
-        "fft_workers",
+        *_WindowedFourierTransform._PROVENANCE_FIELDS,
         "frequency_resolution",
         "is_low_bias",
-        "n_fft_samples",
-        "n_signals",
         "n_tapers",
-        "n_time_samples_per_step",
-        "n_time_samples_per_window",
-        "n_trials",
-        "nyquist_frequency",
-        "sampling_frequency",
-        "start_time",
         "taper_weighting",
         "adaptive_max_iterations",
         "adaptive_tolerance",
         "time_halfbandwidth_product",
-        "time_window_duration",
-        "time_window_step",
     )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -917,24 +1612,7 @@ class Multitaper:
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         self._time_series = _immutable_array_snapshot(time_series)
-        # fft_workers is forwarded verbatim to scipy.fft.fft(workers=...): it must
-        # be a nonzero integer (a negative value counts back from os.cpu_count(),
-        # so -1 uses all cores) or None (SciPy's single-threaded default).
-        # Validate here so a bad value names this parameter, instead of surfacing
-        # a bare "workers must not be zero" ValueError or an opaque TypeError from
-        # deep inside fft(). bool is an int subclass, so reject it explicitly.
-        if fft_workers is not None and (
-            isinstance(fft_workers, bool)
-            or not isinstance(fft_workers, (int, np.integer))  # type: ignore[redundant-expr]  # user input
-            or fft_workers == 0
-        ):
-            msg = (
-                f"fft_workers must be None or a nonzero integer (the number of "
-                f"parallel FFT threads; -1 uses all cores), got {fft_workers!r}. "
-                f"It is forwarded to scipy.fft.fft(workers=...). Use None (the "
-                f"default) for SciPy's single-threaded FFT."
-            )
-            raise ValueError(msg)
+        _validate_fft_workers(fft_workers)
         self.fft_workers = fft_workers
         if taper_weighting not in {"uniform", "eigen", "adaptive"}:
             msg = (
@@ -967,46 +1645,7 @@ class Multitaper:
         self.adaptive_max_iterations = int(adaptive_max_iterations)
         self.adaptive_tolerance = float(adaptive_tolerance)
 
-        # Validate that time_series is 3D
-        if self._time_series.ndim != 3:
-            error_msg = (
-                f"Expected 3D array with shape (n_time_samples, n_trials, n_signals), "
-                f"but got {self._time_series.ndim}D array with shape {self._time_series.shape}.\n"
-                "\n"
-            )
-
-            if self._time_series.ndim == 1:
-                error_msg += (
-                    "For a single time series, use:\n"
-                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series)\n"
-                    "Or manually:\n"
-                    "  >>> time_series_3d = time_series[:, np.newaxis, np.newaxis]"
-                )
-            elif self._time_series.ndim == 2:
-                error_msg += (
-                    "For 2D data, you must clarify the meaning of the second dimension.\n"
-                    "\n"
-                    "Use prepare_time_series() helper:\n"
-                    "  >>> from spectral_connectivity.transforms import prepare_time_series\n"
-                    "  >>> # If shape is (n_time, n_signals) with 1 trial:\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series, axis='signals')\n"
-                    "  >>> # If shape is (n_time, n_trials) with 1 signal:\n"
-                    "  >>> time_series_3d = prepare_time_series(time_series, axis='trials')\n"
-                    "\n"
-                    "Or manually with np.newaxis:\n"
-                    "  >>> # For (n_time, n_signals) → (n_time, 1, n_signals):\n"
-                    "  >>> time_series_3d = time_series[:, np.newaxis, :]\n"
-                    "  >>> # For (n_time, n_trials) → (n_time, n_trials, 1):\n"
-                    "  >>> time_series_3d = time_series[:, :, np.newaxis]"
-                )
-            else:
-                error_msg += (
-                    f"Arrays with {self._time_series.ndim} dimensions are not supported.\n"
-                    "Expected shape: (n_time_samples, n_trials, n_signals)"
-                )
-
-            raise ValueError(error_msg)
+        _check_time_series_is_3d(self._time_series)
 
         sampling_frequency = _validate_sampling_frequency(sampling_frequency)
 
@@ -1040,7 +1679,7 @@ class Multitaper:
                 "Common values are 1-5. If you're unsure, try 3 (a typical default).\n"
                 "If you specifically need heavy smoothing, you can ignore this warning.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
         # Validate time_window_duration
@@ -1058,93 +1697,21 @@ class Multitaper:
                 "Use None (default) to analyze the entire time series without windowing."
             )
             raise ValueError(msg)
-
-        # Validate time_window_step
-        if time_window_step is not None and time_window_step <= 0:
-            msg = (
-                f"time_window_step must be positive, got {time_window_step}.\n"
-                "\n"
-                "The time window step is how far to advance the window for each computation (in seconds).\n"
-                "  - Small step: More time resolution, more overlapping windows, slower computation\n"
-                "  - Large step: Less overlap, faster computation, coarser time resolution\n"
-                "\n"
-                "Common choices:\n"
-                "  - step = duration: No overlap (consecutive windows)\n"
-                "  - step = duration/2: 50% overlap (recommended for most applications)\n"
-                "  - step < duration: More overlap, smoother temporal evolution\n"
-                "\n"
-                "Use None (default) to match time_window_duration (no overlap)."
-            )
-            raise ValueError(msg)
-
-        # Warn if time_window_step creates gaps between windows
-        if (
-            time_window_step is not None
-            and time_window_duration is not None
-            and time_window_step > time_window_duration
-        ):
-            warnings.warn(
-                f"time_window_step ({time_window_step}s) is larger than "
-                f"time_window_duration ({time_window_duration}s).\n"
-                "\n"
-                "This creates gaps between analysis windows - some data will not be analyzed.\n"
-                "If you want contiguous coverage, set step ≤ duration.\n"
-                "\n"
-                "If gaps are intended (e.g., sampling every Nth window), ignore this warning.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        # Warn if data appears to be transposed (very few time points, many signals)
-        n_time, _, n_signals = self._time_series.shape
-        if n_time < n_signals:
-            warnings.warn(
-                f"Your time series has only {n_time} time points but {n_signals} signals. "
-                "This seems unusual and your data may be transposed.\n"
-                "\n"
-                "Expected shape: (n_time_samples, n_trials, n_signals)\n"
-                f"Your shape: {self._time_series.shape}\n"
-                "\n"
-                "If your data is transposed, use:\n"
-                "  >>> time_series_correct = time_series.T  # or appropriate transpose\n"
-                "\n"
-                "If your data is intentionally short (e.g., very brief epochs), you can ignore this warning.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        # Warn if data contains NaN or Inf
-        if not xp.all(xp.isfinite(self._time_series)):
-            warnings.warn(
-                "Input time_series contains NaN or infinite values.\n"
-                "\n"
-                "This will produce invalid spectral estimates. Common causes:\n"
-                "  - Missing data or recording artifacts\n"
-                "  - Incorrect preprocessing (division by zero, log of negative)\n"
-                "  - Corrupted data files\n"
-                "\n"
-                "Suggestions:\n"
-                "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
-                "  - Remove bad segments or trials\n"
-                "  - Check your preprocessing pipeline\n"
-                "  - Verify data integrity\n"
-                "\n"
-                "For artifact removal, consider using MNE-Python or similar tools.",
-                UserWarning,
-                stacklevel=2,
-            )
+        _validate_window_step(time_window_duration, time_window_step)
+        _warn_about_unusual_time_series(self._time_series)
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
-        self._time_window_duration = time_window_duration
-        self._time_window_step = time_window_step
         self.is_low_bias = is_low_bias
-        # ``time`` adds start_time to a 1-D array of window centers, so a
-        # per-trial array would either broadcast-fail or silently produce a 2-D
-        # time axis.
-        self._start_time = _immutable_array_snapshot(_finite_scalar_start_time(start_time))
-        self._n_fft_samples = n_fft_samples
+        self._set_window_state(
+            start_time,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
+            n_fft_samples=n_fft_samples,
+            n_time_samples_per_window=n_time_samples_per_window,
+            n_time_samples_per_step=n_time_samples_per_step,
+        )
         self._tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         self._taper_eigenvalues: BackendArray | None = None
         # Reject a fractional (or boolean) n_tapers at construction so the
@@ -1175,7 +1742,7 @@ class Multitaper:
             ),
         ):
             if duration is not None and count is not None:
-                duration_samples = int(np.around(duration * sampling_frequency))
+                duration_samples = _duration_to_samples(duration, sampling_frequency)
                 if duration_samples != count:
                     msg = (
                         f"{duration_name}={duration} s and {count_name}={count} "
@@ -1184,8 +1751,6 @@ class Multitaper:
                         f"of them, or values that resolve to the same sample count."
                     )
                     raise ValueError(msg)
-        self._n_time_samples_per_window = n_time_samples_per_window
-        self._n_samples_per_time_step = n_time_samples_per_step
         if self._tapers is not None:
             # Validate custom tapers now; a mismatch would otherwise surface as
             # an opaque broadcasting error inside fft().
@@ -1214,16 +1779,6 @@ class Multitaper:
                 raise ValueError(msg)
         object.__setattr__(self, "_initialized", True)
 
-    @property
-    def time_series(self) -> BackendArray:
-        """Independent read-only copy of the input time-series snapshot."""
-        return _readonly_array_copy(self._time_series)
-
-    @property
-    def start_time(self) -> BackendArray:
-        """Independent read-only copy of the transform's start-time coordinate."""
-        return _readonly_array_copy(self._start_time)
-
     def __repr__(self) -> str:
         """Return string representation of Multitaper object.
 
@@ -1244,24 +1799,6 @@ class Multitaper:
             f"n_tapers={self.n_tapers}"
             ")"
         )
-
-    def _provenance_metadata(self) -> dict[str, Any]:
-        """Native transform settings, serialized by the shared provenance builder."""
-        metadata: dict[str, Any] = {"transform": self._transform_name}
-        for attr in self._PROVENANCE_FIELDS:
-            value = getattr(self, attr)
-            value = to_numpy(value) if hasattr(value, "shape") else value
-            if isinstance(value, np.ndarray):
-                if value.dtype.kind not in "biufSU":  # exclude complex/object
-                    continue
-            elif value is not None and not isinstance(
-                value,
-                (str, bytes, bool, int, float, np.integer, np.floating, np.bool_),
-            ):
-                continue
-            metadata[attr] = value
-        metadata.update(self._spectral_bandwidth_metadata())
-        return metadata
 
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
         """Taper kind and, for generated DPSS tapers, their qualified bandwidth."""
@@ -1348,79 +1885,6 @@ class Multitaper:
             ("Frequency resolution", f"{self.frequency_resolution:.1f} Hz"),
         )
 
-    def _summary(
-        self,
-        title: str,
-        spectral_rows: list[tuple[str, Any]],
-        bandwidth_row: tuple[str, str],
-    ) -> str:
-        """Human-readable configuration summary shared by the windowed transforms.
-
-        ``spectral_rows`` follow the sampling frequency in "Spectral Parameters";
-        ``bandwidth_row`` heads "Frequency Analysis".
-        """
-        n_time_samples = self._time_series.shape[0]
-        signal_duration = n_time_samples / self.sampling_frequency
-        n_windows = int(
-            xp.floor(
-                (n_time_samples - self.n_time_samples_per_window)
-                / self.n_time_samples_per_step
-            )
-            + 1
-        )
-
-        # Determine overlap description
-        if self.time_window_step == self.time_window_duration:
-            overlap_desc = "(non-overlapping)"
-        else:
-            overlap_percent = (
-                100
-                * (self.time_window_duration - self.time_window_step)
-                / self.time_window_duration
-            )
-            overlap_desc = f"({overlap_percent:.0f}% overlap)"
-
-        spectral = "\n".join(
-            f"{label + ':':<31}{value}"
-            for label, value in [
-                ("Sampling frequency", f"{self.sampling_frequency:g} Hz"),
-                *spectral_rows,
-            ]
-        )
-        frequency_rows = [
-            bandwidth_row,
-            ("Nyquist frequency", f"{self.nyquist_frequency:.1f} Hz"),
-            ("Frequency range", f"0.0 - {self.nyquist_frequency:.1f} Hz"),
-            ("FFT samples", f"{self.n_fft_samples}"),
-        ]
-        width = max(22, max(len(label) + 2 for label, _ in frequency_rows))
-        frequency = "\n".join(
-            f"{label + ':':<{width}}{value}" for label, value in frequency_rows
-        )
-        return f"""{title}
-{"=" * (len(title) + 1)}
-
-Data Shape
-----------
-Time samples:    {n_time_samples} ({signal_duration:.2f} seconds)
-Signals:         {self.n_signals}
-Trials:          {self.n_trials}
-
-Spectral Parameters
--------------------
-{spectral}
-
-Time Windowing
---------------
-Window duration:  {self.time_window_duration:.3f} s ({self.n_time_samples_per_window} samples)
-Window step:      {self.time_window_step:.3f} s {overlap_desc}
-Number of windows: {n_windows}
-
-Frequency Analysis
-------------------
-{frequency}
-"""
-
     @property
     def tapers(self) -> NDArray[np.floating]:
         """Return the tapers used for the multitaper function.
@@ -1460,34 +1924,6 @@ Frequency Analysis
         return _readonly_array_copy(self._taper_eigenvalues)
 
     @property
-    def time_window_duration(self) -> float:
-        """Return duration of each time bin.
-
-        Returns
-        -------
-        float
-            Duration in seconds of each time window actually analyzed,
-            ``n_time_samples_per_window / sampling_frequency`` (a requested
-            duration is rounded to the nearest sample).
-
-        """
-        return self.n_time_samples_per_window / self.sampling_frequency
-
-    @property
-    def time_window_step(self) -> float:
-        """Return how much each time window slides.
-
-        Returns
-        -------
-        float
-            Step size in seconds between consecutive time windows actually
-            taken, ``n_time_samples_per_step / sampling_frequency`` (a
-            requested step is rounded to the nearest sample).
-
-        """
-        return self.n_time_samples_per_step / self.sampling_frequency
-
-    @property
     def n_tapers(self) -> int:
         """Return number of desired tapers.
 
@@ -1512,183 +1948,6 @@ Frequency Analysis
         return estimate_n_tapers(self.time_halfbandwidth_product)
 
     @property
-    def n_time_samples_per_window(self) -> int:
-        """Return number of samples per time bin.
-
-        Returns
-        -------
-        int
-            Number of time samples in each window.
-
-        Raises
-        ------
-        ValueError
-            If neither n_time_samples_per_window nor time_window_duration is set.
-
-        """
-        # An explicit n_time_samples_per_window is used as given (a duration
-        # given with it was checked to agree at construction).
-        if self._n_time_samples_per_window is None:
-            if self._time_window_duration is None:
-                self._n_time_samples_per_window = self._time_series.shape[0]
-            else:
-                self._n_time_samples_per_window = int(
-                    np.around(self._time_window_duration * self.sampling_frequency)
-                )
-        assert self._n_time_samples_per_window is not None
-        # Validate the resolved window length regardless of which input path set
-        # it: an explicit n_time_samples_per_window=0 (or a duration rounding to
-        # 0) would divide by zero downstream, and an oversized window yields an
-        # empty transform.
-        n_time_samples = self._time_series.shape[0]
-        if self._n_time_samples_per_window < 1:
-            msg = (
-                f"n_time_samples_per_window resolved to "
-                f"{self._n_time_samples_per_window}, but each window needs at "
-                f"least 1 sample. If you set time_window_duration "
-                f"({self._time_window_duration}), it is too short for "
-                f"sampling_frequency ({self.sampling_frequency}); use a duration "
-                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
-                f"n_time_samples_per_window."
-            )
-            raise ValueError(msg)
-        if self._n_time_samples_per_window > n_time_samples:
-            msg = (
-                f"n_time_samples_per_window ({self._n_time_samples_per_window}) is "
-                f"larger than the signal length ({n_time_samples}); no window fits, "
-                f"which would yield an empty transform. Use a smaller window "
-                f"(time_window_duration <= "
-                f"{n_time_samples / self.sampling_frequency} s)."
-            )
-            raise ValueError(msg)
-        return self._n_time_samples_per_window
-
-    @property
-    def n_fft_samples(self) -> int:
-        """Return number of frequency bins.
-
-        Returns
-        -------
-        int
-            Number of FFT samples.
-
-        """
-        if self._n_fft_samples is None:
-            self._n_fft_samples = default_fft_length(self.n_time_samples_per_window)
-        elif self._n_fft_samples < self.n_time_samples_per_window:
-            # scipy/cupy fft crops (does not zero-pad) when n < len(signal), so
-            # a too-small n_fft_samples silently discards most of each window.
-            msg = (
-                f"n_fft_samples ({self._n_fft_samples}) must be >= the number "
-                f"of time samples per window ({self.n_time_samples_per_window}).\n"
-                f"n_fft_samples is the FFT length (used for zero-padding), not "
-                f"the number of output frequency bins. A value smaller than the "
-                f"window length would silently truncate the signal before the "
-                f"FFT.\n"
-                f"Either omit n_fft_samples (it defaults to a fast length >= the "
-                f"window length) or set it >= {self.n_time_samples_per_window}."
-            )
-            raise ValueError(msg)
-        return self._n_fft_samples
-
-    @property
-    def frequencies(self) -> NDArray[np.floating]:
-        """Return frequency of each frequency bin.
-
-        Returns
-        -------
-        NDArray[float64], shape (n_frequencies,)
-            Frequency values in Hz corresponding to FFT bins.
-
-        """
-        return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
-
-    @property
-    def n_time_samples_per_step(self) -> int:
-        """Return number of samples to step between windows.
-
-        An explicit `n_time_samples_per_step` is used as given. Otherwise, if
-        `time_window_step` is set, the step is the nearest whole number of
-        samples in that duration. If neither is set, the step defaults to the
-        window length (non-overlapping windows).
-
-        Returns
-        -------
-        int
-            Number of samples to advance between windows.
-
-        """
-        if self._n_samples_per_time_step is None:
-            if self._time_window_step is None:
-                self._n_samples_per_time_step = self.n_time_samples_per_window
-            else:
-                # Round like n_time_samples_per_window does: ``step / fs * fs``
-                # can land just below ``step`` in floating point (e.g. 0.57 s at
-                # 100 Hz gives 56.99999...), and ``int()`` would truncate to 56.
-                self._n_samples_per_time_step = int(
-                    np.around(self._time_window_step * self.sampling_frequency)
-                )
-        assert self._n_samples_per_time_step is not None
-        # Validate the resolved step regardless of which input path set it: an
-        # explicit n_time_samples_per_step=0 (or a step truncating to 0) would
-        # divide by zero when building the sliding windows.
-        if self._n_samples_per_time_step < 1:
-            msg = (
-                f"n_time_samples_per_step resolved to "
-                f"{self._n_samples_per_time_step}, but each step must advance at "
-                f"least 1 sample. If you set time_window_step "
-                f"({self._time_window_step}), it is too short for sampling_frequency "
-                f"({self.sampling_frequency}); use a step "
-                f">= {1.0 / self.sampling_frequency} s. Otherwise pass a positive "
-                f"n_time_samples_per_step."
-            )
-            raise ValueError(msg)
-        return self._n_samples_per_time_step
-
-    @property
-    def time(self) -> NDArray[np.floating]:
-        """Return time of each time bin.
-
-        Returns
-        -------
-        NDArray[float64], shape (n_time_windows,)
-            Time values in seconds for center of each time window.
-
-        """
-        original_time = xp.arange(0, self._time_series.shape[0]) / self.sampling_frequency
-        # Label each window by its center time, as documented (the mean of the
-        # window's sample times equals the center for uniformly spaced samples).
-        window_center_time: NDArray[np.floating] = _sliding_window(
-            original_time, self.n_time_samples_per_window, self.n_time_samples_per_step
-        ).mean(axis=-1)
-        center_time: NDArray[np.floating] = self._start_time + window_center_time
-        return center_time
-
-    @property
-    def n_signals(self) -> int:
-        """Return number of signals computed.
-
-        Returns
-        -------
-        int
-            Number of signals in the time series.
-
-        """
-        return int(self._time_series.shape[-1])
-
-    @property
-    def n_trials(self) -> int:
-        """Return number of trials computed.
-
-        Returns
-        -------
-        int
-            Number of trials in the time series.
-
-        """
-        return int(self._time_series.shape[1])
-
-    @property
     def frequency_resolution(self) -> float:
         """Return frequency resolution (full DPSS concentration bandwidth).
 
@@ -1707,18 +1966,6 @@ Frequency Analysis
         return estimate_frequency_resolution(
             self.sampling_frequency, self.time_window_duration, self.time_halfbandwidth_product
         )
-
-    @property
-    def nyquist_frequency(self) -> float:
-        """Return maximum resolvable frequency.
-
-        Returns
-        -------
-        float
-            Nyquist frequency in Hz.
-
-        """
-        return self.sampling_frequency / 2
 
     @property
     def observations_are_independent(self) -> bool:
@@ -1743,60 +1990,12 @@ Frequency Analysis
         """
         return True
 
-    @property
-    def time_bins_are_independent(self) -> bool:
-        """Whether the time windows may be counted as independent observations.
-
-        An expectation that averages over time (``"time"``, ``"time_tapers"``,
-        ...) counts every window in ``n_observations``. Windows that share
-        samples are correlated, so beyond some overlap that count overstates
-        the effective sample size and biases the measures that rely on it
-        (pairwise phase consistency of independent signals, for example, is
-        no longer centered on 0). Like :class:`Welch`,
-        which treats segments overlapping by at most 50% as approximately
-        independent (Welch 1967; Percival & Walden 1993, sec. 6.17), windows
-        count as independent when ``n_time_samples_per_step`` is at least half
-        of ``n_time_samples_per_window``. :class:`Connectivity` warns when an
-        expectation averages over correlated time bins.
-
-        Returns
-        -------
-        bool
-            ``True`` when successive windows overlap by at most half.
-        """
-        return 2 * self.n_time_samples_per_step >= self.n_time_samples_per_window
-
-    def fft(self) -> NDArray[np.complexfloating]:
-        """Compute the fast Fourier transform using the multitaper method.
-
-        Returns
-        -------
-        fourier_coefficients : array
-            Shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
-            Complex-valued Fourier coefficients.
-
-        """
-        logger.info(self)
-        return self._tapered_fft()
-
-    def _tapered_fft(self) -> NDArray[np.complexfloating]:
-        """Compute :meth:`fft` without logging this transform's settings."""
-        time_series = _sliding_window(
-            self._time_series,
-            window_size=self.n_time_samples_per_window,
-            step_size=self.n_time_samples_per_step,
-            axis=0,
-        )
-        if self.detrend_type is not None:
-            time_series = detrend(time_series, type=self.detrend_type)
-
-        coefficients = _multitaper_fft(
-            self._tapers_for_fft(),
-            time_series,
-            self.n_fft_samples,
-            self.sampling_frequency,
-            workers=self.fft_workers,
-        ).swapaxes(2, -1)
+    def _weight_taper_coefficients(
+        self,
+        coefficients: NDArray[np.complexfloating],
+        windows: NDArray[np.floating],
+    ) -> NDArray[np.complexfloating]:
+        """Apply ``taper_weighting`` to the DPSS eigencoefficients."""
         if self.taper_weighting == "uniform":
             return coefficients
 
@@ -1811,11 +2010,11 @@ Frequency Analysis
         # process-noise level, which must be on the *same* power-spectral-density
         # scale. ``fft()`` returns ``fft(taper * x) / sampling_frequency`` with
         # tapers scaled by ``sqrt(sampling_frequency)``, so ``|coefficients| ** 2``
-        # is a PSD (signal ** 2 / Hz) while ``var(time_series)`` is a raw
+        # is a PSD (signal ** 2 / Hz) while ``var(windows)`` is a raw
         # time-domain variance (signal ** 2). Dividing by ``sampling_frequency``
         # puts the noise term on the PSD scale; without it the noise is inflated
         # by a factor of ``sampling_frequency`` and the weighting is miscalibrated.
-        noise_power_spectral_density = xp.var(time_series, axis=-1) / self.sampling_frequency
+        noise_power_spectral_density = xp.var(windows, axis=-1) / self.sampling_frequency
         return _apply_adaptive_taper_weights(
             coefficients,
             eigenvalues,
@@ -1834,7 +2033,7 @@ Frequency Analysis
         return self._tapers
 
 
-class ShortTimeFourierTransform:
+class ShortTimeFourierTransform(_WindowedFourierTransform):
     """Short-time Fourier transform using an L2-normalized Hann window.
 
     The returned coefficients follow the same five-dimensional contract as
@@ -1870,7 +2069,8 @@ class ShortTimeFourierTransform:
     """
 
     _transform_name = "stft"
-    is_one_sided = False
+    # A 1-sample "Hann" window is the rectangular window [1.0], not a taper.
+    _MIN_WINDOW_SAMPLES = 2
 
     def __init__(
         self,
@@ -1893,149 +2093,84 @@ class ShortTimeFourierTransform:
             if value is not None and (not np.isfinite(value) or value <= 0):
                 msg = f"{name} must be finite and positive."
                 raise ValueError(msg)
-        for name, value in (
-            ("n_time_samples_per_window", n_time_samples_per_window),
-            ("n_time_samples_per_step", n_time_samples_per_step),
+        if n_time_samples_per_window is not None and not is_positive_integer(
+            n_time_samples_per_window, minimum=self._MIN_WINDOW_SAMPLES
         ):
-            if value is not None and not is_positive_integer(value):
-                msg = f"{name} must be a positive integer."
-                raise ValueError(msg)
-        data_shape: tuple[int, ...] = tuple(getattr(time_series, "shape", ()))
-        if len(data_shape) != 3:
-            msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
+            msg = (
+                "n_time_samples_per_window must be an integer of at least "
+                f"{self._MIN_WINDOW_SAMPLES}."
+            )
             raise ValueError(msg)
-        resolved_window = _resolve_sample_count(
-            n_time_samples_per_window,
-            time_window_duration,
-            sampling_frequency,
-            "time_window_duration and n_time_samples_per_window resolve to "
-            "different Hann window lengths.",
-        )
-        window_samples = int(data_shape[0]) if resolved_window is None else resolved_window
-        if window_samples < 2:
-            msg = "A Hann transform window requires at least 2 samples."
+        if n_time_samples_per_step is not None and not is_positive_integer(
+            n_time_samples_per_step
+        ):
+            msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
-
-        resolved_step = _resolve_sample_count(
-            n_time_samples_per_step,
-            time_window_step,
-            sampling_frequency,
-            "time_window_step and n_time_samples_per_step resolve to different step lengths.",
-        )
-        step_samples = window_samples if resolved_step is None else resolved_step
-
-        window = scipy_hann(window_samples, sym=False)
-        norm = np.linalg.norm(window)
-        if norm == 0:
-            msg = "The requested Hann window has zero energy."
-            raise ValueError(msg)
-        window = (window / norm * np.sqrt(sampling_frequency))[:, np.newaxis]
-        # Multitaper's windowed FFT with one custom taper is the Hann STFT. It
-        # is held, not inherited, because none of its DPSS settings (NW, taper
-        # count and weighting, concentration bandwidth) describe this transform.
-        self._windowed_fft = Multitaper(
-            time_series,
-            sampling_frequency=sampling_frequency,
-            time_halfbandwidth_product=1,
-            detrend_type=detrend_type,
-            time_window_duration=window_samples / sampling_frequency,
-            time_window_step=step_samples / sampling_frequency,
-            n_tapers=1,
-            tapers=window,
-            start_time=start_time,
+        self._time_series = _immutable_array_snapshot(time_series)
+        _check_time_series_is_3d(self._time_series)
+        for duration, count, mismatch_message in (
+            (
+                time_window_duration,
+                n_time_samples_per_window,
+                (
+                    "time_window_duration and n_time_samples_per_window resolve to "
+                    "different Hann window lengths."
+                ),
+            ),
+            (
+                time_window_step,
+                n_time_samples_per_step,
+                "time_window_step and n_time_samples_per_step resolve to different step lengths.",
+            ),
+        ):
+            if (
+                duration is not None
+                and count is not None
+                and _duration_to_samples(duration, sampling_frequency) != count
+            ):
+                raise ValueError(mismatch_message)
+        _validate_fft_workers(fft_workers)
+        self._sampling_frequency = sampling_frequency
+        self._detrend_type = detrend_type
+        self._fft_workers = fft_workers
+        self._set_window_state(
+            start_time,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
             n_fft_samples=n_fft_samples,
-            n_time_samples_per_window=window_samples,
-            n_time_samples_per_step=step_samples,
-            is_low_bias=False,
-            fft_workers=fft_workers,
+            # NumPy integer counts are stored as Python ints.
+            n_time_samples_per_window=(
+                None if n_time_samples_per_window is None else int(n_time_samples_per_window)
+            ),
+            n_time_samples_per_step=(
+                None if n_time_samples_per_step is None else int(n_time_samples_per_step)
+            ),
         )
-
-    # The settings below are read from the internal transform that does the
-    # computation, so they cannot be reassigned out of step with it.
-    @property
-    def time_series(self) -> BackendArray:
-        """Independent read-only copy of the input time-series snapshot."""
-        return self._windowed_fft.time_series
+        # Resolve the window and step now, so a window that is too short or does
+        # not fit the signal, or a step shorter than one sample, fails here
+        # rather than in fft().
+        window_samples = self.n_time_samples_per_window
+        window = scipy_hann(window_samples, sym=False)
+        self._window = _immutable_array_snapshot(
+            (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]
+        )
+        _validate_window_step(self.time_window_duration, self.time_window_step)
+        _warn_about_unusual_time_series(self._time_series)
 
     @property
     def sampling_frequency(self) -> float:
         """Samples per second, in Hz."""
-        return self._windowed_fft.sampling_frequency
+        return self._sampling_frequency
 
     @property
     def detrend_type(self) -> str | None:
         """Detrending applied to each window before the FFT."""
-        return self._windowed_fft.detrend_type
-
-    @property
-    def start_time(self) -> BackendArray:
-        """Time of the first sample, in seconds."""
-        return self._windowed_fft.start_time
+        return self._detrend_type
 
     @property
     def fft_workers(self) -> int | None:
         """Worker threads for SciPy's CPU FFT (``None`` uses SciPy's default)."""
-        return self._windowed_fft.fft_workers
-
-    @property
-    def n_time_samples_per_window(self) -> int:
-        """Window length in samples."""
-        return self._windowed_fft.n_time_samples_per_window
-
-    @property
-    def n_time_samples_per_step(self) -> int:
-        """Step between window starts, in samples."""
-        return self._windowed_fft.n_time_samples_per_step
-
-    @property
-    def time_window_duration(self) -> float:
-        """Window length in seconds, after rounding to whole samples."""
-        return self._windowed_fft.time_window_duration
-
-    @property
-    def time_window_step(self) -> float:
-        """Step between window starts in seconds, after rounding to whole samples."""
-        return self._windowed_fft.time_window_step
-
-    @property
-    def n_fft_samples(self) -> int:
-        """FFT length of each window."""
-        return self._windowed_fft.n_fft_samples
-
-    @property
-    def frequencies(self) -> NDArray[np.floating]:
-        """Frequency of each FFT bin in Hz, in standard FFT order.
-
-        Returns
-        -------
-        frequencies : array, shape (n_fft_samples,)
-        """
-        return self._windowed_fft.frequencies
-
-    @property
-    def time(self) -> NDArray[np.floating]:
-        """Center time of each window, in seconds.
-
-        Returns
-        -------
-        time : array, shape (n_time_windows,)
-        """
-        return self._windowed_fft.time
-
-    @property
-    def n_trials(self) -> int:
-        """Number of trials in the time series."""
-        return self._windowed_fft.n_trials
-
-    @property
-    def n_signals(self) -> int:
-        """Number of signals in the time series."""
-        return self._windowed_fft.n_signals
-
-    @property
-    def nyquist_frequency(self) -> float:
-        """Maximum resolvable frequency, in Hz."""
-        return self._windowed_fft.nyquist_frequency
+        return self._fft_workers
 
     @property
     def observations_are_independent(self) -> bool:
@@ -2052,33 +2187,9 @@ class ShortTimeFourierTransform:
         """
         return True
 
-    @property
-    def time_bins_are_independent(self) -> bool:
-        """Whether the time windows may be counted as independent observations.
-
-        As for :class:`Multitaper`, windows count as independent when
-        ``n_time_samples_per_step`` is at least half of
-        ``n_time_samples_per_window``. :class:`Connectivity` warns when an
-        expectation averages over correlated time bins.
-
-        Returns
-        -------
-        bool
-            ``True`` when successive windows overlap by at most half.
-        """
-        return self._windowed_fft.time_bins_are_independent
-
-    def fft(self) -> NDArray[np.complexfloating]:
-        """Compute the Hann-windowed Fourier coefficients of every window.
-
-        Returns
-        -------
-        fourier_coefficients : array
-            Shape ``(n_time_windows, n_trials, 1, n_fft_samples, n_signals)``;
-            the taper axis is a singleton.
-        """
-        logger.info(self)
-        return self._windowed_fft._tapered_fft()
+    def _tapers_for_fft(self) -> NDArray[np.floating]:
+        """Return the scaled Hann window, ``(n_time_samples_per_window, 1)``."""
+        return self._window
 
     @property
     def equivalent_noise_bandwidth(self) -> float:
@@ -2111,7 +2222,7 @@ class ShortTimeFourierTransform:
         >>> round(stft.equivalent_noise_bandwidth, 6)
         3.0
         """
-        window = self._windowed_fft._tapers_for_fft()[:, 0]
+        window = self._window[:, 0]
         return float(
             to_numpy(self.sampling_frequency * xp.sum(window**2) / xp.sum(window) ** 2)
         )
@@ -2146,34 +2257,16 @@ class ShortTimeFourierTransform:
         >>> print(stft.summarize_parameters().splitlines()[0])
         Short-Time Fourier Transform Configuration
         """
-        return self._windowed_fft._summary(
+        return self._summary(
             "Short-Time Fourier Transform Configuration",
             [("Window", "Hann (periodic, L2-normalized)")],
             ("Equivalent noise bandwidth", f"{self.equivalent_noise_bandwidth:.1f} Hz"),
         )
 
-    def _provenance_metadata(self) -> dict[str, Any]:
-        """Native transform settings, serialized by the shared provenance builder."""
-        return {
-            "transform": self._transform_name,
-            "detrend_type": self.detrend_type,
-            "fft_workers": self.fft_workers,
-            "n_fft_samples": self.n_fft_samples,
-            "n_signals": self.n_signals,
-            "n_time_samples_per_step": self.n_time_samples_per_step,
-            "n_time_samples_per_window": self.n_time_samples_per_window,
-            "n_trials": self.n_trials,
-            "nyquist_frequency": self.nyquist_frequency,
-            "sampling_frequency": self.sampling_frequency,
-            "start_time": to_numpy(self.start_time),
-            "time_window_duration": self.time_window_duration,
-            "time_window_step": self.time_window_step,
-            "window": "hann_periodic",
-            **self._spectral_bandwidth_metadata(),
-        }
-
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
+        """The Hann window and its equivalent noise bandwidth."""
         return {
+            "window": "hann_periodic",
             "spectral_bandwidth": self.equivalent_noise_bandwidth,
             "spectral_bandwidth_definition": "equivalent_noise_bandwidth",
             "spectral_bandwidth_units": "Hz",
@@ -2241,7 +2334,9 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
-        n_time_samples = int(getattr(time_series, "shape", (0,))[0])
+        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
+        data_shape = np.shape(time_series)
+        n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(
             n_time_samples_per_segment,
             segment_duration,
@@ -2253,6 +2348,24 @@ class Welch:
             segment_samples = min(256, n_time_samples)
         if not np.isfinite(segment_overlap) or not 0 <= segment_overlap < 1:
             msg = "segment_overlap must satisfy 0 <= overlap < 1."
+            raise ValueError(msg)
+        # An explicit n_time_samples_per_segment was checked above, so a short
+        # segment comes from the duration or from a short time series.
+        if segment_samples < 2:
+            if uses_default_segment:
+                msg = (
+                    "Welch needs a segment of at least 2 samples, but the time series "
+                    f"has shape {data_shape}; pass a time series of shape "
+                    "(n_time_samples, n_trials, n_signals) with at least 2 time samples."
+                )
+            else:
+                msg = (
+                    f"segment_duration={segment_duration} s is {segment_samples} "
+                    f"sample{'' if segment_samples == 1 else 's'} "
+                    f"at sampling_frequency={sampling_frequency:g} Hz; a Welch segment "
+                    f"needs at least 2 samples (segment_duration >= "
+                    f"{2 / sampling_frequency} s)."
+                )
             raise ValueError(msg)
         step_samples = max(1, int(np.around(segment_samples * (1 - segment_overlap))))
         self._stft = ShortTimeFourierTransform(
@@ -2282,7 +2395,7 @@ class Welch:
                 "segment_duration (seconds) or n_time_samples_per_segment to set "
                 "the segment length explicitly.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=stacklevel_outside_package(),
             )
 
     # The settings below are read from the internal STFT that does the
@@ -2451,7 +2564,6 @@ class Welch:
             "nyquist_frequency": self._stft.nyquist_frequency,
             "segment_duration": self.segment_duration,
             "segment_overlap": self.segment_overlap,
-            "window": "hann_periodic",
             **self._stft._spectral_bandwidth_metadata(),
         }
 
@@ -2685,7 +2797,7 @@ class MorletWavelet:
                     "multiple trials so the expectation also averages independent "
                     "realizations.",
                     UserWarning,
-                    stacklevel=2,
+                    stacklevel=stacklevel_outside_package(),
                 )
 
     @property
@@ -3349,7 +3461,7 @@ def _apply_adaptive_taper_weights(
             "last iterate, which may bias power and connectivity estimates. "
             "Increase adaptive_max_iterations or relax adaptive_tolerance.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
 
     rms = xp.sqrt(xp.mean(weights**2, axis=2, keepdims=True))
@@ -3470,7 +3582,7 @@ def _get_low_bias_tapers(
             "(time_halfbandwidth_product is too small for low-bias tapers); keeping "
             "only the lowest-bias taper, whose spectral leakage is high.",
             UserWarning,
-            stacklevel=3,
+            stacklevel=stacklevel_outside_package(),
         )
         is_low_bias = xp.array([xp.argmax(eigenvalues)])
     return tapers[is_low_bias, :], eigenvalues[is_low_bias]
