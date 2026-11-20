@@ -754,8 +754,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   (one) rose by 0.01-0.14, in the measures' own units. The old factor also
   returned `NaN` for up to 1% of spectral Granger values, and the new one for
   none. Directed measures from a window shorter than the slowest correlation in
-  the data remain unreliable, and zero-padding the FFT to at least twice the
-  window reduces what the frequency grid itself contributes; the Notes of
+  the data remain unreliable, and their values depend slightly on the FFT
+  length, which zero-padding removes without making them more accurate for
+  well-resolved data; the Notes of
   `spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`
   give the sizes.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`

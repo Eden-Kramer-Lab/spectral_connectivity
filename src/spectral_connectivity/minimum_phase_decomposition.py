@@ -626,16 +626,19 @@ def minimum_phase_decomposition(
     - The grid. The factor is that of the spectrum's periodic extension on the
       grid, so lags of ``S`` beyond ``n_fft_samples / 2`` wrap around. A
       spectrum estimated from windows of ``N`` samples has lags out to
-      ``N - 1``, which wrap on a grid of ``N`` bins. Zero-padding the transform
-      (``n_fft_samples >= 2 * N``, which doubles the number of frequency bins)
-      reduces this, most for a long window: in simulations the error of
-      spectral Granger prediction against a finely sampled factorization of
-      the same estimate fell from 2e-2 to 4e-4 for a 1000-sample recording,
-      and from 0.3-0.6 to 0.2-0.3 for 50-sample windows of a sharply resonant
-      signal.
+      ``N - 1``, which wrap on a grid of ``N`` bins, so the directed measures
+      depend on the FFT length. In simulations, zero-padding the transform to
+      ``n_fft_samples = 2 * N`` moved spectral Granger prediction by about
+      2e-2 (RMS over frequencies) for a 1000-sample recording, and padding
+      further moved it by less than 1e-3. Padding is not a gain in accuracy in
+      general: against the generating model's true values the error of
+      spectral Granger, DTF, and PDC was the same with and without it (within
+      1%) for well-resolved recordings, and 4-9% lower for DTF and PDC only
+      where the window was too short for the signal. It costs about twice the
+      time and frequency bins.
     - The window. An estimate from a window shorter than the slowest
-      correlation in the data is smoothed in frequency, and padding does not
-      restore what the window lost. Use a longer window.
+      correlation in the data is smoothed in frequency, which no FFT length
+      repairs. Use a longer window.
 
     .. versionchanged:: 3.0
        On an even-length grid the lag ``n_fft_samples / 2`` is its own

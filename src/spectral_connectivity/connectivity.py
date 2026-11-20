@@ -4686,9 +4686,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -4770,9 +4769,8 @@ class Connectivity:
         -----
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         Examples
@@ -4840,9 +4838,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -4917,9 +4914,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -5005,9 +5001,8 @@ class Connectivity:
         -----
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         Examples
@@ -5081,9 +5076,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -5158,9 +5152,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -5258,9 +5251,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -5326,9 +5318,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References
@@ -5407,9 +5398,8 @@ class Connectivity:
 
         **Window and FFT length**: this measure comes from the Wilson
         factorization of the estimated spectrum. It needs a window longer
-        than the slowest correlation in the data, and is more accurate on a
-        zero-padded grid (``n_fft_samples`` of at least twice the window):
-        see the Notes of
+        than the slowest correlation in the data, and its values depend
+        slightly on the FFT length (``n_fft_samples``): see the Notes of
         :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition`.
 
         References

@@ -188,12 +188,12 @@ Directed measures are opt-in by name. The result reads `source -> target`:
 ```
 
 Directed measures come from a factorization of the estimated spectrum. Use
-windows longer than the slowest correlation in the data, and zero-pad the FFT
-to at least twice the window (`transform_kwargs={"n_fft_samples": ...}`). For
-a long, well-resolved window that removes most of the frequency grid's effect
-on the factor; for a short window it helps less, and a longer window is the
-remedy. The result then has twice as many frequency bins. The Notes of
-`spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition` give the sizes.
+windows longer than the slowest correlation in the data: nothing warns when a
+window is too short. The values also depend slightly on the FFT length
+(`transform_kwargs={"n_fft_samples": ...}`). Zero-padding to twice the window
+removes that dependence, at about twice the cost, but in simulation it did not
+bring the values closer to the true ones unless the window was too short. The
+Notes of `spectral_connectivity.minimum_phase_decomposition.minimum_phase_decomposition` give the sizes.
 
 ## Compute several measures at once
 
