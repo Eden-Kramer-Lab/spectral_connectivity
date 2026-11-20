@@ -3460,6 +3460,17 @@ def test_integral_with_frequency_range_still_refuses_other_measures():
         )
 
 
+@pytest.mark.parametrize("frequency_reduction", ["mean", "integral"])
+def test_band_reduced_dataarray_keeps_its_name(frequency_reduction):
+    """The weighted sum of an integral comes back unnamed from older xarray
+    (2023.1); a band result is named like its input under either reduction."""
+    power = _one_hz_power()
+    reduced = frequency_band_reduce(
+        power, {"band": (10.0, 30.0)}, frequency_reduction=frequency_reduction
+    )
+    assert reduced.name == power.name == "power"
+
+
 def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():
     """Folding the DC and Nyquist cells must keep adjacent bands additive and
     must not touch ``frequency_reduction="mean"``."""

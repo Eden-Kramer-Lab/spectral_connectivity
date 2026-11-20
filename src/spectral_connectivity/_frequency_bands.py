@@ -326,6 +326,8 @@ def _reduce_frequency_bands(
             "band" if dimension == "frequency" else dimension for dimension in data.dims
         )
         reduced = reduced.transpose(*desired_dims)
+        # xr.dot returns an unnamed array on older xarray (2023.1).
+        reduced.name = data.name
         reduced.attrs = dict(data.attrs)
         description = _BAND_VALUE_DESCRIPTIONS[reduction]
         if "interpretation" in reduced.attrs:
