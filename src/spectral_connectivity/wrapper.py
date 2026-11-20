@@ -2,7 +2,7 @@
 
 import inspect
 import warnings
-from collections.abc import Collection, Hashable, Mapping, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any, Literal
@@ -401,23 +401,6 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
         )
 
 
-# The Multitaper settings multitaper_connectivity takes as named arguments; the
-# others go in transform_kwargs.
-_NAMED_TRANSFORM_SETTINGS = (
-    "sampling_frequency",
-    "time_window_duration",
-    "time_window_step",
-    "time_halfbandwidth_product",
-    "n_tapers",
-    "detrend_type",
-)
-_TRANSFORM_KWARGS_SETTINGS = tuple(
-    name
-    for name in inspect.signature(Multitaper).parameters
-    if name != "time_series" and name not in _NAMED_TRANSFORM_SETTINGS
-)
-
-
 def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, Any]:
     """A copy of the ``name`` mapping argument; ``None`` is empty.
 
@@ -435,14 +418,15 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
     return dict(value)
 
 
-def _unknown_setting_message(problem: str, key: Any, valid: Collection[str]) -> str:
-    """``"<problem> '<key>'."`` and the closest names in ``valid``.
+def _unknown_setting_message(problem: str, key: Any) -> str:
+    """``"<problem> '<key>'."`` and the ``Multitaper`` settings ``key`` most
+    likely misspells.
 
     A suggestion that is one of ``multitaper_connectivity``'s named settings
     says so, since it goes outside ``transform_kwargs``.
     """
     message = f"{problem} {key!r}."
-    close = close_names(str(key), valid)
+    close = close_names(str(key), _MULTITAPER_SETTINGS)
     if close:
         message += f" Did you mean {', '.join(map(repr, close))}?"
         named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
@@ -500,36 +484,35 @@ def _transform_settings(
     named arguments, so a setting reaches the transform by exactly one route.
     """
     mapping = _setting_mapping("transform_kwargs", transform_kwargs)
-    for key in mapping:
-        if key in _NAMED_TRANSFORM_SETTINGS:
+    # The mapping's keys, then the plain keywords (which Python has already kept
+    # from naming one of the wrapper's named arguments).
+    for key, in_mapping in [
+        *((key, True) for key in mapping),
+        *((key, False) for key in legacy),
+    ]:
+        if key in _TRANSFORM_KWARGS_SETTINGS:
+            continue
+        if in_mapping and key in _NAMED_TRANSFORM_SETTINGS:
             msg = (
                 f"{key} was given inside transform_kwargs; it is a named argument of "
                 f"multitaper_connectivity, so pass it once, as {key}=..., not in the "
                 "mapping."
             )
             raise ValueError(msg)
-        if key not in _TRANSFORM_KWARGS_SETTINGS:
-            msg = _unknown_setting_message(
-                "transform_kwargs got an unexpected key",
-                key,
-                (*_TRANSFORM_KWARGS_SETTINGS, *_NAMED_TRANSFORM_SETTINGS),
-            )
+        if in_mapping:
+            msg = _unknown_setting_message("transform_kwargs got an unexpected key", key)
             msg += (
                 f" It accepts the Multitaper settings {', '.join(_TRANSFORM_KWARGS_SETTINGS)}."
             )
-            raise TypeError(msg)
-    for key in legacy:
-        if key not in _TRANSFORM_KWARGS_SETTINGS:
+        else:
             msg = _unknown_setting_message(
-                "multitaper_connectivity() got an unexpected keyword argument",
-                key,
-                (*_TRANSFORM_KWARGS_SETTINGS, *_NAMED_TRANSFORM_SETTINGS),
+                "multitaper_connectivity() got an unexpected keyword argument", key
             )
             msg += (
                 " Measure settings go in connectivity_kwargs and advanced Multitaper "
                 "settings in transform_kwargs."
             )
-            raise TypeError(msg)
+        raise TypeError(msg)
     return _merge_legacy_settings(
         "multitaper_connectivity", "transform_kwargs", mapping, legacy
     )
@@ -1433,6 +1416,22 @@ def multitaper_connectivity(
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
 
+
+# Every Multitaper setting, in its signature's order; the ones that
+# multitaper_connectivity names (in its signature's order) are given by name,
+# and the others go in transform_kwargs. Read when a call is checked, so they
+# can follow the function they are derived from.
+_MULTITAPER_SETTINGS = tuple(
+    name for name in inspect.signature(Multitaper).parameters if name != "time_series"
+)
+_NAMED_TRANSFORM_SETTINGS = tuple(
+    name
+    for name in inspect.signature(multitaper_connectivity).parameters
+    if name in _MULTITAPER_SETTINGS
+)
+_TRANSFORM_KWARGS_SETTINGS = tuple(
+    name for name in _MULTITAPER_SETTINGS if name not in _NAMED_TRANSFORM_SETTINGS
+)
 
 # Spellings of the frequency units fourier_connectivity accepts without
 # conversion, compared ignoring case and whitespace.
