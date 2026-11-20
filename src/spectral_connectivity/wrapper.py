@@ -581,8 +581,9 @@ def connectivity_to_xarray(
        For ``pairwise_spectral_granger_prediction`` and
        ``subset_pairwise_spectral_granger_prediction``,
        ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
-       2.x wrapper rejected the transfer-function measures, and
-       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
+       2.x wrapper rejected the transfer-function measures and could not return
+       ``phase_slope_index``, ``group_delay``, or ``delay``, whose
+       ``Connectivity`` arrays were already source first.
 
     Parameters
     ----------
@@ -1031,8 +1032,9 @@ def multitaper_connectivity(
        For ``pairwise_spectral_granger_prediction`` and
        ``subset_pairwise_spectral_granger_prediction``,
        ``sel(source=a, target=b)`` is ``a -> b``; 2.x returned ``b -> a``. The
-       2.x wrapper rejected the transfer-function measures, and
-       ``phase_slope_index``, ``group_delay``, and ``delay`` are unchanged.
+       2.x wrapper rejected the transfer-function measures and could not return
+       ``phase_slope_index``, ``group_delay``, or ``delay``, whose
+       ``Connectivity`` arrays were already source first.
 
     Parameters
     ----------

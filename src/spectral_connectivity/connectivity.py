@@ -3654,6 +3654,10 @@ class Connectivity:
             of all components, and a returned component does not depend on
             how many are returned. It is not an estimation rank like the
             ``rank`` of the group measures.
+
+            .. versionchanged:: 3.0
+               Components are always strongest first. 2.x returned them
+               weakest first when ``1 < max_rank < n_signals - 1``.
         max_workspace_elements : int, default=16_000_000
             Approximate working-set target, in array elements, for the batched
             decomposition: frequency bins are processed in chunks sized so the
