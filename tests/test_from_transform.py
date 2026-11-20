@@ -228,10 +228,11 @@ def test_a_half_migrated_subclass_works_and_warns_once(multitaper):
 
 
 def test_the_from_multitaper_warning_names_the_renamed_first_argument(multitaper):
-    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
-        Connectivity.from_multitaper(multitaper_instance=multitaper)
-    assert "transform" in str(record[0].message).split("use", 1)[1]
-    assert "multitaper_instance" in str(record[0].message)
+    _, message = warns_once_at_the_call(
+        lambda: Connectivity.from_multitaper(multitaper_instance=multitaper),
+        "the first is named transform, not multitaper_instance",
+    )
+    assert message.index("multitaper_instance") > message.index("from_transform()")
 
 
 def test_a_rejected_from_multitaper_call_does_not_warn(multitaper):
