@@ -616,7 +616,6 @@ def test_nominal_diagonal_holds_with_one_or_two_observations(
     _assert_nominal_diagonal(measure, variable, _diagonal(variable))
 
 
-_NOMINAL_DIAGONALS = [m for m in list_measures() if m.diagonal_value is not None]
 _FLAT_SIGNAL, _FLAT_SIGNAL_GROUP = "3", "b"
 
 
@@ -675,18 +674,31 @@ def test_nan_for_zero_power_signal_matches_what_a_flat_signal_gives(
 
 
 @pytest.mark.parametrize(
-    "measure",
-    [m for m in _NOMINAL_DIAGONALS if not m.nan_for_zero_power_signal],
-    ids=lambda measure: measure.name,
+    ("name", "record"),
+    [
+        pytest.param(name, record, id=name)
+        for name, record in _VALUE_VARIABLES
+        if record.diagonal_value is not None and not record.nan_for_zero_power_signal
+    ],
 )
 def test_a_flat_signal_keeps_the_nominal_diagonal_unless_it_is_nan(
-    flat_signal_results, measure
+    flat_signal_results, name, record
 ):
     """Where the flag is not set, a flat signal's self-connection keeps the
-    nominal value."""
-    variable = flat_signal_results[measure.name]
+    nominal value (group delay's fit correlation included)."""
+    variable = flat_signal_results[name]
     flat_self = variable.sel(source=_FLAT_SIGNAL, target=_FLAT_SIGNAL).values
-    _assert_nominal_diagonal(measure, variable, flat_self)
+    _assert_nominal_diagonal(record, variable, flat_self)
+
+
+def test_group_delay_companions_have_their_documented_range_and_sign():
+    """The slope is unbounded; the fit correlation lies in [-1, 1]; both read
+    their sign as group delay does."""
+    companions = dict(_MEASURE_SPECS["group_delay"].companions)
+    assert companions["group_delay_slope"].value_range == (-np.inf, np.inf)
+    assert companions["group_delay_r_value"].value_range == (-1.0, 1.0)
+    for companion in companions.values():
+        assert companion.sign_convention == _MEASURES["group_delay"].sign_convention
 
 
 def test_imaginary_coherency_is_zero_not_nan_for_a_flat_signal(flat_signal_results):
