@@ -8,6 +8,7 @@ import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._deprecation_helpers import warns_once_at_the_call
 
 
 @pytest.fixture(scope="module")
@@ -51,13 +52,9 @@ def _assert_same_connectivity(actual, expected):
 
 
 def test_from_multitaper_warns_once_at_the_caller_and_agrees_exactly(multitaper):
-    call = lambda: Connectivity.from_multitaper(multitaper)  # noqa: E731
-    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
-        deprecated = call()
-    ((filename, lineno, message),) = _deprecations(record)
-    assert (filename, lineno) == (__file__, call.__code__.co_firstlineno)
-    assert "Connectivity.from_transform" in message
-    assert "removed in 4.0" in message
+    deprecated, _ = warns_once_at_the_call(
+        lambda: Connectivity.from_multitaper(multitaper), "Connectivity.from_transform"
+    )
     _assert_same_connectivity(deprecated, Connectivity.from_transform(multitaper))
 
 
@@ -104,23 +101,18 @@ class _LegacyOverride(Connectivity):
 
 
 def test_from_multitaper_on_a_subclass_builds_the_subclass(multitaper):
-    call = lambda: _PlainSubclass.from_multitaper(multitaper)  # noqa: E731
-    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
-        deprecated = call()
-    ((filename, lineno, message),) = _deprecations(record)
-    assert (filename, lineno) == (__file__, call.__code__.co_firstlineno)
-    assert "_PlainSubclass.from_multitaper()" in message
+    deprecated, _ = warns_once_at_the_call(
+        lambda: _PlainSubclass.from_multitaper(multitaper), "_PlainSubclass.from_multitaper()"
+    )
     _assert_same_connectivity(deprecated, _PlainSubclass.from_transform(multitaper))
 
 
 def test_from_multitaper_does_not_call_a_subclass_from_transform_override(multitaper):
     """The deprecated name builds the instance itself; only code that calls
     from_transform reaches an override of it."""
-    call = lambda: _TransformOverride.from_multitaper(multitaper)  # noqa: E731
-    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
-        deprecated = call()
-    ((filename, lineno, _),) = _deprecations(record)
-    assert (filename, lineno) == (__file__, call.__code__.co_firstlineno)
+    deprecated, _ = warns_once_at_the_call(
+        lambda: _TransformOverride.from_multitaper(multitaper), "from_multitaper"
+    )
     assert not hasattr(deprecated, "marker")
     assert _TransformOverride.from_transform(multitaper).marker == "from_transform override"
 

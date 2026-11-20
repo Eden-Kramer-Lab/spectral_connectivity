@@ -1729,6 +1729,7 @@ def test_transform_setting_in_connectivity_kwargs_points_to_multitaper_connectiv
     message = str(excinfo.value)
     assert "pass it to multitaper_connectivity: by name" in message
     assert "time_halfbandwidth_product" in message
+    assert "otherwise in transform_kwargs" in message
     assert "fourier_coefficients" not in message
 
 

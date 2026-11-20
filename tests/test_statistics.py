@@ -1,4 +1,3 @@
-import inspect
 import subprocess
 import sys
 import warnings
@@ -21,6 +20,7 @@ from spectral_connectivity.statistics import (
     power_fisher_z_transform,
     power_variance,
 )
+from tests._deprecation_helpers import warns_once_at_the_call
 
 
 @pytest.mark.parametrize("correction", [Benjamini_Hochberg_procedure, Bonferroni_correction])
@@ -388,35 +388,13 @@ def test_power_confidence_intervals_count_every_averaged_observation():
     assert "n_observations" in doc
 
 
-def test_power_confidence_intervals_keeps_its_released_argument_order():
-    """The released positional order (count, power, ci) is unchanged; only the
-    count's name changed, and the old name is a keyword-only alias."""
-    parameters = inspect.signature(power_confidence_intervals).parameters
-    positional = [
-        name
-        for name, parameter in parameters.items()
-        if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    ]
-    assert positional == ["n_observations", "power", "ci"]
-    assert parameters["n_tapers"].kind is inspect.Parameter.KEYWORD_ONLY
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        by_position = power_confidence_intervals(25, np.array([0.5, 2.0]), 0.9)
-        by_keyword = power_confidence_intervals(
-            n_observations=25, power=np.array([0.5, 2.0]), ci=0.9
-        )
-    np.testing.assert_array_equal(by_position, by_keyword)
-
-
 def test_power_confidence_intervals_n_tapers_is_a_deprecated_alias():
     power = np.array([0.5, 1.0, 2.0])
     canonical = power_confidence_intervals(n_observations=25, power=power, ci=0.99)
-    call = lambda: power_confidence_intervals(n_tapers=25, power=power, ci=0.99)  # noqa: E731
-    with pytest.warns(DeprecationWarning, match="n_observations") as record:
-        deprecated = call()
-    (warning,) = record
-    assert (warning.filename, warning.lineno) == (__file__, call.__code__.co_firstlineno)
-    assert "removed in 4.0" in str(warning.message)
+    deprecated, _ = warns_once_at_the_call(
+        lambda: power_confidence_intervals(n_tapers=25, power=power, ci=0.99),
+        "n_observations",
+    )
     np.testing.assert_array_equal(deprecated, canonical)
 
 

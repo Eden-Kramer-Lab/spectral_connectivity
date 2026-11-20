@@ -19,6 +19,8 @@ from spectral_connectivity import (
     fourier_connectivity,
 )
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
+from spectral_connectivity.statistics import power_confidence_intervals
+from spectral_connectivity.wrapper import connectivity_to_xarray, multitaper_connectivity
 
 _POSITIONAL = (
     inspect.Parameter.POSITIONAL_ONLY,
@@ -179,3 +181,49 @@ def test_global_coherence_keeps_released_max_rank_and_workspace_is_keyword_only(
         np.testing.assert_array_equal(by_position, by_keyword)
     with pytest.raises(TypeError, match="positional argument"):
         connectivity.global_coherence(2, 1000)
+
+
+def test_multitaper_connectivity_keeps_its_released_positional_order():
+    assert _positional_names(multitaper_connectivity) == [
+        "time_series",
+        "sampling_frequency",
+        "time_window_duration",
+        "method",
+        "signal_names",
+        "squeeze",
+        "connectivity_kwargs",
+    ]
+    assert {
+        "time_window_step",
+        "time_halfbandwidth_product",
+        "n_tapers",
+        "detrend_type",
+        "transform_kwargs",
+    } <= set(_keyword_only_names(multitaper_connectivity))
+
+
+def test_connectivity_to_xarray_keeps_its_released_positional_order():
+    assert _positional_names(connectivity_to_xarray) == [
+        "m",
+        "method",
+        "signal_names",
+        "squeeze",
+    ]
+    assert {"group_labels", "frequency_range", "connectivity_kwargs"} <= set(
+        _keyword_only_names(connectivity_to_xarray)
+    )
+    assert "transform_kwargs" not in inspect.signature(connectivity_to_xarray).parameters
+
+
+def test_power_confidence_intervals_keeps_its_released_argument_order():
+    """The released positional order (count, power, ci) is unchanged; only the
+    count's name changed, and the old name is a keyword-only alias."""
+    assert _positional_names(power_confidence_intervals) == ["n_observations", "power", "ci"]
+    assert _keyword_only_names(power_confidence_intervals) == ["n_tapers"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        by_position = power_confidence_intervals(25, np.array([0.5, 2.0]), 0.9)
+        by_keyword = power_confidence_intervals(
+            n_observations=25, power=np.array([0.5, 2.0]), ci=0.9
+        )
+    np.testing.assert_array_equal(by_position, by_keyword)

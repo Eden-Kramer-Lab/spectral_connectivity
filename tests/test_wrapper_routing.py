@@ -19,6 +19,7 @@ from spectral_connectivity import (
     multitaper_connectivity,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._deprecation_helpers import warns_once_at_the_call
 
 _COMMON_TRANSFORM_SETTINGS = (
     "time_window_step",
@@ -41,39 +42,6 @@ def _assert_identical(actual, expected):
     """Same values, coordinates, and attributes (provenance included)."""
     assert actual.identical(expected)
     assert actual.attrs == expected.attrs
-
-
-def test_multitaper_connectivity_keeps_its_released_positional_order():
-    parameters = inspect.signature(multitaper_connectivity).parameters
-    positional = [
-        name
-        for name, parameter in parameters.items()
-        if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    ]
-    assert positional == [
-        "time_series",
-        "sampling_frequency",
-        "time_window_duration",
-        "method",
-        "signal_names",
-        "squeeze",
-        "connectivity_kwargs",
-    ]
-    for name in (*_COMMON_TRANSFORM_SETTINGS, "transform_kwargs"):
-        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-
-
-def test_connectivity_to_xarray_keeps_its_released_positional_order():
-    parameters = inspect.signature(connectivity_to_xarray).parameters
-    positional = [
-        name
-        for name, parameter in parameters.items()
-        if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    ]
-    assert positional == ["m", "method", "signal_names", "squeeze"]
-    for name in ("group_labels", "connectivity_kwargs"):
-        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-    assert "transform_kwargs" not in parameters
 
 
 def test_common_settings_default_to_the_multitaper_defaults():
@@ -138,17 +106,12 @@ def test_legacy_transform_keywords_warn_once_at_the_caller_and_match_the_mapping
     canonical = multitaper_connectivity(
         time_series, sampling_frequency=500, method="power", transform_kwargs=settings
     )
-    call = lambda: multitaper_connectivity(  # noqa: E731
-        time_series, sampling_frequency=500, method="power", **settings
+    legacy, message = warns_once_at_the_call(
+        lambda: multitaper_connectivity(
+            time_series, sampling_frequency=500, method="power", **settings
+        ),
+        "transform_kwargs",
     )
-    with pytest.warns(DeprecationWarning, match="transform_kwargs") as record:
-        legacy = call()
-    deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
-    assert [(w.filename, w.lineno) for w in deprecations] == [
-        (__file__, call.__code__.co_firstlineno)
-    ]
-    message = str(deprecations[0].message)
-    assert "removed in 4.0" in message
     for key in settings:
         assert key in message
     _assert_identical(legacy, canonical)
@@ -197,18 +160,6 @@ def test_a_named_setting_inside_transform_kwargs_is_rejected(time_series, name):
     assert "named argument" in str(excinfo.value)
 
 
-def test_a_misspelled_transform_kwargs_key_is_rejected(time_series):
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        with pytest.raises(TypeError, match=r"'n_fft_sample'.*n_fft_samples"):
-            multitaper_connectivity(
-                time_series,
-                sampling_frequency=500,
-                method="power",
-                transform_kwargs={"n_fft_sample": 2048},
-            )
-
-
 def test_an_unknown_legacy_keyword_is_rejected_before_any_warning(time_series):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -216,21 +167,6 @@ def test_an_unknown_legacy_keyword_is_rejected_before_any_warning(time_series):
             multitaper_connectivity(
                 time_series, sampling_frequency=500, method="power", pairs=[(0, 1)]
             )
-
-
-def test_transform_setting_in_connectivity_kwargs_names_both_transform_routes(time_series):
-    with pytest.raises(TypeError, match="connectivity_kwargs configures the measure only") as (
-        excinfo
-    ):
-        multitaper_connectivity(
-            time_series,
-            sampling_frequency=500,
-            method="magnitude_squared_coherence",
-            connectivity_kwargs={"n_fft_samples": 2048},
-        )
-    message = str(excinfo.value)
-    assert "transform_kwargs" in message
-    assert "by name" in message
 
 
 @pytest.fixture(scope="module")
@@ -260,14 +196,10 @@ def test_connectivity_to_xarray_legacy_keywords_warn_once_and_match_the_mapping(
     canonical = connectivity_to_xarray(
         multitaper, "phase_slope_index", connectivity_kwargs=settings
     )
-    call = lambda: connectivity_to_xarray(multitaper, "phase_slope_index", **settings)  # noqa: E731
-    with pytest.warns(DeprecationWarning, match="connectivity_kwargs") as record:
-        legacy = call()
-    deprecations = [w for w in record if issubclass(w.category, DeprecationWarning)]
-    assert [(w.filename, w.lineno) for w in deprecations] == [
-        (__file__, call.__code__.co_firstlineno)
-    ]
-    assert "removed in 4.0" in str(deprecations[0].message)
+    legacy, _ = warns_once_at_the_call(
+        lambda: connectivity_to_xarray(multitaper, "phase_slope_index", **settings),
+        "connectivity_kwargs",
+    )
     _assert_identical(legacy, canonical)
 
 
@@ -484,25 +416,23 @@ def test_a_rejected_call_does_not_also_warn_about_plain_keywords(time_series, ca
         ),
         pytest.param({"n_fft": 512}, "n_fft_samples", id="prefix"),
         pytest.param({"taper_weightings": "eigen"}, "taper_weighting", id="advanced"),
+        pytest.param({"n_fft_sample": 2048}, "n_fft_samples", id="close"),
     ],
 )
 def test_a_misspelled_transform_setting_suggests_every_kind_of_setting(
     time_series, transform_kwargs, suggestion
 ):
-    with pytest.raises(TypeError, match=rf"Did you mean.*'{suggestion}'") as excinfo:
-        multitaper_connectivity(
-            time_series,
-            sampling_frequency=500,
-            method="power",
-            transform_kwargs=transform_kwargs,
-        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=rf"Did you mean.*'{suggestion}'") as excinfo:
+            multitaper_connectivity(
+                time_series,
+                sampling_frequency=500,
+                method="power",
+                transform_kwargs=transform_kwargs,
+            )
     if suggestion == "time_halfbandwidth_product":
         assert "named argument" in str(excinfo.value)
-
-
-def test_a_misspelled_plain_keyword_suggests_by_prefix(time_series):
-    with pytest.raises(TypeError, match=r"Did you mean.*'n_fft_samples'"):
-        multitaper_connectivity(time_series, sampling_frequency=500, method="power", n_fft=512)
 
 
 def test_a_misspelled_measure_setting_suggests_the_measures_own(time_series):
