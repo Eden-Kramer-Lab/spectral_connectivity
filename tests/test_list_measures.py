@@ -851,6 +851,57 @@ def test_signed_and_phase_measures_state_their_sign_convention():
     assert {m.name for m in list_measures() if m.sign_convention} == signed
 
 
+# How each sign convention reads the value at (source="a", target="b") when
+# signal "a" leads signal "b", keyed by the wording that states it.
+_LEADING_SOURCE_READINGS = {
+    "Positive (source=a, target=b) means a leads b.": lambda value: value > 0,
+    "A positive angle at (source=a, target=b) means a leads b.": (
+        lambda value: np.angle(value) > 0
+    ),
+    "Above 0.5 at (source=a, target=b) means a leads b; below 0.5, a lags b.": (
+        lambda value: value > 0.5
+    ),
+    "a negative angle means the source group leads.": lambda value: np.angle(value) < 0,
+}
+
+
+@pytest.mark.parametrize("name", sorted(m.name for m in list_measures() if m.sign_convention))
+def test_sign_convention_reads_a_planted_lead_correctly(name):
+    """Signal "a" leads "b" by 3 samples (6 ms, 0.6 to 1.7 rad over 15-45 Hz).
+    The value at (source="a", target="b") must be what the measure's sign
+    convention says a lead looks like, so its wording cannot be inverted
+    without failing here."""
+    rng = np.random.default_rng(0)
+    leader = rng.standard_normal((1003, 20))
+    signals = np.stack([leader[3:], leader[:-3]], axis=-1)
+    signals += 0.5 * rng.standard_normal(signals.shape)
+    result = multitaper_connectivity(
+        signals,
+        sampling_frequency=500,
+        method=name,
+        signal_names=["a", "b"],
+        frequency_range=(15, 45),
+        **({"group_labels": ["a", "b"]} if name == "canonical_coherency" else {}),
+    )
+    variable = result[name] if isinstance(result, xr.Dataset) else result
+    convention = variable.attrs["sign_convention"]
+    readings = [
+        reads for wording, reads in _LEADING_SOURCE_READINGS.items() if wording in convention
+    ]
+    assert len(readings) == 1, convention
+
+    if name == "canonical_coherency":
+        assert result.connection_source_group.item() == "a"
+        values = variable.values
+    elif name == "delay":
+        values = variable.sel(source="a", target="b", candidate=0).values
+    else:
+        values = variable.sel(source="a", target="b").values
+    values = values[~np.isnan(values)]
+    assert values.size > 0
+    assert np.all(readings[0](values))
+
+
 _BANDS = {"low": (4.0, 40.0), "high": (40.0, 120.0)}
 
 
