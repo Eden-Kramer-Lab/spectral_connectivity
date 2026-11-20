@@ -1,18 +1,17 @@
 # 3.0 API and result consistency decisions
 
-**Status: all six steps implemented. Step 1 is merged; steps 2-5 and the
-internal base-class step are open pull requests, and step 6 is the last pull
-request of the stack (see the table below).**
+**Status: all six steps, and the internal base-class step, are implemented and
+merged into `master` (see the table below).**
 
 | Step | Decisions | Branch | Status |
 | --- | --- | --- | --- |
 | 1 | D18, D20, D26, D27, D30 | `fix/coordinates-and-transforms` | Merged as PR #102 (`138f3f7`) |
-| 2 | D1-D3, D19, D21, D28 | `refactor/metadata-and-bandwidths` | PR #108, in review |
-| (internal) | windowed-FFT base | `refactor/windowed-fft-base` | PR #112, in review |
-| 3 | D4, D23 | `refactor/frequency-selection` | PR #113, in review |
-| 4 | D5-D8, D25 | `refactor/coherence-naming` | PR #114, in review |
-| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | PR #115 (`91db050`), in review |
-| 6 | D17, D31; migration table and removal checklist | `refactor/simulators-and-migration` | The last PR of the stack, on #115 |
+| 2 | D1-D3, D19, D21, D28 | `refactor/metadata-and-bandwidths` | Merged as PR #108 (`6749e51`) |
+| (internal) | windowed-FFT base | `refactor/windowed-fft-base` | Merged as PR #112 (`df37de2`) |
+| 3 | D4, D23 | `refactor/frequency-selection` | Merged as PR #113 (`7c278d7`) |
+| 4 | D5-D8, D25 | `refactor/coherence-naming` | Merged as PR #114 (`7a94abb`) |
+| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | Merged as PR #115 (`04200dc`) |
+| 6 | D17, D31; migration table and removal checklist | `refactor/simulators-and-migration` | Merged as PR #116 (`518e17d`) |
 
 D10's step option and D22 remain deferred to 3.x, as decided. D13 and D15
 needed no code change.
