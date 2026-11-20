@@ -411,10 +411,11 @@ def test_power_confidence_intervals_keeps_its_released_argument_order():
 def test_power_confidence_intervals_n_tapers_is_a_deprecated_alias():
     power = np.array([0.5, 1.0, 2.0])
     canonical = power_confidence_intervals(n_observations=25, power=power, ci=0.99)
+    call = lambda: power_confidence_intervals(n_tapers=25, power=power, ci=0.99)  # noqa: E731
     with pytest.warns(DeprecationWarning, match="n_observations") as record:
-        deprecated = power_confidence_intervals(n_tapers=25, power=power, ci=0.99)
+        deprecated = call()
     (warning,) = record
-    assert warning.filename == __file__
+    assert (warning.filename, warning.lineno) == (__file__, call.__code__.co_firstlineno)
     assert "removed in 4.0" in str(warning.message)
     np.testing.assert_array_equal(deprecated, canonical)
 

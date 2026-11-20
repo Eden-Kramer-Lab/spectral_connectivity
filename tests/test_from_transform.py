@@ -62,7 +62,9 @@ def test_from_multitaper_warns_once_at_the_caller_and_agrees_exactly(multitaper)
 
 
 def test_from_multitaper_keeps_its_arguments(multitaper):
-    """The released keyword name and the positional settings still bind."""
+    """The released keyword name and the 3.0 positional order (expectation
+    type, then dtype) bind as in from_transform. The released order, with
+    blocks third, is rejected; see the blocks tests below."""
     with pytest.warns(DeprecationWarning, match="from_multitaper"):
         by_keyword = Connectivity.from_multitaper(
             multitaper_instance=multitaper, expectation_type="tapers"
