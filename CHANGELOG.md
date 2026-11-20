@@ -15,7 +15,7 @@ For pairwise and subset spectral Granger prediction, the directed measures the
 is now `a -> b` (2.x returned `b -> a`). Indexing code written for 2.x still
 runs but reads the opposite direction; see the first two rows of the migration
 guide below. `phase_slope_index`, `group_delay`, and `delay` were already source
-first and are unchanged; do not swap them. Until 3.2 the `Connectivity` methods
+first; do not swap them. Until 3.2 the `Connectivity` methods
 that existed in 2.x (pairwise and subset spectral Granger, directed transfer
 function, directed coherence, (generalized) partial directed coherence, and
 direct directed transfer function) emit a `DirectedOrientationWarning` as a
@@ -44,16 +44,16 @@ returns a trial axis (see its row).
 | `global_coherence(max_rank=k)` returned its components weakest first when `1 < k < n_signals - 1` (the sparse solver's order) and strongest first otherwise | Always strongest first, the values and their vectors alike, so `[..., 0]` is the largest component. Code that indexed a component of such a result now reads a different one: reverse the component axis of stored 2.x results, or re-index |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008) |
-| `delay` returned cycles | Returns seconds; DC is `NaN` |
+| `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time |
 | `xarray.DataArray` axes followed NumPy's positional `(time[, trial], signal)` order | **Dimension names now define DataArray axis roles**, and inputs are transposed automatically; pass `time_dim`, `trial_dim`, and `signal_dim` for custom names |
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for SCoT/ConnectiviPy's amplitude form — recompute dDTF results |
 | `directed_coherence` broadcast the noise variance on the wrong axis (values could exceed 1) | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
-| `group_delay` / `delay` frequency-significance test over-rejected the null ~3–4× | Uses the exact zero-coherence null distribution; the set of "significant" frequencies changes — recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
+| `coherence_fisher_z_transform(coherency, n_obs1)` without a second sample returned `NaN` for three or more observations and `±inf` for two, because its `n_obs2=0` default was used as a sample size. `group_delay` and `delay` found their significant frequencies with it, so with three or more observations they found none: `group_delay` was all `NaN` and `delay` returned only the constants `2πk` | The one-sample z-score has no second-sample terms, and `group_delay` and `delay` use the exact zero-coherence null distribution, so both return estimates at the frequencies with significant coherence. 2.x output of these two methods is not usable: recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family) |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
-| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: memory is now bounded automatically. Recompute `phase_lag_index`, `weighted_phase_lag_index`, `debiased_squared_phase_lag_index`, and `debiased_squared_weighted_phase_lag_index` results that were obtained with `blocks`: in 2.x it changed them (`blocks=1` returned `phase_lag_index` and `weighted_phase_lag_index` with the opposite sign; larger values raised `IndexError` or returned other values), and 3.0 returns the values 2.x gave without `blocks`. Every other measure agreed with and without it to rounding. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
+| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: memory is now bounded automatically. Recompute phase-lag-index results that were obtained with `blocks`. In 2.x `blocks=1` returned `phase_lag_index` and `weighted_phase_lag_index` with the opposite sign; a larger value below the number of signal pairs, `n_signals * (n_signals + 1) / 2`, raised `IndexError` for all four phase-lag-index measures; and a value from that number up returned 0 for those two, `-1 / (n_observations - 1)` for `debiased_squared_phase_lag_index`, and `NaN` for `debiased_squared_weighted_phase_lag_index`. Results obtained without `blocks` are unaffected by its removal, and every other measure agreed with and without it to rounding. Every such call raises a `TypeError` that names `blocks` and says to drop it and to recompute those results; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` and the complex `coherency` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure and not `coherency` (complex arrays do not serialize portably across xarray versions and NetCDF engines), so `result["coherency"]` on a default result raises `KeyError`; request `method=[..., "coherency"]` or `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name. `coherence_magnitude` is now `magnitude_squared_coherence` (row below) |
@@ -597,11 +597,10 @@ returns a trial axis (see its row).
 - `blocks` of `Connectivity` and `Connectivity.from_multitaper` (released in
   2.0.1). It was meant only to chunk the cross-spectral computation, and
   memory is now bounded automatically. In 2.x it also changed the four
-  phase-lag-index measures, whose terms are not Hermitian as its block filling
-  assumed: `blocks=1` returned `phase_lag_index` and
-  `weighted_phase_lag_index` with the opposite sign, and larger values raised
-  `IndexError` or returned other values. Every other measure agreed with and
-  without it to rounding. A call that still passes it, by keyword or in its
+  phase-lag-index measures (see the migration guide): `blocks=1` returned
+  `phase_lag_index` and `weighted_phase_lag_index` with the opposite sign, and
+  larger values raised `IndexError` or returned constants. Every other measure
+  agreed with and without it to rounding. A call that still passes it, by keyword or in its
   released position, raises a `TypeError` that names `blocks`, says to drop
   it, and says to recompute phase-lag-index results obtained with it, before
   any computation. It is not kept as a deprecated alias.
@@ -819,6 +818,10 @@ is removed in 4.0.
 - Phase-locking and phase-lag measures handle dead channels without leaking
   runtime warnings; their documented finite-sample ranges are corrected.
 - Group delay and delay use the exact zero-coherence significance distribution.
+  In 2.x their one-sample Fisher z-scores were `NaN` for three or more
+  observations (`coherence_fisher_z_transform` used its `n_obs2=0` default as
+  a sample size), so `group_delay` was all `NaN` and `delay` returned only the
+  constants `2πk`; the one-sample z-score now has no second-sample terms.
   Undefined p-values are excluded consistently from BH and Bonferroni families.
 - Statistical helpers validate observation counts, confidence levels, spectra,
   firing rates, p-values, and correction methods. Power confidence intervals
@@ -869,21 +872,31 @@ is removed in 4.0.
 - Band integrals keep the Nyquist bin of a frequency coordinate that does not
   hold the Nyquist frequency exactly. The last bin is at `nyquist_frequency` by
   the rule that places a bin on a band's bound, so a coordinate stored as
-  float32 (as netCDF often does) keeps it, and `fourier_connectivity` reads a
-  two-sided grid's rate from its Nyquist bin (the bin farthest from 0 Hz)
-  instead of multiplying the first bin's rounding by the FFT length, so float32
-  and rounded FFT-order grids record the right `sampling_frequency`. A band
+  float32 (as netCDF often does) keeps it on NumPy 1.x too (NumPy 2 already
+  compared the two in float32), and `fourier_connectivity` reads a
+  two-sided grid's rate from the bin farthest from 0 Hz (the Nyquist bin of an
+  even-length grid), in the grid's own precision, instead of multiplying the
+  first bin's rounding by the FFT length, so float32 and rounded FFT-order
+  grids record the right `sampling_frequency`. A band
   ending on the Nyquist bin of such a grid was short by half that bin's cell.
+  This entry and the next two concern `frequency_band_reduce`,
+  `frequency_range`, and `fourier_connectivity`, which 2.x did not have:
+  nothing computed with 2.x is affected.
 - `frequency_band_reduce` integrates each variable of a Dataset with that
   variable's recorded Nyquist frequency. A Dataset assembled from result
   variables has no attributes of its own, so a cropped grid's last bin was
-  taken for the Nyquist bin and a band ending there came out up to 10% high.
+  taken for the Nyquist bin and a band ending there came out high by half that
+  bin's cell (4-10% of a 4-8 Hz band on 0.5 Hz bins, about 50% of a band one
+  bin wide).
 - With `frequency_range`, `multitaper_connectivity` and `fourier_connectivity`
   integrate a band on the uncropped grid, so a band inside the range gives the
-  same value with and without the range even when its edge falls between bins.
-  Cropping first dropped the part of the band lying in the cell of a bin just
-  outside the range (1-3% of a 20 Hz band on 0.5-1 Hz bins). A band reaching
-  past the range is still limited to the cells of the bins the range selects.
+  same value with and without the range even when its edge falls between bins
+  (without `frequency_decimation`, whose kept bins start at the first bin in
+  the range). Cropping first dropped the part of the band lying in the cell of
+  a bin just outside the range (up to about 3% of a 20 Hz band on 0.5-1 Hz
+  bins). A band reaching past the range is cut at the range's bounds, or at
+  the outer edge of the first or last selected bin's cell where that lies
+  further out.
 - `suggest_parameters` no longer loses a taper to floating-point error when
   the resolution and the shortened window put `2 * NW` on a whole number
   (30 Hz over a 0.3 s record suggested NW 1.4999999999999998 and one taper;

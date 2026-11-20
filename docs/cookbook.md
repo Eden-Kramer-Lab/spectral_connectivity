@@ -601,7 +601,8 @@ their attrs; one named like a coordinate or variable of the result (e.g.
 warning. Coefficients without a time dimension that keep a numeric scalar
 coordinate named `time` (or `times`), as after `isel(time=0)`, use it as the
 time of their single window; a scalar under another name of a time dimension,
-such as `window`, stays an identifier, since it may hold a window's length.
+such as `window`, stays an identifier, since it may hold a window's length
+(pass `time=[...]` to use it as the time).
 Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
@@ -628,9 +629,12 @@ setting such as `mt_detrend_type` is the string `"None"`. Compare them with
 `mt_frequency_resolution` describe the window actually analyzed, which is a
 whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
 report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
-and 11.88 Hz. With custom `tapers`, `mt_n_tapers` is the number supplied, where
-2.0.1 reported `floor(2 * NW - 1)` whatever their number (5 for two tapers at
-the default NW=3). `estimate_frequency_resolution` uses the duration it is given.
+and 11.88 Hz. `mt_n_time_samples_per_step` is the step rounded to the nearest
+sample, where 2.0.1 truncated it (57, not 56, for a 0.57 s step at 100 Hz).
+With custom `tapers`, `mt_n_tapers` is the number supplied, where 2.0.1
+reported the DPSS count instead (`n_tapers` if given, else `floor(2 * NW - 1)`:
+5 for two tapers at the default NW=3). `estimate_frequency_resolution` uses the
+duration it is given.
 
 ## Pass a labeled DataArray
 

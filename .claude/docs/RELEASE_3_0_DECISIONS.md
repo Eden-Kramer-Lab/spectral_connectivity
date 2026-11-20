@@ -648,7 +648,8 @@ Rulings where the rules above were silent:
   before this step and is not restored (owner's ruling). Every 2.x use of
   it, by keyword or in its released positional slot (third in
   `from_multitaper`, fifth in `Connectivity`), raises a `TypeError` that names
-  `blocks`, says it had no effect on results, and says to drop it. Separately,
+  `blocks`, says to drop it, and says to recompute phase-lag-index results
+  obtained with it (in 2.x it changed them). Separately,
   `Connectivity` rejects any dtype that is not complex: a value bound there by
   position used to be read as float64 (`None`) and silently drop every
   coefficient's imaginary part.
