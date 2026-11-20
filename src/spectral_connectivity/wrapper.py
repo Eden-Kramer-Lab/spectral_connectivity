@@ -414,9 +414,21 @@ _TRANSFORM_KWARGS_SETTINGS = tuple(
 )
 
 
-def _setting_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    """A copy of a ``*_kwargs`` mapping argument; ``None`` is empty."""
-    return {} if value is None else dict(value)
+def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """A copy of the ``name`` mapping argument; ``None`` is empty.
+
+    Anything that is not a mapping (a string, or a list of pairs that ``dict``
+    would accept) raises ``TypeError`` instead of being read as settings.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        msg = (  # type: ignore[unreachable]  # user input
+            f"{name} must be a mapping of setting names to values, such as "
+            f"{{'n_fft_samples': 1024}}, got {type(value).__name__}."
+        )
+        raise TypeError(msg)
+    return dict(value)
 
 
 def _unknown_setting_message(problem: str, key: Any, valid: Collection[str]) -> str:
@@ -472,7 +484,7 @@ def _transform_settings(
     Every key must be a ``Multitaper`` setting that is not one of the wrapper's
     named arguments, so a setting reaches the transform by exactly one route.
     """
-    mapping = _setting_mapping(transform_kwargs)
+    mapping = _setting_mapping("transform_kwargs", transform_kwargs)
     for key in mapping:
         if key in _NAMED_TRANSFORM_SETTINGS:
             msg = (
@@ -597,7 +609,7 @@ def connectivity_to_xarray(
     measure_settings = _merge_legacy_settings(
         "connectivity_to_xarray",
         "connectivity_kwargs",
-        _setting_mapping(connectivity_kwargs),
+        _setting_mapping("connectivity_kwargs", connectivity_kwargs),
         kwargs,
     )
     # A misspelled setting fails before any work, whichever route it took.
@@ -740,7 +752,7 @@ def _resolve_group_labels(
         If the labels are given both ways, given with no group measure
         requested, or missing while a group measure is requested.
     """
-    label_free_kwargs = dict(connectivity_kwargs or {})
+    label_free_kwargs = _setting_mapping("connectivity_kwargs", connectivity_kwargs)
     legacy_labels = label_free_kwargs.pop("group_labels", None)
     if group_labels is not None and legacy_labels is not None:
         msg = (

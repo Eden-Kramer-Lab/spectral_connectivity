@@ -325,3 +325,33 @@ def test_group_labels_reach_multitaper_connectivity_by_name_or_mapping(time_seri
         connectivity_kwargs={"group_labels": labels},
     )
     _assert_identical(mapped, named)
+
+
+@pytest.mark.parametrize("value", ["n_fft_samples", [("n_fft_samples", 512)]], ids=repr)
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda series, value: multitaper_connectivity(
+                series, sampling_frequency=500, method="power", transform_kwargs=value
+            ),
+            id="multitaper_connectivity-transform_kwargs",
+        ),
+        pytest.param(
+            lambda series, value: multitaper_connectivity(
+                series, sampling_frequency=500, method="power", connectivity_kwargs=value
+            ),
+            id="multitaper_connectivity-connectivity_kwargs",
+        ),
+        pytest.param(
+            lambda series, value: connectivity_to_xarray(
+                Multitaper(series, sampling_frequency=500), "power", connectivity_kwargs=value
+            ),
+            id="connectivity_to_xarray-connectivity_kwargs",
+        ),
+    ],
+)
+def test_a_settings_mapping_that_is_not_a_mapping_is_rejected(time_series, call, value):
+    """A string or a list of pairs is not silently read as settings."""
+    with pytest.raises(TypeError, match=r"_kwargs must be a mapping.*got (str|list)"):
+        call(time_series, value)
