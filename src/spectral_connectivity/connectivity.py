@@ -92,11 +92,19 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     return canonical
 
 
+_BLOCKS_REMOVED = (
+    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
+    "automatically), so drop it."
+)
+
+
 def _validated_complex_dtype(dtype: Any) -> Any:
     """``dtype`` if it is a complex dtype; otherwise a ``TypeError``.
 
     A real dtype (including ``None``, which NumPy reads as float64) would cast
-    the Fourier coefficients to real values and silently drop every phase.
+    the Fourier coefficients to real values and silently drop every phase. A
+    ``None`` or an integer is most likely 2.x's ``blocks``, passed in the
+    position ``dtype`` now has, so the message says so.
     """
     try:
         kind = np.dtype(dtype).kind
@@ -108,6 +116,13 @@ def _validated_complex_dtype(dtype: Any) -> Any:
             f"got {dtype!r}; a real dtype would discard the imaginary part of the "
             "Fourier coefficients."
         )
+        if dtype is None or (
+            isinstance(dtype, (int, np.integer)) and not isinstance(dtype, bool)
+        ):
+            msg += (
+                " In 2.x, blocks took this position (third in from_multitaper, fifth "
+                f"in Connectivity): {_BLOCKS_REMOVED} Pass dtype by keyword."
+            )
         raise TypeError(msg)
     return dtype
 
@@ -253,20 +268,12 @@ DIRECTED_COHERENCE_DISCREPANCY_TOLERANCE = 0.1
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
-_BLOCKS_REMOVED = (
-    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
-    "automatically), so drop it."
-)
 
+def _rejects_removed_blocks(caller: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Reject 2.x's ``blocks=`` keyword with a message that says to drop it.
 
-def _rejects_removed_blocks(
-    caller: str, released_index: int | None = None, released_ordinal: str = ""
-) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
-    """Reject 2.x's ``blocks`` argument with a message that says to drop it.
-
-    ``blocks`` is rejected by keyword. ``released_index`` is its index in
-    ``args`` (``self``/``cls`` included) in v2.0.1, where ``dtype`` now is: a
-    ``None`` or integer there is a 2.x block count, not a dtype.
+    Its released position is ``dtype``'s now, where
+    :func:`_validated_complex_dtype` recognizes it.
     """
 
     def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -275,17 +282,6 @@ def _rejects_removed_blocks(
             if "blocks" in kwargs:
                 msg = f"{caller} got blocks={kwargs['blocks']!r}. {_BLOCKS_REMOVED}"
                 raise TypeError(msg)
-            if released_index is not None and len(args) > released_index:
-                value = args[released_index]
-                if value is None or (
-                    isinstance(value, (int, np.integer)) and not isinstance(value, bool)
-                ):
-                    msg = (
-                        f"{caller} got {value!r} as its {released_ordinal} positional "
-                        "argument, where 2.x took blocks and 3.0 takes dtype. "
-                        f"{_BLOCKS_REMOVED}"
-                    )
-                    raise TypeError(msg)
             return function(*args, **kwargs)
 
         return wrapper
@@ -859,7 +855,7 @@ class Connectivity:
 
     _observation_weights: BackendArray | None
 
-    @_rejects_removed_blocks("Connectivity()", 5, "fifth")
+    @_rejects_removed_blocks("Connectivity()")
     def __init__(
         self,
         fourier_coefficients: NDArray[np.complexfloating],
@@ -1206,7 +1202,7 @@ class Connectivity:
         self.clear_cache()
 
     @classmethod
-    @_rejects_removed_blocks("Connectivity.from_multitaper()", 3, "third")
+    @_rejects_removed_blocks("Connectivity.from_multitaper()")
     def from_multitaper(
         cls,
         multitaper_instance: "SpectralTransform",
@@ -1245,6 +1241,9 @@ class Connectivity:
             New Connectivity instance.
 
         """
+        # Checked before the warning too, so a 2.x blocks in dtype's position
+        # fails without first warning about the name.
+        _validated_complex_dtype(dtype)
         warn_deprecated(
             f"{cls.__name__}.from_multitaper()",
             f"{cls.__name__}.from_transform()",

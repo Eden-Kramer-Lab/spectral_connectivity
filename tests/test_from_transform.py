@@ -171,25 +171,35 @@ def test_blocks_in_its_released_position_is_rejected_with_its_own_message(multit
         multitaper.frequencies,
         multitaper.time,
     )
-    with pytest.raises(TypeError, match=rf"fifth.*{_BLOCKS_MESSAGE}"):
+    released_position = rf"complex dtype.*fifth in Connectivity.*{_BLOCKS_MESSAGE}"
+    with pytest.raises(TypeError, match=released_position):
         Connectivity(coefficients, "trials_tapers", frequencies, time, blocks)
-    with pytest.raises(TypeError, match=rf"fifth.*{_BLOCKS_MESSAGE}"):
+    with pytest.raises(TypeError, match=released_position):
         # 2.x's full positional form: blocks, then dtype.
         Connectivity(coefficients, "trials_tapers", frequencies, time, blocks, np.complex128)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        with pytest.raises(TypeError, match=rf"third.*{_BLOCKS_MESSAGE}"):
+        with pytest.raises(
+            TypeError, match=rf"complex dtype.*third in from_multitaper.*{_BLOCKS_MESSAGE}"
+        ):
             Connectivity.from_multitaper(multitaper, "trials_tapers", blocks)
 
 
-@pytest.mark.parametrize("value", [None, 5, np.float64, "float32"], ids=repr)
-def test_a_dtype_that_is_not_complex_is_rejected(multitaper, value):
-    """A real dtype would discard every coefficient's imaginary part."""
-    with pytest.raises(TypeError, match="complex dtype") as excinfo:
-        Connectivity.from_transform(multitaper, "trials_tapers", value)
-    assert "blocks" not in str(excinfo.value)
-    with pytest.raises(TypeError, match="complex dtype"):
-        Connectivity(multitaper.fft(), dtype=value)
+@pytest.mark.parametrize(
+    ("value", "looks_like_blocks"),
+    [(None, True), (5, True), (np.float64, False), ("float32", False)],
+    ids=repr,
+)
+def test_a_dtype_that_is_not_complex_is_rejected(multitaper, value, looks_like_blocks):
+    """A real dtype would discard every coefficient's imaginary part; a None
+    or an integer, 2.x's blocks values, also gets the note about blocks."""
+    for call in (
+        lambda: Connectivity.from_transform(multitaper, "trials_tapers", value),
+        lambda: Connectivity(multitaper.fft(), dtype=value),
+    ):
+        with pytest.raises(TypeError, match="complex dtype") as excinfo:
+            call()
+        assert ("blocks" in str(excinfo.value)) is looks_like_blocks
 
 
 @pytest.mark.parametrize(
