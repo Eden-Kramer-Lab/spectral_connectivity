@@ -163,7 +163,11 @@ def simulate_lagged_broadband(
         seconds). Must be non-negative integers; express a lead as a smaller
         lag on the leading signal, e.g. ``lags_samples=(0, 3)`` for signal 0
         leading signal 1 by 3 samples. Convert a delay in seconds with
-        ``round(delay * sampling_frequency)``, as in the second example.
+        ``round(delay * sampling_frequency)``, as in the second example;
+        Python's ``round`` sends an exact half to the even neighbour (10.5
+        samples become 10, 11.5 become 12), and a delay of half a sample or
+        less becomes 0, so the signals are simultaneous. Check
+        ``lag_samples / sampling_frequency``, or simulate at a higher rate.
     noise_levels : float or array_like of float, shape (n_signals,)
         Standard deviation of the independent Gaussian noise added to each
         signal. A scalar applies to every signal; 0 gives the pure delayed
@@ -210,7 +214,8 @@ def simulate_lagged_broadband(
     True
 
     The delays are whole samples. For a delay given in seconds, round it to
-    the nearest sample at the sampling rate and pass that count:
+    the nearest sample at the sampling rate and pass that count (an exact
+    half goes to the even neighbour, and half a sample or less becomes 0):
 
     >>> sampling_frequency = 1500.0  # Hz
     >>> delay = 0.0102  # seconds: signal 0 should lead signal 1 by 10.2 ms
@@ -225,6 +230,16 @@ def simulate_lagged_broadband(
     ... )
     >>> lag_samples / sampling_frequency  # the delay actually simulated, in seconds
     0.01
+    >>> # Signal 1 repeats signal 0 exactly lag_samples later.
+    >>> bool(
+    ...     np.array_equal(
+    ...         time_series[lag_samples:, :, 1], time_series[:-lag_samples, :, 0]
+    ...     )
+    ... )
+    True
+    >>> # Exact halves go to the even neighbour; half a sample or less is no delay.
+    >>> round(10.5), round(11.5), round(0.5)
+    (10, 12, 0)
 
     """
     lags_array = np.asarray(lags_samples)
