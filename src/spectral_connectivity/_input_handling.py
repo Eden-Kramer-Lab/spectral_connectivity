@@ -734,6 +734,10 @@ _FOURIER_ROLE_SYNONYMS: dict[str, frozenset[str]] = {
     "frequency": _FREQUENCY_DIM_NAMES,
     "signal": _ROLE_SYNONYMS["signal"],
 }
+# Names under which a scalar coordinate is the time of the single window. The
+# other names of a time dimension can as well hold a window's length or count
+# once they no longer label an axis.
+_SCALAR_TIME_NAMES = frozenset({"time", "times"})
 
 
 def _coordinates_agree(explicit: Any, labeled: NDArray[Any]) -> bool:
@@ -939,8 +943,7 @@ def _unwrap_fourier_input(
         scalar_times = [
             name
             for name, (values, _) in recording_coordinates.items()
-            if name.lower() in _FOURIER_ROLE_SYNONYMS["time"]
-            and _is_real_numeric_dtype(values.dtype)
+            if name.lower() in _SCALAR_TIME_NAMES and _is_real_numeric_dtype(values.dtype)
         ]
         if len(scalar_times) == 1:
             scalar_time, scalar_time_attrs = recording_coordinates.pop(scalar_times[0])

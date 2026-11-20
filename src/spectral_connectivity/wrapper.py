@@ -1564,8 +1564,9 @@ def fourier_connectivity(
     time : array, shape (n_time,), optional
         Center time of each window in seconds; defaults to window indices.
         Taken from the DataArray time coordinate when not given, including a
-        numeric scalar one on coefficients without a time dimension (as left by
-        ``isel(time=0)``), which is the time of the single window.
+        numeric scalar coordinate named ``time`` or ``times`` on coefficients
+        without a time dimension (as left by ``isel(time=0)``), which is the
+        time of the single window.
     method : str or list of str, optional
         Measure name(s) from :func:`list_measures`. A single name returns a
         DataArray; a list (or ``None`` for :data:`DEFAULT_METHODS`) returns a

@@ -322,8 +322,10 @@ returns a trial axis (see its row).
   named like a coordinate or variable of the result is dropped with a warning
   (band reduction likewise discards existing `band`, `band_lower`,
   `band_upper`, and `valid_time_band` coordinates). Fourier coefficients
-  without a time dimension use a numeric scalar time coordinate, as left by
-  `isel(time=0)`, as the time of their single window. A DataArray frequency
+  without a time dimension use a numeric scalar coordinate named `time` or
+  `times`, as left by `isel(time=0)`, as the time of their single window (a
+  scalar named `window`, `windows`, or `time_window` stays an identifier: it
+  may be a window's length or count). A DataArray frequency
   coordinate may spell `Hz` as `Hertz`, `cps`, `1/s`, `cycles/s`, `s-1`,
   `s^-1`, or `s**-1`; other units, such as `kHz`, are rejected and an empty
   `units` is treated as unstated. `connectivity_to_xarray` accepts any

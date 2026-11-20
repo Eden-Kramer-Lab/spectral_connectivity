@@ -598,8 +598,10 @@ observation axis supplies only the raw observation count.
 Unambiguous scalar recording coordinates such as `subject`/`session` keep
 their attrs; one named like a coordinate or variable of the result (e.g.
 `frequency`, or `band` when `frequency_bands` is given) is dropped with a
-warning. Coefficients without a time dimension that keep a numeric scalar time
-coordinate, as after `isel(time=0)`, use it as the time of their single window.
+warning. Coefficients without a time dimension that keep a numeric scalar
+coordinate named `time` (or `times`), as after `isel(time=0)`, use it as the
+time of their single window; a scalar under another name of a time dimension,
+such as `window`, stays an identifier, since it may hold a window's length.
 Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and

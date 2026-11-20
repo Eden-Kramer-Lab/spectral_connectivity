@@ -771,6 +771,22 @@ def test_scalar_fourier_time_coordinate_is_the_time_of_the_single_window(data):
         fourier_connectivity(one_window, time=[3.0], method="power")
 
 
+@pytest.mark.parametrize(
+    ("name", "value"), [("window", 256), ("windows", 8), ("time_window", 0.5)]
+)
+def test_scalar_coordinate_named_like_a_window_is_not_taken_for_its_time(data, name, value):
+    """Only a scalar coordinate named time is the single window's time. A
+    window's length or count is as likely under these names as its time, so
+    they stay recording identifiers and the window keeps its index."""
+    coefficients = _fourier_dataarray(data, np.fft.fftfreq(128, 1 / 64)).assign_coords(
+        {name: value}
+    )
+    result = fourier_connectivity(coefficients, method="power")
+    assert result.time.values.tolist() == [0]
+    assert result.attrs["time_coordinate"] == "index"
+    assert result.coords[name].item() == value
+
+
 def test_coordinate_units_express_normalized_delay_without_claiming_seconds(data):
     coefficients = _fourier_dataarray(data, np.fft.fftfreq(128), "cycles/sample")
     result = fourier_connectivity(coefficients, method="group_delay")
