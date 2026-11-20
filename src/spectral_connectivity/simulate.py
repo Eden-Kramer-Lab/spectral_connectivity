@@ -253,9 +253,9 @@ def simulate_shared_oscillation(
     frequency: float,
     sampling_frequency: float,
     n_time_samples: int,
-    n_trials: int,
-    amplitudes: ArrayLike,
+    n_trials: int = 1,
     *,
+    amplitudes: ArrayLike,
     phase_offsets: ArrayLike = 0.0,
     noise_levels: ArrayLike = 0.0,
     random_phase_per_trial: bool = True,
@@ -280,11 +280,11 @@ def simulate_shared_oscillation(
         Sampling rate, in Hz.
     n_time_samples : int
         Number of time samples per trial; time ``t`` runs from 0.
-    n_trials : int
+    n_trials : int, default=1
         Number of trials.
     amplitudes : array_like of float, shape (n_signals,)
         Amplitude of the sinusoid in each signal; its length sets
-        ``n_signals``.
+        ``n_signals``. Keyword-only and required.
     phase_offsets : float or array_like of float, shape (n_signals,), default=0.0
         Phase added to the sinusoid in each signal, in radians.
     noise_levels : float or array_like of float, shape (n_signals,), default=0.0

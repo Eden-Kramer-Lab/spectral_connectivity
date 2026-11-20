@@ -77,6 +77,8 @@ directly with results from 2.x.
   random phase per trial). Like `simulate_MVAR`, they return
   `(time, trial, signal)` arrays with `n_trials=1` by default;
   `simulate_lagged_broadband(..., n_trials=None)` returns `(time, signal)`.
+  `simulate_shared_oscillation` takes its required `amplitudes` (and its other
+  per-signal settings) by keyword.
   The simulated-examples tutorial builds every case
   with them and asserts what each plot shows, so executing it checks the plots.
 - Spectral primitives and pairwise measures: one-sided

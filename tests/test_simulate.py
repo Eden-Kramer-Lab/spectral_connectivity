@@ -209,13 +209,33 @@ def _fourier_at_frequency(time_series):
     ]
 
 
-def test_shared_oscillation_shape():
-    """Shape is (n_time_samples, n_trials, n_signals) with n_signals = len(amplitudes)."""
+@pytest.mark.parametrize(
+    ("trial_kwargs", "expected_shape"),
+    [({}, (300, 1, 3)), ({"n_trials": 5}, (300, 5, 3))],
+    ids=["default_one_trial", "trials"],
+)
+def test_shared_oscillation_shape(trial_kwargs, expected_shape):
+    """Shape is (n_time_samples, n_trials, n_signals) with n_signals = len(amplitudes),
+    and one trial by default, like ``simulate_MVAR``."""
     time_series = simulate_shared_oscillation(
-        _FREQUENCY, _SAMPLING_FREQUENCY, 300, 5, amplitudes=[1.0, 0.5, 2.0], random_state=0
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        300,
+        amplitudes=[1.0, 0.5, 2.0],
+        random_state=0,
+        **trial_kwargs,
     )
-    assert time_series.shape == (300, 5, 3)
+    assert time_series.shape == expected_shape
     assert time_series.dtype == np.float64
+
+
+def test_shared_oscillation_takes_amplitudes_by_keyword():
+    """``amplitudes`` is keyword-only and required: a call that still passes it
+    as the fifth positional argument raises instead of being misread."""
+    with pytest.raises(TypeError, match="positional"):
+        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 300, 5, [1.0, 0.5])
+    with pytest.raises(TypeError, match="amplitudes"):
+        simulate_shared_oscillation(_FREQUENCY, _SAMPLING_FREQUENCY, 300, 5)
 
 
 def test_shared_oscillation_frequency_dominates_spectrum():
@@ -294,7 +314,7 @@ def test_shared_oscillation_matches_its_formula():
         _SAMPLING_FREQUENCY,
         100,
         2,
-        amplitudes,
+        amplitudes=amplitudes,
         phase_offsets=phase_offsets,
         random_phase_per_trial=False,
     )
@@ -312,7 +332,7 @@ def test_shared_oscillation_trial_phases_cover_the_circle():
     n_trials = 500
     # 100 samples at 1000 Hz hold exactly four 40 Hz cycles, so it is FFT bin 4.
     result = simulate_shared_oscillation(
-        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, [1.0], random_state=0
+        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, amplitudes=[1.0], random_state=0
     )
     phases = np.angle(np.fft.rfft(result[:, :, 0], axis=0)[4])
     mean_resultant_length = np.abs(np.mean(np.exp(1j * phases)))
