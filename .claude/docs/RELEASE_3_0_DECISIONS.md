@@ -1,8 +1,8 @@
 # 3.0 API and result consistency decisions
 
-**Status: all six steps implemented. Step 1 is merged; steps 2-4 and the
-internal base-class step are open pull requests; steps 5 and 6 are validated
-locally and not yet opened as pull requests (see the table below).**
+**Status: all six steps implemented. Step 1 is merged; steps 2-5 and the
+internal base-class step are open pull requests; step 6 is validated locally
+and not yet opened as a pull request (see the table below).**
 
 | Step | Decisions | Branch | Status |
 | --- | --- | --- | --- |
@@ -11,7 +11,7 @@ locally and not yet opened as pull requests (see the table below).**
 | (internal) | windowed-FFT base | `refactor/windowed-fft-base` | PR #112, in review |
 | 3 | D4, D23 | `refactor/frequency-selection` | PR #113, in review |
 | 4 | D5-D8, D25 | `refactor/coherence-naming` | PR #114, in review |
-| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | Implemented and validated locally; PR not yet opened |
+| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | PR #115 (`91db050`), in review |
 | 6 | D17, D31; migration table and removal checklist | `refactor/simulators-and-migration` | Implemented and validated locally; PR not yet opened |
 
 D10's step option and D22 remain deferred to 3.x, as decided. D13 and D15
@@ -679,9 +679,10 @@ Rulings where the rules above were silent:
 
 **Scope:** D17 and D31, the migration table and schema reference for the whole
 pass, and the issue #101 checklist. **Branch:**
-`refactor/simulators-and-migration`, based on step 5's head `743235f`.
+`refactor/simulators-and-migration`, based on step 5's final head `91db050`
+(PR #115).
 Implemented and validated locally on 2026-11-19, including the review fixes:
-2,418 tests passed with 16 skips on the main CPU environment, and 2,303 passed
+2,424 tests passed with 16 skips on the main CPU environment, and 2,309 passed
 with 101 skips on Python 3.10 with the NumPy 1.24/SciPy 1.11.1/xarray
 2023.1/Matplotlib 3.7 floors;
 all 70 source doctests (also on the floors), Ruff formatting/lint, and mypy
