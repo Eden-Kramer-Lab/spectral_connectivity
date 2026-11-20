@@ -135,6 +135,29 @@ def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(mult
     _assert_same_connectivity(deprecated, canonical)
 
 
+@pytest.mark.parametrize(
+    "setting", [{"minimum_phase_max_iterations": 1}, {"minimum_phase_tolerance": 0.5}], ids=str
+)
+def test_from_multitaper_forwards_the_factorization_settings(multitaper, setting):
+    """A directed measure computed through the 2.x name is the one
+    from_transform computes with the same Wilson settings, which here differs
+    from the default's."""
+
+    def granger(connectivity):
+        with warnings.catch_warnings():
+            # Stopping the factorization early is the point; it warns.
+            warnings.simplefilter("ignore")
+            return connectivity.pairwise_spectral_granger_prediction()
+
+    with pytest.warns(DeprecationWarning, match="from_multitaper"):
+        deprecated = Connectivity.from_multitaper(multitaper, **setting)
+    canonical = granger(Connectivity.from_transform(multitaper, **setting))
+    np.testing.assert_array_equal(granger(deprecated), canonical)
+    assert not np.array_equal(
+        canonical, granger(Connectivity.from_transform(multitaper)), equal_nan=True
+    )
+
+
 # 2.x's blocks changed the phase-lag-index measures (blocks=1 reversed the sign of
 # phase_lag_index and weighted_phase_lag_index), so the message must not say it
 # had no effect.
