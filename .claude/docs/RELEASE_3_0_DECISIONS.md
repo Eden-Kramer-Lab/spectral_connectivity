@@ -579,12 +579,13 @@ Rulings where the rules above were silent:
 ## Step 5 implementation
 
 **Scope:** D9, D11, D12, D14, D16, D24, and D29. **Branch:**
-`refactor/signatures-and-routing`, based on step 4's final head `0621a70`.
-Implemented and validated locally on 2026-11-19: 2,359 tests passed with 16
-skips on the main CPU environment, and 2,244 passed with 101 skips on Python
-3.10 with the NumPy 1.24/SciPy 1.11.1/xarray 2023.1/Matplotlib 3.7 floors; all
-70 source doctests (also on the floors), Ruff formatting/lint, and mypy
-passed; the benchmark's 22 arrays are bit-identical to `0621a70`.
+`refactor/signatures-and-routing`, based on step 4's final head `23877e7`.
+Implemented and validated locally on 2026-11-19, including the review fixes:
+2,394 tests passed with 16 skips on the main CPU environment, and 2,279 passed
+with 101 skips on Python 3.10 with the NumPy 1.24/SciPy 1.11.1/xarray
+2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on the floors),
+Ruff formatting/lint, and mypy passed; the benchmark's 22 arrays are
+bit-identical to `23877e7`.
 
 Released forms checked against `v2.0.1`: `Multitaper` (13 positional
 parameters, unchanged), `multitaper_connectivity(time_series,
@@ -603,20 +604,32 @@ Rulings where the rules above were silent:
 - **One route per setting (owner's ruling).** The six common transform
   settings are named arguments only, with `Multitaper`'s real defaults and no
   sentinel defaults; one of them inside `transform_kwargs` raises
-  `ValueError` whether or not it was also named. `group_labels` keeps its existing acceptance inside
-  `connectivity_kwargs` (default `None` is unambiguous), with the existing
-  both-ways `ValueError`. A key both in a mapping and as a plain keyword
-  raises `ValueError` naming both; an unknown key raises `TypeError` with close
-  matches, before any warning or computation.
+  `ValueError` whether or not it was also named. `group_labels` keeps its
+  existing acceptance inside `connectivity_kwargs` (default `None` is
+  unambiguous), with the existing both-ways `ValueError`. `frequency_range` is
+  a named argument of all three wrappers, `connectivity_to_xarray` included
+  (consumed by the interval measures, cropping any other), and is rejected
+  inside `connectivity_kwargs`. A key both in a mapping and as a plain keyword
+  raises `ValueError` naming both; an unknown key in either mapping or as a
+  plain keyword raises `TypeError` with close matches (difflib plus names it
+  begins), before any computation. A mapping argument that is not a mapping
+  raises `TypeError`.
 - **Legacy route.** Every plain keyword the target accepts warns (one
   warning per call listing them), including settings first added in 3.0
   such as `fft_workers`: the deprecated interface is the released forwarding
-  route, not each key. `connectivity_to_xarray` gains a keyword-only
-  `group_labels` so that common setting keeps a flat route.
+  route, not each key. The warning is raised just before the wrapper returns,
+  so a call rejected for any reason raises only its error.
+  `connectivity_to_xarray` gains a keyword-only `group_labels` so that common
+  setting keeps a flat route.
 - **from_multitaper.** It calls `cls.from_transform`, so a subclass's
   `from_transform` override applies to both names; a subclass overriding
   `from_multitaper` warns at its own `super()` call and is not reached by
-  `from_transform`. The 2.x `blocks` parameter (third position) was removed
+  `from_transform`, so the migration row says to move such an override to
+  `from_transform`. An override of `from_transform` that still calls
+  `super().from_multitaper` raises a `TypeError` on re-entry (detected with a
+  context variable) instead of recursing; calling the base implementation
+  from the alias instead was rejected because it would skip a
+  `from_transform` override. The 2.x `blocks` parameter (third position) was removed
   before this step and is not restored (owner's ruling). Every 2.x use of
   it, by keyword or in its released positional slot (third in
   `from_multitaper`, fifth in `Connectivity`), raises a `TypeError` that names
