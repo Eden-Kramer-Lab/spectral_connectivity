@@ -56,6 +56,7 @@ from spectral_connectivity.connectivity import (
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
     close_names,
+    did_you_mean,
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
@@ -427,14 +428,13 @@ def _unknown_setting_message(problem: str, key: Any) -> str:
     """
     message = f"{problem} {key!r}."
     close = close_names(str(key), _MULTITAPER_SETTINGS)
-    if close:
-        message += f" Did you mean {', '.join(map(repr, close))}?"
-        named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
-        if named:
-            message += (
-                f" {', '.join(named)} is a named argument of multitaper_connectivity "
-                f"(pass {named[0]}=... directly)."
-            )
+    message += did_you_mean(close)
+    named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
+    if named:
+        message += (
+            f" {', '.join(named)} is a named argument of multitaper_connectivity "
+            f"(pass {named[0]}=... directly)."
+        )
     return message
 
 

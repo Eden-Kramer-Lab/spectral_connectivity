@@ -158,6 +158,12 @@ def close_names(name: str, valid: Iterable[str], limit: int = 3) -> list[str]:
     return matches[:limit]
 
 
+def did_you_mean(names: Iterable[str]) -> str:
+    """``" Did you mean 'a', 'b'?"`` for ``names`` (repeats dropped), or ``""``."""
+    unique = list(dict.fromkeys(names))
+    return f" Did you mean {', '.join(map(repr, unique))}?" if unique else ""
+
+
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
     """Warn that ``old`` is deprecated, at the first caller outside the package.
 

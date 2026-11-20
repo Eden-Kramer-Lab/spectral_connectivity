@@ -5340,8 +5340,9 @@ class Connectivity:
                 f"{int(selection.mask.sum())} bins, replace frequencies_of_interest=("
                 f"{low!r}, {high!r}) with frequency_range=({selection.lowest!r}, "
                 f"{selection.highest!r}), the lowest and highest bins it selects. "
-                "multitaper_connectivity and fourier_connectivity take "
-                "frequency_range as their own argument, not in connectivity_kwargs.",
+                "The wrappers (multitaper_connectivity, fourier_connectivity, and "
+                "connectivity_to_xarray) take frequency_range as their own argument, "
+                "not in connectivity_kwargs.",
                 DeprecationWarning,
                 stacklevel=stacklevel_outside_package(),
             )

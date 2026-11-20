@@ -21,7 +21,11 @@ from spectral_connectivity.connectivity import (
     _FrequencySelection,
     _warn_orientation_change,
 )
-from spectral_connectivity.utils import close_names, stacklevel_outside_package
+from spectral_connectivity.utils import (
+    close_names,
+    did_you_mean,
+    stacklevel_outside_package,
+)
 
 
 class UnsupportedMeasureError(ValueError):
@@ -64,9 +68,9 @@ def _check_method_accepts_kwargs(
     if rejected:
         names = ", ".join(map(repr, rejected))
         msg = f"{method} does not accept keyword argument(s) {names}."
-        suggestions = [match for name in rejected for match in close_names(str(name), own)]
-        if suggestions:
-            msg += f" Did you mean {', '.join(map(repr, dict.fromkeys(suggestions)))}?"
+        msg += did_you_mean(
+            match for name in rejected for match in close_names(str(name), own)
+        )
         if several_measures:
             msg += (
                 " connectivity_kwargs is passed to every requested method, so request "

@@ -1073,9 +1073,10 @@ def test_deprecated_keyword_through_the_wrapper_warns_at_the_caller(
     assert {w.filename for w in record if issubclass(w.category, DeprecationWarning)} == {
         __file__
     }
-    assert "multitaper_connectivity and fourier_connectivity take frequency_range" in str(
-        record[0].message
-    )
+    assert (
+        "The wrappers (multitaper_connectivity, fourier_connectivity, and "
+        "connectivity_to_xarray) take frequency_range"
+    ) in str(record[0].message)
     np.testing.assert_array_equal(
         result.values, lagged_connectivity.phase_slope_index(frequency_range=(12.0, 48.0))
     )

@@ -45,9 +45,11 @@ def test_time_halfbandwidth_product_kwarg_passthrough():
     assert result.attrs["mt_n_tapers"] == 7
     assert np.isclose(result.attrs["mt_frequency_resolution"], 40.0)
 
-    # Only Python >= 3.12 appends a "Did you mean ...?" hint, so don't match it.
+    # The package's own message, which suggests the named setting.
     with pytest.raises(
-        TypeError, match=r"unexpected keyword argument 'time_bandwidth_product'"
+        TypeError,
+        match=r"unexpected keyword argument 'time_bandwidth_product'\. "
+        r"Did you mean 'time_halfbandwidth_product'",
     ):
         multitaper_connectivity(
             time_series,
