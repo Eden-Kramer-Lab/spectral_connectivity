@@ -1,9 +1,20 @@
 # 3.0 API and result consistency decisions
 
-**Status: step 1 merged; step 2 implemented and validated locally; step 3
-(D4, D23) implemented on `refactor/frequency-selection`; step 4 (D5-D8, D25)
-implemented on `refactor/coherence-naming`; step 5 (D9, D11, D12, D14, D16,
-D24, D29) implemented on `refactor/signatures-and-routing`, see below.**
+**Status: all six steps implemented; step 1 merged, steps 2-6 in review as a
+stack of pull requests (see the table below).**
+
+| Step | Decisions | Branch | Status |
+| --- | --- | --- | --- |
+| 1 | D18, D20, D26, D27, D30 | `fix/coordinates-and-transforms` | Merged as PR #102 (`138f3f7`) |
+| 2 | D1-D3, D19, D21, D28 | `refactor/metadata-and-bandwidths` | PR #108, in review |
+| (internal) | windowed-FFT base | `refactor/windowed-fft-base` | PR #112, in review |
+| 3 | D4, D23 | `refactor/frequency-selection` | PR #113, in review |
+| 4 | D5-D8, D25 | `refactor/coherence-naming` | PR #114, in review |
+| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | Implemented and validated locally; PR not yet opened |
+| 6 | D17, D31; migration table and removal checklist | `refactor/simulators-and-migration` | Implemented and validated locally; PR not yet opened |
+
+D10's step option and D22 remain deferred to 3.x, as decided. D13 and D15
+needed no code change.
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -448,7 +459,7 @@ Rulings where the rules above were silent:
   full result's slice.
 - [x] Additive band-power integrals for adjacent inclusive bands; their means
   share the endpoint bin.
-- [ ] Issue #101 entry for the `frequencies_of_interest` alias (orchestrator).
+- [x] Issue #101 entry for the `frequencies_of_interest` alias.
 
 ## Step 4 implementation
 
@@ -574,7 +585,7 @@ Rulings where the rules above were silent:
 - [x] Power's `source` axis and `power.rename(source="signal")` documented.
 - [x] Measure attributes stay true after cropping, decimation, and band
   reduction (density, coherence, phase, and complex measures).
-- [ ] Issue #101 entry for the `coherence_magnitude` alias (orchestrator).
+- [x] Issue #101 entry for the `coherence_magnitude` alias.
 
 ## Step 5 implementation
 
@@ -663,6 +674,76 @@ Rulings where the rules above were silent:
 - [x] Duplicate arguments fail; misspelled mapping keys fail.
 - [x] Published positional orders are preserved and pinned by tests.
 - [ ] Issue #101 entries for the three aliases (orchestrator).
+
+## Step 6 implementation
+
+**Scope:** D17 and D31, the migration table and schema reference for the whole
+pass, and the issue #101 checklist. **Branch:**
+`refactor/simulators-and-migration`, based on step 5's head `743235f`.
+Implemented and validated locally on 2026-11-19: 2,399 tests passed with 16
+skips on the main CPU environment, and 2,284 passed with 101 skips on Python
+3.10 with the NumPy 1.24/SciPy 1.11.1/xarray 2023.1/Matplotlib 3.7 floors;
+all 70 source doctests (also on the floors), Ruff formatting/lint, and mypy
+passed. No numerical code changed, so no benchmark was run; the notebook
+snapshot tests' stored values are unchanged. All three tutorial notebooks
+execute without error.
+
+Released forms checked against `v2.0.1`: its `simulate.py` defines only
+`simulate_MVAR`, so `simulate_lagged_broadband` and
+`simulate_shared_oscillation` are new in 3.0 and change without aliases, and
+`simulate_MVAR` keeps its signature and `(time, trial, signal)` shape.
+
+Rulings where the rules above were silent:
+
+- **Positional order.** `simulate_lagged_broadband(lags_samples, noise_levels,
+  n_time_samples, n_trials=1, random_state=None)` keeps its order, so the
+  tutorial's positional calls still read naturally; `n_trials=None` is the
+  2-D option and returns the default single trial's values bit for bit (the
+  same draws in the same order). `simulate_shared_oscillation` keeps
+  `n_trials` fourth with default 1 and makes `amplitudes` a required
+  keyword-only argument (a required argument cannot follow a defaulted one
+  positionally); a call that still passes it fifth raises `TypeError`. Only
+  the lagged-broadband simulator accepts `n_trials=None`, as D17 says.
+- **Units.** `lags_samples` is validated as before (non-negative integers);
+  its error message names the `round(delay * sampling_frequency)`
+  conversion. The seconds-to-samples example is a doctest in the
+  `simulate_lagged_broadband` docstring (10.2 ms at 1500 Hz rounds to 15
+  samples, a simulated delay of 10 ms) and a labeled line in each
+  group-delay and phase-slope cell of the simulated-examples tutorial.
+  `simulate_MVAR`'s docstring says its lags and time index count samples; no
+  code changed.
+- **One migration table.** The CHANGELOG migration guide is the single
+  migration table. It gains a row for the 2.0.1 `mt_*` attributes (folded in
+  from the cookbook's separate metadata table, which now links to it) and
+  rows marked *Unreleased* for every interface renamed during 3.0
+  development without a compatibility path (band-reduction keywords,
+  component source/target coordinates, prefixed and unreleased attributes,
+  the interval attributes, STFT's bandwidth property, keyword-only settings
+  of the new APIs, and the simulators). The cookbook's "Result schema"
+  section is the single schema reference; it gains `output_schema_version`,
+  `package`/`package_version`, and the `arg_<name>` views. Each row was
+  checked by running the old and new forms.
+- **Tutorial outputs.** The three tutorials were re-executed with
+  nbconvert so their stored outputs show the final attributes. The stored
+  Dataset reprs still list the 15 released `mt_*` compatibility copies,
+  because every 3.x Multitaper result carries them; the tutorials are not
+  changed to hide them.
+
+### Step 6 acceptance checklist
+
+- [x] Documented shapes: both new simulators return `(time, trial, signal)`
+  with one trial by default, `simulate_lagged_broadband(n_trials=None)`
+  returns `(time, signal)`, and `simulate_MVAR` is unchanged
+  (`tests/test_simulate.py`); the asserting tutorials pass when executed.
+- [x] Seconds-to-samples conversion is explicit in the docstring doctest,
+  the tutorial, and the migration table; `lags=` raises `TypeError`.
+- [x] Every deprecated path in the code (searched for `DeprecationWarning`)
+  is in the proposed issue #101 checklist with its replacement, first
+  deprecation release, and warning tests: the `coherence_magnitude` names,
+  `frequencies_of_interest`, the wrappers' plain-keyword settings,
+  `power_confidence_intervals(n_tapers=)`, `Connectivity.from_multitaper`,
+  and the 15 `mt_*` attribute keys.
+- [ ] Issue #101 updated with that text (orchestrator).
 
 ## Verification performed for this sheet
 
