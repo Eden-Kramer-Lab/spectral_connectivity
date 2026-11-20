@@ -21,7 +21,7 @@ from spectral_connectivity.connectivity import (
     _FrequencySelection,
     _warn_orientation_change,
 )
-from spectral_connectivity.utils import stacklevel_outside_package
+from spectral_connectivity.utils import close_names, stacklevel_outside_package
 
 
 class UnsupportedMeasureError(ValueError):
@@ -40,10 +40,14 @@ def _check_method_accepts_kwargs(
     measure: Callable[..., Any],
     kwargs: Mapping[str, Any],
     transform_settings_hint: str | None = None,
+    *,
+    several_measures: bool = True,
 ) -> None:
     """Raise an actionable error when ``kwargs`` names a parameter ``measure``
     does not accept.
 
+    The message suggests the measure's own parameters a rejected name most
+    likely misspells. When ``several_measures`` were requested it adds that
     ``connectivity_kwargs`` is broadcast to every requested method, so a
     keyword needed by one measure (e.g. ``pairs``) reaches the others.
     ``transform_settings_hint`` completes the sentence "If <keyword> is a
@@ -56,11 +60,16 @@ def _check_method_accepts_kwargs(
     rejected = sorted(set(kwargs) - set(parameters))
     if rejected:
         names = ", ".join(map(repr, rejected))
-        msg = (
-            f"{method} does not accept keyword argument(s) {names}. "
-            "connectivity_kwargs is passed to every requested method, so request "
-            "measures that need different arguments in separate calls."
-        )
+        msg = f"{method} does not accept keyword argument(s) {names}."
+        own = [name for name in parameters if name != "self"]
+        suggestions = [match for name in rejected for match in close_names(str(name), own)]
+        if suggestions:
+            msg += f" Did you mean {', '.join(map(repr, dict.fromkeys(suggestions)))}?"
+        if several_measures:
+            msg += (
+                " connectivity_kwargs is passed to every requested method, so request "
+                "measures that need different arguments in separate calls."
+            )
         if transform_settings_hint is not None:
             msg += (
                 "\nconnectivity_kwargs configures the measure only. If "

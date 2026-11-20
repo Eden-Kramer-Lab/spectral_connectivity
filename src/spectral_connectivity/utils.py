@@ -1,10 +1,12 @@
 """Utility functions for spectral_connectivity package."""
 
 import contextlib
+import difflib
 import functools
 import os
 import sys
 import warnings
+from collections.abc import Iterable
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
@@ -141,6 +143,19 @@ def stacklevel_outside_package() -> int:
         frame = frame.f_back
         level += 1
     return level
+
+
+def close_names(name: str, valid: Iterable[str], limit: int = 3) -> list[str]:
+    """The names in ``valid`` that ``name`` most likely misspells.
+
+    ``difflib``'s close matches, then valid names that start with ``name``
+    (so a truncated ``n_fft`` finds ``n_fft_samples``), without repeats.
+    """
+    candidates = list(valid)
+    matches = difflib.get_close_matches(name, candidates, n=limit)
+    if len(name) >= 3:
+        matches += [c for c in candidates if c.startswith(name) and c not in matches]
+    return matches[:limit]
 
 
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:

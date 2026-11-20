@@ -1,6 +1,5 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
-import difflib
 import inspect
 import warnings
 from collections.abc import Collection, Hashable, Mapping, Sequence
@@ -55,7 +54,12 @@ from spectral_connectivity.connectivity import (
     _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
-from spectral_connectivity.utils import stacklevel_outside_package, to_numpy, warn_deprecated
+from spectral_connectivity.utils import (
+    close_names,
+    stacklevel_outside_package,
+    to_numpy,
+    warn_deprecated,
+)
 
 # The public API. UnsupportedMeasureError is defined in _result_formatting
 # (which raises it) and re-exported here; listing it makes the API reference
@@ -432,11 +436,21 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
 
 
 def _unknown_setting_message(problem: str, key: Any, valid: Collection[str]) -> str:
-    """``"<problem> '<key>'."`` and the closest names in ``valid``."""
+    """``"<problem> '<key>'."`` and the closest names in ``valid``.
+
+    A suggestion that is one of ``multitaper_connectivity``'s named settings
+    says so, since it goes outside ``transform_kwargs``.
+    """
     message = f"{problem} {key!r}."
-    close = difflib.get_close_matches(str(key), list(valid), n=3)
+    close = close_names(str(key), valid)
     if close:
         message += f" Did you mean {', '.join(map(repr, close))}?"
+        named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
+        if named:
+            message += (
+                f" {', '.join(named)} is a named argument of multitaper_connectivity "
+                f"(pass {named[0]}=... directly)."
+            )
     return message
 
 
@@ -496,7 +510,9 @@ def _transform_settings(
             raise ValueError(msg)
         if key not in _TRANSFORM_KWARGS_SETTINGS:
             msg = _unknown_setting_message(
-                "transform_kwargs got an unexpected key", key, _TRANSFORM_KWARGS_SETTINGS
+                "transform_kwargs got an unexpected key",
+                key,
+                (*_TRANSFORM_KWARGS_SETTINGS, *_NAMED_TRANSFORM_SETTINGS),
             )
             msg += (
                 f" It accepts the Multitaper settings {', '.join(_TRANSFORM_KWARGS_SETTINGS)}."
@@ -543,7 +559,11 @@ def _check_measure_settings(
     measure_settings = {key: value for key, value in settings.items() if key != "group_labels"}
     for method in methods:
         _check_method_accepts_kwargs(
-            method, getattr(Connectivity, method), measure_settings, transform_settings_hint
+            method,
+            getattr(Connectivity, method),
+            measure_settings,
+            transform_settings_hint,
+            several_measures=len(methods) > 1,
         )
 
 
@@ -644,6 +664,7 @@ def connectivity_to_xarray(
         method,
         getattr(Connectivity, method),
         {key: value for key, value in measure_settings.items() if key != "group_labels"},
+        several_measures=False,
     )
     connectivity = Connectivity.from_transform(m)
     group_labels, measure_settings, group_methods = _resolve_group_labels(

@@ -435,3 +435,62 @@ def test_a_rejected_call_does_not_also_warn_about_plain_keywords(time_series, ca
         warnings.simplefilter("error", DeprecationWarning)
         with pytest.raises((TypeError, ValueError)):
             call(time_series)
+
+
+@pytest.mark.parametrize(
+    ("transform_kwargs", "suggestion"),
+    [
+        pytest.param(
+            {"time_halfbandwith_product": 3}, "time_halfbandwidth_product", id="named"
+        ),
+        pytest.param({"n_fft": 512}, "n_fft_samples", id="prefix"),
+        pytest.param({"taper_weightings": "eigen"}, "taper_weighting", id="advanced"),
+    ],
+)
+def test_a_misspelled_transform_setting_suggests_every_kind_of_setting(
+    time_series, transform_kwargs, suggestion
+):
+    with pytest.raises(TypeError, match=rf"Did you mean.*'{suggestion}'") as excinfo:
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            transform_kwargs=transform_kwargs,
+        )
+    if suggestion == "time_halfbandwidth_product":
+        assert "named argument" in str(excinfo.value)
+
+
+def test_a_misspelled_plain_keyword_suggests_by_prefix(time_series):
+    with pytest.raises(TypeError, match=r"Did you mean.*'n_fft_samples'"):
+        multitaper_connectivity(time_series, sampling_frequency=500, method="power", n_fft=512)
+
+
+def test_a_misspelled_measure_setting_suggests_the_measures_own(time_series):
+    with pytest.raises(TypeError, match=r"Did you mean.*'n_components'"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="canonical_coherency",
+            group_labels=[0, 0, 1],
+            connectivity_kwargs={"n_component": 2},
+        )
+
+
+def test_one_measure_is_not_told_its_settings_reach_every_requested_measure(time_series):
+    for call in (
+        lambda: connectivity_to_xarray(
+            Multitaper(time_series, sampling_frequency=500),
+            "phase_slope_index",
+            connectivity_kwargs={"frequency_rang": (10.0, 20.0)},
+        ),
+        lambda: multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="phase_slope_index",
+            connectivity_kwargs={"frequency_rang": (10.0, 20.0)},
+        ),
+    ):
+        with pytest.raises(TypeError, match=r"Did you mean.*'frequency_range'") as excinfo:
+            call()
+        assert "every requested method" not in str(excinfo.value)
