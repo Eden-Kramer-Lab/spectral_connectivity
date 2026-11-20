@@ -59,20 +59,38 @@ def _real_signal_spectrum(n_fft=16, seed=0, n_signals=3):
     )
 
 
-def test_minimum_phase_reconstruction_error_flags_underresolved_spectrum():
-    """The diagnostic is tiny for a resolved spectrum and large when aliased."""
-    coefficients = np.array([[[0.9, 0.0], [0.8, 0.9]]])  # (1 lag, 2, 2)
-    noise = np.eye(2)
+# A VAR(1) whose autocovariance has decayed to 3% by lag 32 and to 1e-12 by
+# lag 256. With real coefficients its spectrum is conjugate-symmetric and is
+# factored on the non-negative frequencies; the complex rotation makes it not
+# so, which takes the two-sided iteration.
+_SLOWLY_DECAYING_VAR = np.array([[[0.9, 0.0], [0.8, 0.9]]])  # (1 lag, 2, 2)
 
-    resolved = to_device(_analytic_var_spectrum(coefficients, noise, n_fft=1024))
-    coarse = to_device(_analytic_var_spectrum(coefficients, noise, n_fft=64))
 
-    resolved_error = float(minimum_phase_reconstruction_error(resolved)[0])
-    coarse_error = float(minimum_phase_reconstruction_error(coarse)[0])
+@pytest.mark.parametrize("n_fft", [64, 65, 512, 513])
+@pytest.mark.parametrize(
+    "rotation", [1.0, np.exp(0.7j)], ids=["conjugate-symmetric", "two-sided"]
+)
+def test_factor_reproduces_the_spectrum_on_even_and_odd_grids(n_fft, rotation):
+    """``G Gᴴ`` equals ``S`` at a fixed point of the iteration, whether or not
+    the spectrum's autocovariance has decayed within the grid. On an even grid
+    the lag ``n_fft / 2`` is its own negative, so half of it is causal, like
+    lag 0; dropping it left that lag of the residual unconstrained, and the
+    64-point factor here missed its spectrum by a third."""
+    spectrum = to_device(
+        _analytic_var_spectrum(_SLOWLY_DECAYING_VAR * rotation, np.eye(2), n_fft=n_fft)
+    )
+    assert float(to_host(minimum_phase_reconstruction_error(spectrum))[0]) < 1e-7
 
-    assert resolved_error < 1e-4
-    assert coarse_error > 0.2
-    assert coarse_error > resolved_error
+
+def test_reconstruction_error_measures_how_far_a_factor_is_from_its_spectrum():
+    """The diagnostic is tiny for the returned factor and is the relative
+    residual of any other: a factor 10% too large reconstructs 21% too much."""
+    spectrum = to_device(_analytic_var_spectrum(_SLOWLY_DECAYING_VAR, np.eye(2), n_fft=64))
+    factor = minimum_phase_decomposition(spectrum)
+    assert float(to_host(minimum_phase_reconstruction_error(spectrum, factor))[0]) < 1e-7
+    np.testing.assert_allclose(
+        to_host(minimum_phase_reconstruction_error(spectrum, 1.1 * factor)), 0.21, rtol=1e-6
+    )
 
 
 def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():

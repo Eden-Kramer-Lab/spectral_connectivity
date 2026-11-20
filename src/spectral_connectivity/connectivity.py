@@ -2058,10 +2058,12 @@ class Connectivity:
 
         This diagnostic checks how faithfully the cached minimum-phase factor
         reconstructs the expected cross-spectral matrix. One value is returned
-        per retained batch (normally time-window) dimension. Values near machine
-        precision indicate a faithful factorization; large values suggest that
-        the spectrum is too coarsely resolved for directed-connectivity measures.
-        Non-converged factorizations return ``NaN``.
+        per retained batch (normally time-window) dimension. A converged
+        factorization reproduces the spectrum to about its convergence
+        tolerance; non-converged factorizations return ``NaN``. A small value
+        does not show that the spectrum is resolved finely enough in frequency
+        for the directed measures (see
+        :func:`~spectral_connectivity.minimum_phase_decomposition.minimum_phase_reconstruction_error`).
 
         Returns
         -------

@@ -187,7 +187,8 @@ def _get_causal_signal(
     """Extract causal part of linear predictor (plus operator).
 
     Implements the "plus" operator from the Wilson algorithm by:
-    1. Taking half the roots on the unit circle (zero lag)
+    1. Taking half the roots on the unit circle (zero lag, and on an even grid
+       the lag ``n / 2``, which is its own negative there)
     2. Taking all roots inside the unit circle (positive lags)
     3. Making zero-lag term upper triangular
 
@@ -239,8 +240,15 @@ def _get_causal_signal(
     # CuPy array is a GPU-only footgun).
     linear_predictor_coefficients[..., 0, lower_triangular_ind[0], lower_triangular_ind[1]] = 0
 
-    # Take only the roots inside the unit circle (positive lags)
-    linear_predictor_coefficients[..., (n_lags + 1) // 2 :, :, :] = 0
+    # Take only the roots inside the unit circle (positive lags). On an even
+    # grid the lag n_lags / 2 is its own negative, exp(i * pi * k) at bin k, so
+    # like lag 0 it is half causal: the projection of a Hermitian function
+    # plus its conjugate transpose must give that function back. Dropping the
+    # lag instead left it unconstrained, and the iteration settled on a factor
+    # with G^-1 S G^-H = I + (-1)^k C in place of I.
+    if n_lags % 2 == 0:
+        linear_predictor_coefficients[..., n_lags // 2, :, :] *= 0.5
+    linear_predictor_coefficients[..., n_lags // 2 + 1 :, :, :] = 0
     if n_fft_samples is not None:
         return rfft(linear_predictor_coefficients, axis=-3)
     return fft(linear_predictor_coefficients, axis=-3)
@@ -334,17 +342,29 @@ def minimum_phase_reconstruction_error(
 ) -> NDArray[np.floating]:
     """Relative reconstruction error of a Wilson factorization, per sub-spectrum.
 
-    The Wilson iteration's convergence test only measures the change between
-    successive iterates; a stable iterate does not guarantee ``G Gᴴ ≈ S``. When
-    the cross-spectrum is under-resolved in frequency (its autocovariance has not
-    decayed within the window, so the periodic factorization aliases), the
-    iteration can "converge" to a factor that reconstructs ``S`` poorly, silently
-    biasing every directed-connectivity measure built on it (spectral Granger,
-    DTF, PDC). This is an opt-in diagnostic: it returns
-    ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum -- the entrywise
+    Returns ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum: the entrywise
     maximum absolute residual over every frequency and matrix entry, relative
-    to the entrywise maximum magnitude of ``S`` -- so callers can check
-    factorization quality explicitly.
+    to the entrywise maximum magnitude of ``S``. A fixed point of the Wilson
+    iteration reproduces ``S`` on its frequency grid, so for a factor returned
+    by :func:`minimum_phase_decomposition` the error is at the level of its
+    convergence ``tolerance``; use this to check a factor obtained some other
+    way, or one computed with a loose tolerance.
+
+    A small error does **not** show that the directed measures built on the
+    factor are accurate. If the spectrum is under-resolved in frequency (its
+    autocovariance has not decayed within ``n_fft_samples / 2`` lags), the
+    factor is that of the spectrum's periodic extension on the grid: it
+    reproduces ``S`` at every bin and still differs from the factor of the
+    underlying spectrum, which biases spectral Granger, DTF, and PDC. This
+    function cannot detect that; use a window long enough for the slowest
+    correlation in the data.
+
+    .. versionchanged:: 3.0
+       Before 3.0 the factor of an even-length grid did not reproduce ``S``
+       (see :func:`minimum_phase_decomposition`), and this error was read as a
+       sign of under-resolution. It was the size of the spectrum's
+       ``n_fft_samples / 2`` lag, which the iteration ignored, and it was
+       always tiny on an odd-length grid.
 
     ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
     FFT order, as required by the factorization itself. This module-level
@@ -352,15 +372,6 @@ def minimum_phase_reconstruction_error(
     the same shape); the :meth:`Connectivity.minimum_phase_reconstruction_error
     <spectral_connectivity.Connectivity.minimum_phase_reconstruction_error>`
     method enforces it from the transform's declared sidedness.
-
-    A relative error near machine precision indicates a faithful factorization;
-    values of a few percent are typical for finite-resolution estimated spectra;
-    tens of percent or more indicate the spectrum is too coarsely resolved to
-    trust the directed measures -- use a longer FFT (larger ``n_fft_samples`` /
-    ``n_time_samples_per_window``). The error is deliberately *not* raised as a
-    warning during factorization: it does not cleanly separate an under-resolved
-    spectrum from a merely short or noisy one, so an always-on threshold would
-    either cry wolf on ordinary short-window analyses or miss real problems.
 
     Parameters
     ----------
@@ -685,15 +696,25 @@ def minimum_phase_decomposition(
     An indefinite or non-finite ``S`` has no such square root and is returned as
     NaN with the non-convergence warning.
 
-    Convergence of the iterate does not by itself guarantee ``G Gᴴ ≈ S``. The
-    factorization assumes the cross-spectrum is resolved finely enough in
-    frequency that the corresponding autocovariance decays within the analysis
-    window; an under-resolved (aliased) spectrum can satisfy the successive-
-    iterate convergence test yet reconstruct ``S`` poorly, silently biasing the
-    directed-connectivity measures built on it. Use
-    :func:`minimum_phase_reconstruction_error` to check factorization quality
-    explicitly, and a longer FFT (larger ``n_fft_samples`` /
-    ``n_time_samples_per_window``) if the error is large.
+    A fixed point of the iteration satisfies ``G Gᴴ = S`` at every frequency
+    bin (:func:`minimum_phase_reconstruction_error` measures the residual). That
+    does not make the directed measures accurate for a spectrum that is
+    under-resolved in frequency: when the autocovariance has not decayed within
+    ``n_fft_samples / 2`` lags, the factor is that of the spectrum's periodic
+    extension on the grid, not of the underlying spectrum, and nothing here
+    detects it. Use a window long enough for the slowest correlation in the
+    data.
+
+    .. versionchanged:: 3.0
+       On an even-length grid the lag ``n_fft_samples / 2`` is its own
+       negative, so half of it belongs to the causal part, as with lag 0.
+       Before 3.0 the causal projection dropped it. The iteration then
+       converged to a factor with ``G⁻¹ S G⁻ᴴ = I + (-1)ᵏ C`` at bin ``k``
+       instead of ``I``: it missed the spectrum by the size of that lag
+       (0.2-10% for spectra estimated from simulated data, more for short
+       windows and highly correlated channels) and added a bin-to-bin
+       alternation to every measure derived from it. Odd-length grids were
+       not affected.
 
     References
     ----------

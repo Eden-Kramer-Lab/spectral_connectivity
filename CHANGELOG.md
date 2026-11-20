@@ -42,6 +42,7 @@ their rows).
 | --- | --- |
 | `multitaper_connectivity` labeled pairwise and subset spectral Granger prediction with `source`/`target` transposed (`sel(source=a, target=b)` gave `b -> a`); it rejected the transfer-function measures and could not return `phase_slope_index`, `group_delay`, or `delay` (all three raised), whose `Connectivity` arrays were already source first | `sel(source=a, target=b)` is now `a -> b` — recompute any directed results (e.g. `pairwise_spectral_granger_prediction`) obtained through the wrapper |
 | `Connectivity` Granger and directed-transfer-function methods returned `[..., target, source]` (`result[i, j]` was `j -> i`) | All directed `Connectivity` arrays are `[..., source, target]`, matching the wrapper's `sel(source, target)`: swap the last two indices in indexing code for these methods (`0 -> 1` is now `[..., 0, 1]`) and the axis of any normalization check (DTF and directed coherence sum to 1 over axis -2, PDC and gPDC over axis -1). `np.swapaxes(old, -1, -2)` converts stored 2.x DTF, PDC, gPDC, and spectral Granger arrays (to about 1e-5 relative) when they were computed from at least as many observations (trials x tapers) as signals; directed coherence and dDTF values also changed (see their rows). With fewer observations than signals (a single observation, for pairwise and subset Granger) 2.x returned finite values from a Wilson factorization that had not converged, where 3.0 returns `NaN` with a warning: discard those stored arrays |
+| Every measure built on the Wilson factorization (the spectral Granger family, DTF, directed coherence, PDC, gPDC, dDTF) used, on an even FFT length, a factor that did not reproduce the spectrum: it ignored the lag `n_fft_samples / 2`, missing the spectrum by 0.2-10% in simulations and adding a bin-to-bin alternation to the measures | The factor reproduces the spectrum on even and odd FFT lengths alike. Recompute directed measures: values change by 1e-3 to 1e-2 for long, well-resolved recordings, and by much more for short windows, few observations, or highly correlated channels. `minimum_phase_reconstruction_error` is therefore small for every converged factor and no longer indicates an under-resolved spectrum (it never did on an odd FFT length) |
 | `global_coherence` returned the squared singular values of the observations' coefficient matrix divided by the number of observations, and its default call raised for some inputs with one or two observations (three signals with one observation; six signals with two) | Returns each component's fraction of the total coherent power, in `[0, 1]`, for any number of observations. It is unchanged when every signal is rescaled by the same factor, but not when signals are rescaled separately (one of four channels x10 moved values by up to 0.6): put signals on a common scale first |
 | `global_coherence(max_rank=k)` returned its components weakest first when `1 < k < n_signals - 1` (the sparse solver's order) and strongest first otherwise | Always strongest first, the values and their vectors alike, so `[..., 0]` is the largest component. Code that indexed a component of such a result now reads a different one: reverse the component axis of stored 2.x results, or re-index |
 | `weighted_phase_lag_index` was about 0 for small-amplitude data, whatever the true value: at 1 kHz it began to fail at a standard deviation of 1e-6 and was about 1e-17 at every frequency by 3e-7 (MEG in tesla, for example) | Invariant to the data's amplitude. Recompute weighted phase-lag results obtained from data stored in small units |
@@ -147,11 +148,12 @@ their rows).
   across measures (cross-spectral matrix, power, phase-lag moments, and the
   minimum-phase factorization with the Granger quantities derived from it) so
   memory-constrained runs can keep an instance without holding them.
-- `minimum_phase_reconstruction_error`: an opt-in diagnostic returning the
-  relative reconstruction error of the Wilson factorization per sub-spectrum, so
-  callers can check whether a cross-spectrum is resolved finely enough in
-  frequency to trust the directed measures built on it (an under-resolved
-  spectrum can converge yet reconstruct poorly).
+- `minimum_phase_reconstruction_error`: a diagnostic returning the relative
+  reconstruction error of a Wilson factor per sub-spectrum. A converged factor
+  reproduces its spectrum to about the convergence tolerance, so this checks a
+  factor obtained another way or with a loose tolerance. It does not show
+  whether a spectrum is resolved finely enough in frequency for the directed
+  measures: an under-resolved spectrum is reproduced exactly too.
 - `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Each
   takes `time_series` and `sampling_frequency` positionally and every other
   setting by keyword (e.g. `MorletWavelet(x, fs, frequencies=[4, 8, 16])`);
@@ -731,6 +733,20 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   as did a real or integer dtype, and an integer count failed only when a
   measure first used it (`power` did not). 2.x read `dtype=None` as its
   complex128 default.
+- The Wilson factorization behind every directed measure (the spectral
+  Granger family, `directed_transfer_function`, `directed_coherence`,
+  `partial_directed_coherence`, `generalized_partial_directed_coherence`,
+  `direct_directed_transfer_function`) reproduces the spectrum on an
+  even-length FFT grid. There the lag `n_fft_samples / 2` is its own negative,
+  so half of it is causal, as with lag 0; the causal projection dropped it,
+  and the iteration converged to a factor `G` with `G⁻¹ S G⁻ᴴ = I + (-1)ᵏ C`
+  at bin `k` instead of `I`. In simulations from known VAR models the factor
+  missed the spectrum by a median 0.2-10% (largest for short windows, few
+  observations, and highly correlated channels) and now does so by about
+  1e-9; DTF error against the model's true values fell in 39-40 of 40
+  datasets in every setting tried, by 5-40%, and spectral Granger error in
+  most. Values change by 1e-3 to 1e-2 for long, well-resolved recordings and
+  by much more in the settings above. Odd-length grids were not affected.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
   refuse an `xarray.DataArray` whose dimension names put time, trials, or
   signals on another axis than their positional `(time, trial, signal)`. They
