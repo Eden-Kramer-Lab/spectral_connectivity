@@ -92,6 +92,28 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     return canonical
 
 
+def _validated_complex_dtype(dtype: Any) -> Any:
+    """``dtype`` if it is a complex dtype; otherwise a ``TypeError``.
+
+    A real dtype (including ``None``, which NumPy reads as float64) would cast
+    the Fourier coefficients to real values and silently drop every phase.
+    """
+    try:
+        kind = np.dtype(dtype).kind
+    except TypeError:
+        kind = None
+    if kind != "c":
+        msg = (
+            f"dtype must be a complex dtype such as np.complex128 or np.complex64, "
+            f"got {dtype!r}; a real dtype would discard the imaginary part of the "
+            "Fourier coefficients. In 2.x, Connectivity.from_multitaper's third "
+            "positional argument was blocks, removed in 3.0 (memory is bounded "
+            "automatically): drop it, or pass dtype by keyword."
+        )
+        raise TypeError(msg)
+    return dtype
+
+
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -679,7 +701,9 @@ class Connectivity:
     time : NDArray[floating], shape (n_time_windows,), optional
         Time values in seconds for each time window. If None, uses indices.
     dtype : np.dtype, default=complex128
-        Data type for internal computations. Should match input precision.
+        Complex data type for internal computations. Should match input
+        precision. A real dtype (or ``None``) raises ``TypeError``: it would
+        discard the coefficients' imaginary parts.
     minimum_phase_tolerance : float, default=1e-8
         Relative convergence tolerance for the Wilson minimum-phase
         factorization used by the directed measures (spectral Granger, DTF,
@@ -821,6 +845,7 @@ class Connectivity:
         # the fft() output is unshared, so it is frozen in place instead of
         # copied, avoiding a transient 2x peak of the largest array. It must not
         # be set for a caller-owned array (see _adopt_fourier_coefficients).
+        dtype = _validated_complex_dtype(dtype)
         if _adopt_fourier_coefficients:
             self._adopt_fourier_coefficients(fourier_coefficients)
         else:
@@ -1215,7 +1240,8 @@ class Connectivity:
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
-            Data type for computations.
+            Complex data type for computations; a real dtype (or ``None``)
+            raises ``TypeError``.
         minimum_phase_tolerance : float, default=1e-8
             Relative convergence tolerance for the Wilson minimum-phase
             factorization used by the directed measures.
@@ -1230,7 +1256,8 @@ class Connectivity:
         """
         init_kwargs: dict[str, Any] = {
             "expectation_type": expectation_type,
-            "dtype": dtype,
+            # Checked before the (possibly expensive) fft(), like the flags below.
+            "dtype": _validated_complex_dtype(dtype),
             "minimum_phase_tolerance": minimum_phase_tolerance,
             "minimum_phase_max_iterations": minimum_phase_max_iterations,
         }

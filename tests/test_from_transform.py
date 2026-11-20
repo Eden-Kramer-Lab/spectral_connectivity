@@ -136,3 +136,29 @@ def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(mult
         canonical = _LegacyOverride.from_transform(multitaper)
     assert not hasattr(canonical, "marker")
     _assert_same_connectivity(deprecated, canonical)
+
+
+@pytest.mark.parametrize("value", [None, 5, np.float64, "float32"], ids=repr)
+def test_a_value_that_is_not_a_complex_dtype_is_rejected(multitaper, value):
+    """2.x's from_multitaper took ``blocks`` (``None`` or an int) third, where
+    ``dtype`` now is. ``None`` used to become float64 and silently drop the
+    imaginary part of every coefficient, and an int failed only when a
+    measure first used it; both now fail when the instance is built, naming
+    ``blocks``."""
+    with pytest.raises(TypeError, match=r"complex dtype.*blocks"):
+        Connectivity.from_transform(multitaper, "trials_tapers", value)
+    with (
+        pytest.warns(DeprecationWarning, match="from_multitaper"),
+        pytest.raises(TypeError, match=r"complex dtype.*blocks"),
+    ):
+        Connectivity.from_multitaper(multitaper, "trials_tapers", value)
+    with pytest.raises(TypeError, match="complex dtype"):
+        Connectivity(multitaper.fft(), dtype=value)
+
+
+@pytest.mark.parametrize(
+    "value", [np.complex64, "complex128", np.dtype("complex64")], ids=repr
+)
+def test_a_complex_dtype_is_accepted(multitaper, value):
+    connectivity = Connectivity.from_transform(multitaper, dtype=value)
+    assert connectivity.magnitude_squared_coherence().shape[-2:] == (3, 3)
