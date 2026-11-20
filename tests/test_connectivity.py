@@ -4353,7 +4353,10 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
 # coherence inverts a rank-one cross-spectrum: forced to 1 only for two signals
 # (see test_partial_coherence_warns_when_signals_outnumber_observations), and
 # null-space garbage for the three used here, so no saturation is asserted.
+# Imaginary coherence is the absolute sine of one phase difference: fixed by a
+# coherency of magnitude 1, but at no single value.
 SINGLE_OBSERVATION_DEGENERATE_MEASURES = {
+    "imaginary_coherence": None,
     "magnitude_squared_coherence": [1.0],
     "phase_locking_value": [1.0],
     "partial_coherence": None,
@@ -4396,6 +4399,69 @@ def test_multiple_observations_normalized_measure_does_not_warn(measure):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         getattr(connectivity, measure)()
+
+
+# Measures of signal groups, or of all signals at once, that the rank-one
+# cross-spectral matrix of a single observation fixes whatever the data, with
+# the value each takes for two groups of two signals.
+SINGLE_OBSERVATION_RANK_ONE_MEASURES = {
+    "canonical_coherency": 1.0,
+    "global_coherence": 1.0,
+    "maximized_imaginary_coherency": 1.0,
+    "maximized_imaginary_coherency_components": 1.0,
+    "multivariate_interaction_measure": 2.0,
+}
+
+
+def _rank_one_measure_magnitudes(connectivity, measure):
+    """Magnitudes of a global or two-group measure's defined values."""
+    if measure == "global_coherence":
+        return connectivity.global_coherence()[0]
+    result = getattr(connectivity, measure)([0, 0, 1, 1])
+    if isinstance(result, tuple):
+        return result[0][..., 0, 1]
+    return np.abs(result.scores)
+
+
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_RANK_ONE_MEASURES))
+def test_single_observation_group_measure_warns(measure):
+    # Independent noise, yet one observation fixes the value: that must warn
+    # rather than be returned silently.
+    rng = np.random.default_rng(709)
+    shape = (1, 1, 1, 16, 4)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(UserWarning, match=f"{measure} is computed from a single observation"):
+        magnitudes = _rank_one_measure_magnitudes(connectivity, measure)
+    np.testing.assert_allclose(
+        magnitudes, SINGLE_OBSERVATION_RANK_ONE_MEASURES[measure], atol=1e-6
+    )
+
+
+@pytest.mark.parametrize("measure", sorted(SINGLE_OBSERVATION_RANK_ONE_MEASURES))
+def test_multiple_observations_group_measure_does_not_warn(measure):
+    rng = np.random.default_rng(710)
+    shape = (1, 4, 3, 16, 4)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _rank_one_measure_magnitudes(connectivity, measure)
+
+
+def test_global_coherence_counts_trials_and_tapers_as_observations():
+    # Global coherence decomposes the trials x tapers coefficients whatever the
+    # expectation type, so one trial with four tapers is four observations there
+    # although the expectation over trials averages one.
+    rng = np.random.default_rng(711)
+    shape = (1, 1, 4, 16, 4)
+    connectivity = Connectivity(
+        rng.standard_normal(shape) + 1j * rng.standard_normal(shape),
+        expectation_type="trials",
+    )
+    assert connectivity.n_observations == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        global_coherence, _ = connectivity.global_coherence()
+    assert np.all(global_coherence < 1.0 - 1e-6)
 
 
 def test_canonical_coherence_warns_when_groups_outnumber_observations():

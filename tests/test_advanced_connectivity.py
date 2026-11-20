@@ -668,8 +668,9 @@ class TestGlobalCoherence:
         """One trial/taper (n_estimates=1) must not crash and puts all power in one.
 
         A single estimate gives a rank-one cross-spectral matrix, so the leading
-        component holds the whole power (global coherence exactly 1). Checked on
-        the batched thin-SVD path and on the forced per-bin fallback.
+        component holds the whole power (global coherence exactly 1, which is
+        announced). Checked on the batched thin-SVD path and on the forced
+        per-bin fallback.
         """
         import spectral_connectivity._multivariate as multivariate_module
 
@@ -680,7 +681,8 @@ class TestGlobalCoherence:
         rng = np.random.default_rng(0)
         # (n_time, n_trials, n_tapers, n_fft, n_signals) with n_trials*n_tapers = 1
         fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal((1, 1, 1, 4, 3))
-        gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
+        with pytest.warns(UserWarning, match="global_coherence is computed from a single"):
+            gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
         assert gc.shape == (1, 4, 1)
         np.testing.assert_allclose(gc, 1.0, rtol=1e-12)
 

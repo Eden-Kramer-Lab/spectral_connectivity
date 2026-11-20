@@ -132,6 +132,15 @@ def _validated_complex_dtype(dtype: Any) -> Any:
     return dtype
 
 
+# How a single observation fixes the maximized imaginary coherency and the
+# multivariate interaction measure (1, and 1 or 2, for a group pair with more
+# than two signals in total), for the single-observation warning.
+_RANK_ONE_GROUP_CONSEQUENCE = (
+    "the cross-spectral matrix has rank one and the value is fixed by the "
+    "number of signals in each group (for two single-signal groups, by one "
+    "phase difference)"
+)
+
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
 # jackknife interval is clamped at 0 on the way back.
 _NONNEGATIVE_MAGNITUDE_MEASURES = frozenset({"phase_locking_value", "imaginary_coherence"})
@@ -1540,24 +1549,30 @@ class Connectivity:
             "every magnitude-normalized value is mathematically forced to 1 "
             "(apparent perfect connectivity)"
         ),
+        *,
+        n_observations: int | None = None,
     ) -> None:
         """Warn that a normalized measure is degenerate for one observation.
 
         Coherency, the phase-locking value, and every measure derived from
         them normalize each cross-spectral entry by its magnitude; the
         phase-lag family averages the sign of one imaginary cross-spectrum per
-        observation; partial coherence inverts a rank-one cross-spectral
-        matrix. With a single observation (one trial times one taper/window --
-        e.g. a single-trial
-        :class:`~spectral_connectivity.transforms.MorletWavelet` transform
-        without ``smoothing_time``) the result is fixed by that normalization
-        rather than by the data (``consequence`` states how for ``measure``),
-        so the measure reports perfect connectivity or a perfectly consistent
-        lag between unrelated signals and carries no information. This is a
-        silent-failure trap rather than an error, so it warns instead of
-        raising.
+        observation; partial coherence inverts, and the group measures and
+        global coherence decompose, a rank-one cross-spectral matrix. With a
+        single observation (one trial times one taper/window -- e.g. a
+        single-trial :class:`~spectral_connectivity.transforms.MorletWavelet`
+        transform without ``smoothing_time``) the result is fixed by that
+        normalization rather than by the data (``consequence`` states how for
+        ``measure``), so the measure reports perfect connectivity or a
+        perfectly consistent lag between unrelated signals and carries no
+        information. This is a silent-failure trap rather than an error, so it
+        warns instead of raising. ``n_observations`` replaces
+        :attr:`n_observations` for a measure that counts its observations
+        differently.
         """
-        if self.n_observations < 2:
+        if n_observations is None:
+            n_observations = self.n_observations
+        if n_observations < 2:
             warnings.warn(
                 f"{measure} is computed from a single observation "
                 f"(n_observations == n_trials * n_tapers == 1), so {consequence} "
@@ -2676,6 +2691,11 @@ class Connectivity:
         >>> bool(imaginary_coherence[0, 20, 0, 1] > 0.2)
         True
         """
+        self._warn_single_observation_degenerate(
+            "imaginary_coherence",
+            "coherency has magnitude 1 for every pair and each value is the "
+            "absolute sine of one phase difference",
+        )
         imaginary_coh = xp.abs(
             _divide_masking_zero_denominator(
                 self._nonnegative_cross_spectral_matrix().imag,
@@ -3331,6 +3351,13 @@ class Connectivity:
             msg = f"n_components must be a positive integer, got {n_components!r}."
             raise ValueError(msg)
         regularization = _validated_regularization(regularization)
+        self._warn_single_observation_degenerate(
+            method,
+            "the leading canonical coherency of every group pair is mathematically "
+            "forced to magnitude 1 (apparent perfect connectivity)"
+            if method == "canonical_coherency"
+            else _RANK_ONE_GROUP_CONSEQUENCE,
+        )
         rank_cap = rank if rank is not None else self.n_signals
         # ``pairs`` is the single connection ordering shared by the capacities,
         # the ``connections`` labels, and the main loop below.
@@ -3515,6 +3542,7 @@ class Connectivity:
         True
         """
         return self._group_imaginary_coherency(
+            "maximized_imaginary_coherency",
             group_labels,
             lambda whitened: xp.clip(
                 xp.linalg.svd(whitened, full_matrices=False, compute_uv=False)[..., 0],
@@ -3588,6 +3616,7 @@ class Connectivity:
         True
         """
         return self._group_imaginary_coherency(
+            "multivariate_interaction_measure",
             group_labels,
             lambda whitened: xp.sum(whitened**2, axis=(-2, -1)),
             rank=rank,
@@ -3596,6 +3625,7 @@ class Connectivity:
 
     def _group_imaginary_coherency(
         self,
+        measure: str,
         group_labels: NDArray[np.integer],
         reduce: Callable[[BackendArray], BackendArray],
         *,
@@ -3618,6 +3648,7 @@ class Connectivity:
         labels, numpy_group_indices, _ = self._validated_group_indices(group_labels)
         rank = _validated_rank(rank)
         regularization = _validated_regularization(regularization)
+        self._warn_single_observation_degenerate(measure, _RANK_ONE_GROUP_CONSEQUENCE)
 
         spectrum = self._nonnegative_cross_spectral_matrix()
         group_indices = [xp.asarray(indices) for indices in numpy_group_indices]
@@ -3776,6 +3807,12 @@ class Connectivity:
         """
         self._validate_multiple_signals()
         _, n_trials, n_tapers, _, n_signals = self._fourier_coefficients.shape
+        self._warn_single_observation_degenerate(
+            "global_coherence",
+            "the cross-spectral matrix has rank one: its first component holds "
+            "all of the power, and global coherence is forced to 1",
+            n_observations=n_trials * n_tapers,
+        )
 
         # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
         # coefficient matrix has at most min(n_signals, n_trials * n_tapers)

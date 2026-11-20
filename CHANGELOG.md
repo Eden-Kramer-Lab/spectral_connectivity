@@ -230,10 +230,17 @@ their rows).
   intervals with automatic variance-stabilizing transformations: log for power,
   `atanh(sqrt(.))` for magnitude-squared coherence (`transformation=
   "fisher_squared"`), and circular for phase.
-- Magnitude-normalized measures (coherency, phase-locking value, and everything
-  derived from them) warn when computed from a single observation, where they
-  are mathematically forced to 1; set `smoothing_time` on `MorletWavelet` or
-  provide multiple trials/tapers. `Welch` warns when its default segment length
+- Measures that a single observation fixes whatever the data warn there:
+  coherency and everything derived from it, the phase-locking value and its
+  corrected imaginary part, and the canonical coherency (magnitude forced to
+  1); the phase-lag index and its weighted and directed forms (the sign of one
+  imaginary cross-spectrum); the phase slope index; partial coherence; and
+  global coherence, the maximized imaginary coherency, and the multivariate
+  interaction measure (a rank-one cross-spectral matrix). Set `smoothing_time`
+  on `MorletWavelet` or provide multiple trials/tapers. The bias-corrected
+  phase measures, `delay`, and `group_delay` raise there instead, and
+  `canonical_coherence` warns whenever a group pair has more signals than
+  observations. `Welch` warns when its default segment length
   is shorter than 0.25 s, reporting the resulting equivalent noise bandwidth.
   `fourier_connectivity` rejects directed
   measures on unlabeled coefficients whose two-sidedness cannot be verified.
@@ -543,10 +550,7 @@ their rows).
   only exact 1s) and ignores `phase_locking_value`'s diagonal, which is 1 by
   definition, so it no longer fires on every PLV jackknife.
 - `partial_coherence` warns when there are fewer observations than signals
-  (the rank-deficient estimate is forced to 1 or dominated by the null space),
-  and the single-observation degeneracy warning now also covers
-  `phase_lag_index`, `weighted_phase_lag_index`, `directed_phase_lag_index`,
-  and `partial_coherence`.
+  (the rank-deficient estimate is forced to 1 or dominated by the null space).
 - `multitaper_connectivity` rejects a leftover `frequency`/`freq`/`band`
   dimension instead of assigning it to the signal role by elimination.
 - `start_time` must be a single finite value for `Multitaper`,
