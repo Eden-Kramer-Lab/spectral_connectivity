@@ -515,6 +515,8 @@ facts needed to interpret it. Settings use one JSON record:
 
 | Attribute | Meaning |
 | --- | --- |
+| `output_schema_version` | `1`: the version of the layout this table describes. |
+| `package`, `package_version` | `spectral_connectivity` and the installed version that computed the result. |
 | `transform` | `multitaper`, `stft`, `welch`, `morlet`, or `external_fourier`. |
 | `sampling_frequency` | Physical sampling rate in Hz, included only when known. |
 | `n_trials`, `n_signals` | Known trial and signal counts; an arbitrary external observation axis is not labeled as trials. |
@@ -533,6 +535,7 @@ facts needed to interpret it. Settings use one JSON record:
 | `frequency_interval_closed` | `"both"` when the bins on the bounds are included (`frequency_range`, or every bin), `"neither"` for the deprecated `frequencies_of_interest`. |
 | `frequency_decimation`, `frequency_bands_json`, `frequency_reduction` | The wrapper's decimation and band reduction, on the frequency-resolved variables they were applied to. Decimation and band reduction keep the interval record, which still names the interval they were drawn from; the `frequency` (or `band`) coordinate shows what was returned. |
 | `measure`, `measure_kwargs_json` | The measure name the caller requested and its keyword arguments, on each measure's variables. A result requested by a deprecated name (`coherence_magnitude`) records that name, and its variable has that name too. |
+| `arg_<name>`, `arg_<name>_json` | Each of those keyword arguments on its own: a scalar as `arg_<name>`, a structured or non-finite value as canonical JSON under `arg_<name>_json` (e.g. `arg_frequency_range_json`, `arg_group_labels_json`). `measure_kwargs_json` remains the full record. |
 | `long_name`, `units`, `interpretation` | How to read the measure variable, from `list_measures()`. With `sign_convention`, the value range, and `diagonal_policy` (below), these are on each measure variable and on `group_delay`'s other value variables, `group_delay_slope` and `group_delay_r_value` (range [-1, 1], with the slope's sign), which have their own; group membership and spatial vectors, filters, and patterns carry none. Band reduction names its reduction (mean, circular mean, complex mean, or integral) at the start of `interpretation` and `formula`, and an integral rewrites `long_name` and `units`; cropping and decimation change none of the measure attributes. |
 | `sign_convention` | Which signal leads, for measures whose sign or angle shows it; omitted for the others. |
 | `value_range_lower`, `value_range_upper`, `value_range_applies_to` | The estimator's theoretical range (see `docs/CONNECTIVITY_METRIC_RANGES.md` for when a computed value can lie outside it); an unbounded side is omitted. For complex measures `value_range_applies_to="magnitude"`: the range bounds the magnitude. |
@@ -599,13 +602,10 @@ coordinate, as after `isel(time=0)`, use it as the time of their single window.
 Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
-helper names:
-
-| Previous metadata | Schema version 1 |
-| --- | --- |
-| `mt_sampling_frequency`, `mt_n_trials`, `mt_n_signals` | `sampling_frequency`, `n_trials`, `n_signals`. |
-| `mt_frequency_resolution` | `spectral_bandwidth`, qualified as `full_dpss_concentration_bandwidth`, for generated DPSS tapers. Custom tapers have no `spectral_bandwidth`; their `mt_frequency_resolution` stays the nominal NW-based value. |
-| Other scalar `mt_*` settings | `transform_parameters_json`, with optional settings as JSON `null`. |
+helper names. The [migration
+guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide)
+maps each 2.0.1 `mt_*` attribute, and each attribute renamed during 3.0
+development, to the keys above.
 
 The 15 scalar `mt_*` attributes released in 2.0.1 remain compatibility copies
 through 3.x and will be removed in 4.0: `mt_detrend_type`, `mt_is_low_bias`,
