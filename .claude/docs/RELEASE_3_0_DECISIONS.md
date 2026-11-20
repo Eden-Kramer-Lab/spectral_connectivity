@@ -621,15 +621,15 @@ Rulings where the rules above were silent:
   so a call rejected for any reason raises only its error.
   `connectivity_to_xarray` gains a keyword-only `group_labels` so that common
   setting keeps a flat route.
-- **from_multitaper.** It calls `cls.from_transform`, so a subclass's
-  `from_transform` override applies to both names; a subclass overriding
-  `from_multitaper` warns at its own `super()` call and is not reached by
-  `from_transform`, so the migration row says to move such an override to
-  `from_transform`. An override of `from_transform` that still calls
-  `super().from_multitaper` raises a `TypeError` on re-entry (detected with a
-  context variable) instead of recursing; calling the base implementation
-  from the alias instead was rejected because it would skip a
-  `from_transform` override. The 2.x `blocks` parameter (third position) was removed
+- **from_multitaper (cleanup ruling).** Both names call one private
+  builder, `_from_transform`, and neither calls the other. A subclass
+  overriding `from_multitaper` warns once at its own `super()` call and is not
+  reached by `from_transform`, so the migration row says to move such an
+  override to `from_transform`; an override of `from_transform` that still
+  calls `super().from_multitaper` works, with one warning, instead of
+  recursing; and `Sub.from_multitaper` does not reach a `Sub.from_transform`
+  override (a promise only this pull request had made). The 2.x `blocks`
+  parameter (third position) was removed
   before this step and is not restored (owner's ruling). Every 2.x use of
   it, by keyword or in its released positional slot (third in
   `from_multitaper`, fifth in `Connectivity`), raises a `TypeError` that names

@@ -390,13 +390,6 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
 # False while the labeled wrapper or a jackknife replicate runs a measure: the
 # wrapper warns about its source/target labels instead, and a jackknife warns
 # once, for its full estimate.
-# The class whose from_transform the deprecated from_multitaper is calling, so
-# a from_transform override that calls super().from_multitaper (a half-done
-# rename) fails on re-entry instead of recursing without end.
-_from_multitaper_dispatch: ContextVar[type | None] = ContextVar(
-    "_from_multitaper_dispatch", default=None
-)
-
 _warn_orientation_change: ContextVar[bool] = ContextVar(
     "_warn_orientation_change", default=True
 )
@@ -1227,18 +1220,17 @@ class Connectivity:
         .. deprecated:: 3.0
            Use :meth:`from_transform`, which takes the same arguments (the
            first is named ``transform``) and builds the same instance.
-           ``from_multitaper`` is removed in 4.0. ``from_transform`` does not
-           call ``from_multitaper``, so a subclass that overrides
-           ``from_multitaper`` must move the override, and its ``super()``
-           call, to ``from_transform``.
+           ``from_multitaper`` is removed in 4.0. Neither name calls the
+           other, so a subclass that overrides ``from_multitaper`` must move
+           the override, and its ``super()`` call, to ``from_transform``.
 
         .. versionchanged:: 3.0
            The 2.x ``blocks`` argument (third, before ``dtype``) is removed;
            passing it raises ``TypeError``.
 
         Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`
-        and calls ``cls.from_transform`` with the same arguments, so a
-        subclass's ``from_transform`` applies to both names.
+        and builds the instance as :meth:`from_transform` does; a subclass's
+        override of ``from_transform`` is not called.
 
         Parameters
         ----------
@@ -1253,30 +1245,19 @@ class Connectivity:
             New Connectivity instance.
 
         """
-        if _from_multitaper_dispatch.get() is cls:
-            msg = (
-                f"{cls.__name__}.from_transform calls from_multitaper, which calls "
-                f"{cls.__name__}.from_transform: an override of from_transform must "
-                "call super().from_transform(...), not super().from_multitaper(...)."
-            )
-            raise TypeError(msg)
         warn_deprecated(
             f"{cls.__name__}.from_multitaper()",
             f"{cls.__name__}.from_transform()",
             "takes the same arguments (the first is named transform, not "
             "multitaper_instance) and builds the same instance",
         )
-        token = _from_multitaper_dispatch.set(cls)
-        try:
-            return cls.from_transform(
-                multitaper_instance,
-                expectation_type=expectation_type,
-                dtype=dtype,
-                minimum_phase_tolerance=minimum_phase_tolerance,
-                minimum_phase_max_iterations=minimum_phase_max_iterations,
-            )
-        finally:
-            _from_multitaper_dispatch.reset(token)
+        return cls._from_transform(
+            multitaper_instance,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
 
     @classmethod
     @_rejects_removed_blocks("Connectivity.from_transform()")
@@ -1291,8 +1272,8 @@ class Connectivity:
         """Construct from any spectral transform.
 
         .. versionadded:: 3.0
-           The canonical constructor; :meth:`from_multitaper`, its 2.x name,
-           calls it.
+           The canonical constructor; :meth:`from_multitaper` is its
+           deprecated 2.x name.
 
         Parameters
         ----------
@@ -1320,6 +1301,29 @@ class Connectivity:
         -------
         Connectivity
             New Connectivity instance.
+        """
+        return cls._from_transform(
+            transform,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
+        )
+
+    @classmethod
+    def _from_transform(
+        cls,
+        transform: "SpectralTransform",
+        *,
+        expectation_type: str,
+        dtype: Any,
+        minimum_phase_tolerance: float,
+        minimum_phase_max_iterations: int,
+    ) -> "Connectivity":
+        """Build an instance from ``transform``; see :meth:`from_transform`.
+
+        Both public constructors call it, and neither calls the other, so an
+        override of either name never re-enters the other.
         """
         init_kwargs: dict[str, Any] = {
             "expectation_type": expectation_type,

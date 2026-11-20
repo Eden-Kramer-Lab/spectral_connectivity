@@ -113,13 +113,16 @@ def test_from_multitaper_on_a_subclass_builds_the_subclass(multitaper):
     _assert_same_connectivity(deprecated, _PlainSubclass.from_transform(multitaper))
 
 
-def test_from_multitaper_reaches_a_subclass_from_transform_override(multitaper):
+def test_from_multitaper_does_not_call_a_subclass_from_transform_override(multitaper):
+    """The deprecated name builds the instance itself; only code that calls
+    from_transform reaches an override of it."""
     call = lambda: _TransformOverride.from_multitaper(multitaper)  # noqa: E731
     with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
         deprecated = call()
     ((filename, lineno, _),) = _deprecations(record)
     assert (filename, lineno) == (__file__, call.__code__.co_firstlineno)
-    assert deprecated.marker == "from_transform override"
+    assert not hasattr(deprecated, "marker")
+    assert _TransformOverride.from_transform(multitaper).marker == "from_transform override"
 
 
 def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(multitaper):
@@ -207,16 +210,19 @@ class _HalfMigrated(Connectivity):
         return instance
 
 
-def test_a_half_migrated_subclass_fails_at_once_with_the_fix(multitaper):
-    """from_multitaper calls cls.from_transform, so an override of
-    from_transform that still calls super().from_multitaper would recurse
-    without end; it fails on re-entry, naming the call to change."""
-    with (
-        pytest.warns(DeprecationWarning, match="from_multitaper") as record,
-        pytest.raises(TypeError, match=r"super\(\)\.from_transform"),
-    ):
-        _HalfMigrated.from_transform(multitaper)
+def test_a_half_migrated_subclass_works_and_warns_once(multitaper):
+    """An override renamed to from_transform that still calls
+    super().from_multitaper builds its instance, applies its customization
+    once, and warns once about the old name: neither name calls the other."""
+    with pytest.warns(DeprecationWarning, match="from_multitaper") as record:
+        instance = _HalfMigrated.from_transform(multitaper)
     assert len(record) == 1
+    assert isinstance(instance, _HalfMigrated)
+    assert instance.marker == "half migrated"
+    np.testing.assert_array_equal(
+        instance.magnitude_squared_coherence(),
+        Connectivity.from_transform(multitaper).magnitude_squared_coherence(),
+    )
 
 
 def test_the_from_multitaper_warning_names_the_renamed_first_argument(multitaper):
