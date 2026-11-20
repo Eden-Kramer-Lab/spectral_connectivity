@@ -128,6 +128,15 @@ def test_deprecated_method_string_in_a_list_keeps_its_variable(time_series):
     assert result[_OLD].attrs["measure"] == _OLD
 
 
+def test_deprecated_name_requested_twice_warns_once(time_series):
+    with _warns(_STRING) as record:
+        result = multitaper_connectivity(
+            time_series, sampling_frequency=500, method=[_OLD, _OLD]
+        )
+    _assert_one_caller_warning(record, _STRING)
+    assert list(result.data_vars) == [_OLD]
+
+
 def test_deprecated_method_string_through_fourier_connectivity(multitaper):
     coefficients = multitaper.fft()
     frequencies = multitaper.frequencies

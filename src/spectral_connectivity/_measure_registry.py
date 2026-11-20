@@ -763,7 +763,12 @@ def _requested_methods(
             )
             raise ValueError(msg)
     _validate_method_names([_DEPRECATED_MEASURE_NAMES.get(name, name) for name in requested])
-    methods = [_resolve_deprecated_measure_name(name, "method={!r}") for name in requested]
+    # Each distinct name is resolved, and so warns, once.
+    resolved = {
+        name: _resolve_deprecated_measure_name(name, "method={!r}")
+        for name in dict.fromkeys(requested)
+    }
+    methods = [resolved[name] for name in requested]
     return methods, dict(zip(methods, requested, strict=True)), isinstance(method, str)
 
 
