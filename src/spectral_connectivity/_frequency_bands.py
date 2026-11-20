@@ -21,12 +21,17 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
 
+# The bins ``frequency_range`` selects on a grid left uncropped, as a mask over
+# that grid, and the range's bounds.
+_KeptBins = tuple[NDArray[np.bool_], tuple[float, float]]
+
 
 def _band_integration_weights(
     frequencies: NDArray[np.floating],
     low: float,
     high: float,
     nyquist_frequency: float | None,
+    kept: _KeptBins | None = None,
 ) -> NDArray[np.floating]:
     """Width of each bin's frequency cell that lies inside ``[low, high]``.
 
@@ -47,6 +52,12 @@ def _band_integration_weights(
     doubled. The last bin is at ``nyquist_frequency`` by the rule that places a
     bin on a band's bound (:func:`_frequency_interval_mask`), so a coordinate
     stored as float32 still has its Nyquist bin.
+
+    ``kept`` limits the band to the cells of the bins ``frequency_range``
+    selects and to the range itself. That is what integrating the cropped grid
+    gives, plus any part of the band that lies inside the range but in the
+    cell of a bin just outside it, which a crop would drop: a band inside the
+    range integrates the same with and without the range.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -63,6 +74,11 @@ def _band_integration_weights(
     if nyquist_frequency is not None and _bins_on_bound(frequencies, nyquist_frequency)[-1]:
         upper[-1] = frequencies[-1]
         scale[-1] = 2.0
+    if kept is not None:
+        in_range, (range_low, range_high) = kept
+        selected = np.flatnonzero(in_range)
+        low = max(low, min(range_low, lower[selected[0]]))
+        high = min(high, max(range_high, upper[selected[-1]]))
     weights: NDArray[np.floating] = scale * np.clip(
         np.minimum(upper, high) - np.maximum(lower, low), 0.0, None
     )
@@ -127,6 +143,7 @@ def _reduce_frequency_bands(
     frequency_reduction: Literal["mean", "integral"],
     circular: bool | None,
     nyquist_frequency: float | None,
+    kept: _KeptBins | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """:func:`frequency_band_reduce` with the grid's Nyquist bin given.
 
@@ -134,6 +151,10 @@ def _reduce_frequency_bands(
     bin, or ``None`` if the grid does not reach it or is not one-sided. A
     variable that records its own (a Dataset assembled from result variables
     has no attributes of its own) is integrated with that one.
+
+    ``kept`` is given when ``result`` was left uncropped for an integral (see
+    :func:`_band_integration_weights`). The bands are then bands of the kept
+    bins, as after a crop: one containing none of them is refused.
     """
     if "frequency" not in result.dims:
         msg = "result must have a 'frequency' dimension."
@@ -164,10 +185,15 @@ def _reduce_frequency_bands(
         msg = "band names must be unique, non-empty strings."
         raise ValueError(msg)
 
-    band_masks_and_bounds = [
-        _frequency_interval_mask(f"Band {name!r}", bounds, frequencies)
-        for name, bounds in frequency_bands.items()
-    ]
+    in_range = np.ones(frequencies.shape, dtype=bool) if kept is None else kept[0]
+    band_masks_and_bounds = []
+    for name, bounds in frequency_bands.items():
+        kept_mask, band_bounds = _frequency_interval_mask(
+            f"Band {name!r}", bounds, frequencies[in_range]
+        )
+        mask = np.zeros(frequencies.shape, dtype=bool)
+        mask[in_range] = kept_mask
+        band_masks_and_bounds.append((mask, band_bounds))
     discarded = [
         name
         for name in ("band", "band_lower", "band_upper", "valid_time_band")
@@ -185,7 +211,7 @@ def _reduce_frequency_bands(
         # Discard them first: one left on a Dataset would take precedence over
         # the per-band coordinate of each reduced variable.
         result = result.drop_vars(discarded)
-    if frequency_reduction == "integral" and frequencies.size < 2:
+    if frequency_reduction == "integral" and np.count_nonzero(in_range) < 2:
         msg = (
             "frequency_reduction='integral' needs at least two frequency bins to "
             "know their widths."
@@ -222,7 +248,9 @@ def _reduce_frequency_bands(
         band_validity: list[xr.DataArray] = []
         for mask, (low, high) in band_masks_and_bounds:
             if frequency_reduction == "integral":
-                weights = _band_integration_weights(frequencies, low, high, variable_nyquist)
+                weights = _band_integration_weights(
+                    frequencies, low, high, variable_nyquist, kept
+                )
                 # Bins inside the band count for validity even with zero weight
                 # (a zero-width band), so an invalid bin is never read as zero.
                 used = np.flatnonzero((weights > 0) | mask)
@@ -443,16 +471,25 @@ def _decimate_and_reduce_frequencies(
     frequency_bands: Mapping[str, tuple[float, float]] | None,
     frequency_reduction: Literal["mean", "integral"],
     nyquist_frequency: float | None,
+    kept: _KeptBins | None = None,
 ) -> xr.DataArray | xr.Dataset:
     """Apply the wrappers' decimation and band reduction after the crop.
 
     ``nyquist_frequency`` is that of the grid as computed, before cropping
-    (see :func:`_nyquist_frequency`).
+    (see :func:`_nyquist_frequency`). ``kept`` is given when ``result`` was
+    left uncropped for an integral (see :func:`_band_integration_weights`).
     """
     selected = result
+    first = 0
+    if kept is not None:
+        # Decimation keeps every Nth bin from the first one in the range, as
+        # after a crop, and here the bins on that lattice outside the range too.
+        in_range, frequency_range = kept
+        first = int(np.flatnonzero(in_range)[0]) % frequency_decimation
+        kept = (in_range[first::frequency_decimation], frequency_range)
     if frequency_decimation != 1:
         selected = _with_frequency_attrs(
-            selected.isel(frequency=slice(None, None, frequency_decimation)),
+            selected.isel(frequency=slice(first, None, frequency_decimation)),
             frequency_decimation=int(frequency_decimation),
         )
 
@@ -463,5 +500,6 @@ def _decimate_and_reduce_frequencies(
             frequency_reduction=frequency_reduction,
             circular=None,
             nyquist_frequency=nyquist_frequency,
+            kept=kept,
         )
     return _with_frequency_grid_metadata(selected)

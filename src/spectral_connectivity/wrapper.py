@@ -12,11 +12,13 @@ import xarray as xr
 from numpy.typing import DTypeLike, NDArray
 
 from spectral_connectivity._frequency_bands import (
+    _BAND_INTEGRAL_LONG_NAMES,
     _check_frequency_operations,
     _crop_frequency_range,
     _decimate_and_reduce_frequencies,
     _nyquist_frequency,
     _reduce_frequency_bands,
+    _with_frequency_attrs,
 )
 from spectral_connectivity._input_handling import (
     _UNSET,
@@ -32,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
+    _reduces_frequency,
     _requested_methods,
     _requires_two_sided,
     _warn_deprecated_measure_names,
@@ -897,6 +900,19 @@ def _format_and_reduce_measures(
         connectivity_kwargs.get("frequencies_of_interest") if consuming_methods else None,
     )
 
+    # An integral leaves its densities uncropped, so a band inside the range
+    # also integrates the part of it lying in the cell of a bin just outside
+    # the range. A request the reduction refuses is cropped as any other.
+    kept = (
+        (selection.mask, selection.requested)
+        if frequency_range is not None
+        and selection.requested is not None
+        and frequency_bands is not None
+        and frequency_reduction == "integral"
+        and all(m in _BAND_INTEGRAL_LONG_NAMES or _reduces_frequency(m) for m in methods)
+        else None
+    )
+
     def measure_kwargs(method: str) -> Mapping[str, Any]:
         """Keyword arguments for one measure: ``group_labels`` reaches group
         measures only, and ``frequency_range`` the measures that consume it."""
@@ -936,6 +952,8 @@ def _format_and_reduce_measures(
         )
         if frequency_range is None or consumes_range:
             return result
+        if kept is not None:
+            return _with_frequency_attrs(result, **selection.attrs())
         return _crop_frequency_range(result, selection)
 
     if return_dataarray:
@@ -994,6 +1012,7 @@ def _format_and_reduce_measures(
         frequency_reduction=frequency_reduction,
         # The computed grid's, before the crop can make an interior bin the last.
         nyquist_frequency=_nyquist_frequency(shared_attrs, frequencies),
+        kept=kept,
     )
 
 
@@ -1170,7 +1189,10 @@ def multitaper_connectivity(
         Band reduction. Integration is restricted to ``power`` and
         ``cross_spectral_density``, where it yields band power/covariance;
         adjacent band integrals add up to their union without counting a
-        shared edge bin twice (see :func:`frequency_band_reduce`).
+        shared edge bin twice (see :func:`frequency_band_reduce`). A band
+        inside ``frequency_range`` integrates the same with and without the
+        range, even when its edge falls between bins; one reaching past the
+        range is limited to the cells of the bins the range selects.
     time_dim : hashable, optional
         DataArray dimension containing time samples. Common names such as
         ``"time"`` and ``"sample"`` are inferred automatically.

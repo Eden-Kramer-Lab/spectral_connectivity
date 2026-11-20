@@ -3246,12 +3246,23 @@ def test_frequency_band_integral_of_odd_fft_last_bin_is_not_nyquist(path):
 
 @pytest.mark.parametrize(
     ("band", "frequency_range"),
-    [((0.0, 4.0), (0.0, 4.0)), ((4.0, 8.0), (0.0, 8.0)), ((10.0, 30.0), (0.0, 30.0))],
+    [
+        ((0.0, 4.0), (0.0, 4.0)),
+        ((4.0, 8.0), (0.0, 8.0)),
+        ((10.0, 30.0), (0.0, 30.0)),
+        # Edges between the 1 Hz bins: the 10 and 31 Hz bins are outside the
+        # range, but part of each one's cell is inside the band.
+        ((10.3, 30.6), (10.3, 30.6)),
+        ((10.3, 30.6), (10.3, 40.0)),
+        ((10.3, 30.6), (5.5, 30.6)),
+    ],
 )
 def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_range):
     """Only the true Nyquist bin is undoubled. Cropping the grid with
     frequency_range must not turn its new last bin into a Nyquist bin, or a
-    band ending at the crop edge integrates that bin twice (+3% to +15%)."""
+    band ending at the crop edge integrates that bin twice (+3% to +15%). Nor
+    may it drop the part of a band that lies in the cell of a bin just outside
+    the range (-1% to -2% for a band edge between bins)."""
     time_series = np.random.default_rng(51).standard_normal((20000, 1, 1))
     kwargs = {
         "sampling_frequency": 1000,
@@ -3263,6 +3274,74 @@ def test_frequency_band_integral_does_not_depend_on_cropping(band, frequency_ran
     uncropped = multitaper_connectivity(time_series, **kwargs)
     cropped = multitaper_connectivity(time_series, frequency_range=frequency_range, **kwargs)
     np.testing.assert_allclose(cropped.values, uncropped.values, rtol=1e-12)
+
+
+def _one_hz_power(**kwargs):
+    """Power on 1 Hz bins (0 to 500 Hz) of fixed white noise."""
+    time_series = np.random.default_rng(51).standard_normal((20000, 1, 1))
+    return multitaper_connectivity(
+        time_series,
+        sampling_frequency=1000,
+        time_window_duration=1.0,
+        method="power",
+        **kwargs,
+    )
+
+
+def test_band_reaching_past_frequency_range_integrates_the_selected_bins_cells():
+    """frequency_range limits a band to the cells of the bins it selects (10 to
+    30 Hz here, so 9.5 to 30.5 Hz), which is what reducing the cropped result
+    gives."""
+    bands = {"wide": (0.0, 100.0)}
+    cropped = _one_hz_power(frequency_range=(10.0, 30.0))
+    np.testing.assert_allclose(
+        _one_hz_power(
+            frequency_range=(10.0, 30.0), frequency_bands=bands, frequency_reduction="integral"
+        ).values,
+        frequency_band_reduce(cropped, bands, frequency_reduction="integral").values,
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        frequency_band_reduce(cropped, bands, frequency_reduction="integral").values,
+        frequency_band_reduce(
+            _one_hz_power(), {"wide": (9.5, 30.5)}, frequency_reduction="integral"
+        ).values,
+        rtol=1e-12,
+    )
+
+
+def test_decimated_band_integral_keeps_the_part_of_the_range_between_kept_bins():
+    """With frequency_decimation the kept bins start at the first bin in
+    frequency_range (11, 13, ..., 29 Hz here, each a 2 Hz cell). The band's
+    30 to 30.6 Hz lies in the cell of the next bin on that lattice, 31 Hz."""
+    band = {"band": (10.3, 30.6)}
+    lattice = _one_hz_power().isel(frequency=slice(1, None, 2))
+    assert lattice.frequency.values[5] == 11.0
+    np.testing.assert_allclose(
+        _one_hz_power(
+            frequency_range=(10.3, 30.6),
+            frequency_decimation=2,
+            frequency_bands=band,
+            frequency_reduction="integral",
+        ).values,
+        frequency_band_reduce(lattice, band, frequency_reduction="integral").values,
+        rtol=1e-12,
+    )
+
+
+def test_integral_with_frequency_range_still_refuses_other_measures():
+    """Leaving power uncropped for the integral must not change which requests
+    are refused, or how."""
+    time_series = np.random.default_rng(53).standard_normal((2000, 4, 2))
+    with pytest.raises(ValueError, match="defined only for power and cross_spectral_density"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=1000,
+            method=["power", "delay"],
+            frequency_range=(10.3, 30.6),
+            frequency_bands={"band": (10.3, 30.6)},
+            frequency_reduction="integral",
+        )
 
 
 def test_frequency_band_integral_edge_bins_stay_additive_and_mean_is_unchanged():

@@ -858,18 +858,27 @@ is removed in 4.0.
   known, so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
-  a 4-8 Hz band cropped at 8 Hz). The last bin is at `nyquist_frequency` by the
-  same rule that places a bin on a band's bound, so a frequency coordinate
-  stored as float32 (as netCDF often does) keeps its Nyquist bin, and
-  `fourier_connectivity` reads the rate of a two-sided grid from its Nyquist bin
-  (the bin farthest from 0 Hz) instead of multiplying the first bin's rounding
-  by the FFT length, so float32 and rounded FFT-order grids record the right
-  `sampling_frequency` and keep theirs too. A Dataset assembled from result
-  variables, which has no attributes of its own, is integrated with each
-  variable's recorded Nyquist frequency instead of taking a cropped grid's
-  last bin for the Nyquist bin. An integrated band is labeled `"Band power"`
+  a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`
   or `"Band cross-power"` in `(units)^2` rather than keeping the density's
   `"Power spectral density"` label and `(units)^2/Hz`.
+- Band integrals keep the Nyquist bin of a frequency coordinate that does not
+  hold the Nyquist frequency exactly. The last bin is at `nyquist_frequency` by
+  the rule that places a bin on a band's bound, so a coordinate stored as
+  float32 (as netCDF often does) keeps it, and `fourier_connectivity` reads a
+  two-sided grid's rate from its Nyquist bin (the bin farthest from 0 Hz)
+  instead of multiplying the first bin's rounding by the FFT length, so float32
+  and rounded FFT-order grids record the right `sampling_frequency`. A band
+  ending on the Nyquist bin of such a grid was short by half that bin's cell.
+- `frequency_band_reduce` integrates each variable of a Dataset with that
+  variable's recorded Nyquist frequency. A Dataset assembled from result
+  variables has no attributes of its own, so a cropped grid's last bin was
+  taken for the Nyquist bin and a band ending there came out up to 10% high.
+- With `frequency_range`, `multitaper_connectivity` and `fourier_connectivity`
+  integrate a band on the uncropped grid, so a band inside the range gives the
+  same value with and without the range even when its edge falls between bins.
+  Cropping first dropped the part of the band lying in the cell of a bin just
+  outside the range (1-3% of a 20 Hz band on 0.5-1 Hz bins). A band reaching
+  past the range is still limited to the cells of the bins the range selects.
 - A window step given in seconds is rounded to the nearest sample instead of
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
