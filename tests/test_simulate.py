@@ -453,3 +453,52 @@ def test_lagged_broadband_rejects_negative_noise_levels():
     """``noise_levels`` are standard deviations, so a negative one is a mistake."""
     with pytest.raises(ValueError, match="must be non-negative"):
         simulate_lagged_broadband((0, 3), -0.1, n_time_samples=50)
+
+
+@pytest.mark.parametrize(
+    ("simulate", "kwargs"),
+    [
+        (simulate_lagged_broadband, {"lags_samples": (0, 2), "noise_levels": 0.1}),
+        (
+            simulate_shared_oscillation,
+            {
+                "frequency": _FREQUENCY,
+                "sampling_frequency": _SAMPLING_FREQUENCY,
+                "amplitudes": [1.0],
+            },
+        ),
+    ],
+    ids=["lagged_broadband", "shared_oscillation"],
+)
+@pytest.mark.parametrize("name", ["n_trials", "n_time_samples"])
+@pytest.mark.parametrize(
+    "value", [0, -1, 2.0, True], ids=["zero", "negative", "float", "bool"]
+)
+def test_simulators_reject_counts_that_are_not_positive_integers(
+    simulate, kwargs, name, value
+):
+    """An empty, negative, fractional, or boolean count names itself instead of
+    returning an empty array or failing inside NumPy."""
+    counts = {"n_trials": 2, "n_time_samples": 50, name: value}
+    with pytest.raises(ValueError, match=f"{name} must be a positive integer"):
+        simulate(**kwargs, **counts)
+
+
+def test_simulators_accept_numpy_integer_counts():
+    """NumPy integer counts are valid counts."""
+    lagged = simulate_lagged_broadband(
+        (0, 2), 0.1, n_time_samples=np.int64(50), n_trials=np.int32(2), random_state=0
+    )
+    oscillation = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, np.int64(50), np.int32(2), amplitudes=[1.0]
+    )
+    assert lagged.shape == (50, 2, 2)
+    assert oscillation.shape == (50, 2, 1)
+
+
+def test_shared_oscillation_has_no_two_dimensional_form():
+    """Only the lagged-broadband simulator omits the trial axis for ``n_trials=None``."""
+    with pytest.raises(ValueError, match="pass n_trials=1"):
+        simulate_shared_oscillation(
+            _FREQUENCY, _SAMPLING_FREQUENCY, 50, n_trials=None, amplitudes=[1.0]
+        )

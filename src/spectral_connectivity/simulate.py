@@ -37,6 +37,17 @@ def _per_signal(
     return np.broadcast_to(values_array.reshape(-1), (n_signals,))
 
 
+def _check_count(value: object, name: str, hint: str = "") -> None:
+    """Raise ``ValueError`` unless ``value`` is a positive integer (not a bool)."""
+    if (
+        isinstance(value, (bool, np.bool_))
+        or not isinstance(value, (int, np.integer))
+        or value < 1
+    ):
+        msg = f"{name} must be a positive integer{hint}; got {value!r}"
+        raise ValueError(msg)
+
+
 def _add_noise(
     time_series: NDArray[np.floating],
     noise_levels: NDArray[np.floating],
@@ -174,8 +185,9 @@ def simulate_lagged_broadband(
     Raises
     ------
     ValueError
-        If any lag is negative or not an integer, or if ``noise_levels`` is
-        neither a scalar nor one value per signal.
+        If any lag is negative or not an integer, if ``noise_levels`` is
+        neither a scalar nor one value per signal, or if ``n_time_samples``
+        or ``n_trials`` (unless None) is not a positive integer.
 
     Notes
     -----
@@ -231,6 +243,9 @@ def simulate_lagged_broadband(
             "lag on the leading signal, e.g. lags_samples=(0, 3)"
         )
         raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    if n_trials is not None:
+        _check_count(n_trials, "n_trials", " (or None to omit the trial axis)")
     n_signals = lags_array.size
     noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)
     rng = _generator(random_state)
@@ -304,8 +319,10 @@ def simulate_shared_oscillation(
     Raises
     ------
     ValueError
-        If ``amplitudes`` is not 1-D, or if ``phase_offsets`` or
-        ``noise_levels`` is neither a scalar nor one value per signal.
+        If ``amplitudes`` is not 1-D, if ``phase_offsets`` or
+        ``noise_levels`` is neither a scalar nor one value per signal, or if
+        ``n_time_samples`` or ``n_trials`` is not a positive integer (there is
+        no 2-D form: ``n_trials=None`` raises).
 
     Notes
     -----
@@ -343,6 +360,13 @@ def simulate_shared_oscillation(
             f"got shape {amplitudes_array.shape}"
         )
         raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    _check_count(
+        n_trials,
+        "n_trials",
+        "; simulate_shared_oscillation always returns a trial axis, so pass "
+        "n_trials=1 for a single trial",
+    )
     n_signals = amplitudes_array.size
     phase_offsets_array = _per_signal(phase_offsets, n_signals, "phase_offsets")
     noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)

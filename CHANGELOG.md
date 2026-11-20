@@ -32,7 +32,9 @@ directly with results from 2.x.
 
 Rows marked *Unreleased* concern code written against the development branch
 after 2.0.1: those interfaces were renamed before their first release, with no
-compatibility path, so the old spellings fail loudly or are absent.
+compatibility path. Most old spellings fail loudly or are absent; one does
+not: a positional call to `simulate_lagged_broadband` still runs but now
+returns a trial axis (see its row).
 
 | Previous behavior | New behavior / required action |
 | --- | --- |
@@ -69,7 +71,7 @@ compatibility path, so the old spellings fail loudly or are absent.
 | *Unreleased:* `frequency_band_lower`/`frequency_band_upper` and `frequency_range_json` on interval results | `requested_frequency_lower`/`_upper`, `selected_frequency_lower`/`_upper`, and `frequency_interval_closed`, on every variable a `frequency_range` applied to; `measure_kwargs_json` and `arg_*` still record the keyword as given |
 | *Unreleased:* `ShortTimeFourierTransform(...).frequency_resolution` (Hann equivalent noise bandwidth) | `equivalent_noise_bandwidth`, also on `Welch`; only `Multitaper` has `frequency_resolution`, its DPSS concentration bandwidth |
 | *Unreleased:* Settings of the new APIs passed by position: `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` after `sampling_frequency`; `fourier_connectivity` after `signal_names`; `rank`, `regularization`, and `n_components`; `global_coherence`'s `max_workspace_elements` | Pass them by keyword; a positional value raises `TypeError` instead of binding to the wrong setting. Released positional orders (`Multitaper`, `multitaper_connectivity`, `connectivity_to_xarray`, `global_coherence(max_rank)`, `minimum_phase_decomposition`) are unchanged |
-| *Unreleased:* `simulate_lagged_broadband(lags=..., ...)`, which returned `(time, signal)` unless `n_trials` was given | `lags_samples=...` (whole samples; for a delay in seconds pass `round(delay * sampling_frequency)`). It returns `(time, trial, signal)` with `n_trials=1` by default, like `simulate_MVAR`; pass `n_trials=None` for `(time, signal)`. `lags=` raises `TypeError` |
+| *Unreleased:* `simulate_lagged_broadband(lags=..., ...)`, which returned `(time, signal)` unless `n_trials` was given | `lags_samples=...` (whole samples; for a delay in seconds pass `round(delay * sampling_frequency)`). It returns `(time, trial, signal)` with `n_trials=1` by default, like `simulate_MVAR`; pass `n_trials=None` for `(time, signal)`. `lags=` raises `TypeError`, but a positional call such as `simulate_lagged_broadband((0, 3), 0.1, 100)` runs and returns `(100, 1, 2)` instead of `(100, 2)`, so `x[:, 0]` now selects every signal of trial 0 rather than signal 0: index `x[:, 0, k]` or pass `n_trials=None` |
 | *Unreleased:* `simulate_shared_oscillation(frequency, sampling_frequency, n_time_samples, n_trials, amplitudes)` | `amplitudes` is a required keyword (`amplitudes=[...]`) and `n_trials` defaults to 1; passing the amplitudes fifth raises `TypeError`. `frequency` and `sampling_frequency` are in Hz |
 
 ### Added
@@ -91,7 +93,8 @@ compatibility path, so the old spellings fail loudly or are absent.
   `(time, trial, signal)` arrays with `n_trials=1` by default;
   `simulate_lagged_broadband(..., n_trials=None)` returns `(time, signal)`.
   `simulate_shared_oscillation` takes its required `amplitudes` (and its other
-  per-signal settings) by keyword.
+  per-signal settings) by keyword. Both raise `ValueError` for a sample or
+  trial count that is not a positive integer.
   The simulated-examples tutorial builds every case
   with them and asserts what each plot shows, so executing it checks the plots.
 - Spectral primitives and pairwise measures: one-sided
