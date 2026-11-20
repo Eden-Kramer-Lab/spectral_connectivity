@@ -699,30 +699,42 @@ is removed in 4.0.
 
 ### Fixed
 
-- `Connectivity`, `Connectivity.from_transform`, and `from_multitaper` reject a
-  `dtype` that is not complex with a `TypeError` before any FFT. `dtype=None`
-  (for instance 2.x's default `blocks` passed in its old position, where
-  `dtype` now is) was read as float64 and silently discarded the imaginary
-  part of every coefficient, and an integer failed only when a measure first
-  used it (`power` did not).
+Entries marked *Unreleased* fix defects that existed only in development
+builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
+2.x is affected by them.
+
+- *Unreleased:* `Connectivity`, `Connectivity.from_transform`, and
+  `from_multitaper` reject a `dtype` that is not complex with a `TypeError`
+  before any FFT. Once `blocks` was removed, `dtype=None` (for instance 2.x's
+  default `blocks` passed in its old position, where `dtype` now is) was read
+  as float64 and silently discarded the imaginary part of every coefficient,
+  as did a real or integer dtype, and an integer count failed only when a
+  measure first used it (`power` did not). 2.x read `dtype=None` as its
+  complex128 default.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
   refuse an `xarray.DataArray` whose dimension names put time, trials, or
   signals on another axis than their positional `(time, trial, signal)`. They
   read a labeled input by position, so 2.x `Multitaper` transformed, say, a
   `(trial, time, signal)` array along its trial axis and returned a plausible
-  result of the wrong quantity. The `ValueError` names each misplaced
-  dimension and the transpose to apply; names that say nothing of a role
+  result of the wrong quantity (or, with too few trials to taper, raised an
+  opaque `select_range` error). The `ValueError` names each misplaced
+  dimension and, when the names give all three roles, the transpose to apply;
+  names that say nothing of a role
   (`dim_0`, `session`) are still read by position, and
   `multitaper_connectivity` assigns axes from dimension names itself.
 - `Multitaper` reports the supplied column count for custom tapers. For DPSS,
-  `n_tapers` keeps describing the requested count after low-bias filtering,
-  so repeated wrapper calls retain the same taper-count provenance.
+  as in 2.x, `n_tapers` is the requested count, not the number kept after
+  low-bias filtering.
 - `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
   negative, larger than the window, a boolean, or disagreeing with the columns
-  of supplied `tapers`. 2.x accepted these and failed later inside `fft()` with
-  an opaque SciPy `select_range` error, or used `True` as one taper.
+  of supplied `tapers`, or not a whole number. 2.x accepted these: it failed
+  later inside `fft()` with an opaque SciPy `select_range` error, used `True`
+  as one taper, used the supplied `tapers` while reporting the disagreeing
+  count, or truncated a fractional count while reporting it as given.
 - `canonical_coherence` overstated the coherence of a group containing a dead,
-  duplicated, or (numerically) collinear channel, by up to 0.12 in tests: the
+  duplicated, or (numerically) collinear channel, by more the fewer the
+  observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the
+  cases run): the
   SVD-based whitening turned each zero singular direction into an arbitrary
   unit-norm null-space direction, whose value depended on the LAPACK build.
   After each channel is scaled to unit norm (so the value does not depend on
@@ -765,57 +777,81 @@ is removed in 4.0.
 - `minimum_phase_reconstruction_error` and `minimum_phase_decomposition`
   raised `TypeError` on the GPU for a NumPy cross-spectral matrix; they now
   accept host arrays (results are CuPy arrays on the GPU).
-- `group_delay` and `delay` unwrapped the coherence phase before excluding
-  undefined bins, so one bin without a defined phase (e.g. a zero-power DC
-  bin) made every later frequency NaN; the unwrapping now skips such bins.
+- *Unreleased:* `group_delay` and `delay` unwrapped the coherence phase before
+  excluding undefined bins, so one bin without a defined phase (e.g. a
+  zero-power DC bin) made every later frequency NaN; the unwrapping now skips
+  such bins. An undefined bin inside the band still splits it: only the
+  longer contiguous run of significant bins is used.
 - `group_delay`'s `r_value` for the reverse pair `[..., j, i]` had the forward
-  pair's sign although the slope is negated; it is now `-r_value[..., i, j]`.
+  pair's sign although the slope is negated; it is now `-r_value[..., i, j]`
+  (in 2.x visible only with exactly two observations; with more, `r_value`
+  was `NaN` off the diagonal, see the migration guide).
 - `delay`'s reverse-pair candidates were the negated forward candidates in the
   same order, so reverse candidate `k` held the value for `-k`; every
   candidate now follows `(phase + 2 pi k) / (2 pi f)` for its own pair.
 - The paper tutorial's Dhamala 2a/2b panels plotted `[..., 0, 1]` under the
   title "x1 -> x2", which in 2.x was the x2 -> x1 entry. The re-executed
   figures are now labeled correctly.
-- Warnings from `Connectivity` measures, the spectral Granger kernels, and the
-  Wilson factorization now name the user's line. Several pointed inside the
-  package instead (e.g. `magnitude_squared_coherence`'s single-observation warning, and
-  every Granger NaN-pair warning reached through `multitaper_connectivity`),
-  which also defeated per-module warning filters.
+- *Unreleased:* Warnings from `Connectivity` measures, the spectral Granger
+  kernels, and the Wilson factorization now name the user's line. Several
+  pointed inside the package instead (e.g. `magnitude_squared_coherence`'s
+  single-observation warning, and every Granger NaN-pair warning reached
+  through `multitaper_connectivity`), which also defeated per-module warning
+  filters.
 - The input warnings raised while `multitaper_connectivity` builds its
   `Multitaper` (NaN or infinite input, likely transposed data, gaps between
   windows, an unusually large `time_halfbandwidth_product`) now name the user's
   line instead of the `Multitaper(...)` call inside `wrapper.py`. Their
-  categories and messages are unchanged. Every warning raised by a transform
-  now names the user's line.
-- `global_coherence` is reproducible run to run on the CPU backend when it
-  decomposes bins one at a time (many signals and estimates). SciPy's `svds`
-  started from a random vector, so the values varied at rounding level and the
-  component vectors' phase was arbitrary between runs.
-- xarray results: every result now writes with netCDF4 and h5netcdf as well
-  as SciPy (boolean attributes are stored as 0/1); `frequency_band_reduce`'s
-  integral covers the whole band (off-grid edges, one-bin bands, additive
-  adjacent bands) instead of only the span between its outer bins; default
-  `fourier_connectivity` coordinates are labeled as normalized frequency and
-  window index, and datetime time is rejected; a frequency-reduced measure's
-  band no longer leaks onto other Dataset variables, and crop, decimation and
-  band provenance is recorded on the variables it applies to.
+  categories and messages are unchanged. Every warning a transform issues
+  itself now names the user's line (a NumPy or SciPy `RuntimeWarning` from
+  non-finite input still names a library line).
+- `global_coherence` is reproducible run to run on the CPU backend. In 2.x
+  every call with `max_rank < n_signals - 1` used SciPy's `svds` from a random
+  start, so the values varied at rounding level and the component vectors'
+  phase was arbitrary between runs.
+- 2.x results could not be written to NetCDF by any engine
+  (`mt_summarize_parameters` held a bound method). Every real-valued result
+  now writes with the SciPy, netCDF4, and h5netcdf engines (boolean attributes
+  are stored as 0/1). The complex results (`coherency`,
+  `cross_spectral_density`, `canonical_coherency`, `global_coherence`) do not
+  write with the SciPy engine, which cannot store complex values, nor with
+  netCDF4 unless `auto_complex=True` is passed; h5netcdf writes them.
+- *Unreleased:* `frequency_band_reduce`'s integral covers the whole band
+  (off-grid edges, one-bin bands, additive adjacent bands) instead of only the
+  span between its outer bins; default `fourier_connectivity` coordinates are
+  labeled as normalized frequency and window index, and datetime time is
+  rejected; a frequency-reduced measure's band no longer leaks onto other
+  Dataset variables, and crop, decimation and band provenance is recorded on
+  the variables it applies to.
 - `canonical_coherence` warns when a group pair has more signals than
   trial x taper observations; its value is then forced to 1 for any data and
   was previously returned silently.
-- Directed measures use at least complex128 working precision, so complex64
-  inputs can satisfy the Wilson factorization's default tolerance.
-- Subset spectral Granger restores `NaN` on the global self-Granger diagonal.
+- *Unreleased:* Directed measures use at least complex128 working precision,
+  so complex64 inputs can satisfy the Wilson factorization's default
+  tolerance.
+- *Unreleased:* Subset spectral Granger restores `NaN` on the global
+  self-Granger diagonal.
 - Wilson initialization and solves isolate rank-deficient sub-spectra instead of
-  poisoning a whole batch. Failed Cholesky units use the deterministic
-  `n_signals * I` fallback; healthy units retain their Cholesky starts.
-- Wilson convergence is relative and scale-invariant, and non-converged units
-  return `NaN` with a targeted warning.
+  poisoning a whole batch. A unit whose Cholesky start fails starts from the
+  Cholesky factor of `n_signals * I`, which is deterministic; healthy units
+  keep their own starts. In 2.x one rank-deficient window gave every window a
+  random start, which changed the healthy windows' values (by 6e-4 in one
+  case) and made them differ from run to run.
+- Wilson convergence is relative to the scale of the data, and non-converged
+  units return `NaN` with a targeted warning. 2.x used an absolute threshold,
+  so its Granger and transfer-function values changed with the data's units:
+  by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored
+  in volts) in the cases run, and by more below that. Recompute directed
+  results from small-amplitude data.
 - The Wilson iteration builds each update from a square root of the
   cross-spectrum, so it is Hermitian positive semidefinite by construction.
-  Sub-spectra with near-collinear channels (condition numbers around 1e10 and
-  above) now converge instead of stalling at rounding level above the tolerance
-  and returning `NaN`; their directed measures differ from 2.x there. An
-  indefinite cross-spectrum returns `NaN` with the non-convergence warning.
+  Sub-spectra with near-duplicate channels (condition numbers from about 1e10)
+  now converge. 2.x stopped at its iteration cap there and returned the
+  unconverged factor, so directed measures differ from 2.x, by more the worse
+  the conditioning (1e-6 near 1e10, and 1e-4 to 0.5 at 1e12-1e14 in the cases
+  run). Other near-singular spectra, such as one channel a lagged copy of
+  another, can still fail and return `NaN` with the warning, as an indefinite
+  cross-spectrum does.
 - Directed-measure regularization is scale-invariant, directed coherence uses
   the correct source-axis noise variance, and it warns when correlated
   innovations materially violate its diagonal-covariance assumption.
