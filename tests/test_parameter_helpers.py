@@ -269,6 +269,25 @@ class TestSuggestParameters:
         )
         assert params["n_tapers"] == 2
 
+    def test_shortened_window_keeps_the_requested_resolution_exactly(self):
+        """A window shortened to fit three in the record lowers NW to keep the
+        resolution; NW is not rounded, so 4 Hz stays 4 Hz, not 4.0000000000005."""
+        params = suggest_parameters(
+            sampling_frequency=500, signal_duration=4.0, desired_freq_resolution=4.0
+        )
+        assert params["time_window_duration"] == 4.0 / 3
+        assert params["time_halfbandwidth_product"] == 4.0 * (4.0 / 3) / 2
+        assert params["frequency_resolution"] == 4.0
+
+    def test_rounding_error_at_a_taper_boundary_does_not_cost_a_taper(self):
+        """30 Hz over a 0.3 / 3 s window is 2 * NW = 2.9999999999999996 in
+        floating point, which would floor to one taper instead of two."""
+        params = suggest_parameters(
+            sampling_frequency=1000, signal_duration=0.3, desired_freq_resolution=30.0
+        )
+        assert params["time_halfbandwidth_product"] == 1.5
+        assert params["n_tapers"] == 2
+
     def test_single_requested_taper_does_not_warn(self):
         """Only a resolution target can leave one taper by surprise."""
         params = suggest_parameters(

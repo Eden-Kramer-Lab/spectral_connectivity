@@ -447,11 +447,13 @@ def suggest_parameters(
             # Adjust NW to give us at least min_n_windows
             time_window_duration = max_window_for_min_windows
             # Recalculate NW to achieve target resolution with this window.
-            # Rounding drops floating-point error, which at a boundary such as
-            # 30 Hz * 0.1 s / 2 = 1.4999999999999998 would cost a taper.
-            time_halfbandwidth_product = round(
-                desired_freq_resolution * time_window_duration / 2.0, 12
-            )
+            # The taper count is floor(2 * NW) - 1, so floating-point error just
+            # below a whole 2 * NW, such as 30 Hz * 0.1 s = 2.9999999999999996,
+            # would cost a taper: only such a value is snapped to that whole.
+            twice_nw = desired_freq_resolution * time_window_duration
+            if np.isclose(twice_nw, np.round(twice_nw), rtol=1e-12, atol=0.0):
+                twice_nw = float(np.round(twice_nw))
+            time_halfbandwidth_product = twice_nw / 2.0
             # But keep NW >= 1
             time_halfbandwidth_product = max(time_halfbandwidth_product, 1.0)
 

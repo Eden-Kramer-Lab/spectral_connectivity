@@ -884,6 +884,10 @@ is removed in 4.0.
   Cropping first dropped the part of the band lying in the cell of a bin just
   outside the range (1-3% of a 20 Hz band on 0.5-1 Hz bins). A band reaching
   past the range is still limited to the cells of the bins the range selects.
+- `suggest_parameters` no longer loses a taper to floating-point error when
+  the resolution and the shortened window put `2 * NW` on a whole number
+  (30 Hz over a 0.3 s record suggested NW 1.4999999999999998 and one taper;
+  now 1.5 and two). Its other suggestions keep their 2.0.1 values exactly.
 - A window step given in seconds is rounded to the nearest sample instead of
   truncated (`time_window_step=0.57` at 100 Hz gave 56 samples), and an explicit
   `n_time_samples_per_step` is used as given, so `ShortTimeFourierTransform`
