@@ -43,7 +43,7 @@ _MEASURES_SCRIPT = textwrap.dedent(
     coefficients = m.fft()
     assert isinstance(coefficients, xp.ndarray)
 
-    connectivity = Connectivity.from_multitaper(m)
+    connectivity = Connectivity.from_transform(m)
     assert isinstance(connectivity._fourier_coefficients, xp.ndarray)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)

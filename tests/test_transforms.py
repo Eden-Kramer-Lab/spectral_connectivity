@@ -147,13 +147,16 @@ def test_morlet_observations_are_independent_only_for_one_sample_neighborhoods()
     data = np.zeros((512, 2, 2))
     frequencies = [8.0, 16.0, 32.0]
     assert (
-        MorletWavelet(data, 128, frequencies, n_cycles=3).observations_are_independent is True
+        MorletWavelet(
+            data, 128, frequencies=frequencies, n_cycles=3
+        ).observations_are_independent
+        is True
     )
     # 64-fold decimation gives a 2 Hz output rate, so a 0.5 s window is one sample.
     one_sample = MorletWavelet(
         data,
         128,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=3,
         decimation=64,
         smoothing_time=0.5,
@@ -161,10 +164,12 @@ def test_morlet_observations_are_independent_only_for_one_sample_neighborhoods()
     )
     assert one_sample._smoothing_samples * one_sample.smoothing_frequency == 1
     assert one_sample.observations_are_independent is True
-    time_smoothed = MorletWavelet(data, 128, frequencies, n_cycles=3, smoothing_time=0.5)
+    time_smoothed = MorletWavelet(
+        data, 128, frequencies=frequencies, n_cycles=3, smoothing_time=0.5
+    )
     assert time_smoothed.observations_are_independent is False
     frequency_smoothed = MorletWavelet(
-        data, 128, frequencies, n_cycles=3, smoothing_frequency=3
+        data, 128, frequencies=frequencies, n_cycles=3, smoothing_frequency=3
     )
     assert frequency_smoothed.observations_are_independent is False
 
@@ -207,17 +212,20 @@ def test_morlet_time_bins_are_independent_only_four_sigma_apart():
     data = np.zeros((1024, 1, 2))
     frequencies = [8.0, 16.0]
     # Widest wavelet: sigma_t = 3 / (2 pi 8) ~ 0.06 s, so 4 sigma_t ~ 0.24 s.
-    assert MorletWavelet(data, 128, frequencies, n_cycles=3).time_bins_are_independent is False
+    assert (
+        MorletWavelet(data, 128, frequencies=frequencies, n_cycles=3).time_bins_are_independent
+        is False
+    )
     # 16-fold decimation at 128 Hz spaces the samples 0.125 s apart (< 4 sigma_t).
     assert (
         MorletWavelet(
-            data, 128, frequencies, n_cycles=3, decimation=16
+            data, 128, frequencies=frequencies, n_cycles=3, decimation=16
         ).time_bins_are_independent
         is False
     )
     # 32-fold decimation spaces them 0.25 s apart (>= 4 sigma_t).
     assert MorletWavelet(
-        data, 128, frequencies, n_cycles=3, decimation=32
+        data, 128, frequencies=frequencies, n_cycles=3, decimation=32
     ).time_bins_are_independent
 
 
@@ -952,7 +960,7 @@ def test_multitaper_real_input_is_exactly_conjugate_symmetric():
         time_window_duration=0.25,
         n_fft_samples=300,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
     assert _is_conjugate_symmetric(connectivity._expectation_cross_spectral_matrix())
 
 
@@ -1556,7 +1564,7 @@ def test_morlet_wavelet_tracks_requested_frequency_and_smoothing():
         transform = MorletWavelet(
             data,
             sampling_frequency,
-            np.array([8.0, 16.0, 32.0]),
+            frequencies=np.array([8.0, 16.0, 32.0]),
             n_cycles=5,
             smoothing_time=0.25,
         )
@@ -1582,14 +1590,14 @@ def test_morlet_power_matches_multitaper_one_sided_psd_on_white_noise():
     noise, so wavelet and multitaper power are on the same scale."""
     fs, variance = 500.0, 4.0
     data = np.sqrt(variance) * np.random.default_rng(926).standard_normal((10000, 20, 1))
-    multitaper_power = Connectivity.from_multitaper(
+    multitaper_power = Connectivity.from_transform(
         Multitaper(data, fs, time_halfbandwidth_product=4, time_window_duration=2.0)
     ).power()
     morlet_power = Connectivity.from_transform(
         MorletWavelet(
             data,
             fs,
-            [40.0, 80.0, 120.0],
+            frequencies=[40.0, 80.0, 120.0],
             n_cycles=7,
             edge_mode="trim",
             smoothing_time=0.5,
@@ -1613,7 +1621,7 @@ def test_morlet_power_of_a_sinusoid_matches_its_amplitude():
     data = (amplitude * np.cos(2 * np.pi * f0 * time))[:, np.newaxis, np.newaxis]
     frequencies = np.arange(20.0, 60.25, 0.5)
     power = Connectivity.from_transform(
-        MorletWavelet(data, fs, frequencies, n_cycles=n_cycles, edge_mode="trim")
+        MorletWavelet(data, fs, frequencies=frequencies, n_cycles=n_cycles, edge_mode="trim")
     ).power()[..., 0]  # (n_time, n_frequencies)
     mean_power = power.mean(axis=0)
 
@@ -1636,7 +1644,7 @@ def test_morlet_warns_when_smoothing_window_is_shorter_than_four_wavelet_sigmas(
     with pytest.warns(
         UserWarning, match="shorter than 4 wavelet standard deviations"
     ) as record:
-        MorletWavelet(data, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.1)
+        MorletWavelet(data, 1000.0, frequencies=[10.0, 40.0], n_cycles=7, smoothing_time=0.1)
     message = str(record[0].message)
     assert "smoothing_time=0.1 s" in message
     assert "10 Hz" in message
@@ -1651,7 +1659,9 @@ def test_morlet_smoothing_warning_uses_the_widest_wavelet_not_the_lowest_frequen
     data = np.random.default_rng(930).standard_normal((4000, 1, 2))
     # sigma_t = [3 / (2 pi 10), 12 / (2 pi 20)] = [0.048, 0.095] s -> 4 sigma_t max = 0.38 s.
     with pytest.warns(UserWarning, match="at 20 Hz"):
-        MorletWavelet(data, 1000.0, [10.0, 20.0], n_cycles=[3.0, 12.0], smoothing_time=0.3)
+        MorletWavelet(
+            data, 1000.0, frequencies=[10.0, 20.0], n_cycles=[3.0, 12.0], smoothing_time=0.3
+        )
 
 
 def test_morlet_does_not_warn_for_an_adequate_smoothing_window_or_without_smoothing():
@@ -1659,9 +1669,9 @@ def test_morlet_does_not_warn_for_an_adequate_smoothing_window_or_without_smooth
     no smoothing warning is emitted."""
     data = np.random.default_rng(931).standard_normal((4000, 1, 2))
     MorletWavelet(
-        data, 1000.0, [10.0, 40.0], n_cycles=7, smoothing_time=0.5
+        data, 1000.0, frequencies=[10.0, 40.0], n_cycles=7, smoothing_time=0.5
     )  # 4 sigma_t = 0.446
-    MorletWavelet(data, 1000.0, [10.0, 40.0], n_cycles=7)
+    MorletWavelet(data, 1000.0, frequencies=[10.0, 40.0], n_cycles=7)
 
 
 def test_morlet_short_smoothing_window_does_not_warn_with_multiple_trials():
@@ -1677,7 +1687,7 @@ def test_morlet_short_smoothing_window_does_not_warn_with_multiple_trials():
             MorletWavelet(
                 rng.standard_normal((2000, n_trials, 2)),
                 500.0,
-                [4.0, 8.0, 16.0, 32.0],
+                frequencies=[4.0, 8.0, 16.0, 32.0],
                 smoothing_time=0.5,
                 smoothing_frequency=3,
                 smoothing_kernel="hann",
@@ -1712,7 +1722,7 @@ def test_morlet_default_zero_padding_matches_same_convolution():
 
     rng = np.random.default_rng(918)
     data = rng.standard_normal((96, 2, 2))
-    transform = MorletWavelet(data, 64, np.array([8.0]), n_cycles=4)
+    transform = MorletWavelet(data, 64, frequencies=np.array([8.0]), n_cycles=4)
 
     _, kernel = _reference_morlet_kernel(8.0, n_cycles=4, sampling_frequency=64)
     expected = fftconvolve(data, kernel, mode="same", axes=0)
@@ -1728,7 +1738,9 @@ def test_morlet_padding_modes_match_padded_convolution(padding_mode):
     rng = np.random.default_rng(920)
     data = rng.standard_normal((96, 3, 2))
     frequencies = np.array([6.0, 8.0, 16.0])
-    transform = MorletWavelet(data, 64, frequencies, n_cycles=4, padding_mode=padding_mode)
+    transform = MorletWavelet(
+        data, 64, frequencies=frequencies, n_cycles=4, padding_mode=padding_mode
+    )
     coefficients = to_host(transform.fft())
 
     for frequency_index, frequency in enumerate(frequencies):
@@ -1750,7 +1762,7 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
     kept = MorletWavelet(
         data,
         128,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=5,
         smoothing_time=0.25,
         smoothing_frequency=3,
@@ -1759,7 +1771,7 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
     masked = MorletWavelet(
         data,
         128,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=5,
         smoothing_time=0.25,
         smoothing_frequency=3,
@@ -1768,7 +1780,7 @@ def test_morlet_edge_mask_nan_and_trim_contracts():
     trimmed = MorletWavelet(
         data,
         128,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=5,
         edge_mode="trim",
     )
@@ -1805,12 +1817,12 @@ def test_adjacent_bin_measures_reject_non_uniform_frequency_grid(measure):
     is arbitrary, so a non-uniform grid must be rejected, not silently used."""
     data = np.random.default_rng(927).standard_normal((2000, 2, 2))
     non_uniform = Connectivity.from_transform(
-        MorletWavelet(data, 200, [4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
+        MorletWavelet(data, 200, frequencies=[4.0, 8.0, 16.0, 32.0], smoothing_time=0.5)
     )
     with pytest.raises(ValueError, match="uniformly spaced"):
         getattr(non_uniform, measure)()
     uniform = Connectivity.from_transform(
-        MorletWavelet(data, 200, [10.0, 20.0, 30.0, 40.0], smoothing_time=0.5)
+        MorletWavelet(data, 200, frequencies=[10.0, 20.0, 30.0, 40.0], smoothing_time=0.5)
     )
     if measure == "phase_slope_index":
         getattr(uniform, measure)()
@@ -1830,7 +1842,7 @@ def test_delay_significance_rejects_non_uniform_weights(measure):
         MorletWavelet(
             data,
             200,
-            np.arange(5.0, 60.0, 1.0),
+            frequencies=np.arange(5.0, 60.0, 1.0),
             smoothing_time=0.2,
             smoothing_kernel="hann",
         )
@@ -1847,7 +1859,7 @@ def test_morlet_boxcar_edge_mask_error_names_edge_mode():
         transform = MorletWavelet(
             data,
             200,
-            np.array([10.0, 20.0, 40.0]),
+            frequencies=np.array([10.0, 20.0, 40.0]),
             smoothing_kernel="boxcar",
             edge_mode="nan",
             smoothing_time=0.2,
@@ -1863,11 +1875,11 @@ def test_morlet_frequency_smoothing_is_local_cross_spectral_average():
     rng = np.random.default_rng(920)
     data = rng.standard_normal((128, 3, 2))
     frequencies = np.array([8.0, 12.0, 20.0])
-    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    raw = MorletWavelet(data, 64, frequencies=frequencies, n_cycles=3)
     smoothed = MorletWavelet(
         data,
         64,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=3,
         smoothing_frequency=3,
         smoothing_kernel="boxcar",
@@ -1887,11 +1899,11 @@ def test_morlet_hann_frequency_smoothing_weights_the_cross_spectral_average():
     rng = np.random.default_rng(922)
     data = rng.standard_normal((128, 3, 2))
     frequencies = np.array([6.0, 8.0, 12.0, 16.0, 20.0])
-    raw = MorletWavelet(data, 64, frequencies, n_cycles=3)
+    raw = MorletWavelet(data, 64, frequencies=frequencies, n_cycles=3)
     smoothed = MorletWavelet(
         data,
         64,
-        frequencies,
+        frequencies=frequencies,
         n_cycles=3,
         smoothing_frequency=5,
         smoothing_kernel="hann",
@@ -1915,7 +1927,7 @@ def test_morlet_hann_weights_are_used_and_reject_debiased_measure():
     transform = MorletWavelet(
         data,
         64,
-        np.array([8.0, 12.0, 20.0]),
+        frequencies=np.array([8.0, 12.0, 20.0]),
         n_cycles=3,
         smoothing_time=0.25,
         smoothing_kernel="hann",
@@ -1936,7 +1948,7 @@ def test_morlet_uniform_weights_take_unweighted_path(edge_mode):
     transform = MorletWavelet(
         rng.standard_normal((192, 3, 3)),
         64,
-        np.array([8.0, 12.0]),
+        frequencies=np.array([8.0, 12.0]),
         n_cycles=3,
         smoothing_time=0.25,
         edge_mode=edge_mode,
@@ -1965,7 +1977,7 @@ def test_morlet_weights_apply_to_global_and_legacy_canonical_coherence():
     transform = MorletWavelet(
         rng.standard_normal((192, 4, 4)),
         64,
-        np.array([6.0, 10.0, 16.0, 24.0]),
+        frequencies=np.array([6.0, 10.0, 16.0, 24.0]),
         n_cycles=3,
         smoothing_time=0.25,
         smoothing_kernel="hann",
@@ -2277,7 +2289,7 @@ def test_adaptive_coherence_is_joint_estimate_shrunk_by_weight_cosine_similarity
         np.sum(d_x**2, axis=0) * np.sum(d_y**2, axis=0)
     )
 
-    connectivity = Connectivity.from_multitaper(adaptive)
+    connectivity = Connectivity.from_transform(adaptive)
     package = np.abs(connectivity.coherency()[0, :, 0, 1])
     n_frequencies = len(connectivity.frequencies)
     np.testing.assert_allclose(

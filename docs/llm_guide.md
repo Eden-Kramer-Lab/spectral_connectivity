@@ -92,6 +92,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 - `time_window_duration` defaults to the whole recording (one window). Set it,
   and `time_window_step`, for a time-resolved result.
+- The common settings `time_window_duration`, `time_window_step`,
+  `time_halfbandwidth_product`, `n_tapers`, and `detrend_type` are named
+  arguments of `multitaper_connectivity`. Put any other `Multitaper` setting in
+  `transform_kwargs={...}` and measure settings in `connectivity_kwargs={...}`;
+  a misspelled key raises instead of being ignored. Passing those as plain
+  keyword arguments is the deprecated 2.x form.
 - Multitaper frequency resolution is the full DPSS concentration bandwidth,
   `2 * time_halfbandwidth_product / time_window_duration` Hz. It describes
   spectral smoothing; FFT bin spacing also depends on the FFT length and
@@ -160,6 +166,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `phase_slope_index`, `group_delay`, and `delay`, which then consume only
   those bins. Their old `frequencies_of_interest` excluded the edges and is
   deprecated; do not write new code with it.
+- **Avoid the deprecated 2.x spellings** in new code: use
+  `Connectivity.from_transform` (not `from_multitaper`),
+  `power_confidence_intervals(n_observations=...)` (not `n_tapers=`), and
+  the `transform_kwargs`/`connectivity_kwargs` mappings for advanced
+  settings. Each old form still works through 3.x with a
+  `DeprecationWarning`.
 - **GPU.** Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` *before* importing the
   package; setting it later has no effect.
 

@@ -222,6 +222,42 @@ standalone channel axis, rename it:
 
 ```
 
+## Set transform and measure options
+
+The common multitaper settings (`sampling_frequency`, `time_window_duration`,
+`time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`)
+and `group_labels` are named arguments of `multitaper_connectivity`. Any other
+`Multitaper` setting goes in `transform_kwargs`, and settings for the measures
+go in `connectivity_kwargs`:
+
+```python
+>>> components = multitaper_connectivity(
+...     time_series,
+...     sampling_frequency=500,
+...     time_window_duration=0.5,
+...     time_halfbandwidth_product=2,
+...     n_tapers=3,
+...     method="canonical_coherency",
+...     group_labels=["a", "a", "b"],
+...     transform_kwargs={"n_fft_samples": 512, "taper_weighting": "eigen"},
+...     connectivity_kwargs={"n_components": 1},
+... )
+>>> components.attrs["mt_n_fft_samples"], components.attrs["mt_n_tapers"]
+(512, 3)
+
+```
+
+Each setting has one route, so a common setting placed in `transform_kwargs`
+raises `ValueError` instead of silently competing with its named argument, and
+a misspelled key in either mapping raises `TypeError`. `connectivity_to_xarray`
+takes an existing transform, so it has `connectivity_kwargs` (and the named
+`group_labels` and `frequency_range`) but no `transform_kwargs`.
+
+Before 3.0, advanced settings were passed as plain keyword arguments, e.g.
+`multitaper_connectivity(x, fs, n_fft_samples=512)`. That still works
+through 3.x, with the same result and a `DeprecationWarning` naming the
+mapping to use, and is removed in 4.0.
+
 ## Group measures: canonical coherence between areas
 
 Group measures (`list_measures(category="group_pairwise")` and

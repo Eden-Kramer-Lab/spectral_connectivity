@@ -73,7 +73,7 @@ def morlet_transform():
     return MorletWavelet(
         np.random.default_rng(319).standard_normal((192, 5, 2)),
         64,
-        np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
+        frequencies=np.array([4.0, 8.0, 12.0, 16.0, 20.0]),
         edge_mode="nan",
     )
 
@@ -374,7 +374,7 @@ def test_an_open_deprecated_band_records_only_its_finite_requested_bounds(
         result = connectivity_to_xarray(
             Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
             method="phase_slope_index",
-            frequencies_of_interest=bounds,
+            connectivity_kwargs={"frequencies_of_interest": bounds},
         )
     names = [
         "requested_frequency_lower",
@@ -772,7 +772,9 @@ def test_results_record_the_requested_and_selected_interval(
     lagged_time_series, measure, kwargs, expected
 ):
     result = connectivity_to_xarray(
-        Multitaper(lagged_time_series, **_LAGGED_TRANSFORM), method=measure, **kwargs
+        Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
+        method=measure,
+        **kwargs,
     )
     for variable in _measure_variables(result):
         assert {key: variable.attrs[key] for key in expected} == expected
@@ -795,7 +797,7 @@ def test_deprecated_results_record_the_exclusive_interval_and_keyword(
         result = connectivity_to_xarray(
             Multitaper(lagged_time_series, **_LAGGED_TRANSFORM),
             method=measure,
-            frequencies_of_interest=(10.0, 50.0),
+            connectivity_kwargs={"frequencies_of_interest": (10.0, 50.0)},
         )
     for variable in _measure_variables(result):
         assert variable.attrs["requested_frequency_lower"] == 10.0
@@ -1071,9 +1073,10 @@ def test_deprecated_keyword_through_the_wrapper_warns_at_the_caller(
     assert {w.filename for w in record if issubclass(w.category, DeprecationWarning)} == {
         __file__
     }
-    assert "multitaper_connectivity and fourier_connectivity take frequency_range" in str(
-        record[0].message
-    )
+    assert (
+        "The wrappers (multitaper_connectivity, fourier_connectivity, and "
+        "connectivity_to_xarray) take frequency_range"
+    ) in str(record[0].message)
     np.testing.assert_array_equal(
         result.values, lagged_connectivity.phase_slope_index(frequency_range=(12.0, 48.0))
     )
@@ -1151,7 +1154,7 @@ def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
     transform = MorletWavelet(
         np.random.default_rng(320).standard_normal((256, 5, 2)),
         64,
-        np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
+        frequencies=np.array([10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
         n_cycles=np.array([3.0, 20.0, 3.0, 3.0, 3.0, 3.0]),
         edge_mode="nan",
     )
@@ -1164,6 +1167,6 @@ def test_morlet_validity_covers_bins_that_frequency_resolution_skips():
         transform,
         method="phase_slope_index",
         frequency_range=(10.0, 20.0),
-        frequency_resolution=4.0,  # a step of two 2 Hz bins
+        connectivity_kwargs={"frequency_resolution": 4.0},  # a step of two 2 Hz bins
     )
     np.testing.assert_array_equal(psi.valid_time, every_bin)

@@ -250,7 +250,7 @@ def one_sided_connectivity(coupled_time_series):
     multitaper = Multitaper(
         coupled_time_series, sampling_frequency=500, time_window_duration=0.5
     )
-    two_sided = Connectivity.from_multitaper(multitaper)
+    two_sided = Connectivity.from_transform(multitaper)
     n_nonnegative = two_sided.frequencies.size
     return Connectivity(
         multitaper.fft()[..., :n_nonnegative, :],

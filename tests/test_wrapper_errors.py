@@ -45,9 +45,11 @@ def test_time_halfbandwidth_product_kwarg_passthrough():
     assert result.attrs["mt_n_tapers"] == 7
     assert np.isclose(result.attrs["mt_frequency_resolution"], 40.0)
 
-    # Only Python >= 3.12 appends a "Did you mean ...?" hint, so don't match it.
+    # The package's own message, which suggests the named setting.
     with pytest.raises(
-        TypeError, match=r"unexpected keyword argument 'time_bandwidth_product'"
+        TypeError,
+        match=r"unexpected keyword argument 'time_bandwidth_product'\. "
+        r"Did you mean 'time_halfbandwidth_product'",
     ):
         multitaper_connectivity(
             time_series,
@@ -60,21 +62,21 @@ def test_time_halfbandwidth_product_kwarg_passthrough():
 def test_connectivity_injection_is_rejected():
     """The formatter does not accept a separately constructed result object.
 
-    ``connectivity`` collides with the formatter's own internal argument rather
-    than replacing the object it builds, and ``_connectivity`` is forwarded to
-    the measure, which rejects it as an unknown measure keyword.
+    Keyword arguments are measure settings, checked against the measure before
+    anything is built, so ``connectivity`` and ``_connectivity`` are rejected as
+    unknown measure keywords rather than replacing the object the formatter
+    builds.
     """
     rng = np.random.default_rng(5)
     m = Multitaper(rng.standard_normal((256, 3, 3)), sampling_frequency=500)
-    connectivity = Connectivity.from_multitaper(m)
+    connectivity = Connectivity.from_transform(m)
 
-    with pytest.raises(TypeError, match="multiple values for argument 'connectivity'"):
-        connectivity_to_xarray(m, "magnitude_squared_coherence", connectivity=connectivity)
-    with pytest.raises(
-        TypeError,
-        match=r"magnitude_squared_coherence does not accept keyword argument\(s\) '_connectivity'",
-    ):
-        connectivity_to_xarray(m, "magnitude_squared_coherence", _connectivity=connectivity)
+    for name in ("connectivity", "_connectivity"):
+        with pytest.raises(
+            TypeError,
+            match=rf"magnitude_squared_coherence does not accept keyword argument\(s\) '{name}'",
+        ):
+            connectivity_to_xarray(m, "magnitude_squared_coherence", **{name: connectivity})
 
 
 def test_unregistered_nonpairwise_extension_is_rejected(monkeypatch):

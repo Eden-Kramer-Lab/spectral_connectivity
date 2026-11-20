@@ -92,9 +92,14 @@ measures = multitaper_connectivity(
 )
 ```
 
-Extra keyword arguments, like `time_halfbandwidth_product` here, configure the
-multitaper transform. Options for the measure itself go in
-`connectivity_kwargs`, and group measures take `group_labels` (see the
+The common multitaper settings, like `time_halfbandwidth_product` here, are
+named arguments: `time_window_duration`, `time_window_step`,
+`time_halfbandwidth_product`, `n_tapers`, and `detrend_type`. Any other
+`Multitaper` setting goes in `transform_kwargs={...}` (e.g.
+`transform_kwargs={"n_fft_samples": 1024}`), options for the measure itself go
+in `connectivity_kwargs={...}`, and group measures take `group_labels` (see
+[setting transform and measure options](docs/cookbook.md#set-transform-and-measure-options)
+and the
 [group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).
 
 The `3` above is a common default. To pick values from your recording's length
@@ -190,8 +195,7 @@ m = Multitaper(
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-# (`from_transform` is the transform-neutral spelling; `from_multitaper` is a
-# backward-compatible alias for it.)
+# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.)
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples

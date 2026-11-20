@@ -2,7 +2,8 @@
 
 **Status: step 1 merged; step 2 implemented and validated locally; step 3
 (D4, D23) implemented on `refactor/frequency-selection`; step 4 (D5-D8, D25)
-implemented on `refactor/coherence-naming`, see below.**
+implemented on `refactor/coherence-naming`; step 5 (D9, D11, D12, D14, D16,
+D24, D29) implemented on `refactor/signatures-and-routing`, see below.**
 [PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
 merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
 on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
@@ -574,6 +575,94 @@ Rulings where the rules above were silent:
 - [x] Measure attributes stay true after cropping, decimation, and band
   reduction (density, coherence, phase, and complex measures).
 - [ ] Issue #101 entry for the `coherence_magnitude` alias (orchestrator).
+
+## Step 5 implementation
+
+**Scope:** D9, D11, D12, D14, D16, D24, and D29. **Branch:**
+`refactor/signatures-and-routing`, based on step 4's final head `23877e7`.
+Implemented and validated locally on 2026-11-19, including the review fixes
+and the final review's:
+2,400 tests passed with 16 skips on the main CPU environment, and 2,285 passed
+with 101 skips on Python 3.10 with the NumPy 1.24/SciPy 1.11.1/xarray
+2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on the floors),
+Ruff formatting/lint, and mypy passed; the benchmark's 22 arrays are
+bit-identical to `23877e7`.
+
+Released forms checked against `v2.0.1`: `Multitaper` (13 positional
+parameters, unchanged), `multitaper_connectivity(time_series,
+sampling_frequency, time_window_duration, method, signal_names, squeeze,
+connectivity_kwargs, **kwargs)`, `connectivity_to_xarray(m, method,
+signal_names, squeeze, **kwargs)`, `power_confidence_intervals(n_tapers,
+power, ci)`, `minimum_phase_decomposition(cross_spectral_matrix, tolerance,
+max_iterations=60)`, `global_coherence(max_rank)`,
+`canonical_coherence(group_labels)`, and `from_multitaper(multitaper_instance,
+expectation_type, blocks, dtype)`. The STFT, Welch, Morlet, MIC, MIM,
+`partial_coherence`, `canonical_coherency`, `max_workspace_elements`,
+`fourier_connectivity`, and `from_transform` are new in 3.0.
+
+Rulings where the rules above were silent:
+
+- **One route per setting (owner's ruling).** The six common transform
+  settings are named arguments only, with `Multitaper`'s real defaults and no
+  sentinel defaults; one of them inside `transform_kwargs` raises
+  `ValueError` whether or not it was also named. `group_labels` keeps its
+  existing acceptance inside `connectivity_kwargs` (default `None` is
+  unambiguous), with the existing both-ways `ValueError`. `frequency_range` is
+  a named argument of all three wrappers, `connectivity_to_xarray` included
+  (consumed by the interval measures, cropping any other), and is rejected
+  inside `connectivity_kwargs`. A key both in a mapping and as a plain keyword
+  raises `ValueError` naming both; an unknown key in either mapping or as a
+  plain keyword raises `TypeError` with close matches (difflib plus names it
+  begins), before any computation. A mapping argument that is not a mapping
+  raises `TypeError`.
+- **Legacy route.** Every plain keyword the target accepts warns (one
+  warning per call listing them), including settings first added in 3.0
+  such as `fft_workers`: the deprecated interface is the released forwarding
+  route, not each key. The warning is raised just before the wrapper returns,
+  so a call rejected for any reason raises only its error.
+  `connectivity_to_xarray` gains a keyword-only `group_labels` so that common
+  setting keeps a flat route.
+- **from_multitaper (cleanup ruling).** Both names call one private
+  builder, `_from_transform`, and neither calls the other. A subclass
+  overriding `from_multitaper` warns once at its own `super()` call and is not
+  reached by `from_transform`, so the migration row says to move such an
+  override to `from_transform`; an override of `from_transform` that still
+  calls `super().from_multitaper` works, with one warning, instead of
+  recursing; and `Sub.from_multitaper` does not reach a `Sub.from_transform`
+  override (a promise only this pull request had made). The 2.x `blocks`
+  parameter (third position) was removed
+  before this step and is not restored (owner's ruling). Every 2.x use of
+  it, by keyword or in its released positional slot (third in
+  `from_multitaper`, fifth in `Connectivity`), raises a `TypeError` that names
+  `blocks`, says it had no effect on results, and says to drop it. Separately,
+  `Connectivity` rejects any dtype that is not complex: a value bound there by
+  position used to be read as float64 (`None`) and silently drop every
+  coefficient's imaginary part.
+- **One deprecation template.** `utils.warn_deprecated` writes the
+  measure-name, `from_multitaper`, `n_tapers=`, and plain-keyword deprecation
+  warnings (not step 3's `frequencies_of_interest` warning, which states an
+  exact replacement interval) as "<old> is deprecated and will be
+  removed in 4.0; use <new>, which <outcome>.", attributed with
+  `stacklevel_outside_package()`.
+- **fourier_connectivity (owner's ruling).** New in 3.0, so every parameter
+  after `signal_names` is keyword-only, as for the other new 3.0 APIs.
+- **n_tapers alias.** It matches the canonical 3.0 interval exactly; 2.0.1's
+  numbers differ by the documented formula correction (2.0.1's `ci=c` interval
+  is 3.0's `ci=2c-1`). Both spellings raise `ValueError`.
+- **max_iterations default (owner's ruling).** It stays 500, a 3.0 change
+  from 2.0.1's 60, recorded in the CHANGELOG (Changed and the migration
+  guide) and the docstring, with `max_iterations=60` for the 2.0.1 cap.
+
+### Step 5 acceptance checklist
+
+- [x] Supported released forms and common wrapper keywords work without
+  warnings (`tests/test_signatures.py`, `tests/test_wrapper_routing.py`).
+- [x] Deprecated paths agree numerically and warn at the caller's line:
+  `from_multitaper`, plain-keyword settings, `n_tapers=`; compared with the
+  2.0.1 wheel under NumPy 2.5 and 1.24.
+- [x] Duplicate arguments fail; misspelled mapping keys fail.
+- [x] Published positional orders are preserved and pinned by tests.
+- [ ] Issue #101 entries for the three aliases (orchestrator).
 
 ## Verification performed for this sheet
 

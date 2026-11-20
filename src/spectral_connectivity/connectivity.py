@@ -57,6 +57,7 @@ from spectral_connectivity.utils import (
     mark_readonly_if_supported,
     stacklevel_outside_package,
     to_numpy,
+    warn_deprecated,
 )
 
 if TYPE_CHECKING:
@@ -87,13 +88,43 @@ def _resolve_deprecated_measure_name(method: str, spelling: str) -> str:
     canonical = _DEPRECATED_MEASURE_NAMES.get(method)
     if canonical is None:
         return method
-    warnings.warn(
-        f"{spelling.format(method)} is deprecated and will be removed in 4.0; use "
-        f"{spelling.format(canonical)}, which gives the same values.",
-        DeprecationWarning,
-        stacklevel=stacklevel_outside_package(),
-    )
+    warn_deprecated(spelling.format(method), spelling.format(canonical))
     return canonical
+
+
+_BLOCKS_REMOVED = (
+    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
+    "automatically), so drop it."
+)
+
+
+def _validated_complex_dtype(dtype: Any) -> Any:
+    """``dtype`` if it is a complex dtype; otherwise a ``TypeError``.
+
+    A real dtype (including ``None``, which NumPy reads as float64) would cast
+    the Fourier coefficients to real values and silently drop every phase. A
+    ``None`` or an integer is most likely 2.x's ``blocks``, passed in the
+    position ``dtype`` now has, so the message says so.
+    """
+    try:
+        kind = np.dtype(dtype).kind
+    except TypeError:
+        kind = None
+    if kind != "c":
+        msg = (
+            f"dtype must be a complex dtype such as np.complex128 or np.complex64, "
+            f"got {dtype!r}; a real dtype would discard the imaginary part of the "
+            "Fourier coefficients."
+        )
+        if dtype is None or (
+            isinstance(dtype, (int, np.integer)) and not isinstance(dtype, bool)
+        ):
+            msg += (
+                " In 2.x, blocks took this position (third in from_multitaper, fifth "
+                f"in Connectivity). {_BLOCKS_REMOVED} Pass dtype by keyword."
+            )
+        raise TypeError(msg)
+    return dtype
 
 
 # Measures whose values are magnitudes in [0, 1], so their Fisher (atanh)
@@ -236,6 +267,26 @@ DIRECTED_COHERENCE_DISCREPANCY_TOLERANCE = 0.1
 # Signature and return type of a decorated measure, preserved by its decorators.
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _rejects_removed_blocks(caller: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Reject 2.x's ``blocks=`` keyword with a message that says to drop it.
+
+    Its released position is ``dtype``'s now, where
+    :func:`_validated_complex_dtype` recognizes it.
+    """
+
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        @wraps(function)
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            if "blocks" in kwargs:
+                msg = f"{caller} got blocks={kwargs['blocks']!r}. {_BLOCKS_REMOVED}"
+                raise TypeError(msg)
+            return function(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 def _asnumpy(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -683,7 +734,9 @@ class Connectivity:
     time : NDArray[floating], shape (n_time_windows,), optional
         Time values in seconds for each time window. If None, uses indices.
     dtype : np.dtype, default=complex128
-        Data type for internal computations. Should match input precision.
+        Complex data type for internal computations. Should match input
+        precision. A real dtype (or ``None``) raises ``TypeError``: it would
+        discard the coefficients' imaginary parts.
     minimum_phase_tolerance : float, default=1e-8
         Relative convergence tolerance for the Wilson minimum-phase
         factorization used by the directed measures (spectral Granger, DTF,
@@ -802,6 +855,7 @@ class Connectivity:
 
     _observation_weights: BackendArray | None
 
+    @_rejects_removed_blocks("Connectivity()")
     def __init__(
         self,
         fourier_coefficients: NDArray[np.complexfloating],
@@ -821,10 +875,11 @@ class Connectivity:
         # fourier_coefficients and expectation_type are validated in their
         # property setters (below), which also clear the cached intermediates so
         # reassigning either on an existing instance cannot serve stale results.
-        # _adopt_fourier_coefficients is a private fast path for from_multitaper:
+        # _adopt_fourier_coefficients is a private fast path for from_transform:
         # the fft() output is unshared, so it is frozen in place instead of
         # copied, avoiding a transient 2x peak of the largest array. It must not
         # be set for a caller-owned array (see _adopt_fourier_coefficients).
+        dtype = _validated_complex_dtype(dtype)
         if _adopt_fourier_coefficients:
             self._adopt_fourier_coefficients(fourier_coefficients)
         else:
@@ -984,7 +1039,7 @@ class Connectivity:
     def _adopt_fourier_coefficients(self, value: NDArray[np.complexfloating]) -> None:
         """Take ownership of a freshly produced, unshared array without copying.
 
-        Used only by ``from_multitaper``, where ``value`` is ``transform.fft()``,
+        Used only by ``from_transform``, where ``value`` is ``transform.fft()``,
         which the ``SpectralTransform`` contract requires to be fresh and
         referenced nowhere else. This avoids a full copy of the largest array in
         the pipeline -- a transient ~2x peak on every construction, which can
@@ -992,7 +1047,7 @@ class Connectivity:
 
         This is deliberately private and has no public ``copy=False`` surface: it
         is safe only when the array *and its writable NumPy base buffer* are
-        unshared, which ``from_multitaper`` relies on the transform for and
+        unshared, which ``from_transform`` relies on the transform for and
         cannot check.
         """
         self._set_fourier_coefficients(value, adopt=True)
@@ -1072,7 +1127,7 @@ class Connectivity:
         # coordinate-dependent methods stay consistent -- stale coordinates would
         # otherwise silently drop or misalign bins (e.g. phase_slope_index) or
         # raise (group_delay). Warn because any user-supplied coordinates (e.g.
-        # Hz frequencies from from_multitaper) are discarded.
+        # Hz frequencies from from_transform) are discarded.
         n_fft_samples = value.shape[-2]
         n_time_windows = value.shape[0]
         frequencies_stale = (
@@ -1147,6 +1202,7 @@ class Connectivity:
         self.clear_cache()
 
     @classmethod
+    @_rejects_removed_blocks("Connectivity.from_multitaper()")
     def from_multitaper(
         cls,
         multitaper_instance: "SpectralTransform",
@@ -1155,9 +1211,22 @@ class Connectivity:
         minimum_phase_tolerance: float = 1e-8,
         minimum_phase_max_iterations: int = 500,
     ) -> "Connectivity":
-        """Construct from a spectral transform; the original name of from_transform.
+        """Construct from a spectral transform (deprecated name).
 
-        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`.
+        .. deprecated:: 3.0
+           Use :meth:`from_transform`, which takes the same arguments (the
+           first is named ``transform``) and builds the same instance.
+           ``from_multitaper`` is removed in 4.0. Neither name calls the
+           other, so a subclass that overrides ``from_multitaper`` must move
+           the override, and its ``super()`` call, to ``from_transform``.
+
+        .. versionchanged:: 3.0
+           The 2.x ``blocks`` argument (third, before ``dtype``) is removed;
+           passing it raises ``TypeError``.
+
+        Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`
+        and builds the instance as :meth:`from_transform` does; a subclass's
+        override of ``from_transform`` is not called.
 
         Parameters
         ----------
@@ -1172,45 +1241,26 @@ class Connectivity:
             New Connectivity instance.
 
         """
-        init_kwargs: dict[str, Any] = {
-            "expectation_type": expectation_type,
-            "dtype": dtype,
-            "minimum_phase_tolerance": minimum_phase_tolerance,
-            "minimum_phase_max_iterations": minimum_phase_max_iterations,
-        }
-        # The optional SpectralTransform attributes must always reach the
-        # instance: a subclass that cannot accept them fails loudly here rather
-        # than silently treating a one-sided, weighted, or correlated spectrum as
-        # two-sided, unweighted, and independent. They are passed only when
-        # non-default so a subclass mirroring the older signature keeps working
-        # with a plain two-sided transform. The flags are checked before the
-        # (possibly expensive) fft() so a bad one fails fast; the coordinates
-        # and weights are read after it, which may set them.
-        if _transform_flag(multitaper_instance, "is_one_sided", False):
-            init_kwargs["is_one_sided"] = True
-        if not _transform_flag(multitaper_instance, "observations_are_independent", True):
-            init_kwargs["observations_are_independent"] = False
-        if not _transform_flag(multitaper_instance, "time_bins_are_independent", True):
-            init_kwargs["time_bins_are_independent"] = False
-        init_kwargs["fourier_coefficients"] = multitaper_instance.fft()
-        init_kwargs["time"] = multitaper_instance.time
-        init_kwargs["frequencies"] = multitaper_instance.frequencies
-        weights = _optional_transform_attribute(
-            multitaper_instance, "observation_weights", None
+        instance = cls._from_transform(
+            multitaper_instance,
+            expectation_type=expectation_type,
+            dtype=dtype,
+            minimum_phase_tolerance=minimum_phase_tolerance,
+            minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
-        if weights is not None:
-            init_kwargs["observation_weights"] = weights
-        # The SpectralTransform contract requires fft() to return a freshly
-        # built, unshared array, so adopt it in place instead of copying (see
-        # Connectivity._adopt_fourier_coefficients). Only pass the private
-        # keyword when the subclass has not overridden __init__:
-        # an overriding subclass need not accept it, and passing it would raise
-        # TypeError. Such a subclass falls back to the defensive-copy path.
-        if cls.__init__ is Connectivity.__init__:
-            init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
+        # Warned once the instance is built, as the wrappers do, so a rejected
+        # call (a 2.x blocks in dtype's position, a bad expectation type, ...)
+        # shows only its error.
+        warn_deprecated(
+            f"{cls.__name__}.from_multitaper()",
+            f"{cls.__name__}.from_transform()",
+            "takes the same arguments (the first is named transform, not "
+            "multitaper_instance) and builds the same instance",
+        )
+        return instance
 
     @classmethod
+    @_rejects_removed_blocks("Connectivity.from_transform()")
     def from_transform(
         cls,
         transform: "SpectralTransform",
@@ -1221,8 +1271,9 @@ class Connectivity:
     ) -> "Connectivity":
         """Construct from any spectral transform.
 
-        This is the transform-neutral spelling of :meth:`from_multitaper`; the
-        older method remains fully supported.
+        .. versionadded:: 3.0
+           The canonical constructor; :meth:`from_multitaper` is its
+           deprecated 2.x name.
 
         Parameters
         ----------
@@ -1237,7 +1288,8 @@ class Connectivity:
         expectation_type : str, default="trials_tapers"
             How to average the cross-spectral matrix.
         dtype : np.dtype, default=complex128
-            Data type for computations.
+            Complex data type for computations; a real dtype (or ``None``)
+            raises ``TypeError``.
         minimum_phase_tolerance : float, default=1e-8
             Relative convergence tolerance for the Wilson minimum-phase
             factorization used by the directed measures.
@@ -1250,13 +1302,65 @@ class Connectivity:
         Connectivity
             New Connectivity instance.
         """
-        return cls.from_multitaper(
+        return cls._from_transform(
             transform,
             expectation_type=expectation_type,
             dtype=dtype,
             minimum_phase_tolerance=minimum_phase_tolerance,
             minimum_phase_max_iterations=minimum_phase_max_iterations,
         )
+
+    @classmethod
+    def _from_transform(
+        cls,
+        transform: "SpectralTransform",
+        *,
+        expectation_type: str,
+        dtype: Any,
+        minimum_phase_tolerance: float,
+        minimum_phase_max_iterations: int,
+    ) -> "Connectivity":
+        """Build an instance from ``transform``; see :meth:`from_transform`.
+
+        Both public constructors call it, and neither calls the other, so an
+        override of either name never re-enters the other.
+        """
+        init_kwargs: dict[str, Any] = {
+            "expectation_type": expectation_type,
+            # Checked before the (possibly expensive) fft(), like the flags below.
+            "dtype": _validated_complex_dtype(dtype),
+            "minimum_phase_tolerance": minimum_phase_tolerance,
+            "minimum_phase_max_iterations": minimum_phase_max_iterations,
+        }
+        # The optional SpectralTransform attributes must always reach the
+        # instance: a subclass that cannot accept them fails loudly here rather
+        # than silently treating a one-sided, weighted, or correlated spectrum as
+        # two-sided, unweighted, and independent. They are passed only when
+        # non-default so a subclass mirroring the older signature keeps working
+        # with a plain two-sided transform. The flags are checked before the
+        # (possibly expensive) fft() so a bad one fails fast; the coordinates
+        # and weights are read after it, which may set them.
+        if _transform_flag(transform, "is_one_sided", False):
+            init_kwargs["is_one_sided"] = True
+        if not _transform_flag(transform, "observations_are_independent", True):
+            init_kwargs["observations_are_independent"] = False
+        if not _transform_flag(transform, "time_bins_are_independent", True):
+            init_kwargs["time_bins_are_independent"] = False
+        init_kwargs["fourier_coefficients"] = transform.fft()
+        init_kwargs["time"] = transform.time
+        init_kwargs["frequencies"] = transform.frequencies
+        weights = _optional_transform_attribute(transform, "observation_weights", None)
+        if weights is not None:
+            init_kwargs["observation_weights"] = weights
+        # The SpectralTransform contract requires fft() to return a freshly
+        # built, unshared array, so adopt it in place instead of copying (see
+        # Connectivity._adopt_fourier_coefficients). Only pass the private
+        # keyword when the subclass has not overridden __init__:
+        # an overriding subclass need not accept it, and passing it would raise
+        # TypeError. Such a subclass falls back to the defensive-copy path.
+        if cls.__init__ is Connectivity.__init__:
+            init_kwargs["_adopt_fourier_coefficients"] = True
+        return cls(**init_kwargs)
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -2595,6 +2699,7 @@ class Connectivity:
     @_asnumpy
     def partial_coherence(
         self,
+        *,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> NDArray[np.floating]:
         """Return magnitude-squared coherence conditional on all other signals.
@@ -3000,10 +3105,14 @@ class Connectivity:
         rank : int, optional
             Retain at most this many within-group whitening directions per group.
             ``None`` keeps every numerically non-zero direction. Applied
-            identically to both groups of every connection.
+            identically to both groups of every connection. This is an
+            estimation rank: it restricts the subspace every component is
+            sought in, so it changes the scores themselves.
         n_components : int, default=1
-            Number of coherency components to return. A connection whose smaller
-            group has fewer channels returns NaN for the unavailable components.
+            Number of coherency components to return, an output count: the
+            earlier components are the same however many are returned. A
+            connection whose smaller group has fewer channels returns NaN for
+            the unavailable components.
         regularization : float, default=1e-12
             Relative diagonal loading used by the whitening decomposition.
 
@@ -3108,10 +3217,14 @@ class Connectivity:
             groups is one connection.
         rank : int, optional
             Retain at most this many within-group whitening directions per group.
-            ``None`` keeps every numerically non-zero direction.
+            ``None`` keeps every numerically non-zero direction. This is an
+            estimation rank: it restricts the subspace the singular components
+            are computed in, so it changes the scores themselves.
         n_components : int, default=1
-            Number of singular components to return. A connection whose smaller
-            group has fewer channels returns NaN for the unavailable components.
+            Number of singular components to return, an output count: the
+            earlier components are the same however many are returned. A
+            connection whose smaller group has fewer channels returns NaN for
+            the unavailable components.
         regularization : float, default=1e-12
             Relative diagonal loading used by the whitening decomposition.
 
@@ -3311,6 +3424,7 @@ class Connectivity:
     def maximized_imaginary_coherency(
         self,
         group_labels: NDArray[np.integer],
+        *,
         rank: int | None = None,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -3376,6 +3490,7 @@ class Connectivity:
     def multivariate_interaction_measure(
         self,
         group_labels: NDArray[np.integer],
+        *,
         rank: int | None = None,
         regularization: float = TIKHONOV_REGULARIZATION_FACTOR,
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -3513,6 +3628,7 @@ class Connectivity:
     def global_coherence(
         self,
         max_rank: int = 1,
+        *,
         max_workspace_elements: int = GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
     ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
         """Find linear combinations that capture the most coherent power.
@@ -3526,7 +3642,14 @@ class Connectivity:
         Parameters
         ----------
         max_rank : int, default=1
-            The number of components to keep (like the number of PC dimensions).
+            The number of components returned, strongest first (like the
+            number of PC dimensions kept); more than
+            ``min(n_signals, n_trials * n_tapers)`` is clamped with a warning.
+            It limits the output only: the decomposition uses the whole
+            cross-spectral matrix, each value is a fraction of the total power
+            of all components, and a returned component does not depend on
+            how many are returned. It is not an estimation rank like the
+            ``rank`` of the group measures.
         max_workspace_elements : int, default=16_000_000
             Approximate working-set target, in array elements, for the batched
             decomposition: frequency bins are processed in chunks sized so the
@@ -5218,8 +5341,9 @@ class Connectivity:
                 f"{int(selection.mask.sum())} bins, replace frequencies_of_interest=("
                 f"{low!r}, {high!r}) with frequency_range=({selection.lowest!r}, "
                 f"{selection.highest!r}), the lowest and highest bins it selects. "
-                "multitaper_connectivity and fourier_connectivity take "
-                "frequency_range as their own argument, not in connectivity_kwargs.",
+                "The wrappers (multitaper_connectivity, fourier_connectivity, and "
+                "connectivity_to_xarray) take frequency_range as their own argument, "
+                "not in connectivity_kwargs.",
                 DeprecationWarning,
                 stacklevel=stacklevel_outside_package(),
             )

@@ -809,7 +809,7 @@ m = Multitaper(
     time_window_duration=0.500,
     time_window_step=0.250,
 )
-c = Connectivity.from_multitaper(m)
+c = Connectivity.from_transform(m)
 granger = c.pairwise_spectral_granger_prediction()
 
 fig, ax = plt.subplots(2, 1, sharex=True, sharey=True)

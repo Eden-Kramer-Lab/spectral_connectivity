@@ -70,7 +70,7 @@ def _transform(name, data):
         )
     if name == "welch":
         return Welch(data, 64, segment_duration=0.5)
-    return MorletWavelet(data, 64, [4, 8, 16])
+    return MorletWavelet(data, 64, frequencies=[4, 8, 16])
 
 
 def _multitaper_without(field):
@@ -316,7 +316,7 @@ def test_spacing_is_per_variable_in_a_mixed_dataset(data):
 
 
 def test_irregular_singleton_and_reduced_frequency_outputs_have_no_spacing(data):
-    morlet = connectivity_to_xarray(MorletWavelet(data, 64, [4, 7, 16]), "power")
+    morlet = connectivity_to_xarray(MorletWavelet(data, 64, frequencies=[4, 7, 16]), "power")
     singleton = fourier_connectivity(
         np.ones((3, 1, 2), dtype=complex), frequencies=np.array([4.0]), method="power"
     )
@@ -591,7 +591,7 @@ def test_transform_with_only_the_public_interface_is_labeled_truthfully(
 def test_rounded_uniform_grid_is_uniform_for_both_spacing_and_phase_slope(data):
     """One definition of a uniform grid serves the metadata and the measures."""
     frequencies = np.round(np.arange(4, 20, 1 / 3), 7)
-    wavelet = MorletWavelet(data, 64, frequencies)
+    wavelet = MorletWavelet(data, 64, frequencies=frequencies)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = connectivity_to_xarray(wavelet, "phase_slope_index")

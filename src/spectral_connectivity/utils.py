@@ -1,10 +1,12 @@
 """Utility functions for spectral_connectivity package."""
 
 import contextlib
+import difflib
 import functools
 import os
 import sys
 import warnings
+from collections.abc import Iterable
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
@@ -141,6 +143,43 @@ def stacklevel_outside_package() -> int:
         frame = frame.f_back
         level += 1
     return level
+
+
+def close_names(name: str, valid: Iterable[str], limit: int = 3) -> list[str]:
+    """The names in ``valid`` that ``name`` most likely misspells.
+
+    ``difflib``'s close matches, then valid names that start with ``name``
+    (so a truncated ``n_fft`` finds ``n_fft_samples``), without repeats.
+    """
+    candidates = list(valid)
+    matches = difflib.get_close_matches(name, candidates, n=limit)
+    if len(name) >= 3:
+        matches += [c for c in candidates if c.startswith(name) and c not in matches]
+    return matches[:limit]
+
+
+def did_you_mean(names: Iterable[str]) -> str:
+    """``" Did you mean 'a', 'b'?"`` for ``names`` (repeats dropped), or ``""``."""
+    unique = list(dict.fromkeys(names))
+    return f" Did you mean {', '.join(map(repr, unique))}?" if unique else ""
+
+
+def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
+    """Warn that ``old`` is deprecated, at the first caller outside the package.
+
+    The template of the deprecated measure names, ``from_multitaper``,
+    ``power_confidence_intervals(n_tapers=)``, and the wrappers' plain-keyword
+    settings: ``"<old> is deprecated and will be removed in 4.0; use <new>,
+    which <outcome>."``. The ``frequencies_of_interest`` warning, which gives an
+    exact replacement interval, is composed separately. ``old`` and
+    ``new`` are written as the caller would write them (``"method='x'"``,
+    ``"Connectivity.from_transform()"``).
+    """
+    warnings.warn(
+        f"{old} is deprecated and will be removed in 4.0; use {new}, which {outcome}.",
+        DeprecationWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
 
 
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:

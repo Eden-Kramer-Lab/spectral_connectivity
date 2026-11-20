@@ -70,7 +70,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axes[1].plot(connectivity.frequencies, connectivity.power().squeeze())
 axes[1].set_title("Frequency Domain")
@@ -126,7 +126,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axes[1].plot(connectivity.frequencies, connectivity.power().squeeze())
 axes[1].set_title("Frequency Domain")
@@ -195,7 +195,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(connectivity.frequencies, connectivity.power().squeeze())
 axes[1, 0].set_xlabel("Frequency")
 axes[1, 0].set_ylabel("Power")
@@ -206,7 +206,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(connectivity.frequencies, connectivity.power().squeeze())
 axes[1, 1].set_xlabel("Frequency")
 axes[1, 1].set_ylabel("Power")
@@ -220,7 +220,7 @@ multitaper = Multitaper(
     time_window_step=0.300,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 0].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -243,7 +243,7 @@ multitaper = Multitaper(
     time_window_step=0.300,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 1].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -338,7 +338,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(connectivity.frequencies, connectivity.power().squeeze())
 
 multitaper = Multitaper(
@@ -347,7 +347,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=3,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(connectivity.frequencies, connectivity.power().squeeze())
 
 
@@ -359,7 +359,7 @@ multitaper = Multitaper(
     time_window_step=0.060,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 0].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -380,7 +380,7 @@ multitaper = Multitaper(
     time_window_step=0.060,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 1].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -474,7 +474,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(connectivity.frequencies, connectivity.power().squeeze())
 
 multitaper = Multitaper(
@@ -483,7 +483,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(connectivity.frequencies, connectivity.power().squeeze())
 
 
@@ -495,7 +495,7 @@ multitaper = Multitaper(
     time_window_step=0.060,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 0].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -516,7 +516,7 @@ multitaper = Multitaper(
     time_window_step=0.060,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 mesh = axes[2, 1].pcolormesh(
     connectivity.time,
     connectivity.frequencies,
@@ -566,7 +566,7 @@ assert at_200_hz[after].mean() > 1.5 * noise_floor
 # The wider band is visible as broadening: 40 Hz from the 200 Hz peak, outside
 # the single-taper band (2W = 33 Hz) but inside this one (2W = 100 Hz), the
 # power is well above the noise floor here and at the floor with one taper.
-single_taper = Connectivity.from_multitaper(
+single_taper = Connectivity.from_transform(
     Multitaper(
         data,
         sampling_frequency=sampling_frequency,
@@ -635,7 +635,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 3)
 plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
@@ -646,7 +646,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 4)
 plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
@@ -719,7 +719,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 3)
 plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
@@ -730,7 +730,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 plt.subplot(2, 2, 4)
 plt.plot(connectivity.frequencies, connectivity.magnitude_squared_coherence()[0, :, 0, 1])
 
@@ -838,7 +838,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
@@ -850,7 +850,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies, connectivity.magnitude_squared_coherence()[..., 0, 1].squeeze()
 )
@@ -865,7 +865,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -891,7 +891,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -971,7 +971,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies, connectivity.imaginary_coherence()[..., 0, 1].squeeze()
 )
@@ -983,7 +983,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies, connectivity.imaginary_coherence()[..., 0, 1].squeeze()
 )
@@ -998,7 +998,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1024,7 +1024,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1104,7 +1104,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies, connectivity.phase_locking_value()[..., 0, 1].squeeze()
 )
@@ -1116,7 +1116,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies, connectivity.phase_locking_value()[..., 0, 1].squeeze()
 )
@@ -1131,7 +1131,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1157,7 +1157,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1238,7 +1238,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies, connectivity.phase_lag_index()[..., 0, 1].squeeze()
 )
@@ -1250,7 +1250,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies, connectivity.phase_lag_index()[..., 0, 1].squeeze()
 )
@@ -1265,7 +1265,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1291,7 +1291,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1373,7 +1373,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies,
     connectivity.weighted_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1386,7 +1386,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies,
     connectivity.weighted_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1402,7 +1402,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1428,7 +1428,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1509,7 +1509,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies,
     connectivity.debiased_squared_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1522,7 +1522,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies,
     connectivity.debiased_squared_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1538,7 +1538,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1564,7 +1564,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1644,7 +1644,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies,
     connectivity.debiased_squared_weighted_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1657,7 +1657,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies,
     connectivity.debiased_squared_weighted_phase_lag_index()[..., 0, 1].squeeze(),
@@ -1673,7 +1673,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1699,7 +1699,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1778,7 +1778,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 0].plot(
     connectivity.frequencies,
     connectivity.pairwise_phase_consistency()[..., 0, 1].squeeze(),
@@ -1791,7 +1791,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 axes[1, 1].plot(
     connectivity.frequencies,
     connectivity.pairwise_phase_consistency()[..., 0, 1].squeeze(),
@@ -1807,7 +1807,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
     np.append(connectivity.frequencies, multitaper.nyquist_frequency),
@@ -1833,7 +1833,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -1918,7 +1918,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -1952,7 +1952,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2022,7 +2022,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2056,7 +2056,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2128,7 +2128,7 @@ multitaper = Multitaper(
     time_window_step=0.100,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 delay, slope, r_value = connectivity.group_delay()
 axis_handles[1, 0].plot(
@@ -2144,7 +2144,7 @@ multitaper = Multitaper(
     time_window_step=0.100,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 delay, slope, r_value = connectivity.group_delay()
 axis_handles[1, 1].plot(
@@ -2196,7 +2196,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2227,7 +2227,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2296,7 +2296,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 0].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2327,7 +2327,7 @@ multitaper = Multitaper(
     time_halfbandwidth_product=time_halfbandwidth_product,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 axis_handles[1, 1].plot(
     connectivity.frequencies, connectivity.power()[..., 0].squeeze()
@@ -2400,7 +2400,7 @@ multitaper = Multitaper(
     time_window_step=0.100,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 psi = connectivity.phase_slope_index()
 axis_handles[1, 0].plot(
@@ -2421,7 +2421,7 @@ multitaper = Multitaper(
     time_window_step=0.100,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 psi = connectivity.phase_slope_index()
 axis_handles[1, 1].plot(
@@ -2485,7 +2485,7 @@ multitaper = Multitaper(
     time_window_step=0.400,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -2604,7 +2604,7 @@ multitaper = Multitaper(
     time_window_step=0.400,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 time_grid, freq_grid = np.meshgrid(
     np.append(connectivity.time, time_extent[-1]),
@@ -2723,7 +2723,7 @@ multitaper = Multitaper(
     time_window_step=0.080,
     start_time=time[0],
 )
-connectivity = Connectivity.from_multitaper(multitaper)
+connectivity = Connectivity.from_transform(multitaper)
 
 global_coherence, unnormalized_global_coherence = connectivity.global_coherence()
 print(global_coherence.shape)  # n_time, n_frequencies, n_components

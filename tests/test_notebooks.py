@@ -177,7 +177,7 @@ def test_power_spectrum_200hz(snapshot):
         time_halfbandwidth_product=3,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     # Snapshot outputs as a dict
     outputs = {
@@ -216,7 +216,7 @@ def test_coherence_magnitude_phase_offset(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "coherence_magnitude": connectivity.magnitude_squared_coherence(),
@@ -258,7 +258,7 @@ def test_spectrogram_temporal_dynamics(snapshot):
         time_window_step=0.300,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "power": connectivity.power(),
@@ -298,7 +298,7 @@ def test_coherogram_phase_change(snapshot):
         time_window_step=0.080,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "coherence_magnitude": connectivity.magnitude_squared_coherence(),
@@ -330,7 +330,7 @@ def test_power_spectrum_30hz(snapshot):
         time_halfbandwidth_product=3,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "power": connectivity.power(),
@@ -374,7 +374,7 @@ def test_spectrogram_with_trials(snapshot):
         time_window_step=0.300,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "power": connectivity.power(),
@@ -411,7 +411,7 @@ def test_spectrogram_finer_frequency_resolution(snapshot):
         time_window_step=0.300,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "power": connectivity.power(),
@@ -467,7 +467,7 @@ def phase_offset_trials():
         time_halfbandwidth_product=1,
         start_time=time[0],
     )
-    return Connectivity.from_multitaper(multitaper)
+    return Connectivity.from_transform(multitaper)
 
 
 def _phase_measure_outputs(connectivity, name, method):
@@ -579,7 +579,7 @@ def test_group_delay_signal1_leads(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "group_delay": connectivity.group_delay(),
@@ -611,7 +611,7 @@ def test_group_delay_signal2_leads(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "group_delay": connectivity.group_delay(),
@@ -646,7 +646,7 @@ def test_group_delay_signal2_leads_over_time(snapshot):
         time_window_step=0.080,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "group_delay": connectivity.group_delay(),
@@ -678,7 +678,7 @@ def test_phase_slope_index_signal1_leads(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "phase_slope_index": connectivity.phase_slope_index(),
@@ -710,7 +710,7 @@ def test_phase_slope_index_signal2_leads(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "phase_slope_index": connectivity.phase_slope_index(),
@@ -757,7 +757,7 @@ def _canonical_coherence_two_groups(n_per_group, noise_sd):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
     assert connectivity.n_observations == 180
 
     outputs = {
@@ -813,7 +813,7 @@ def test_global_coherence(snapshot):
         time_halfbandwidth_product=5,
         start_time=time[0],
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         # Snapshot only the coherence fractions (phase-invariant). The singular
@@ -872,7 +872,7 @@ def test_baccala_example2(snapshot):
         time_halfbandwidth_product=1,
         start_time=0,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "pairwise_spectral_granger": connectivity.pairwise_spectral_granger_prediction(),
@@ -915,7 +915,7 @@ def test_dtf_and_ddtf_one_way_coupled_var(snapshot):
         time_halfbandwidth_product=2,
         start_time=0,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "directed_transfer_function": connectivity.directed_transfer_function(),
@@ -953,7 +953,7 @@ def test_conditional_granger_three_signal_regression(snapshot):
         time_halfbandwidth_product=2,
         start_time=0,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
 
     outputs = {
         "pairwise_spectral_granger": connectivity.pairwise_spectral_granger_prediction(),

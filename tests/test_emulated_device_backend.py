@@ -383,7 +383,7 @@ def test_multitaper_transform_runs_on_the_device(xp):
         rng.standard_normal((256, 3, 2)), sampling_frequency=256, detrend_type="linear"
     )
     assert isinstance(multitaper.fft(), _DeviceArray)
-    coherence = Connectivity.from_multitaper(multitaper).magnitude_squared_coherence()
+    coherence = Connectivity.from_transform(multitaper).magnitude_squared_coherence()
     assert isinstance(coherence, np.ndarray)  # public results come back to the host
     assert np.isfinite(coherence[..., 0, 1]).all()
 

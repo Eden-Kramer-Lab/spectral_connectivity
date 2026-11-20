@@ -46,7 +46,7 @@ directly with results from 2.x.
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
-| `Connectivity(..., blocks=...)` | Remove `blocks`; memory is bounded automatically |
+| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: it never changed a result beyond rounding, and memory is now bounded automatically. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
@@ -54,6 +54,10 @@ directly with results from 2.x.
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
+| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls are unchanged; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "subset_pairwise_spectral_granger_prediction", pairs=[(0, 1)])`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"pairs": [(0, 1)]}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`, and `frequency_range`) stay named arguments of every wrapper that takes them and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `Connectivity.from_multitaper(m)`, or a `Connectivity` subclass overriding `from_multitaper` | Use `Connectivity.from_transform(m)`, which takes the same arguments (the first is named `transform`, not `multitaper_instance`) and builds the same instance from any spectral transform. Neither name calls the other, so move a subclass's override to `from_transform` and change its `super().from_multitaper(...)` to `super().from_transform(...)` (an override still calling `super().from_multitaper` works but warns). `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
+| `minimum_phase_decomposition(S)` stopped after 60 Wilson iterations by default | The default `max_iterations` is 500, so spectra that need more iterations converge instead of warning; pass `max_iterations=60` for the 2.x cap. `tolerance` and `max_iterations` keep their positions and still work positionally or by keyword |
 
 ### Added
 
@@ -92,6 +96,16 @@ directly with results from 2.x.
   root: its magnitude is the unsquared, phase-optimized coherence. Both are vectorized over the time/frequency axes on the
   active backend (GPU-capable), with the CaCoh phase search done as a batched
   grid-and-Newton optimization rather than a per-bin loop.
+- The tuning settings of the new measures are keyword-only: `rank`,
+  `regularization`, and `n_components` of `canonical_coherency`,
+  `maximized_imaginary_coherency(_components)`,
+  `multivariate_interaction_measure`, and `partial_coherence`, and the new
+  `max_workspace_elements` of `global_coherence`. `rank` is an estimation rank
+  (it restricts the whitening subspace, so it changes the scores);
+  `n_components` and `global_coherence`'s released `max_rank`, which keeps its
+  keyword and position, only count the components returned.
+  `canonical_coherence` keeps its released signature and gains no tuning
+  setting.
 - `Connectivity.clear_cache()` releases the intermediates cached for reuse
   across measures (cross-spectral matrix, power, phase-lag moments, and the
   minimum-phase factorization with the Granger quantities derived from it) so
@@ -101,7 +115,10 @@ directly with results from 2.x.
   callers can check whether a cross-spectrum is resolved finely enough in
   frequency to trust the directed measures built on it (an under-resolved
   spectrum can converge yet reconstruct poorly).
-- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Morlet
+- `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Each
+  takes `time_series` and `sampling_frequency` positionally and every other
+  setting by keyword (e.g. `MorletWavelet(x, fs, frequencies=[4, 8, 16])`);
+  `Multitaper` keeps its released positional order. Morlet
   output is explicitly one-sided and rejects Wilson-factorized directed
   measures, which require a full two-sided spectrum. Morlet coefficients are
   scaled so that `power()` is the one-sided PSD in signal²/Hz, on the same
@@ -148,7 +165,10 @@ directly with results from 2.x.
   noise on a matched power-spectral-density scale and warns if the iteration
   does not converge.
 - `fourier_connectivity` accepts externally computed Fourier coefficients as
-  NumPy arrays or labeled DataArrays. Functional measures support one-sided
+  NumPy arrays or labeled DataArrays. It takes `fourier_coefficients`,
+  `frequencies`, `time`, `method`, and `signal_names` positionally and every
+  other setting (`squeeze`, `connectivity_kwargs`, `is_one_sided`, ...) by
+  keyword. Functional measures support one-sided
   coefficients (inferred from a labeled non-negative frequency coordinate or
   declared with `is_one_sided=True`), while directed factorization still
   requires a full two-sided spectrum. High-level results can be cropped,
@@ -190,6 +210,24 @@ directly with results from 2.x.
   `direct_directed_transfer_function`) by name. They are opt-in (not in the
   default set) and, like the spectral Granger measures, are oriented so
   `sel(source=a, target=b)` is the influence from `a` to `b`.
+- `multitaper_connectivity` names the common multitaper settings
+  (`time_window_step`, `time_halfbandwidth_product`, `n_tapers`, and
+  `detrend_type`, keyword-only, with `Multitaper`'s defaults, beside the
+  released `sampling_frequency` and `time_window_duration`) and takes every
+  other `Multitaper` setting in a `transform_kwargs` mapping, as measure
+  settings go in `connectivity_kwargs`. The released positional order is
+  unchanged. A misspelled key in either mapping raises `TypeError`; a common
+  setting inside `transform_kwargs` raises `ValueError`, so a setting cannot be
+  given two values. `connectivity_to_xarray` gains `connectivity_kwargs`, a
+  keyword-only `group_labels` (also accepted in the mapping, not both), and a
+  keyword-only `frequency_range` that, as in the other wrappers, the interval
+  measures consume and every other measure is cropped to (it is rejected
+  inside `connectivity_kwargs`). Every wrapper checks the name and route of
+  every setting, and that `group_labels` is given once and only with a group
+  measure, before computing anything. The one such check that comes later is
+  `connectivity_to_xarray`'s missing-`group_labels` error, raised after the
+  transform's FFT because it quotes the signal count. Provenance does not
+  depend on the route that supplied a setting.
 - `list_measures()` enumerates every wrapper-supported `method` name with its
   output category, a one-line description sourced from the `Connectivity`
   method docstring, and whether it is a default and/or directed measure;
@@ -365,6 +403,12 @@ directly with results from 2.x.
 
 ### Changed
 
+- `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
+  defaulted to 60. Near-singular cross-spectra (highly correlated channels)
+  can need several hundred Wilson iterations, and the loop still stops as soon
+  as every sub-spectrum converges. Pass `max_iterations=60` for the 2.0.1 cap.
+  `tolerance` and `max_iterations` keep their positions and are accepted by
+  position or keyword.
 - On the GPU, the default FFT length (and so the default frequency grid) of
   `Multitaper`, `ShortTimeFourierTransform`, and `Welch` now follows SciPy's
   `next_fast_len`, as on the CPU, so the same data gives the same frequencies
@@ -512,6 +556,15 @@ directly with results from 2.x.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
 
+### Removed
+
+- `blocks` of `Connectivity` and `Connectivity.from_multitaper` (released in
+  2.0.1). It only chunked the cross-spectral computation and never changed a
+  result beyond rounding; memory is now bounded automatically. A call that
+  still passes it, by keyword or in its released position, raises a
+  `TypeError` that names `blocks`, says it had no effect on results, and says
+  to drop it, before any computation. It is not kept as a deprecated alias.
+
 ### Deprecated
 
 Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
@@ -531,6 +584,34 @@ is removed in 4.0.
   working and a saved file says which name produced it; its values and other
   attributes are those of `magnitude_squared_coherence`. Requesting both names
   in one call raises `ValueError`.
+- `Connectivity.from_multitaper`: use `Connectivity.from_transform`, the
+  canonical constructor for any spectral transform. The old name takes the
+  same arguments (including its `multitaper_instance` keyword) and builds the
+  same instance; it warns once, at the line that called it. Neither name calls
+  the other: a subclass overriding `from_multitaper` keeps working when called
+  by that name and warns at its own call to `super().from_multitaper`, but
+  `from_transform` does not go through such an override, and
+  `Sub.from_multitaper` does not go through an override of `from_transform`.
+  The package itself uses only `from_transform`.
+- Advanced settings passed to `multitaper_connectivity` or
+  `connectivity_to_xarray` as plain keyword arguments (the 2.x `**kwargs`
+  forwarding): use `transform_kwargs` for `Multitaper` settings and
+  `connectivity_kwargs` for measure settings. The plain keywords still reach
+  the same place, with the same result and provenance, and warn once per
+  call, at the caller, naming the mapping, only when the call succeeds (a
+  rejected call raises its error without the warning). The common settings
+  are named arguments and never warn. A setting given both in the mapping and
+  as a plain keyword raises `ValueError`, and a name the transform or measure
+  does not take, in either mapping or as a plain keyword, raises `TypeError`
+  before any computation.
+- `power_confidence_intervals(n_tapers=...)`: use `n_observations=...`. The
+  count is every observation averaged into the estimate (tapers x trials), not
+  the taper count, so the old name invited intervals far too wide for
+  multi-trial averages. The argument keeps its first position, so positional
+  calls such as `power_confidence_intervals(25, power, 0.95)` are unchanged
+  and do not warn; `n_tapers` is accepted by keyword only and gives the same
+  interval as `n_observations`. `power` and `ci` (the confidence level, in
+  `[0.5, 1)`) are unchanged. Giving both names raises `ValueError`.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
@@ -552,6 +633,12 @@ is removed in 4.0.
 
 ### Fixed
 
+- `Connectivity`, `Connectivity.from_transform`, and `from_multitaper` reject a
+  `dtype` that is not complex with a `TypeError` before any FFT. `dtype=None`
+  (for instance 2.x's default `blocks` passed in its old position, where
+  `dtype` now is) was read as float64 and silently discarded the imaginary
+  part of every coefficient, and an integer failed only when a measure first
+  used it (`power` did not).
 - `Multitaper` reports the supplied column count for custom tapers. For DPSS,
   `n_tapers` keeps describing the requested count after low-bias filtering,
   so repeated wrapper calls retain the same taper-count provenance.
@@ -769,8 +856,9 @@ is removed in 4.0.
   `minimum_phase_max_iterations` instead of a regularization parameter no
   Granger method has.
 - `coherence_fisher_z_transform` accepts scalar coherency, and
-  `power_confidence_intervals` documents that `n_tapers` is the number of
-  averaged observations (tapers x trials), not the taper count.
+  `power_confidence_intervals` documents that its count is the number of
+  averaged observations (tapers x trials), not the taper count, and names it
+  `n_observations` (see Deprecated).
 - The simulated-examples tutorial no longer stores a local absolute path in a
   warning output, and `help(spectral_connectivity)` links both the AI-assistant
   guide and `llms.txt`.
@@ -821,7 +909,7 @@ is removed in 4.0.
   `sliding_window_view`.
 - Multi-measure wrapper calls build one `Connectivity` and reuse its cached
   power, cross-spectrum, directed factors, and phase-lag moments.
-- `Connectivity.from_multitaper` adopts the transform's fresh FFT output
+- `Connectivity.from_transform` adopts the transform's fresh FFT output
   without a redundant full-size copy. CPU FFT parallelism is available through
   the opt-in `fft_workers` argument.
 - `MorletWavelet.fft` fills one preallocated coefficient array instead of

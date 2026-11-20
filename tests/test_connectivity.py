@@ -679,7 +679,7 @@ def test_cacoh_phase_distinguishes_lead_from_lag():
         y = np.sin(2 * np.pi * 20 * t + offset - 2.0)  # y lags x by 2 rad
         trials.append(np.stack([y, x], 1) + 0.1 * rng.standard_normal((t.size, 2)))
     data = np.stack(trials, 1)
-    connectivity = Connectivity.from_multitaper(
+    connectivity = Connectivity.from_transform(
         Multitaper(data, fs, time_window_duration=4.0, time_halfbandwidth_product=2)
     )
     index = np.argmin(np.abs(connectivity.frequencies - 20))
@@ -1978,7 +1978,7 @@ def hann_morlet_coefficients():
     wavelet = MorletWavelet(
         rng.standard_normal((600, 4, 3)),
         200.0,
-        [10.0, 20.0],
+        frequencies=[10.0, 20.0],
         smoothing_time=0.1,
         smoothing_kernel="hann",
     )
@@ -2086,7 +2086,7 @@ def _morlet_connectivity_with_nan_edges():
     observation weights; returns those (time, frequency) bins."""
     rng = np.random.default_rng(6)
     wavelet = MorletWavelet(
-        rng.standard_normal((600, 4, 2)), 200.0, [10.0, 20.0], edge_mode="nan"
+        rng.standard_normal((600, 4, 2)), 200.0, frequencies=[10.0, 20.0], edge_mode="nan"
     )
     conn = Connectivity.from_transform(wavelet)
     return conn, ~to_host(wavelet.valid_time_frequency)
@@ -2406,7 +2406,7 @@ def test_jackknife_warns_only_for_off_diagonal_saturation(method, transformation
     rng = np.random.default_rng(12)
     signal = rng.standard_normal((64, 5))
     time_series = np.stack([signal, rng.standard_normal((64, 5)), signal], axis=-1)
-    connectivity = Connectivity.from_multitaper(
+    connectivity = Connectivity.from_transform(
         Multitaper(time_series, sampling_frequency=64, time_halfbandwidth_product=1)
     )
     estimate = getattr(connectivity, method)()
@@ -2481,14 +2481,14 @@ def test_weighted_paths_avoid_ufunc_where_keyword(monkeypatch, backend_modules):
     rng = np.random.default_rng(7)
     data = rng.standard_normal((600, 3, 3))
     wavelet = MorletWavelet(
-        data, 200.0, [10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
+        data, 200.0, frequencies=[10.0, 20.0], smoothing_time=0.1, smoothing_kernel="hann"
     )
     weighted = Connectivity.from_transform(wavelet)
     assert np.isfinite(weighted.power()).any()
     assert np.isfinite(weighted.magnitude_squared_coherence()).any()
     adaptive = Multitaper(data, 200.0, taper_weighting="adaptive")
     assert np.isfinite(to_host(adaptive.fft())).all()
-    conn = Connectivity.from_multitaper(Multitaper(data, 200.0))
+    conn = Connectivity.from_transform(Multitaper(data, 200.0))
     assert np.isfinite(conn.canonical_coherency(np.array([0, 0, 1])).scores).any()
 
 
@@ -2530,7 +2530,7 @@ def _granger_connectivity(defect=None):
         signals[..., 2] = signals[..., 0]
     elif defect == "dead":
         signals[..., 2] = 0.0
-    return Connectivity.from_multitaper(
+    return Connectivity.from_transform(
         Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
     )
 
@@ -2707,7 +2707,7 @@ def test_batched_granger_matches_across_chunks_and_block_sizes(
     signals[2:, :, 3] += 0.4 * signals[:-2, :, 4]
 
     def compute():
-        connectivity = Connectivity.from_multitaper(
+        connectivity = Connectivity.from_transform(
             Multitaper(signals, sampling_frequency=256, time_halfbandwidth_product=2)
         )
         if measure == "subset":
@@ -3032,7 +3032,7 @@ def test_nyquist_frequency_sign(n_samples):
     multitaper = Multitaper(
         signal_3d, sampling_frequency=sampling_frequency, n_fft_samples=n_samples
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
     n_fft = multitaper.n_fft_samples
     assert n_fft == n_samples
 
@@ -3080,7 +3080,7 @@ def test_spectrogram_frequency_alignment():
         time_window_duration=1.0,
         time_window_step=0.5,
     )
-    connectivity = Connectivity.from_multitaper(multitaper)
+    connectivity = Connectivity.from_transform(multitaper)
     power = connectivity.power()
 
     # Find frequency bins
@@ -3576,7 +3576,7 @@ def test_directed_measures_no_runtime_warning_on_nan_transfer_function(measure):
 
     rng = np.random.default_rng(0)
     time_series = rng.standard_normal((256, 4, 3))
-    conn = Connectivity.from_multitaper(
+    conn = Connectivity.from_transform(
         Multitaper(time_series, sampling_frequency=256, time_halfbandwidth_product=3),
         minimum_phase_max_iterations=1,
     )
@@ -3604,7 +3604,7 @@ def test_power_one_sided_preserves_total_power():
         # Pass the FFT length: by default 511 samples are padded to 512.
         multitaper = Multitaper(time_series, sampling_frequency=256, n_fft_samples=n_time)
         assert multitaper.n_fft_samples == n_time
-        conn = Connectivity.from_multitaper(multitaper)
+        conn = Connectivity.from_transform(multitaper)
         one_sided = conn.power()  # non-negative frequencies, interior doubled
         two_sided = to_host(conn._power)  # full spectrum
         np.testing.assert_allclose(one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10)
@@ -3685,7 +3685,7 @@ def test_phase_slope_index_uses_adjacent_frequency_bins():
 
     rng = np.random.default_rng(0)
     time_series = rng.standard_normal((256, 12, 2))
-    conn = Connectivity.from_multitaper(
+    conn = Connectivity.from_transform(
         Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
     )
 
@@ -3754,7 +3754,7 @@ def test_directed_measures_finite_on_ordinary_correlated_data(measure):
     cross-spectral matrices (highly correlated channels), which the range tests
     accepted vacuously. This is a non-vacuous finiteness check.
     """
-    conn = Connectivity.from_multitaper(_correlated_fixture())
+    conn = Connectivity.from_transform(_correlated_fixture())
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)  # no non-convergence warning
         warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
@@ -3765,12 +3765,12 @@ def test_directed_measures_finite_on_ordinary_correlated_data(measure):
 def test_minimum_phase_max_iterations_is_configurable():
     """Users can raise max_iterations to recover from Wilson non-convergence."""
     m = _correlated_fixture()
-    conn_low = Connectivity.from_multitaper(m, minimum_phase_max_iterations=1)
+    conn_low = Connectivity.from_transform(m, minimum_phase_max_iterations=1)
     with pytest.warns(UserWarning, match="did not converge"):
         dtf_low = conn_low.directed_transfer_function()
     assert np.isnan(dtf_low).all()
 
-    conn_high = Connectivity.from_multitaper(m, minimum_phase_max_iterations=500)
+    conn_high = Connectivity.from_transform(m, minimum_phase_max_iterations=500)
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
@@ -3811,7 +3811,7 @@ def test_directed_measures_are_scale_invariant(measure):
             time_halfbandwidth_product=3,
             start_time=0,
         )
-        return getattr(Connectivity.from_multitaper(m), measure)()
+        return getattr(Connectivity.from_transform(m), measure)()
 
     base = compute(1.0)
     scaled = compute(1e12)
@@ -4147,7 +4147,7 @@ def test_phase_slope_index_raises_with_fewer_than_two_bins():
     from spectral_connectivity.transforms import Multitaper
 
     rng = np.random.default_rng(0)
-    conn = Connectivity.from_multitaper(
+    conn = Connectivity.from_transform(
         Multitaper(
             rng.standard_normal((256, 6, 2)),
             sampling_frequency=200,
@@ -4164,7 +4164,7 @@ def test_frequency_resolution_must_be_finite_positive(bad_resolution):
     """delay/phase_slope_index reject an invalid frequency_resolution."""
     from spectral_connectivity.transforms import Multitaper
 
-    conn = Connectivity.from_multitaper(
+    conn = Connectivity.from_transform(
         Multitaper(
             np.random.default_rng(0).standard_normal((256, 6, 2)),
             sampling_frequency=200,
@@ -4580,7 +4580,7 @@ def _warning_cases():
         ),
         "multitaper_single_observation": (
             "single",
-            lambda: Connectivity.from_multitaper(
+            lambda: Connectivity.from_transform(
                 Multitaper(single_trial_series, 256, time_halfbandwidth_product=1)
             ).phase_locking_value(),
         ),
