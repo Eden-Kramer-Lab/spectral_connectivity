@@ -574,7 +574,7 @@ def test_group_delay_signal1_leads(snapshot):
     )
 
     multitaper = Multitaper(
-        prepare_time_series(signal, axis="signals"),
+        prepare_time_series(signal),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -606,7 +606,7 @@ def test_group_delay_signal2_leads(snapshot):
     )
 
     multitaper = Multitaper(
-        prepare_time_series(signal, axis="signals"),
+        prepare_time_series(signal),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -673,7 +673,7 @@ def test_phase_slope_index_signal1_leads(snapshot):
     )
 
     multitaper = Multitaper(
-        prepare_time_series(signal, axis="signals"),
+        prepare_time_series(signal),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],
@@ -705,7 +705,7 @@ def test_phase_slope_index_signal2_leads(snapshot):
     )
 
     multitaper = Multitaper(
-        prepare_time_series(signal, axis="signals"),
+        prepare_time_series(signal),
         sampling_frequency=sampling_frequency,
         time_halfbandwidth_product=5,
         start_time=time[0],

@@ -2,7 +2,7 @@
 
 import difflib
 import inspect
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
 from typing import Literal
 
@@ -732,8 +732,10 @@ def _requested_methods(
     ``None`` requests ``defaults``; a string requests that one measure, whose
     result is returned as a DataArray rather than a Dataset. An empty request,
     an unknown name, or a measure named under both its deprecated and its
-    canonical name (one estimate under two variable names) raises; a deprecated
-    name warns at the caller.
+    canonical name (one estimate under two variable names) raises. A
+    deprecated name is resolved without a warning here: the wrapper calls
+    :func:`_warn_deprecated_measure_names` just before it returns, so a call
+    rejected for any reason raises only its error.
 
     Returns
     -------
@@ -762,14 +764,22 @@ def _requested_methods(
                 f"of {canonical!r}. Request it once, as {canonical!r}."
             )
             raise ValueError(msg)
-    _validate_method_names([_DEPRECATED_MEASURE_NAMES.get(name, name) for name in requested])
-    # Each distinct name is resolved, and so warns, once.
-    resolved = {
-        name: _resolve_deprecated_measure_name(name, "method={!r}")
-        for name in dict.fromkeys(requested)
-    }
-    methods = [resolved[name] for name in requested]
+    methods = [_DEPRECATED_MEASURE_NAMES.get(name, name) for name in requested]
+    _validate_method_names(methods)
     return methods, dict(zip(methods, requested, strict=True)), isinstance(method, str)
+
+
+def _warn_deprecated_measure_names(output_names: Mapping[str, str]) -> None:
+    """Warn at the caller, once per name, for each measure requested by a
+    deprecated name.
+
+    ``output_names`` maps each canonical name to the requested one, as
+    :func:`_requested_methods` returns it. Wrappers call this just before they
+    return, as for the other deprecated spellings.
+    """
+    for canonical, requested in output_names.items():
+        if requested != canonical:
+            _resolve_deprecated_measure_name(requested, "method={!r}")
 
 
 def _measure_description(name: str) -> str:

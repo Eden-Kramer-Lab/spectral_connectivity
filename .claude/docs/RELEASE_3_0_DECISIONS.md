@@ -1,12 +1,21 @@
 # 3.0 API and result consistency decisions
 
-**Status: step 1 merged; step 2 implemented and validated locally; step 3
-(D4, D23) implemented on `refactor/frequency-selection`; step 4 (D5-D8, D25)
-implemented on `refactor/coherence-naming`; step 5 (D9, D11, D12, D14, D16,
-D24, D29) implemented on `refactor/signatures-and-routing`, see below.**
-[PR #102](https://github.com/Eden-Kramer-Lab/spectral_connectivity/pull/102)
-merged into `master` as `138f3f7` on 2026-10-05. Step 2 starts from that commit
-on `refactor/metadata-and-bandwidths`; its implementation checklist is below.
+**Status: all six steps implemented. Step 1 is merged; steps 2-5 and the
+internal base-class step are open pull requests, and step 6 is the last pull
+request of the stack (see the table below).**
+
+| Step | Decisions | Branch | Status |
+| --- | --- | --- | --- |
+| 1 | D18, D20, D26, D27, D30 | `fix/coordinates-and-transforms` | Merged as PR #102 (`138f3f7`) |
+| 2 | D1-D3, D19, D21, D28 | `refactor/metadata-and-bandwidths` | PR #108, in review |
+| (internal) | windowed-FFT base | `refactor/windowed-fft-base` | PR #112, in review |
+| 3 | D4, D23 | `refactor/frequency-selection` | PR #113, in review |
+| 4 | D5-D8, D25 | `refactor/coherence-naming` | PR #114, in review |
+| 5 | D9, D11, D12, D14, D16, D24, D29 | `refactor/signatures-and-routing` | PR #115 (`91db050`), in review |
+| 6 | D17, D31; migration table and removal checklist | `refactor/simulators-and-migration` | The last PR of the stack, on #115 |
+
+D10's step option and D22 remain deferred to 3.x, as decided. D13 and D15
+needed no code change.
 The accepted naming decision keeps Multitaper's `frequency_resolution` and
 its existing helper names supported, with precise definitions and no synonyms.
 The subsequent UX review also retains released function spellings, `ci`,
@@ -71,7 +80,7 @@ released interfaces, and remove those aliases in 4.0 under the policy below.
 | ID | Topic | Recommended choice | Compatibility and timing |
 | --- | --- | --- | --- |
 | D1 | Shared transform attributes | Use common keys for shared facts: `transform`, `sampling_frequency`, `n_trials`, `n_signals`, `n_observations`, `expectation_type`, `observations_are_independent`, and `time_bins_are_independent`. Include only facts that are known. Add `output_schema_version=1`. | Establish in 3.0. Preserve only the scalar `mt_*` compatibility keys that actually shipped in v2.0.1, until 4.0. Drop unreleased `stft_*`, `welch_*`, `morlet_*`, and `fourier_*` copies now. |
-| D2 | Frequency resolution | Keep `Multitaper.frequency_resolution` as the single supported public name and define it as full DPSS concentration bandwidth (`2 * NW / time_window_duration`, in Hz). Use STFT/Welch `equivalent_noise_bandwidth` and `frequency_bin_spacing` for a uniform output grid. Results record a qualified `spectral_bandwidth` with `spectral_bandwidth_definition`; frequency-dependent bandwidth belongs on a frequency coordinate. | Retain Multitaper's released property and value without deprecation or a `concentration_bandwidth` synonym. Rename STFT's unreleased `frequency_resolution` directly, with no compatibility alias, and prevent inheritance of Multitaper's property with a different meaning. |
+| D2 | Frequency resolution | Keep `Multitaper.frequency_resolution` as the single supported public name and define it as full DPSS concentration bandwidth (`2 * NW / time_window_duration`, in Hz). Use STFT/Welch `equivalent_noise_bandwidth` and `frequency_bin_spacing` for a uniform output grid. Results record a qualified `spectral_bandwidth` with `spectral_bandwidth_definition`; frequency-dependent bandwidth belongs on a frequency coordinate. | Retain Multitaper's released property and value without deprecation or a `concentration_bandwidth` synonym. Rename STFT's unreleased `frequency_resolution` directly, with no compatibility alias, and prevent inheritance of Multitaper's property with a different meaning. Status: the property keeps its definition and its value for any window of a whole number of samples; since 3.0 it describes the realized (rounded) window, so a 0.505 s window at 100 Hz with NW=3 reports 12 Hz where 2.0.1 reported 11.88 Hz (CHANGELOG migration guide). |
 | D3 | Transform and execution settings | Keep D1's common facts at the top level and one `transform_parameters_json` record for remaining settings. Inside that record, separate `estimator` settings from `execution` settings such as `fft_workers`. Keep `backend="cpu"` or `"gpu"` at the top level. | Establish in 3.0. Do not repeat common facts inside JSON or add a second execution JSON record. The only extra compatibility copies are the released `mt_*` keys, removed in 4.0. |
 | D4 | Frequency selection | Use `frequency_range=(low, high)` for a single selected interval, with both endpoints included. Retain `frequency_bands={name: (low, high)}` for named aggregation and `frequency_reduction` for mean/integral. Use one selection helper. | Prefer the canonical interface in 3.0. Keep `frequencies_of_interest` as a deprecated compatibility keyword with its historical exclusive edges. Reject calls supplying both spellings. See the routing rules below. |
 | D5 | Diagonal values | Preserve and document current numerical diagonals. Describe coherence's NaN as an intentional self-connection mask despite mathematical self-coherence being 1 at nonzero power. Explicitly document `imaginary_coherence`'s 0 versus signed `imaginary_coherency`'s NaN; retain that difference. Add `diagonal_policy` metadata and an explicit masking recipe. | Documentation and metadata in 3.0. Choose documentation over changing values within the imaginary-coherence family. A convenience masking helper can follow. |
@@ -196,8 +205,8 @@ adding it would preserve that estimator's definition.
 | D25 | Power's `source` versus components' `signal` dimension | Keep `power(time, frequency, source)` and the component projections' `signal` axis. Power then aligns with the source dimension of pairwise results; `signal` in a projection indexes channels across its labeled sides. Document this deliberate distinction. | Power's `source` axis shipped in 2.x. No dimension rename or alias. A user wanting a standalone channel axis can explicitly call `power.rename(source="signal")`. |
 | D26 | STFT representation and summary | Give STFT its own `repr` and `summarize_parameters()`: identify the Hann STFT, actual window/step, and equivalent noise bandwidth. Omit Multitaper-only settings such as NW and DPSS taper count from that description. | Fix before 3.0. The transform and these inherited descriptions are unreleased; no compatibility strings are needed. |
 | D27 | Welch parameter inspection | Expose read-only scalar constructor settings on Welch, including resolved `segment_duration`, `detrend_type`, `start_time`, `n_fft_samples`, and `fft_workers`, alongside its existing rate, overlap, and sample counts. Expose resolved `segment_step` when D10 lands. | Add before 3.0 so callers need not inspect `_stft`. Document sample rounding and distinguish requested overlap from the realized step. Derive properties from the same state used for computation. |
-| D28 | Parameter-helper terminology | Keep `suggest_parameters(desired_freq_resolution=...)`, `estimate_frequency_resolution(sampling_frequency, time_window_duration, time_halfbandwidth_product)`, and the returned `frequency_resolution` key. Explain that frequency resolution here is full DPSS concentration bandwidth in Hz, and distinguish it from FFT bin spacing in docs and examples. | These released names, signatures, and dictionary key remain supported without warnings or a 4.0 removal. Add no parallel `concentration_bandwidth` property/helper/keyword/key spellings. Documentation clarification belongs in step 2. |
-| D29 | Minimum-phase tolerance calls | Keep `minimum_phase_decomposition`'s released positional and keyword forms for `tolerance` and `max_iterations`, including their order, defaults, and meanings. Prefer explicit keyword calls in documentation and examples. | Both forms remain supported without warnings or planned removal. A style preference for keyword calls does not change the released signature. |
+| D28 | Parameter-helper terminology | Keep `suggest_parameters(desired_freq_resolution=...)`, `estimate_frequency_resolution(sampling_frequency, time_window_duration, time_halfbandwidth_product)`, and the returned `frequency_resolution` key. Explain that frequency resolution here is full DPSS concentration bandwidth in Hz, and distinguish it from FFT bin spacing in docs and examples. | These released names, signatures, and dictionary key remain supported without warnings or a 4.0 removal. Add no parallel `concentration_bandwidth` property/helper/keyword/key spellings. Documentation clarification belongs in step 2. Status: the helpers compute from the duration they are given and keep their 2.0.1 values; only `Multitaper.frequency_resolution` follows the realized, rounded window (D2). |
+| D29 | Minimum-phase tolerance calls | Keep `minimum_phase_decomposition`'s released positional and keyword forms for `tolerance` and `max_iterations`, including their order, defaults, and meanings. Prefer explicit keyword calls in documentation and examples. | Both forms remain supported without warnings or planned removal. A style preference for keyword calls does not change the released signature. Status: the order and meanings are kept, and both forms work without warnings; the `max_iterations` default is 500 from 3.0, where 2.0.1 used 60 (owner's ruling in step 5, recorded in the CHANGELOG; pass `max_iterations=60` for the 2.0.1 cap). |
 | D30 | Invalid taper counts | Reject invalid explicit `n_tapers` at Multitaper construction, including zero, negative, fractional, boolean, or counts above the resolved window length. Keep `None` as automatic selection and check consistency with supplied tapers. | Fix before 3.0. Fail before FFT/allocation with a targeted message; preserve valid-call behavior. |
 | D31 | Simulator lag and frequency units | Use `lags_samples` for the lagged-broadband simulator's whole-sample delays. Keep oscillation `frequency` and `sampling_frequency` in Hz, and document MVAR lags as sample steps. Include an example converting a desired delay in seconds to a rounded sample count. | The lagged simulator is new: rename `lags` before 3.0 without an alias. Keep MVAR's released semantics. Time delays and oscillation frequencies are different quantities, so consistency means explicit units, not giving them one unit. |
 
@@ -326,7 +335,9 @@ to trigger an exact zero pivot consistently across LAPACK builds.
   Hann equivalent noise bandwidth is 3 Hz. Decimation changes reported bin
   spacing without changing the estimator bandwidth.
 - [x] Multitaper's frequency-resolution property, helper names, keyword, and
-  returned key retain their values and positional order without warnings or
+  returned key retain their values (for windows of a whole number of samples;
+  a rounded window reports the realized window, see D2) and positional order
+  without warnings or
   synonym spellings. STFT exposes `equivalent_noise_bandwidth` and does not
   inherit Multitaper's `frequency_resolution` property.
 - [x] Metadata does not depend on whether tapers/FFT have already been cached;
@@ -345,7 +356,9 @@ to trigger an exact zero pivot consistently across LAPACK builds.
 ## Step 3 implementation
 
 **Scope:** D4 and D23. **Branch:** `refactor/frequency-selection`, based on
-`77e83ce` (`refactor/windowed-fft-base`, on step 2's head `1953a61`).
+the head of `refactor/windowed-fft-base` (now `39b4784`, on step 2's head
+`1953a61`; the step was first built on that branch's earlier head `77e83ce`,
+since rebased).
 Implemented and validated locally on 2026-11-19: 2,142 tests passed with 16
 skips on the main CPU environment; all 70 source doctests, Ruff
 formatting/lint, and mypy passed.
@@ -436,7 +449,9 @@ Rulings where the rules above were silent:
   example and agree with the released selection: v2.0.1 itself and this
   branch give the same `delay` bin counts for 30 tuple, list, and ndarray
   bands on float32 and float64 grids, and 38 of 40 recorded float64 and
-  float32 outputs are bit-identical to `4266d7c`/`77e83ce`; the other two are
+  float32 outputs are bit-identical to the development builds before this
+  step (`4266d7c`, and `77e83ce`, a base-class head since rebased, measured
+  before the rebase); the other two are
   a float32 tuple band where those development builds had departed from
   v2.0.1. Open-ended bands (`(10.1, inf)`, `(-inf, 20.3)`, `(-inf, inf)`,
   `(0.3, inf)`) match the 2.0.1 wheel in all 48 tuple, list, ndarray,
@@ -448,7 +463,7 @@ Rulings where the rules above were silent:
   full result's slice.
 - [x] Additive band-power integrals for adjacent inclusive bands; their means
   share the endpoint bin.
-- [ ] Issue #101 entry for the `frequencies_of_interest` alias (orchestrator).
+- [x] Issue #101 entry for the `frequencies_of_interest` alias.
 
 ## Step 4 implementation
 
@@ -574,7 +589,7 @@ Rulings where the rules above were silent:
 - [x] Power's `source` axis and `power.rename(source="signal")` documented.
 - [x] Measure attributes stay true after cropping, decimation, and band
   reduction (density, coherence, phase, and complex measures).
-- [ ] Issue #101 entry for the `coherence_magnitude` alias (orchestrator).
+- [x] Issue #101 entry for the `coherence_magnitude` alias.
 
 ## Step 5 implementation
 
@@ -662,7 +677,133 @@ Rulings where the rules above were silent:
   2.0.1 wheel under NumPy 2.5 and 1.24.
 - [x] Duplicate arguments fail; misspelled mapping keys fail.
 - [x] Published positional orders are preserved and pinned by tests.
-- [ ] Issue #101 entries for the three aliases (orchestrator).
+- [x] Issue #101 entries for the three aliases (they cite #115).
+
+## Step 6 implementation
+
+**Scope:** D17 and D31, the migration table and schema reference for the whole
+pass, and the issue #101 checklist. **Branch:**
+`refactor/simulators-and-migration`, based on step 5's final head `91db050`
+(PR #115).
+Implemented and validated locally on 2026-11-19, including both final
+reviews' fixes: 2,428 tests passed with 16 skips on the main CPU environment,
+and 2,313 passed with 101 skips on Python 3.10 with the NumPy 1.24/SciPy
+1.11.1/xarray 2023.1/Matplotlib 3.7 floors; all 70 source doctests (also on
+the floors), Ruff formatting/lint, and mypy passed. No numerical code
+changed, so no benchmark was run: the simulators' draws are bit-identical to
+their first 3.0 form, and the notebook snapshot tests' stored values are
+unchanged. All three tutorial notebooks execute without error.
+
+Released forms checked against `v2.0.1`: its `simulate.py` defines only
+`simulate_MVAR`, so `simulate_lagged_broadband` and
+`simulate_shared_oscillation` are new in 3.0 and change without aliases, and
+`simulate_MVAR` keeps its signature and `(time, trial, signal)` shape.
+
+Rulings where the rules above were silent:
+
+- **Positional order.** `simulate_lagged_broadband(lags_samples, noise_levels,
+  n_time_samples, n_trials=1, random_state=None)` keeps its order, so the
+  tutorial's positional calls still read naturally; `n_trials=None` is the
+  2-D option and returns the default single trial's values bit for bit (the
+  same draws in the same order). `simulate_shared_oscillation` keeps
+  `n_trials` fourth with default 1 and makes `amplitudes` a required
+  keyword-only argument (a required argument cannot follow a defaulted one
+  positionally); a call that still passes it fifth raises `TypeError`. Only
+  the lagged-broadband simulator accepts `n_trials=None`, as D17 says.
+- **Units.** `lags_samples` is validated as before (non-negative integers);
+  its error message names the `round(delay * sampling_frequency)`
+  conversion. The seconds-to-samples example is a doctest in the
+  `simulate_lagged_broadband` docstring (10.2 ms at 1500 Hz rounds to 15
+  samples, a simulated delay of 10 ms) and a labeled line in each
+  group-delay and phase-slope cell of the simulated-examples tutorial.
+  `simulate_MVAR`'s docstring says its lags and time index count samples; no
+  code changed.
+- **One migration table.** The CHANGELOG migration guide is the single
+  migration table. It gains a row for the 2.0.1 `mt_*` attributes (folded in
+  from the cookbook's separate metadata table, which now links to it) and
+  rows marked *Unreleased* for every interface renamed during 3.0
+  development without a compatibility path (band-reduction keywords,
+  component source/target coordinates, prefixed and unreleased attributes,
+  the interval attributes, STFT's bandwidth property, keyword-only settings
+  of the new APIs, and the simulators). The cookbook's "Result schema"
+  section is the single schema reference; it gains `output_schema_version`,
+  `package`/`package_version`, and the `arg_<name>` views. Each row was
+  checked by running the old and new forms.
+- **Counts.** Both simulators raise `ValueError` naming `n_time_samples` or
+  `n_trials` for a count that is not a positive integer (zero, negative,
+  fractional, boolean); NumPy integers are accepted. `n_trials=None` stays
+  the lagged simulator's 2-D form, and the shared-oscillation message says
+  it has none. `simulate_MVAR` is released and is not changed.
+- **Rounding a delay.** The docstring says that Python's `round` sends an
+  exact half to the even neighbour and that a delay of half a sample or less
+  becomes 0, once, in the `lags_samples` parameter text; the example converts
+  10.2 ms at 1500 Hz to 15 samples and prints the 10 ms that simulates.
+- **Migration completeness.** The migration rows were checked against a
+  diff of every public name and signature between the 2.0.1 wheel and this
+  branch and against the same calls run under both, which added rows for the
+  default result's `coherency`, window-step rounding and the realized-window
+  properties, the corrected confidence interval behind both
+  `power_confidence_intervals` spellings, `squeeze=True` with several
+  measures, `power_fisher_z_transform`'s `spectrum2` default, the removed
+  `tridisolve`/`tridi_inverse_iteration`, `connectivity.EXPECTATION` and the
+  module's re-imports, and `mt_summarize_parameters`. D2 and D28 record that
+  only `Multitaper.frequency_resolution` follows a rounded window.
+- **Schema reference test.** A test in `tests/test_result_schema.py` reads
+  the cookbook's attribute table and checks both directions: every
+  attribute a result of any transform, measure, or wrapper option carries is
+  named there (`input_attrs_json` was the one missing), and every name there
+  is carried by some probed result. It reads the `mt_*` keys only from
+  their list sentence, so dropping one from the list fails it. Generating
+  the table from one code record would remove the check's need to parse it;
+  that is left for 3.x, as is validating `simulate_MVAR`'s counts.
+- **D20 and copied channel metadata.** D20 adds `long_name` (and units where
+  they apply) to the coordinates the package creates: band edges, connection
+  labels, and `source`/`target`. Channel metadata copied from an input
+  DataArray (e.g. `area` becoming `source_area`/`target_area`) keeps the attrs
+  it came with and gains none: the package cannot know what a user's
+  coordinate means, and a name-derived label would add no information. A
+  default description could be added in 3.x without breaking anything.
+- **Final-review fixes to earlier steps (owner's ruling).** Two items in
+  code from steps 4 and 5 are fixed here, as their own commits, rather than
+  by restacking those branches: the wrappers now warn about
+  `coherence_magnitude` only for a call that succeeds, like the other
+  deprecated spellings, and a plain `frequencies_of_interest=` to
+  `connectivity_to_xarray` gets only its own deprecation (naming
+  `frequency_range`), not also the plain-keyword one advising
+  `connectivity_kwargs`. One test runs every deprecated spelling in a 2.x
+  sequence and checks one warning per spelling at its own line.
+- **Further migration rows.** The guide adds the debiased PLI and wPLI values
+  where there is no phase lag (`-1/(n-1)` and NaN in 2.0.1, 0 now, including
+  dsWPLI's diagonal) and read-only `Multitaper` settings; the window-step
+  advice reproduces 2.x's windows exactly (checked on the wheel); the
+  `ci=2c-1` equivalence states its range.
+- **Issue #101 checkboxes.** In the proposed text every alias and key stays
+  unticked until 4.0 removes it; a box means "removed", not "listed".
+- **Tutorial outputs.** The three tutorials were re-executed with
+  nbconvert so their stored outputs show the final attributes. The stored
+  Dataset reprs still list the 15 released `mt_*` compatibility copies,
+  because every 3.x Multitaper result carries them; the tutorials are not
+  changed to hide them. Cells that ended with a plotting call end with `;`,
+  so no output is a `<... at 0x...>` repr, and the notebooks are executed
+  without per-cell timing metadata. What remains run-specific is the
+  development `package_version` (until a release is tagged) and the random
+  element ids of xarray's HTML repr, which every execution regenerates.
+
+### Step 6 acceptance checklist
+
+- [x] Documented shapes: both new simulators return `(time, trial, signal)`
+  with one trial by default, `simulate_lagged_broadband(n_trials=None)`
+  returns `(time, signal)`, and `simulate_MVAR` is unchanged
+  (`tests/test_simulate.py`); the asserting tutorials pass when executed.
+- [x] Seconds-to-samples conversion is explicit in the docstring doctest,
+  the tutorial, and the migration table; `lags=` raises `TypeError`.
+- [x] Every deprecated path in the code (searched for `DeprecationWarning`)
+  is in the proposed issue #101 checklist with its replacement, first
+  deprecation release, and warning tests: the `coherence_magnitude` names,
+  `frequencies_of_interest`, the wrappers' plain-keyword settings,
+  `power_confidence_intervals(n_tapers=)`, `Connectivity.from_multitaper`,
+  and the 15 `mt_*` attribute keys.
+- [ ] Issue #101 updated with that text (orchestrator).
 
 ## Verification performed for this sheet
 

@@ -95,37 +95,49 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
 
 
 @pytest.mark.parametrize(
-    "lags",
+    "lags_samples",
     [(-3, 0), (0, 1.5), (0, 3.0), [[0, 3]], 3],
     ids=["negative", "fractional", "whole_float", "2d", "scalar"],
 )
-def test_lagged_broadband_rejects_negative_or_fractional_lags(lags):
+def test_lagged_broadband_rejects_negative_or_fractional_lags(lags_samples):
     """Lags must be non-negative integers; a lead is a smaller lag, not a negative one."""
-    with pytest.raises(ValueError, match="non-negative integers"):
-        simulate_lagged_broadband(lags, noise_levels=0.1, n_time_samples=50, random_state=0)
+    with pytest.raises(ValueError, match="lags_samples must be non-negative integers"):
+        simulate_lagged_broadband(
+            lags_samples, noise_levels=0.1, n_time_samples=50, random_state=0
+        )
 
 
 @pytest.mark.parametrize(
-    ("n_trials", "expected_shape"),
-    [(None, (50, 3)), (4, (50, 4, 3))],
-    ids=["no_trials", "trials"],
+    ("trial_kwargs", "expected_shape"),
+    [({}, (50, 1, 3)), ({"n_trials": 4}, (50, 4, 3))],
+    ids=["default_one_trial", "trials"],
 )
-def test_lagged_broadband_shape(n_trials, expected_shape):
-    """The trial axis is present only when ``n_trials`` is given."""
+def test_lagged_broadband_shape(trial_kwargs, expected_shape):
+    """``(time, trial, signal)`` with one trial by default, like ``simulate_MVAR``."""
     time_series = simulate_lagged_broadband(
-        (0, 2, 5), noise_levels=0.1, n_time_samples=50, n_trials=n_trials, random_state=0
+        (0, 2, 5), noise_levels=0.1, n_time_samples=50, random_state=0, **trial_kwargs
     )
     assert time_series.shape == expected_shape
     assert time_series.dtype == np.float64
 
 
+def test_lagged_broadband_without_trial_axis_is_the_single_trial():
+    """``n_trials=None`` returns the default single trial as ``(time, signal)``,
+    bit for bit."""
+    kwargs = {"lags_samples": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64}
+    one_trial = simulate_lagged_broadband(**kwargs, random_state=5)
+    no_trial_axis = simulate_lagged_broadband(**kwargs, n_trials=None, random_state=5)
+    assert no_trial_axis.shape == (64, 2)
+    np.testing.assert_array_equal(one_trial[:, 0, :], no_trial_axis)
+
+
 def test_lagged_broadband_cross_correlation_peaks_at_lag():
-    """Signal 1 repeats signal 0 ``lags[1] - lags[0]`` samples later."""
+    """Signal 1 repeats signal 0 ``lags_samples[1] - lags_samples[0]`` samples later."""
     lags = (2, 9)
     time_series = simulate_lagged_broadband(
         lags, noise_levels=0.1, n_time_samples=5000, random_state=0
     )
-    signal0, signal1 = time_series[:, 0], time_series[:, 1]
+    signal0, signal1 = time_series[:, 0, 0], time_series[:, 0, 1]
     # np.correlate(a, v, "full")[i] = sum_n a[n + k] * v[n] with k = i - (len(v) - 1).
     cross_correlation = np.correlate(signal1, signal0, mode="full")
     shift = np.argmax(cross_correlation) - (signal0.size - 1)
@@ -135,7 +147,7 @@ def test_lagged_broadband_cross_correlation_peaks_at_lag():
 @pytest.mark.parametrize("leader", [0, 1])
 @pytest.mark.parametrize("n_trials", [None, 3])
 def test_lagged_broadband_reproduces_pair_helper_semantics(leader, n_trials):
-    """``lags=(0, L)`` slices one seeded source and adds one noise draw.
+    """``lags_samples=(0, L)`` slices one seeded source and adds one noise draw.
 
     Replays by hand the leader/follower construction (source first, then
     ``rng.normal(0, noise_sd, shape)``); the simulator must reproduce it bit for
@@ -185,12 +197,23 @@ def _fourier_at_frequency(time_series):
     ]
 
 
-def test_shared_oscillation_shape():
-    """Shape is (n_time_samples, n_trials, n_signals) with n_signals = len(amplitudes)."""
+@pytest.mark.parametrize(
+    ("trial_kwargs", "expected_shape"),
+    [({}, (300, 1, 3)), ({"n_trials": 5}, (300, 5, 3))],
+    ids=["default_one_trial", "trials"],
+)
+def test_shared_oscillation_shape(trial_kwargs, expected_shape):
+    """Shape is (n_time_samples, n_trials, n_signals) with n_signals = len(amplitudes),
+    and one trial by default, like ``simulate_MVAR``."""
     time_series = simulate_shared_oscillation(
-        _FREQUENCY, _SAMPLING_FREQUENCY, 300, 5, amplitudes=[1.0, 0.5, 2.0], random_state=0
+        _FREQUENCY,
+        _SAMPLING_FREQUENCY,
+        300,
+        amplitudes=[1.0, 0.5, 2.0],
+        random_state=0,
+        **trial_kwargs,
     )
-    assert time_series.shape == (300, 5, 3)
+    assert time_series.shape == expected_shape
     assert time_series.dtype == np.float64
 
 
@@ -270,7 +293,7 @@ def test_shared_oscillation_matches_its_formula():
         _SAMPLING_FREQUENCY,
         100,
         2,
-        amplitudes,
+        amplitudes=amplitudes,
         phase_offsets=phase_offsets,
         random_phase_per_trial=False,
     )
@@ -288,7 +311,7 @@ def test_shared_oscillation_trial_phases_cover_the_circle():
     n_trials = 500
     # 100 samples at 1000 Hz hold exactly four 40 Hz cycles, so it is FFT bin 4.
     result = simulate_shared_oscillation(
-        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, [1.0], random_state=0
+        _FREQUENCY, _SAMPLING_FREQUENCY, 100, n_trials, amplitudes=[1.0], random_state=0
     )
     phases = np.angle(np.fft.rfft(result[:, :, 0], axis=0)[4])
     mean_resultant_length = np.abs(np.mean(np.exp(1j * phases)))
@@ -309,7 +332,12 @@ def test_shared_oscillation_zero_amplitude_is_flat():
     [
         (
             simulate_lagged_broadband,
-            {"lags": (0, 4), "noise_levels": [0.2, 0.5], "n_time_samples": 64, "n_trials": 2},
+            {
+                "lags_samples": (0, 4),
+                "noise_levels": [0.2, 0.5],
+                "n_time_samples": 64,
+                "n_trials": 2,
+            },
         ),
         (
             simulate_shared_oscillation,
@@ -404,3 +432,57 @@ def test_lagged_broadband_rejects_negative_noise_levels():
     """``noise_levels`` are standard deviations, so a negative one is a mistake."""
     with pytest.raises(ValueError, match="must be non-negative"):
         simulate_lagged_broadband((0, 3), -0.1, n_time_samples=50)
+
+
+@pytest.mark.parametrize(
+    ("simulate", "kwargs"),
+    [
+        (simulate_lagged_broadband, {"lags_samples": (0, 2), "noise_levels": 0.1}),
+        (
+            simulate_shared_oscillation,
+            {
+                "frequency": _FREQUENCY,
+                "sampling_frequency": _SAMPLING_FREQUENCY,
+                "amplitudes": [1.0],
+            },
+        ),
+    ],
+    ids=["lagged_broadband", "shared_oscillation"],
+)
+@pytest.mark.parametrize("name", ["n_trials", "n_time_samples"])
+@pytest.mark.parametrize(
+    "value", [0, -1, 2.0, True], ids=["zero", "negative", "float", "bool"]
+)
+def test_simulators_reject_counts_that_are_not_positive_integers(
+    simulate, kwargs, name, value
+):
+    """An empty, negative, fractional, or boolean count names itself instead of
+    returning an empty array or failing inside NumPy."""
+    counts = {"n_trials": 2, "n_time_samples": 50, name: value}
+    with pytest.raises(ValueError, match=f"{name} must be a positive integer"):
+        simulate(**kwargs, **counts)
+
+
+def test_simulators_accept_numpy_integer_counts():
+    """NumPy integer counts are valid counts."""
+    lagged = simulate_lagged_broadband(
+        (0, 2), 0.1, n_time_samples=np.int64(50), n_trials=np.int32(2), random_state=0
+    )
+    oscillation = simulate_shared_oscillation(
+        _FREQUENCY, _SAMPLING_FREQUENCY, np.int64(50), np.int32(2), amplitudes=[1.0]
+    )
+    assert lagged.shape == (50, 2, 2)
+    assert oscillation.shape == (50, 2, 1)
+
+
+def test_shared_oscillation_has_no_two_dimensional_form():
+    """Only the lagged-broadband simulator omits the trial axis for ``n_trials=None``."""
+    with pytest.raises(ValueError, match="no 2-D form, so pass n_trials=1"):
+        simulate_shared_oscillation(
+            _FREQUENCY, _SAMPLING_FREQUENCY, 50, n_trials=None, amplitudes=[1.0]
+        )
+    # The 2-D hint is for None only; another bad count gets the plain message.
+    with pytest.raises(ValueError, match=r"positive integer; got 0$"):
+        simulate_shared_oscillation(
+            _FREQUENCY, _SAMPLING_FREQUENCY, 50, n_trials=0, amplitudes=[1.0]
+        )

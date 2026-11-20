@@ -1,7 +1,9 @@
 """Public result-schema contracts across transforms and frequency operations."""
 
 import json
+import re
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,8 +16,10 @@ from spectral_connectivity import (
     ShortTimeFourierTransform,
     Welch,
     estimate_frequency_resolution,
+    list_measures,
     suggest_parameters,
 )
+from spectral_connectivity._measure_registry import _is_group_measure
 from spectral_connectivity._provenance import _with_frequency_grid_metadata
 from spectral_connectivity.wrapper import (
     connectivity_to_xarray,
@@ -767,3 +771,122 @@ def test_power_units_are_known_only_when_input_states_them(data, units):
         assert result.attrs["units"] == "(uV)^2/Hz"
     else:
         assert "units" not in result.attrs
+
+
+_COOKBOOK = Path(__file__).parents[1] / "docs" / "cookbook.md"
+_SCHEMA_SECTION = "## Result schema and transform bandwidth"
+_COMPATIBILITY_LIST_START = "remain compatibility copies"
+# Measures that need a uniform frequency grid, which a Morlet transform lacks.
+_UNIFORM_GRID_CATEGORIES = {"delay", "group_delay", "phase_slope"}
+
+
+def _documented_attribute_names():
+    """The names the cookbook's schema reference documents, read from its text:
+    the first column of its attribute table and the list of ``mt_*``
+    compatibility keys (only that list: the prose after it mentions some keys
+    again, and must not document one the list dropped)."""
+    text = _COOKBOOK.read_text(encoding="utf-8")
+    section = text.split(_SCHEMA_SECTION, 1)[1].split("\n## ", 1)[0]
+    table_names = [
+        name
+        for row in section.splitlines()
+        if row.startswith("| `")
+        for name in re.findall(r"`([^`]+)`", row.split("|")[1])
+    ]
+    compatibility_list = section.split(_COMPATIBILITY_LIST_START, 1)[1].split(".\n", 1)[0]
+    return sorted(set(table_names + re.findall(r"`(mt_\w+)`", compatibility_list)))
+
+
+def _name_pattern(name):
+    """``arg_<name>`` stands for any keyword name; other names are literal."""
+    return re.compile(re.escape(name).replace("<name>", r"\w+") + "$")
+
+
+def _attribute_names(result):
+    names = set(result.attrs)
+    if isinstance(result, xr.Dataset):
+        for variable in result.data_vars.values():
+            names |= set(variable.attrs)
+    return names
+
+
+def _probe_results(data):
+    """Results of every transform with every measure it supports, and of each
+    wrapper option that writes attributes of its own."""
+    labels = ["a", "a", "b", "b"]
+    for transform_name in ("multitaper", "stft", "welch", "morlet"):
+        transform = _transform(transform_name, data)
+        for info in list_measures():
+            if transform_name == "morlet" and (
+                info.requires_two_sided or info.category in _UNIFORM_GRID_CATEGORIES
+            ):
+                continue
+            settings = {}
+            if _is_group_measure(info.name):
+                settings["group_labels"] = labels
+            if info.name == "subset_pairwise_spectral_granger_prediction":
+                settings["connectivity_kwargs"] = {"pairs": [(0, 1)]}
+            yield connectivity_to_xarray(transform, info.name, **settings)
+
+    common = {"sampling_frequency": 64, "time_window_duration": 0.5}
+    yield multitaper_connectivity(
+        data,
+        **common,
+        method=["power", "magnitude_squared_coherence", "delay"],
+        frequency_range=(4, 20),
+        frequency_decimation=2,
+    )
+    for reduction in ("mean", "integral"):
+        yield multitaper_connectivity(
+            data,
+            **common,
+            method="power",
+            frequency_bands={"theta": (4, 8)},
+            frequency_reduction=reduction,
+        )
+    with pytest.warns(DeprecationWarning, match="coherence_magnitude"):
+        deprecated_name = multitaper_connectivity(data, **common, method="coherence_magnitude")
+    yield deprecated_name
+    multitaper = _transform("multitaper", data)
+    with pytest.warns(DeprecationWarning, match="frequencies_of_interest"):
+        open_band = connectivity_to_xarray(
+            multitaper, "delay", connectivity_kwargs={"frequencies_of_interest": (4, np.inf)}
+        )
+    yield open_band
+    labeled = xr.DataArray(
+        data,
+        dims=("time", "trial", "signal"),
+        coords={"time": np.arange(data.shape[0]) / 64, "subject": "s1"},
+        attrs={"units": "uV", "note": "recorded"},
+    )
+    yield multitaper_connectivity(labeled, time_window_duration=0.5, method="power")
+    yield multitaper_connectivity(
+        data, **common, method="power", transform_kwargs={"tapers": np.ones((32, 1))}
+    )
+    coefficients = multitaper.fft()
+    yield fourier_connectivity(coefficients, method="power")
+    yield fourier_connectivity(coefficients, multitaper.frequencies, multitaper.time, "power")
+
+
+def test_schema_reference_documents_exactly_the_attributes_results_carry():
+    """Every attribute a result carries is named by the cookbook's schema
+    reference, and every name the reference documents is carried by some
+    result. Update the table in ``docs/cookbook.md`` when either fails."""
+    data = np.random.default_rng(910).standard_normal((128, 3, 4))
+    documented = _documented_attribute_names()
+    with warnings.catch_warnings():
+        # Warnings about the random data (orientation reminder, correlated
+        # innovations, few observations) are not what this test is about.
+        warnings.simplefilter("ignore", UserWarning)
+        carried = set().union(*(_attribute_names(result) for result in _probe_results(data)))
+    patterns = {name: _name_pattern(name) for name in documented}
+    undocumented = sorted(
+        name for name in carried if not any(p.match(name) for p in patterns.values())
+    )
+    never_carried = sorted(
+        name
+        for name, pattern in patterns.items()
+        if not any(pattern.match(attribute) for attribute in carried)
+    )
+    assert undocumented == []
+    assert never_carried == []

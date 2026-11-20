@@ -5,11 +5,14 @@ known directed coupling. ``simulate_lagged_broadband`` generates delayed noisy
 copies of one broadband source, with a known lead/lag between every pair of
 signals. ``simulate_shared_oscillation`` generates one sinusoid seen by several
 signals with known amplitudes and phase offsets. All return ``float64`` NumPy
-arrays with time on the first axis and signals on the last.
+arrays of shape ``(n_time_samples, n_trials, n_signals)``, one trial by
+default; ``simulate_lagged_broadband(..., n_trials=None)`` omits the trial axis.
 """
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+from spectral_connectivity.utils import is_positive_integer
 
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
@@ -34,6 +37,18 @@ def _per_signal(
         msg = f"{name} are standard deviations and must be non-negative; got {values_array}"
         raise ValueError(msg)
     return np.broadcast_to(values_array.reshape(-1), (n_signals,))
+
+
+def _check_count(value: object, name: str, hint: str = "", *, hint_if_none: str = "") -> None:
+    """Raise ``ValueError`` unless ``value`` is a positive integer (not a bool).
+
+    ``hint`` follows the requirement in the message; ``hint_if_none``
+    replaces it when ``value`` is None.
+    """
+    if not is_positive_integer(value):
+        suffix = hint_if_none if value is None else hint
+        msg = f"{name} must be a positive integer{suffix}; got {value!r}"
+        raise ValueError(msg)
 
 
 def _add_noise(
@@ -62,13 +77,16 @@ def simulate_MVAR(
 
     Generates time series data following the MVAR model:
     X(t) = sum(A_k * X(t-k)) + E(t), where A_k are coefficient matrices
-    and E(t) is multivariate Gaussian noise.
+    and E(t) is multivariate Gaussian noise. Time ``t`` and the lags ``k``
+    count samples.
 
     Parameters
     ----------
     coefficients : NDArray[floating], shape (n_lags, n_signals, n_signals)
-        MVAR coefficient matrices for each lag. Each A_k matrix defines
-        the linear influence of signals at lag k.
+        MVAR coefficient matrices for each lag. ``coefficients[k - 1]`` is
+        A_k, the linear influence of the signals ``k`` samples earlier: lags
+        are sample steps, so lag ``k`` is ``k / sampling_frequency`` seconds at
+        whatever rate the series is analyzed with.
     noise_covariance : NDArray[floating], shape (n_signals, n_signals), optional
         Covariance matrix of the noise process. If None, uses identity matrix
         (independent unit-variance noise).
@@ -127,53 +145,63 @@ def simulate_MVAR(
 
 
 def simulate_lagged_broadband(
-    lags: ArrayLike,
+    lags_samples: ArrayLike,
     noise_levels: ArrayLike,
     n_time_samples: int,
-    n_trials: int | None = None,
+    n_trials: int | None = 1,
     random_state: int | np.random.Generator | None = None,
 ) -> NDArray[np.floating]:
     """Noisy copies of one white-noise source, each delayed by whole samples.
 
-    Signal ``k`` is ``source[t - lags[k]] + noise_levels[k] * N(0, 1)``, so a
-    signal with a smaller lag leads one with a larger lag by their difference
-    in samples. The source is broadband on purpose: a sinusoid delayed by a
-    whole number of cycles is indistinguishable from the original and carries
-    no lag information for group delay or the phase slope index.
+    Signal ``k`` is ``source[t - lags_samples[k]] + noise_levels[k] * N(0, 1)``,
+    so a signal with a smaller lag leads one with a larger lag by their
+    difference in samples. The source is broadband on purpose: a sinusoid
+    delayed by a whole number of cycles is indistinguishable from the original
+    and carries no lag information for group delay or the phase slope index.
 
     Parameters
     ----------
-    lags : array_like of int, shape (n_signals,)
-        Delay of each signal behind the source, in samples. Must be
-        non-negative integers; express a lead as a smaller lag on the leading
-        signal, e.g. ``lags=(0, 3)`` for signal 0 leading signal 1 by 3 samples.
+    lags_samples : array_like of int, shape (n_signals,)
+        Delay of each signal behind the source, in whole samples (not
+        seconds). Must be non-negative integers; express a lead as a smaller
+        lag on the leading signal, e.g. ``lags_samples=(0, 3)`` for signal 0
+        leading signal 1 by 3 samples. Convert a delay in seconds with
+        ``round(delay * sampling_frequency)``, as in the second example.
+        Python's ``round`` sends an exact half to the even neighbour (10.5
+        samples become 10, 11.5 become 12), and a delay of half a sample or
+        less becomes 0, so the signals are simultaneous: check the simulated
+        delay, ``lags_samples[k] / sampling_frequency`` seconds, or simulate
+        at a higher rate.
     noise_levels : float or array_like of float, shape (n_signals,)
         Standard deviation of the independent Gaussian noise added to each
         signal. A scalar applies to every signal; 0 gives the pure delayed
         source.
     n_time_samples : int
         Number of time samples per signal.
-    n_trials : int or None, optional
-        Number of independent trials. None (default) omits the trial axis.
+    n_trials : int or None, default=1
+        Number of independent trials. None draws the default single trial and
+        returns it without its trial axis, as a 2-D array.
     random_state : int, np.random.Generator, or None, optional
         Seed or generator for reproducible results.
 
     Returns
     -------
-    time_series : NDArray[floating], shape (n_time_samples, n_signals) or (n_time_samples, n_trials, n_signals)
-        The delayed noisy copies; the trial axis is present only when
-        ``n_trials`` is given.
+    time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+        The delayed noisy copies, ``(time, trial, signal)`` like
+        ``simulate_MVAR``; ``(time, signal)`` when ``n_trials`` is None.
 
     Raises
     ------
     ValueError
-        If any lag is negative or not an integer, or if ``noise_levels`` is
-        neither a scalar nor one value per signal.
+        If any lag is negative or not an integer, if ``noise_levels`` is
+        neither a scalar nor one value per signal, or if ``n_time_samples``
+        or ``n_trials`` (unless None) is not a positive integer.
 
     Notes
     -----
-    The source has ``n_time_samples + max(lags)`` samples and signal ``k`` is
-    its slice starting at ``max(lags) - lags[k]``, so no sample wraps around.
+    The source has ``n_time_samples + max(lags_samples)`` samples and signal
+    ``k`` is its slice starting at ``max(lags_samples) - lags_samples[k]``, so
+    no sample wraps around.
     The source is drawn first, then all of the noise in one draw of shape
     ``time_series.shape``.
 
@@ -181,18 +209,30 @@ def simulate_lagged_broadband(
     --------
     >>> import numpy as np
     >>> time_series = simulate_lagged_broadband(
-    ...     lags=(0, 3), noise_levels=0.0, n_time_samples=100, random_state=0
+    ...     lags_samples=(0, 3), noise_levels=0.0, n_time_samples=100, random_state=0
     ... )
     >>> time_series.shape
-    (100, 2)
+    (100, 1, 2)
     >>> # Signal 1 repeats signal 0 three samples later: signal 0 leads.
-    >>> bool(np.array_equal(time_series[3:, 1], time_series[:-3, 0]))
+    >>> bool(np.array_equal(time_series[3:, :, 1], time_series[:-3, :, 0]))
     True
 
+    For a delay given in seconds, round it to whole samples at the sampling
+    rate, pass that count as ``lags_samples=(0, lag_samples)``, and check the
+    delay it simulates:
+
+    >>> sampling_frequency = 1500.0  # Hz
+    >>> delay = 0.0102  # seconds: signal 0 should lead signal 1 by 10.2 ms
+    >>> lag_samples = round(delay * sampling_frequency)  # 15.3 samples, rounded
+    >>> lag_samples
+    15
+    >>> lag_samples / sampling_frequency  # the delay actually simulated, in seconds
+    0.01
+
     """
-    lags_array = np.asarray(lags)
+    lags_array = np.asarray(lags_samples)
     if lags_array.size == 0:
-        msg = "lags must have at least one entry, one per signal"
+        msg = "lags_samples must have at least one entry, one per signal"
         raise ValueError(msg)
     if (
         lags_array.ndim != 1
@@ -200,18 +240,24 @@ def simulate_lagged_broadband(
         or np.any(lags_array < 0)
     ):
         msg = (
-            "lags must be non-negative integers (an integer dtype, so 3 rather "
-            "than 3.0); express a lead as a smaller lag on the leading signal, "
-            "e.g. lags=(0, 3)"
+            "lags_samples must be non-negative integers, in samples (an integer "
+            "dtype, so 3 rather than 3.0); convert a delay in seconds with "
+            "round(delay * sampling_frequency), and express a lead as a smaller "
+            "lag on the leading signal, e.g. lags_samples=(0, 3)"
         )
         raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    if n_trials is not None:
+        _check_count(n_trials, "n_trials", " (or None to omit the trial axis)")
     n_signals = lags_array.size
     noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)
     rng = _generator(random_state)
 
     max_lag = int(lags_array.max())
-    extra_shape = () if n_trials is None else (n_trials,)
-    source = rng.standard_normal((n_time_samples + max_lag, *extra_shape))
+    # n_trials=None is the single trial without its trial axis.
+    source = rng.standard_normal(
+        (n_time_samples + max_lag, 1 if n_trials is None else n_trials)
+    )
     time_series = np.stack(
         # Python ints, so a narrow dtype such as int8 cannot overflow the bounds.
         [
@@ -219,17 +265,18 @@ def simulate_lagged_broadband(
             for lag in lags_array.tolist()
         ],
         axis=-1,
-    )
-    return _add_noise(time_series, noise_array, rng)
+    )  # (n_time_samples, n_trials, n_signals)
+    noisy = _add_noise(time_series, noise_array, rng)
+    return noisy[:, 0, :] if n_trials is None else noisy
 
 
 def simulate_shared_oscillation(
     frequency: float,
     sampling_frequency: float,
     n_time_samples: int,
-    n_trials: int,
-    amplitudes: ArrayLike,
+    n_trials: int = 1,
     *,
+    amplitudes: ArrayLike,
     phase_offsets: ArrayLike = 0.0,
     noise_levels: ArrayLike = 0.0,
     random_phase_per_trial: bool = True,
@@ -254,11 +301,11 @@ def simulate_shared_oscillation(
         Sampling rate, in Hz.
     n_time_samples : int
         Number of time samples per trial; time ``t`` runs from 0.
-    n_trials : int
+    n_trials : int, default=1
         Number of trials.
     amplitudes : array_like of float, shape (n_signals,)
         Amplitude of the sinusoid in each signal; its length sets
-        ``n_signals``.
+        ``n_signals``. Keyword-only and required.
     phase_offsets : float or array_like of float, shape (n_signals,), default=0.0
         Phase added to the sinusoid in each signal, in radians.
     noise_levels : float or array_like of float, shape (n_signals,), default=0.0
@@ -278,8 +325,10 @@ def simulate_shared_oscillation(
     Raises
     ------
     ValueError
-        If ``amplitudes`` is not 1-D, or if ``phase_offsets`` or
-        ``noise_levels`` is neither a scalar nor one value per signal.
+        If ``amplitudes`` is not 1-D, if ``phase_offsets`` or
+        ``noise_levels`` is neither a scalar nor one value per signal, or if
+        ``n_time_samples`` or ``n_trials`` is not a positive integer (there is
+        no 2-D form: ``n_trials=None`` raises).
 
     Notes
     -----
@@ -317,6 +366,13 @@ def simulate_shared_oscillation(
             f"got shape {amplitudes_array.shape}"
         )
         raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    _check_count(
+        n_trials,
+        "n_trials",
+        hint_if_none="; simulate_shared_oscillation has no 2-D form, so pass "
+        "n_trials=1 for a single trial",
+    )
     n_signals = amplitudes_array.size
     phase_offsets_array = _per_signal(phase_offsets, n_signals, "phase_offsets")
     noise_array = _per_signal(noise_levels, n_signals, "noise_levels", nonnegative=True)

@@ -30,7 +30,7 @@ def nitime_series():
     500 samples (even, so the last one-sided bin is Nyquist). Signals 1 and 2
     are noisy copies of signal 0 delayed by 2 and 5 samples.
     """
-    return simulate_lagged_broadband((0, 2, 5), 1.0, 500, random_state=0)
+    return simulate_lagged_broadband((0, 2, 5), 1.0, 500, n_trials=None, random_state=0)
 
 
 def test_coherence_matches_nitime(nitime_series):
