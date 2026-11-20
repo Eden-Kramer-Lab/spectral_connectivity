@@ -463,7 +463,8 @@ def _merge_legacy_settings(
 def _warn_legacy_settings(function: str, mapping_name: str, legacy: Mapping[str, Any]) -> None:
     """Warn once, at the caller, that ``legacy`` settings belong in ``mapping_name``.
 
-    Called after every setting is validated, so a rejected call does not warn.
+    Called just before the wrapper returns, so a call that is rejected for any
+    reason does not warn first.
     """
     if not legacy:
         return
@@ -513,11 +514,37 @@ def _transform_settings(
                 "settings in transform_kwargs."
             )
             raise TypeError(msg)
-    settings = _merge_legacy_settings(
+    return _merge_legacy_settings(
         "multitaper_connectivity", "transform_kwargs", mapping, legacy
     )
-    _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", legacy)
-    return settings
+
+
+def _check_measure_settings(
+    methods: Sequence[str],
+    connectivity_kwargs: Mapping[str, Any] | None,
+    *,
+    transform_settings_hint: str,
+    frequency_decimation: int,
+    frequency_bands: Mapping[str, tuple[float, float]] | None,
+) -> None:
+    """Reject a ``connectivity_kwargs`` key before any spectral work.
+
+    Every requested measure must take every key (``group_labels`` is routed to
+    the group measures separately), and the frequency options must suit the
+    measures (see :func:`_check_frequency_operations`).
+    """
+    settings = _setting_mapping("connectivity_kwargs", connectivity_kwargs)
+    _check_frequency_operations(
+        methods,
+        settings,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
+    measure_settings = {key: value for key, value in settings.items() if key != "group_labels"}
+    for method in methods:
+        _check_method_accepts_kwargs(
+            method, getattr(Connectivity, method), measure_settings, transform_settings_hint
+        )
 
 
 def connectivity_to_xarray(
@@ -618,7 +645,6 @@ def connectivity_to_xarray(
         getattr(Connectivity, method),
         {key: value for key, value in measure_settings.items() if key != "group_labels"},
     )
-    _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     connectivity = Connectivity.from_transform(m)
     group_labels, measure_settings, group_methods = _resolve_group_labels(
         [method], measure_settings, group_labels, connectivity.n_signals
@@ -692,6 +718,7 @@ def connectivity_to_xarray(
             valid_time = validity[:, selection.mask].all(axis=1)
             result = result.assign_coords(valid_time=(("time",), valid_time, validity_attrs))
     _warn_label_orientation_changed([method])
+    _warn_legacy_settings("connectivity_to_xarray", "connectivity_kwargs", kwargs)
     return _with_frequency_grid_metadata(result)
 
 
@@ -817,14 +844,9 @@ def _format_and_reduce_measures(
     measures that consume an interval and crops each other result before they
     are merged, so every variable keeps the same bins. ``connectivity_kwargs``
     must be label-free; ``transform_settings_hint`` tells a rejected keyword
-    argument where transform settings go for the calling wrapper.
+    argument where transform settings go for the calling wrapper. The callers
+    check the settings first (see :func:`_check_measure_settings`).
     """
-    _check_frequency_operations(
-        methods,
-        connectivity_kwargs,
-        frequency_decimation=frequency_decimation,
-        frequency_bands=frequency_bands,
-    )
     frequencies = to_numpy(connectivity.frequencies)
     consuming_methods = frozenset(m for m in methods if _consumes_frequency_range(m))
     # One selection per call, on the full grid: the interval measures' results
@@ -1315,6 +1337,18 @@ def multitaper_connectivity(
     # component/group, frequency-reduced, and directed-transfer-function results
     # remain opt-in by name.
     method, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    # Every measure setting is checked before the transform runs its FFT.
+    transform_settings_hint = (
+        "pass it to multitaper_connectivity: by name for the common settings "
+        f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
+    )
+    _check_measure_settings(
+        method,
+        connectivity_kwargs,
+        transform_settings_hint=transform_settings_hint,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
@@ -1357,10 +1391,7 @@ def multitaper_connectivity(
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
         group_methods=group_methods,
-        transform_settings_hint=(
-            "pass it to multitaper_connectivity: by name for the common settings "
-            f"({', '.join(_NAMED_TRANSFORM_SETTINGS)}), otherwise in transform_kwargs"
-        ),
+        transform_settings_hint=transform_settings_hint,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,
@@ -1369,6 +1400,7 @@ def multitaper_connectivity(
         signal_metadata=signal_metadata,
     )
     _warn_label_orientation_changed(method)
+    _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
     return result
 
 
@@ -1606,6 +1638,14 @@ def fourier_connectivity(
     )
     # No default measure needs a two-sided spectrum, so the defaults suit any input.
     methods, output_names, return_dataarray = _requested_methods(method, DEFAULT_METHODS)
+    transform_settings_hint = "set it on the transform that produced fourier_coefficients"
+    _check_measure_settings(
+        methods,
+        connectivity_kwargs,
+        transform_settings_hint=transform_settings_hint,
+        frequency_decimation=frequency_decimation,
+        frequency_bands=frequency_bands,
+    )
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels, connectivity.n_signals
     )
@@ -1716,7 +1756,7 @@ def fourier_connectivity(
         connectivity_kwargs=connectivity_kwargs,
         group_labels=group_labels,
         group_methods=group_methods,
-        transform_settings_hint=("set it on the transform that produced fourier_coefficients"),
+        transform_settings_hint=transform_settings_hint,
         frequency_range=frequency_range,
         frequency_decimation=frequency_decimation,
         frequency_bands=frequency_bands,

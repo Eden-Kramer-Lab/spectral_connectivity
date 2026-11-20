@@ -592,10 +592,12 @@ is removed in 4.0.
   forwarding): use `transform_kwargs` for `Multitaper` settings and
   `connectivity_kwargs` for measure settings. The plain keywords still reach
   the same place, with the same result and provenance, and warn once per
-  call, at the caller, naming the mapping. The common settings are named
-  arguments and never warn. A setting given both in the mapping and as a
-  plain keyword raises `ValueError`, and a name the transform or measure
-  does not take raises `TypeError` before anything warns or is computed.
+  call, at the caller, naming the mapping, only when the call succeeds (a
+  rejected call raises its error without the warning). The common settings
+  are named arguments and never warn. A setting given both in the mapping and
+  as a plain keyword raises `ValueError`, and a name the transform or measure
+  does not take, in either mapping or as a plain keyword, raises `TypeError`
+  before any computation.
 - `power_confidence_intervals(n_tapers=...)`: use `n_observations=...`. The
   count is every observation averaged into the estimate (tapers x trials), not
   the taper count, so the old name invited intervals far too wide for

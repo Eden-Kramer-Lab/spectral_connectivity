@@ -355,3 +355,83 @@ def test_a_settings_mapping_that_is_not_a_mapping_is_rejected(time_series, call,
     """A string or a list of pairs is not silently read as settings."""
     with pytest.raises(TypeError, match=r"_kwargs must be a mapping.*got (str|list)"):
         call(time_series, value)
+
+
+@pytest.fixture
+def no_fft(monkeypatch):
+    """Fail the test if any transform's FFT runs."""
+
+    def fail(self):
+        msg = "the FFT ran before the call was rejected"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(Multitaper, "fft", fail)
+
+
+@pytest.mark.parametrize(
+    ("connectivity_kwargs", "error", "match"),
+    [
+        pytest.param({"max_rnk": 2}, TypeError, "max_rnk", id="misspelled"),
+        pytest.param({"n_fft_samples": 256}, TypeError, "transform_kwargs", id="transform"),
+        pytest.param(
+            {"frequency_range": (1.0, 2.0)}, ValueError, "frequency_range", id="named"
+        ),
+    ],
+)
+def test_a_bad_connectivity_kwargs_key_fails_before_the_fft(
+    time_series, no_fft, connectivity_kwargs, error, match
+):
+    with pytest.raises(error, match=match):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method=["power", "global_coherence"],
+            connectivity_kwargs=connectivity_kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda series: multitaper_connectivity(
+                series,
+                sampling_frequency=500,
+                method="power",
+                n_fft_samples=1024,
+                connectivity_kwargs={"bogus": 1},
+            ),
+            id="misspelled-measure-setting",
+        ),
+        pytest.param(
+            lambda series: multitaper_connectivity(
+                series,
+                sampling_frequency=500,
+                method="canonical_coherence",
+                n_fft_samples=1024,
+            ),
+            id="missing-group-labels",
+        ),
+        pytest.param(
+            lambda series: multitaper_connectivity(
+                series[:, 0, 0], sampling_frequency=500, method="power", n_fft_samples=1024
+            ),
+            id="one-signal",
+        ),
+        pytest.param(
+            lambda series: connectivity_to_xarray(
+                Multitaper(series, sampling_frequency=500),
+                "canonical_coherency",
+                n_components=1,
+            ),
+            id="connectivity_to_xarray-missing-group-labels",
+        ),
+    ],
+)
+def test_a_rejected_call_does_not_also_warn_about_plain_keywords(time_series, call):
+    """The plain-keyword deprecation is only raised for a call that succeeds,
+    so it can never hide or precede the error a caller has to fix."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises((TypeError, ValueError)):
+            call(time_series)
