@@ -148,12 +148,6 @@ their rows).
   across measures (cross-spectral matrix, power, phase-lag moments, and the
   minimum-phase factorization with the Granger quantities derived from it) so
   memory-constrained runs can keep an instance without holding them.
-- `minimum_phase_reconstruction_error(cross_spectral_matrix, factor)`: the
-  relative reconstruction error of a Wilson factor per sub-spectrum. A
-  converged factor reproduces its spectrum to about the convergence tolerance,
-  so this checks a factor obtained another way or with a loose tolerance. It
-  does not show whether a spectrum is resolved finely enough in frequency for
-  the directed measures: an under-resolved spectrum is reproduced exactly too.
 - `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet` transforms. Each
   takes `time_series` and `sampling_frequency` positionally and every other
   setting by keyword (e.g. `MorletWavelet(x, fs, frequencies=[4, 8, 16])`);
@@ -828,9 +822,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   product. The operands are now cast first, as NumPy does. NumPy results are
   unchanged.
 - `minimum_phase_decomposition` raised `TypeError` on the GPU for a NumPy
-  cross-spectral matrix; it now accepts host arrays, as the new
-  `minimum_phase_reconstruction_error` does (results are CuPy arrays on the
-  GPU).
+  cross-spectral matrix; it now accepts host arrays (the result is a CuPy
+  array on the GPU).
 - *Unreleased:* `group_delay` and `delay` unwrapped the coherence phase before
   excluding undefined bins, so one bin without a defined phase (e.g. a
   zero-power DC bin) made every later frequency NaN; the unwrapping now skips

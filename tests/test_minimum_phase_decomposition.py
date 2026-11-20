@@ -19,7 +19,6 @@ from spectral_connectivity.minimum_phase_decomposition import (
     _solve_isolating_singular,
     _to_two_sided,
     minimum_phase_decomposition,
-    minimum_phase_reconstruction_error,
 )
 from tests._backend_helpers import ON_GPU, to_device, to_host, xp
 from tests._var_oracle import _analytic_var
@@ -28,6 +27,13 @@ from tests._var_oracle import _analytic_var
 def _analytic_var_spectrum(coefficients, noise_covariance, n_fft):
     """Analytic cross-spectrum S(f) of a VAR on the full FFT grid, as one window."""
     return _analytic_var(coefficients, noise_covariance, n_fft)[2][None]
+
+
+def _reconstruction_error(spectrum, factor):
+    """``max |G Gᴴ - S| / max |S|`` of each sub-spectrum, on the host."""
+    spectrum, factor = to_host(spectrum), to_host(factor)
+    residual = factor @ factor.conj().swapaxes(-1, -2) - spectrum
+    return np.abs(residual).max(axis=(-3, -2, -1)) / np.abs(spectrum).max(axis=(-3, -2, -1))
 
 
 def _cross_spectrum_of(signals):
@@ -74,29 +80,8 @@ def test_factor_reproduces_the_spectrum_on_even_and_odd_grids(n_fft, rotation):
     spectrum = to_device(
         _analytic_var_spectrum(_SLOWLY_DECAYING_VAR * rotation, np.eye(2), n_fft=n_fft)
     )
-    assert float(to_host(minimum_phase_reconstruction_error(spectrum))[0]) < 1e-7
-
-
-def test_reconstruction_error_measures_how_far_a_factor_is_from_its_spectrum():
-    """The diagnostic is tiny for the returned factor and is the relative
-    residual of any other: a factor 10% too large reconstructs 21% too much."""
-    spectrum = to_device(_analytic_var_spectrum(_SLOWLY_DECAYING_VAR, np.eye(2), n_fft=64))
     factor = minimum_phase_decomposition(spectrum)
-    assert float(to_host(minimum_phase_reconstruction_error(spectrum, factor))[0]) < 1e-7
-    np.testing.assert_allclose(
-        to_host(minimum_phase_reconstruction_error(spectrum, 1.1 * factor)), 0.21, rtol=1e-6
-    )
-
-
-def test_minimum_phase_reconstruction_error_accepts_precomputed_factor():
-    coefficients = np.array([[[0.5, 0.0], [0.4, 0.5]]])
-    spectrum = to_device(_analytic_var_spectrum(coefficients, np.eye(2), n_fft=512))
-    factor = minimum_phase_decomposition(spectrum)
-    from_factor = minimum_phase_reconstruction_error(spectrum, factor)
-    recomputed = minimum_phase_reconstruction_error(spectrum)
-    np.testing.assert_allclose(
-        to_host(from_factor), to_host(recomputed), rtol=1e-6, atol=1e-10
-    )
+    assert _reconstruction_error(spectrum, factor)[0] < 1e-7
 
 
 @pytest.mark.parametrize("real_signals", [False, True], ids=["two_sided", "half_spectrum"])
@@ -303,13 +288,9 @@ def test_near_collinear_channels_converge():
         warnings.simplefilter("error")
         factor = minimum_phase_decomposition(spectrum)
 
-    reference_error = minimum_phase_reconstruction_error(
-        to_device(_cross_spectrum_of(signals))
-    )
-    np.testing.assert_array_less(
-        to_host(minimum_phase_reconstruction_error(spectrum, factor)),
-        2 * to_host(reference_error),
-    )
+    reference = to_device(_cross_spectrum_of(signals))
+    reference_error = _reconstruction_error(reference, minimum_phase_decomposition(reference))
+    np.testing.assert_array_less(_reconstruction_error(spectrum, factor), 2 * reference_error)
 
 
 @pytest.mark.parametrize("n_signals", [2, 3])

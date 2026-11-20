@@ -333,75 +333,6 @@ def _all_finite_units(
     return xp.isfinite(factor).reshape(*batch_shape, -1).all(axis=-1)
 
 
-def minimum_phase_reconstruction_error(
-    cross_spectral_matrix: NDArray[np.complexfloating],
-    minimum_phase_factor: NDArray[np.complexfloating] | None = None,
-    *,
-    tolerance: float = 1e-8,
-    max_iterations: int = 500,
-) -> NDArray[np.floating]:
-    """Relative reconstruction error of a Wilson factorization, per sub-spectrum.
-
-    Returns ``max |G Gᴴ - S| / max |S|`` for each sub-spectrum: the entrywise
-    maximum absolute residual over every frequency and matrix entry, relative
-    to the entrywise maximum magnitude of ``S``. A fixed point of the Wilson
-    iteration reproduces ``S`` on its frequency grid, so for a factor returned
-    by :func:`minimum_phase_decomposition` the error is at the level of its
-    convergence ``tolerance``; use this to check a factor obtained some other
-    way, or one computed with a loose tolerance.
-
-    A small error does **not** show that the directed measures built on the
-    factor are accurate. If the spectrum is under-resolved in frequency (its
-    autocovariance has not decayed within ``n_fft_samples / 2`` lags), the
-    factor is that of the spectrum's periodic extension on the grid: it
-    reproduces ``S`` at every bin and still differs from the factor of the
-    underlying spectrum, which biases spectral Granger, DTF, and PDC. This
-    function cannot detect that; use a window long enough for the slowest
-    correlation in the data, and zero-pad the transform (see the notes of
-    :func:`minimum_phase_decomposition`).
-
-    ``cross_spectral_matrix`` must be a full two-sided spectrum in standard
-    FFT order, as required by the factorization itself. The function cannot
-    verify that from the array alone: a one-sided spectrum has the same shape.
-
-    Parameters
-    ----------
-    cross_spectral_matrix : NDArray[complexfloating],
-        shape (..., n_fft_samples, n_signals, n_signals)
-        The two-sided cross-spectral matrix (standard FFT order, positive and
-        negative frequencies) that was (or will be) factored.
-    minimum_phase_factor : NDArray[complexfloating], optional
-        A precomputed factor from :func:`minimum_phase_decomposition`. If omitted,
-        the factorization is computed here with ``tolerance`` / ``max_iterations``.
-    tolerance, max_iterations
-        Passed to :func:`minimum_phase_decomposition` when it must be computed.
-
-    Returns
-    -------
-    relative_error : NDArray[floating], shape (...,)
-        Entrywise max-abs relative reconstruction error per sub-spectrum (the
-        leading batch dimensions ``cross_spectral_matrix.shape[:-3]``). ``NaN``
-        where the factor is non-finite (the factorization did not converge).
-        An array of the active backend: CuPy on the GPU, even for NumPy input.
-    """
-    # Accept host (NumPy) arrays on the GPU backend; a no-op for device arrays.
-    cross_spectral_matrix = xp.asarray(cross_spectral_matrix)
-    if minimum_phase_factor is None:
-        minimum_phase_factor = minimum_phase_decomposition(
-            cross_spectral_matrix, tolerance=tolerance, max_iterations=max_iterations
-        )
-    minimum_phase_factor = xp.asarray(minimum_phase_factor)
-    batch_shape = cross_spectral_matrix.shape[:-3]
-    reconstructed = xp.matmul(minimum_phase_factor, _conjugate_transpose(minimum_phase_factor))
-    reference = cross_spectral_matrix.astype(reconstructed.dtype, copy=False)
-    residual: NDArray[np.floating] = xp.max(
-        xp.abs(reconstructed - reference).reshape(*batch_shape, -1), axis=-1
-    )
-    scale: NDArray[np.floating] = xp.max(xp.abs(reference).reshape(*batch_shape, -1), axis=-1)
-    scale = xp.maximum(scale, xp.finfo(scale.dtype).tiny)
-    return residual / scale
-
-
 def _singular_matrix_mask(
     matrices: NDArray[np.complexfloating],
     identity_matrix: NDArray[np.complexfloating],
@@ -663,8 +594,9 @@ def minimum_phase_decomposition(
     ...     cross_spec, tolerance=1e-8, max_iterations=500
     ... )
     >>> # The factor reconstructs the input: G @ G^H == S.
-    >>> error = minimum_phase_reconstruction_error(cross_spec, min_phase)
-    >>> bool(error.max() < 1e-6)
+    >>> from spectral_connectivity.utils import to_numpy
+    >>> factor = to_numpy(min_phase)  # a CuPy array on the GPU backend
+    >>> bool(np.allclose(factor @ factor.conj().swapaxes(-1, -2), cross_spec))
     True
 
     Notes
@@ -688,9 +620,8 @@ def minimum_phase_decomposition(
     NaN with the non-convergence warning.
 
     A fixed point of the iteration satisfies ``G Gᴴ = S`` at every frequency
-    bin (:func:`minimum_phase_reconstruction_error` measures the residual). That
-    does not make the directed measures accurate. Two limits remain, and
-    nothing here detects either:
+    bin. That does not make the directed measures accurate. Two limits remain,
+    and nothing here detects either:
 
     - The grid. The factor is that of the spectrum's periodic extension on the
       grid, so lags of ``S`` beyond ``n_fft_samples / 2`` wrap around. A

@@ -33,9 +33,6 @@ from spectral_connectivity.connectivity import (
     DirectedOrientationWarning,
     MultivariateConnectivityResult,
 )
-from spectral_connectivity.minimum_phase_decomposition import (
-    minimum_phase_reconstruction_error,
-)
 from spectral_connectivity.statistics import (
     JackknifeResult,
     jackknife_confidence_interval,
@@ -92,7 +89,6 @@ __all__ = [
     "get_compute_backend",
     "jackknife_confidence_interval",
     "list_measures",
-    "minimum_phase_reconstruction_error",
     "multitaper_connectivity",
     "prepare_time_series",
     "suggest_parameters",
