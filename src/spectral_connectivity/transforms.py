@@ -699,19 +699,26 @@ def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
         if _dimension_role(dimension) not in (None, expected)
     ]
     if misplaced:
-        # Name the order to transpose to when the names give all three roles.
+        # Spell out the transpose only when the names determine it: all three
+        # roles named, or two named, which leaves the third dimension for the
+        # remaining role.
         named = {_dimension_role(dimension): dimension for dimension in dimensions}
-        order = [named.get(role) for role in _INPUT_AXIS_ROLES]
-        target = (
-            ", ".join(repr(dimension) for dimension in order)
-            if None not in order
-            else "time_dim, trial_dim, signal_dim"
-        )
+        unnamed = named.pop(None, None)
+        missing = [role for role in _INPUT_AXIS_ROLES if role not in named]
+        if len(missing) == 1 and len(named) == 2:
+            named[missing[0]] = unnamed
+        if len(named) == len(_INPUT_AXIS_ROLES):
+            order = ", ".join(repr(named[role]) for role in _INPUT_AXIS_ROLES)
+            advice = f"Transpose it first, time_series.transpose({order})"
+        else:
+            advice = (
+                "Transpose it to (time, trial, signal) order first "
+                "(time_series.transpose with the dimension names in that order)"
+            )
         msg = (
             f"{transform} reads time_series by position, as (time, trial, signal), "
             f"but its dimensions are named {tuple(dimensions)!r}: "
-            f"{'; '.join(misplaced)}. Transpose it first, "
-            f"time_series.transpose({target}), or pass time_series.values if the "
+            f"{'; '.join(misplaced)}. {advice}, or pass time_series.values if the "
             "names are wrong and the axes are already in that order. "
             "multitaper_connectivity assigns axes from dimension names itself."
         )

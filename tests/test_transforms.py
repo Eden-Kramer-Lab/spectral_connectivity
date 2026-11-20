@@ -1035,6 +1035,28 @@ def test_transforms_refuse_a_dataarray_whose_dimension_names_contradict_its_axes
         construct(labeled)
 
 
+@pytest.mark.parametrize(
+    ("dims", "advice"),
+    [
+        (("trial", "time", "signal"), "time_series.transpose('time', 'trial', 'signal')"),
+        # Two named roles leave the third dimension for the remaining one.
+        (("run", "time", "signal"), "time_series.transpose('time', 'run', 'signal')"),
+        (("dim_0", "trial", "time"), "time_series.transpose('time', 'trial', 'dim_0')"),
+        # One named role leaves two axes unassigned, so no call can be spelled out.
+        (("dim_0", "dim_1", "time"), "Transpose it to (time, trial, signal) order"),
+    ],
+    ids=lambda value: "-".join(value) if isinstance(value, tuple) else None,
+)
+def test_axis_order_error_spells_out_only_the_transpose_the_names_determine(dims, advice):
+    """The suggested call must run as written: a placeholder such as
+    ``time_dim`` is not a variable the user has."""
+    labeled = xr.DataArray(np.zeros((40, 100, 2)), dims=dims)
+    with pytest.raises(ValueError, match="reads time_series by position") as error:
+        Multitaper(labeled, sampling_frequency=1000)
+    assert advice in str(error.value)
+    assert "time_dim" not in str(error.value)
+
+
 @_EVERY_TRANSFORM
 @pytest.mark.parametrize(
     "dims",

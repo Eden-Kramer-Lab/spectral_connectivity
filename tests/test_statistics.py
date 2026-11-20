@@ -517,7 +517,10 @@ def test_coherence_rate_adjustment_negative_power_is_masked():
 @pytest.mark.parametrize("bad_n_obs", [0, 1])
 def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
     """n_observations < 2 would give values outside [0, 1]; must raise."""
-    with pytest.raises(ValueError, match="n_observations must be a finite integer >= 2"):
+    with pytest.raises(
+        ValueError,
+        match=r"(?s)n_observations must be a finite integer >= 2.*at least 2 observations",
+    ):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
 

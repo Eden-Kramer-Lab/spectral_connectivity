@@ -1419,7 +1419,8 @@ class Connectivity:
                 f"fourier_coefficients has {n_signals} signal "
                 f"(shape[-1] == {n_signals}).\n"
                 f"Connectivity quantifies relationships between pairs of "
-                f"signals; for a single signal use power() instead.\n"
+                f"signals; for a single signal use power() instead "
+                f"(method='power' in multitaper_connectivity).\n"
                 f"If you sliced to one channel, keep the signal axis, e.g. "
                 f"fourier_coefficients[..., [channel_index]] rather than "
                 f"fourier_coefficients[..., channel_index]."
@@ -1545,7 +1546,7 @@ class Connectivity:
             "(apparent perfect connectivity)"
         ),
         *,
-        n_observations: int | None = None,
+        n_trials_by_tapers: int | None = None,
     ) -> None:
         """Warn that a normalized measure is degenerate for one observation.
 
@@ -1561,19 +1562,22 @@ class Connectivity:
         ``measure``), so the measure reports perfect connectivity or a
         perfectly consistent lag between unrelated signals and carries no
         information. This is a silent-failure trap rather than an error, so it
-        warns instead of raising. ``n_observations`` replaces
-        :attr:`n_observations` for a measure that counts its observations
-        differently.
+        warns instead of raising. ``n_trials_by_tapers`` is the count for a
+        measure that decomposes trials x tapers whatever the expectation type,
+        in place of :attr:`n_observations`.
         """
-        if n_observations is None:
-            n_observations = self.n_observations
-        if n_observations < 2:
+        if n_trials_by_tapers is None:
+            count, counted = self.n_observations, "n_observations"
+        else:
+            count, counted = n_trials_by_tapers, "n_trials * n_tapers"
+        if count < 2:
             warnings.warn(
                 f"{measure} is computed from a single observation "
-                f"(n_observations == n_trials * n_tapers == 1), so {consequence} "
+                f"({counted} == 1), so {consequence} "
                 "regardless of the data, and the result carries no information. "
-                "Provide multiple trials/tapers, or set smoothing_time on "
-                "MorletWavelet to collect neighboring coefficients on the "
+                "Use more trials or tapers (for Multitaper, a larger "
+                "time_halfbandwidth_product or n_tapers), or set smoothing_time "
+                "on MorletWavelet to collect neighboring coefficients on the "
                 "observation axis.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
@@ -2984,9 +2988,11 @@ class Connectivity:
             if len(group_indices[first]) + len(group_indices[second]) > n_observations
         ]
         if degenerate_pairs:
+            pairs = ", ".join(f"({first}, {second})" for first, second in degenerate_pairs)
             warnings.warn(
-                f"canonical_coherence uses {n_observations} observations (trials x "
-                f"tapers), fewer than the signals in group pair(s) {degenerate_pairs}; "
+                f"canonical_coherence uses {n_observations} "
+                f"observation{'' if n_observations == 1 else 's'} (trials x "
+                f"tapers), fewer than the signals in group pair(s) {pairs}; "
                 "their canonical coherence is forced to 1 regardless of the data. "
                 "Provide more trials or tapers, or use smaller groups.",
                 UserWarning,
@@ -3779,7 +3785,7 @@ class Connectivity:
             "global_coherence",
             "the cross-spectral matrix has rank one: its first component holds "
             "all of the power, and global coherence is forced to 1",
-            n_observations=n_trials * n_tapers,
+            n_trials_by_tapers=n_trials * n_tapers,
         )
 
         # A rank-r decomposition of the (n_signals, n_trials * n_tapers)

@@ -1692,7 +1692,7 @@ def test_single_signal_connectivity_raises_but_power_works():
     """Connectivity on a single signal raises; power() still works."""
     c = Connectivity(fourier_coefficients=np.ones((1, 2, 1, 4, 1), dtype=complex))
     for method in (c.magnitude_squared_coherence, c.phase_locking_value, c.global_coherence):
-        with pytest.raises(ValueError, match="at least 2 signals"):
+        with pytest.raises(ValueError, match=r"(?s)at least 2 signals.*method='power'"):
             method()
     with pytest.raises(ValueError, match="at least 2 signals"):
         c.canonical_coherence(group_labels=np.array([0]))
@@ -4451,6 +4451,59 @@ def test_global_coherence_counts_trials_and_tapers_as_observations():
     assert np.all(global_coherence < 1.0 - 1e-6)
 
 
+def test_single_observation_warning_counts_what_each_measure_averages():
+    """A measure of the averaged cross-spectrum warns when its expectation
+    averages one observation. Global coherence decomposes trials x tapers in
+    every window, so it warns for one trial and one taper however many windows
+    there are. Each message says which count is 1 and how to raise it."""
+    rng = np.random.default_rng(712)
+
+    def coefficients(shape):
+        return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+
+    # One trial and three tapers, averaged over trials: one observation each.
+    over_trials = Connectivity(coefficients((1, 1, 3, 16, 4)), expectation_type="trials")
+    with pytest.warns(
+        UserWarning,
+        match=r"single observation \(n_observations == 1\).*time_halfbandwidth_product",
+    ):
+        over_trials.imaginary_coherence()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        over_trials.global_coherence()
+
+    # Five windows of one trial and one taper, averaged over time: five observations.
+    over_time = Connectivity(coefficients((5, 1, 1, 16, 4)), expectation_type="time")
+    with pytest.warns(UserWarning, match=r"single observation \(n_trials \* n_tapers == 1\)"):
+        over_time.global_coherence()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        over_time.imaginary_coherence()
+
+
+def test_granger_nan_warning_names_too_few_observations_as_a_cause():
+    """One observation gives every pair a rank-one spectrum that cannot be
+    factored. The warning must not only send the user to look for bad channels."""
+    rng = np.random.default_rng(713)
+    shape = (1, 1, 1, 16, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(UserWarning, match="NaN at every frequency.*too few observations"):
+        granger = connectivity.pairwise_spectral_granger_prediction()
+    assert np.isnan(granger).all()
+
+
+def test_canonical_coherence_warning_reads_plainly():
+    """One observation is singular, and group labels print as the user gave them."""
+    rng = np.random.default_rng(714)
+    shape = (1, 1, 1, 8, 3)
+    connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
+    with pytest.warns(
+        UserWarning,
+        match=r"uses 1 observation \(trials x tapers\).*group pair\(s\) \(CA1, PFC\)",
+    ):
+        connectivity.canonical_coherence(np.array(["CA1", "CA1", "PFC"]))
+
+
 def test_canonical_coherence_warns_when_groups_outnumber_observations():
     """With fewer trial x taper observations than the two groups' signals, the
     groups' observation subspaces must intersect, forcing canonical coherence
@@ -4595,6 +4648,14 @@ def _warning_cases():
         "single_observation": (
             "single",
             lambda: Connectivity(one_observation).magnitude_squared_coherence(),
+        ),
+        "single_observation_global_coherence": (
+            "single",
+            lambda: Connectivity(one_observation).global_coherence(),
+        ),
+        "single_observation_group_measure": (
+            "single",
+            lambda: Connectivity(one_observation).maximized_imaginary_coherency([0, 0, 1]),
         ),
         "single_observation_through_wrapper": (
             "single",
