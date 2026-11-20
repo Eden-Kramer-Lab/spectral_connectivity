@@ -617,10 +617,13 @@ Rulings where the rules above were silent:
   `from_transform` override applies to both names; a subclass overriding
   `from_multitaper` warns at its own `super()` call and is not reached by
   `from_transform`. The 2.x `blocks` parameter (third position) was removed
-  before this step and is not restored. A 2.x call that still passes it
-  there binds `dtype`; 2.x's `None` was read as float64 and silently dropped
-  every coefficient's imaginary part, so `Connectivity` now rejects any dtype
-  that is not complex with a `TypeError` naming `blocks`.
+  before this step and is not restored (owner's ruling). Every 2.x use of
+  it, by keyword or in its released positional slot (third in
+  `from_multitaper`, fifth in `Connectivity`), raises a `TypeError` that names
+  `blocks`, says it had no effect on results, and says to drop it. Separately,
+  `Connectivity` rejects any dtype that is not complex: a value bound there by
+  position used to be read as float64 (`None`) and silently drop every
+  coefficient's imaginary part.
 - **One deprecation template.** `utils.warn_deprecated` writes every 2.x
   deprecation warning (the measure-name resolver, `from_multitaper`,
   `n_tapers=`, and plain-keyword settings) as "<old> is deprecated and will be

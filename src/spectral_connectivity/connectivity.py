@@ -106,9 +106,7 @@ def _validated_complex_dtype(dtype: Any) -> Any:
         msg = (
             f"dtype must be a complex dtype such as np.complex128 or np.complex64, "
             f"got {dtype!r}; a real dtype would discard the imaginary part of the "
-            "Fourier coefficients. In 2.x, Connectivity.from_multitaper's third "
-            "positional argument was blocks, removed in 3.0 (memory is bounded "
-            "automatically): drop it, or pass dtype by keyword."
+            "Fourier coefficients."
         )
         raise TypeError(msg)
     return dtype
@@ -254,6 +252,45 @@ DIRECTED_COHERENCE_DISCREPANCY_TOLERANCE = 0.1
 # Signature and return type of a decorated measure, preserved by its decorators.
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+_BLOCKS_REMOVED = (
+    "blocks was removed in 3.0: it had no effect on results (memory is bounded "
+    "automatically), so drop it."
+)
+
+
+def _rejects_removed_blocks(
+    caller: str, released_index: int | None = None, released_ordinal: str = ""
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
+    """Reject 2.x's ``blocks`` argument with a message that says to drop it.
+
+    ``blocks`` is rejected by keyword. ``released_index`` is its index in
+    ``args`` (``self``/``cls`` included) in v2.0.1, where ``dtype`` now is: a
+    ``None`` or integer there is a 2.x block count, not a dtype.
+    """
+
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
+        @wraps(function)
+        def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+            if "blocks" in kwargs:
+                msg = f"{caller} got blocks={kwargs['blocks']!r}. {_BLOCKS_REMOVED}"
+                raise TypeError(msg)
+            if released_index is not None and len(args) > released_index:
+                value = args[released_index]
+                if value is None or (
+                    isinstance(value, (int, np.integer)) and not isinstance(value, bool)
+                ):
+                    msg = (
+                        f"{caller} got {value!r} as its {released_ordinal} positional "
+                        "argument, where 2.x took blocks and 3.0 takes dtype. "
+                        f"{_BLOCKS_REMOVED}"
+                    )
+                    raise TypeError(msg)
+            return function(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
 
 
 def _asnumpy(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -822,6 +859,7 @@ class Connectivity:
 
     _observation_weights: BackendArray | None
 
+    @_rejects_removed_blocks("Connectivity()", 5, "fifth")
     def __init__(
         self,
         fourier_coefficients: NDArray[np.complexfloating],
@@ -1168,6 +1206,7 @@ class Connectivity:
         self.clear_cache()
 
     @classmethod
+    @_rejects_removed_blocks("Connectivity.from_multitaper()", 3, "third")
     def from_multitaper(
         cls,
         multitaper_instance: "SpectralTransform",
@@ -1181,6 +1220,10 @@ class Connectivity:
         .. deprecated:: 3.0
            Use :meth:`from_transform`, which takes the same arguments and
            builds the same instance. ``from_multitaper`` is removed in 4.0.
+
+        .. versionchanged:: 3.0
+           The 2.x ``blocks`` argument (third, before ``dtype``) is removed;
+           passing it raises ``TypeError``.
 
         Accepts any :class:`~spectral_connectivity.transforms.SpectralTransform`
         and calls ``cls.from_transform`` with the same arguments, so a
@@ -1213,6 +1256,7 @@ class Connectivity:
         )
 
     @classmethod
+    @_rejects_removed_blocks("Connectivity.from_transform()")
     def from_transform(
         cls,
         transform: "SpectralTransform",

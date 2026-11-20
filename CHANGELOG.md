@@ -46,7 +46,7 @@ directly with results from 2.x.
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
-| `Connectivity(..., blocks=...)`, or `Connectivity.from_multitaper(m, expectation_type, blocks)` with `blocks` third | Remove `blocks`; memory is bounded automatically. `dtype` now holds the third position, and a value there that is not a complex dtype (such as 2.x's `None` or an integer block count) raises `TypeError` naming `blocks` |
+| `blocks` of `Connectivity` and `Connectivity.from_multitaper`: by keyword, or positionally (fifth in `Connectivity(fc, expectation_type, frequencies, time, blocks, dtype)`, third in `from_multitaper(m, expectation_type, blocks, dtype)`) | Drop it: it never changed a result beyond rounding, and memory is now bounded automatically. Every such call raises a `TypeError` that names `blocks` and says so; in the positional form `dtype` has moved into `blocks`' slot, so pass `dtype` by keyword |
 | `dpss_windows(..., interp_from=..., interp_kind=...)` | Remove both arguments; the exact SciPy solver is faster |
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure; request `method="pairwise_spectral_granger_prediction"` (or any directed measure) by name |
@@ -550,6 +550,15 @@ directly with results from 2.x.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
 
+### Removed
+
+- `blocks` of `Connectivity` and `Connectivity.from_multitaper` (released in
+  2.0.1). It only chunked the cross-spectral computation and never changed a
+  result beyond rounding; memory is now bounded automatically. A call that
+  still passes it, by keyword or in its released position, raises a
+  `TypeError` that names `blocks`, says it had no effect on results, and says
+  to drop it, before any computation. It is not kept as a deprecated alias.
+
 ### Deprecated
 
 Each deprecated spelling keeps its 2.x numerical meaning through 3.x (except
@@ -618,9 +627,10 @@ is removed in 4.0.
 
 - `Connectivity`, `Connectivity.from_transform`, and `from_multitaper` reject a
   `dtype` that is not complex with a `TypeError` before any FFT. `dtype=None`
-  (2.x's default `blocks` passed positionally to `from_multitaper`) was read as
-  float64 and silently discarded the imaginary part of every coefficient, and
-  an integer failed only when a measure first used it (`power` did not).
+  (for instance 2.x's default `blocks` passed in its old position, where
+  `dtype` now is) was read as float64 and silently discarded the imaginary
+  part of every coefficient, and an integer failed only when a measure first
+  used it (`power` did not).
 - `Multitaper` reports the supplied column count for custom tapers. For DPSS,
   `n_tapers` keeps describing the requested count after low-bias filtering,
   so repeated wrapper calls retain the same taper-count provenance.

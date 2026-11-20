@@ -138,20 +138,51 @@ def test_a_subclass_overriding_from_multitaper_warns_once_at_its_super_call(mult
     _assert_same_connectivity(deprecated, canonical)
 
 
+_BLOCKS_MESSAGE = r"blocks.*removed in 3\.0.*no effect on results.*drop it"
+
+
+@pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
+def test_blocks_by_keyword_is_rejected_with_its_own_message(multitaper, blocks):
+    """2.x's blocks (removed in 3.0) never changed a value; every keyword use
+    of it fails with a message that says so, before anything is computed."""
+    with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
+        Connectivity(multitaper.fft(), blocks=blocks)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
+            Connectivity.from_multitaper(multitaper, blocks=blocks)
+    with pytest.raises(TypeError, match=_BLOCKS_MESSAGE):
+        Connectivity.from_transform(multitaper, blocks=blocks)
+
+
+@pytest.mark.parametrize("blocks", [None, 1, 5], ids=repr)
+def test_blocks_in_its_released_position_is_rejected_with_its_own_message(multitaper, blocks):
+    """In 2.x blocks was from_multitaper's third and Connectivity's fifth
+    positional argument, where dtype now is. None used to become float64 and
+    silently drop every coefficient's imaginary part, and an int failed only
+    when a measure first used it."""
+    coefficients, frequencies, time = (
+        multitaper.fft(),
+        multitaper.frequencies,
+        multitaper.time,
+    )
+    with pytest.raises(TypeError, match=rf"fifth.*{_BLOCKS_MESSAGE}"):
+        Connectivity(coefficients, "trials_tapers", frequencies, time, blocks)
+    with pytest.raises(TypeError, match=rf"fifth.*{_BLOCKS_MESSAGE}"):
+        # 2.x's full positional form: blocks, then dtype.
+        Connectivity(coefficients, "trials_tapers", frequencies, time, blocks, np.complex128)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match=rf"third.*{_BLOCKS_MESSAGE}"):
+            Connectivity.from_multitaper(multitaper, "trials_tapers", blocks)
+
+
 @pytest.mark.parametrize("value", [None, 5, np.float64, "float32"], ids=repr)
-def test_a_value_that_is_not_a_complex_dtype_is_rejected(multitaper, value):
-    """2.x's from_multitaper took ``blocks`` (``None`` or an int) third, where
-    ``dtype`` now is. ``None`` used to become float64 and silently drop the
-    imaginary part of every coefficient, and an int failed only when a
-    measure first used it; both now fail when the instance is built, naming
-    ``blocks``."""
-    with pytest.raises(TypeError, match=r"complex dtype.*blocks"):
+def test_a_dtype_that_is_not_complex_is_rejected(multitaper, value):
+    """A real dtype would discard every coefficient's imaginary part."""
+    with pytest.raises(TypeError, match="complex dtype") as excinfo:
         Connectivity.from_transform(multitaper, "trials_tapers", value)
-    with (
-        pytest.warns(DeprecationWarning, match="from_multitaper"),
-        pytest.raises(TypeError, match=r"complex dtype.*blocks"),
-    ):
-        Connectivity.from_multitaper(multitaper, "trials_tapers", value)
+    assert "blocks" not in str(excinfo.value)
     with pytest.raises(TypeError, match="complex dtype"):
         Connectivity(multitaper.fft(), dtype=value)
 
