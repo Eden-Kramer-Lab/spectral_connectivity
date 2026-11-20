@@ -411,9 +411,12 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        msg = (  # type: ignore[unreachable]  # user input
-            f"{name} must be a mapping of setting names to values, such as "
-            f"{{'n_fft_samples': 1024}}, got {type(value).__name__}."
+        example = (  # type: ignore[unreachable]  # user input
+            "{'n_fft_samples': 1024}" if name == "transform_kwargs" else "{'pairs': [(0, 1)]}"
+        )
+        msg = (
+            f"{name} must be a mapping of setting names to values, such as {example}, "
+            f"got {type(value).__name__}."
         )
         raise TypeError(msg)
     return dict(value)

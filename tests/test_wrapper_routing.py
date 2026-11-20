@@ -323,9 +323,18 @@ def test_group_labels_reach_multitaper_connectivity_by_name_or_mapping(time_seri
     ],
 )
 def test_a_settings_mapping_that_is_not_a_mapping_is_rejected(time_series, call, value):
-    """A string or a list of pairs is not silently read as settings."""
-    with pytest.raises(TypeError, match=r"_kwargs must be a mapping.*got (str|list)"):
+    """A string or a list of pairs is not silently read as settings, and the
+    example in the message is a setting of that mapping's kind."""
+    with pytest.raises(
+        TypeError, match=r"_kwargs must be a mapping.*got (str|list)"
+    ) as excinfo:
         call(time_series, value)
+    message = str(excinfo.value)
+    if message.startswith("transform_kwargs"):
+        assert "{'n_fft_samples': 1024}" in message
+    else:
+        assert message.startswith("connectivity_kwargs")
+        assert "{'pairs': [(0, 1)]}" in message
 
 
 @pytest.fixture
