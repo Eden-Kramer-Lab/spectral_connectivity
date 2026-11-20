@@ -218,19 +218,14 @@ def simulate_lagged_broadband(
     True
 
     For a delay given in seconds, round it to whole samples at the sampling
-    rate and pass that count:
+    rate, pass that count as ``lags_samples=(0, lag_samples)``, and check the
+    delay it simulates:
 
     >>> sampling_frequency = 1500.0  # Hz
     >>> delay = 0.0102  # seconds: signal 0 should lead signal 1 by 10.2 ms
     >>> lag_samples = round(delay * sampling_frequency)  # 15.3 samples, rounded
     >>> lag_samples
     15
-    >>> time_series = simulate_lagged_broadband(
-    ...     lags_samples=(0, lag_samples),
-    ...     noise_levels=0.0,
-    ...     n_time_samples=1000,
-    ...     random_state=0,
-    ... )
     >>> lag_samples / sampling_frequency  # the delay actually simulated, in seconds
     0.01
 
