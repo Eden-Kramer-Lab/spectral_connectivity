@@ -593,6 +593,30 @@ def _nearest_bin_gap(grid: NDArray[np.float64]) -> NDArray[np.float64]:
     return gap
 
 
+def _bins_on_bound(values: NDArray[Any], bound: Any) -> NDArray[np.bool_]:
+    """Which frequency bins lie on ``bound``, by the rule of :func:`_frequency_interval_mask`.
+
+    Parameters
+    ----------
+    values : array, shape (n_frequencies,)
+        The frequency grid on the host, in its stored precision.
+    bound : float
+        The bound in its stored precision (a float32 scalar stays float32).
+
+    Returns
+    -------
+    NDArray[bool], shape (n_frequencies,)
+    """
+    grid = values.astype(np.float64)
+    allowance = (
+        _GRID_SPACING_RTOL * _nearest_bin_gap(grid)
+        + 2 * _last_place(values)
+        + 2 * _last_place(bound)
+    )
+    on_bound: NDArray[np.bool_] = np.abs(grid - float(bound)) <= allowance
+    return on_bound
+
+
 def _frequency_interval_mask(
     label: str, bounds: Any, frequencies: Any
 ) -> tuple[NDArray[np.bool_], tuple[float, float]]:
@@ -656,9 +680,8 @@ def _frequency_interval_mask(
         raise ValueError(invalid)
 
     grid = values.astype(np.float64)
-    grid_allowance = _GRID_SPACING_RTOL * _nearest_bin_gap(grid) + 2 * _last_place(values)
-    on_lower = np.abs(grid - lower) <= grid_allowance + 2 * _last_place(stored_lower)
-    on_upper = np.abs(grid - upper) <= grid_allowance + 2 * _last_place(stored_upper)
+    on_lower = _bins_on_bound(values, stored_lower)
+    on_upper = _bins_on_bound(values, stored_upper)
     mask: NDArray[np.bool_] = ((lower < grid) | on_lower) & ((grid < upper) | on_upper)
     if not mask.any():
         msg = (

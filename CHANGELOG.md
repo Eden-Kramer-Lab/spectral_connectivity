@@ -858,7 +858,13 @@ is removed in 4.0.
   known, so an odd-length FFT's last bin, which lies below Nyquist, is integrated as an ordinary bin,
   and a band ending at a `frequency_range` or `frequency_decimation` crop edge
   is not integrated as if its last bin were Nyquist (which added 3-15% to, e.g.,
-  a 4-8 Hz band cropped at 8 Hz). An integrated band is labeled `"Band power"`
+  a 4-8 Hz band cropped at 8 Hz). The last bin is at `nyquist_frequency` by the
+  same rule that places a bin on a band's bound, so a frequency coordinate
+  stored as float32 (as netCDF often does) keeps its Nyquist bin, and
+  `fourier_connectivity` reads the rate of a two-sided grid from its Nyquist bin
+  (the bin farthest from 0 Hz) instead of multiplying the first bin's rounding
+  by the FFT length, so float32 and rounded FFT-order grids record the right
+  `sampling_frequency` and keep theirs too. An integrated band is labeled `"Band power"`
   or `"Band cross-power"` in `(units)^2` rather than keeping the density's
   `"Power spectral density"` label and `(units)^2/Hz`.
 - A window step given in seconds is rounded to the nearest sample instead of

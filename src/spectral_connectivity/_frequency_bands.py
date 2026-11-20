@@ -14,7 +14,11 @@ from spectral_connectivity._measure_registry import (
     _reduces_frequency,
 )
 from spectral_connectivity._provenance import _canonical_json, _with_frequency_grid_metadata
-from spectral_connectivity.connectivity import _frequency_interval_mask, _FrequencySelection
+from spectral_connectivity.connectivity import (
+    _bins_on_bound,
+    _frequency_interval_mask,
+    _FrequencySelection,
+)
 from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
 
 
@@ -40,7 +44,9 @@ def _band_integration_weights(
     ``sum(density) * spacing`` (Parseval). Only a bin at ``nyquist_frequency``
     is folded at the top: an odd-length FFT has no Nyquist bin, and after
     cropping the last bin is an ordinary interior bin whose density is already
-    doubled.
+    doubled. The last bin is at ``nyquist_frequency`` by the rule that places a
+    bin on a band's bound (:func:`_frequency_interval_mask`), so a coordinate
+    stored as float32 still has its Nyquist bin.
     """
     midpoints = (frequencies[1:] + frequencies[:-1]) / 2
     lower = np.concatenate(
@@ -54,9 +60,7 @@ def _band_integration_weights(
         lower = np.maximum(lower, 0.0)
     if frequencies[0] == 0.0:
         scale[0] = 2.0
-    if nyquist_frequency is not None and np.isclose(
-        frequencies[-1], nyquist_frequency, rtol=1e-12, atol=0.0
-    ):
+    if nyquist_frequency is not None and _bins_on_bound(frequencies, nyquist_frequency)[-1]:
         upper[-1] = frequencies[-1]
         scale[-1] = 2.0
     weights: NDArray[np.floating] = scale * np.clip(

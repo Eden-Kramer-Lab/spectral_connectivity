@@ -1793,11 +1793,17 @@ def fourier_connectivity(
         # sampling rate in Hz. Retain it for integration after cropping.
         metadata["nyquist_frequency"] = 0.5
     elif not one_sided and all_frequencies.size > 1:
-        # FFT-order bins are sampling_frequency / n_fft apart (bin 1 is -spacing
-        # when n_fft == 2), so the rate follows and places the Nyquist bin,
-        # which only an even n_fft has.
-        metadata["sampling_frequency"] = float(all_frequencies.size * abs(all_frequencies[1]))
-        metadata["nyquist_frequency"] = metadata["sampling_frequency"] / 2
+        # Bin n_fft // 2 of an FFT-order grid is the farthest from 0 Hz. For an
+        # even n_fft it is the Nyquist bin itself, so the recorded Nyquist
+        # frequency is that bin's stored value whatever the grid's rounding.
+        # An odd n_fft has no Nyquist bin: its top bin is (n_fft - 1) / 2 bins
+        # of sampling_frequency / n_fft above zero.
+        n_fft = all_frequencies.size
+        nyquist_frequency = abs(float(all_frequencies[n_fft // 2]))
+        if n_fft % 2 == 1:
+            nyquist_frequency *= n_fft / (n_fft - 1)
+        metadata["sampling_frequency"] = 2 * nyquist_frequency
+        metadata["nyquist_frequency"] = nyquist_frequency
     shared_attrs = _shared_provenance_attrs(
         connectivity,
         metadata,

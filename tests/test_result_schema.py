@@ -612,6 +612,52 @@ def test_rounded_two_sided_grid_is_in_fft_order(data):
     assert result.attrs["sampling_frequency"] == pytest.approx(128 / 3, rel=1e-6)
 
 
+def _power_up_to(result, top):
+    """Power integrated from 0 Hz to ``top``, as a band ending on that bin."""
+    return frequency_band_reduce(
+        result, {"all": (0.0, top)}, frequency_reduction="integral"
+    ).values
+
+
+@pytest.mark.parametrize("n_fft", [90, 89], ids=["even", "odd"])
+@pytest.mark.parametrize(
+    "stored",
+    [lambda grid: grid.astype(np.float32), lambda grid: np.round(grid, 7)],
+    ids=["float32", "rounded"],
+)
+def test_two_sided_grid_rounding_does_not_lose_the_nyquist_bin(data, n_fft, stored):
+    """The rate is read from the bin farthest from 0 Hz, the Nyquist bin of an
+    even-length grid, so one bin's rounding is not multiplied by the FFT
+    length and a band ending on that bin still integrates its whole cell."""
+    data = data[:n_fft]
+    exact_grid = np.fft.fftfreq(n_fft, 1 / 250)
+    exact = fourier_connectivity(_fourier_dataarray(data, exact_grid), method="power")
+    result = fourier_connectivity(_fourier_dataarray(data, stored(exact_grid)), method="power")
+
+    assert result.attrs["sampling_frequency"] == pytest.approx(250, rel=1e-6)
+    assert result.attrs["nyquist_frequency"] == result.attrs["sampling_frequency"] / 2
+    if n_fft % 2 == 0:
+        assert result.attrs["sampling_frequency"] == 250
+        assert result.attrs["nyquist_frequency"] == float(result.frequency[-1])
+    np.testing.assert_allclose(
+        _power_up_to(result, float(result.frequency[-1])),
+        _power_up_to(exact, float(exact.frequency[-1])),
+        rtol=1e-6,
+    )
+
+
+def test_float32_frequency_coordinate_keeps_its_nyquist_bin(data):
+    """A result's coordinate stored as float32 (e.g. by netCDF) is still on the
+    recorded Nyquist frequency, 64/3 Hz here, which float32 cannot hold exactly."""
+    result = multitaper_connectivity(data, sampling_frequency=128 / 3, method="power")
+    nyquist = result.attrs["nyquist_frequency"]
+    stored = result.assign_coords(frequency=result.frequency.astype(np.float32))
+    assert float(stored.frequency[-1]) != nyquist
+    np.testing.assert_allclose(
+        _power_up_to(stored, nyquist), _power_up_to(result, nyquist), rtol=1e-6
+    )
+
+
 def test_float32_uniform_grid_is_uniform_for_phase_slope(data):
     """A coordinate's own rounding (e.g. float32 from netCDF) is not irregularity."""
     coefficients = xr.DataArray(
