@@ -19,6 +19,7 @@ from spectral_connectivity import (
     Multitaper,
     multitaper_connectivity,
 )
+from spectral_connectivity.statistics import jackknife_confidence_interval
 from spectral_connectivity.transforms import (
     MorletWavelet,
     ShortTimeFourierTransform,
@@ -581,6 +582,23 @@ def test_jackknife_echoes_an_invalid_confidence_level(confidence_level, monkeypa
         _jackknife_connectivity().jackknife(
             "magnitude_squared_coherence", confidence_level=confidence_level
         )
+
+
+@pytest.mark.parametrize(
+    "confidence_level", [0.9, np.float32(0.9), np.array(0.9)], ids=["float", "float32", "0d"]
+)
+def test_a_confidence_level_scalar_of_any_kind_is_accepted(confidence_level):
+    """A 0-d array or a NumPy scalar is a confidence level, as before the
+    validation was added."""
+    reference = jackknife_confidence_interval(
+        np.array(2.0), np.array([2.5, 2.0, 1.5]), confidence_level=0.9
+    )
+    result = jackknife_confidence_interval(
+        np.array(2.0), np.array([2.5, 2.0, 1.5]), confidence_level=confidence_level
+    )
+    np.testing.assert_allclose(
+        result.confidence_interval, reference.confidence_interval, rtol=1e-6
+    )
 
 
 @pytest.mark.parametrize("expectation_type", ["time_trials_tapers", "time", "time_trials"])

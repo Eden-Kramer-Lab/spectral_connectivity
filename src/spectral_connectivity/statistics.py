@@ -140,12 +140,17 @@ def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
 
 
 def _validate_confidence_level(confidence_level: float) -> None:
-    """Reject a ``confidence_level`` that is not a probability strictly inside (0, 1)."""
+    """Reject a ``confidence_level`` that is not a probability strictly inside (0, 1).
+
+    A real number is accepted as a Python or NumPy scalar or a 0-d array; a
+    boolean is not a probability.
+    """
+    value = np.asarray(confidence_level)
     if (
-        isinstance(confidence_level, (bool, np.bool_))
-        or not isinstance(confidence_level, (int, float, np.integer, np.floating))  # type: ignore[redundant-expr]  # user input
-        or not np.isfinite(confidence_level)
-        or not 0 < confidence_level < 1
+        value.ndim != 0
+        or value.dtype.kind not in "iuf"
+        or not np.isfinite(value)
+        or not 0 < value < 1
     ):
         msg = (
             "confidence_level must be finite and strictly between 0 and 1, got "

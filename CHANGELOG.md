@@ -1388,7 +1388,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `str.startswith`. An invalid `confidence_level`
   (`confidence_level=95`) is echoed with "e.g. 0.95 for a 95% interval" and
   rejected before the leave-one-out estimates are computed, here and in
-  `jackknife_confidence_interval`. An `expectation_type` it cannot use names
+  `jackknife_confidence_interval`; a NumPy scalar or 0-d array is accepted as
+  before. An `expectation_type` it cannot use names
   the ones it can (`'trials_tapers'`, the default, `'trials'`, or
   `'tapers'`) and the one the `Connectivity` has.
 - `multitaper_connectivity`, `Multitaper`, `ShortTimeFourierTransform`,
