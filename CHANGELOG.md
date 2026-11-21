@@ -347,6 +347,9 @@ their rows).
   broadcast against the coherency or power (so 0 Hz and Nyquist get their own
   null), and, for the p-values, select one pair before
   `adjust_for_multiple_comparisons`.
+- The `Connectivity` docstring has a table of the leading axes each
+  `expectation_type` keeps and the shape it gives, and its descriptions of
+  `"trials"` and `"tapers"` say that they keep the time-window axis too.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring

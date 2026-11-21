@@ -915,12 +915,17 @@ class Connectivity:
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
-        Specifies how to average the cross-spectral matrix:
-        - "trials_tapers": average over trials and tapers (most common)
-        - "trials": average over trials only (keep taper dimension)
-        - "tapers": average over tapers only (keep trial dimension)
-        - "time": average over time windows
-        - combinations: average over multiple dimensions
+        Which axes of the coefficients to average over. The others are kept,
+        ahead of the measure's own axes (see "Result shape by
+        expectation_type" in Notes):
+
+        - "trials_tapers": average over trials and tapers (most common); keep
+          the time-window axis
+        - "trials": average over trials; keep the time-window and taper axes
+        - "tapers": average over tapers; keep the time-window and trial axes
+        - "time": average over time windows; keep the trial and taper axes
+        - "time_trials", "time_tapers", "time_trials_tapers": average over
+          every named axis; keep the rest
     frequencies : NDArray[floating], shape (n_frequencies,), optional
         Frequency values in Hz corresponding to FFT bins. If None, uses
         normalized frequencies.
@@ -1000,6 +1005,24 @@ class Connectivity:
     and :func:`~spectral_connectivity.fourier_connectivity` use the same order:
     ``result.sel(source=a, target=b)`` is ``a -> b`` (or "``a`` leads ``b``").
     Prefer them unless you need this lower-level API.
+
+    **Result shape by expectation_type**: the averaged axes are dropped and
+    the others kept, in the order (time windows, trials, tapers), ahead of the
+    measure's own axes. For ``magnitude_squared_coherence`` of coefficients
+    with 4 time windows, 4 trials, 5 tapers, 126 non-negative frequencies, and
+    2 signals:
+
+    ========================  ==============================  =================
+    expectation_type          leading axes kept               result shape
+    ========================  ==============================  =================
+    ``"trials_tapers"``       (n_time_windows)                (4, 126, 2, 2)
+    ``"trials"``              (n_time_windows, n_tapers)      (4, 5, 126, 2, 2)
+    ``"tapers"``              (n_time_windows, n_trials)      (4, 4, 126, 2, 2)
+    ``"time"``                (n_trials, n_tapers)            (4, 5, 126, 2, 2)
+    ``"time_trials"``         (n_tapers)                      (5, 126, 2, 2)
+    ``"time_tapers"``         (n_trials)                      (4, 126, 2, 2)
+    ``"time_trials_tapers"``  ()                              (126, 2, 2)
+    ========================  ==============================  =================
 
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
