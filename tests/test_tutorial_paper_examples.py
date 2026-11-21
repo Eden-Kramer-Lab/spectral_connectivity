@@ -263,6 +263,18 @@ _ESTIMATE_BUDGET = (0.3, 0.05)
 # has now. Wen example 2 with 5 s trials, as it once was, averaged to a partial
 # directed coherence of 0.16 between two signals its model does not connect.
 _BIAS_BUDGET = (0.25, 0.01)
+# Direct DTF is normalized over every frequency, so a bin holds about
+# 1 / n_frequencies of its target's inflow and the absolute parts above exceed
+# it: an all-zero dDTF passed the estimate budget for 12 of the 14 plotted
+# examples. Its sum over frequency, the share of the target's inflow it
+# attributes to the source, is held to a budget relative to each influence's
+# own share, (relative, absolute) as above. The absolute part is about twice
+# the largest share estimated where a model has no direct influence (0.0027).
+# With the tutorial's seed the furthest estimate uses 0.53 of its budget and
+# the furthest expected spectrum 0.55 of its, while an all-zero dDTF uses 2.3
+# or more of both in every example.
+_SUMMED_DDTF_ESTIMATE_BUDGET = (0.3, 0.005)
+_SUMMED_DDTF_BIAS_BUDGET = (0.25, 0.005)
 
 
 def _explained_fraction(measure, values):
@@ -312,6 +324,25 @@ def _assert_near_model(measure, model, budget, label):
     assert departure[frequency, influence] < limit[influence], (
         f"{label}, x{source + 1} -> x{target + 1}: {departure[frequency, influence]:.3g} "
         f"from the model at frequency bin {frequency + 1} (limit {limit[influence]:.3g})"
+    )
+
+
+def _assert_summed_ddtf_near_model(measure, model, budget, label):
+    """Direct DTF, ``[frequency, source, target]``, summed over the
+    frequencies above 0 Hz, is within ``budget`` of the model's for every
+    influence of one signal on another, relative to that influence's own sum."""
+    relative, absolute = budget
+    off_diagonal = ~np.eye(model.shape[-1], dtype=bool)
+    measure_share = measure[1:, off_diagonal].sum(axis=0)
+    model_share = model[1:, off_diagonal].sum(axis=0)
+    departure = np.abs(measure_share - model_share)
+    limit = relative * model_share + absolute
+    influence = np.argmax(departure / limit)
+    source, target = np.argwhere(off_diagonal)[influence]
+    assert departure[influence] < limit[influence], (
+        f"{label}, x{source + 1} -> x{target + 1}: summed direct DTF "
+        f"{measure_share[influence]:.3g}, model {model_share[influence]:.3g} "
+        f"(limit {limit[influence]:.3g})"
     )
 
 
@@ -382,12 +413,13 @@ def test_window_and_tapers_of_example_suit_its_model(analysis):
     )
     true = analysis.true_measures()
     for measure in analysis.measures:
-        _assert_near_model(
-            getattr(expected, measure)()[0],
-            true[measure],
-            _BIAS_BUDGET,
-            f"{analysis.label} {measure}",
-        )
+        values = getattr(expected, measure)()[0]
+        label = f"{analysis.label} {measure}"
+        _assert_near_model(values, true[measure], _BIAS_BUDGET, label)
+        if measure == "direct_directed_transfer_function":
+            _assert_summed_ddtf_near_model(
+                values, true[measure], _SUMMED_DDTF_BIAS_BUDGET, label
+            )
 
 
 def test_example_agrees_with_its_model(analysis):
@@ -396,9 +428,15 @@ def test_example_agrees_with_its_model(analysis):
     windows of each half)."""
     true = analysis.true_measures()
     for measure in analysis.measures:
+        estimate = analysis.estimate(measure)
+        label = f"{analysis.label} {measure}"
         _assert_near_model(
-            _explained_fraction(measure, analysis.estimate(measure)),
+            _explained_fraction(measure, estimate),
             _explained_fraction(measure, true[measure]),
             _ESTIMATE_BUDGET,
-            f"{analysis.label} {measure}",
+            label,
         )
+        if measure == "direct_directed_transfer_function":
+            _assert_summed_ddtf_near_model(
+                estimate, true[measure], _SUMMED_DDTF_ESTIMATE_BUDGET, label
+            )
