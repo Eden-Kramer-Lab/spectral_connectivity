@@ -350,6 +350,12 @@ their rows).
 - The `Connectivity` docstring has a table of the leading axes each
   `expectation_type` keeps and the shape it gives, and its descriptions of
   `"trials"` and `"tapers"` say that they keep the time-window axis too.
+- The `Connectivity` docstring says what each group measure returns and how
+  to unpack it: `(values, labels)` from `canonical_coherence` and the other
+  scalar group measures, a `MultivariateConnectivityResult` from
+  `canonical_coherency` and `maximized_imaginary_coherency_components`, and
+  two arrays from `global_coherence`, whose frequency axis (unlike the other
+  measures') holds every FFT bin.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring

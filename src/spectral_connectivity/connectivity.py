@@ -1024,6 +1024,45 @@ class Connectivity:
     ``"time_trials_tapers"``  ()                              (126, 2, 2)
     ========================  ==============================  =================
 
+    **Return types**: most measures return one array. The group measures,
+    which take ``group_labels``, return more:
+
+    - ``canonical_coherence``, ``blockwise_spectral_granger_prediction``,
+      ``maximized_imaginary_coherency``, and
+      ``multivariate_interaction_measure`` return a tuple ``(values,
+      labels)``: ``values`` ends in ``(n_groups, n_groups)``, ordered as
+      ``labels``, the sorted unique group labels. Unpack it:
+      ``values, labels = conn.canonical_coherence(group_labels)``.
+    - ``canonical_coherency`` and ``maximized_imaginary_coherency_components``
+      return a :class:`MultivariateConnectivityResult`; read its attributes
+      (``result.scores``, ``result.connections``, ``result.filters``, ...)
+      rather than unpacking it.
+    - ``global_coherence`` (which takes no groups) returns two arrays,
+      ``fractions, vectors = conn.global_coherence()``. Unlike every other
+      measure, its frequency axis holds all ``n_fft_samples`` FFT bins,
+      negative frequencies included: ``fractions[:, :len(conn.frequencies)]``
+      lines up with :attr:`frequencies`.
+
+    ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
+    :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
+    wrappers return an ``xarray.Dataset`` for each of these instead.
+
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> conn = Connectivity(
+    ...     rng.standard_normal((1, 6, 3, 64, 4)) + 1j * rng.standard_normal((1, 6, 3, 64, 4))
+    ... )
+    >>> group_labels = np.array(["CA1", "CA1", "PFC", "PFC"])
+    >>> values, labels = conn.canonical_coherence(group_labels)
+    >>> values.shape, labels.tolist()  # (n_time_windows, n_frequencies, n_groups, n_groups)
+    ((1, 33, 2, 2), ['CA1', 'PFC'])
+    >>> result = conn.canonical_coherency(group_labels)
+    >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
+    (1, 33, 1, 1)
+    >>> fractions, vectors = conn.global_coherence()
+    >>> fractions.shape, vectors.shape  # 64 FFT bins: all of them, not 33
+    ((1, 64, 1), (1, 64, 4, 1))
+
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
     coefficients passed here directly may come from a complex signal, whose
