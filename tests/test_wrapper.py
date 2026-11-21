@@ -432,6 +432,24 @@ def test_nested_list_input_matches_the_array_input():
         xr.testing.assert_identical(from_list, from_array)
 
 
+@pytest.mark.parametrize(
+    ("time_series", "error", "match"),
+    [
+        ([[1.0, 2.0], [3.0]], ValueError, "rows of different lengths"),
+        ([["1", "2"], ["3", "4"]], TypeError, "dtype <U1"),
+    ],
+    ids=["ragged", "strings"],
+)
+def test_time_series_that_is_not_a_numeric_array_is_rejected_clearly(
+    time_series, error, match
+):
+    """A ragged nested list or one of strings names the expected array instead
+    of NumPy's inhomogeneous-shape or ufunc message."""
+    with pytest.raises(error, match=match) as raised:
+        multitaper_connectivity(time_series, sampling_frequency=500)
+    assert "(n_time, n_signals) or (n_time, n_trials, n_signals)" in str(raised.value)
+
+
 # Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
 # are deliberately unsorted, so per-signal power exposes a data/label
 # mispairing, a channel reversal, or a label sort (a symmetric two-signal

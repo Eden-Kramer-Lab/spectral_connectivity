@@ -808,7 +808,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `(time, signal)` input, and `fourier_connectivity` one as 3-D or 4-D
   coefficients, as they do the same array. Both read the layout before
   converting, so a list raised a `ValueError` asking for 3-D input (or for 3
-  to 5 dimensions) although the array it describes has a supported shape.
+  to 5 dimensions) although the array it describes has a supported shape. A
+  ragged nested list, or one of strings, given to `multitaper_connectivity`
+  raises an error naming the expected numeric array instead of NumPy's
+  inhomogeneous-shape or ufunc message.
 - `Multitaper` and `multitaper_connectivity` warn when low-bias filtering
   (`is_low_bias=True`, the default) uses fewer DPSS tapers than requested, and
   every taper count they report is the number used. Only about `2 * NW - 1`

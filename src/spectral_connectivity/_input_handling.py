@@ -720,6 +720,36 @@ def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
         raise TypeError(msg)
 
 
+_TIME_SERIES_LAYOUTS = "(n_time, n_signals) or (n_time, n_trials, n_signals)"
+
+
+def _numeric_time_series(time_series: Any) -> BackendArray:
+    """Convert array-like time-series input (a nested list, say) to an array.
+
+    Converting first lets the wrapper's shape checks read the shape a list
+    describes. A ragged list, or values that are not numbers, raise naming the
+    expected array rather than with NumPy's message.
+    """
+    try:
+        data = xp.asarray(time_series)
+    except ValueError as error:
+        msg = (
+            f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
+            "but NumPy cannot make it one array: its nested lists have rows of "
+            "different lengths. Give every signal (and trial) the same number of "
+            "samples, trimming or padding them, then pass the result."
+        )
+        raise ValueError(msg) from error
+    if data.dtype.kind not in "biufc":
+        msg = (
+            f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
+            f"got values of dtype {data.dtype}, which are not numbers. Convert "
+            "them first, e.g. np.asarray(time_series, dtype=float)."
+        )
+        raise TypeError(msg)
+    return data
+
+
 def _unwrap_xarray_input(
     time_series: NDArray[np.floating] | xr.DataArray,
     signal_names: Sequence[_SignalLabel] | None,
@@ -746,9 +776,9 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an xarray.DataArray input."
             )
             raise TypeError(msg)
-        # Convert array-likes (a nested list, say) so the wrapper's shape
-        # checks read the shape the list describes.
-        return _UnwrappedInput(xp.asarray(time_series), signal_names, None, None, None, None)
+        return _UnwrappedInput(
+            _numeric_time_series(time_series), signal_names, None, None, None, None
+        )
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
