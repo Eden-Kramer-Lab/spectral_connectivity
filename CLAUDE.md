@@ -128,6 +128,15 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
   `tests/reference/mne_connectivity_reference.npz` (mne is not a dependency);
   regenerate it only when its generator changes, with
   `uv run --with mne-connectivity==0.9.0 python tests/reference/generate_mne_connectivity_reference.py`
+- Estimators with a known population value (the phase-consistency family, the
+  two-sample coherence z statistic, jackknife intervals) are tested by Monte
+  Carlo with a fixed seed. Replicate datasets go on the time-window axis so one
+  call gives every replicate. A limit is five standard errors of the replicate
+  mean where the expectation is exact; what is not sampling error is computed
+  (the exact distribution of the z statistic) or, failing that, given a stated
+  allowance beside its measured value. A test that guards one specific defect
+  (a wrong count in a bias correction, say) also asserts that the defect lies
+  many limits away
 
 ## File Structure
 
