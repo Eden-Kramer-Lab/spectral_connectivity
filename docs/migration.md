@@ -35,13 +35,11 @@ for 2.x has to change.
    `multitaper_connectivity` and `connectivity_to_xarray` results changed the
    same way without a warning: halve its interior bins to compare with 2.x.
 3. **Recompute results whose values changed without an error.** Besides
-   direction and power, code written for 2.x runs unchanged but gets
-   different numbers here (see the tables below):
-   - windows are labeled by their center time, not their first sample
-     (0.245 s, not 0 s, for a first 50-sample window at 100 Hz);
-   - `phase_slope_index` sums adjacent frequency bins only, so its values
-     are smaller by one to several orders of magnitude: re-derive any
-     threshold;
+   direction and power, these changes give code written for 2.x different
+   numbers without an error (the tables below give the details):
+   - windows are labeled by their center time, not their first sample;
+   - `phase_slope_index` sums adjacent frequency bins only, so its values are
+     much smaller: re-derive any threshold;
    - `delay` returns seconds, not cycles;
    - `multitaper_connectivity` takes the axis roles of an `xarray.DataArray`
      from its dimension names, not their positions;
