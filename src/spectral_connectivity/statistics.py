@@ -1390,9 +1390,9 @@ def power_confidence_intervals(
     )
     if not 0.5 <= confidence_level < 1.0:
         msg = (
-            f"{level_name} must be in [0.5, 1.0), got {confidence_level}. It is "
-            "the total probability mass inside the interval (e.g. 0.95 for a 95% "
-            "confidence interval)."
+            f"{level_name} must be at least 0.5 and less than 1, got "
+            f"{confidence_level!r}. It is the probability mass inside the interval, "
+            "e.g. 0.95 for a 95% interval."
         )
         raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds

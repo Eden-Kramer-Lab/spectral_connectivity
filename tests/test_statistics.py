@@ -818,11 +818,17 @@ def test_power_fisher_z_transform_rejects_nonpositive_power():
         power_fisher_z_transform(np.array([1.0, 2.0]), n_obs1=30, spectrum2=0.0)
 
 
-@pytest.mark.parametrize("bad_level", [0.3, 1.0, 1.5, -0.1])
+@pytest.mark.parametrize("bad_level", [0.3, 1.0, 1.5, -0.1, 95])
 def test_power_confidence_intervals_rejects_out_of_range_confidence_level(bad_level):
-    """The level must be in [0.5, 1.0); out-of-range values raise instead of inverting."""
-    with pytest.raises(ValueError, match=r"confidence_level must be in \[0\.5, 1\.0\)"):
+    """The level must be in [0.5, 1.0). The message has the shape of
+    jackknife's for the same argument: the range, the value given, and what
+    a level is, with the same example."""
+    with pytest.raises(ValueError, match=r"at least 0\.5 and less than 1") as error:
         power_confidence_intervals(n_observations=5, power=1.0, confidence_level=bad_level)
+    assert str(error.value) == (
+        f"confidence_level must be at least 0.5 and less than 1, got {bad_level!r}. "
+        "It is the probability mass inside the interval, e.g. 0.95 for a 95% interval."
+    )
 
 
 def test_power_confidence_intervals_ci_is_a_deprecated_alias():
@@ -867,7 +873,9 @@ def test_power_confidence_intervals_signature_shows_the_default_level():
 def test_a_rejected_ci_call_does_not_warn_and_names_ci():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        with pytest.raises(ValueError, match=r"^ci must be in \[0\.5, 1\.0\), got 1\.5"):
+        with pytest.raises(
+            ValueError, match=r"^ci must be at least 0\.5 and less than 1, got 1\.5\."
+        ):
             power_confidence_intervals(5, ci=1.5)
 
 
