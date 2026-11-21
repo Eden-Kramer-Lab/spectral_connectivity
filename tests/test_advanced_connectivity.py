@@ -926,6 +926,19 @@ class TestGroupDelay:
             delay[..., off_diagonal], slope[..., off_diagonal] / (2 * np.pi), rtol=1e-12
         )
 
+    def test_pair_without_significant_coherence_is_nan(self):
+        """For independent noise no frequency's coherence survives the
+        Benjamini-Hochberg-corrected zero-coherence test, so, as documented,
+        the pair's delay, slope, and r are NaN in group_delay and every
+        candidate in delay is NaN."""
+        noise = self.rng.standard_normal((1000, 10, 2))
+        conn = Connectivity.from_transform(Multitaper(noise, sampling_frequency=500))
+        delay, slope, r_value = conn.group_delay()
+        for output in (delay, slope, r_value):
+            assert np.isnan(output[..., 0, 1]).all()
+            assert np.isnan(output[..., 1, 0]).all()
+        assert np.isnan(conn.delay(frequency_range=(5, 50))[..., 0, 1]).all()
+
     def test_group_delay_zero_power_bin_does_not_poison_slice(self):
         """A masked (zero-power) frequency must not NaN-poison a pair's fit.
 

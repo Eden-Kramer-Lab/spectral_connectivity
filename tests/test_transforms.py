@@ -384,7 +384,8 @@ def test_n_fft_samples_smaller_than_window_raises():
 
 
 def test_frequencies():
-    # Window length must not exceed n_fft_samples, so use a 4-sample window.
+    # Window length must not exceed n_fft_samples, so use a 4-sample window,
+    # which DPSS tapers need NW < 2 for.
     n_time_samples, n_trials, n_signals = 4, 10, 2
     time_series = np.zeros((n_time_samples, n_trials, n_signals))
     n_fft_samples = 4
@@ -392,6 +393,7 @@ def test_frequencies():
     m = Multitaper(
         time_series=time_series,
         sampling_frequency=sampling_frequency,
+        time_halfbandwidth_product=1,
         n_fft_samples=n_fft_samples,
     )
     expected_frequencies = np.array([0, 250, -500, -250])
@@ -1501,6 +1503,38 @@ def test_multitaper_reports_the_supplied_taper_count():
     assert mt._provenance_metadata()["n_tapers"] == 3
 
 
+def test_multitaper_warns_and_reports_the_tapers_it_uses_when_low_bias_drops_some():
+    """At NW = 3 on a 1000-sample window only 5 DPSS tapers have a concentration
+    above 0.9, so low-bias filtering keeps 5 of 50 requested. Construction says
+    so, and every reported count is the 5 used; the provenance keeps the 50
+    requested."""
+    data = np.random.default_rng(0).standard_normal((1000, 1, 3))
+    with pytest.warns(
+        UserWarning, match=r"using 5 of the 50 DPSS tapers you requested \(n_tapers=50\)"
+    ) as record:
+        mt = Multitaper(data, sampling_frequency=500, n_tapers=50)
+    message = str(record[0].message)
+    for remedy in (
+        "concentration > 0.9",
+        "is_low_bias=False",
+        "raise time_halfbandwidth_product to about 25.5",
+        "pass n_tapers=5",
+    ):
+        assert remedy in message
+    assert mt.n_tapers == 5
+    assert mt.fft().shape[2] == 5
+    assert "n_tapers=5)" in repr(mt)
+    assert re.search(r"Number of tapers:\s+5 \(of 50 requested", mt.summarize_parameters())
+    metadata = mt._provenance_metadata()
+    assert metadata["n_tapers"] == 5
+    assert metadata["requested_n_tapers"] == 50
+
+    # Without low-bias filtering every requested taper is used, silently.
+    kept = Multitaper(data, sampling_frequency=500, n_tapers=50, is_low_bias=False)
+    assert kept.n_tapers == 50
+    assert kept.fft().shape[2] == 50
+
+
 def test_multitaper_rejects_n_tapers_that_disagrees_with_the_tapers():
     with pytest.raises(ValueError, match="n_tapers"):
         Multitaper(
@@ -1565,6 +1599,7 @@ def test_multitaper_provenance_uses_explicit_backend_neutral_fields():
         "spectral_bandwidth",
         "spectral_bandwidth_definition",
         "spectral_bandwidth_units",
+        "requested_n_tapers",
     }
     assert "unrelated_extension_attribute" not in metadata
     assert isinstance(metadata["start_time"], np.ndarray)

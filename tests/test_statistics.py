@@ -990,6 +990,95 @@ def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
 
+@pytest.mark.parametrize(
+    ("function", "minimum", "bad_n_obs"),
+    [
+        (coherence_bias, 2, 0),
+        (coherence_bias, 2, 1),
+        (coherence_bias, 2, 2.5),
+        (power_bias, 1, 0),
+        (power_bias, 1, np.nan),
+        (power_variance, 1, 0),
+        (power_variance, 1, -3),
+    ],
+)
+def test_bias_and_variance_helpers_reject_invalid_n_observations(function, minimum, bad_n_obs):
+    """coherence_bias(0) returned -0.5 and power_bias(0) and power_variance(0)
+    the digamma and trigamma poles; like coherence_significance_pvalue, they
+    raise for a count the formula cannot use and say what to pass."""
+    with pytest.raises(
+        ValueError,
+        match=rf"(?s)n_observations must be a finite integer >= {minimum}, got .*"
+        r"Connectivity\.n_observations",
+    ):
+        function(bad_n_obs)
+    # In an array the offending entry is named.
+    with pytest.raises(ValueError, match=rf"got {bad_n_obs!r}"):
+        function(np.array([10, bad_n_obs]))
+
+
+def test_bias_and_variance_helpers_accept_arrays_of_counts():
+    """One count per estimate, as before validation was added."""
+    counts = np.array([4, 10])
+    np.testing.assert_allclose(coherence_bias(counts), 1 / (2 * counts - 2))
+    mask = np.array([True, False])
+    np.testing.assert_allclose(
+        power_bias(counts, real_valued=mask),
+        [power_bias(4, real_valued=True), power_bias(10)],
+    )
+    np.testing.assert_allclose(
+        power_variance(counts, real_valued=mask),
+        [power_variance(4, real_valued=True), power_variance(10)],
+    )
+
+
+@pytest.mark.parametrize(
+    ("function", "kwargs"),
+    [
+        (coherence_bias, {}),
+        (power_bias, {}),
+        (power_bias, {"real_valued": True}),
+        (power_variance, {}),
+        (power_variance, {"real_valued": True}),
+    ],
+)
+def test_array_counts_broadcast_against_a_scalar_real_valued(function, kwargs):
+    """An array of counts with a scalar real_valued gives each count's scalar
+    result; power_bias and power_variance raised converting the array to a
+    float."""
+    counts = np.array([[4, 10], [25, 2]])
+    expected = [[function(int(count), **kwargs) for count in row] for row in counts]
+    result = function(counts, **kwargs)
+    assert np.shape(result) == counts.shape
+    np.testing.assert_allclose(result, expected, rtol=1e-15)
+
+
+@pytest.mark.parametrize("function", [coherence_bias, power_bias, power_variance])
+def test_a_list_of_counts_is_read_like_the_array(function):
+    """A list passed validation but then failed in the arithmetic
+    ("unsupported operand type(s) for -: 'list' and 'int'")."""
+    np.testing.assert_array_equal(function([3, 4]), function(np.array([3, 4])))
+
+
+def test_pole_is_named_only_for_a_count_at_a_pole():
+    with pytest.raises(ValueError, match="poles at 0"):
+        power_bias(0)
+    with pytest.raises(ValueError, match=r"got 2\.5") as fractional:
+        power_bias(2.5)
+    assert "pole" not in str(fractional.value)
+    with pytest.raises(ValueError, match="undefined below 2 observations"):
+        coherence_bias(1)
+
+
+@pytest.mark.parametrize("function", [coherence_bias, power_bias, power_variance])
+@pytest.mark.parametrize("not_a_count", ["10", None, True, np.array([True, False])])
+def test_bias_and_variance_helpers_reject_non_numeric_counts(function, not_a_count):
+    """A string, None, or a boolean is not a count: TypeError, not a NumPy
+    ufunc error, a division by zero (coherence_bias(True)), or True read as 1."""
+    with pytest.raises(TypeError, match="n_observations must be a number"):
+        function(not_a_count)
+
+
 @pytest.mark.parametrize("bad_rate", [np.inf, np.nan])
 def test_coherence_rate_adjustment_rejects_nonfinite_rate(bad_rate):
     """A non-finite firing rate must raise, not pass and hit ZeroDivisionError."""

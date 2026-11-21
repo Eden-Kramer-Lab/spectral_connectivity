@@ -9,10 +9,16 @@ arrays of shape ``(n_time_samples, n_trials, n_signals)``, one trial by
 default; ``simulate_lagged_broadband(..., n_trials=None)`` omits the trial axis.
 """
 
+import warnings
+
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from spectral_connectivity.utils import is_positive_integer
+from spectral_connectivity.utils import (
+    _validate_sampling_frequency,
+    is_positive_integer,
+    stacklevel_outside_package,
+)
 
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
@@ -104,6 +110,24 @@ def simulate_MVAR(
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
         Simulated time series data with specified MVAR dynamics.
 
+    Raises
+    ------
+    TypeError
+        If ``coefficients`` is complex.
+    ValueError
+        If ``coefficients`` is not of shape ``(n_lags, n_signals, n_signals)``,
+        ``noise_covariance`` not of shape ``(n_signals, n_signals)``,
+        ``n_time_samples`` or ``n_trials`` not a positive integer, or
+        ``n_burnin_samples`` not a non-negative integer.
+
+    Warns
+    -----
+    UserWarning
+        If the coefficients are not stable: the spectral radius of their
+        companion matrix is above 1, or within a relative 1e-12 of it (a unit
+        root), so the process has no stationary state and the simulated
+        series grows without bound or, for a unit root, wanders.
+
     Examples
     --------
     >>> import numpy as np
@@ -119,9 +143,68 @@ def simulate_MVAR(
     before collecting the requested samples.
 
     """
+    coefficients = np.asarray(coefficients)
+    if np.iscomplexobj(coefficients):
+        msg = (
+            f"coefficients must be real, got dtype {coefficients.dtype}. "
+            "simulate_MVAR draws real Gaussian innovations, so it simulates real "
+            "processes only; pass the real coefficient matrices."
+        )
+        raise TypeError(msg)
+    if coefficients.ndim != 3 or coefficients.shape[1] != coefficients.shape[2]:
+        hint = (
+            "; for a single lag, pass coefficients[np.newaxis]"
+            if coefficients.ndim == 2
+            else ""
+        )
+        msg = (
+            "coefficients must have shape (n_lags, n_signals, n_signals), one "
+            "square matrix A_k per lag; got shape "
+            f"{coefficients.shape}{hint}"
+        )
+        raise ValueError(msg)
     n_lags, n_signals, _ = coefficients.shape
     if noise_covariance is None:
         noise_covariance = np.eye(n_signals)
+    noise_covariance = np.asarray(noise_covariance)
+    if noise_covariance.shape != (n_signals, n_signals):
+        msg = (
+            f"noise_covariance must have shape ({n_signals}, {n_signals}), one "
+            f"row and column per signal of the coefficients; got shape "
+            f"{noise_covariance.shape}"
+        )
+        raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    _check_count(n_trials, "n_trials")
+    if not is_positive_integer(n_burnin_samples, minimum=0):
+        msg = f"n_burnin_samples must be a non-negative integer; got {n_burnin_samples!r}"
+        raise ValueError(msg)
+    if n_lags > 0:
+        # x(t) = sum_k A_k x(t - k) is stable when every eigenvalue of its
+        # companion matrix [[A_1 ... A_p], [I 0]] lies inside the unit circle.
+        companion = np.eye(n_lags * n_signals, k=-n_signals)
+        companion[:n_signals] = np.concatenate(coefficients, axis=1)
+        spectral_radius = float(np.max(np.abs(np.linalg.eigvals(companion))))
+        unit_root = bool(np.isclose(spectral_radius, 1, rtol=1e-12, atol=0))
+        if unit_root or spectral_radius > 1:
+            radius = (
+                "1 (a unit root: the series wanders like a random walk)"
+                if unit_root
+                else f"{spectral_radius:.4g} (above 1: the series grows without bound)"
+            )
+            # Scaling A_k by c**k scales every companion eigenvalue by c.
+            scale = 0.9 / spectral_radius
+            warnings.warn(
+                "The MVAR coefficients are unstable: the spectral radius of their "
+                f"companion matrix is {radius}, so the process has no stationary "
+                "state and its spectrum and connectivity are undefined. Scale the "
+                "coefficients until the radius is below 1: multiplying each lag's "
+                "matrix A_k (coefficients[k - 1]) by c**k multiplies the radius by "
+                "c, so coefficients * c ** np.arange(1, n_lags + 1)[:, np.newaxis, "
+                f"np.newaxis] with c = {scale:.6g} gives a radius of 0.9.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
 
     rng = _generator(random_state)
 
@@ -296,7 +379,8 @@ def simulate_shared_oscillation(
     Parameters
     ----------
     frequency : float
-        Frequency of the shared sinusoid, in Hz.
+        Frequency of the shared sinusoid, in Hz, from 0 up to but not including
+        the Nyquist frequency ``sampling_frequency / 2``.
     sampling_frequency : float
         Sampling rate, in Hz.
     n_time_samples : int
@@ -325,7 +409,9 @@ def simulate_shared_oscillation(
     Raises
     ------
     ValueError
-        If ``amplitudes`` is not 1-D, if ``phase_offsets`` or
+        If ``frequency`` is negative or not below the Nyquist frequency (it
+        would be sampled as an alias), if ``sampling_frequency`` is not finite
+        and positive, if ``amplitudes`` is not 1-D, if ``phase_offsets`` or
         ``noise_levels`` is neither a scalar nor one value per signal, or if
         ``n_time_samples`` or ``n_trials`` is not a positive integer (there is
         no 2-D form: ``n_trials=None`` raises).
@@ -364,6 +450,22 @@ def simulate_shared_oscillation(
         msg = (
             "amplitudes must be 1-D with at least one entry, one per signal; "
             f"got shape {amplitudes_array.shape}"
+        )
+        raise ValueError(msg)
+    sampling_frequency = _validate_sampling_frequency(sampling_frequency)
+    nyquist_frequency = sampling_frequency / 2
+    if not 0 <= frequency < nyquist_frequency:
+        remedy = (
+            f"Lower the frequency, or raise sampling_frequency above {2 * frequency!r} Hz."
+            if np.isfinite(frequency) and frequency >= nyquist_frequency
+            else "Pass a finite, non-negative frequency."
+        )
+        msg = (
+            f"frequency={frequency!r} Hz must lie from 0 up to but not including "
+            f"the Nyquist frequency ({nyquist_frequency!r} Hz at "
+            f"sampling_frequency={sampling_frequency!r} Hz). A sinusoid at or above "
+            "Nyquist is sampled as one at a lower frequency (an alias), and one at "
+            f"Nyquist has an amplitude set by its phase. {remedy}"
         )
         raise ValueError(msg)
     _check_count(n_time_samples, "n_time_samples")

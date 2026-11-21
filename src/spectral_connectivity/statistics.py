@@ -10,7 +10,7 @@ connectivity analysis.
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import scipy.special
@@ -584,12 +584,16 @@ def coherence_fisher_z_transform(
     Parameters
     ----------
     coherency1 : NDArray[complexfloating] or complex, shape (...,)
-        Complex coherency values between signals. A scalar is accepted and
-        gives a scalar (0-d) result.
+        Complex coherency values between signals, ``Connectivity.coherency()``,
+        or their magnitudes. A scalar is accepted and gives a scalar (0-d)
+        result. Do not pass ``magnitude_squared_coherence()``: its values are
+        already squared, and they are read as magnitudes, so the z-scores are
+        wrong with no error (take the square root first).
     n_obs1 : int
         Number of observations for coherency1 (n_tapers * n_trials).
     coherency2 : NDArray[complexfloating] or float, default=0
-        Second coherency for comparison. If 0, tests against null hypothesis.
+        Second coherency for comparison, in the same form as ``coherency1``. If
+        0, tests against null hypothesis.
     n_obs2 : int, default=0
         Number of observations for coherency2 (n_tapers * n_trials).
 
@@ -632,10 +636,12 @@ def coherence_fisher_z_transform(
     ``coherence_significance_pvalue(..., real_valued=True)``.
     """
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
-    # and non-finite/fractional counts give NaN with a runtime warning.
-    if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 2:
-        msg = f"n_obs1 must be a finite integer >= 2, got {n_obs1}."
-        raise ValueError(msg)
+    # and non-finite/fractional counts give NaN with a runtime warning. n_obs2
+    # keeps its own check: 0 (no second sample) is valid there.
+    # Checked here, too, so the message names n_obs1.
+    _validated_n_observations(
+        n_obs1, 2, "The coherence bias is undefined below 2 observations.", name="n_obs1"
+    )
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
         msg = (
             f"n_obs2 must be a finite integer equal to 0 (one-sample test) or "
@@ -658,7 +664,7 @@ def coherence_fisher_z_transform(
 
     z1: NDArray[np.floating] = np.arctanh(coherence_magnitude1) - bias1
     z2: NDArray[np.floating] = np.arctanh(coherence_magnitude2) - bias2
-    scale: float = np.sqrt(bias1 + bias2)
+    scale = np.sqrt(bias1 + bias2)
     return (z1 - z2) / scale
 
 
@@ -774,7 +780,13 @@ def coherence_significance_pvalue(
     Parameters
     ----------
     coherency : NDArray[complexfloating], shape (...,)
-        Complex coherency values between signals.
+        Complex coherency values between signals, ``Connectivity.coherency()``,
+        or their magnitudes; the function squares their absolute value. Do not
+        pass ``magnitude_squared_coherence()``: its values are already squared,
+        so they would be squared again and the p-values are too large with no
+        error (for independent noise, none fell below 0.05 where
+        ``coherency()`` gives about the nominal 5%). Take its square root
+        first.
     n_observations : int
         Number of independent observations used to estimate the coherency
         (n_tapers * n_trials).
@@ -845,7 +857,38 @@ def coherence_significance_pvalue(
     return p_values
 
 
-def coherence_bias(n_observations: int) -> float:
+def _validated_n_observations(
+    n_observations: Any, minimum: int, why_below_minimum: str, name: str = "n_observations"
+) -> NDArray[Any]:
+    """Observation counts, a scalar or one per estimate, as a validated array.
+
+    Raises ``TypeError`` unless every count is a real number (a boolean, a
+    string, or None is not a count), and ``ValueError`` unless every count is
+    a finite whole number of at least ``minimum``. ``why_below_minimum`` is
+    added to the message when a finite whole count lies below ``minimum``.
+    """
+    how = "Pass the number of averaged observations (trials x tapers), Connectivity.n_observations."
+    counts = np.asarray(n_observations)
+    if counts.dtype.kind not in "iuf":
+        msg = (
+            f"{name} must be a number (a count of observations), got "
+            f"{type(n_observations).__name__} {n_observations!r}. {how}"
+        )
+        raise TypeError(msg)
+    whole = np.isfinite(counts) & (counts == np.round(counts))
+    invalid = ~whole | (counts < minimum)
+    if np.any(invalid):
+        offending = ", ".join(repr(value) for value in counts[invalid].ravel().tolist()[:5])
+        below_minimum = np.any(whole & (counts < minimum))
+        msg = (
+            f"{name} must be a finite integer >= {minimum}, got {offending}. "
+            f"{why_below_minimum + ' ' if below_minimum else ''}{how}"
+        )
+        raise ValueError(msg)
+    return counts
+
+
+def coherence_bias(n_observations: int) -> float | NDArray[np.floating]:
     """Estimate bias correction for coherence estimates.
 
     Coherence estimates are biased by finite sample size. This function
@@ -858,12 +901,18 @@ def coherence_bias(n_observations: int) -> float:
     Parameters
     ----------
     n_observations : int
-        Number of observations used in coherence estimation (n_tapers * n_trials).
+        Number of observations used in coherence estimation (n_tapers *
+        n_trials), at least 2: pass ``Connectivity.n_observations``.
 
     Returns
     -------
     bias : float
         Bias correction factor for Fisher z-transform of coherence.
+
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite integer of at least 2.
 
     Examples
     --------
@@ -883,8 +932,13 @@ def coherence_bias(n_observations: int) -> float:
            Journal of Neuroscience Methods 159,
            337-345. 10.1016/j.jneumeth.2006.07.011.
     """
-    degrees_of_freedom = 2 * n_observations
-    return 1.0 / (degrees_of_freedom - 2)
+    counts = _validated_n_observations(
+        n_observations,
+        2,
+        "The bias, 1 / (2 * n_observations - 2), is undefined below 2 observations.",
+    )
+    degrees_of_freedom = 2 * counts
+    return _float_if_scalar(1.0 / (degrees_of_freedom - 2))
 
 
 def coherence_rate_adjustment(
@@ -1237,7 +1291,7 @@ def power_confidence_intervals(
 
 
 def _chi_squared_shape(
-    n_observations: int, real_valued: bool | NDArray[np.bool_]
+    n_observations: int | NDArray[Any], real_valued: bool | NDArray[np.bool_]
 ) -> NDArray[np.floating]:
     """Shape ``nu / 2`` of a power estimate's chi-squared distribution.
 
@@ -1250,11 +1304,9 @@ def _chi_squared_shape(
     return shape
 
 
-def _float_unless_masked(
-    value: NDArray[np.floating], real_valued: bool | NDArray[np.bool_]
-) -> float | NDArray[np.floating]:
-    """A float for a scalar ``real_valued``, the array for a mask."""
-    return float(value) if np.ndim(real_valued) == 0 else value
+def _float_if_scalar(value: NDArray[np.floating]) -> float | NDArray[np.floating]:
+    """A float for a 0-d result (scalar count and mask), else the array."""
+    return float(value) if np.ndim(value) == 0 else value
 
 
 def power_bias(
@@ -1273,7 +1325,8 @@ def power_bias(
     Parameters
     ----------
     n_observations : int
-        n_observations is n_tapers * n_trials
+        Number of observations used in power estimation (n_tapers * n_trials),
+        at least 1: pass ``Connectivity.n_observations``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         mask such as
@@ -1282,7 +1335,13 @@ def power_bias(
     Returns
     -------
     bias : float or NDArray[floating]
-        A float, or an array shaped like ``real_valued`` when that is an array.
+        A float for a scalar count and ``real_valued``; otherwise an array
+        of their broadcast shape.
+
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite positive integer.
 
     Examples
     --------
@@ -1293,8 +1352,11 @@ def power_bias(
     >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
     At a real-valued bin: -0.010033
     """
-    shape = _chi_squared_shape(n_observations, real_valued)
-    return _float_unless_masked(scipy.special.psi(shape) - np.log(shape), real_valued)
+    counts = _validated_n_observations(
+        n_observations, 1, "The digamma function has poles at 0 and the negative integers."
+    )
+    shape = _chi_squared_shape(counts, real_valued)
+    return _float_if_scalar(scipy.special.psi(shape) - np.log(shape))
 
 
 def power_variance(
@@ -1308,7 +1370,8 @@ def power_variance(
     Parameters
     ----------
     n_observations : int
-        Number of observations used in power estimation (n_tapers * n_trials).
+        Number of observations used in power estimation (n_tapers * n_trials),
+        at least 1: pass ``Connectivity.n_observations``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, as in
         :func:`power_bias`.
@@ -1316,8 +1379,13 @@ def power_variance(
     Returns
     -------
     variance : float or NDArray[floating]
-        Variance of log-power estimates: a float, or an array shaped like
-        ``real_valued`` when that is an array.
+        Variance of log-power estimates: a float for a scalar count and
+        ``real_valued``; otherwise an array of their broadcast shape.
+
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite positive integer.
 
     Examples
     --------
@@ -1335,8 +1403,11 @@ def power_variance(
     chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
     bin ``nu = n_observations``, which about doubles it.
     """
-    shape = _chi_squared_shape(n_observations, real_valued)
-    return _float_unless_masked(scipy.special.polygamma(1, shape), real_valued)
+    counts = _validated_n_observations(
+        n_observations, 1, "The trigamma function has poles at 0 and the negative integers."
+    )
+    shape = _chi_squared_shape(counts, real_valued)
+    return _float_if_scalar(scipy.special.polygamma(1, shape))
 
 
 def power_fisher_z_transform(

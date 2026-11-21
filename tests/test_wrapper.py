@@ -409,6 +409,102 @@ def test_accepts_documented_2d_input():
     np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
 
 
+def test_nested_list_input_matches_the_array_input():
+    """A nested list is read like the array it describes: 2-D time series in
+    multitaper_connectivity, and 3-D and 4-D coefficients in
+    fourier_connectivity, whose shapes the wrappers check before converting."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    from_array = multitaper_connectivity(data, sampling_frequency=500, method="power")
+    from_list = multitaper_connectivity(data.tolist(), sampling_frequency=500, method="power")
+    xr.testing.assert_identical(from_list, from_array)
+
+    # A contiguous copy, which the list's array is: a strided view can change
+    # the summation order, and so the last bit.
+    coefficients = np.ascontiguousarray(
+        Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0]
+    )
+    frequencies = np.fft.fftfreq(coefficients.shape[-2], d=1 / 500)
+    for layout in (coefficients[0], coefficients):  # 3-D and 4-D
+        from_array = fourier_connectivity(layout, frequencies=frequencies, method="coherency")
+        from_list = fourier_connectivity(
+            layout.tolist(), frequencies=frequencies, method="coherency"
+        )
+        xr.testing.assert_identical(from_list, from_array)
+
+
+@pytest.mark.parametrize(
+    ("time_series", "error", "match"),
+    [
+        ([[1.0, 2.0], [3.0]], ValueError, "rows of different lengths"),
+        ([["1", "2"], ["3", "4"]], TypeError, "dtype <U1"),
+    ],
+    ids=["ragged", "strings"],
+)
+def test_time_series_that_is_not_a_numeric_array_is_rejected_clearly(
+    time_series, error, match
+):
+    """A ragged nested list or one of strings names the expected array instead
+    of NumPy's inhomogeneous-shape or ufunc message."""
+    with pytest.raises(error, match=match) as raised:
+        multitaper_connectivity(time_series, sampling_frequency=500)
+    assert "(n_time, n_signals) or (n_time, n_trials, n_signals)" in str(raised.value)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.int64, np.float64])
+def test_array_input_passes_through_and_matches_its_list(dtype):
+    """An ndarray reaches the transform as it is, and its nested list gives the
+    same result. A float32 array keeps its precision, so its list (Python
+    floats, read as float64) agrees only to float32 rounding."""
+    data = (100 * np.random.default_rng(0).standard_normal((512, 2))).astype(dtype)
+    from_array = multitaper_connectivity(data, sampling_frequency=500, method="power")
+    from_list = multitaper_connectivity(data.tolist(), sampling_frequency=500, method="power")
+    if dtype is np.float32:
+        np.testing.assert_allclose(from_array.values, from_list.values, rtol=1e-5)
+    else:
+        xr.testing.assert_identical(from_array, from_list)
+
+
+def test_fourier_array_input_matches_the_multitaper_wrapper():
+    """Coefficients passed as an ndarray give the coherency multitaper_connectivity
+    computes from the same transform."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    multitaper = Multitaper(data[:, np.newaxis, :], sampling_frequency=500)
+    from_coefficients = fourier_connectivity(
+        multitaper.fft()[0], frequencies=multitaper.frequencies, method="coherency"
+    )
+    from_time_series = multitaper_connectivity(
+        data, sampling_frequency=500, method="coherency"
+    )
+    np.testing.assert_array_equal(
+        from_coefficients.frequency.values, from_time_series.frequency.values
+    )
+    np.testing.assert_allclose(
+        from_coefficients.values, from_time_series.values, rtol=1e-12, equal_nan=True
+    )
+
+
+class _ForeignArray:
+    """An array-like whose ``dtype`` is not a NumPy dtype (as a torch tensor's)."""
+
+    dtype = object()
+
+    def __init__(self, values):
+        self._values = values
+
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self._values, dtype=dtype)
+
+
+def test_array_like_with_a_foreign_dtype_is_converted():
+    """An array-like whose dtype NumPy cannot read is converted like a list
+    rather than failing on ``dtype.kind``."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    xr.testing.assert_identical(
+        multitaper_connectivity(_ForeignArray(data), sampling_frequency=500, method="power"),
+        multitaper_connectivity(data, sampling_frequency=500, method="power"),
+    )
+
+
 # Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
 # are deliberately unsorted, so per-signal power exposes a data/label
 # mispairing, a channel reversal, or a label sort (a symmetric two-signal
@@ -975,6 +1071,70 @@ def test_dataarray_infers_sampling_frequency_from_time_coordinate():
     xr.testing.assert_identical(inferred, explicit)
     # The frequency grid reflects the inferred rate (Nyquist = fs / 2).
     assert float(inferred.frequency.max()) == pytest.approx(sampling_frequency / 2)
+
+
+def _recording(time, **coordinate_attrs):
+    """Two channels of noise on a ``time`` coordinate with the given attrs."""
+    raw = np.random.default_rng(38).standard_normal((time.size, 2))
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": time})
+    data.time.attrs.update(coordinate_attrs)
+    return data
+
+
+def test_inferred_rate_warns_for_a_millisecond_time_coordinate():
+    """A coordinate in milliseconds is read as seconds, giving a rate 1000 times
+    too low: inference warns, naming the rate and the conversion, when the rate
+    is at most 1 Hz or the coordinate's units say milliseconds."""
+    at_500_hz = _recording(np.arange(1000) / 500 * 1000)  # ms, no units
+    with pytest.warns(UserWarning, match=r"inferred as 0\.5 Hz") as record:
+        result = multitaper_connectivity(at_500_hz, method="power")
+    message = str(record[0].message)
+    assert "elapsed seconds" in message
+    assert "fMRI" in message  # no units attribute, so the rate may be genuine
+    conversion = "da = da.assign_coords({'time': (da['time'] / 1000).assign_attrs(units='s')})"
+    assert conversion in message
+    assert "sampling_frequency=0.5 " in message
+    assert result.attrs["sampling_frequency"] == pytest.approx(0.5)
+
+    # 1 kHz on a millisecond axis, the commonest case, steps by exactly 1.
+    with pytest.warns(UserWarning, match=r"inferred as 1 Hz"):
+        multitaper_connectivity(_recording(np.arange(1000.0)), method="power")
+
+    # Above 1 Hz, the units attribute is what gives a millisecond axis away,
+    # and the message leaves out the slow-recording aside.
+    at_2_khz = _recording(np.arange(1000) / 2000 * 1000, units="ms")
+    with pytest.warns(
+        UserWarning, match=r"inferred as 2 Hz.*units attribute is 'ms'"
+    ) as record:
+        multitaper_connectivity(at_2_khz, method="power")
+    assert "fMRI" not in str(record[0].message)
+    namespace = {"da": at_2_khz}
+    exec(conversion, namespace)  # the message's own fix
+    assert multitaper_connectivity(namespace["da"], method="power").attrs[
+        "sampling_frequency"
+    ] == pytest.approx(2000)
+
+
+def test_spacing_mismatch_asks_whether_the_coordinate_is_in_milliseconds():
+    """With the rate given, a millisecond coordinate fails the spacing check by a
+    factor of 1000; the error says so."""
+    data = _recording(np.arange(1000) / 500 * 1000)
+    with pytest.raises(ValueError, match=r"spacing does not match.*in milliseconds"):
+        multitaper_connectivity(data, sampling_frequency=500, method="power")
+
+
+def test_inferred_slow_rate_is_silent_when_confirmed():
+    """Slow data (fMRI at TR = 2 s is 0.5 Hz) is legitimate: passing the rate,
+    or stating seconds as the coordinate's units, silences the warning."""
+    fmri = _recording(np.arange(200) * 2.0)
+    with pytest.warns(UserWarning, match=r"inferred as 0\.5 Hz"):
+        multitaper_connectivity(fmri, method="power")
+    explicit = multitaper_connectivity(fmri, sampling_frequency=0.5, method="power")
+    stated = multitaper_connectivity(
+        _recording(np.arange(200) * 2.0, units="s"), method="power"
+    )
+    assert explicit.attrs["sampling_frequency"] == 0.5
+    assert stated.attrs["sampling_frequency"] == 0.5
 
 
 def test_dataarray_infers_rate_from_precise_float32_time_coordinate():
@@ -2202,26 +2362,57 @@ def test_result_carries_provenance_metadata():
 
 
 @pytest.mark.parametrize("n_tapers", [None, 31])
-def test_low_bias_taper_filtering_keeps_requested_count_and_provenance(n_tapers):
-    """Caching filtered DPSS tapers must not change the requested taper count
-    or the provenance of repeated computations with the same transform."""
+def test_low_bias_taper_filtering_reports_the_used_count_and_keeps_provenance(n_tapers):
+    """When low-bias filtering drops DPSS tapers, the reported taper count is the
+    number used, the provenance records the request, and repeated computations
+    with the same transform record the same provenance."""
     data = np.random.default_rng(123).standard_normal((1000, 2, 2))
-    with pytest.warns(UserWarning, match="unusually large"):
+    requested = (
+        r"of the 31 DPSS tapers you requested \(n_tapers=31\)"
+        if n_tapers
+        else r"of the default floor\(2 \* time_halfbandwidth_product\) - 1 = 31 DPSS"
+    )
+    with (
+        pytest.warns(UserWarning, match="unusually large"),
+        pytest.warns(UserWarning, match=requested) as record,
+    ):
         mt = Multitaper(
             data,
             sampling_frequency=100,
             time_halfbandwidth_product=16,
             n_tapers=n_tapers,
         )
-    assert mt.n_tapers == 31
+    if n_tapers is None:
+        # NW already sets the default count: raising it is not the remedy.
+        message = next(str(w.message) for w in record if "DPSS" in str(w.message))
+        assert "raise time_halfbandwidth_product" not in message
+        assert "is_low_bias=False" in message
+    n_used = mt.tapers.shape[1]
+    assert n_used < 31  # Low-bias filtering actually removed tapers.
+    assert mt.n_tapers == n_used
 
     first = connectivity_to_xarray(mt, method="power")
-    assert mt.tapers.shape[1] < 31  # Low-bias filtering actually removed tapers.
-    assert mt.n_tapers == 31
     second = connectivity_to_xarray(mt, method="power")
-    assert first.attrs["mt_n_tapers"] == 31
-    assert second.attrs["mt_n_tapers"] == 31
+    assert first.attrs["mt_n_tapers"] == n_used
+    assert first.attrs["n_observations"] == 2 * n_used
+    estimator = json.loads(first.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["n_tapers"] == n_used
+    assert estimator["requested_n_tapers"] == n_tapers
     xr.testing.assert_identical(first, second)
+
+
+def test_multitaper_connectivity_reports_the_tapers_low_bias_filtering_kept():
+    """The wrapper's result counts the 5 tapers used, not the 50 requested."""
+    data = np.random.default_rng(0).standard_normal((1000, 3))
+    with pytest.warns(UserWarning, match="using 5 of the 50 DPSS tapers you requested"):
+        result = multitaper_connectivity(
+            data, sampling_frequency=500, n_tapers=50, method="power"
+        )
+    assert result.attrs["mt_n_tapers"] == 5
+    assert result.attrs["n_observations"] == 5
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["n_tapers"] == 5
+    assert estimator["requested_n_tapers"] == 50
 
 
 def test_provenance_records_measure_kwargs(tmp_path, stub_measure):

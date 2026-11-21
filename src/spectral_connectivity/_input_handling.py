@@ -538,6 +538,13 @@ def _time_axis_from_dataarray(
             f"sampling_frequency={sampling_frequency!r} Hz (expected "
             f"{expected_description}, observed median {observed_median!r})."
         )
+        if not coordinate_is_sample_index and np.isclose(
+            observed_median / expected_interval, 1000, rtol=1e-3
+        ):
+            msg += (
+                " The observed step is 1000 times the expected one: is the "
+                "coordinate in milliseconds? Divide it by 1000."
+            )
         raise ValueError(msg)
 
     if coordinate_is_sample_index:
@@ -570,7 +577,56 @@ def _time_axis_from_dataarray(
                 "start_time or make the values agree."
             )
             raise ValueError(msg)
+    if inferred_sampling_frequency is not None:
+        _warn_if_inferred_rate_looks_like_milliseconds(
+            coordinate_name, coordinate.attrs.get("units"), inferred_sampling_frequency
+        )
     return _TimeAxis(inferred_sampling_frequency, inferred_start_time)
+
+
+_MILLISECOND_UNITS = frozenset({"ms", "msec", "msecs", "millisecond", "milliseconds"})
+_SECOND_UNITS = frozenset({"s", "sec", "secs", "second", "seconds"})
+
+
+def _warn_if_inferred_rate_looks_like_milliseconds(
+    coordinate_name: Hashable, units: Any, sampling_frequency: float
+) -> None:
+    """Warn when a rate inferred from a time coordinate suggests milliseconds.
+
+    The coordinate is read as elapsed seconds, so one in milliseconds gives a
+    rate 1000 times too low. Warn when its ``units`` attribute says
+    milliseconds, or, unless it says seconds, when the rate is at most 1 Hz
+    (1 kHz data on a millisecond axis steps by exactly 1), which slow
+    recordings (fMRI) legitimately have too. A millisecond axis faster than
+    1 kHz without a ``units`` attribute is not detected.
+    """
+    stated = units.strip().lower() if isinstance(units, str) else None
+    in_milliseconds = stated in _MILLISECOND_UNITS
+    if not in_milliseconds and (stated in _SECOND_UNITS or sampling_frequency > 1):
+        return
+    rate = f"{sampling_frequency:.6g}"
+    name = repr(coordinate_name)
+    conversion = (
+        "da = da.assign_coords({" + name + ": (da[" + name + "] / 1000)"
+        ".assign_attrs(units='s')})"
+    )
+    if in_milliseconds:
+        why = f", although its units attribute is {units!r}"
+        confirm = f"Otherwise pass sampling_frequency={rate} to silence this warning."
+    else:
+        why = ""
+        confirm = (
+            f"If {rate} Hz is the true rate (fMRI at TR = 2 s is 0.5 Hz), pass "
+            f"sampling_frequency={rate} to confirm it and silence this warning."
+        )
+    warnings.warn(
+        f"sampling_frequency was inferred as {rate} Hz from the DataArray time "
+        f"coordinate {name}, which is read as elapsed seconds{why}. A coordinate "
+        "in milliseconds gives a sampling rate, and frequencies, 1000 times too "
+        f"low: convert it to seconds with {conversion}. {confirm}",
+        UserWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
 
 
 def _signal_labels_from_dataarray(
@@ -663,6 +719,42 @@ def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
         raise TypeError(msg)
 
 
+_TIME_SERIES_LAYOUTS = "(n_time, n_signals) or (n_time, n_trials, n_signals)"
+
+
+def _numeric_time_series(time_series: Any) -> BackendArray:
+    """Convert array-like time-series input (a nested list, say) to an array.
+
+    Converting first lets the wrapper's shape checks read the shape a list
+    describes. A ragged list, or values that are not numbers, raise naming the
+    expected array rather than with NumPy's message. An array (NumPy or CuPy)
+    is returned as it is: ``Multitaper`` makes the one device copy. An
+    array-like whose ``dtype`` NumPy cannot read is converted like a list.
+    """
+    data: BackendArray = time_series
+    try:
+        np.dtype(time_series.dtype)
+    except (AttributeError, TypeError):
+        try:
+            data = np.asarray(time_series)
+        except ValueError as error:
+            msg = (
+                f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
+                "but NumPy cannot make it one array: its nested lists have rows of "
+                "different lengths. Give every signal (and trial) the same number of "
+                "samples, trimming or padding them, then pass the result."
+            )
+            raise ValueError(msg) from error
+    if data.dtype.kind not in "biufc":
+        msg = (
+            f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
+            f"got values of dtype {data.dtype}, which are not numbers. Convert "
+            "them first, e.g. np.asarray(time_series, dtype=float)."
+        )
+        raise TypeError(msg)
+    return data
+
+
 def _unwrap_xarray_input(
     time_series: NDArray[np.floating] | xr.DataArray,
     signal_names: Sequence[_SignalLabel] | None,
@@ -689,7 +781,9 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an xarray.DataArray input."
             )
             raise TypeError(msg)
-        return _UnwrappedInput(time_series, signal_names, None, None, None, None)
+        return _UnwrappedInput(
+            _numeric_time_series(time_series), signal_names, None, None, None, None
+        )
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -783,8 +877,14 @@ def _unwrap_fourier_input(
         if any(dimension is not None for dimension in dimension_arguments.values()):
             msg = "The *_dim arguments apply only to an xarray.DataArray input."
             raise TypeError(msg)
-        data = fourier_coefficients
-        ndim = getattr(data, "ndim", None)
+        # Convert array-likes (a nested list, say) before reading the layout;
+        # an array is left for Connectivity to make the one device copy.
+        data = (
+            fourier_coefficients
+            if hasattr(fourier_coefficients, "ndim")
+            else np.asarray(fourier_coefficients)
+        )
+        ndim = data.ndim
         if ndim == 3:
             # (observation, frequency, signal)
             data = data[np.newaxis, :, np.newaxis, :, :]

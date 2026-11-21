@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pytest
 
@@ -6,7 +8,11 @@ from spectral_connectivity.simulate import (
     simulate_MVAR,
     simulate_shared_oscillation,
 )
-from tests._var_oracle import _dense_stable_var, _var_autocovariance
+from tests._var_oracle import (
+    _companion_spectral_radius,
+    _dense_stable_var,
+    _var_autocovariance,
+)
 
 
 def test_simulate_MVAR_deterministic_with_seed():
@@ -139,6 +145,70 @@ def test_simulate_MVAR_has_the_stationary_covariance_of_its_model():
         assert np.all(np.abs(following.T @ now / n_trials - lag_one_covariance) < tolerance), (
             f"covariance of sample {sample + 1} with sample {sample}"
         )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"coefficients": np.array([[0.5, 0.1], [0.0, 0.5]])},
+            r"shape \(n_lags, n_signals, n_signals\).*got shape \(2, 2\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 3))},
+            r"shape \(n_lags, n_signals, n_signals\).*got shape \(1, 2, 3\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "noise_covariance": np.eye(3)},
+            r"noise_covariance must have shape \(2, 2\).*got shape \(3, 3\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "n_trials": 2.5},
+            "n_trials must be a positive integer; got 2.5",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "n_burnin_samples": -1},
+            "n_burnin_samples must be a non-negative integer; got -1",
+        ),
+    ],
+    ids=["2d_coefficients", "non_square", "covariance_size", "fractional_trials", "burnin"],
+)
+def test_simulate_MVAR_rejects_malformed_input_with_the_expected_shape(kwargs, match):
+    """Malformed input names the argument, the expected shape, and the one
+    received, instead of failing inside NumPy."""
+    with pytest.raises(ValueError, match=match):
+        simulate_MVAR(**kwargs)
+
+
+def test_simulate_MVAR_warns_for_unstable_coefficients():
+    """A spectral radius of 1.5 diverged to |x| ~ 1e52 in 200 samples without a
+    sign; the warning gives the radius. Two lags are folded into the companion
+    matrix: x(t) = 0.5 x(t - 1) + 0.6 x(t - 2) has roots 1.06 and -0.56."""
+    with pytest.warns(UserWarning, match=r"spectral radius of their companion matrix is 1\.5"):
+        diverged = simulate_MVAR(
+            np.array([[[1.5, 0.0], [0.0, 1.5]]]), n_time_samples=200, random_state=0
+        )
+    assert np.abs(diverged).max() > 1e30
+    with pytest.warns(UserWarning, match=r"is 1\.064 ") as record:
+        simulate_MVAR(np.array([[[0.5]], [[0.6]]]), random_state=0)
+    # The advice works for several lags: scaling A_k by c**k scales the radius
+    # by c, so the c the message gives brings it to 0.9, silently.
+    c = float(re.search(r"c = ([0-9.]+)", str(record[0].message)).group(1))
+    scaled = np.array([[[0.5]], [[0.6]]]) * c ** np.arange(1, 3)[:, np.newaxis, np.newaxis]
+    assert _companion_spectral_radius(scaled) == pytest.approx(0.9, rel=1e-3)
+    simulate_MVAR(scaled, random_state=0)
+    # A unit root is named as such.
+    with pytest.warns(UserWarning, match=r"is 1 \(a unit root"):
+        simulate_MVAR(np.array([[[1.0]]]), random_state=0)
+    # A stable model (radius 0.6 and 0.5) is silent.
+    simulate_MVAR(np.array([[[0.5, 0.3], [0.0, 0.6]]]), random_state=0)
+
+
+def test_simulate_MVAR_rejects_complex_coefficients():
+    """A complex model cannot be simulated with real innovations; NumPy failed
+    later with a casting error."""
+    with pytest.raises(TypeError, match="coefficients must be real"):
+        simulate_MVAR(np.array([[[0.5 + 0.1j]]]))
 
 
 @pytest.mark.parametrize(
@@ -493,8 +563,9 @@ def test_lagged_broadband_rejects_negative_noise_levels():
                 "amplitudes": [1.0],
             },
         ),
+        (simulate_MVAR, {"coefficients": np.array([[[0.5]]])}),
     ],
-    ids=["lagged_broadband", "shared_oscillation"],
+    ids=["lagged_broadband", "shared_oscillation", "MVAR"],
 )
 @pytest.mark.parametrize("name", ["n_trials", "n_time_samples"])
 @pytest.mark.parametrize(
@@ -520,6 +591,24 @@ def test_simulators_accept_numpy_integer_counts():
     )
     assert lagged.shape == (50, 2, 2)
     assert oscillation.shape == (50, 2, 1)
+
+
+@pytest.mark.parametrize(
+    "frequency", [250, 300, -10, np.inf], ids=["nyquist", "above", "negative", "inf"]
+)
+def test_shared_oscillation_rejects_a_frequency_it_cannot_sample(frequency):
+    """At 500 Hz a 300 Hz sinusoid is sampled as an aliased 200 Hz one, and
+    250 Hz (Nyquist) as a sinusoid whose amplitude depends on its phase: the
+    error names the frequency and the Nyquist frequency."""
+    with pytest.raises(
+        ValueError, match=rf"frequency={frequency!r} Hz.*Nyquist frequency \(250\.0 Hz"
+    ):
+        simulate_shared_oscillation(frequency, 500, 1000, 5, amplitudes=[1, 1])
+
+
+def test_shared_oscillation_rejects_an_invalid_sampling_frequency():
+    with pytest.raises(ValueError, match="sampling_frequency"):
+        simulate_shared_oscillation(10, 0, 1000, amplitudes=[1])
 
 
 def test_shared_oscillation_has_no_two_dimensional_form():

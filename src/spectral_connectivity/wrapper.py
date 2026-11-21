@@ -1119,6 +1119,13 @@ def multitaper_connectivity(
         for a DataArray it may be omitted and inferred from a sufficiently precise
         numeric elapsed-seconds ``time`` coordinate. Pass it explicitly when a
         low-precision or large-offset coordinate cannot resolve the rate reliably.
+        An inferred rate of at most 1 Hz, or a coordinate whose ``units``
+        attribute says milliseconds, warns that the coordinate may be in
+        milliseconds (read as seconds, it gives a rate 1000 times too low);
+        passing the rate, or ``units="s"`` on the coordinate for a slow
+        recording, silences it. A millisecond coordinate of data sampled faster
+        than 1 kHz infers a rate above 1 Hz and is not detected unless its
+        ``units`` attribute says milliseconds: set ``units`` or pass the rate.
     time_window_duration : float, optional
         Duration of sliding window in seconds for time-resolved analysis.
         If None, analyzes entire time series (no time resolution).
@@ -1174,7 +1181,11 @@ def multitaper_connectivity(
         DPSS time-half-bandwidth product ``NW``; the concentration bandwidth is
         ``2 * NW / time_window_duration`` Hz.
     n_tapers : int, optional
-        Number of DPSS tapers; defaults to ``floor(2 * NW) - 1``.
+        Number of DPSS tapers to request; defaults to ``floor(2 * NW) - 1``.
+        Only about ``2 * NW - 1`` are well concentrated: a taper whose spectral
+        concentration is at or below 0.9 is dropped, with a warning, unless
+        ``transform_kwargs={"is_low_bias": False}``. The result's
+        ``mt_n_tapers`` and ``n_observations`` count the tapers used.
     detrend_type : {"constant", "linear"} or None, default="constant"
         Detrending applied to each window before the FFT; ``None`` for none.
     transform_kwargs : mapping, optional
@@ -1452,7 +1463,7 @@ def multitaper_connectivity(
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
-    if getattr(time_series_data, "ndim", None) == 2:
+    if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
     m = Multitaper(
         time_series=time_series_data,
