@@ -46,8 +46,11 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ### How to build the documentation
 
-1. From the repository root, install the documentation dependencies with
-   `pip install -r docs/requirements-docs.txt`.
+1. From the repository root, in a Python >= 3.11 environment (the docs need
+   MyST-Parser >= 5.1, which does not install on 3.10), install the
+   documentation dependencies with `pip install -r docs/requirements-docs.txt`
+   (or run the build with
+   `uv run --with-requirements docs/requirements-docs.txt python -m sphinx -b html docs docs/_build/html`).
 2. Run `make -C docs html` to build the site.
 3. Preview `docs/_build/html/index.html`. A commit to the master branch will
    automatically build the docs on Read the Docs.
