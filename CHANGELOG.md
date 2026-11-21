@@ -114,9 +114,11 @@ their rows).
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
   when they compute pairwise or subset spectral Granger prediction (the 2.x
   wrapper rejected the transfer-function measures). It points at the calling
-  line and appears once per Python session for each measure (the wrappers'
-  label notice and the `Connectivity` method's array notice are separate);
-  `warnings.simplefilter("always",
+  line and appears once per Python session for each measure, and for each
+  way of computing it: once for calls through `multitaper_connectivity` or
+  `connectivity_to_xarray` (about `sel(source, target)`) and once for calls
+  to the `Connectivity` method (about the array's axes), so a script that
+  uses both sees both, once each. `warnings.simplefilter("always",
   spectral_connectivity.DirectedOrientationWarning)` shows it at every call,
   and any other filter on it (such as `"error"`) applies as usual. A call
   made while it is ignored does not count as shown, so removing the filter
