@@ -219,7 +219,8 @@ def numeric_array(
     ``ragged_fix`` says how to even out the rows. An array (NumPy, CuPy, or an
     ``xarray.DataArray``) is returned as it is, so the caller makes the one
     device copy and can still read a DataArray's dimension names. An
-    array-like whose ``dtype`` NumPy cannot read is converted like a list.
+    array-like whose ``dtype`` NumPy cannot read is converted like a list, and
+    an object array holding numbers to an array of those numbers.
     """
     data: BackendArray = value
     try:
@@ -234,6 +235,13 @@ def numeric_array(
                 f"different lengths. {ragged_fix}"
             )
             raise ValueError(msg) from error
+    if data.dtype.kind == "O":
+        # An object array of numbers is read as the numbers it holds, with the
+        # dtype NumPy infers for them (float, or complex for coefficients).
+        with contextlib.suppress(ValueError):
+            converted = np.asarray(np.asarray(data).tolist())
+            if converted.dtype.kind in "biufc":
+                data = converted
     if data.dtype.kind not in "biufc":
         received = (
             f"{type(value).__name__} {value!r}"

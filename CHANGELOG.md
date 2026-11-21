@@ -1444,7 +1444,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   'isfinite'` error for strings (`MorletWavelet` accepted an array of
   strings), or, for `Welch(None)`, one about its segment length.
   `fourier_connectivity` names its coefficient layouts for a ragged list
-  too.
+  too. An object-dtype array holding numbers is read as those numbers by all
+  four transforms and both wrappers, as `MorletWavelet` read it; `Multitaper`,
+  `ShortTimeFourierTransform`, and `Welch` raised NumPy's `isfinite` error
+  for one.
 
 ### Performance
 

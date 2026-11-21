@@ -630,8 +630,9 @@ def test_transforms_name_a_ragged_nested_list(make):
         ([[["a", "b"]]] * 8, "values of dtype <U1"),
         (np.full((8, 1, 2), "a"), "values of dtype <U1"),
         (None, "NoneType None"),
+        (np.full((8, 1, 2), None), "values of dtype object"),
     ],
-    ids=["list", "array", "none"],
+    ids=["list", "array", "none", "object_array_of_none"],
 )
 def test_transforms_name_values_that_are_not_numbers(make, values, received):
     """Strings or None raise naming the array and the conversion, not a ufunc
@@ -646,6 +647,30 @@ def test_transforms_name_values_that_are_not_numbers(make, values, received):
         + "$",
     ):
         make(values)
+
+
+@pytest.mark.parametrize("make", _TRANSFORMS.values(), ids=list(_TRANSFORMS))
+def test_an_object_array_of_numbers_is_read_as_its_numbers(make):
+    """Every transform reads an object array holding floats as those floats:
+    MorletWavelet accepted one, and Multitaper, STFT, and Welch failed with
+    NumPy's isfinite error."""
+    values = np.random.default_rng(9).standard_normal((300, 2, 2))
+    np.testing.assert_array_equal(
+        to_host(make(values.astype(object)).fft()), to_host(make(values).fft())
+    )
+
+
+def test_the_wrapper_reads_an_object_array_of_numbers():
+    values = np.random.default_rng(9).standard_normal((300, 2))
+    expected = multitaper_connectivity(values, 500, method="power")
+    result = multitaper_connectivity(values.astype(object), 500, method="power")
+    np.testing.assert_array_equal(result.values, expected.values)
+    coefficients = np.random.default_rng(10).standard_normal((4, 8, 2)) * (1 + 1j)
+    frequencies = np.arange(8.0)
+    np.testing.assert_array_equal(
+        fourier_connectivity(coefficients.astype(object), frequencies, method="power").values,
+        fourier_connectivity(coefficients, frequencies, method="power").values,
+    )
 
 
 def test_fourier_connectivity_names_a_ragged_nested_list():
