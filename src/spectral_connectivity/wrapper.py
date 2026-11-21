@@ -1497,6 +1497,18 @@ def multitaper_connectivity(
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         method, connectivity_kwargs, group_labels
     )
+    if time_series_data.ndim not in (2, 3):
+        # Said here, in this function's layouts: Multitaper's message speaks
+        # of its own 3-D input and prepare_time_series.
+        n_dimensions = time_series_data.ndim
+        msg = (
+            f"time_series has {n_dimensions} dimension{'' if n_dimensions == 1 else 's'}, "
+            f"shape {tuple(time_series_data.shape)}. multitaper_connectivity needs "
+            "(n_time_samples, n_signals) or (n_time_samples, n_trials, n_signals)."
+        )
+        if n_dimensions == 1:
+            msg += " For one signal use x[:, np.newaxis] with method='power'."
+        raise ValueError(msg)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).

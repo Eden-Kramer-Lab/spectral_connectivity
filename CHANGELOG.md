@@ -1448,6 +1448,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   four transforms and both wrappers, as `MorletWavelet` read it; `Multitaper`,
   `ShortTimeFourierTransform`, and `Welch` raised NumPy's `isfinite` error
   for one.
+- `multitaper_connectivity` given an array of 1 or 4 or more dimensions says
+  so in its own terms: "time_series has 1 dimension, shape (200,).
+  multitaper_connectivity needs (n_time_samples, n_signals) or
+  (n_time_samples, n_trials, n_signals). For one signal use x[:, np.newaxis]
+  with method='power'." It raised `Multitaper`'s "Expected 3D array" error,
+  which points to `prepare_time_series`, a helper for `Multitaper`'s 3-D
+  input.
 
 ### Performance
 

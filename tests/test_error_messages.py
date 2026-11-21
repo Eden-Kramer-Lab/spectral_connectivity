@@ -420,6 +420,34 @@ def test_short_window_without_transposed_layout_keeps_its_message():
         Multitaper(np.ones((4, 1, 2)), sampling_frequency=500)
 
 
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        (
+            (200,),
+            (
+                "time_series has 1 dimension, shape (200,). multitaper_connectivity "
+                "needs (n_time_samples, n_signals) or (n_time_samples, n_trials, "
+                "n_signals). For one signal use x[:, np.newaxis] with method='power'."
+            ),
+        ),
+        (
+            (200, 2, 2, 2),
+            (
+                "time_series has 4 dimensions, shape (200, 2, 2, 2). "
+                "multitaper_connectivity needs (n_time_samples, n_signals) or "
+                "(n_time_samples, n_trials, n_signals)."
+            ),
+        ),
+    ],
+)
+def test_wrapper_names_its_own_layouts_for_another_dimension_count(shape, expected):
+    """The wrapper's error speaks of its own 2-D and 3-D layouts, not of
+    Multitaper's 3-D input or prepare_time_series."""
+    with pytest.raises(ValueError, match="^" + re.escape(expected) + "$"):
+        multitaper_connectivity(np.ones(shape), sampling_frequency=500)
+
+
 _WIDE = np.random.default_rng(5).standard_normal((200, 1, 300))
 
 
