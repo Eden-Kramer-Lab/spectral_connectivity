@@ -49,6 +49,7 @@ from spectral_connectivity.statistics import (
 )
 from spectral_connectivity.utils import (
     BackendArray,
+    _validated_flag,
     is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
@@ -501,28 +502,6 @@ def _optional_transform_attribute(transform: Any, name: str, default: Any) -> An
         if inspect.getattr_static(transform, name, _ABSENT) is not _ABSENT:
             raise
         return default
-
-
-def _validated_flag(name: str, value: Any) -> bool:
-    """Return ``value`` as a bool, or raise unless it is a boolean.
-
-    Accepts Python and NumPy bools and 0-d boolean arrays (e.g. a flag computed
-    as ``xp.all(...)``). ``bool()`` would read a method or the string
-    ``"False"`` as True and ``None`` or 0 as False, silently changing how the
-    spectrum is treated.
-    """
-    is_boolean_scalar = getattr(value, "ndim", None) == 0 and (
-        getattr(getattr(value, "dtype", None), "kind", None) == "b"
-    )
-    if not (isinstance(value, bool) or is_boolean_scalar):
-        msg = (
-            f"{name} must be a bool, got {type(value).__name__} ({value!r}). It "
-            f"sets how the spectrum is treated, so it is not guessed from a truth "
-            f"value: pass True or False (for a transform, a bool attribute or "
-            f"property, not a method)."
-        )
-        raise TypeError(msg)
-    return bool(value)
 
 
 def _transform_flag(transform: Any, name: str, default: bool) -> bool:

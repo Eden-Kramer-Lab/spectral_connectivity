@@ -55,10 +55,10 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     _select_measure_frequencies,
-    _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
+    _validated_flag,
     close_names,
     did_you_mean,
     stacklevel_outside_package,
