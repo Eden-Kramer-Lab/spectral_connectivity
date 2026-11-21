@@ -477,8 +477,9 @@ the GPU. Results are NumPy arrays either way.
    print(backend["message"])
    ```
 
-   On a GPU the message is `Using GPU backend with CuPy on <your GPU name>.`;
-   on the CPU it says so and lists the steps above that are missing. The
+   On a GPU the message is `Using GPU backend with CuPy on <your GPU name>.`
+   On the CPU it says the NumPy backend is in use and how to enable the GPU
+   (install CuPy, set the variable before importing). The
    dictionary also holds `backend` (`"cpu"` or `"gpu"`), `gpu_enabled`
    (whether the variable requested the GPU), `gpu_available` (whether CuPy is
    installed), and `device_name`.
@@ -489,9 +490,10 @@ Troubleshooting:
   requested ... but CuPy is not installed`.** Install CuPy as in step 1,
   matching your CUDA version; `python -c "import cupy; print(cupy.__version__)"`
   checks the install and `nvidia-smi` the CUDA driver.
-+ **The GPU is not used although the variable is set.** It was set after the
-  package was imported: move it above the first import, or restart the
-  notebook kernel.
++ **The GPU is not used although CuPy is installed and the variable is set.**
+  The variable must be set before `import spectral_connectivity`; set later, it
+  has no effect (and the message may still suggest installing CuPy). Move it
+  above the first import, or restart the notebook kernel.
 + **Out of GPU memory.** Process fewer trials or time windows per call, or run
   on the CPU: unset the variable and restart Python.
 
