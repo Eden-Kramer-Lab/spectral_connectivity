@@ -61,10 +61,10 @@ from spectral_connectivity.connectivity import (
 from spectral_connectivity.transforms import Multitaper, _transposed_layout_error
 from spectral_connectivity.utils import (
     SAMPLING_FREQUENCY_ALIASES,
-    SAMPLING_FREQUENCY_HINT,
     _validated_flag,
     close_names,
     did_you_mean,
+    sampling_frequency_hint,
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
@@ -444,7 +444,9 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
     return dict(value)
 
 
-def _unknown_setting_message(problem: str, key: Any) -> str:
+def _unknown_setting_message(
+    problem: str, key: Any, *, sampling_frequency_given: bool = False
+) -> str:
     """``"<problem> '<key>'."`` and the ``Multitaper`` settings ``key`` most
     likely misspells.
 
@@ -453,7 +455,7 @@ def _unknown_setting_message(problem: str, key: Any) -> str:
     """
     message = f"{problem} {key!r}."
     if key in SAMPLING_FREQUENCY_ALIASES:
-        return message + SAMPLING_FREQUENCY_HINT
+        return message + sampling_frequency_hint(sampling_frequency_given)
     close = close_names(str(key), _MULTITAPER_SETTINGS)
     message += did_you_mean(close)
     named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
@@ -506,7 +508,10 @@ def _warn_legacy_settings(function: str, mapping_name: str, legacy: Mapping[str,
 
 
 def _transform_settings(
-    transform_kwargs: Mapping[str, Any] | None, legacy: Mapping[str, Any]
+    transform_kwargs: Mapping[str, Any] | None,
+    legacy: Mapping[str, Any],
+    *,
+    sampling_frequency_given: bool = False,
 ) -> dict[str, Any]:
     """The advanced ``Multitaper`` settings of a ``multitaper_connectivity`` call.
 
@@ -530,13 +535,19 @@ def _transform_settings(
             )
             raise ValueError(msg)
         if in_mapping:
-            msg = _unknown_setting_message("transform_kwargs got an unexpected key", key)
+            msg = _unknown_setting_message(
+                "transform_kwargs got an unexpected key",
+                key,
+                sampling_frequency_given=sampling_frequency_given,
+            )
             msg += (
                 f" It accepts the Multitaper settings {', '.join(_TRANSFORM_KWARGS_SETTINGS)}."
             )
         else:
             msg = _unknown_setting_message(
-                "multitaper_connectivity() got an unexpected keyword argument", key
+                "multitaper_connectivity() got an unexpected keyword argument",
+                key,
+                sampling_frequency_given=sampling_frequency_given,
             )
             msg += (
                 " Measure settings go in connectivity_kwargs and advanced Multitaper "
@@ -1450,7 +1461,9 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
-    transform_settings = _transform_settings(transform_kwargs, kwargs)
+    transform_settings = _transform_settings(
+        transform_kwargs, kwargs, sampling_frequency_given=sampling_frequency is not None
+    )
     explicit_start_time = transform_settings.get("start_time", _UNSET)
     (
         time_series_data,

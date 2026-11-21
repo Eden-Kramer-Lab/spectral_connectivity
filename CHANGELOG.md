@@ -1397,7 +1397,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   rate (`fs`, `Fs`, `sfreq`, `srate`, `sampling_rate`, `sample_rate`) with
   "Did you mean sampling_frequency (in Hz)?", where the `TypeError` for the
   unexpected keyword suggested nothing. `transform_kwargs={"fs": ...}` gets
-  the same hint.
+  the same hint. Given beside `sampling_frequency`, the alias is answered
+  with "pass only sampling_frequency (in Hz)". `fourier_connectivity`, which
+  takes no sampling rate, keeps Python's `TypeError` for `fs=`.
 - The `multitaper_connectivity` and `Multitaper` docstrings state that trials
   are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
   n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of

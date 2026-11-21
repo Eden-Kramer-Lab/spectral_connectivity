@@ -647,6 +647,28 @@ def test_sampling_rate_aliases_point_to_sampling_frequency(call, name, alias):
         call(**{alias: 500})
 
 
+@pytest.mark.parametrize(("call", "name"), _RATE_CALLS.values(), ids=list(_RATE_CALLS))
+def test_an_alias_beside_sampling_frequency_is_answered_with_drop_it(call, name):
+    """With sampling_frequency given too, "did you mean" is the wrong answer:
+    the alias is the one to drop."""
+    with pytest.raises(
+        TypeError,
+        match="^"
+        + re.escape(
+            f"{name}() got an unexpected keyword argument 'fs'. sampling_frequency "
+            "was given too; pass only sampling_frequency (in Hz)."
+        ),
+    ):
+        call(sampling_frequency=500, fs=500)
+
+
+def test_an_alias_beside_a_positional_sampling_frequency_is_answered_with_drop_it():
+    with pytest.raises(TypeError, match="pass only sampling_frequency"):
+        Multitaper(_SERIES, 500, fs=500)
+    with pytest.raises(TypeError, match="pass only sampling_frequency"):
+        multitaper_connectivity(_SERIES, 500, transform_kwargs={"sfreq": 500})
+
+
 def test_constructors_keep_their_signatures():
     """The alias check leaves each transform's signature intact for inspect."""
     import inspect

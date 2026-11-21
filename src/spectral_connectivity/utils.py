@@ -170,7 +170,14 @@ def did_you_mean(names: Iterable[str]) -> str:
 SAMPLING_FREQUENCY_ALIASES = frozenset(
     {"fs", "Fs", "sfreq", "srate", "sampling_rate", "sample_rate"}
 )
-SAMPLING_FREQUENCY_HINT = " Did you mean sampling_frequency (in Hz)?"
+
+
+def sampling_frequency_hint(sampling_frequency_given: bool) -> str:
+    """What to say after rejecting a sampling-rate alias such as ``fs``: its
+    name, or, when ``sampling_frequency`` was passed as well, to drop the alias."""
+    if sampling_frequency_given:
+        return " sampling_frequency was given too; pass only sampling_frequency (in Hz)."
+    return " Did you mean sampling_frequency (in Hz)?"
 
 
 def reject_sampling_frequency_aliases(
@@ -179,17 +186,19 @@ def reject_sampling_frequency_aliases(
     """Make a transform's ``__init__`` answer ``fs=...`` with the parameter's name.
 
     Python's own ``TypeError`` for an unexpected keyword names no alternative;
-    this one adds :data:`SAMPLING_FREQUENCY_HINT`. Other calls pass through,
-    and the signature is unchanged for ``inspect``.
+    this one adds :func:`sampling_frequency_hint`. Other calls pass through,
+    and the signature is unchanged for ``inspect``. ``sampling_frequency`` is
+    the second parameter after ``self`` of every transform it decorates.
     """
 
     @functools.wraps(init)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
         alias = next((name for name in kwargs if name in SAMPLING_FREQUENCY_ALIASES), None)
         if alias is not None:
+            given = "sampling_frequency" in kwargs or len(args) > 2
             msg = (
                 f"{type(args[0]).__name__}() got an unexpected keyword "
-                f"argument {alias!r}.{SAMPLING_FREQUENCY_HINT}"
+                f"argument {alias!r}.{sampling_frequency_hint(given)}"
             )
             raise TypeError(msg)
         init(*args, **kwargs)
