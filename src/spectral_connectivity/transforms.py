@@ -900,19 +900,24 @@ def _validate_window_step(
         )
 
 
-class _RecordingTooShortError(ValueError):
-    """The recording is too short for the window: the window is longer than
-    it, or, spanning it, too short for the DPSS tapers.
+def _recording_too_short(msg: str) -> ValueError:
+    """The ``ValueError`` for a recording too short for its window: the window
+    is longer than it, or, spanning it, too short for the DPSS tapers.
 
-    Raised where those two checks fail, so :func:`_transposed_layout_hint`
-    can tell them from every other ``ValueError``. It is a detail of this
-    module, so a traceback names it ``ValueError``, as before it existed,
-    rather than by its private name.
+    Marked so :func:`_transposed_layout_hint` (see
+    :func:`_is_recording_too_short`) can tell it from every other
+    ``ValueError``. A plain ``ValueError`` with an attribute, rather than a
+    subclass, prints and pickles as the ``ValueError`` it was; pickling keeps
+    the attribute.
     """
+    error = ValueError(msg)
+    error._recording_too_short = True  # type: ignore[attr-defined]
+    return error
 
 
-_RecordingTooShortError.__module__ = "builtins"
-_RecordingTooShortError.__name__ = _RecordingTooShortError.__qualname__ = "ValueError"
+def _is_recording_too_short(error: BaseException | None) -> bool:
+    """Whether ``error`` was made by :func:`_recording_too_short`."""
+    return getattr(error, "_recording_too_short", False)
 
 
 def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> ValueError:
@@ -920,7 +925,7 @@ def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> Valu
     signals than time samples, so is most likely transposed.
 
     It says so instead of advising a longer window; raised from the window
-    error, a :class:`_RecordingTooShortError`, by which a caller accepting
+    error (see :func:`_recording_too_short`), by which a caller accepting
     other layouts (``expected``) recognizes it and rebuilds the message.
     """
     return ValueError(
@@ -938,9 +943,9 @@ def _transposed_layout_hint(time_series: BackendArray) -> Iterator[None]:
     every other ``ValueError`` passes unchanged."""
     try:
         yield
-    except _RecordingTooShortError as error:
+    except ValueError as error:
         n_time, _, n_signals = time_series.shape
-        if n_time < n_signals:
+        if _is_recording_too_short(error) and n_time < n_signals:
             raise _transposed_layout_error(n_time, n_signals, _TRANSFORM_LAYOUT) from error
         raise
 
@@ -1309,7 +1314,7 @@ Frequency Analysis
                 f"(time_window_duration <= "
                 f"{n_time_samples / self.sampling_frequency} s)."
             )
-            raise _RecordingTooShortError(msg)
+            raise _recording_too_short(msg)
         return self._n_time_samples_per_window
 
     @property
@@ -3852,7 +3857,7 @@ def dpss_windows(
             f"decomposition, got {n_time_samples_per_window}. A single-sample "
             f"window carries no spectral information."
         )
-        raise _RecordingTooShortError(msg)
+        raise _recording_too_short(msg)
     if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
         # NW <= 0 is a bad NW; NW >= n / 2, a window too short for it.
         too_short = time_halfbandwidth_product > 0
@@ -3864,7 +3869,7 @@ def dpss_windows(
             f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
             f"longer window or a smaller time_halfbandwidth_product."
         )
-        raise (_RecordingTooShortError if too_short else ValueError)(msg)
+        raise _recording_too_short(msg) if too_short else ValueError(msg)
     if not 1 <= n_tapers <= n_time_samples_per_window:
         msg = (
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "

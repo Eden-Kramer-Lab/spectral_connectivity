@@ -60,7 +60,7 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.transforms import (
     Multitaper,
-    _RecordingTooShortError,
+    _is_recording_too_short,
     _transposed_layout_error,
 )
 from spectral_connectivity.utils import (
@@ -1554,7 +1554,7 @@ def multitaper_connectivity(
         # Multitaper's layout error is the one caused by a recording too short
         # for its window; it names only its own 3-D layout, and this function
         # takes 2-D too.
-        if not isinstance(error.__cause__, _RecordingTooShortError):
+        if not _is_recording_too_short(error.__cause__):
             raise
         n_time, _, n_signals = time_series_data.shape
         raise _transposed_layout_error(

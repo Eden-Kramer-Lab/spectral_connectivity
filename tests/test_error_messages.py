@@ -7,6 +7,7 @@ This module tests that error messages follow the WHAT/WHY/HOW pattern:
 """
 
 import functools
+import pickle
 import re
 import traceback
 import warnings
@@ -443,6 +444,22 @@ def test_window_errors_print_as_value_error(call):
         call()
     printed = "".join(traceback.format_exception_only(excinfo.type, excinfo.value))
     assert printed.startswith("ValueError: ")
+    assert type(excinfo.value) is ValueError
+
+
+def test_a_window_error_survives_pickling():
+    """Errors cross process boundaries pickled (multiprocessing, joblib,
+    dask); the window error must keep its type, message, and marker."""
+    with pytest.raises(ValueError, match="larger than the signal length") as excinfo:
+        Multitaper(
+            np.random.default_rng(0).standard_normal((100, 1, 3)),
+            sampling_frequency=1000,
+            time_window_duration=0.5,
+        )
+    restored = pickle.loads(pickle.dumps(excinfo.value))
+    assert type(restored) is ValueError
+    assert str(restored) == str(excinfo.value)
+    assert restored._recording_too_short is True
 
 
 @pytest.mark.parametrize(
