@@ -24,7 +24,7 @@ pairwise and subset spectral Granger prediction, once per session for each
 measure; silence it with `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
-the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
+the 2.x values. Until 3.2 it emits a `SidednessWarning` (once per session)
 when called without `one_sided` on two-sided coefficients; the wrappers' power
 results changed the same way without a warning (see the
 [migration guide](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)).
@@ -38,7 +38,7 @@ directly with results from 2.x.
 The migration guide for code written against 2.x is
 [its own page in the documentation](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)
 (`docs/migration.md` in the repository). The `DirectedOrientationWarning` and
-`PowerSidednessWarning` messages link to that page.
+`SidednessWarning` messages link to that page.
 
 ### Added
 
@@ -65,7 +65,7 @@ The migration guide for code written against 2.x is
   made while it is ignored does not count as shown, so removing the filter
   shows it once; a call turned into an error counts, since the exception
   carried the message.
-- `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
+- `SidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
   3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It is also
@@ -74,7 +74,7 @@ The migration guide for code written against 2.x is
   appears once per Python session, like `DirectedOrientationWarning`. Pass
   `one_sided=True` to `power` (or `False` for the 2.x values) or silence
   both with `warnings.filterwarnings("ignore",
-  category=spectral_connectivity.PowerSidednessWarning)`. The wrappers'
+  category=spectral_connectivity.SidednessWarning)`. The wrappers'
   results do not emit it. Both warnings' messages say that they are shown
   once per session and give the `simplefilter("always", ...)` call that shows
   them at every call.
@@ -447,7 +447,7 @@ The migration guide for code written against 2.x is
   non-negative ones (the same fractions, conjugated vectors), and the
   non-negative bins are unchanged, so code that sliced
   `[..., :len(conn.frequencies), :]` gets the same values. Until 3.2 a call on
-  two-sided coefficients emits a `PowerSidednessWarning` once per session.
+  two-sided coefficients emits a `SidednessWarning` once per session.
   The results of `multitaper_connectivity` and `connectivity_to_xarray` were
   already trimmed so; they are unchanged and do not warn.
 - `Connectivity.global_coherence` follows `expectation_type` for the settings

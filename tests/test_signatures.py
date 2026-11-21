@@ -14,8 +14,8 @@ from spectral_connectivity import (
     Connectivity,
     MorletWavelet,
     Multitaper,
-    PowerSidednessWarning,
     ShortTimeFourierTransform,
+    SidednessWarning,
     Welch,
     fourier_connectivity,
 )
@@ -208,7 +208,7 @@ def test_global_coherence_keeps_released_max_rank_and_workspace_is_keyword_only(
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         # The 3.0 frequency-axis notice is not about the arguments.
-        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
         positional = connectivity.global_coherence(2)
     keyword = connectivity.global_coherence(max_rank=2)
     assert positional[0].shape[-1] == 2

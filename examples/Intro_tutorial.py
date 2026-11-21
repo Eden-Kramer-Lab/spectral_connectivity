@@ -220,12 +220,12 @@ multitaper.frequencies
 # %%
 import warnings
 
-from spectral_connectivity import Connectivity, PowerSidednessWarning
+from spectral_connectivity import Connectivity, SidednessWarning
 
 # Connectivity.power() is one-sided (as this tutorial expects); the reminder
 # meant for code written for 2.x, which returned the two-sided density, does
 # not apply here.
-warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+warnings.filterwarnings("ignore", category=SidednessWarning)
 
 # ?Connectivity
 

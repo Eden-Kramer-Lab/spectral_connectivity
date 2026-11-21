@@ -1,4 +1,7 @@
-"""The temporary warning that ``Connectivity.power`` is one-sided since 3.0.
+"""The temporary warning that a result is one-sided since 3.0.
+
+``Connectivity.power`` returns the one-sided density, and
+``Connectivity.global_coherence`` only the non-negative frequencies.
 
 ``pyproject.toml`` ignores warnings that start with "Since spectral_connectivity
 3.0," for the rest of the suite, so each test here records warnings with the
@@ -16,7 +19,7 @@ from spectral_connectivity import (
     Connectivity,
     MorletWavelet,
     Multitaper,
-    PowerSidednessWarning,
+    SidednessWarning,
     fourier_connectivity,
     multitaper_connectivity,
 )
@@ -35,12 +38,15 @@ def connectivity(time_series):
 
 
 def _sidedness_warnings(record):
-    return [w for w in record if issubclass(w.category, PowerSidednessWarning)]
+    return [w for w in record if issubclass(w.category, SidednessWarning)]
 
 
 def test_warning_is_a_public_user_warning():
-    assert issubclass(PowerSidednessWarning, UserWarning)
-    assert "PowerSidednessWarning" in spectral_connectivity.__all__
+    assert issubclass(SidednessWarning, UserWarning)
+    assert "SidednessWarning" in spectral_connectivity.__all__
+    # Renamed before any release (PowerSidednessWarning in development
+    # builds), so the old name is gone rather than aliased.
+    assert not hasattr(spectral_connectivity, "PowerSidednessWarning")
 
 
 def test_power_without_one_sided_warns_once_at_the_call(connectivity):
@@ -59,7 +65,7 @@ def test_power_without_one_sided_warns_once_at_the_call(connectivity):
     # It says it will not repeat, and how to see it again or silence it.
     assert (
         "Shown once per Python session; to see it at every call: "
-        'warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning).'
+        'warnings.simplefilter("always", spectral_connectivity.SidednessWarning).'
     ) in message
     assert "Silence this warning with" in message
     np.testing.assert_array_equal(power, connectivity.power(one_sided=True))
@@ -146,7 +152,7 @@ def test_global_coherence_warns_once_at_the_call(connectivity):
     assert "migration.html" in message
     assert (
         'Silence this warning with warnings.filterwarnings("ignore", '
-        "category=spectral_connectivity.PowerSidednessWarning)."
+        "category=spectral_connectivity.SidednessWarning)."
     ) in message
     assert fractions.shape[1] == connectivity.frequencies.size
 
@@ -181,7 +187,7 @@ def test_labelled_global_coherence_is_silent(time_series):
 def test_warning_is_silenced_by_its_category(connectivity):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
         connectivity.power()
     assert _sidedness_warnings(record) == []
 
@@ -195,14 +201,14 @@ with warnings.catch_warnings():  # resets what Python's "once" action showed
 connectivity.power()  # another line
 connectivity.jackknife("power")
 counts.append(len(shown))
-warnings.simplefilter("always", PowerSidednessWarning)
+warnings.simplefilter("always", SidednessWarning)
 connectivity.power()
 connectivity.power()
 counts.append(len(shown))
-warnings.simplefilter("error", PowerSidednessWarning)
+warnings.simplefilter("error", SidednessWarning)
 try:
     connectivity.power()
-except PowerSidednessWarning:
+except SidednessWarning:
     counts.append("raised")
 print(json.dumps(counts))
 """
@@ -235,7 +241,7 @@ def test_power_and_global_coherence_notices_each_appear_once_per_session():
 
 _SILENCED_FIRST_SCRIPT = """
 # Silenced, then un-silenced: the notice was never seen, so it is still due.
-warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+warnings.filterwarnings("ignore", category=SidednessWarning)
 connectivity.power()
 warnings.resetwarnings()
 connectivity.power()
@@ -246,10 +252,10 @@ print(json.dumps([len(shown)]))
 _ERROR_FIRST_SCRIPT = """
 counts = []
 # Raised as an error: the user read the message in the exception, so it counts.
-warnings.filterwarnings("error", category=PowerSidednessWarning)
+warnings.filterwarnings("error", category=SidednessWarning)
 try:
     connectivity.power()
-except PowerSidednessWarning:
+except SidednessWarning:
     counts.append("raised")
 warnings.resetwarnings()
 connectivity.power()
@@ -276,7 +282,7 @@ for _ in range(2):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.power()
-    counts.append(sum(issubclass(w.category, PowerSidednessWarning) for w in record))
+    counts.append(sum(issubclass(w.category, SidednessWarning) for w in record))
 print(json.dumps(counts))
 """
 

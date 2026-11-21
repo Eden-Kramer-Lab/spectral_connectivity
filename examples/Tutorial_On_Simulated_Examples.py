@@ -31,7 +31,7 @@ import numpy as np
 from spectral_connectivity import (
     Connectivity,
     Multitaper,
-    PowerSidednessWarning,
+    SidednessWarning,
     multitaper_connectivity,
 )
 from spectral_connectivity.simulate import (
@@ -43,7 +43,7 @@ from spectral_connectivity.simulate import (
 # the non-negative frequencies (as this tutorial expects); the reminders meant
 # for code written for 2.x, which returned the two-sided density and every FFT
 # bin, do not apply here.
-warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+warnings.filterwarnings("ignore", category=SidednessWarning)
 
 # %% [markdown]
 # ### Power Spectrum

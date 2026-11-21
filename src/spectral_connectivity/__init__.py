@@ -32,7 +32,7 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     MultivariateConnectivityResult,
-    PowerSidednessWarning,
+    SidednessWarning,
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
@@ -80,8 +80,8 @@ __all__ = [
     "Multitaper",
     "MultitaperParameters",
     "MultivariateConnectivityResult",
-    "PowerSidednessWarning",
     "ShortTimeFourierTransform",
+    "SidednessWarning",
     "SpectralTransform",
     "Welch",
     "estimate_frequency_resolution",

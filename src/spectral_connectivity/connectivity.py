@@ -430,8 +430,8 @@ class DirectedOrientationWarning(UserWarning):
     """
 
 
-class PowerSidednessWarning(UserWarning):
-    """A result's frequency sidedness differs from spectral_connectivity 2.x.
+class SidednessWarning(UserWarning):
+    """A result is one-sided now, unlike in spectral_connectivity 2.x.
 
     Emitted by :meth:`Connectivity.power` when it is called without
     ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
@@ -446,20 +446,20 @@ class PowerSidednessWarning(UserWarning):
     of the two-sided transform, labelled by :attr:`Connectivity.all_frequencies`.
 
     This warning is temporary. Each of the two notices appears once per Python
-    session; ``warnings.simplefilter("always", PowerSidednessWarning)`` shows
+    session; ``warnings.simplefilter("always", SidednessWarning)`` shows
     them at every call, and a call made while it is ignored does not count as
     shown. Silence them with
-    ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
+    ``warnings.filterwarnings("ignore", category=SidednessWarning)``.
 
     By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
     records nothing once the notice has been shown; add
-    ``warnings.simplefilter("always", PowerSidednessWarning)`` inside it
+    ``warnings.simplefilter("always", SidednessWarning)`` inside it
     (``pytest.warns`` does the equivalent).
     """
 
 
 _MIGRATION_GUIDE_URL = "https://spectral-connectivity.readthedocs.io/en/latest/migration.html"
-# Every DirectedOrientationWarning and PowerSidednessWarning message starts with
+# Every DirectedOrientationWarning and SidednessWarning message starts with
 # this, so pyproject.toml can filter them by message: a category filter would
 # import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
@@ -2701,7 +2701,7 @@ class Connectivity:
             also what an omitted ``one_sided`` gives. Called without it on
             two-sided coefficients, ``power`` warns that 2.x returned the
             two-sided density
-            (:class:`~spectral_connectivity.PowerSidednessWarning`, once per
+            (:class:`~spectral_connectivity.SidednessWarning`, once per
             session, until 3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
             non-negative frequencies only: no bin is doubled, as for a
@@ -2767,8 +2767,8 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    + _silence_hint(PowerSidednessWarning),
-                    PowerSidednessWarning,
+                    + _silence_hint(SidednessWarning),
+                    SidednessWarning,
                 )
             one_sided = True
         if _validated_flag("one_sided", one_sided):
@@ -4174,7 +4174,7 @@ class Connectivity:
            :attr:`all_frequencies`. For a real signal the negative bins repeat
            the non-negative ones (the same fractions, conjugated vectors).
            Until 3.2, a call on two-sided coefficients emits a
-           :class:`~spectral_connectivity.PowerSidednessWarning` once per
+           :class:`~spectral_connectivity.SidednessWarning` once per
            Python session as a reminder.
 
         **Observations**: the matrix decomposed at each frequency is the
@@ -4425,9 +4425,8 @@ class Connectivity:
                 "It also follows expectation_type, which 2.x ignored: the default, "
                 "'trials_tapers', pools each time window's trials and tapers as 2.x "
                 "did for every setting. This notice is temporary and will be removed in 3.2. See the "
-                f"migration guide: {_MIGRATION_GUIDE_URL}. "
-                + _silence_hint(PowerSidednessWarning),
-                PowerSidednessWarning,
+                f"migration guide: {_MIGRATION_GUIDE_URL}. " + _silence_hint(SidednessWarning),
+                SidednessWarning,
             )
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 

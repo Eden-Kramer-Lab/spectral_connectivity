@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
+from spectral_connectivity import Connectivity, Multitaper, SidednessWarning
 from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
@@ -974,7 +974,7 @@ def test_global_coherence_with_as_many_observations_as_signals_does_not_warn():
         coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+            warnings.filterwarnings("ignore", category=SidednessWarning)
             Connectivity(coefficients).global_coherence()
 
 
@@ -1012,7 +1012,7 @@ def test_global_coherence_warns_when_it_pools_overlapping_windows(expectation_ty
     for silent in (connectivity(0.1, "trials_tapers"), connectivity(0.4, expectation_type)):
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+            warnings.filterwarnings("ignore", category=SidednessWarning)
             silent.global_coherence()
 
 

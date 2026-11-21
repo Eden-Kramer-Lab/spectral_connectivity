@@ -122,7 +122,7 @@ filterwarnings = [
     "ignore:numpy.ndarray size changed:RuntimeWarning",
     "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning",
     # The temporary 3.x DirectedOrientationWarning (directed arrays are source
-    # first) and PowerSidednessWarning (power and global coherence are
+    # first) and SidednessWarning (power and global coherence are
     # one-sided); their own tests
     # enable them explicitly. Matched by their message prefix,
     # because naming the category would import the package before coverage starts.

@@ -18,7 +18,7 @@ from spectral_connectivity.connectivity import (
     PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS,
     Connectivity,
     DirectedOrientationWarning,
-    PowerSidednessWarning,
+    SidednessWarning,
     _bandpass,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
@@ -5022,7 +5022,7 @@ def test_multiple_observations_group_measure_does_not_warn(measure):
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         # global_coherence's 3.0 frequency-axis notice is not about the data.
-        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
         _rank_one_measure_magnitudes(connectivity, measure)
 
 
@@ -5074,7 +5074,7 @@ def test_single_observation_warning_counts_what_each_measure_averages():
     pooled = Connectivity(five_windows, expectation_type="time_tapers")
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
         global_coherence, _ = pooled.global_coherence()
         Connectivity(five_windows, expectation_type="time").imaginary_coherence()
     assert np.all(global_coherence < 1.0 - 1e-6)
