@@ -21,13 +21,12 @@ function, directed coherence, (generalized) partial directed coherence, and
 direct directed transfer function) emit a `DirectedOrientationWarning` as a
 reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
 pairwise and subset spectral Granger prediction, once per session for each
-measure; silence it with
-`warnings.filterwarnings("ignore",
+measure; silence it with `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
 the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
-when called without `one_sided` on two-sided coefficients; the wrappers' power results changed the
-same way without a warning (see the migration row).
+when called without `one_sided` on two-sided coefficients; the wrappers' power
+results changed the same way without a warning (see the migration row).
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
