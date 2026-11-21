@@ -1045,7 +1045,7 @@ class TestGroupDelay:
             conn.n_observations,
             step,
             significance_threshold=0.05,
-            real_valued=conn._real_valued_frequency_bins()[:, np.newaxis],
+            real_valued=conn.real_valued_frequencies[:, np.newaxis],
         )
         phase = np.ma.masked_array(np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant)
 

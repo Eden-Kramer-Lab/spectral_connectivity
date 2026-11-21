@@ -710,6 +710,40 @@ def get_normal_distribution_p_values(
     )
 
 
+def _validated_real_valued(
+    real_valued: bool | NDArray[np.bool_],
+    estimates_shape: tuple[int, ...] | None = None,
+    estimates_name: str = "the estimates",
+) -> NDArray[np.bool_]:
+    """``real_valued`` as a boolean array that broadcasts against the estimates.
+
+    A non-boolean value (an integer mask, a string) and a mask of the wrong
+    shape raise rather than being read as truthy or failing inside NumPy.
+    """
+    mask = np.asarray(real_valued)
+    if mask.dtype != np.bool_:
+        msg = (
+            f"real_valued must be a bool or a boolean array, got dtype {mask.dtype}. "
+            "It marks the estimates from real-valued Fourier coefficients: use "
+            "Connectivity.real_valued_frequencies, which is True at 0 Hz and, for "
+            "an even FFT length, Nyquist for a real signal."
+        )
+        raise TypeError(msg)
+    if estimates_shape is not None:
+        try:
+            np.broadcast_shapes(mask.shape, estimates_shape)
+        except ValueError:
+            msg = (
+                f"real_valued has shape {mask.shape}, which does not broadcast "
+                f"against {estimates_name} of shape {estimates_shape}. Align it "
+                "with their frequency axis: for estimates shaped "
+                "(..., n_frequencies, n_signals, n_signals), pass "
+                "Connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis]."
+            )
+            raise ValueError(msg) from None
+    return mask
+
+
 def coherence_significance_pvalue(
     coherency: NDArray[np.complexfloating],
     n_observations: int,
@@ -743,9 +777,14 @@ def coherence_significance_pvalue(
         Number of independent observations used to estimate the coherency
         (n_tapers * n_trials).
     real_valued : bool or NDArray[bool], default=False
-        Which estimates average real-valued Fourier coefficients, broadcast
-        against ``coherency``: for the non-negative frequencies of a real
-        signal, ``(frequencies == 0) | (frequencies == sampling_frequency / 2)``.
+        Which estimates average real-valued Fourier coefficients, a boolean
+        array broadcast against ``coherency``: for coherency over
+        ``Connectivity.frequencies``, ``Connectivity.real_valued_frequencies``
+        (0 Hz and, for an even FFT length, Nyquist for a real signal),
+        broadcast over the signal pair axes as
+        ``real_valued_frequencies[:, np.newaxis, np.newaxis]``.
+        :meth:`~spectral_connectivity.Connectivity.group_delay` and
+        :meth:`~spectral_connectivity.Connectivity.delay` apply it themselves.
 
     Returns
     -------
@@ -785,6 +824,9 @@ def coherence_significance_pvalue(
         raise ValueError(msg)
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
+    )
+    real_valued = _validated_real_valued(
+        real_valued, magnitude_squared_coherence.shape, "coherency"
     )
     complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
     if not np.any(real_valued):
@@ -1076,10 +1118,12 @@ def power_confidence_intervals(
         Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
         Giving both raises ``ValueError``.
     real_valued : bool or NDArray[bool], default=False
-        Which estimates average real-valued Fourier coefficients, broadcast
-        against ``power``: for the non-negative frequencies of a real signal,
-        ``(frequencies == 0) | (frequencies == sampling_frequency / 2)``. Each
-        such coefficient carries one degree of freedom rather than two, so
+        Which estimates average real-valued Fourier coefficients, a boolean
+        array broadcast against ``power``: for ``Connectivity.power()``, of
+        shape ``(..., n_frequencies, n_signals)``,
+        ``Connectivity.real_valued_frequencies[:, np.newaxis]`` (0 Hz and, for
+        an even FFT length, Nyquist for a real signal). Each such coefficient
+        carries one degree of freedom rather than two, so
         those bins use ``n_observations`` degrees of freedom; with
         ``2 * n_observations`` there, a nominal 95% interval from five
         observations covers 83%.
@@ -1171,6 +1215,7 @@ def power_confidence_intervals(
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
     # previous behavior) produces an interval with coverage 2 * ci - 1 (a
     # requested 95% interval only covered ~90%).
+    real_valued = _validated_real_valued(real_valued, power_values.shape, "power")
     degrees_of_freedom = np.where(real_valued, n_observations, 2 * n_observations)
     alpha = 1 - ci
     lower_bound = (
@@ -1192,7 +1237,8 @@ def _chi_squared_shape(
     (the 0 Hz and Nyquist bins of a real signal) one, so ``nu`` is
     ``2 * n_observations``, or ``n_observations`` where ``real_valued``.
     """
-    shape: NDArray[np.floating] = np.where(real_valued, n_observations / 2, n_observations)
+    mask = _validated_real_valued(real_valued)
+    shape: NDArray[np.floating] = np.where(mask, n_observations / 2, n_observations)
     return shape
 
 
@@ -1221,14 +1267,14 @@ def power_bias(
     n_observations : int
         n_observations is n_tapers * n_trials
     real_valued : bool or NDArray[bool], default=False
-        Which estimates average real-valued Fourier coefficients: for the
-        non-negative frequencies of a real signal,
-        ``(frequencies == 0) | (frequencies == sampling_frequency / 2)``.
+        Which estimates average real-valued Fourier coefficients, a boolean
+        mask such as ``Connectivity.real_valued_frequencies`` (0 Hz and, for an
+        even FFT length, Nyquist for a real signal).
 
     Returns
     -------
-    bias : float, or NDArray[floating] shaped like ``real_valued`` when it
-        is an array
+    bias : float or NDArray[floating]
+        A float, or an array shaped like ``real_valued`` when that is an array.
 
     Examples
     --------
@@ -1261,9 +1307,9 @@ def power_variance(
 
     Returns
     -------
-    variance : float, or NDArray[floating] shaped like ``real_valued`` when it
-        is an array
-        Variance of log-power estimates.
+    variance : float or NDArray[floating]
+        Variance of log-power estimates: a float, or an array shaped like
+        ``real_valued`` when that is an array.
 
     Examples
     --------
@@ -1368,6 +1414,11 @@ def power_fisher_z_transform(
         )
         raise ValueError(msg)
 
+    real_valued = _validated_real_valued(
+        real_valued,
+        np.broadcast_shapes(spectrum1_values.shape, spectrum2_values.shape),
+        "the spectra",
+    )
     bias1 = power_bias(n_obs1, real_valued=real_valued)
     variance1 = power_variance(n_obs1, real_valued=real_valued)
     # When there is no second sample (n_obs2 == 0) spectrum2 is a fixed

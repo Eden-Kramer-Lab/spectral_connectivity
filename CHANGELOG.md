@@ -56,7 +56,7 @@ their rows).
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density. Until 3.2, `Connectivity.power()` without `one_sided` on two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power in `multitaper_connectivity` and `connectivity_to_xarray` results (including by default) changed the same way without a warning: halve its interior bins to compare with 2.x |
 | `coherence_rate_adjustment(rate1, rate2, power, ...)` was given 2.x's `power()`, a two-sided density | Say which density the spectrum is. With 3.0's one-sided `power()` pass `is_one_sided=True`: the factor is the same as in 2.x at interior frequencies (with no added Poisson spikes; see the next row) and differs at 0 Hz and Nyquist, where a one-sided density is not doubled. Leave 0 Hz out in any case; at Nyquist pass the two-sided density. With a two-sided spectrum (your own, or `power(one_sided=False)`) pass `is_one_sided=False`. Without the keyword the call warns and assumes one-sided |
 | `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. A call with a non-zero noise rate warns about this until 4.0. Calls with the default noise of 0 are unchanged and silent |
-| `Multitaper` accepted a complex-valued time series, although its outputs cover only the non-negative frequencies and the one-sided quantities assume the negative ones mirror them | `Multitaper`, `ShortTimeFourierTransform`, `Welch`, `MorletWavelet`, and `multitaper_connectivity` raise `TypeError` for a complex time series. Pass its real and imaginary parts as separate real signals, or compute the Fourier coefficients yourself and pass them to `Connectivity`, whose `power(one_sided=True)` and `cross_spectral_density()` add each interior negative frequency to its positive one, `S(f) + conj(S(-f))`. That doubles the bin for a real signal, as before, but no longer counts a complex tone at `+f` twice (one-sided total 2 for unit power) and one at `-f` not at all (total 0) |
+| `Multitaper` accepted a complex-valued time series, although its outputs cover only the non-negative frequencies and the one-sided quantities assume the negative ones mirror them | `Multitaper`, `ShortTimeFourierTransform`, `Welch`, `MorletWavelet`, and `multitaper_connectivity` raise `TypeError` for a complex time series. Pass its real and imaginary parts as separate real signals, or compute the Fourier coefficients yourself and pass them to `Connectivity`, whose `power(one_sided=True)` and `cross_spectral_density()` add each interior negative frequency to its positive one, `S(f) + conj(S(-f))`. That doubles the bin for a real signal, as 3.0 does, but no longer counts a complex tone at `+f` twice (one-sided total 2 for unit power) and one at `-f` not at all (total 0) |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008). The sign is unchanged, but the sum has far fewer terms, so values are smaller by one to several orders of magnitude: recompute, and re-derive any threshold |
 | `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time, the midpoint of the window's first and last samples: the 2.x label plus `(n_time_samples_per_window - 1) / (2 * sampling_frequency)` (0.245 s, not 0.25 s, for the first 50-sample window at 100 Hz) |
@@ -800,23 +800,25 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   while PDC and conditional Granger are zero. The values are unchanged.
 - Inference at real-valued Fourier coefficients, the 0 Hz bin and (for an
   even FFT length) the Nyquist bin of a real signal, where each observation
-  carries one degree of freedom rather than two.
-  `coherence_significance_pvalue` and `power_confidence_intervals` take a
-  keyword `real_valued` (a bool, or a mask broadcast against the estimates,
-  such as `(frequencies == 0) | (frequencies == sampling_frequency / 2)`) and
-  use the real null there, `Beta(1/2, (n - 1) / 2)` for squared coherence and
-  `n` rather than `2 n` chi-squared degrees of freedom for power. With five
-  observations the complex null had rejected 10% of independent pairs at a
-  nominal 5%, and the power interval covered 83% at a nominal 95%.
-  `group_delay` and `delay` find the bins whose coefficients are all real and
-  test those against the real null. `power_bias`, `power_variance`, and
-  `power_fisher_z_transform` take the same keyword (the log power's variance
-  about doubles there; with the complex terms a one-sample z from five
-  observations had variance 2.2 instead of 1). `coherence_fisher_z_transform`
-  and `coherence_bias` assume complex coefficients and document that they are
-  not calibrated at those bins (9-18% rejection of equal coherences at a
-  nominal 5% in simulation), pointing to
-  `coherence_significance_pvalue(..., real_valued=True)`.
+  carries one degree of freedom rather than two. `power_confidence_intervals`,
+  `power_bias`, `power_variance`, and `power_fisher_z_transform` take a
+  keyword `real_valued`, a boolean mask broadcast against the estimates, and
+  use `n` rather than `2 n` chi-squared degrees of freedom where it is set:
+  with five observations the 95% power interval had covered 83%, and a
+  one-sample log-power z had variance 2.2 instead of 1. The new
+  `Connectivity.real_valued_frequencies` gives the mask for
+  `Connectivity.frequencies` (prefer it to comparing frequencies with
+  `sampling_frequency / 2`, which rounding can defeat at Nyquist), and a mask
+  that is not boolean or does not broadcast raises. `group_delay` and `delay`
+  apply it themselves, testing those bins against the real zero-coherence
+  null, so their results at 0 Hz and Nyquist can change.
+- *Unreleased:* `coherence_significance_pvalue` takes the same `real_valued`
+  mask and uses the real null `Beta(1/2, (n - 1) / 2)` for squared coherence
+  there: with five observations the complex null had rejected 10% of
+  independent pairs at a nominal 5%. `coherence_fisher_z_transform` and
+  `coherence_bias` keep their complex-coefficient terms and document that
+  they are not calibrated at those bins (9-18% rejection of equal coherences
+  at a nominal 5% in simulation), pointing to the exact zero-coherence test.
 - *Unreleased:* `Multitaper.observations_are_independent` is `False` for
   custom tapers that are not mutually orthogonal, whose eigencoefficients are
   correlated even for white noise, so the measures that count observations

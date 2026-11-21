@@ -5608,17 +5608,46 @@ class Connectivity:
             )
         return selection.mask
 
-    def _real_valued_frequency_bins(self) -> NDArray[np.bool_]:
-        """Host mask over the non-negative bins whose coefficients are all real.
+    @property
+    def real_valued_frequencies(self) -> NDArray[np.bool_]:
+        """Which of :attr:`frequencies` hold only real Fourier coefficients.
 
-        For a real signal these are 0 Hz and, for an even FFT length, Nyquist.
-        Each observation there carries one real degree of freedom rather than
-        two, so the zero-coherence null differs (see
-        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`).
+        For a real signal these are 0 Hz and, for an even FFT length, Nyquist;
+        an odd FFT length has no Nyquist bin. Each observation there carries
+        one real degree of freedom rather than two, so the zero-coherence null
+        and the chi-squared degrees of freedom of power differ: pass this mask
+        as ``real_valued`` to
+        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`,
+        :func:`~spectral_connectivity.statistics.power_confidence_intervals`,
+        and the log-power statistics. :meth:`group_delay` and :meth:`delay`
+        apply it themselves.
+
+        A bin counts as real when every coefficient's imaginary part is exactly
+        0, ignoring NaN coefficients. The package's transforms give exactly
+        real coefficients there on the CPU and the GPU alike; coefficients
+        computed elsewhere may carry rounding in those bins and then do not
+        count.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_frequencies,)
+            Host array aligned with :attr:`frequencies`.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> multitaper = Multitaper(rng.standard_normal((200, 3, 2)), sampling_frequency=100)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.frequencies[connectivity.real_valued_frequencies].tolist()
+        [0.0, 50.0]
         """
         n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
-        coefficients = self._fourier_coefficients[..., :n_nonnegative, :]
-        real: NDArray[np.bool_] = to_numpy(xp.all(coefficients.imag == 0, axis=(0, 1, 2, 4)))
+        imaginary = self._fourier_coefficients[..., :n_nonnegative, :].imag
+        real: NDArray[np.bool_] = to_numpy(
+            xp.all((imaginary == 0) | xp.isnan(imaginary), axis=(0, 1, 2, 4))
+        )
         return real
 
     def _significant_pair_phase(
@@ -5682,7 +5711,7 @@ class Connectivity:
             self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
-            real_valued=self._real_valued_frequency_bins()[frequency_mask][:, np.newaxis],
+            real_valued=self.real_valued_frequencies[frequency_mask][:, np.newaxis],
         )
         coherence_phase = np.ma.masked_array(
             _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),

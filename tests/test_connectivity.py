@@ -3959,8 +3959,21 @@ def test_power_one_sided_must_be_a_bool(not_a_flag):
         Connectivity(coefficients).power(one_sided=not_a_flag)
 
 
+def test_real_valued_frequencies_ignore_nan_coefficients():
+    """A NaN trial does not make a real signal's 0 Hz and Nyquist bins count
+    as complex, which would switch them back to the complex null."""
+    rng = np.random.default_rng(10)
+    time_series = rng.standard_normal((64, 3, 2))
+    time_series[:, 1] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        multitaper = Multitaper(time_series, sampling_frequency=100, n_fft_samples=64)
+        real_bins = Connectivity.from_transform(multitaper).real_valued_frequencies
+    np.testing.assert_array_equal(np.flatnonzero(real_bins), [0, 32])
+
+
 @pytest.mark.parametrize("n_fft", [64, 65])
-def test_real_valued_frequency_bins_are_zero_and_nyquist_of_a_real_signal(n_fft):
+def test_real_valued_frequencies_are_zero_and_nyquist_of_a_real_signal(n_fft):
     """A real signal's Fourier coefficients are real at 0 Hz and, for an even
     FFT length, at Nyquist; those of a complex one are real nowhere."""
     rng = np.random.default_rng(8)
@@ -3971,10 +3984,10 @@ def test_real_valued_frequency_bins_are_zero_and_nyquist_of_a_real_signal(n_fft)
     expected[0] = True
     if n_fft % 2 == 0:
         expected[-1] = True
-    real_bins = Connectivity.from_transform(multitaper)._real_valued_frequency_bins()
+    real_bins = Connectivity.from_transform(multitaper).real_valued_frequencies
     np.testing.assert_array_equal(real_bins, expected)
     complex_coefficients = rng.standard_normal((1, 2, 3, n_fft, 2)) + 1j
-    assert not Connectivity(complex_coefficients)._real_valued_frequency_bins().any()
+    assert not Connectivity(complex_coefficients).real_valued_frequencies.any()
 
 
 def _pair_with_squared_coherence(rng, n_observations, squared_coherence, real):

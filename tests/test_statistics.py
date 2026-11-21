@@ -433,6 +433,8 @@ def test_coherence_significance_pvalue_is_calibrated_for_real_valued_coefficient
     the squared coherence of five real observations follows Beta(1/2, 2), not
     Beta(1, 4). The complex null rejected 10% of independent pairs there at a
     nominal 5%."""
+    import scipy.stats
+
     rng = np.random.default_rng(20261121)
     alpha, n_obs, n_rep = 0.05, 5, 200_000
     x = rng.standard_normal((n_rep, n_obs))
@@ -444,7 +446,14 @@ def test_coherence_significance_pvalue_is_calibrated_for_real_valued_coefficient
 
     rate, limit = _rate_and_limit(real_null, alpha)
     assert abs(rate - alpha) < limit
-    assert complex_null.mean() - alpha > 20 * limit
+    # The complex null rejects when (1 - c)**4 <= alpha, which under the real
+    # null Beta(1/2, 2) has probability 0.102: about twice the level.
+    complex_rate_exact = scipy.stats.beta.sf(
+        1 - alpha ** (1 / (n_obs - 1)), 0.5, (n_obs - 1) / 2
+    )
+    complex_rate, complex_limit = _rate_and_limit(complex_null, complex_rate_exact)
+    assert abs(complex_rate - complex_rate_exact) < complex_limit
+    assert complex_rate_exact - alpha > 10 * limit
     # A mask applies the real null only where it is set.
     mixed = coherence_significance_pvalue(
         coherency[:4], n_obs, real_valued=np.array([True, False, True, False])
@@ -494,6 +503,29 @@ def test_log_power_statistics_hold_at_real_valued_bins():
         power_variance(n_observations, real_valued=mask),
         [variance, power_variance(n_observations)],
     )
+
+
+@pytest.mark.parametrize(
+    ("real_valued", "error", "match"),
+    [
+        ("yes", TypeError, "boolean"),
+        (np.array([1, 0]), TypeError, "boolean"),
+        (np.array([True, False, True]), ValueError, "does not broadcast"),
+    ],
+    ids=["string", "integer_mask", "wrong_shape"],
+)
+def test_real_valued_must_be_a_boolean_mask_that_fits_the_estimates(real_valued, error, match):
+    """A truthy non-boolean would be read as "all real", and a misaligned mask
+    failed inside NumPy without naming the argument."""
+    estimates = np.array([0.5, 0.5])
+    calls = [
+        lambda: coherence_significance_pvalue(estimates, 5, real_valued=real_valued),
+        lambda: power_confidence_intervals(5, estimates, 0.95, real_valued=real_valued),
+        lambda: power_fisher_z_transform(estimates, 5, real_valued=real_valued),
+    ]
+    for call in calls:
+        with pytest.raises(error, match=match):
+            call()
 
 
 def test_power_confidence_intervals_cover_real_valued_bins():
