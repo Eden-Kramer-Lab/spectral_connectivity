@@ -923,10 +923,8 @@ def coherence_rate_adjustment(
         raise ValueError(msg)
     if is_one_sided is not None:
         is_one_sided = _validated_flag("is_one_sided", is_one_sided)
-    if (
-        not np.isfinite(homogeneous_poisson_noise)
-        or not 0 <= homogeneous_poisson_noise < firing_rate_condition2
-    ):
+    # NaN and inf fail the comparison too.
+    if not 0 <= homogeneous_poisson_noise < firing_rate_condition2:
         msg = (
             "homogeneous_poisson_noise must be a finite rate of at least 0 and "
             f"below firing_rate_condition2 ({firing_rate_condition2}), which "
@@ -943,7 +941,7 @@ def coherence_rate_adjustment(
             "homogeneous_poisson_noise: it is the second condition's measured "
             "rate. 2.x took it as the rate of the kept spikes alone. If a call "
             "written for 2.x passed that rate, add the noise rate to it. This "
-            "notice is shown for every call with added spikes until 4.0; "
+            "notice accompanies calls with added spikes until 4.0; "
             "filter it with warnings.filterwarnings('ignore', "
             "message='coherence_rate_adjustment, changed in').",
             UserWarning,
@@ -996,7 +994,7 @@ def coherence_rate_adjustment(
             "This typically happens for a large firing-rate increase relative "
             "to the spike power, or invalid (non-positive) spike power.",
             UserWarning,
-            stacklevel=2,
+            stacklevel=stacklevel_outside_package(),
         )
     return np.where(undefined, np.nan, adjustment)
 

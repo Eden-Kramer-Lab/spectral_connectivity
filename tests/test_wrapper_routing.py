@@ -357,28 +357,22 @@ def no_fft(monkeypatch):
     ],
     ids=["alone", "first", "last"],
 )
-def test_two_sided_power_is_refused_for_a_labelled_result(time_series, no_fft, method):
+@pytest.mark.parametrize(
+    "flag", [False, np.False_, np.array(False)], ids=["bool", "numpy_bool", "zero_d"]
+)
+def test_two_sided_power_is_refused_for_a_labelled_result(time_series, no_fft, method, flag):
     """A labelled power result is one-sided: its attributes say so and its
     band integrals rely on it. The two-sided density is ``Connectivity.power``'s
     to give, and the call is refused before the FFT with the same message
-    wherever ``power`` stands among the requested methods."""
-    with pytest.raises(ValueError, match=r"one_sided=False.*\.power\(one_sided=False\)"):
+    wherever ``power`` stands among the requested methods, for any boolean
+    False."""
+    with pytest.raises(
+        ValueError, match=r"not supported for 'power'.*\.power\(one_sided=False\)"
+    ):
         multitaper_connectivity(
             time_series,
             sampling_frequency=500,
             method=method,
-            connectivity_kwargs={"one_sided": False},
-        )
-
-
-@pytest.mark.parametrize("flag", [np.False_, np.array(False)], ids=["numpy_bool", "zero_d"])
-def test_two_sided_power_is_refused_for_any_false_flag(time_series, no_fft, flag):
-    """A NumPy boolean False is False: it is refused like the literal one."""
-    with pytest.raises(ValueError, match="not supported for 'power'"):
-        multitaper_connectivity(
-            time_series,
-            sampling_frequency=500,
-            method="power",
             connectivity_kwargs={"one_sided": flag},
         )
 
