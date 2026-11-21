@@ -1391,13 +1391,34 @@ Frequency Analysis
     def frequencies(self) -> NDArray[np.floating]:
         """Frequency of each FFT bin in Hz, in standard FFT order.
 
+        These label the coefficients of :meth:`fft`, negative frequencies
+        included, not the results computed from them. To label the frequency
+        axis of a power or connectivity result, use
+        :attr:`Connectivity.frequencies
+        <spectral_connectivity.Connectivity.frequencies>`: the
+        ``n_fft_samples // 2 + 1`` non-negative bins, 0 Hz up to Nyquist.
+
         Returns
         -------
         NDArray[float64], shape (n_fft_samples,)
             Frequency values in Hz corresponding to FFT bins, as
             ``numpy.fft.fftfreq`` orders them (non-negative frequencies first,
-            then negative).
+            then negative; for an even ``n_fft_samples`` the Nyquist bin is
+            listed as negative).
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> multitaper = Multitaper(rng.standard_normal((100, 2, 2)), sampling_frequency=100)
+        >>> multitaper.frequencies.shape, multitaper.frequencies[[0, 1, 50, -1]].tolist()
+        ((100,), [0.0, 1.0, -50.0, -1.0])
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.frequencies.shape, connectivity.frequencies[[0, -1]].tolist()
+        ((51,), [0.0, 50.0])
+        >>> connectivity.power(one_sided=True).shape  # (time, frequency, signal)
+        (1, 51, 2)
         """
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
@@ -1736,9 +1757,11 @@ class Multitaper(_WindowedFourierTransform):
     ----------
     fft : NDArray[complex128]
         Complex-valued FFT coefficients with shape
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals).
-    frequencies : NDArray[float64], shape (n_frequencies,)
-        Frequency values in Hz corresponding to FFT bins.
+        (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+    frequencies : NDArray[float64], shape (n_fft_samples,)
+        Frequency of each FFT bin in Hz, negative frequencies included, in FFT
+        order. To label the frequency axis of a power or connectivity result,
+        use ``Connectivity.frequencies`` (the non-negative bins) instead.
     time : NDArray[float64], shape (n_time_windows,)
         Time values in seconds for center of each time window.
 
@@ -2839,6 +2862,12 @@ class Welch:
     @property
     def frequencies(self) -> NDArray[np.floating]:
         """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        These label the coefficients of :meth:`fft`, negative frequencies
+        included. To label the frequency axis of a power or connectivity
+        result, use :attr:`Connectivity.frequencies
+        <spectral_connectivity.Connectivity.frequencies>`, the non-negative
+        bins.
 
         Returns
         -------

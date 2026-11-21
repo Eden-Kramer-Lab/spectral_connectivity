@@ -356,6 +356,11 @@ their rows).
   `canonical_coherency` and `maximized_imaginary_coherency_components`, and
   two arrays from `global_coherence`, whose frequency axis (unlike the other
   measures') holds every FFT bin.
+- `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
+  says that it labels the two-sided FFT bins of `fft()` and that
+  `Connectivity.frequencies`, the non-negative bins, labels results; the
+  `Multitaper` attributes give `fft` and `frequencies` their `n_fft_samples`
+  length.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring
