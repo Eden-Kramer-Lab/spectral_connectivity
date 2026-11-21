@@ -254,8 +254,7 @@ from `a` to `b`, and the lower-level `Connectivity` arrays use the same order:
 `result[..., i, j]` is `i -> j`. For lead/lag measures a positive value means
 the source leads. The directed-transfer-function family is available by name
 as an opt-in method. `list_measures()` reports each measure's value range,
-units, and interpretation; see
-[Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
+units, and interpretation.
 
 #### Lower-level API
 
@@ -365,7 +364,8 @@ the xarray wrapper carries it as a two-dimensional coordinate.
 satisfying the `SpectralTransform` protocol (an `fft()` method plus
 `frequencies` and `time`). `help(SpectralTransform)` gives its optional
 attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
-density; the [cookbook](docs/cookbook.md) has a worked example.
+density; the cookbook has a
+[worked example](docs/cookbook.md#plug-in-your-own-transform).
 
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
