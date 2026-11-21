@@ -138,7 +138,6 @@ myst_enable_extensions = [
 myst_heading_anchors = 3
 
 # MyST-NB
-nb_execution_mode = "cache"
 nb_execution_mode = "off"
 
 
