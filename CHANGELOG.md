@@ -130,7 +130,9 @@ their rows).
   `one_sided=True` (or `False` for the 2.x values) or silence it with
   `warnings.filterwarnings("ignore",
   category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
-  results do not emit it.
+  results do not emit it. Both warnings' messages say that they are shown
+  once per session and give the `simplefilter("always", ...)` call that shows
+  them at every call.
 - Public simulators with planted, known structure in
   `spectral_connectivity.simulate`: `simulate_lagged_broadband` (noisy copies of
   one white-noise source, each delayed by a whole number of samples given as

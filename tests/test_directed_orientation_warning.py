@@ -40,6 +40,12 @@ _UNCHANGED = [
     "magnitude_squared_coherence",
 ]
 
+# Each message says it will not repeat, and how to see it at every call.
+_ONCE_PER_SESSION = (
+    "Shown once per Python session; to see it at every call: "
+    'warnings.simplefilter("always", spectral_connectivity.DirectedOrientationWarning).'
+)
+
 
 @pytest.fixture(scope="module")
 def time_series():
@@ -78,6 +84,7 @@ def test_changed_measure_warns_at_the_callers_line(connectivity, method):
     assert method in message
     assert "[..., source, target]" in message
     assert "migration-guide" in message
+    assert _ONCE_PER_SESSION in message
     assert warning.filename == __file__
 
 
@@ -189,6 +196,7 @@ def test_wrapper_warns_once_about_its_labels(time_series):
         "sel(source=a, target=b) of pairwise_spectral_granger_prediction is a -> b" in message
     )
     assert "[..., source, target]" not in message
+    assert _ONCE_PER_SESSION in message
     assert warning.filename == __file__
 
 

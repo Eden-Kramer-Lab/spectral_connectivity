@@ -493,8 +493,10 @@ _MIGRATION_GUIDE_URL = (
 # import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
 _SILENCE_ORIENTATION_WARNING = (
-    'Silence with warnings.filterwarnings("ignore", '
-    "category=spectral_connectivity.DirectedOrientationWarning)."
+    'Silence this warning with warnings.filterwarnings("ignore", '
+    "category=spectral_connectivity.DirectedOrientationWarning). Shown once per "
+    "Python session; to see it at every call: warnings.simplefilter("
+    '"always", spectral_connectivity.DirectedOrientationWarning).'
 )
 
 # The methods that returned [..., target, source] arrays in 2.x. The Granger
@@ -2745,8 +2747,11 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    'Silence all of these with warnings.filterwarnings("ignore", '
-                    "category=spectral_connectivity.PowerSidednessWarning).",
+                    'Silence this warning with warnings.filterwarnings("ignore", '
+                    "category=spectral_connectivity.PowerSidednessWarning). Shown "
+                    "once per Python session; to see it at every call: "
+                    'warnings.simplefilter("always", '
+                    "spectral_connectivity.PowerSidednessWarning).",
                     PowerSidednessWarning,
                 )
             one_sided = True

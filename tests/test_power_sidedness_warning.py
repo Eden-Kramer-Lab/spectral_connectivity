@@ -58,6 +58,12 @@ def test_power_without_one_sided_warns_once_at_the_call(connectivity):
     assert message.startswith("Since spectral_connectivity 3.0,")
     assert "one_sided=True" in message
     assert "one_sided=False" in message
+    # It says it will not repeat, and how to see it again or silence it.
+    assert (
+        "Shown once per Python session; to see it at every call: "
+        'warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning).'
+    ) in message
+    assert "Silence this warning with" in message
     np.testing.assert_array_equal(power, connectivity.power(one_sided=True))
 
 
