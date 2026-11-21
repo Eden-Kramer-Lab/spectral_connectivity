@@ -744,6 +744,14 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- `Connectivity.group_delay` and `Connectivity.delay` document that a pair
+  without significant coherence is NaN (for independent signals,
+  `group_delay()` returns NaN delay, slope, and r), which means no delay was
+  estimated rather than a delay of zero, and how `significance_threshold`
+  selects the frequencies: an exact zero-coherence test at each bin,
+  Benjamini-Hochberg corrected at that false discovery rate over every bin,
+  pair, and window of the call, keeping each pair's largest contiguous run of
+  at least 3 independent significant bins. The values are unchanged.
 - `coherence_bias`, `power_bias`, and `power_variance` raise a `ValueError`
   for an observation count their formulas cannot use, as
   `coherence_significance_pvalue` does, and say to pass

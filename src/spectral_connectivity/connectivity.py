@@ -5777,7 +5777,15 @@ class Connectivity:
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
-            P-value threshold for significance.
+            False discovery rate of the test that selects the frequencies used.
+            Each bin's coherence is tested against zero with the exact null of
+            :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`,
+            and the Benjamini-Hochberg procedure is applied at this level to
+            every bin in ``frequency_range``, signal pair, and time window of the
+            call as one family. For each pair and window only the largest
+            contiguous run of significant bins is kept, taking every independent
+            bin (one per ``frequency_resolution``), and only if it has at least
+            3; a pair with no such run is NaN (see Returns).
         frequency_range : (float, float), optional
             Frequency interval ``(low, high)`` to fit over, in the units of
             ``frequencies``. Both endpoints are included: a bin lies on a bound
@@ -5792,15 +5800,19 @@ class Connectivity:
             Time delays between signal pairs, in the reciprocal units of
             ``frequencies``: seconds for Hz, samples for cycles/sample.
             Positive ``[..., i, j]`` means signal ``i`` leads signal ``j``. The
-            diagonal is NaN.
+            diagonal is NaN, and so is a pair whose coherence is not
+            significant at enough frequencies (see ``significance_threshold``),
+            such as two independent signals: NaN means no delay was estimated,
+            not a delay of zero.
         slope : array, shape (..., n_signals, n_signals)
             Slope of the coherence phase vs frequency, in radians per unit of
             ``frequencies`` (``delay = slope / (2 * pi)``); same sign
-            convention as ``delay``.
+            convention as ``delay``, and NaN where it is.
         r_value : array, shape (..., n_signals, n_signals)
             Correlation coefficient of the linear phase-frequency fit, with the
             sign of ``slope`` (so ``[..., j, i]`` is ``-[..., i, j]``). The
-            diagonal is 1, where ``delay`` and ``slope`` are NaN.
+            diagonal is 1, where ``delay`` and ``slope`` are NaN; a pair
+            without significant coherence is NaN.
 
         Notes
         -----
@@ -5921,7 +5933,15 @@ class Connectivity:
         frequency_resolution : float, optional
             Frequency resolution for independent samples.
         significance_threshold : float, default=0.05
-            P-value threshold for significance.
+            False discovery rate of the test that selects the frequencies used.
+            Each bin's coherence is tested against zero with the exact null of
+            :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`,
+            and the Benjamini-Hochberg procedure is applied at this level to
+            every bin in ``frequency_range``, signal pair, and time window of the
+            call as one family. For each pair and window only the largest
+            contiguous run of significant bins is kept, taking every independent
+            bin (one per ``frequency_resolution``), and only if it has at least
+            3; a pair with no such run is NaN (see Returns).
         n_range : int, default=3
             Number of phases to consider.
         frequency_range : (float, float), optional
@@ -5943,8 +5963,10 @@ class Connectivity:
             cycles/sample); positive ``[..., i, j]`` means signal ``i`` leads
             signal ``j``. The true delay is the candidate that is consistent
             (frequency-independent) across the band. Frequencies without
-            significant coherence, and the 0 Hz (DC) bin, are undefined and
-            returned as NaN.
+            significant coherence (see ``significance_threshold``), and the
+            0 Hz (DC) bin, are undefined and returned as NaN: a pair with no
+            significant frequency, such as two independent signals, is NaN
+            throughout.
 
         Examples
         --------
