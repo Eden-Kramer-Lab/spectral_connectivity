@@ -170,8 +170,8 @@ The `3` above is a common default. To pick values from your recording's length
 and the frequency resolution you need, use `suggest_parameters`, giving it the
 duration of one trial. The window must fit within that duration: a resolution
 that needs a longer window raises a `ValueError`, and a window that would leave
-fewer than three per trial is shortened, keeping the resolution with fewer
-tapers:
+fewer than three per trial is shortened, keeping the resolution where possible
+at the cost of fewer tapers (it warns when that leaves fewer than two):
 
 ```python
 from spectral_connectivity import suggest_parameters
