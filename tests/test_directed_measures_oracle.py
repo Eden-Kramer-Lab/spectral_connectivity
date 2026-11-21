@@ -43,9 +43,16 @@ from spectral_connectivity.minimum_phase_decomposition import _is_conjugate_symm
 from spectral_connectivity.simulate import simulate_MVAR
 from tests._backend_helpers import to_host
 from tests._var_oracle import (
+    _analytic_directed_measures,
     _analytic_var,
+    _block_granger_from_state_space,
+    _companion_matrix,
     _companion_spectral_radius,
+    _dense_stable_var,
     _fourier_coefficients_with_cross_spectrum,
+    _pairwise_granger_from_state_space,
+    _time_reversed_var,
+    _var_autocovariance,
 )
 
 # A unidirectional VAR: signal 0 drives signal 1 (lower-triangular coefficients),
@@ -55,6 +62,24 @@ _A2 = np.array([[-0.6, 0.0], [0.0, -0.6]])
 _COEFFICIENTS = np.stack([_A1, _A2])
 _NOISE = np.eye(2)
 _N_FFT = 128
+
+
+# Both Wilson factorization paths (see ``_fourier_coefficients_with_cross_spectrum``).
+_BOTH_FACTORIZATION_PATHS = pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+
+
+def _tightly_factored_connectivity(spectrum, conjugate_symmetric=False):
+    """A ``Connectivity`` fed the exact ``spectrum`` and factored to a tolerance
+    far below the ones the oracle comparisons allow."""
+    return Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        ),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["two_sided", "half_spectrum"])
@@ -139,54 +164,11 @@ _CHAIN_NOISE = np.diag([1.0, 2.0, 0.5])
 _CHAIN_N_FFT = 256
 
 
-def _analytic_directed_measures(A, H, noise_covariance):
-    """Closed-form directed measures of a VAR on the non-negative FFT grid.
-
-    Results are in the native ``[target, source]`` layout (see the module
-    docstring). ``A`` and ``H`` are on the full FFT grid; ``noise_covariance``
-    must be diagonal (variances ``sigma``). Returns squared DTF, PDC, DC, gPDC,
-    and dDTF.
-    """
-    n_non_negative = A.shape[0] // 2 + 1
-    A, H = A[:n_non_negative], H[:n_non_negative]
-    sigma = np.diag(noise_covariance)
-    H2, A2 = np.abs(H) ** 2, np.abs(A) ** 2
-    # DTF / DC normalize each target row by its total inflow over sources.
-    dtf = H2 / H2.sum(axis=-1, keepdims=True)
-    dc = sigma * H2 / (sigma * H2).sum(axis=-1, keepdims=True)
-    # PDC / gPDC normalize each source column by its total outflow over targets.
-    pdc = A2 / A2.sum(axis=-2, keepdims=True)
-    weighted = A2 / sigma[:, np.newaxis]
-    gpdc = weighted / weighted.sum(axis=-2, keepdims=True)
-    # dDTF (Korzeniewska et al. 2003): chi^2_ij = ffDTF^2_ij * kappa^2_ij, the
-    # full-frequency DTF (inflow summed over sources and frequencies) times the
-    # squared partial coherence from the inverse spectral matrix
-    # G = A^H Sigma^-1 A, kappa^2_ij = |G_ij|^2 / (G_ii G_jj).
-    full_frequency_dtf = H2 / H2.sum(axis=(-1, -3), keepdims=True)
-    inverse_spectrum = np.conj(np.swapaxes(A, -1, -2)) @ np.linalg.inv(noise_covariance) @ A
-    g_diagonal = np.real(np.diagonal(inverse_spectrum, axis1=-2, axis2=-1))
-    partial_coherence = np.abs(inverse_spectrum) ** 2 / (
-        g_diagonal[..., :, np.newaxis] * g_diagonal[..., np.newaxis, :]
-    )
-    ddtf = full_frequency_dtf * partial_coherence
-    return {
-        "directed_transfer_function": dtf,
-        "partial_directed_coherence": pdc,
-        "directed_coherence": dc,
-        "generalized_partial_directed_coherence": gpdc,
-        "direct_directed_transfer_function": ddtf,
-    }
-
-
 @pytest.fixture(scope="module")
 def chain_oracle():
     """Analytic chain-VAR measures and a Connectivity fed its exact spectrum."""
     A, H, S = _analytic_var(_CHAIN_COEFFICIENTS, _CHAIN_NOISE, _CHAIN_N_FFT)
-    connectivity = Connectivity(
-        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(S),
-        minimum_phase_tolerance=1e-12,
-        minimum_phase_max_iterations=5000,
-    )
+    connectivity = _tightly_factored_connectivity(S)
     return {
         "H": H,
         "measures": _analytic_directed_measures(A, H, _CHAIN_NOISE),
@@ -323,9 +305,7 @@ _BLOCK_N_FFT = 256
     [np.eye(4), _CORRELATED_BLOCK_NOISE],
     ids=["uncorrelated", "correlated"],
 )
-@pytest.mark.parametrize(
-    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
-)
+@_BOTH_FACTORIZATION_PATHS
 def test_blockwise_granger_matches_geweke_block_closed_form(
     conjugate_symmetric, noise_covariance
 ):
@@ -360,7 +340,10 @@ def test_blockwise_granger_matches_geweke_block_closed_form(
         np.ix_(source, target)
     ] @ np.linalg.solve(sigma[np.ix_(target, target)], sigma[np.ix_(target, source)])
     intrinsic = S_yy - H_yx @ sigma_x_given_y @ H_yx.conj().swapaxes(-1, -2)
-    geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
+    # NumPy 1.24's complex slogdet warns of a division by zero on
+    # well-conditioned input on some platforms.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
 
     np.testing.assert_array_equal(labels, [0, 1])
     assert geweke.max() > 1.0  # premise: a strong planted block influence
@@ -440,10 +423,7 @@ def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, targ
     """
     n_lags, n_signals, _ = coefficients.shape
     C = np.concatenate(list(coefficients), axis=1)
-    A = np.zeros((n_signals * n_lags, n_signals * n_lags))
-    A[:n_signals] = C
-    if n_lags > 1:
-        A[n_signals:, :-n_signals] = np.eye(n_signals * (n_lags - 1))
+    A = _companion_matrix(coefficients)
     K = np.zeros((n_signals * n_lags, n_signals))
     K[:n_signals] = np.eye(n_signals)
     V = noise_covariance
@@ -487,19 +467,18 @@ _CHAIN_COEFFICIENTS = np.stack(
         -0.6 * np.eye(3),
     ]
 )
-
-
-@pytest.mark.parametrize(
+_CHAIN_AND_DENSE_MODELS = pytest.mark.parametrize(
     ("coefficients", "noise_covariance"),
     [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
     ids=["chain", "dense_correlated"],
 )
+
+
+@_CHAIN_AND_DENSE_MODELS
 @pytest.mark.parametrize(
     ("n_fft", "atol"), [(128, 2e-5), (1024, 1e-10)], ids=["nfft128", "nfft1024"]
 )
-@pytest.mark.parametrize(
-    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
-)
+@_BOTH_FACTORIZATION_PATHS
 def test_conditional_granger_matches_state_space_oracle(
     coefficients, noise_covariance, n_fft, atol, conjugate_symmetric
 ):
@@ -508,13 +487,7 @@ def test_conditional_granger_matches_state_space_oracle(
     reduced model is obtained. The residual shrinks with the Wilson
     factorization's own frequency-discretization error."""
     _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
-    connectivity = Connectivity(
-        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
-            spectrum, conjugate_symmetric=conjugate_symmetric
-        ),
-        minimum_phase_tolerance=1e-12,
-        minimum_phase_max_iterations=5000,
-    )
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         conditional = connectivity.conditional_spectral_granger_prediction()[0]
@@ -529,6 +502,68 @@ def test_conditional_granger_matches_state_space_oracle(
             np.testing.assert_allclose(
                 conditional[:, source, target], oracle, atol=atol, rtol=0
             )
+
+
+@_CHAIN_AND_DENSE_MODELS
+@_BOTH_FACTORIZATION_PATHS
+def test_pairwise_granger_matches_state_space_oracle(
+    coefficients, noise_covariance, conjugate_symmetric
+):
+    """Pairwise Granger from the Wilson factor of each pair's spectrum agrees
+    with the innovations form of that pair obtained from a Riccati equation,
+    which factors nothing: influences in both directions, through other
+    signals, and with correlated innovations."""
+    n_fft = 1024
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        pairwise = connectivity.pairwise_spectral_granger_prediction()[0]
+    oracle = _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    assert oracle[:, off_diagonal].max() > 0.1
+    np.testing.assert_allclose(
+        pairwise[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "group_labels",
+    [["a", "b", "b", "c", "c"], ["b", "a", "b", "c", "a"], [0, 0, 0, 1, 2]],
+    ids=["sizes_1_2_2", "interleaved", "sizes_3_1_1"],
+)
+@_BOTH_FACTORIZATION_PATHS
+def test_blockwise_granger_among_three_groups_matches_state_space_oracle(
+    group_labels, conjugate_symmetric
+):
+    """With more than two groups, the measure between two of them is that of
+    the sub-process they form, for which the remaining signals are unobserved.
+    The full model's transfer function does not give it; the innovations form
+    of each sub-process, from a Riccati equation, does. Every signal drives
+    every other here and the innovations are correlated, so no direction is
+    zero, and the groups differ in size and need not be adjacent signals."""
+    n_fft = 1024
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=5, n_lags=2, spectral_radius=0.8, seed=0
+    )
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction(group_labels)
+
+    blocks = [
+        [signal for signal, label in enumerate(group_labels) if label == group]
+        for group in labels
+    ]
+    oracle = _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    # Premise: an influence in every direction, at its peak far above the tolerance.
+    assert oracle[:, off_diagonal].max(axis=0).min() > 0.01
+    np.testing.assert_allclose(
+        blockwise[0][:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
 
 
 def test_conditional_granger_removes_mediated_influence():
@@ -580,6 +615,64 @@ def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
     # innovations can leave a small residual in the original direction.
     assert np.nanmax(reversed_gc[..., 1, 0]) > 0.5
     assert np.nanmax(reversed_gc[..., 1, 0]) > 10 * np.nanmax(reversed_gc[..., 0, 1])
+
+
+@pytest.mark.parametrize("n_lags", [1, 2, 3])
+def test_var_autocovariance_is_the_inverse_transform_of_the_spectrum(n_lags):
+    """``Gamma(h) = E[x(t + h) x(t)^T]`` from the state covariance and the
+    Yule-Walker recursion equals the inverse Fourier transform of the model's
+    spectrum, at lags below, at and beyond the model's order. The lag-one
+    covariance is not symmetric, so a transposed convention would fail."""
+    n_fft, max_lag = 4096, 6
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=3, n_lags=n_lags, spectral_radius=0.8, seed=n_lags
+    )
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    from_spectrum = np.fft.ifft(spectrum, axis=0)[: max_lag + 1].real
+
+    gamma = _var_autocovariance(coefficients, noise_covariance, max_lag)
+
+    assert np.abs(gamma[1] - gamma[1].T).max() > 0.1
+    np.testing.assert_allclose(gamma, from_spectrum, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(
+        _var_autocovariance(coefficients, noise_covariance, 0), gamma[:1]
+    )
+
+
+@_CHAIN_AND_DENSE_MODELS
+@_BOTH_FACTORIZATION_PATHS
+def test_time_reversed_granger_matches_the_reversed_var(
+    coefficients, noise_covariance, conjugate_symmetric
+):
+    """Read backwards in time, a VAR is again a VAR, with coefficients and
+    innovations that follow from its autocovariance. Time-reversed Granger of
+    the forward spectrum equals the state-space pairwise Granger of that
+    reversed VAR. It is not the forward result with the two directions
+    exchanged, which a transposed output would give."""
+    n_fft = 1024
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    reversed_coefficients, reversed_noise = _time_reversed_var(coefficients, noise_covariance)
+    # Premise: the reversed VAR has the transposed spectrum.
+    np.testing.assert_allclose(
+        _analytic_var(reversed_coefficients, reversed_noise, n_fft)[2],
+        spectrum.swapaxes(-1, -2),
+        atol=1e-10,
+        rtol=0,
+    )
+    connectivity = _tightly_factored_connectivity(spectrum, conjugate_symmetric)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        time_reversed = connectivity.time_reversed_spectral_granger_prediction()[0]
+
+    oracle = _pairwise_granger_from_state_space(reversed_coefficients, reversed_noise, n_fft)
+    forward = _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    exchanged = forward.swapaxes(-1, -2)
+    # Premise: reversal does more than exchange the directions.
+    assert np.abs(oracle - exchanged)[:, off_diagonal].max() > 0.05
+    np.testing.assert_allclose(
+        time_reversed[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
 
 
 # Signal 0 drives 1 and 1 drives 2, with poles at 0.9, 0.8 and 0.7: the
