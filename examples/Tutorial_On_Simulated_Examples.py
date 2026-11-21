@@ -21,14 +21,26 @@
 # Every example builds its data with `spectral_connectivity.simulate`, so the structure in each plot is planted and known: `simulate_shared_oscillation` puts one sinusoid, with chosen amplitudes and phase offsets, into several signals, and `simulate_lagged_broadband` delays copies of one broadband source by a known number of samples. Each section ends with an `assert` cell that checks what its plot shows, so running the notebook verifies it. Every simulation passes `random_state`, so the output is reproducible.
 
 # %%
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity import (
+    Connectivity,
+    Multitaper,
+    PowerSidednessWarning,
+    multitaper_connectivity,
+)
 from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
 )
+
+# Connectivity.power() is one-sided (as this tutorial expects); the reminder
+# meant for code written for 2.x, which returned the two-sided density, does
+# not apply here.
+warnings.filterwarnings("ignore", category=PowerSidednessWarning)
 
 # %% [markdown]
 # ### Power Spectrum

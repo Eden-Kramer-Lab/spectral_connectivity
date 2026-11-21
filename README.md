@@ -39,6 +39,12 @@
 > `warnings.filterwarnings("ignore",
 > category=spectral_connectivity.DirectedOrientationWarning)`. See the
 > [migration guide](CHANGELOG.md#migration-guide).
+>
+> **`Connectivity.power()` is one-sided since 3.0.** The bins between 0 Hz and
+> Nyquist are twice the 2.x values, so integrating over the non-negative
+> frequencies gives the signal's power. `power(one_sided=False)` returns the
+> 2.x values. Until 3.2, calling `power()` without `one_sided` emits a
+> `PowerSidednessWarning`; pass `one_sided=True` to silence it.
 
 ## What is spectral_connectivity?
 
@@ -199,7 +205,7 @@ m = Multitaper(
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
-power = c.power()  # spectral power
+power = c.power(one_sided=True)  # one-sided spectral power density
 coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)

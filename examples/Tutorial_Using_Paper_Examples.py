@@ -24,13 +24,20 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
+from spectral_connectivity import (
+    Connectivity,
+    DirectedOrientationWarning,
+    Multitaper,
+    PowerSidednessWarning,
+)
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.transforms import prepare_time_series
 
-# This tutorial indexes directed measures source first ([..., i, j] is i -> j),
-# so the reminder meant for code written for 2.x does not apply here.
+# This tutorial indexes directed measures source first ([..., i, j] is i -> j)
+# and plots the one-sided power, so the reminders meant for code written for
+# 2.x do not apply here.
 warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+warnings.filterwarnings("ignore", category=PowerSidednessWarning)
 
 
 def plot_directional(time_series, sampling_frequency, time_halfbandwidth_product=2):

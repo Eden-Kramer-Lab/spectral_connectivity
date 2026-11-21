@@ -214,7 +214,14 @@ multitaper.frequencies
 # The `Connectivity` class computes frequency-domain connectivity measures from Fourier coefficients. Let's import the class and look at the docstring:
 
 # %%
-from spectral_connectivity import Connectivity
+import warnings
+
+from spectral_connectivity import Connectivity, PowerSidednessWarning
+
+# Connectivity.power() is one-sided (as this tutorial expects); the reminder
+# meant for code written for 2.x, which returned the two-sided density, does
+# not apply here.
+warnings.filterwarnings("ignore", category=PowerSidednessWarning)
 
 # ?Connectivity
 

@@ -394,13 +394,26 @@ class DirectedOrientationWarning(UserWarning):
     """
 
 
+class PowerSidednessWarning(UserWarning):
+    """``Connectivity.power()`` is one-sided, unlike in spectral_connectivity 2.x.
+
+    Emitted by :meth:`Connectivity.power` when it is called without
+    ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
+    density, with the interior frequency bins doubled, where 2.x returned the
+    two-sided density, so code written for 2.x keeps running and gets values
+    twice as large away from 0 Hz and Nyquist. This warning is temporary; pass
+    ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
+    ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
+    """
+
+
 _MIGRATION_GUIDE_URL = (
     "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/"
     "CHANGELOG.md#migration-guide"
 )
-# Every DirectedOrientationWarning message starts with this, so pyproject.toml
-# can filter it by message: a category filter would import the package while
-# pytest reads its configuration, before coverage starts.
+# Every DirectedOrientationWarning and PowerSidednessWarning message starts with
+# this, so pyproject.toml can filter them by message: a category filter would
+# import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
 _SILENCE_ORIENTATION_WARNING = (
     'Silence with warnings.filterwarnings("ignore", '
@@ -422,8 +435,9 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
 )
 
 # False while the labeled wrapper or a jackknife replicate runs a measure: the
-# wrapper warns about its source/target labels instead, and a jackknife warns
-# once, for its full estimate.
+# wrapper warns about its source/target labels instead (and a labeled power
+# result states its sidedness), and a jackknife warns once, for its full
+# estimate.
 _warn_orientation_change: ContextVar[bool] = ContextVar(
     "_warn_orientation_change", default=True
 )
@@ -2333,7 +2347,7 @@ class Connectivity:
         return result
 
     @_asnumpy
-    def power(self, *, one_sided: bool = True) -> NDArray[np.floating]:
+    def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
         """Return the power spectral density of the signal (one-sided by default).
 
         Only the non-negative frequencies are returned, with the interior
@@ -2350,7 +2364,12 @@ class Connectivity:
 
         Parameters
         ----------
-        one_sided : bool, default=True
+        one_sided : bool, optional
+            ``True`` (the default) returns the one-sided density described
+            above. Called without it on two-sided coefficients, ``power``
+            warns that 2.x returned the two-sided density
+            (:class:`~spectral_connectivity.PowerSidednessWarning`, until
+            3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
             non-negative frequencies only: no bin is doubled, as for a
             spectrum laid out over negative and positive frequencies. For a
@@ -2404,6 +2423,23 @@ class Connectivity:
         >>> bool(np.allclose(power[0, [0, -1]], two_sided[0, [0, -1]]))  # 0 Hz, Nyquist
         True
         """
+        if one_sided is None:
+            if not self._is_one_sided and _warn_orientation_change.get():
+                # Remove in 3.2, with DirectedOrientationWarning (issue #98).
+                warnings.warn(
+                    f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
+                    "one-sided power spectral density: the bins between 0 Hz and "
+                    "Nyquist are doubled, so integrating over the non-negative "
+                    "frequencies gives the signal's power. 2.x returned the "
+                    "two-sided density, half of that. Pass one_sided=True to "
+                    "confirm and silence this warning, or one_sided=False for the "
+                    f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
+                    'Silence all of these with warnings.filterwarnings("ignore", '
+                    "category=spectral_connectivity.PowerSidednessWarning).",
+                    PowerSidednessWarning,
+                    stacklevel=stacklevel_outside_package(),
+                )
+            one_sided = True
         if _validated_flag("one_sided", one_sided):
             return self._one_sided_density(self._power, frequency_axis=-2)
         if self._is_one_sided:
