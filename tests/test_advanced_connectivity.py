@@ -786,6 +786,143 @@ class TestGlobalCoherence:
             np.testing.assert_allclose(gc, base, rtol=1e-6)
 
 
+# The expectation_type settings global coherence supports (they average the
+# tapers), with the observation axes each keeps ahead of the frequency axis.
+_GLOBAL_COHERENCE_KEPT_AXES = {
+    "trials_tapers": "t",
+    "time_trials_tapers": "",
+    "time_tapers": "r",
+    "tapers": "tr",
+}
+
+
+def _pooled_cross_spectral_matrix(fourier_coefficients, kept_axes, weights=None):
+    """Mean of x x^H over the observation axes not in ``kept_axes``, by einsum.
+
+    ``fourier_coefficients`` has shape (n_time, n_trials, n_tapers, n_freq,
+    n_signals), lettered ``t``, ``r``, ``k``; ``weights``, shape
+    (n_time, n_trials, n_tapers, n_freq, 1), weight the mean. Returns shape
+    (*kept axes, n_freq, n_signals, n_signals).
+    """
+    weights = np.ones(fourier_coefficients.shape[:-1]) if weights is None else weights[..., 0]
+    total = np.einsum(
+        f"trkf,trkfa,trkfb->{kept_axes}fab",
+        weights,
+        fourier_coefficients,
+        fourier_coefficients.conj(),
+    )
+    return total / np.einsum(f"trkf->{kept_axes}f", weights)[..., np.newaxis, np.newaxis]
+
+
+@pytest.mark.parametrize("weighted", [False, True], ids=["unweighted", "weighted"])
+@pytest.mark.parametrize("path", ["batched", "per_bin"])
+@pytest.mark.parametrize("expectation_type", sorted(_GLOBAL_COHERENCE_KEPT_AXES))
+def test_global_coherence_decomposes_the_matrix_its_expectation_averages(
+    expectation_type, path, weighted, monkeypatch
+):
+    """For each supported expectation_type, the fractions and vectors are the
+    eigendecomposition of the cross-spectral matrix averaged over the same
+    axes (with the same observation weights), and the kept axes lead the
+    result in the order the other measures keep them."""
+    import spectral_connectivity._multivariate as multivariate_module
+
+    if path == "per_bin":
+        monkeypatch.setattr(multivariate_module, "GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS", 0)
+    rng = np.random.default_rng(31)
+    shape = (3, 4, 6, 6, 6)  # (time, trials, tapers, two-sided frequency, signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.2, 1.0, (*shape[:-1], 1)) if weighted else None
+    conn = Connectivity(
+        coefficients, expectation_type=expectation_type, observation_weights=weights
+    )
+    # Two of six components: the per-bin path takes its truncated svds branch.
+    fractions, vectors = conn.global_coherence(max_rank=2)
+
+    kept_axes = _GLOBAL_COHERENCE_KEPT_AXES[expectation_type]
+    kept_shape = tuple(shape["trk".index(axis)] for axis in kept_axes)
+    n_frequencies = conn.frequencies.size
+    assert fractions.shape == (*kept_shape, n_frequencies, 2)
+    assert vectors.shape == (*kept_shape, n_frequencies, shape[-1], 2)
+    assert fractions.shape[:-1] == conn.magnitude_squared_coherence().shape[:-2]
+
+    expected = _pooled_cross_spectral_matrix(
+        _nonnegative_bins(coefficients),
+        kept_axes,
+        None if weights is None else _nonnegative_bins(weights),
+    )
+    eigenvalues, eigenvectors = np.linalg.eigh(expected)
+    trace = np.trace(expected, axis1=-2, axis2=-1).real[..., np.newaxis]
+    np.testing.assert_allclose(
+        fractions, eigenvalues[..., ::-1][..., :2] / trace, rtol=1e-10, atol=1e-12
+    )
+    # The same vectors up to a phase: |<u, v>| = 1 for unit vectors.
+    leading = eigenvectors[..., ::-1][..., :2]
+    overlap = np.abs(np.sum(leading.conj() * vectors, axis=-2))
+    np.testing.assert_allclose(overlap, 1.0, rtol=1e-8)
+
+
+def test_time_trials_tapers_global_coherence_is_the_chronux_estimand():
+    """On non-overlapping windows, "time_trials_tapers" estimates what Chronux
+    ``CrossSpecMatc`` returns as ``Ctot``: the cross-spectral matrix ``Sc``
+    averaged with equal weight over every taper, trial and window (Chronux
+    adds the taper mean of ``conj(J_k) J_l`` for each window and trial and
+    divides by ``Nwins * Ntr``), then ``s(1) / sum(s)`` from its singular
+    values. ``Sc`` is the conjugate of the matrix decomposed here, so the
+    values are the same."""
+    time_series = np.random.default_rng(32).standard_normal((1000, 3, 5))
+    m = Multitaper(
+        time_series,
+        sampling_frequency=500,
+        time_halfbandwidth_product=3,
+        time_window_duration=0.4,
+        time_window_step=0.4,
+    )
+    conn = Connectivity.from_transform(m, expectation_type="time_trials_tapers")
+    assert conn.time_bins_are_independent  # the windows do not overlap
+    fractions, _ = conn.global_coherence()
+
+    coefficients = _nonnegative_bins(to_host(m.fft()))  # (window, trial, taper, f, signal)
+    n_windows, n_trials = coefficients.shape[:2]
+    assert n_windows == 5
+    summed = np.zeros((*coefficients.shape[3:], coefficients.shape[-1]), dtype=complex)
+    for window in range(n_windows):
+        for trial in range(n_trials):
+            tapered = coefficients[window, trial]  # (taper, frequency, signal)
+            summed += np.mean(
+                tapered.conj()[..., :, np.newaxis] * tapered[..., np.newaxis, :], 0
+            )
+    singular_values = np.linalg.svd(summed / (n_windows * n_trials), compute_uv=False)
+    np.testing.assert_allclose(
+        fractions[..., 0], singular_values[..., 0] / singular_values.sum(axis=-1), rtol=1e-10
+    )
+
+
+@pytest.mark.parametrize("expectation_type", ["time", "trials", "time_trials"])
+def test_global_coherence_rejects_an_expectation_that_keeps_the_tapers(expectation_type):
+    """A per-taper global coherence has no established meaning, so the
+    settings that keep tapers as an output axis raise, naming the supported
+    ones and how to rebuild; the rebuilt instance computes it."""
+    rng = np.random.default_rng(33)
+    coefficients = rng.standard_normal((2, 4, 3, 8, 3)) + 1j * rng.standard_normal(
+        (2, 4, 3, 8, 3)
+    )
+    conn = Connectivity(coefficients, expectation_type=expectation_type)
+    with pytest.raises(
+        ValueError, match=r"^global_coherence needs the tapers averaged"
+    ) as info:
+        conn.global_coherence()
+    message = str(info.value)
+    assert f"expectation_type={expectation_type!r} keeps them as an output axis" in message
+    for supported in _GLOBAL_COHERENCE_KEPT_AXES:
+        assert repr(supported) in message
+    assert (
+        "Connectivity.from_transform(transform, expectation_type='trials_tapers')" in message
+    )
+    conn.expectation_type = "trials_tapers"
+    fractions, _ = conn.global_coherence()
+    assert fractions.shape == (2, 5, 1)
+
+
 class TestGroupDelay:
     """Test group_delay() method."""
 

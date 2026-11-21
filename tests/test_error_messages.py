@@ -989,6 +989,30 @@ def test_global_coherence_raises_before_numpy_warns_on_nonfinite_coefficients():
     assert record == []
 
 
+_GLOBAL_COHERENCE_EXPECTATIONS = [
+    "trials_tapers",
+    "time_trials_tapers",
+    "time_tapers",
+    "tapers",
+]
+
+
+@pytest.mark.parametrize("expectation_type", _GLOBAL_COHERENCE_EXPECTATIONS)
+def test_global_coherence_names_nonfinite_coefficients_for_every_expectation(
+    expectation_type,
+):
+    """Whichever observations it pools, global_coherence raises the same
+    ValueError on NaN or Inf coefficients, not LAPACK's error."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            _coefficients_with_nan(), expectation_type=expectation_type
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed") as excinfo:
+        connectivity.global_coherence()
+    assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
@@ -1003,6 +1027,29 @@ def _nan_instead_of_raising(kernel):
         return result * np.nan
 
     return returns_nan
+
+
+@pytest.mark.cpu_only(reason="simulates CuPy's NaN on the NumPy backend")
+@pytest.mark.parametrize("expectation_type", _GLOBAL_COHERENCE_EXPECTATIONS)
+def test_global_coherence_that_returns_nan_names_nonfinite_coefficients_for_every_expectation(
+    expectation_type, monkeypatch
+):
+    """A backend returning NaN rather than raising (CuPy) gives the same
+    ValueError for every expectation_type global_coherence supports."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    monkeypatch.setattr(
+        connectivity_module,
+        "_global_coherence",
+        _nan_instead_of_raising(connectivity_module._global_coherence),
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            _coefficients_with_nan(), expectation_type=expectation_type
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence()
 
 
 @pytest.mark.cpu_only(reason="simulates CuPy's NaN on the NumPy backend")

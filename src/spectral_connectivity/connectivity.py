@@ -1031,7 +1031,9 @@ class Connectivity:
     - ``global_coherence`` (which takes no groups) returns two arrays,
       ``fractions, vectors = conn.global_coherence()``, whose frequency axis,
       like every other measure's, holds the non-negative frequencies (2.x
-      returned every FFT bin).
+      returned every FFT bin). It needs an ``expectation_type`` that averages
+      the tapers and raises for ``"time"``, ``"trials"``, and
+      ``"time_trials"``.
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
@@ -1794,8 +1796,6 @@ class Connectivity:
             "every magnitude-normalized value is mathematically forced to 1 "
             "(apparent perfect connectivity)"
         ),
-        *,
-        n_trials_by_tapers: int | None = None,
     ) -> None:
         """Warn that a normalized measure is degenerate for one observation.
 
@@ -1811,27 +1811,20 @@ class Connectivity:
         ``measure``), so the measure reports perfect connectivity or a
         perfectly consistent lag between unrelated signals and carries no
         information. This is a silent-failure trap rather than an error, so it
-        warns instead of raising. ``n_trials_by_tapers`` is the count for a
-        measure that decomposes trials x tapers whatever the expectation type,
-        in place of :attr:`n_observations`.
+        warns instead of raising.
         """
-        if n_trials_by_tapers is None:
-            count, counted = self.n_observations, "n_observations"
-            averaged = self.expectation_type.split("_")
-        else:
-            count, counted = n_trials_by_tapers, "n_trials * n_tapers"
-            averaged = ["trials", "tapers"]
-        if count < 2:
+        averaged = self.expectation_type.split("_")
+        if self.n_observations < 2:
             # Offer only what raises this count: the axes it is taken over.
             remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
-            if n_trials_by_tapers is None and len(averaged) < len(_MORE_OBSERVATIONS):
+            if len(averaged) < len(_MORE_OBSERVATIONS):
                 remedies.append(
                     "an expectation_type that averages more axes than "
                     f"{self.expectation_type!r}"
                 )
             warnings.warn(
                 f"{measure} is computed from a single observation "
-                f"({counted} == 1), so {consequence} "
+                f"(n_observations == 1), so {consequence} "
                 "regardless of the data, and the result carries no information. "
                 f"Use {', or '.join(remedies)}.",
                 UserWarning,
@@ -4054,17 +4047,18 @@ class Connectivity:
         """Find linear combinations that capture the most coherent power.
 
         The linear combinations of signals that capture the most coherent
-        power at each frequency and time window.
+        power at each frequency, from the cross-spectral matrix averaged over
+        the observations ``expectation_type`` averages.
 
         This is a frequency domain analog of PCA over signals at a given
-        frequency/time window.
+        frequency (and time window, for the default expectation).
 
         Parameters
         ----------
         max_rank : int, default=1
             The number of components returned, strongest first (like the
             number of PC dimensions kept); more than
-            ``min(n_signals, n_trials * n_tapers)`` is clamped with a warning.
+            ``min(n_signals, n_observations)`` is clamped with a warning.
             It limits the output only: the decomposition uses the whole
             cross-spectral matrix, each value is a fraction of the total power
             of all components, and a returned component does not depend on
@@ -4090,15 +4084,23 @@ class Connectivity:
         Returns
         -------
         global_coherence : ndarray
-            Shape (n_time_windows, n_frequencies, n_components).
+            Shape (..., n_frequencies, n_components), the leading axes those
+            ``expectation_type`` keeps (``n_time_windows`` for the default).
             The fraction of total coherent power captured by each component
             (eigenvalue of the cross-spectral matrix divided by the sum of all
             eigenvalues), ordered strongest component first.
         vectors : ndarray
-            Shape (n_time_windows, n_frequencies, n_signals, n_components).
+            Shape (..., n_frequencies, n_signals, n_components).
             Each component's unit-norm weights over the signals (the left
             singular vectors of the coefficient matrix), in the same order;
             the wrappers call them ``global_coherence_vectors``.
+
+        Raises
+        ------
+        ValueError
+            If ``expectation_type`` keeps the tapers as an output axis
+            (``"time"``, ``"trials"``, ``"time_trials"``), or if the Fourier
+            coefficients contain NaN or Inf (where weights do not omit them).
 
         Notes
         -----
@@ -4113,9 +4115,21 @@ class Connectivity:
            :class:`~spectral_connectivity.PowerSidednessWarning` once per
            Python session as a reminder.
 
-        **Observations**: it does not follow ``expectation_type``. Each time
-        window is decomposed from all of its trials and tapers, so the
-        leading axis is always ``n_time_windows``.
+        **Observations**: the matrix decomposed at each frequency is the
+        cross-spectral matrix averaged over the axes ``expectation_type``
+        averages, which must include the tapers: ``"trials_tapers"`` (the
+        default) pools each time window's trials and tapers,
+        ``"time_trials_tapers"`` every window, trial and taper (one value per
+        frequency), ``"time_tapers"`` each trial's windows and tapers, and
+        ``"tapers"`` the tapers of each window and trial. The kept axes lead
+        the result in the order of the "Result shape by expectation_type"
+        table of :class:`Connectivity`. Observation weights give the weighted
+        average: each pooled coefficient is scaled by the square root of its
+        weight.
+
+        .. versionchanged:: 3.0
+           It follows ``expectation_type``; 2.x pooled each window's trials
+           and tapers whatever the setting, as ``"trials_tapers"`` does.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
         in that component, so the components sum to at most 1 and rescaling
@@ -4124,8 +4138,9 @@ class Connectivity:
         signals as given, so put them on a common scale first if their units
         differ.
 
-        **Algorithm**: when the number of estimates (``n_trials * n_tapers``)
-        is at least ``n_signals`` and ``n_signals`` is small
+        **Algorithm**: when the number of estimates (the pooled
+        observations, :attr:`n_observations`) is at least ``n_signals`` and
+        ``n_signals`` is small
         (``<= 64``), the components are obtained from an eigendecomposition of
         the ``(n_signals, n_signals)`` cross-spectral matrix ``A @ Aᴴ`` rather
         than a singular value decomposition of ``A``. This is substantially
@@ -4170,25 +4185,41 @@ class Connectivity:
         True
         """
         self._validate_multiple_signals()
-        _, n_trials, n_tapers, _, n_signals = self._fourier_coefficients.shape
+        pooled_axes = list(self._expectation_axes)
+        if 2 not in pooled_axes:
+            supported = ", ".join(
+                repr(name) for name, axes in EXPECTATION_AXES.items() if 2 in axes
+            )
+            msg = (
+                f"global_coherence needs the tapers averaged, but "
+                f"expectation_type={self.expectation_type!r} keeps them as an "
+                "output axis. Global coherence decomposes one cross-spectral "
+                "matrix pooled over the tapers (and whatever else is averaged); "
+                "a value for each taper has no established meaning. Use one of "
+                f"{supported}, e.g. Connectivity.from_transform(transform, "
+                "expectation_type='trials_tapers'), or set "
+                "conn.expectation_type = 'trials_tapers' on this instance."
+            )
+            raise ValueError(msg)
+        n_signals = self.n_signals
+        n_observations = self.n_observations
         self._warn_single_observation_degenerate(
             "global_coherence",
             "the cross-spectral matrix has rank one: its first component holds "
             "all of the power, and global coherence is forced to 1",
-            n_trials_by_tapers=n_trials * n_tapers,
         )
 
-        # A rank-r decomposition of the (n_signals, n_trials * n_tapers)
-        # coefficient matrix has at most min(n_signals, n_trials * n_tapers)
-        # non-trivial components. Requesting more than that would crash svds or
-        # (in the dense branch) broadcast a single component into duplicates, so
-        # clamp the requested rank to what is realizable.
-        max_available_rank = min(n_signals, n_trials * n_tapers)
+        # A rank-r decomposition of the (n_signals, n_observations) coefficient
+        # matrix has at most min(n_signals, n_observations) non-trivial
+        # components. Requesting more than that would crash svds or (in the
+        # dense branch) broadcast a single component into duplicates, so clamp
+        # the requested rank to what is realizable.
+        max_available_rank = min(n_signals, n_observations)
         if max_rank > max_available_rank:
             warnings.warn(
                 f"max_rank={max_rank} exceeds the number of available "
                 f"global-coherence components "
-                f"(min(n_signals, n_trials * n_tapers) = {max_available_rank}); "
+                f"(min(n_signals, n_observations) = {max_available_rank}); "
                 f"clamping to {max_available_rank}.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
@@ -4207,15 +4238,37 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
+
+        # The kernel decomposes, for each index of its first axis, the columns
+        # spanned by its second and third axes. Put the kept observation axes
+        # (in time, trials, tapers order, as the other measures keep them)
+        # together on the first axis and the pooled ones on the next two. For
+        # every supported expectation_type these are views; for the default,
+        # "trials_tapers", the layout is the coefficients' own. Only the
+        # non-negative frequencies are reported, so only those are decomposed:
+        # for a real signal S(-f) = conj(S(f)), and the negative bins have the
+        # same fractions and conjugated vectors.
+        coefficient_shape = self._fourier_coefficients.shape
+        kept_axes = [axis for axis in range(3) if axis not in pooled_axes]
+        kept_shape = tuple(coefficient_shape[axis] for axis in kept_axes)
+        n_nonnegative = self._nonnegative_frequency_count(coefficient_shape[3])
+        pooled_layout = (
+            int(np.prod(kept_shape)),
+            int(np.prod([coefficient_shape[axis] for axis in pooled_axes[:-1]])),
+            coefficient_shape[pooled_axes[-1]],
+        )
+
+        def pooled(values: BackendArray) -> BackendArray:
+            arranged = xp.transpose(
+                values[..., :n_nonnegative, :], (*kept_axes, *pooled_axes, 3, 4)
+            )
+            return arranged.reshape((*pooled_layout, *arranged.shape[3:]))
+
+        weights = self._observation_weights
         # NaN or Inf coefficients (unless zero weights omit them) make the
         # decomposition fail, which is reported in the user's terms; NumPy's
         # "invalid value" RuntimeWarning from the scaling before it would only
         # repeat that, so it is silenced for such coefficients.
-        # Only the non-negative frequencies are reported, so only those are
-        # decomposed. For a real signal S(-f) = conj(S(f)): the negative bins
-        # have the same fractions and conjugated vectors.
-        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
-        weights = self._observation_weights
         with (
             self._decomposition_of_nonfinite_coefficients("global_coherence"),
             contextlib.nullcontext()
@@ -4223,11 +4276,15 @@ class Connectivity:
             else np.errstate(invalid="ignore", divide="ignore"),
         ):
             global_coherence, unnormalized_global_coherence = _global_coherence(
-                self._fourier_coefficients[..., :n_nonnegative, :],
-                None if weights is None else weights[..., :n_nonnegative, :],
+                pooled(self._fourier_coefficients),
+                None if weights is None else pooled(weights),
                 max_rank,
                 max_workspace_elements,
             )
+        global_coherence = global_coherence.reshape((*kept_shape, *global_coherence.shape[1:]))
+        unnormalized_global_coherence = unnormalized_global_coherence.reshape(
+            (*kept_shape, *unnormalized_global_coherence.shape[1:])
+        )
         self._require_finite_decomposition("global_coherence", global_coherence)
 
         if xp.any(xp.isnan(global_coherence)):
@@ -4249,7 +4306,9 @@ class Connectivity:
                 "for a real signal the negative bins repeat the non-negative ones "
                 "(the same fractions, conjugated vectors), so nothing is lost. "
                 "Label the frequency axis of code written for 2.x with frequencies. "
-                "This notice is temporary and will be removed in 3.2. See the "
+                "It also follows expectation_type, which 2.x ignored: the default, "
+                "'trials_tapers', pools each time window's trials and tapers as 2.x "
+                "did for every setting. This notice is temporary and will be removed in 3.2. See the "
                 f"migration guide: {_MIGRATION_GUIDE_URL}. "
                 + _silence_hint(PowerSidednessWarning),
                 PowerSidednessWarning,

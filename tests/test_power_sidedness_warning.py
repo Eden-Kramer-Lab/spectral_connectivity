@@ -141,6 +141,7 @@ def test_global_coherence_warns_once_at_the_call(connectivity):
     assert "only the non-negative frequencies" in message
     assert "labelled by Connectivity.frequencies" in message
     assert "all_frequencies" in message
+    assert "follows expectation_type, which 2.x ignored" in message
     assert "removed in 3.2" in message
     assert "migration.html" in message
     assert (

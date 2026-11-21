@@ -713,6 +713,12 @@ def _global_coherence(
 ) -> tuple[NDArray[np.floating], NDArray[np.complexfloating]]:
     """Strongest global-coherence components of every time-frequency bin.
 
+    Each bin's ``(n_signals, n_estimates)`` coefficient matrix is formed from
+    the second and third axes (trials and tapers in the coefficients' own
+    layout; ``Connectivity.global_coherence`` arranges whichever observation
+    axes it pools there), one matrix per index of the first axis and per
+    frequency.
+
     Uses one batched decomposition over all bins when the decomposition
     dimension ``min(n_signals, n_estimates)`` is at most
     ``GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS``, and a per-bin decomposition
@@ -720,17 +726,18 @@ def _global_coherence(
 
     Parameters
     ----------
-    fourier_coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
-    observation_weights : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, 1), or None
+    fourier_coefficients : array, shape (n_kept, n_pooled, n_pooled_last, n_frequencies, n_signals)
+        ``n_estimates = n_pooled * n_pooled_last``.
+    observation_weights : array, shape (n_kept, n_pooled, n_pooled_last, n_frequencies, 1), or None
     max_rank : int
-        Number of components, at most ``min(n_signals, n_trials * n_tapers)``.
+        Number of components, at most ``min(n_signals, n_estimates)``.
     max_workspace_elements : int
         Element budget for the batched decomposition's chunks.
 
     Returns
     -------
-    global_coherence : array, shape (n_time_windows, n_fft_samples, max_rank)
-    unnormalized_global_coherence : array, shape (n_time_windows, n_fft_samples, n_signals, max_rank)
+    global_coherence : array, shape (n_kept, n_frequencies, max_rank)
+    unnormalized_global_coherence : array, shape (n_kept, n_frequencies, n_signals, max_rank)
     """
     n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals = fourier_coefficients.shape
     # The batched decomposition works on min(n_signals, n_estimates)-square

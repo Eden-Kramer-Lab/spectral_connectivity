@@ -450,6 +450,19 @@ The migration guide for code written against 2.x is
   two-sided coefficients emits a `PowerSidednessWarning` once per session.
   The results of `multitaper_connectivity` and `connectivity_to_xarray` were
   already trimmed so; they are unchanged and do not warn.
+- `Connectivity.global_coherence` follows `expectation_type` for the settings
+  that average the tapers: it decomposes the cross-spectral matrix averaged
+  over the same axes as the other measures, with the kept axes leading the
+  result in the same order. The default, `"trials_tapers"`, gives the same
+  values as before (each window's trials and tapers); `"time_trials_tapers"`
+  pools every window, trial, and taper into one value per frequency, the
+  estimand of Chronux `CrossSpecMatc`'s `Ctot` on non-overlapping windows;
+  `"time_tapers"` gives one value per trial; and `"tapers"` one per window and
+  trial. Observation weights weight the pooled columns as before. `"time"`,
+  `"trials"`, and `"time_trials"`, which keep the tapers as an output axis,
+  raise `ValueError` naming the supported settings. 2.x ignored
+  `expectation_type` and pooled each window's trials and tapers for every
+  setting.
 - `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
   defaulted to 60. Near-singular cross-spectra (highly correlated channels)
   can need several hundred Wilson iterations, and the loop still stops as soon
