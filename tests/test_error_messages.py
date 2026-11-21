@@ -307,3 +307,36 @@ def test_delay_measures_name_an_invalid_significance_threshold(
         r"0 and 1, got .*e\.g\. 0\.05\.$",
     ):
         getattr(connectivity, measure)(significance_threshold=threshold)
+
+
+_DETREND_CONSTRUCTORS = {
+    "Multitaper": lambda ts, **kw: Multitaper(ts, 500, **kw),
+    "STFT": lambda ts, **kw: ShortTimeFourierTransform(ts, 500, **kw),
+    "Welch": lambda ts, **kw: Welch(ts, 500, n_time_samples_per_segment=100, **kw),
+    "wrapper": lambda ts, **kw: multitaper_connectivity(ts, 500, method="power", **kw),
+}
+
+
+@pytest.mark.parametrize(
+    "make", _DETREND_CONSTRUCTORS.values(), ids=list(_DETREND_CONSTRUCTORS)
+)
+@pytest.mark.parametrize("detrend_type", ["quadratic", "foo", 1])
+def test_invalid_detrend_type_raises_at_construction(make, detrend_type):
+    """An unknown detrend_type is rejected by name when the transform is
+    built, listing the valid choices, not at its first fft()."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    expected = f"detrend_type must be 'constant', 'linear', or None, got {detrend_type!r}."
+    with pytest.raises(ValueError, match="^" + re.escape(expected)):
+        make(ts, detrend_type=detrend_type)
+
+
+@pytest.mark.parametrize(
+    "make", _DETREND_CONSTRUCTORS.values(), ids=list(_DETREND_CONSTRUCTORS)
+)
+@pytest.mark.parametrize("detrend_type", ["constant", "c", "linear", "l", None])
+def test_valid_detrend_types_are_accepted(make, detrend_type):
+    """The spellings detrend() accepts, and None, construct and transform."""
+    ts = np.random.default_rng(0).standard_normal((500, 2, 2))
+    result = make(ts, detrend_type=detrend_type)
+    if hasattr(result, "fft"):
+        assert np.all(np.isfinite(to_host(result.fft())))

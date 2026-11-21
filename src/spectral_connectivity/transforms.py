@@ -827,6 +827,22 @@ def _validate_fft_workers(fft_workers: int | None) -> None:
         raise ValueError(msg)
 
 
+# The trend types :func:`detrend` accepts, with SciPy's one-letter spellings.
+_DETREND_TYPES = ("constant", "c", "linear", "l")
+
+
+def _validate_detrend_type(detrend_type: str | None) -> None:
+    """Reject a ``detrend_type`` that :func:`detrend` would reject at ``fft()``."""
+    if detrend_type is not None and detrend_type not in _DETREND_TYPES:
+        msg = (
+            f"detrend_type must be 'constant', 'linear', or None, got "
+            f"{detrend_type!r}. 'constant' (the default) removes each window's "
+            "mean, 'linear' its best-fit line, and None leaves the windows as "
+            "they are."
+        )
+        raise ValueError(msg)
+
+
 def _validate_window_step(
     time_window_duration: float | None,
     time_window_step: float | None,
@@ -1746,6 +1762,7 @@ class Multitaper(_WindowedFourierTransform):
         _reject_complex_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
+        _validate_detrend_type(detrend_type)
         self.fft_workers = fft_workers
         if taper_weighting not in {"uniform", "eigen", "adaptive"}:
             msg = (
@@ -2337,6 +2354,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             ):
                 raise ValueError(mismatch_message)
         _validate_fft_workers(fft_workers)
+        _validate_detrend_type(detrend_type)
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers
@@ -3871,7 +3889,7 @@ def detrend(
     >>> bool(np.abs(signal.detrend(x) - noise).max() < 0.2)
     True
     """
-    if type not in ["linear", "l", "constant", "c"]:
+    if type not in _DETREND_TYPES:
         msg = (
             f"Invalid trend type '{type}' is not supported.\n"
             f"The detrend function only supports linear and constant detrending.\n"

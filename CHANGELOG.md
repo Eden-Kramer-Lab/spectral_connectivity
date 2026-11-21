@@ -1328,6 +1328,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   counted every bin as significant and 0 none, without a sign; development
   builds raised from deep in the statistics module about an `alpha` the
   caller never passed.
+- `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and
+  `multitaper_connectivity` reject an unknown `detrend_type` (e.g.
+  `"quadratic"`) when constructed, with a `ValueError` naming `detrend_type`
+  and listing `'constant'`, `'linear'`, and `None`. It was accepted and failed
+  at the first `fft()` with `detrend`'s message about its `type` argument
+  (`Example: detrend(data, type='linear')`). Code that catches this error
+  should wrap the constructor.
 
 ### Performance
 
