@@ -124,8 +124,9 @@ def simulate_MVAR(
     -----
     UserWarning
         If the coefficients are not stable: the spectral radius of their
-        companion matrix is at least 1, so the process has no stationary state
-        and the simulated series grows without bound.
+        companion matrix is above 1, or within a relative 1e-12 of it (a unit
+        root), so the process has no stationary state and the simulated
+        series grows without bound or, for a unit root, wanders.
 
     Examples
     --------
