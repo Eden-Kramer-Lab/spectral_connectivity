@@ -64,6 +64,10 @@ def test_every_deprecated_spelling_warns_once_at_its_own_line():
             lambda: power_confidence_intervals(n_tapers=25, power=2.0),
             ["power_confidence_intervals(n_tapers=...)"],
         ),
+        (
+            lambda: power_confidence_intervals(25, 2.0, ci=0.9),
+            ["power_confidence_intervals(ci=...)"],
+        ),
     ]
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")

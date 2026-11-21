@@ -1182,9 +1182,10 @@ def coherence_rate_adjustment(
 def power_confidence_intervals(
     n_observations: int | None = None,
     power: NDArray[np.floating] | float = 1,
-    ci: float = 0.95,
+    confidence_level: float | None = None,
     *,
     n_tapers: int | None = None,
+    ci: float | None = None,
     real_valued: bool | NDArray[np.bool_] = False,
 ) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
@@ -1193,9 +1194,12 @@ def power_confidence_intervals(
     spectral density estimates from multitaper analysis.
 
     .. versionchanged:: 3.0
-       The count is named ``n_observations``; it keeps its position, so
-       positional calls are unchanged. ``n_tapers=`` still works through 3.x
-       with a ``DeprecationWarning`` and is removed in 4.0.
+       The count is named ``n_observations`` and the level
+       ``confidence_level``, as in
+       :meth:`~spectral_connectivity.Connectivity.jackknife`; both keep their
+       positions, so positional calls are unchanged. ``n_tapers=`` and
+       ``ci=`` still work through 3.x with a ``DeprecationWarning`` and are
+       removed in 4.0.
 
     Parameters
     ----------
@@ -1209,12 +1213,15 @@ def power_confidence_intervals(
         95% for 5 tapers x 5 trials).
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
-    ci : float, default=0.95
-        Confidence level: the probability mass inside the two-sided interval
-        (0.95 for a 95% interval), in the range [0.5, 1.0).
+    confidence_level : float, default=0.95
+        The probability mass inside the two-sided interval (0.95 for a 95%
+        interval), in the range [0.5, 1.0).
     n_tapers : int, optional
         Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
         Giving both raises ``ValueError``.
+    ci : float, optional
+        Deprecated name of ``confidence_level``, by keyword only; removed in
+        4.0. Giving both raises ``ValueError``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         array broadcast against ``power``; see
@@ -1236,11 +1243,15 @@ def power_confidence_intervals(
     --------
     >>> import numpy as np
     >>> # Single power estimate from 5 observations (5 tapers x 1 trial)
-    >>> lower, upper = power_confidence_intervals(n_observations=5, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(
+    ...     n_observations=5, power=1.0, confidence_level=0.95
+    ... )
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.488, 3.080]
     >>> # Averaging 5 tapers x 5 trials gives 25 observations, a much tighter interval
-    >>> lower, upper = power_confidence_intervals(n_observations=25, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(
+    ...     n_observations=25, power=1.0, confidence_level=0.95
+    ... )
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.700, 1.545]
     >>> # Multiple power estimates
@@ -1269,17 +1280,27 @@ def power_confidence_intervals(
     if n_observations is None:
         msg = "power_confidence_intervals() missing required argument: 'n_observations'"
         raise TypeError(msg)
+    if ci is not None:
+        if confidence_level is not None:
+            msg = (
+                "power_confidence_intervals was given both confidence_level and its "
+                "deprecated name ci; pass only confidence_level."
+            )
+            raise ValueError(msg)
+        confidence_level = ci
+    if confidence_level is None:
+        confidence_level = 0.95
     counts = _validated_n_observations(
         n_observations,
         1,
         "It sets the chi-squared degrees of freedom, 2 * n_observations, which "
         "must be positive.",
     )
-    if not 0.5 <= ci < 1.0:
+    if not 0.5 <= confidence_level < 1.0:
         msg = (
-            f"Confidence level `ci` must be in the range [0.5, 1.0), got {ci}. "
-            "`ci` is the total probability mass inside the interval (e.g. 0.95 "
-            "for a 95% confidence interval)."
+            f"confidence_level must be in [0.5, 1.0), got {confidence_level}. It is "
+            "the total probability mass inside the interval (e.g. 0.95 for a 95% "
+            "confidence interval)."
         )
         raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds
@@ -1300,14 +1321,21 @@ def power_confidence_intervals(
             "gives the same interval; the count is every averaged observation, "
             "tapers x trials",
         )
-    # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
-    # evenly between the two tails, so the chi-squared quantiles are taken at
-    # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
-    # previous behavior) produces an interval with coverage 2 * ci - 1 (a
-    # requested 95% interval only covered ~90%).
+    if ci is not None:
+        warn_deprecated(
+            "power_confidence_intervals(ci=...)",
+            "power_confidence_intervals(confidence_level=...)",
+            "gives the same interval, under the name jackknife uses",
+        )
+    # A two-sided (1 - alpha) interval splits the tail mass
+    # alpha = 1 - confidence_level evenly between the two tails, so the
+    # chi-squared quantiles are taken at alpha / 2 and 1 - alpha / 2. Using the
+    # full alpha on each tail (the previous behavior) produces an interval with
+    # coverage 2 * confidence_level - 1 (a requested 95% interval only covered
+    # ~90%).
     real_valued = _validated_real_valued(real_valued, power_values.shape, "power")
     degrees_of_freedom = 2 * _chi_squared_shape(counts, real_valued)
-    alpha = 1 - ci
+    alpha = 1 - confidence_level
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
     )
