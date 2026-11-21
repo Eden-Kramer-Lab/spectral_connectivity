@@ -551,14 +551,25 @@ def _factorization_explained_by_nonfinite_input(
     @wraps(directed_measure)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         connectivity = cast("Connectivity", args[0])
-        if connectivity._coefficients_are_finite:
-            return directed_measure(*args, **kwargs)
-        with warnings.catch_warnings():
-            for message in _FACTORIZATION_FAILURE_WARNINGS:
-                warnings.filterwarnings("ignore", message=message, category=UserWarning)
+        with _user_warnings_ignored(
+            _FACTORIZATION_FAILURE_WARNINGS, not connectivity._coefficients_are_finite
+        ):
             return directed_measure(*args, **kwargs)
 
     return wrapper
+
+
+@contextlib.contextmanager
+def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[None]:
+    """Ignore the ``UserWarning``\\ s whose messages match ``messages`` (regular
+    expressions) inside the block, if ``ignore``; otherwise change nothing."""
+    if not ignore:
+        yield
+        return
+    with warnings.catch_warnings():
+        for message in messages:
+            warnings.filterwarnings("ignore", message=message, category=UserWarning)
+        yield
 
 
 _ABSENT = object()
@@ -1493,14 +1504,10 @@ class Connectivity:
         # series records it, and the coefficients' warning would repeat it in
         # other words. Coefficients from any other transform, or that are not
         # finite although the time series was, still warn.
-        if _optional_transform_attribute(transform, "_time_series_is_finite", True):
-            return cls(**init_kwargs)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=re.escape(_NONFINITE_COEFFICIENTS_WARNING),
-                category=UserWarning,
-            )
+        with _user_warnings_ignored(
+            [re.escape(_NONFINITE_COEFFICIENTS_WARNING)],
+            not _optional_transform_attribute(transform, "_time_series_is_finite", True),
+        ):
             return cls(**init_kwargs)
 
     @contextlib.contextmanager

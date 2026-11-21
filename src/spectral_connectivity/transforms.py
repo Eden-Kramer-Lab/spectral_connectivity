@@ -919,19 +919,16 @@ def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> Valu
     """The error for a recording too short for its window when it has more
     signals than time samples, so is most likely transposed.
 
-    It says so instead of advising a longer window (the window error is the
-    ``__cause__``). The counts are kept as the ``_transposed_layout``
-    attribute, from which a caller accepting other layouts (``expected``)
-    rebuilds the message.
+    It says so instead of advising a longer window; raised from the window
+    error, a :class:`_RecordingTooShortError`, by which a caller accepting
+    other layouts (``expected``) recognizes it and rebuilds the message.
     """
-    error = ValueError(
+    return ValueError(
         f"Your array has {n_time} time sample{'' if n_time == 1 else 's'} and "
         f"{n_signals} signals; expected {expected}. It looks transposed: put "
         "time on the first axis, e.g. x.T. Read as given, its recording is too "
         "short to analyze."
     )
-    error._transposed_layout = (n_time, n_signals)  # type: ignore[attr-defined]
-    return error
 
 
 @contextlib.contextmanager
@@ -1074,7 +1071,8 @@ class _WindowedFourierTransform:
         def fft_workers(self) -> int | None: ...
 
     _time_series: BackendArray
-    _time_series_is_finite: bool
+    # A subclass from outside the package may not record it; then assume finite.
+    _time_series_is_finite: bool = True
     _start_time: BackendArray
     _time_window_duration: float | None
     _time_window_step: float | None
@@ -1510,13 +1508,12 @@ Frequency Analysis
             step_size=self.n_time_samples_per_step,
             axis=0,
         )
-        # NaN or Inf input was reported at construction (a subclass outside the
-        # package may not record whether it was); detrending and tapering
-        # it (Inf times a taper's zero end) would add NumPy "invalid value"
+        # NaN or Inf input was reported at construction; detrending and
+        # tapering it (Inf times a taper's zero end) would add NumPy "invalid value"
         # RuntimeWarnings about the same values.
         with (
             contextlib.nullcontext()
-            if getattr(self, "_time_series_is_finite", True)
+            if self._time_series_is_finite
             else np.errstate(invalid="ignore")
         ):
             if self.detrend_type is not None:

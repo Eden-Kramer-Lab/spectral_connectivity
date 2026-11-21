@@ -770,18 +770,18 @@ def _requested_methods(
         requested = [method]
     else:
         # The annotation is the contract; these checks are for user input.
-        requested = list(method) if isinstance(method, Iterable) else [method]  # type: ignore[redundant-expr]
+        accepted = "a measure name (str), a list of names, or None (the default measures)"
+        if not isinstance(method, Iterable):
+            received = f"{type(method).__name__} {method!r}"  # type: ignore[unreachable]
+            raise TypeError(_method_type_message(accepted, received))
+        requested = list(method)
         not_names = [name for name in requested if not isinstance(name, str)]  # type: ignore[redundant-expr]
         if not_names:
-            received = f"{type(not_names[0]).__name__} {not_names[0]!r}"
-            if isinstance(method, Iterable):
-                received = f"a {type(method).__name__} holding {received}"
-            raise TypeError(
-                _method_type_message(
-                    "a measure name (str), a list of names, or None (the default measures)",
-                    received,
-                )
+            received = (
+                f"a {type(method).__name__} holding "
+                f"{type(not_names[0]).__name__} {not_names[0]!r}"
             )
+            raise TypeError(_method_type_message(accepted, received))
     if not requested:
         msg = "method must name at least one connectivity measure; got an empty list."
         raise ValueError(msg)

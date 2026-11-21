@@ -58,7 +58,11 @@ from spectral_connectivity.connectivity import (
     DirectedOrientationWarning,
     _select_measure_frequencies,
 )
-from spectral_connectivity.transforms import Multitaper, _transposed_layout_error
+from spectral_connectivity.transforms import (
+    Multitaper,
+    _RecordingTooShortError,
+    _transposed_layout_error,
+)
 from spectral_connectivity.utils import (
     SAMPLING_FREQUENCY_ALIASES,
     _validated_flag,
@@ -903,7 +907,7 @@ def _require_two_signals(methods: Sequence[str], n_signals: int) -> None:
     verbs = (
         "relates pairs of signals and needs"
         if len(pairwise) == 1
-        else ("relate pairs of signals and need")
+        else "relate pairs of signals and need"
     )
     msg = (
         f"The time series has {n_signals} signal, but {named} {verbs} at least "
@@ -1547,11 +1551,12 @@ def multitaper_connectivity(
             **transform_settings,
         )
     except ValueError as error:
-        layout = getattr(error, "_transposed_layout", None)
-        if layout is None:
+        # Multitaper's layout error is the one caused by a recording too short
+        # for its window; it names only its own 3-D layout, and this function
+        # takes 2-D too.
+        if not isinstance(error.__cause__, _RecordingTooShortError):
             raise
-        n_time, n_signals = layout
-        # Multitaper names only its own 3-D layout; this function takes 2-D too.
+        n_time, _, n_signals = time_series_data.shape
         raise _transposed_layout_error(
             n_time,
             n_signals,

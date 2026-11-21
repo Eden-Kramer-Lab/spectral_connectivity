@@ -663,9 +663,7 @@ def coherence_fisher_z_transform(
     # valid for n_obs2.
     why = "The coherence bias is undefined below 2 observations."
     counts1 = _validated_n_observations(n_obs1, 2, why, name="n_obs1")
-    counts2 = _validated_n_observations(
-        n_obs2, 2, why, name="n_obs2", zero_means="for a one-sample test"
-    )
+    counts2 = _validated_n_observations(n_obs2, 2, why, name="n_obs2", zero_is_one_sample=True)
     # Clip saturated magnitudes below 1 so arctanh stays finite. np.minimum
     # accepts Python and 0-d scalars (whose np.abs is a NumPy scalar that does
     # not support item assignment) and preserves the input's shape.
@@ -885,7 +883,7 @@ def _validated_n_observations(
     why_below_minimum: str,
     name: str = "n_observations",
     *,
-    zero_means: str | None = None,
+    zero_is_one_sample: bool = False,
 ) -> NDArray[Any]:
     """Observation counts, a scalar or one per estimate, as a validated array.
 
@@ -893,8 +891,8 @@ def _validated_n_observations(
     string, or None is not a count), and ``ValueError`` unless every count is
     a finite whole number of at least ``minimum``. ``why_below_minimum`` is
     added to the message when a finite whole count lies below ``minimum``.
-    Given ``zero_means`` (what a count of 0 asks for, e.g. "for a one-sample
-    test"), a count of 0 is valid too.
+    With ``zero_is_one_sample``, a count of 0 (no second sample, for a
+    one-sample test) is valid too.
     """
     how = "Pass the number of averaged observations (trials x tapers), Connectivity.n_observations."
     counts = np.asarray(n_observations)
@@ -906,14 +904,14 @@ def _validated_n_observations(
         raise TypeError(msg)
     whole = np.isfinite(counts) & (counts == np.round(counts))
     too_few = counts < minimum
-    if zero_means is not None:
+    if zero_is_one_sample:
         too_few &= counts != 0
     invalid = ~whole | too_few
     if np.any(invalid):
         offending = ", ".join(repr(value) for value in counts[invalid].ravel().tolist()[:5])
         below_minimum = np.any(whole & too_few)
-        accepted = (
-            f">= {minimum}" if zero_means is None else f">= {minimum}, or 0 {zero_means}"
+        accepted = f">= {minimum}" + (
+            ", or 0 for a one-sample test" if zero_is_one_sample else ""
         )
         msg = (
             f"{name} must be a finite integer {accepted}, got {offending}. "
@@ -1506,9 +1504,7 @@ def power_fisher_z_transform(
     # names n_obs1 or n_obs2; 0 (no second sample) is valid for n_obs2.
     why = "The power bias and variance (digamma and trigamma) have poles at 0."
     counts1 = _validated_n_observations(n_obs1, 1, why, name="n_obs1")
-    counts2 = _validated_n_observations(
-        n_obs2, 1, why, name="n_obs2", zero_means="for a one-sample test"
-    )
+    counts2 = _validated_n_observations(n_obs2, 1, why, name="n_obs2", zero_is_one_sample=True)
     # The test operates on log(power); non-finite or non-positive inputs would
     # produce silent -inf/nan z-scores. Fail loudly instead.
     spectrum1_values = np.asarray(spectrum1, dtype=float)
