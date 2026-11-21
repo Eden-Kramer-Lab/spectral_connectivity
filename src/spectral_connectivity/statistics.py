@@ -811,11 +811,17 @@ def coherence_rate_adjustment(
     firing_rate_condition1 : float
         Average firing rate in first condition (spikes/sec).
     firing_rate_condition2 : float
-        Average firing rate in second condition (spikes/sec).
+        Average firing rate in second condition (spikes/sec), including any
+        spikes counted in ``homogeneous_poisson_noise``.
     spike_power_spectrum : NDArray[floating], shape (n_frequencies,)
         Power spectrum of spike train in condition 1.
     homogeneous_poisson_noise : float, default=0
-        Homogeneous Poisson noise parameter (beta in reference).
+        Rate (spikes/sec) of independent homogeneous Poisson spikes added in
+        the second condition (beta in the reference). The second condition's
+        intensity is the first's scaled by alpha, plus this rate, so alpha is
+        ``(firing_rate_condition2 - homogeneous_poisson_noise) /
+        firing_rate_condition1``. Must be at least 0 and below
+        ``firing_rate_condition2``.
     dt : float, default=1
         Time step size for discretization.
 
@@ -859,11 +865,24 @@ def coherence_rate_adjustment(
             f"{firing_rate_condition2}."
         )
         raise ValueError(msg)
-    # alpha in [1]
-    firing_rate_ratio = firing_rate_condition2 / firing_rate_condition1
+    if (
+        not np.isfinite(homogeneous_poisson_noise)
+        or not 0 <= homogeneous_poisson_noise < firing_rate_condition2
+    ):
+        msg = (
+            "homogeneous_poisson_noise must be a finite rate of at least 0 and "
+            f"below firing_rate_condition2 ({firing_rate_condition2}), which "
+            f"includes the added spikes; got {homogeneous_poisson_noise}."
+        )
+        raise ValueError(msg)
+    # alpha in [1]: the second condition's intensity is alpha * lambda(t) + beta,
+    # so its mean rate is alpha * firing_rate_condition1 + beta.
+    intensity_scale = (
+        firing_rate_condition2 - homogeneous_poisson_noise
+    ) / firing_rate_condition1
     adjusted_firing_rate = (
-        (1 / firing_rate_ratio - 1) * firing_rate_condition1
-        + homogeneous_poisson_noise / firing_rate_ratio**2
+        (1 / intensity_scale - 1) * firing_rate_condition1
+        + homogeneous_poisson_noise / intensity_scale**2
     ) * dt**2
     # Spike power spectral density is non-negative by definition; a non-positive
     # value is invalid input (not just undefined), so it is masked below.

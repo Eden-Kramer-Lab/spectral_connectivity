@@ -507,8 +507,8 @@ def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_pro
     rate ratio, dropping ``dt**2``, or dropping the added-spike term each
     changes the ratio.
 
-    The second rate passed is that of the kept spikes, ``alpha * rate``, not the
-    second condition's total rate ``alpha * rate + beta``.
+    The second rate passed is the second condition's mean rate, kept and
+    added spikes together: ``alpha * rate + beta``.
     """
     frequencies = np.linspace(1.0, 100.0, 50)
     rate, alpha = 15.0, 0.4
@@ -533,7 +533,7 @@ def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_pro
 
     factor = coherence_rate_adjustment(
         rate,
-        alpha * rate,
+        alpha * rate + added_poisson_rate,
         spike_spectrum,
         homogeneous_poisson_noise=added_poisson_rate,
         dt=dt,
@@ -701,6 +701,16 @@ def test_get_normal_distribution_p_values_survival_precision():
     p = get_normal_distribution_p_values(8.3)
     assert p > 0
     assert np.allclose(p, 5.2055697448902465e-17, rtol=1e-6)
+
+
+@pytest.mark.parametrize("noise", [10.0, 12.0, -1.0, np.nan, np.inf])
+def test_coherence_rate_adjustment_rejects_noise_outside_the_second_rate(noise):
+    """The added Poisson spikes are part of the second condition's rate, so
+    their rate lies between 0 and that rate, which leaves spikes to keep."""
+    with pytest.raises(ValueError, match="homogeneous_poisson_noise must be"):
+        coherence_rate_adjustment(
+            15.0, 10.0, np.array([1.0, 2.0]), homogeneous_poisson_noise=noise
+        )
 
 
 def test_coherence_rate_adjustment_rejects_zero_second_rate():

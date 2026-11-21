@@ -57,6 +57,7 @@ their rows).
 | `direct_directed_transfer_function` returned `\|ffDTF\| * sqrt(PDC)` | Returns the squared dDTF of Korzeniewska et al. (2003), `ffDTF^2 * partial_coherence^2`, from the model's inverse spectral matrix; take the square root for the amplitude form `\|ffDTF\| * \|partial coherence\|` — recompute dDTF results |
 | `directed_coherence` returned `\|H_ij\|^2 / sqrt(sum_k \|H_ik\|^2)` for target `i` and source `j`: its noise variance, placed on the target axis, cancelled, so the result ignored the noise covariance, was not normalized, and exceeded 1 | Uses the correct source-axis noise variance and is bounded in `[0, 1]` — recompute directed-coherence results |
 | `coherence_fisher_z_transform(coherency, n_obs1)` without a second sample returned `NaN` for three or more observations and `±inf` for two, and raised `ZeroDivisionError` for one, because its `n_obs2=0` default was used as a sample size. `group_delay` and `delay` found their significant frequencies with it, so with three or more observations they found none: `group_delay` returned `NaN` delays and slopes, and `delay` returned only the constants `2πk` between signals | The one-sample z-score has no second-sample terms, and `group_delay` and `delay` use the exact zero-coherence null distribution, so both return estimates at the frequencies with significant coherence. 2.x output of these two methods with three or more observations is not usable: recompute (a dead-channel pair also no longer penalizes valid pairs in the BH/Bonferroni family). With exactly two observations, where 2.x passed every frequency, 3.0 finds none significant and returns `NaN`. `significance_threshold` must lie strictly between 0 and 1; 2.x accepted 1.0 |
+| `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero took `firing_rate_condition2` as the rate of the spikes kept from the first condition, although it was documented as the second condition's rate. Given the documented rate, the factor came out 30-62% too large in the case run | `firing_rate_condition2` is the second condition's measured rate, added spikes included. A call that passed the rate without the added spikes must add them back; one that passed the measured rate now gets the right factor. Calls with the default `homogeneous_poisson_noise=0` are unchanged |
 | `power_confidence_intervals` covered ~90% at a nominal 95%; `power_bias` / `power_variance` were ~2× off | Corrected formulas — recompute power confidence intervals and log-power z-tests |
 | Spectral Granger measures returned `NaN` wherever the estimate was `<= 0` | Exact zeros and roundoff-negative values are returned as `0.0` (no influence); only materially negative, degenerate bins are `NaN`. Replace `np.isnan(...)` checks for "no influence" with `== 0`, and expect `nanmean` over a direction to include those zeros |
 | Multi-component CaCoh from mne-connectivity 0.9 (`method="cacoh"`, `n_components > 1`) | `canonical_coherency` component 1 matches mne-connectivity's `cacoh` wherever both optimizers reach the global phase optimum; components 2 and above are deflated in whitened space (uncorrelated within each group, invariant to invertible real within-group mixing) and differ from mne-connectivity's channel-space deflation — do not compare them directly |
@@ -722,6 +723,17 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero takes
+  the thinning fraction from the second condition's rate less the added
+  spikes, `(firing_rate_condition2 - homogeneous_poisson_noise) /
+  firing_rate_condition1`. In the model of Aoi et al. (2015) the second
+  condition's intensity is `alpha * lambda(t) + beta`, with mean rate
+  `alpha * mu + beta`. The function used `firing_rate_condition2 /
+  firing_rate_condition1`, which is `alpha` only when no spikes are added, so
+  for the documented argument the factor was too large: 0.90, 0.81 and 0.74
+  where the thinned process gives 0.69, 0.54 and 0.46 in the case run. A
+  noise rate that is negative, not finite, or not below the second rate raises
+  a `ValueError`.
 - *Unreleased:* `Connectivity`, `Connectivity.from_transform`, and
   `from_multitaper` reject a `dtype` that is not complex with a `TypeError`
   before any FFT. Once `blocks` was removed, `dtype=None` (for instance 2.x's
