@@ -492,6 +492,32 @@ def test_wrapper_names_its_own_layouts_for_another_dimension_count(shape, expect
         multitaper_connectivity(np.ones(shape), sampling_frequency=500)
 
 
+@pytest.mark.parametrize(
+    ("n_tapers", "received"),
+    [("5", "str '5'"), ([5], "list [5]"), ((5,), "tuple (5,)")],
+)
+def test_n_tapers_of_another_type_names_n_tapers(n_tapers, received):
+    """n_tapers that is not a number raises a TypeError naming it and the
+    expected type, not NumPy's ufunc 'isfinite' error."""
+    expected = (
+        f"n_tapers must be an integer (a count of tapers), got {received}. Pass "
+        "e.g. n_tapers=5, or None for the default floor(2 * "
+        "time_halfbandwidth_product) - 1."
+    )
+    with pytest.raises(TypeError, match="^" + re.escape(expected) + "$"):
+        Multitaper(np.ones((100, 1, 2)), 500, n_tapers=n_tapers)
+
+
+def test_boolean_n_tapers_keeps_its_value_error():
+    with pytest.raises(ValueError, match=r"^n_tapers must be an integer, got True"):
+        Multitaper(np.ones((100, 1, 2)), 500, n_tapers=True)
+
+
+def test_n_tapers_as_a_numpy_scalar_or_0d_array_is_accepted():
+    for n_tapers in (np.int64(3), np.array(3), 3.0):
+        assert Multitaper(np.ones((100, 1, 2)), 500, n_tapers=n_tapers).n_tapers == 3
+
+
 _WIDE = np.random.default_rng(5).standard_normal((200, 1, 300))
 
 

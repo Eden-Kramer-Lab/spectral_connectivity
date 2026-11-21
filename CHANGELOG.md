@@ -1490,6 +1490,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   with method='power'." It raised `Multitaper`'s "Expected 3D array" error,
   which points to `prepare_time_series`, a helper for `Multitaper`'s 3-D
   input.
+- `Multitaper` given an `n_tapers` that is not a number (`n_tapers="5"`, or a
+  list) raises a `TypeError` naming `n_tapers` and the integer it takes,
+  where it raised NumPy's `ufunc 'isfinite'` error. A NumPy integer or a 0-d
+  array is still accepted, and `n_tapers=True` keeps its `ValueError`.
 
 ### Performance
 

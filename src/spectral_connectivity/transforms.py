@@ -1945,6 +1945,17 @@ class Multitaper(_WindowedFourierTransform):
         custom_tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         # Reject a fractional (or boolean) n_tapers: a taper count is a whole
         # number, and dpss_windows would otherwise see a float.
+        # Any real scalar (a 0-d array too) goes on to the checks below; a
+        # boolean is a number to NumPy and gets their ValueError.
+        if n_tapers is not None and (
+            np.ndim(n_tapers) != 0 or np.asarray(n_tapers).dtype.kind not in "biuf"
+        ):
+            msg = (
+                f"n_tapers must be an integer (a count of tapers), got "
+                f"{type(n_tapers).__name__} {n_tapers!r}. Pass e.g. n_tapers=5, or "
+                "None for the default floor(2 * time_halfbandwidth_product) - 1."
+            )
+            raise TypeError(msg)
         if n_tapers is not None and (
             isinstance(n_tapers, (bool, np.bool_))
             or not np.isfinite(n_tapers)
