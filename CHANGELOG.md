@@ -809,7 +809,14 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   observations the complex null had rejected 10% of independent pairs at a
   nominal 5%, and the power interval covered 83% at a nominal 95%.
   `group_delay` and `delay` find the bins whose coefficients are all real and
-  test those against the real null.
+  test those against the real null. `power_bias`, `power_variance`, and
+  `power_fisher_z_transform` take the same keyword (the log power's variance
+  about doubles there; with the complex terms a one-sample z from five
+  observations had variance 2.2 instead of 1). `coherence_fisher_z_transform`
+  and `coherence_bias` assume complex coefficients and document that they are
+  not calibrated at those bins (9-18% rejection of equal coherences at a
+  nominal 5% in simulation), pointing to
+  `coherence_significance_pvalue(..., real_valued=True)`.
 - *Unreleased:* `Multitaper.observations_are_independent` is `False` for
   custom tapers that are not mutually orthogonal, whose eigencoefficients are
   correlated even for white noise, so the measures that count observations

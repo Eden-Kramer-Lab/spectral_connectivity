@@ -459,6 +459,43 @@ def test_coherence_significance_pvalue_is_calibrated_for_real_valued_coefficient
     )
 
 
+def test_log_power_statistics_hold_at_real_valued_bins():
+    """At a real-valued bin the mean of five squared real Gaussians is
+    chi-squared with 5 degrees of freedom over 5, so the log power's bias and
+    variance are digamma and trigamma at 5/2, and the one-sample z of
+    ``power_fisher_z_transform`` against the true power is standard normal.
+    With the complex terms its variance is 2.2 instead of 1."""
+    rng = np.random.default_rng(20261123)
+    n_observations, true_power, n_rep = 5, 2.0, 200_000
+    estimates = true_power * (rng.standard_normal((n_rep, n_observations)) ** 2).mean(axis=1)
+    log_ratio = np.log(estimates / true_power)
+
+    bias = power_bias(n_observations, real_valued=True)
+    variance = power_variance(n_observations, real_valued=True)
+    z = power_fisher_z_transform(estimates, n_observations, true_power, real_valued=True)
+    complex_z = power_fisher_z_transform(estimates, n_observations, true_power)
+
+    mean_limit = 5 * log_ratio.std() / np.sqrt(n_rep)
+    assert abs(log_ratio.mean() - bias) < mean_limit
+    # Variance of a sample variance: 5 SE from the fourth central moment.
+    centered = log_ratio - log_ratio.mean()
+    variance_limit = 5 * np.sqrt((np.mean(centered**4) - log_ratio.var() ** 2) / n_rep)
+    assert abs(log_ratio.var() - variance) < variance_limit
+    assert abs(z.mean()) < 5 / np.sqrt(n_rep)
+    assert abs(z.var() - 1) < variance_limit / variance
+    assert complex_z.var() - 1 > 0.5
+    # A mask gives the real terms where it is set and the complex ones elsewhere.
+    mask = np.array([True, False])
+    np.testing.assert_array_equal(
+        power_bias(n_observations, real_valued=mask),
+        [bias, power_bias(n_observations)],
+    )
+    np.testing.assert_array_equal(
+        power_variance(n_observations, real_valued=mask),
+        [variance, power_variance(n_observations)],
+    )
+
+
 def test_power_confidence_intervals_cover_real_valued_bins():
     """A real coefficient's squared magnitude is chi-squared with one degree
     of freedom, so the mean of five has n, not 2 n, degrees of freedom; the
