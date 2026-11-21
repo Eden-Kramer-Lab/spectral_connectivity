@@ -777,9 +777,11 @@ is removed in 4.0.
   keeps its third position, so positional calls such as
   `power_confidence_intervals(25, power, 0.95)` keep working and do not warn;
   `ci` is accepted by keyword only and gives the same interval as
-  `confidence_level`, which, like it, must lie in `[0.5, 1)`. Giving both
-  names raises `ValueError`, and a call rejected for another reason raises
-  without the warning. The interval is the corrected one (previous entry).
+  `confidence_level`, which, like it, must lie in `[0.5, 1)` (the error
+  names the argument given). Giving both names raises `ValueError`, even
+  with `confidence_level=0.95`, and a call rejected for another reason
+  raises without the warning. The interval is the corrected one (previous
+  entry).
 - `suggest_parameters(desired_freq_resolution=...)`: use
   `frequency_resolution=...`, the name `Multitaper` and
   `estimate_frequency_resolution` use (and the key of the returned

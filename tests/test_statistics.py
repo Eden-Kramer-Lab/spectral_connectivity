@@ -847,12 +847,27 @@ def test_power_confidence_intervals_rejects_both_level_spellings():
         power_confidence_intervals(25, 1.0, 0.9, ci=0.9)
     with pytest.raises(ValueError, match=r"confidence_level.*ci"):
         power_confidence_intervals(25, confidence_level=0.9, ci=0.9)
+    # A level equal to the default is still a level the caller gave.
+    with pytest.raises(ValueError, match=r"confidence_level.*ci"):
+        power_confidence_intervals(25, confidence_level=0.95, ci=0.9)
 
 
-def test_a_rejected_ci_call_does_not_warn():
+def test_power_confidence_intervals_signature_shows_the_default_level():
+    """``help()`` shows the default the docstring states, 0.95, not ``None``."""
+    import inspect
+
+    default = (
+        inspect.signature(power_confidence_intervals).parameters["confidence_level"].default
+    )
+    assert repr(default) == "0.95"
+    lower, upper = power_confidence_intervals(25, 2.0)
+    assert (lower, upper) == power_confidence_intervals(25, 2.0, confidence_level=0.95)
+
+
+def test_a_rejected_ci_call_does_not_warn_and_names_ci():
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
-        with pytest.raises(ValueError, match="confidence_level must be"):
+        with pytest.raises(ValueError, match=r"^ci must be in \[0\.5, 1\.0\), got 1\.5"):
             power_confidence_intervals(5, ci=1.5)
 
 

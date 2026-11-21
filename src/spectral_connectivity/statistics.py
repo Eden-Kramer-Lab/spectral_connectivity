@@ -1236,10 +1236,21 @@ def coherence_rate_adjustment(
     return np.where(undefined, np.nan, adjustment)
 
 
+class _DefaultConfidenceLevel(float):
+    """0.95, the default level: shown as ``0.95`` in the signature, but a
+    different object from any level a caller passes (0.95 included), so
+    giving it together with the deprecated ``ci`` can be detected."""
+
+    __slots__ = ()
+
+
+_DEFAULT_CONFIDENCE_LEVEL = _DefaultConfidenceLevel(0.95)
+
+
 def power_confidence_intervals(
     n_observations: int | None = None,
     power: NDArray[np.floating] | float = 1,
-    confidence_level: float | None = None,
+    confidence_level: float = _DEFAULT_CONFIDENCE_LEVEL,
     *,
     n_tapers: int | None = None,
     ci: float | None = None,
@@ -1363,16 +1374,15 @@ def power_confidence_intervals(
     if n_observations is None:
         msg = "power_confidence_intervals() missing required argument: 'n_observations'"
         raise TypeError(msg)
+    level_name = "confidence_level"
     if ci is not None:
-        if confidence_level is not None:
+        if confidence_level is not _DEFAULT_CONFIDENCE_LEVEL:
             msg = (
                 "power_confidence_intervals was given both confidence_level and its "
                 "deprecated name ci; pass only confidence_level."
             )
             raise ValueError(msg)
-        confidence_level = ci
-    if confidence_level is None:
-        confidence_level = 0.95
+        confidence_level, level_name = ci, "ci"
     counts = _validated_n_observations(
         n_observations,
         1,
@@ -1381,7 +1391,7 @@ def power_confidence_intervals(
     )
     if not 0.5 <= confidence_level < 1.0:
         msg = (
-            f"confidence_level must be in [0.5, 1.0), got {confidence_level}. It is "
+            f"{level_name} must be in [0.5, 1.0), got {confidence_level}. It is "
             "the total probability mass inside the interval (e.g. 0.95 for a 95% "
             "confidence interval)."
         )
