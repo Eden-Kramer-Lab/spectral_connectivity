@@ -1948,7 +1948,7 @@ class Connectivity:
         )
 
     @cached_property
-    def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+    def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.complexfloating]]:
         return _var_model_from_factor(self._minimum_phase_factor)
 
     @property
@@ -1956,7 +1956,7 @@ class Connectivity:
         return self._var_model[0]
 
     @property
-    def _noise_covariance(self) -> NDArray[np.floating]:
+    def _noise_covariance(self) -> NDArray[np.complexfloating]:
         return self._var_model[1]
 
     @cached_property
@@ -6046,7 +6046,7 @@ def _total_inflow(
 
 
 def _get_noise_variance(
-    noise_covariance: NDArray[np.floating],
+    noise_covariance: NDArray[np.complexfloating],
     axis: int = -2,
 ) -> NDArray[np.floating]:
     """Extract noise variance and broadcast it along the requested signal axis.
@@ -6061,7 +6061,7 @@ def _get_noise_variance(
     Parameters
     ----------
     noise_covariance : array, shape (..., n_signals, n_signals)
-        Noise covariance matrix.
+        Hermitian noise covariance matrix; its diagonal is real.
     axis : int, default=-2
         Signal axis the noise variance should vary along, either -2 (target) or
         -1 (source). A leading ``newaxis`` is always inserted for the frequency
@@ -6074,7 +6074,7 @@ def _get_noise_variance(
         transfer function along `axis`.
 
     """
-    noise_variance = xp.diagonal(noise_covariance, axis1=-1, axis2=-2)
+    noise_variance = xp.real(xp.diagonal(noise_covariance, axis1=-1, axis2=-2))
     if axis == -2:
         return noise_variance[..., xp.newaxis, :, xp.newaxis]
     if axis == -1:
@@ -6085,7 +6085,7 @@ def _get_noise_variance(
 
 def _max_psd_discrepancy(
     transfer_function: NDArray[np.complexfloating],
-    noise_covariance: NDArray[np.floating],
+    noise_covariance: NDArray[np.complexfloating],
 ) -> float:
     """Return the largest relative gap between the diagonal-noise PSD and the true PSD.
 

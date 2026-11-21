@@ -6,13 +6,47 @@ exactly; these helpers build them and Fourier coefficients that reproduce
 them, so a ``Connectivity`` can be fed an exact spectrum (see
 ``tests/test_directed_measures_oracle.py``). The VAR's state-space form gives
 what needs no spectrum: its autocovariance, the spectral Granger measure
-between sub-processes, and the VAR its time reversal follows.
+between sub-processes, and the VAR its time reversal follows. The spectra and
+the state-space Granger oracle use conjugate transposes throughout, so they
+hold for a complex-valued VAR (complex coefficients and a Hermitian innovation
+covariance) as well as a real one.
 """
 
 import itertools
 
 import numpy as np
-from scipy.linalg import solve_discrete_are, solve_discrete_lyapunov
+from scipy.linalg import solve_discrete_lyapunov
+
+
+def _prediction_error_covariance(A, C, Q, R, S, max_iterations=100_000):
+    """Steady-state state prediction-error covariance ``P`` of a Kalman filter.
+
+    The state ``s(t + 1) = A s(t) + w(t)`` is observed as ``y(t) = C s(t) +
+    v(t)`` with ``Cov(w) = Q``, ``Cov(v) = R`` and ``Cov(w, v) = S``. ``P`` is
+    the stabilizing solution of the discrete algebraic Riccati equation, found
+    by iterating the filter's covariance recursion from zero, which converges
+    for a stable ``A`` (Anderson & Moore 1979, ch. 4). The iteration takes
+    conjugate transposes, so it holds for complex systems, for which SciPy's
+    ``solve_discrete_are`` can fail its QZ step.
+    """
+    P = np.zeros_like(Q)
+    for _ in range(max_iterations):
+        cross = A @ P @ C.conj().T + S
+        gain = cross @ np.linalg.inv(C @ P @ C.conj().T + R)
+        updated = A @ P @ A.conj().T + Q - gain @ cross.conj().T
+        updated = (updated + updated.conj().T) / 2
+        change = np.abs(updated - P).max()
+        # Relative to Q as well as P, which is 0 when C observes the whole state;
+        # the update's rounding floor grows with both.
+        tolerance = 1e-14 * (np.abs(Q).max() + np.abs(updated).max())
+        P = updated
+        if change <= tolerance:
+            return P
+    msg = (
+        f"Riccati iteration did not converge: last change {change:.2e}, "
+        f"tolerance {tolerance:.2e}"
+    )
+    raise RuntimeError(msg)
 
 
 def _analytic_var(coefficients, noise_covariance, n_fft):
@@ -103,7 +137,7 @@ def _analytic_directed_measures(A, H, noise_covariance):
 def _companion_matrix(coefficients):
     """Transition matrix of a VAR's state ``[x(t - 1), ..., x(t - n_lags)]``."""
     n_lags, n_signals, _ = coefficients.shape
-    companion = np.zeros((n_lags * n_signals, n_lags * n_signals))
+    companion = np.zeros((n_lags * n_signals, n_lags * n_signals), dtype=coefficients.dtype)
     companion[:n_signals] = np.concatenate(list(coefficients), axis=1)
     companion[n_signals:, :-n_signals] = np.eye((n_lags - 1) * n_signals)
     return companion
@@ -114,20 +148,30 @@ def _companion_spectral_radius(coefficients):
     return np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients))))
 
 
-def _dense_stable_var(n_signals, n_lags, spectral_radius, seed):
+def _dense_stable_var(n_signals, n_lags, spectral_radius, seed, complex_valued=False):
     """A VAR in which every signal drives every other and the innovations are
     correlated: ``(coefficients, noise_covariance)``.
 
     Coefficients are drawn at random and lag ``k`` is scaled by ``c**k``,
     which scales every eigenvalue of the companion matrix by ``c``, so the
-    companion matrix has exactly the requested spectral radius.
+    companion matrix has exactly the requested spectral radius. With
+    ``complex_valued`` the coefficients and the innovation mixing are complex
+    Gaussian, so the innovation covariance is Hermitian with genuinely
+    imaginary off-diagonal entries and the spectrum is not
+    conjugate-symmetric.
     """
     rng = np.random.default_rng(seed)
-    coefficients = rng.normal(size=(n_lags, n_signals, n_signals))
+
+    def draw(shape):
+        if complex_valued:
+            return (rng.normal(size=shape) + 1j * rng.normal(size=shape)) / np.sqrt(2)
+        return rng.normal(size=shape)
+
+    coefficients = draw((n_lags, n_signals, n_signals))
     scale = spectral_radius / _companion_spectral_radius(coefficients)
     coefficients *= (scale ** np.arange(1, n_lags + 1))[:, np.newaxis, np.newaxis]
-    mixing = rng.normal(size=(n_signals, n_signals))
-    noise_covariance = mixing @ mixing.T / n_signals + np.eye(n_signals)
+    mixing = draw((n_signals, n_signals))
+    noise_covariance = mixing @ mixing.conj().T / n_signals + np.eye(n_signals)
     return coefficients, noise_covariance
 
 
@@ -158,9 +202,9 @@ def _block_granger_from_state_space(coefficients, noise_covariance, n_fft, block
         C_sub = C[members]
         R = noise_covariance[np.ix_(members, members)]
         S = K @ noise_covariance[:, members]
-        P = solve_discrete_are(A.T, C_sub.T, Q, R, s=S)
-        V = C_sub @ P @ C_sub.T + R
-        gain = (A @ P @ C_sub.T + S) @ np.linalg.inv(V)
+        P = _prediction_error_covariance(A, C_sub, Q, R, S)
+        V = C_sub @ P @ C_sub.conj().T + R
+        gain = (A @ P @ C_sub.conj().T + S) @ np.linalg.inv(V)
         H = np.eye(len(members)) + C_sub @ resolvent @ gain  # (frequency, member, member)
         spectrum = H @ V @ H.conj().swapaxes(-1, -2)
         in_first = np.arange(len(members)) < len(blocks[first])

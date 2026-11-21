@@ -33,7 +33,7 @@ from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
 def _estimate_noise_covariance(
     minimum_phase: NDArray[np.complexfloating],
-) -> NDArray[np.floating]:
+) -> NDArray[np.complexfloating]:
     """Estimate noise covariance non-parametrically from minimum phase factor.
 
     Given a matrix square root of the cross spectral matrix (
@@ -48,7 +48,10 @@ def _estimate_noise_covariance(
     Returns
     -------
     noise_covariance : array, shape (n_time_windows, n_signals, n_signals)
-        The noise covariance of a MVAR model.
+        The Hermitian noise covariance ``H_0 H_0^H`` of a MVAR model, where
+        ``H_0`` is the factor's lag-0 coefficient. It is complex: its imaginary
+        part is rounding-level for a real process and genuine for a complex
+        one.
 
     References
     ----------
@@ -58,21 +61,26 @@ def _estimate_noise_covariance(
 
     """
     zero_lag = _zero_lag_coefficient(minimum_phase)
-    noise_covariance: NDArray[np.floating] = xp.matmul(zero_lag, zero_lag.swapaxes(-1, -2))
+    noise_covariance: NDArray[np.complexfloating] = xp.matmul(
+        zero_lag, _conjugate_transpose(zero_lag)
+    )
     return noise_covariance
 
 
 def _zero_lag_coefficient(
     minimum_phase: NDArray[np.complexfloating],
-) -> NDArray[np.floating]:
+) -> NDArray[np.complexfloating]:
     """Lag-0 coefficient of the minimum-phase factor, shape (..., n_signals, n_signals).
 
     The inverse DFT at lag 0 is the mean over frequencies, so no full inverse
     transform is needed; ``minimum_phase`` must therefore hold all
-    ``n_fft_samples`` bins, not a frequency slice. ``.real`` discards an
-    imaginary part that is rounding-level for the factor of a real process.
+    ``n_fft_samples`` bins, not a frequency slice. The coefficient is complex
+    in general: its imaginary part is rounding-level for the factor of a real
+    process (a conjugate-symmetric spectrum) but genuine for a complex one, and
+    discarding it would leave ``H(0) != I`` and a spurious direction (complex
+    white noise with correlated innovations would read as Granger-causal).
     """
-    zero_lag: NDArray[np.floating] = xp.mean(minimum_phase, axis=-3).real
+    zero_lag: NDArray[np.complexfloating] = xp.mean(minimum_phase, axis=-3)
     return zero_lag
 
 
@@ -184,20 +192,20 @@ def _estimate_predictive_power(
 
 
 def _remove_instantaneous_causality(
-    noise_covariance: NDArray[np.floating],
+    noise_covariance: NDArray[np.complexfloating],
 ) -> NDArray[np.floating]:
     """Remove instantaneous causality effects from noise covariance.
 
     Rotates the noise covariance so that the effect of instantaneous
     signals (like those caused by volume conduction) are removed.
 
-    x -> y: var(x) - (cov(x,y) ** 2 / var(y))
-    y -> x: var(y) - (cov(x,y) ** 2 / var(x))
+    x -> y: var(x) - (|cov(x,y)| ** 2 / var(y))
+    y -> x: var(y) - (|cov(x,y)| ** 2 / var(x))
 
     Parameters
     ----------
     noise_covariance : array, shape (..., n_signals, n_signals)
-        Input noise covariance matrix.
+        Input (Hermitian) noise covariance matrix.
 
     Returns
     -------
@@ -205,8 +213,11 @@ def _remove_instantaneous_causality(
         The noise covariance without the instantaneous causality effects.
 
     """
-    variance = xp.diagonal(noise_covariance, axis1=-1, axis2=-2)[..., xp.newaxis]
-    return variance.swapaxes(-1, -2) - noise_covariance**2 / variance
+    variance = xp.real(xp.diagonal(noise_covariance, axis1=-1, axis2=-2))[..., xp.newaxis]
+    rotated: NDArray[np.floating] = (
+        variance.swapaxes(-1, -2) - _squared_magnitude(noise_covariance) / variance
+    )
+    return rotated
 
 
 # Most spectral elements (sub-spectra x FFT bins x signals**2) one GPU Wilson
@@ -467,7 +478,7 @@ def _factorize_spectrum(
 
 def _var_model_from_factor(
     minimum_phase: NDArray[np.complexfloating],
-) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.complexfloating], NDArray[np.complexfloating]]:
     """Transfer function and noise covariance of a two-sided minimum-phase factor.
 
     Parameters
@@ -491,7 +502,7 @@ def _var_model_from_spectrum(
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
-) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+) -> tuple[NDArray[np.complexfloating], NDArray[np.complexfloating]]:
     """Wilson-factorize a cross-spectrum into a transfer function and noise covariance.
 
     Parameters
@@ -517,7 +528,7 @@ def _var_model_from_spectrum(
 
 def _estimate_conditional_spectral_granger_prediction(
     full_transfer: NDArray[np.complexfloating],
-    full_covariance: NDArray[np.floating],
+    full_covariance: NDArray[np.complexfloating],
     reduced_inverse_transfer: NDArray[np.complexfloating],
     reduced_indices: NDArray[np.integer],
     target: int,
@@ -560,21 +571,25 @@ def _estimate_conditional_spectral_granger_prediction(
     (target_reduced,) = np.flatnonzero(reduced_indices == target)
 
     # Geweke normalization: P = I - coupling e_t^T removes the correlation of
-    # every other innovation with the target's, leaving Sigma' = P Sigma P^T
+    # every other innovation with the target's, leaving Sigma' = P Sigma P^H
     # with a zero target row/column off the diagonal and H' = H P^{-1}.
     identity = xp.eye(n_signals, dtype=full_covariance.dtype)
     unit_target = identity[:, target]
-    coupling = (
-        full_covariance[..., :, target] / full_covariance[..., target : target + 1, target]
-    )
+    # A failed factorization leaves the covariance NaN, which the calling
+    # measure reports by pair; NumPy flags a complex NaN quotient as invalid
+    # (a real one is silent), so that flag is not raised here.
+    with np.errstate(invalid="ignore"):
+        coupling = (
+            full_covariance[..., :, target] / full_covariance[..., target : target + 1, target]
+        )
     coupling = coupling - unit_target  # zero at the target itself
     normalizer = identity - coupling[..., :, xp.newaxis] * unit_target
     inverse_normalizer = identity + coupling[..., :, xp.newaxis] * unit_target
     normalized_covariance = xp.matmul(
-        xp.matmul(normalizer, full_covariance), normalizer.swapaxes(-1, -2)
+        xp.matmul(normalizer, full_covariance), _conjugate_transpose(normalizer)
     )
     normalized_covariance = (
-        normalized_covariance + normalized_covariance.swapaxes(-1, -2)
+        normalized_covariance + _conjugate_transpose(normalized_covariance)
     ) / 2.0
     normalized_transfer = xp.matmul(full_transfer, inverse_normalizer[..., xp.newaxis, :, :])
 
@@ -591,9 +606,8 @@ def _estimate_conditional_spectral_granger_prediction(
             _conjugate_transpose(q_target),
         )
     )[..., 0, 0]
-    intrinsic = (
-        _squared_magnitude(q_target[..., 0, target])
-        * normalized_covariance[..., target : target + 1, target]
+    intrinsic = _squared_magnitude(q_target[..., 0, target]) * xp.real(
+        normalized_covariance[..., target : target + 1, target]
     )
 
     positive = (total > 0) & (intrinsic > 0)
@@ -611,7 +625,7 @@ def _estimate_conditional_spectral_granger_prediction(
 def _estimate_all_conditional_spectral_granger(
     spectrum: NDArray[np.complexfloating],
     full_transfer: NDArray[np.complexfloating],
-    full_covariance: NDArray[np.floating],
+    full_covariance: NDArray[np.complexfloating],
     *,
     minimum_phase_tolerance: float,
     minimum_phase_max_iterations: int,
@@ -795,7 +809,7 @@ def _estimate_block_spectral_granger_prediction(
 def _block_spectral_granger_from_model(
     subsystem: NDArray[np.complexfloating],
     transfer: NDArray[np.complexfloating],
-    covariance: NDArray[np.floating],
+    covariance: NDArray[np.complexfloating],
     n_target: int,
 ) -> NDArray[np.floating]:
     """Block spectral Granger from the trailing (source) to the leading (target) block.

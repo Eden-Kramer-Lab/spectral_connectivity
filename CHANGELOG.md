@@ -772,6 +772,19 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   as did a real or integer dtype, and an integer count failed only when a
   measure first used it (`power` did not). 2.x read `dtype=None` as its
   complex128 default.
+- Every directed measure (the spectral Granger family,
+  `directed_transfer_function`, `directed_coherence`,
+  `partial_directed_coherence`, `generalized_partial_directed_coherence`,
+  `direct_directed_transfer_function`) keeps the imaginary part of the
+  minimum-phase factor's lag-0 coefficient, and so of the innovation
+  covariance, which is Hermitian. 2.x and earlier 3.0 builds discarded it,
+  which is harmless for a real process (it is rounding-level there; results
+  for real signals change by at most 1e-15) but not for a complex one, whose
+  spectrum is not conjugate-symmetric: complex white noise with innovations
+  correlated by `0.6j`, which has no lagged dependence, gave pairwise Granger
+  0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
+  Granger of complex processes now match an independent state-space
+  calculation.
 - The Wilson factorization behind every directed measure (the spectral Granger
   family, `directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,
