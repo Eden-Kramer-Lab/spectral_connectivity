@@ -2051,16 +2051,30 @@ class Multitaper(_WindowedFourierTransform):
         independent samples: the jackknife, the debiased measures (pairwise
         phase consistency, debiased squared PLI/WPLI) and the zero-coherence
         significance test (``Beta(1, n_observations - 1)`` null) all assume it
-        does. Always ``True`` for this transform. The flag describes the
-        observations within one window; correlation between overlapping
-        windows, which matters only for expectations that also average over
-        time, is reported by :attr:`time_bins_are_independent`.
+        does. ``True`` for DPSS tapers and for custom tapers that are mutually
+        orthogonal; ``False`` for custom tapers that are not, whose
+        eigencoefficients are correlated even for white noise (copies of one
+        taper give identical ones). The flag describes the observations within
+        one window; correlation between overlapping windows, which matters
+        only for expectations that also average over time, is reported by
+        :attr:`time_bins_are_independent`.
 
         Returns
         -------
         bool
         """
-        return True
+        if self._tapers is None or self._taper_eigenvalues is not None:
+            return True  # DPSS tapers, generated here
+        # For white noise the eigencoefficients of tapers k and l correlate by
+        # <w_k, w_l> / (|w_k| |w_l|). Orthogonal tapers computed in floating
+        # point leave that at rounding level; sqrt(eps) admits orthogonal
+        # tapers computed elsewhere to a lower precision.
+        gram = xp.matmul(self._tapers.T, self._tapers)
+        norms = xp.sqrt(xp.diagonal(gram))
+        correlation = xp.abs(gram) / (norms[:, xp.newaxis] * norms[xp.newaxis, :])
+        off_diagonal = ~xp.eye(gram.shape[0], dtype=bool)
+        tolerance = float(np.sqrt(xp.finfo(gram.dtype).eps))
+        return not bool(xp.any(correlation[off_diagonal] > tolerance))
 
     def _weight_taper_coefficients(
         self,

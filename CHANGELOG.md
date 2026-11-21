@@ -785,6 +785,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- *Unreleased:* `Multitaper.observations_are_independent` is `False` for
+  custom tapers that are not mutually orthogonal, whose eigencoefficients are
+  correlated even for white noise, so the measures that count observations
+  warn and the jackknife refuses to leave out tapers. It was always `True`:
+  four copies of one taper made `n_observations` 4 and pairwise phase
+  consistency of independent channels 1, with no warning. DPSS and orthogonal
+  custom tapers are unaffected.
 - *Unreleased:* An observation with weight 0 contributes nothing to any
   weighted expectation even when its coefficients are not finite: power, the
   cross-spectrum and the measures built on them, phase locking, the phase-lag
