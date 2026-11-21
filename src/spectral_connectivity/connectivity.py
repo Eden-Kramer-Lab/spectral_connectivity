@@ -5477,8 +5477,16 @@ class Connectivity:
         The squared dDTF of Korzeniewska et al. (2003) multiplies the
         full-frequency DTF, which keeps direct and indirect (cascade) influence,
         by the squared partial coherence, which is zero between two signals
-        whose relation is fully explained by the others. The product therefore
-        keeps only direct influence:
+        whose relation is fully explained by the others. The product is
+        therefore zero for an influence relayed through observed signals, but a
+        positive value does not establish a direct one: partial coherence is
+        also nonzero between two signals that drive a common observed signal.
+        In the VAR ``0 -> 1 -> 2`` with ``0 -> 3 <- 2`` (unit lag-one couplings,
+        identity innovations) there is no ``0 -> 2`` coefficient, and
+        :meth:`partial_directed_coherence` and
+        :meth:`conditional_spectral_granger_prediction` are zero for it, yet
+        the dDTF ``0 -> 2`` is positive at every frequency and sums to 1/18. Use
+        those measures to test for a direct link:
 
         ``chi^2_ij(f) = ffDTF^2_ij(f) * kappa^2_ij(f)``, with
         ``ffDTF^2_ij(f) = |H_ij(f)|^2 / sum_f' sum_k |H_ik(f')|^2`` (summed over
@@ -5497,8 +5505,9 @@ class Connectivity:
         -------
         direct_directed_transfer_function : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[..., i, j]`` is the direct influence of signal ``i`` on
-            signal ``j`` (``i -> j``).
+            Output ``[..., i, j]`` is the dDTF ``i -> j``: zero for influence
+            relayed through observed signals, and positive for direct
+            influence or for two signals with a common observed child.
 
         Notes
         -----

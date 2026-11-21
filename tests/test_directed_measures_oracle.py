@@ -715,6 +715,34 @@ def test_conditional_granger_of_a_complex_var_matches_state_space_oracle(complex
             )
 
 
+def test_ddtf_is_positive_between_parents_of_a_common_child():
+    """dDTF is zero for a relayed influence, not only for an absent one: in
+    ``0 -> 1 -> 2`` with ``0 -> 3 <- 2`` there is no ``0 -> 2`` coefficient,
+    so PDC and conditional Granger are zero, but 0 and 2 drive the common child
+    3 and their partial coherence is not, so dDTF ``0 -> 2`` is positive at
+    every frequency. Its closed form sums to exactly 1/18 for unit couplings
+    and identity innovations."""
+    coefficients = np.zeros((1, 4, 4))  # native [target, source]
+    for source, target in [(0, 1), (1, 2), (0, 3), (2, 3)]:
+        coefficients[0, target, source] = 1.0
+    A, H, spectrum = _analytic_var(coefficients, np.eye(4), 256)
+    connectivity = _tightly_factored_connectivity(spectrum)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ddtf = connectivity.direct_directed_transfer_function()[0]
+        pdc = connectivity.partial_directed_coherence()[0]
+        conditional = connectivity.conditional_spectral_granger_prediction()[0]
+
+    analytic = _analytic_directed_measures(A, H, np.eye(4))[
+        "direct_directed_transfer_function"
+    ]
+    np.testing.assert_allclose(ddtf[:, 0, 2], analytic[:, 2, 0], rtol=1e-9)
+    assert ddtf[:, 0, 2].min() > 1e-4
+    assert ddtf[:, 0, 2].sum() == pytest.approx(1 / 18, rel=1e-9)
+    np.testing.assert_allclose(pdc[:, 0, 2], 0.0, atol=1e-12)
+    np.testing.assert_allclose(conditional[:, 0, 2], 0.0, atol=1e-10)
+
+
 def test_conditional_granger_removes_mediated_influence():
     """A 3-node chain 0 -> 1 -> 2 has zero conditional influence 0 -> 2 given 1.
 

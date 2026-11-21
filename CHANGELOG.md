@@ -786,6 +786,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- `direct_directed_transfer_function` and its `list_measures` entry no
+  longer describe it as direct influence only. It is zero for an influence
+  relayed through observed signals, but its partial-coherence factor is also
+  nonzero between two signals that drive a common observed signal: in
+  `0 -> 1 -> 2` with `0 -> 3 <- 2`, which has no `0 -> 2` coefficient, dDTF
+  `0 -> 2` is positive at every frequency (summing to 1/18 for unit couplings)
+  while PDC and conditional Granger are zero. The values are unchanged.
 - Inference at real-valued Fourier coefficients, the 0 Hz bin and (for an
   even FFT length) the Nyquist bin of a real signal, where each observation
   carries one degree of freedom rather than two.

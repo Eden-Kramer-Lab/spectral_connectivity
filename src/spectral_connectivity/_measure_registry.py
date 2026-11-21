@@ -510,8 +510,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
         long_name="Direct directed transfer function",
         units="1",
         value_range=(0.0, 1.0),
-        interpretation="Direct (not relayed) influence from source to target. Normalized over all "
-        "frequencies, so values are small: compare pairs, not against 1.",
+        interpretation="Influence from source to target, zero when relayed through observed "
+        "signals; also positive when source and target drive a common observed signal, so it "
+        "does not establish a direct link. Normalized over all frequencies, so values are "
+        "small: compare pairs, not against 1.",
         diagonal_policy="estimated",
     ),
     "blockwise_spectral_granger_prediction": _wilson_directed_spec(
