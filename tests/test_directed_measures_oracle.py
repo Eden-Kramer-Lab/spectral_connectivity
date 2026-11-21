@@ -31,10 +31,12 @@ but not PDC, and the unequal variances make the noise-weighted DC and gPDC
 differ from DTF and PDC.
 """
 
+import itertools
 import warnings
 
 import numpy as np
 import pytest
+from scipy.linalg import solve_discrete_are
 
 from spectral_connectivity import Connectivity, DirectedOrientationWarning, Multitaper
 from spectral_connectivity._result_formatting import _connectivity_result_to_xarray
@@ -473,6 +475,44 @@ _CHAIN_AND_DENSE_MODELS = pytest.mark.parametrize(
     [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
     ids=["chain", "dense_correlated"],
 )
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "noise_covariance"),
+    [
+        (_CHAIN_COEFFICIENTS, np.eye(3)),
+        (_DENSE_COEFFICIENTS, _CORRELATED_NOISE),
+        _dense_stable_var(n_signals=5, n_lags=2, spectral_radius=0.8, seed=0),
+    ],
+    ids=["chain", "dense_correlated", "dense_5_signals"],
+)
+def test_riccati_iteration_matches_scipy_on_real_models(coefficients, noise_covariance):
+    """The state-space oracles solve their Riccati equations by iteration,
+    which also covers complex models; for real ones it must give SciPy's
+    ``solve_discrete_are`` solution, for every observed sub-system the oracles
+    use (each signal pair, and every signal but one)."""
+    n_signals = coefficients.shape[-1]
+    C = np.concatenate(list(coefficients), axis=1)
+    A = _companion_matrix(coefficients)
+    K = np.zeros((A.shape[0], n_signals))
+    K[:n_signals] = np.eye(n_signals)
+    Q = K @ noise_covariance @ K.T
+    subsets = [
+        *itertools.combinations(range(n_signals), 2),
+        *itertools.combinations(range(n_signals), n_signals - 1),
+    ]
+    for members in map(list, subsets):
+        C_sub = C[members]
+        R = noise_covariance[np.ix_(members, members)]
+        S = K @ noise_covariance[:, members]
+        expected = solve_discrete_are(A.T, C_sub.T, Q, R, s=S)
+        np.testing.assert_allclose(
+            _prediction_error_covariance(A, C_sub, Q, R, S),
+            expected,
+            rtol=0,
+            atol=1e-12 * (np.abs(Q).max() + np.abs(expected).max()),
+            err_msg=str(members),
+        )
 
 
 @_CHAIN_AND_DENSE_MODELS
