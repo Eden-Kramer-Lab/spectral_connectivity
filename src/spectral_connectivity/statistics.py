@@ -10,7 +10,7 @@ connectivity analysis.
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import scipy.special
@@ -855,6 +855,21 @@ def coherence_significance_pvalue(
     return p_values
 
 
+def _check_n_observations(n_observations: Any, minimum: int, why: str) -> None:
+    """Raise ``ValueError`` unless ``n_observations`` is a finite integer >= ``minimum``."""
+    if (
+        not np.isfinite(n_observations)
+        or int(n_observations) != n_observations
+        or n_observations < minimum
+    ):
+        msg = (
+            f"n_observations must be a finite integer >= {minimum}, got "
+            f"{n_observations!r}. {why} Pass the number of averaged observations "
+            "(trials x tapers), Connectivity.n_observations."
+        )
+        raise ValueError(msg)
+
+
 def coherence_bias(n_observations: int) -> float:
     """Estimate bias correction for coherence estimates.
 
@@ -868,12 +883,18 @@ def coherence_bias(n_observations: int) -> float:
     Parameters
     ----------
     n_observations : int
-        Number of observations used in coherence estimation (n_tapers * n_trials).
+        Number of observations used in coherence estimation (n_tapers *
+        n_trials), at least 2: pass ``Connectivity.n_observations``.
 
     Returns
     -------
     bias : float
         Bias correction factor for Fisher z-transform of coherence.
+
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite integer of at least 2.
 
     Examples
     --------
@@ -893,6 +914,9 @@ def coherence_bias(n_observations: int) -> float:
            Journal of Neuroscience Methods 159,
            337-345. 10.1016/j.jneumeth.2006.07.011.
     """
+    _check_n_observations(
+        n_observations, 2, "The bias, 1 / (2 * n_observations - 2), needs two."
+    )
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)
 
@@ -1283,7 +1307,8 @@ def power_bias(
     Parameters
     ----------
     n_observations : int
-        n_observations is n_tapers * n_trials
+        Number of observations used in power estimation (n_tapers * n_trials),
+        at least 1: pass ``Connectivity.n_observations``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         mask such as
@@ -1294,6 +1319,11 @@ def power_bias(
     bias : float or NDArray[floating]
         A float, or an array shaped like ``real_valued`` when that is an array.
 
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite positive integer.
+
     Examples
     --------
     >>> print(f"Bias with 100 obs: {power_bias(100):.6f}")
@@ -1303,6 +1333,7 @@ def power_bias(
     >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
     At a real-valued bin: -0.010033
     """
+    _check_n_observations(n_observations, 1, "The digamma function has a pole at 0.")
     shape = _chi_squared_shape(n_observations, real_valued)
     return _float_unless_masked(scipy.special.psi(shape) - np.log(shape), real_valued)
 
@@ -1318,7 +1349,8 @@ def power_variance(
     Parameters
     ----------
     n_observations : int
-        Number of observations used in power estimation (n_tapers * n_trials).
+        Number of observations used in power estimation (n_tapers * n_trials),
+        at least 1: pass ``Connectivity.n_observations``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, as in
         :func:`power_bias`.
@@ -1328,6 +1360,11 @@ def power_variance(
     variance : float or NDArray[floating]
         Variance of log-power estimates: a float, or an array shaped like
         ``real_valued`` when that is an array.
+
+    Raises
+    ------
+    ValueError
+        If ``n_observations`` is not a finite positive integer.
 
     Examples
     --------
@@ -1345,6 +1382,7 @@ def power_variance(
     chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
     bin ``nu = n_observations``, which about doubles it.
     """
+    _check_n_observations(n_observations, 1, "The trigamma function has a pole at 0.")
     shape = _chi_squared_shape(n_observations, real_valued)
     return _float_unless_masked(scipy.special.polygamma(1, shape), real_valued)
 

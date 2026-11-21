@@ -990,6 +990,30 @@ def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
 
+@pytest.mark.parametrize(
+    ("function", "minimum", "bad_n_obs"),
+    [
+        (coherence_bias, 2, 0),
+        (coherence_bias, 2, 1),
+        (coherence_bias, 2, 2.5),
+        (power_bias, 1, 0),
+        (power_bias, 1, np.nan),
+        (power_variance, 1, 0),
+        (power_variance, 1, -3),
+    ],
+)
+def test_bias_and_variance_helpers_reject_invalid_n_observations(function, minimum, bad_n_obs):
+    """coherence_bias(0) returned -0.5 and power_bias(0) and power_variance(0)
+    the digamma and trigamma poles; like coherence_significance_pvalue, they
+    raise for a count the formula cannot use and say what to pass."""
+    with pytest.raises(
+        ValueError,
+        match=rf"(?s)n_observations must be a finite integer >= {minimum}, got .*"
+        r"Connectivity\.n_observations",
+    ):
+        function(bad_n_obs)
+
+
 @pytest.mark.parametrize("bad_rate", [np.inf, np.nan])
 def test_coherence_rate_adjustment_rejects_nonfinite_rate(bad_rate):
     """A non-finite firing rate must raise, not pass and hit ZeroDivisionError."""

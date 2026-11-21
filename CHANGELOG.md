@@ -744,6 +744,13 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- `coherence_bias`, `power_bias`, and `power_variance` raise a `ValueError`
+  for an observation count their formulas cannot use, as
+  `coherence_significance_pvalue` does, and say to pass
+  `Connectivity.n_observations`: `coherence_bias` needs at least 2 (it
+  returned -0.5 for 0 and divided by zero for 1), and the power helpers at
+  least 1 (0 hit the digamma and trigamma poles). A non-finite or fractional
+  count raises too.
 - *Unreleased:* `simulate_shared_oscillation` raises a `ValueError` naming
   the frequency and the Nyquist frequency when `frequency` is negative or not
   below Nyquist, and validates `sampling_frequency` as the transforms do.
