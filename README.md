@@ -20,7 +20,8 @@
 | [**Citation**](#citation)
 
 > [!WARNING]
-> **Upgrading from 2.x? Two changes alter results without raising an error.**
+> **Upgrading from 2.x? Two changes alter almost every directed or power result
+> without raising an error.**
 >
 > + **Directed measures changed direction.** `result[..., i, j]` from the
 >   `Connectivity` methods of the spectral Granger family, directed transfer
@@ -37,8 +38,9 @@
 >   2.x values.
 >
 > Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
-> `PowerSidednessWarning` as a reminder. The [migration guide](docs/migration.md)
-> lists which ones, how to silence them, and every other change.
+> `PowerSidednessWarning` as a reminder. Several other values also changed
+> without an error. The [migration guide](docs/migration.md) lists which calls
+> warn, how to silence them, and every other change.
 
 ## What is spectral_connectivity?
 
