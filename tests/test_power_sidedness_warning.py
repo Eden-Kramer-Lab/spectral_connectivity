@@ -5,9 +5,6 @@
 ``"always"`` filter.
 """
 
-import json
-import os
-import subprocess
 import sys
 import warnings
 
@@ -24,6 +21,7 @@ from spectral_connectivity import (
     multitaper_connectivity,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._fresh_session import run_fresh_session
 
 
 @pytest.fixture(scope="module")
@@ -138,20 +136,6 @@ def test_warning_is_silenced_by_its_category(connectivity):
 
 
 _SESSION_SCRIPT = """
-import json
-import warnings
-
-import numpy as np
-
-shown = []
-# Record what Python's filters let through, without changing the filters.
-warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
-    category.__name__
-)
-from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
-
-time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
-connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
 counts = []
 connectivity.power()
 counts.append(len(shown))
@@ -177,52 +161,20 @@ def test_warning_appears_once_per_session_unless_a_filter_says_otherwise():
     """Under Python's default filters the notice appears once per session,
     not at every line that calls ``power()``; a filter the user sets after
     import still shows it every time, or turns it into an error."""
-    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
-    output = subprocess.check_output(
-        [sys.executable, "-c", _SESSION_SCRIPT], text=True, env=environment
-    )
-    assert json.loads(output) == [1, 1, 3, "raised"]
+    assert run_fresh_session(_SESSION_SCRIPT) == [1, 1, 3, "raised"]
 
 
 _SILENCED_FIRST_SCRIPT = """
-import json
-import warnings
-
-import numpy as np
-
-shown = []
-warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
-    category.__name__
-)
-from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
-
-time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
-connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
-counts = []
 # Silenced, then un-silenced: the notice was never seen, so it is still due.
 warnings.filterwarnings("ignore", category=PowerSidednessWarning)
 connectivity.power()
 warnings.resetwarnings()
 connectivity.power()
 connectivity.power()  # another line
-counts.append(len(shown))
-print(json.dumps(counts))
+print(json.dumps([len(shown)]))
 """
 
 _ERROR_FIRST_SCRIPT = """
-import json
-import warnings
-
-import numpy as np
-
-shown = []
-warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
-    category.__name__
-)
-from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
-
-time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
-connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
 counts = []
 # Raised as an error: the user read the message in the exception, so it counts.
 warnings.filterwarnings("error", category=PowerSidednessWarning)
@@ -246,29 +198,17 @@ def test_only_a_notice_the_user_saw_uses_up_the_session(script, expected):
     """An ignored call does not count as shown, so the notice appears once
     the filter is removed (a notebook that silenced it, then un-silenced it).
     A call raised as an error does: its message was in the exception."""
-    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
-    output = subprocess.check_output(
-        [sys.executable, "-c", script], text=True, env=environment
-    )
-    assert json.loads(output) == expected
+    assert run_fresh_session(script) == expected
 
 
 _CONTEXT_SCRIPT = """
-import warnings
-
-import numpy as np
-
-from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
-
-time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
-connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
 counts = []
 for _ in range(2):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.power()
     counts.append(sum(issubclass(w.category, PowerSidednessWarning) for w in record))
-print(counts)
+print(json.dumps(counts))
 """
 
 
@@ -279,10 +219,4 @@ def test_a_repeat_obeys_a_filter_set_in_catch_warnings_under_context_aware_warni
     """Python 3.14's context-aware warnings (the default on free-threaded
     builds) keep the filters a ``catch_warnings`` block sets, as
     ``pytest.warns`` does, out of ``warnings.filters``."""
-    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
-    output = subprocess.check_output(
-        [sys.executable, "-X", "context_aware_warnings=1", "-c", _CONTEXT_SCRIPT],
-        text=True,
-        env=environment,
-    )
-    assert output.strip() == "[1, 1]"
+    assert run_fresh_session(_CONTEXT_SCRIPT, "-X", "context_aware_warnings=1") == [1, 1]
