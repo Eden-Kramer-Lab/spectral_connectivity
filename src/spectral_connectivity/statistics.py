@@ -705,13 +705,21 @@ def get_normal_distribution_p_values(
 def coherence_significance_pvalue(
     coherency: NDArray[np.complexfloating],
     n_observations: int,
+    *,
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.floating]:
     """P-value for testing squared coherence magnitude against zero.
 
     Tests the null hypothesis that the true coherence is zero. Under this null,
     for ``n`` independent complex-Gaussian observations the magnitude-squared
     coherence estimate follows a Beta(1, n - 1) distribution, so the upper-tail
-    probability is ``P(|C|^2 >= c) = (1 - c)^(n - 1)``.
+    probability is ``P(|C|^2 >= c) = (1 - c)^(n - 1)``. Where the Fourier
+    coefficients are real -- the 0 Hz bin and, for an even FFT length, the
+    Nyquist bin of a real signal -- each observation carries one real degree
+    of freedom rather than two. The estimate is then the squared cosine of the
+    angle between two independent isotropic vectors in R^n rather than C^n,
+    which follows Beta(1/2, (n - 1) / 2); the complex null there rejects about
+    twice as often as its level (10% at a nominal 5% with five observations).
 
     This exact boundary distribution should be used instead of the Fisher
     z-transform (:func:`coherence_fisher_z_transform`) when testing against zero
@@ -726,6 +734,10 @@ def coherence_significance_pvalue(
     n_observations : int
         Number of independent observations used to estimate the coherency
         (n_tapers * n_trials).
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, broadcast
+        against ``coherency``: for the non-negative frequencies of a real
+        signal, ``(frequencies == 0) | (frequencies == sampling_frequency / 2)``.
 
     Returns
     -------
@@ -739,6 +751,16 @@ def coherence_significance_pvalue(
     .. [2] Thomson, D. J., & Chave, A. D. (1991). Jackknifed error estimates
            for spectra, coherences, and transfer functions. In Advances in
            Spectrum Analysis and Array Processing.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> coherency = np.array([0.6, 0.6])
+    >>> p_values = coherence_significance_pvalue(
+    ...     coherency, n_observations=5, real_valued=np.array([False, True])
+    ... )
+    >>> np.round(p_values, 3).tolist()  # (1 - 0.36)**4, and the real null
+    [0.168, 0.208]
     """
     if (
         not np.isfinite(n_observations)
@@ -756,7 +778,12 @@ def coherence_significance_pvalue(
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
     )
-    return (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    if not np.any(real_valued):
+        return complex_null
+    real_null = scipy.stats.beta.sf(magnitude_squared_coherence, 0.5, (n_observations - 1) / 2)
+    p_values: NDArray[np.floating] = np.where(real_valued, real_null, complex_null)
+    return p_values
 
 
 def coherence_bias(n_observations: int) -> float:
@@ -1007,6 +1034,7 @@ def power_confidence_intervals(
     ci: float = 0.95,
     *,
     n_tapers: int | None = None,
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
@@ -1036,6 +1064,14 @@ def power_confidence_intervals(
     n_tapers : int, optional
         Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
         Giving both raises ``ValueError``.
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, broadcast
+        against ``power``: for the non-negative frequencies of a real signal,
+        ``(frequencies == 0) | (frequencies == sampling_frequency / 2)``. Each
+        such coefficient carries one degree of freedom rather than two, so
+        those bins use ``n_observations`` degrees of freedom; with
+        ``2 * n_observations`` there, a nominal 95% interval from five
+        observations covers 83%.
 
     Returns
     -------
@@ -1060,6 +1096,10 @@ def power_confidence_intervals(
     >>> lower, upper = power_confidence_intervals(5, power_vals, 0.95)
     >>> np.round(lower, 3).tolist()
     [0.244, 0.488, 0.976, 2.441]
+    >>> # The 0 Hz bin of a real signal: half the degrees of freedom, a wider interval
+    >>> lower, upper = power_confidence_intervals(5, 1.0, 0.95, real_valued=True)
+    >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
+    95% CI: [0.390, 6.015]
 
     References
     ----------
@@ -1120,7 +1160,7 @@ def power_confidence_intervals(
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
     # previous behavior) produces an interval with coverage 2 * ci - 1 (a
     # requested 95% interval only covered ~90%).
-    degrees_of_freedom = 2 * n_observations
+    degrees_of_freedom = np.where(real_valued, n_observations, 2 * n_observations)
     alpha = 1 - ci
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power

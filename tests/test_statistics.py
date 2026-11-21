@@ -423,6 +423,63 @@ def test_coherence_significance_pvalue_is_well_calibrated():
         assert np.isclose(rejection_rate, alpha, atol=0.01)
 
 
+def _rate_and_limit(hits, expected_rate):
+    """Observed rate of ``hits`` and five standard errors of it under ``expected_rate``."""
+    return hits.mean(), 5 * np.sqrt(expected_rate * (1 - expected_rate) / hits.size)
+
+
+def test_coherence_significance_pvalue_is_calibrated_for_real_valued_coefficients():
+    """At a real signal's 0 Hz and Nyquist bins the coefficients are real, and
+    the squared coherence of five real observations follows Beta(1/2, 2), not
+    Beta(1, 4). The complex null rejected 10% of independent pairs there at a
+    nominal 5%."""
+    rng = np.random.default_rng(20261121)
+    alpha, n_obs, n_rep = 0.05, 5, 200_000
+    x = rng.standard_normal((n_rep, n_obs))
+    y = rng.standard_normal((n_rep, n_obs))
+    coherency = (x * y).mean(axis=1) / np.sqrt((x**2).mean(axis=1) * (y**2).mean(axis=1))
+
+    real_null = coherence_significance_pvalue(coherency, n_obs, real_valued=True) <= alpha
+    complex_null = coherence_significance_pvalue(coherency, n_obs) <= alpha
+
+    rate, limit = _rate_and_limit(real_null, alpha)
+    assert abs(rate - alpha) < limit
+    assert complex_null.mean() - alpha > 20 * limit
+    # A mask applies the real null only where it is set.
+    mixed = coherence_significance_pvalue(
+        coherency[:4], n_obs, real_valued=np.array([True, False, True, False])
+    )
+    np.testing.assert_array_equal(
+        mixed,
+        np.where(
+            [True, False, True, False],
+            coherence_significance_pvalue(coherency[:4], n_obs, real_valued=True),
+            coherence_significance_pvalue(coherency[:4], n_obs),
+        ),
+    )
+
+
+def test_power_confidence_intervals_cover_real_valued_bins():
+    """A real coefficient's squared magnitude is chi-squared with one degree
+    of freedom, so the mean of five has n, not 2 n, degrees of freedom; the
+    2 n interval covered 83% at a nominal 95%."""
+    rng = np.random.default_rng(20261122)
+    n_observations, true_power = 5, 2.0
+    estimates = true_power * (rng.standard_normal((200_000, n_observations)) ** 2).mean(axis=1)
+
+    lower, upper = power_confidence_intervals(
+        n_observations, estimates, ci=0.95, real_valued=True
+    )
+    complex_lower, complex_upper = power_confidence_intervals(
+        n_observations, estimates, ci=0.95
+    )
+
+    rate, limit = _rate_and_limit((lower <= true_power) & (true_power <= upper), 0.95)
+    assert abs(rate - 0.95) < limit
+    complex_coverage = np.mean((complex_lower <= true_power) & (true_power <= complex_upper))
+    assert 0.95 - complex_coverage > 20 * limit
+
+
 def test_coherence_significance_pvalue_matches_beta_null():
     """p-value equals (1 - |C|^2)^(n-1)."""
     coherency = np.array([0.0 + 0j, 0.3 + 0.1j, 0.9 + 0j])

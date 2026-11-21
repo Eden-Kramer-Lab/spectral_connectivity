@@ -786,6 +786,18 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- Inference at real-valued Fourier coefficients, the 0 Hz bin and (for an
+  even FFT length) the Nyquist bin of a real signal, where each observation
+  carries one degree of freedom rather than two.
+  `coherence_significance_pvalue` and `power_confidence_intervals` take a
+  keyword `real_valued` (a bool, or a mask broadcast against the estimates,
+  such as `(frequencies == 0) | (frequencies == sampling_frequency / 2)`) and
+  use the real null there, `Beta(1/2, (n - 1) / 2)` for squared coherence and
+  `n` rather than `2 n` chi-squared degrees of freedom for power. With five
+  observations the complex null had rejected 10% of independent pairs at a
+  nominal 5%, and the power interval covered 83% at a nominal 95%.
+  `group_delay` and `delay` find the bins whose coefficients are all real and
+  test those against the real null.
 - *Unreleased:* `Multitaper.observations_are_independent` is `False` for
   custom tapers that are not mutually orthogonal, whose eigencoefficients are
   correlated even for white noise, so the measures that count observations

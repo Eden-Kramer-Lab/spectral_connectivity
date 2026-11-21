@@ -3925,6 +3925,68 @@ def test_power_one_sided_must_be_a_bool(not_a_flag):
 
 
 @pytest.mark.parametrize("n_fft", [64, 65])
+def test_real_valued_frequency_bins_are_zero_and_nyquist_of_a_real_signal(n_fft):
+    """A real signal's Fourier coefficients are real at 0 Hz and, for an even
+    FFT length, at Nyquist; those of a complex one are real nowhere."""
+    rng = np.random.default_rng(8)
+    multitaper = Multitaper(
+        rng.standard_normal((n_fft, 2, 2)), sampling_frequency=100, n_fft_samples=n_fft
+    )
+    expected = np.zeros(n_fft // 2 + 1, dtype=bool)
+    expected[0] = True
+    if n_fft % 2 == 0:
+        expected[-1] = True
+    real_bins = Connectivity.from_transform(multitaper)._real_valued_frequency_bins()
+    np.testing.assert_array_equal(real_bins, expected)
+    complex_coefficients = rng.standard_normal((1, 2, 3, n_fft, 2)) + 1j
+    assert not Connectivity(complex_coefficients)._real_valued_frequency_bins().any()
+
+
+def _pair_with_squared_coherence(rng, n_observations, squared_coherence, real):
+    """Two signals' coefficients over ``n_observations`` with exactly
+    ``squared_coherence``: ``y = a x + b z`` for ``z`` orthogonal to ``x`` of
+    the same norm, ``a**2 = squared_coherence`` and ``a**2 + b**2 = 1``."""
+
+    def draw():
+        values = rng.standard_normal(n_observations)
+        return values if real else values + 1j * rng.standard_normal(n_observations)
+
+    x, z = draw(), draw()
+    z = z - np.vdot(x, z) / np.vdot(x, x) * x
+    z *= np.linalg.norm(x) / np.linalg.norm(z)
+    y = np.sqrt(squared_coherence) * x + np.sqrt(1 - squared_coherence) * z
+    return np.stack([x, y], axis=-1)
+
+
+def test_group_delay_tests_a_real_valued_bin_against_the_real_null():
+    """The significance filter of ``group_delay`` and ``delay`` takes the
+    zero-coherence null of real coefficients at a real-valued bin. Here three
+    bins at the top of the spectrum have squared coherence 0.6 over five
+    observations: p = 0.026 under the complex null at the two complex bins,
+    but 0.071 under the real null at Nyquist. With Benjamini-Hochberg at 0.05
+    only the two complex bins are significant, which is fewer than the
+    three-bin cluster the delay fit needs, so the delay is undefined; the
+    complex null at Nyquist made all three significant and gave a delay."""
+    rng = np.random.default_rng(9)
+    n_observations, n_fft = 5, 8
+    coefficients = np.empty((1, 1, n_observations, n_fft, 2), dtype=complex)
+    for bin_index in range(n_fft):
+        is_real = bin_index in (0, n_fft // 2)
+        coherence = 0.6 if bin_index in (2, 3, 4) else 0.0
+        coefficients[0, 0, :, bin_index] = _pair_with_squared_coherence(
+            rng, n_observations, coherence, real=is_real
+        )
+    connectivity = Connectivity(coefficients)
+    np.testing.assert_allclose(
+        connectivity.magnitude_squared_coherence()[0, 2:, 0, 1], 0.6, rtol=1e-12
+    )
+
+    delay, _, _ = connectivity.group_delay(frequency_range=(0.25, 0.5))
+
+    assert np.isnan(delay[0, 0, 1])
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
 @pytest.mark.parametrize("tone_bin", [13, -13])
 def test_power_of_complex_coefficients_folds_both_signs_of_frequency(n_fft, tone_bin):
     """A complex tone at -f carries its power at -f only, so doubling P(f)

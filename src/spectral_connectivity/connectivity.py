@@ -5599,6 +5599,19 @@ class Connectivity:
             )
         return selection.mask
 
+    def _real_valued_frequency_bins(self) -> NDArray[np.bool_]:
+        """Host mask over the non-negative bins whose coefficients are all real.
+
+        For a real signal these are 0 Hz and, for an even FFT length, Nyquist.
+        Each observation there carries one real degree of freedom rather than
+        two, so the zero-coherence null differs (see
+        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`).
+        """
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        coefficients = self._fourier_coefficients[..., :n_nonnegative, :]
+        real: NDArray[np.bool_] = to_numpy(xp.all(coefficients.imag == 0, axis=(0, 1, 2, 4)))
+        return real
+
     def _significant_pair_phase(
         self,
         measure: str,
@@ -5660,6 +5673,7 @@ class Connectivity:
             self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
+            real_valued=self._real_valued_frequency_bins()[frequency_mask][:, np.newaxis],
         )
         coherence_phase = np.ma.masked_array(
             _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),
@@ -6565,6 +6579,7 @@ def _find_significant_frequencies(
     multiple_comparisons_method: Literal[
         "Benjamini_Hochberg_procedure", "Bonferroni_correction"
     ] = "Benjamini_Hochberg_procedure",
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.bool_]:
     """Determine the largest significant cluster along the frequency axis.
 
@@ -6590,6 +6605,8 @@ def _find_significant_frequencies(
     multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
         'Bonferroni_correction'
         Procedure used to correct for multiple comparisons.
+    real_valued : bool or bool array, broadcastable to ``coherency``
+        Estimates from real-valued coefficients, tested against the real null.
 
     Returns
     -------
@@ -6600,7 +6617,7 @@ def _find_significant_frequencies(
     # Test each frequency's coherence against zero using the exact
     # magnitude-squared-coherence null distribution. The Fisher z-transform is
     # miscalibrated at the zero boundary and over-rejects the null ~3-4x.
-    p_values = coherence_significance_pvalue(coherency, n_obs)
+    p_values = coherence_significance_pvalue(coherency, n_obs, real_valued=real_valued)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )
