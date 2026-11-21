@@ -13,8 +13,8 @@ and direct directed transfer function is now `i -> j` (2.x returned `j -> i`).
 For pairwise and subset spectral Granger prediction, the directed measures the
 2.x wrapper accepted, `multitaper_connectivity(...).sel(source="a", target="b")`
 is now `a -> b` (2.x returned `b -> a`). Indexing code written for 2.x still
-runs but reads the opposite direction; see the first item of the migration
-guide below. `phase_slope_index`, `group_delay`, and `delay` were already source
+runs but reads the opposite direction; see the first item of the
+[migration guide](https://spectral-connectivity.readthedocs.io/en/latest/migration.html). `phase_slope_index`, `group_delay`, and `delay` were already source
 first; do not swap them. Until 3.2 the `Connectivity` methods
 that existed in 2.x (pairwise and subset spectral Granger, directed transfer
 function, directed coherence, (generalized) partial directed coherence, and
@@ -26,7 +26,8 @@ category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
 the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
 when called without `one_sided` on two-sided coefficients; the wrappers' power
-results changed the same way without a warning (see the migration guide).
+results changed the same way without a warning (see the
+[migration guide](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)).
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
