@@ -6,6 +6,7 @@ This module tests that error messages follow the WHAT/WHY/HOW pattern:
 - HOW: Specific, actionable recovery steps
 """
 
+import functools
 import re
 import warnings
 
@@ -740,3 +741,37 @@ def test_directed_measures_on_finite_collinear_input_still_warn():
         for w in record
         if not issubclass(w.category, DirectedOrientationWarning)
     )
+
+
+@pytest.mark.parametrize(
+    ("measure", "kwargs"),
+    [
+        ("canonical_coherence", {"group_labels": np.array([0, 0, 1])}),
+        ("global_coherence", {}),
+    ],
+)
+@pytest.mark.parametrize("route", ["Connectivity", "wrapper"])
+def test_decompositions_name_nonfinite_coefficients(measure, kwargs, route):
+    """canonical_coherence and global_coherence raised LAPACK's LinAlgError
+    on NaN or Inf; they say the coefficients hold NaN or Inf and what to do.
+    (The other multivariate kernels already return NaN for those bins.)"""
+    with warnings.catch_warnings():
+        # The NaN warnings, and NumPy's on the class path (see the CHANGELOG).
+        warnings.simplefilter("ignore")
+        if route == "Connectivity":
+            compute = getattr(Connectivity(_coefficients_with_nan()), measure)
+        else:
+            compute = functools.partial(
+                multitaper_connectivity,
+                _series_with_nan(),
+                500,
+                method=measure,
+                group_labels=kwargs.pop("group_labels", None),
+            )
+        with pytest.raises(
+            ValueError,
+            match=f"^{measure} cannot be computed: the Fourier coefficients contain "
+            "NaN or Inf.*Interpolate or remove the NaN or Inf samples",
+        ) as excinfo:
+            compute(**kwargs)
+    assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)

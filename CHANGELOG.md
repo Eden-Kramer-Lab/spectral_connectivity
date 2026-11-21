@@ -1334,6 +1334,15 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `DirectedOrientationWarning` reminder. Finite coefficients keep every
   warning. The Cholesky fallback is no longer also logged at WARNING level,
   which printed it to stderr a second time.
+- `canonical_coherence` and `global_coherence` computed from NaN or Inf
+  coefficients raise a `ValueError` saying the measure cannot be computed
+  because the coefficients contain NaN or Inf, and to interpolate or remove
+  those samples or drop the affected trials or signals; they raised LAPACK's
+  `LinAlgError` ("SVD did not converge", "Eigenvalues did not converge"),
+  which is kept as the cause. `canonical_coherency`,
+  `maximized_imaginary_coherency` (and its components), and
+  `multivariate_interaction_measure` already returned NaN there, and still
+  do.
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0

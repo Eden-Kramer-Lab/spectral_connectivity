@@ -1,9 +1,10 @@
 """Compute metrics for relating signals in the frequency domain."""
 
+import contextlib
 import inspect
 import re
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property, wraps
@@ -1490,6 +1491,28 @@ class Connectivity:
                 category=UserWarning,
             )
             return cls(**init_kwargs)
+
+    @contextlib.contextmanager
+    def _decomposition_of_nonfinite_coefficients(self, measure: str) -> Iterator[None]:
+        """Report a matrix decomposition that fails on NaN or Inf coefficients
+        as that, in the user's terms, rather than as LAPACK's ``LinAlgError``.
+
+        A failure on finite coefficients is re-raised unchanged.
+        """
+        try:
+            yield
+        except np.linalg.LinAlgError as error:
+            if self._coefficients_are_finite:
+                raise
+            msg = (
+                f"{measure} cannot be computed: the Fourier coefficients contain "
+                "NaN or Inf (from NaN or Inf in the time series, if it was "
+                "transformed here; see the earlier warning), on which its matrix "
+                f"decomposition does not converge ({error}). Interpolate or remove "
+                "the NaN or Inf samples, or drop the affected trials or signals, "
+                "and compute it again."
+            )
+            raise ValueError(msg) from error
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -3219,35 +3242,31 @@ class Connectivity:
         # (one ascending index array per sorted label); index the device
         # coefficients with device index arrays, as ``xp.isin`` over host labels
         # fails on CuPy.
-        normalized_fourier_coefficients, ranks = zip(
-            *(
-                _normalize_fourier_coefficients(fourier_coefficients[..., xp.asarray(indices)])
-                for indices in group_indices
-            ),
-            strict=True,
-        )
+        with self._decomposition_of_nonfinite_coefficients("canonical_coherence"):
+            normalized_fourier_coefficients, ranks = zip(
+                *(
+                    _normalize_fourier_coefficients(
+                        fourier_coefficients[..., xp.asarray(indices)]
+                    )
+                    for indices in group_indices
+                ),
+                strict=True,
+            )
+            canonical_coherency = xp.stack(
+                [
+                    _estimate_canonical_coherence(fourier_coefficients1, fourier_coefficients2)
+                    for fourier_coefficients1, fourier_coefficients2 in combinations(
+                        normalized_fourier_coefficients, 2
+                    )
+                ],
+                axis=-1,
+            )
 
         n_groups = len(labels)
         new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
         # A canonical correlation is at most 1; with fewer observations than
         # signals it reaches 1, where rounding left it up to 4e-15 above.
-        magnitude = xp.clip(
-            _squared_magnitude(
-                xp.stack(
-                    [
-                        _estimate_canonical_coherence(
-                            fourier_coefficients1, fourier_coefficients2
-                        )
-                        for fourier_coefficients1, fourier_coefficients2 in combinations(
-                            normalized_fourier_coefficients, 2
-                        )
-                    ],
-                    axis=-1,
-                )
-            ),
-            0.0,
-            1.0,
-        )
+        magnitude = xp.clip(_squared_magnitude(canonical_coherency), 0.0, 1.0)
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
         if observation_weights is not None:
@@ -4027,12 +4046,13 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
-        global_coherence, unnormalized_global_coherence = _global_coherence(
-            self._fourier_coefficients,
-            self._observation_weights,
-            max_rank,
-            max_workspace_elements,
-        )
+        with self._decomposition_of_nonfinite_coefficients("global_coherence"):
+            global_coherence, unnormalized_global_coherence = _global_coherence(
+                self._fourier_coefficients,
+                self._observation_weights,
+                max_rank,
+                max_workspace_elements,
+            )
 
         if xp.any(xp.isnan(global_coherence)):
             warnings.warn(
