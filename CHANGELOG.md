@@ -1382,7 +1382,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   unknown measure (`jackknife("coherence")`) gets the wrapper's suggestions
   ("Did you mean 'magnitude_squared_coherence', ...?") and a pointer to
   `list_measures()`, where the message said only that `method` must name a
-  public connectivity measure. An invalid `confidence_level`
+  public connectivity measure. A `method` that is not a string
+  (`jackknife(3)`) raises the wrappers' `TypeError` ("method must be a measure
+  name (str), got int 3. ..."), where it raised an `AttributeError` from
+  `str.startswith`. An invalid `confidence_level`
   (`confidence_level=95`) is echoed with "e.g. 0.95 for a 95% interval" and
   rejected before the leave-one-out estimates are computed, here and in
   `jackknife_confidence_interval`. An `expectation_type` it cannot use names

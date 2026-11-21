@@ -731,6 +731,16 @@ def _reduces_frequency(method: str) -> bool:
     return spec is not None and "frequency" not in spec.dims
 
 
+def _method_type_message(accepted: str, received: str) -> str:
+    """The message for a ``method`` of the wrong type: what the caller takes
+    (``accepted``), what it got, and where the names are listed."""
+    return (
+        f"method must be {accepted}, got {received}. Call "
+        "spectral_connectivity.list_measures() to see the measure names, "
+        "e.g. method='magnitude_squared_coherence'."
+    )
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
 ) -> tuple[list[str], dict[str, str], bool]:
@@ -766,13 +776,12 @@ def _requested_methods(
             received = f"{type(not_names[0]).__name__} {not_names[0]!r}"
             if isinstance(method, Iterable):
                 received = f"a {type(method).__name__} holding {received}"
-            msg = (
-                "method must be a measure name (str), a list of names, or None "
-                f"(the default measures), got {received}. Call "
-                "spectral_connectivity.list_measures() to see the measure names, "
-                "e.g. method='magnitude_squared_coherence'."
+            raise TypeError(
+                _method_type_message(
+                    "a measure name (str), a list of names, or None (the default measures)",
+                    received,
+                )
             )
-            raise TypeError(msg)
     if not requested:
         msg = "method must name at least one connectivity measure; got an empty list."
         raise ValueError(msg)

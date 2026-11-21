@@ -2335,6 +2335,18 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
+        # The registry imports this module, so its helpers are imported here.
+        from spectral_connectivity._measure_registry import (
+            _method_type_message,
+            _suggest_measure_names,
+        )
+
+        if not isinstance(method, str):
+            raise TypeError(
+                _method_type_message(
+                    "a measure name (str)", f"{type(method).__name__} {method!r}"
+                )
+            )
         method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
@@ -2342,9 +2354,6 @@ class Connectivity:
             or method in _NON_MEASURE_METHODS
             or not inspect.isfunction(method_attribute)
         ):
-            # The registry imports this module, so its suggester is imported here.
-            from spectral_connectivity._measure_registry import _suggest_measure_names
-
             msg = (
                 f"{method!r} is not a connectivity measure jackknife can "
                 f"compute.{did_you_mean(_suggest_measure_names(method))} Call "

@@ -534,6 +534,19 @@ def _jackknife_connectivity(expectation_type="trials_tapers"):
     )
 
 
+@pytest.mark.parametrize(("method", "received"), [(3, "int 3"), (None, "NoneType None")])
+def test_jackknife_says_what_method_may_be(method, received):
+    """A method that is not a name gets the wrappers' TypeError wording, not
+    an AttributeError from str.startswith."""
+    with pytest.raises(TypeError) as excinfo:
+        _jackknife_connectivity().jackknife(method)
+    assert str(excinfo.value) == (
+        f"method must be a measure name (str), got {received}. Call "
+        "spectral_connectivity.list_measures() to see the measure names, e.g. "
+        "method='magnitude_squared_coherence'."
+    )
+
+
 def test_jackknife_suggests_measure_names_for_an_unknown_one():
     """An unknown measure name gets the wrapper's suggestions and a pointer to
     list_measures()."""
