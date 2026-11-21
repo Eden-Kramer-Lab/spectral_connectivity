@@ -17,6 +17,11 @@ from spectral_connectivity.utils import stacklevel_outside_package
 
 logger = getLogger(__name__)
 
+# The opening words of the two warnings a failed factorization gives, which
+# Connectivity matches to drop them for NaN or Inf coefficients.
+CHOLESKY_FALLBACK_WARNING_START = "Computing the initial conditions using the Cholesky failed"
+NONCONVERGENCE_WARNING_START = "Wilson minimum-phase decomposition did not converge"
+
 
 def _is_conjugate_symmetric(cross_spectral_matrix: NDArray[np.complexfloating]) -> bool:
     """Whether ``S(-f) == conj(S(f))`` exactly along the frequency axis (-3).
@@ -132,7 +137,7 @@ def _get_initial_conditions(
         # finite value that is not guaranteed correct, so it must be equally
         # visible rather than only logged.
         warnings.warn(
-            "Computing the initial conditions using the Cholesky failed for "
+            f"{CHOLESKY_FALLBACK_WARNING_START} for "
             "some sub-spectra (rank-deficient / duplicated channels); using a "
             "deterministic positive-definite fallback start for those units. "
             "Their directed-connectivity values are not guaranteed correct — "
@@ -784,7 +789,7 @@ def minimum_phase_decomposition(
                 else f"within {max_iterations} iterations (tolerance={tolerance})"
             )
             warnings.warn(
-                f"Wilson minimum-phase decomposition did not converge for "
+                f"{NONCONVERGENCE_WARNING_START} for "
                 f"{n_failed} of {n_units} sub-spectrum/spectra ({reason}). Those "
                 f"sub-spectra are returned as NaN and will produce NaN in any "
                 f"directed connectivity measure (spectral Granger, DTF, etc.). "

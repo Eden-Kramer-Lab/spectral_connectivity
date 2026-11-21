@@ -29,6 +29,9 @@ from spectral_connectivity._array_utils import (
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
+    BLOCK_DEGENERATE_WARNING_START,
+    CONDITIONAL_DEGENERATE_WARNING_START,
+    NAN_PAIRS_WARNING_AFTER_MEASURE,
     _estimate_all_conditional_spectral_granger,
     _estimate_blockwise_spectral_granger,
     _estimate_spectral_granger_prediction,
@@ -44,6 +47,10 @@ from spectral_connectivity._multivariate import (
     _global_coherence,
     _mic_components,
     _normalize_fourier_coefficients,
+)
+from spectral_connectivity.minimum_phase_decomposition import (
+    CHOLESKY_FALLBACK_WARNING_START,
+    NONCONVERGENCE_WARNING_START,
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
@@ -522,12 +529,14 @@ def _ignore_nan_propagation_warnings(
 # Computed from NaN or Inf coefficients it always fails, and these warnings
 # then blame duplicated or collinear channels for what the NaN warning
 # already explained.
+# (warnings.filterwarnings patterns; the starts are defined where each
+# warning is raised.)
 _FACTORIZATION_FAILURE_WARNINGS = (
-    "Computing the initial conditions using the Cholesky failed",
-    "Wilson minimum-phase decomposition did not converge",
-    r"\w+: NaN at every frequency",
-    "Conditional spectral Granger: the total or intrinsic innovation",
-    "Block spectral Granger: the intrinsic or total target spectrum",
+    re.escape(CHOLESKY_FALLBACK_WARNING_START),
+    re.escape(NONCONVERGENCE_WARNING_START),
+    r"\w+" + re.escape(NAN_PAIRS_WARNING_AFTER_MEASURE),
+    re.escape(CONDITIONAL_DEGENERATE_WARNING_START),
+    re.escape(BLOCK_DEGENERATE_WARNING_START),
 )
 
 

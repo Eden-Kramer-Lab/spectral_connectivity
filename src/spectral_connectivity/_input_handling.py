@@ -722,6 +722,10 @@ def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
 
 
 _TIME_SERIES_LAYOUTS = "(n_time, n_signals) or (n_time, n_trials, n_signals)"
+_FOURIER_LAYOUTS = (
+    "(observation, frequency, signal), (trial, taper, frequency, signal), "
+    "or (time, trial, taper, frequency, signal)"
+)
 
 
 def _numeric_time_series(time_series: Any) -> BackendArray:
@@ -858,8 +862,7 @@ def _unwrap_fourier_input(
         data = numeric_array(
             fourier_coefficients,
             "fourier_coefficients",
-            "(observation, frequency, signal), (trial, taper, frequency, signal), "
-            "or (time, trial, taper, frequency, signal)",
+            _FOURIER_LAYOUTS,
             "Give every observation and signal the same number of frequency bins, "
             "then pass the result.",
             dtype_example="complex",
@@ -872,11 +875,7 @@ def _unwrap_fourier_input(
             # (trial, taper, frequency, signal)
             data = data[np.newaxis, :, :, :, :]
         elif ndim != 5:
-            msg = (
-                "fourier_coefficients must have 3, 4, or 5 dimensions: "
-                "(observation, frequency, signal), (trial, taper, frequency, "
-                "signal), or (time, trial, taper, frequency, signal)."
-            )
+            msg = f"fourier_coefficients must have 3, 4, or 5 dimensions: {_FOURIER_LAYOUTS}."
             raise ValueError(msg)
         # The 4-D and 5-D layouts name their second-to-last observation axis
         # as trials; the 3-D layout's observation axis is not known to be one.

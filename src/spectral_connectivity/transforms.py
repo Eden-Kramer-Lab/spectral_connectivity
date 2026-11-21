@@ -748,11 +748,8 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
     array's dtype without converting it (CuPy and xarray included).
     """
     if np.iscomplexobj(time_series):
-        dtype = getattr(time_series, "dtype", None)
-        if dtype is None:
-            dtype = np.asarray(time_series).dtype
         msg = (
-            f"{transform} got a complex-valued time series (dtype {dtype}). "
+            f"{transform} got a complex-valued time series (dtype {time_series.dtype}). "
             "Its outputs cover only the "
             "non-negative frequencies and assume the negative ones mirror them, "
             "which holds only for a real signal: the negative-frequency content "
@@ -763,6 +760,16 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
             "the Fourier coefficients yourself and pass them to Connectivity."
         )
         raise TypeError(msg)
+
+
+def _validated_time_series(time_series: Any, transform: str) -> BackendArray:
+    """A transform's input checked as every transform checks it: the axis order
+    of a labeled input, then numbers in an array (a nested list converted),
+    then real values."""
+    _check_labeled_axis_order(time_series, transform)
+    data = numeric_array(time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX)
+    _reject_complex_time_series(data, transform)
+    return data
 
 
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
@@ -1821,11 +1828,7 @@ class Multitaper(_WindowedFourierTransform):
         adaptive_tolerance: float = 1e-8,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        time_series = numeric_array(
-            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
-        )
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         _validate_detrend_type(detrend_type)
@@ -2401,11 +2404,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         ):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        time_series = numeric_array(
-            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
-        )
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2644,12 +2643,8 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        time_series = numeric_array(
-            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
-        )
-        _reject_complex_time_series(time_series, type(self).__name__)
-        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
+        time_series = _validated_time_series(time_series, type(self).__name__)
+        # np.shape reads the array's own shape, without a copy.
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(
@@ -2979,11 +2974,7 @@ class MorletWavelet:
         zero_mean: bool = True,
         start_time: float = 0.0,
     ) -> None:
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        time_series = numeric_array(
-            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
-        )
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
