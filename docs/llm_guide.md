@@ -152,8 +152,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `statistics.coherence_rate_adjustment` with `Connectivity.power()` of the
   spike train and `is_one_sided=True` (that spectrum is one-sided), the spikes
   given to the transform as counts per sample, and
-  `dt = 1 / sampling_frequency`. Its values at 0 Hz and Nyquist are not valid
-  for a one-sided spectrum. For a two-sided spectrum
+  `dt = 1 / sampling_frequency`. Leave out 0 Hz (and the bins within a taper
+  bandwidth of it); the Nyquist bin is valid only with a two-sided spectrum.
+  For a two-sided spectrum
   (`Connectivity.power(one_sided=False)`; the wrappers do not return one) pass
   `is_one_sided=False`. Omitting the keyword warns and assumes one-sided.
 - **Directed measures need a two-sided spectrum.** The Granger and

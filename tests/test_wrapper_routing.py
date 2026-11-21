@@ -371,16 +371,40 @@ def test_two_sided_power_is_refused_for_a_labelled_result(time_series, no_fft, m
         )
 
 
+@pytest.mark.parametrize("flag", [np.False_, np.array(False)], ids=["numpy_bool", "zero_d"])
+def test_two_sided_power_is_refused_for_any_false_flag(time_series, no_fft, flag):
+    """A NumPy boolean False is False: it is refused like the literal one."""
+    with pytest.raises(ValueError, match="not supported for 'power'"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": flag},
+        )
+
+
+@pytest.mark.parametrize("not_a_flag", [0, 1, None, "False"])
+def test_power_one_sided_setting_must_be_a_bool(time_series, no_fft, not_a_flag):
+    with pytest.raises(TypeError, match="one_sided must be a bool"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": not_a_flag},
+        )
+
+
 def test_one_sided_power_can_be_asked_for_by_name(time_series):
     """``one_sided=True`` is the labelled result as it always is."""
-    explicit = multitaper_connectivity(
-        time_series,
-        sampling_frequency=500,
-        method="power",
-        connectivity_kwargs={"one_sided": True},
-    )
     default = multitaper_connectivity(time_series, sampling_frequency=500, method="power")
-    np.testing.assert_array_equal(explicit.values, default.values)
+    for flag in (True, np.True_):
+        explicit = multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": flag},
+        )
+        np.testing.assert_array_equal(explicit.values, default.values)
 
 
 @pytest.mark.parametrize(

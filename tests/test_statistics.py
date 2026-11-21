@@ -742,7 +742,7 @@ def test_coherence_rate_adjustment_predicts_the_coherence_of_a_thinned_spike_tra
     magnitudes, each with the large-sample standard error
     ``(1 - C**2) / sqrt(2 n)`` for ``n`` observations and taken as
     independent, which overstates the error of their ratio. Read as the wrong
-    kind of density, the spectrum moves the factor by 0.11 without added
+    kind of density, the spectrum moves the factor by 0.11 to 0.13 without added
     spikes.
     """
     rng = np.random.default_rng(20261127)

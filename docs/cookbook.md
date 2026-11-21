@@ -37,7 +37,7 @@ category and a one-line description. Use it instead of guessing method strings.
 False
 >>> power = next(m for m in list_measures() if m.name == "power")
 >>> power.category, power.description
-('power', 'Return the one-sided power spectral density of the signal.')
+('power', 'Return the power spectral density of the signal (one-sided by default).')
 
 ```
 
@@ -505,11 +505,12 @@ True
 
 ```
 
-The factor multiplies the coherence magnitude, not its square. With the
-one-sided `power()` it is not valid at 0 Hz or at the Nyquist frequency:
-leave those two bins out, or pass `connectivity.power(one_sided=False)` with
-`is_one_sided=False`. Without `is_one_sided` the function assumes a one-sided
-spectrum and warns.
+The factor multiplies the coherence magnitude, not its square. Leave out the
+0 Hz bin, where the estimated spectrum is dominated by the spike train's mean
+(or by its removal), and the lowest bins within a taper's bandwidth of it. At
+the Nyquist frequency the factor is valid only with a two-sided spectrum:
+`connectivity.power(one_sided=False)` with `is_one_sided=False`. Without
+`is_one_sided` the function assumes a one-sided spectrum and warns.
 
 ## Bring your own Fourier coefficients
 

@@ -219,7 +219,7 @@ def list_measures(
     >>> [m.name for m in list_measures(default_only=True)][:3]
     ['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
     >>> next(m for m in list_measures() if m.name == "power").description
-    'Return the one-sided power spectral density of the signal.'
+    'Return the power spectral density of the signal (one-sided by default).'
     """
     valid_categories = {spec.output_kind for spec in _MEASURE_SPECS.values()}
     if category is not None and category not in valid_categories:
@@ -569,7 +569,11 @@ def _check_measure_settings(
         frequency_bands=frequency_bands,
     )
     measure_settings = {key: value for key, value in settings.items() if key != "group_labels"}
-    if "power" in methods and measure_settings.get("one_sided", True) is not True:
+    if (
+        "power" in methods
+        and "one_sided" in measure_settings
+        and not _validated_flag("one_sided", measure_settings["one_sided"])
+    ):
         # Checked for the whole request, so the answer does not depend on
         # where power stands among the methods.
         msg = (

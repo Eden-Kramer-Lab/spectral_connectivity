@@ -871,10 +871,12 @@ def coherence_rate_adjustment(
     rate_adjustment_factor : NDArray[floating], shape (n_frequencies,)
         Factor that multiplies the magnitude of the first condition's
         coherence (not its square); at most 1 when the rate does not rise.
-        ``NaN`` where it is undefined. With a one-sided spectrum the values
-        at 0 Hz and at the Nyquist frequency are not valid, because a
-        one-sided density is not doubled there: leave those two bins out, or
-        give the two-sided density.
+        ``NaN`` where it is undefined. Leave out the value at 0 Hz, and at
+        the frequencies within a taper's bandwidth of it: there the estimated
+        spike spectrum is dominated by the train's mean, or by its removal,
+        not by its fluctuations. The value at the Nyquist frequency is valid
+        only with a two-sided spectrum, because a one-sided density is not
+        doubled there.
 
     Examples
     --------

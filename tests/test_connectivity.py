@@ -196,6 +196,15 @@ def test_one_sided_power_and_csd_return_detached_arrays():
     power *= 2.0
     np.testing.assert_allclose(connectivity.power(), power / 2.0, equal_nan=True)
 
+    two_sided_connectivity = Connectivity(coefficients)
+    coherence_before = two_sided_connectivity.magnitude_squared_coherence()
+    two_sided = two_sided_connectivity.power(one_sided=False)
+    two_sided *= 0.0
+    assert np.all(two_sided_connectivity.power(one_sided=False) > 0)
+    np.testing.assert_allclose(
+        two_sided_connectivity.magnitude_squared_coherence(), coherence_before, equal_nan=True
+    )
+
     coherence_before = connectivity.magnitude_squared_coherence()
     csd = connectivity.cross_spectral_density()
     csd *= 3.0

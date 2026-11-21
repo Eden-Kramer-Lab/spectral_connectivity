@@ -2334,7 +2334,7 @@ class Connectivity:
 
     @_asnumpy
     def power(self, *, one_sided: bool = True) -> NDArray[np.floating]:
-        """Return the one-sided power spectral density of the signal.
+        """Return the power spectral density of the signal (one-sided by default).
 
         Only the non-negative frequencies are returned, with the interior
         positive-frequency bins doubled so that integrating the returned
