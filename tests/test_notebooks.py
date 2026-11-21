@@ -822,9 +822,8 @@ def test_global_coherence(snapshot):
         "global_coherence": connectivity.global_coherence()[0],
         "frequencies": connectivity.frequencies,
     }
-    # global_coherence spans all FFT bins, so pair it with all_frequencies.
     on_peak, off_peak = _on_and_off_peak(
-        outputs["global_coherence"][0, :, 0], connectivity.all_frequencies
+        outputs["global_coherence"][0, :, 0], connectivity.frequencies
     )
     assert on_peak > 0.95
     assert on_peak > 2 * np.median(off_peak)

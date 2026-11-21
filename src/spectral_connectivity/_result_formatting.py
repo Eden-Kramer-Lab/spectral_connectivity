@@ -432,8 +432,8 @@ def _connectivity_result_to_xarray(
 
     if output_kind == "global":
         scores, vectors = numerical_result
-        scores = np.asarray(scores)[..., : len(connectivity.frequencies), :]
-        vectors = np.asarray(vectors)[..., : len(connectivity.frequencies), :, :]
+        scores = np.asarray(scores)
+        vectors = np.asarray(vectors)
         n_components = scores.shape[-1]
         dataset_coordinates = {
             **base_coordinates,

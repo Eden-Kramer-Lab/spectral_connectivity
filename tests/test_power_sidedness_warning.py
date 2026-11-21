@@ -127,6 +127,56 @@ def test_jackknife_of_power_warns_once_for_its_full_estimate(connectivity):
     assert _sidedness_warnings(record) == []
 
 
+def test_global_coherence_warns_once_at_the_call(connectivity):
+    """A 2.x call of ``global_coherence()`` now gets only the non-negative
+    frequencies (2.x returned every FFT bin), so it says so, at the caller's
+    line, with the version that removes the notice and how to silence it."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        fractions, _ = connectivity.global_coherence()
+    (warning,) = _sidedness_warnings(record)
+    assert warning.filename == __file__
+    message = str(warning.message)
+    assert message.startswith("Since spectral_connectivity 3.0,")
+    assert "only the non-negative frequencies" in message
+    assert "labelled by Connectivity.frequencies" in message
+    assert "all_frequencies" in message
+    assert "removed in 3.2" in message
+    assert "migration.html" in message
+    assert (
+        'Silence this warning with warnings.filterwarnings("ignore", '
+        "category=spectral_connectivity.PowerSidednessWarning)."
+    ) in message
+    assert fractions.shape[1] == connectivity.frequencies.size
+
+
+def test_global_coherence_of_one_sided_coefficients_is_silent(time_series):
+    """One-sided coefficients have no negative bins, so nothing changed."""
+    morlet = Connectivity.from_transform(
+        MorletWavelet(time_series, sampling_frequency=100, frequencies=np.array([10.0, 20.0]))
+    )
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        morlet.global_coherence()
+    assert _sidedness_warnings(record) == []
+
+
+def test_labelled_global_coherence_is_silent(time_series):
+    """The wrappers labelled global coherence by its non-negative frequencies
+    already, so their results did not change and do not warn."""
+    multitaper = Multitaper(time_series, sampling_frequency=100)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        labelled = multitaper_connectivity(
+            time_series, sampling_frequency=100, method="global_coherence"
+        )
+        connectivity_to_xarray(multitaper, "global_coherence")
+    assert _sidedness_warnings(record) == []
+    fractions, vectors = Connectivity.from_transform(multitaper).global_coherence()
+    np.testing.assert_array_equal(labelled["global_coherence"].values, fractions)
+    np.testing.assert_array_equal(labelled["global_coherence_vectors"].values, vectors)
+
+
 def test_warning_is_silenced_by_its_category(connectivity):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
@@ -162,6 +212,24 @@ def test_warning_appears_once_per_session_unless_a_filter_says_otherwise():
     not at every line that calls ``power()``; a filter the user sets after
     import still shows it every time, or turns it into an error."""
     assert run_fresh_session(_SESSION_SCRIPT) == [1, 1, 3, "raised"]
+
+
+_GLOBAL_COHERENCE_SESSION_SCRIPT = """
+counts = []
+connectivity.power()
+connectivity.global_coherence()
+counts.append(len(shown))
+connectivity.global_coherence()  # another line
+connectivity.power()
+counts.append(len(shown))
+print(json.dumps(counts))
+"""
+
+
+def test_power_and_global_coherence_notices_each_appear_once_per_session():
+    """The two notices share the category but are separate messages: each
+    appears once, and seeing one does not use up the other."""
+    assert run_fresh_session(_GLOBAL_COHERENCE_SESSION_SCRIPT) == [2, 2]
 
 
 _SILENCED_FIRST_SCRIPT = """

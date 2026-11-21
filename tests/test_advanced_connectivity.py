@@ -61,6 +61,11 @@ def _observations(fourier_coefficients):
     return np.moveaxis(stacked, 1, -1)
 
 
+def _nonnegative_bins(fourier_coefficients):
+    """The non-negative frequency bins of two-sided coefficients in FFT order."""
+    return fourier_coefficients[..., : fourier_coefficients.shape[-2] // 2 + 1, :]
+
+
 def _cross_spectral_matrix(fourier_coefficients):
     """Per-bin (uncentered) cross-spectral matrix, shape (n_time, n_freq, n, n)."""
     x = _observations(fourier_coefficients)
@@ -448,21 +453,85 @@ class TestGlobalCoherence:
         conn = Connectivity.from_transform(m)
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=1)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
-        assert global_coh_vectors.shape == (m.time.size, m.frequencies.size, n_signals, 1)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, 1)
+        assert global_coh_vectors.shape == (
+            m.time.size,
+            m.frequencies.size // 2 + 1,
+            n_signals,
+            1,
+        )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(to_host(m.fft()))[..., :1],
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :1],
             rtol=1e-10,
             atol=1e-12,
         )
 
-        frequencies = np.abs(to_host(m.frequencies))
+        frequencies = conn.frequencies
         at_target = global_coh[0, np.argmin(np.abs(frequencies - 30)), 0]
         # Beyond the peak's multitaper bandwidth (W = NW / T = 5 Hz).
         off_peak = global_coh[0, np.abs(frequencies - 30) > 10, 0]
         assert at_target > 0.95
         assert off_peak.max() < 0.6
+
+    @pytest.mark.parametrize("n_time_samples", [100, 101], ids=["even_fft", "odd_fft"])
+    def test_global_coherence_nonnegative_bins_lose_nothing(self, n_time_samples):
+        """Only the non-negative bins are returned, and they hold everything.
+
+        For a real signal S(-f) = conj(S(f)), so the negative bins of the
+        two-sided decomposition (all that 2.x returned) have the same fractions
+        as their positive partners and conjugated vectors. The non-negative
+        bins themselves are bit-for-bit those of the two-sided decomposition.
+        """
+        from spectral_connectivity._multivariate import (
+            GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS,
+            _global_coherence,
+        )
+
+        n_signals = 4
+        m = Multitaper(
+            time_series=self.rng.standard_normal((n_time_samples, 6, n_signals)),
+            sampling_frequency=200,
+            time_halfbandwidth_product=2,
+        )
+        conn = Connectivity.from_transform(m)
+        fractions, vectors = conn.global_coherence(max_rank=n_signals)
+        full_fractions, full_vectors = (
+            to_host(values)
+            for values in _global_coherence(
+                m.fft(), None, n_signals, GLOBAL_COHERENCE_BATCH_CHUNK_ELEMENTS
+            )
+        )
+
+        n_frequencies = conn.frequencies.size
+        n_fft_samples = full_fractions.shape[1]
+        assert fractions.shape == (conn.time.size, n_frequencies, n_signals)
+        assert vectors.shape == (conn.time.size, n_frequencies, n_signals, n_signals)
+        np.testing.assert_array_equal(fractions, full_fractions[:, :n_frequencies])
+        np.testing.assert_array_equal(vectors, full_vectors[:, :n_frequencies])
+
+        # Bin k (0 < k < n_fft_samples - k) pairs with bin n_fft_samples - k.
+        positive = np.arange(1, n_fft_samples - n_frequencies + 1)
+        negative = n_fft_samples - positive
+        np.testing.assert_allclose(
+            full_fractions[:, negative], fractions[:, positive], rtol=1e-10, atol=1e-14
+        )
+        # conj(v) up to a phase: |<conj(v(f)), v(-f)>| = 1 for unit vectors.
+        overlap = np.abs(np.sum(vectors[:, positive] * full_vectors[:, negative], axis=-2))
+        np.testing.assert_allclose(overlap, 1.0, rtol=1e-8)
+
+    def test_global_coherence_of_one_sided_coefficients_keeps_every_bin(self):
+        """One-sided coefficients hold only non-negative bins: all are returned."""
+        coefficients = self.rng.standard_normal(
+            (1, 6, 2, 5, 3)
+        ) + 1j * self.rng.standard_normal((1, 6, 2, 5, 3))
+        conn = Connectivity(coefficients, is_one_sided=True)
+        fractions, vectors = conn.global_coherence(max_rank=2)
+        assert fractions.shape == (1, 5, 2)
+        assert vectors.shape == (1, 5, 3, 2)
+        np.testing.assert_allclose(
+            fractions, _global_coherence_oracle(coefficients)[..., :2], rtol=1e-10, atol=1e-12
+        )
 
     def test_global_coherence_multiple_components(self):
         """max_rank > 1 returns the leading eigenvalue fractions, strongest first."""
@@ -478,16 +547,16 @@ class TestGlobalCoherence:
         max_rank = 3
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=max_rank)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, max_rank)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, max_rank)
         assert global_coh_vectors.shape == (
             m.time.size,
-            m.frequencies.size,
+            m.frequencies.size // 2 + 1,
             n_signals,
             max_rank,
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(to_host(m.fft()))[..., :max_rank],
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :max_rank],
             rtol=1e-10,
             atol=1e-12,
         )
@@ -548,7 +617,10 @@ class TestGlobalCoherence:
             max_rank=n_signals
         )
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(to_host(m.fft())), rtol=1e-10, atol=1e-12
+            gc,
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft()))),
+            rtol=1e-10,
+            atol=1e-12,
         )
         # The fractions of every component sum to the whole (trace) power.
         np.testing.assert_allclose(gc.sum(axis=-1), 1.0, rtol=1e-12)
@@ -577,7 +649,10 @@ class TestGlobalCoherence:
         )
         gc, _ = Connectivity.from_transform(m).global_coherence(max_rank=3)
         np.testing.assert_allclose(
-            gc, _global_coherence_oracle(to_host(m.fft()))[..., :3], rtol=1e-8, atol=1e-12
+            gc,
+            _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))[..., :3],
+            rtol=1e-8,
+            atol=1e-12,
         )
         assert np.all(gc >= 0)
         assert np.all(gc <= 1.0 + 1e-12)
@@ -594,11 +669,11 @@ class TestGlobalCoherence:
             time_halfbandwidth_product=1,
         )
         conn = Connectivity.from_transform(m)
-        expected = _global_coherence_oracle(to_host(m.fft()))
+        expected = _global_coherence_oracle(_nonnegative_bins(to_host(m.fft())))
 
         for max_rank in (n_signals, n_signals - 1):
             global_coh, _ = conn.global_coherence(max_rank=max_rank)
-            assert global_coh.shape == (m.time.size, m.frequencies.size, max_rank)
+            assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, max_rank)
             np.testing.assert_allclose(
                 global_coh, expected[..., :max_rank], rtol=1e-10, atol=1e-12
             )
@@ -618,13 +693,13 @@ class TestGlobalCoherence:
         )
         global_coh, _ = Connectivity.from_transform(m).global_coherence(max_rank=1)
 
-        x = _observations(to_host(m.fft()))
+        x = _observations(_nonnegative_bins(to_host(m.fft())))
         a = np.sum(np.abs(x[..., 0, :]) ** 2, axis=-1)
         b = np.sum(np.abs(x[..., 1, :]) ** 2, axis=-1)
         c = np.sum(x[..., 0, :] * x[..., 1, :].conj(), axis=-1)
         largest = (a + b) / 2 + np.sqrt(((a - b) / 2) ** 2 + np.abs(c) ** 2)
 
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 1)
+        assert global_coh.shape == (m.time.size, m.frequencies.size // 2 + 1, 1)
         np.testing.assert_allclose(global_coh[..., 0], largest / (a + b), rtol=1e-10)
 
     def test_global_coherence_values_are_squared_singular_values(self):
@@ -644,7 +719,9 @@ class TestGlobalCoherence:
             max_rank=2
         )
 
-        singular_values = np.linalg.svd(_observations(to_host(m.fft())), compute_uv=False)
+        singular_values = np.linalg.svd(
+            _observations(_nonnegative_bins(to_host(m.fft()))), compute_uv=False
+        )
         power = singular_values**2
         expected = power / power.sum(axis=-1, keepdims=True)
         np.testing.assert_allclose(global_coh, expected[..., :2], rtol=1e-10, atol=1e-12)
@@ -660,8 +737,8 @@ class TestGlobalCoherence:
         conn = Connectivity(fourier_coefficients=fc)
         with pytest.warns(UserWarning, match="zero total power"):
             gc, _ = conn.global_coherence(max_rank=1)
-        assert np.all(np.isnan(gc[:, 2, :]))
-        assert np.all(np.isfinite(gc[:, [0, 1, 3], :]))
+        assert np.all(np.isnan(gc[:, 2, :]))  # bin 2 of 4 is Nyquist
+        assert np.all(np.isfinite(gc[:, [0, 1], :]))
 
     @pytest.mark.parametrize("path", ["batched", "per_bin"])
     def test_global_coherence_single_estimate_is_rank_one(self, path, monkeypatch):
@@ -683,7 +760,7 @@ class TestGlobalCoherence:
         fc = rng.standard_normal((1, 1, 1, 4, 3)) + 1j * rng.standard_normal((1, 1, 1, 4, 3))
         with pytest.warns(UserWarning, match="global_coherence is computed from a single"):
             gc, _ = Connectivity(fourier_coefficients=fc).global_coherence(max_rank=1)
-        assert gc.shape == (1, 4, 1)
+        assert gc.shape == (1, 3, 1)  # the non-negative bins of 4
         np.testing.assert_allclose(gc, 1.0, rtol=1e-12)
 
     def test_global_coherence_over_requested_rank_is_clamped(self):
@@ -1196,22 +1273,24 @@ class TestAdvancedConnectivityIntegration:
 
         # Global coherence
         global_coh, global_coh_vectors = conn.global_coherence(max_rank=2)
-        assert global_coh.shape == (m.time.size, m.frequencies.size, 2)
+        assert global_coh.shape == (m.time.size, n_non_negative_freqs, 2)
         assert global_coh_vectors.shape == (
             m.time.size,
-            m.frequencies.size,
+            n_non_negative_freqs,
             n_signals,
             2,
         )
         np.testing.assert_allclose(
             global_coh,
-            _global_coherence_oracle(fourier_coefficients)[..., :2],
+            _global_coherence_oracle(fourier_coefficients[..., :n_non_negative_freqs, :])[
+                ..., :2
+            ],
             rtol=1e-10,
             atol=1e-12,
         )
         # One shared source: the leading component dominates at low frequencies,
         # where the lags barely rotate the phases.
-        low = np.abs(to_host(m.frequencies)) <= 50
+        low = conn.frequencies <= 50
         assert np.all(global_coh[:, low, 0] > 0.8)
 
         # Group delay recovers the signed lags: [i, j] = (lags[j] - lags[i]) / fs.
@@ -1349,7 +1428,7 @@ def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
     coefficients = np.concatenate([coefficients, coefficients[:, :1]], axis=1)  # 4 estimates
     fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
 
-    observations = _observations(coefficients)
+    observations = _observations(_nonnegative_bins(coefficients))
     singular_values = np.linalg.svd(observations, compute_uv=False)
     expected = singular_values**2 / np.sum(singular_values**2, axis=-1, keepdims=True)
     np.testing.assert_allclose(fractions, expected, rtol=1e-10, atol=1e-12)

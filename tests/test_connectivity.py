@@ -18,6 +18,7 @@ from spectral_connectivity.connectivity import (
     PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS,
     Connectivity,
     DirectedOrientationWarning,
+    PowerSidednessWarning,
     _bandpass,
     _get_independent_frequency_step,
     _max_psd_discrepancy,
@@ -4699,8 +4700,11 @@ def test_global_coherence_vectors_are_orthonormal_eigenvectors():
     # Every component is an eigenvector of the per-bin cross-spectral matrix
     # A A^H with eigenvalue global_coherence * ||A||_F**2 (the fraction of total
     # power), computed here directly from the coefficients.
-    observations = fc.transpose(0, 3, 4, 1, 2).reshape(
-        n_time, n_fft, n_signals, n_trials * n_tapers
+    n_frequencies = n_fft // 2 + 1  # the non-negative bins
+    observations = (
+        fc[..., :n_frequencies, :]
+        .transpose(0, 3, 4, 1, 2)
+        .reshape(n_time, n_frequencies, n_signals, n_trials * n_tapers)
     )
     cross_spectral = observations @ np.conj(observations).swapaxes(-1, -2)
     total_power = np.sum(np.abs(observations) ** 2, axis=(-2, -1))
@@ -5017,6 +5021,8 @@ def test_multiple_observations_group_measure_does_not_warn(measure):
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
+        # global_coherence's 3.0 frequency-axis notice is not about the data.
+        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
         _rank_one_measure_magnitudes(connectivity, measure)
 
 
@@ -5058,6 +5064,7 @@ def test_single_observation_warning_counts_what_each_measure_averages():
     assert "time_halfbandwidth_product" not in message
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", category=PowerSidednessWarning)
         global_coherence, _ = over_trials.global_coherence()
     assert np.all(global_coherence < 1.0 - 1e-6)
 

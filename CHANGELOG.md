@@ -68,11 +68,13 @@ The migration guide for code written against 2.x is
 - `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
-  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It appears
-  once per Python session, like `DirectedOrientationWarning`. Pass
-  `one_sided=True` (or `False` for the 2.x values) or silence it with
-  `warnings.filterwarnings("ignore",
-  category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
+  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It is also
+  emitted by `Connectivity.global_coherence()` on two-sided coefficients,
+  which since 3.0 returns only the non-negative frequencies. Each notice
+  appears once per Python session, like `DirectedOrientationWarning`. Pass
+  `one_sided=True` to `power` (or `False` for the 2.x values) or silence
+  both with `warnings.filterwarnings("ignore",
+  category=spectral_connectivity.PowerSidednessWarning)`. The wrappers'
   results do not emit it. Both warnings' messages say that they are shown
   once per session and give the `simplefilter("always", ...)` call that shows
   them at every call.
@@ -438,6 +440,16 @@ The migration guide for code written against 2.x is
 
 ### Changed
 
+- `Connectivity.global_coherence` returns only the non-negative frequencies,
+  labelled by `Connectivity.frequencies`, like every other measure; 2.x
+  returned every bin of the two-sided transform, labelled by
+  `all_frequencies`. For a real signal the negative bins repeat the
+  non-negative ones (the same fractions, conjugated vectors), and the
+  non-negative bins are unchanged, so code that sliced
+  `[..., :len(conn.frequencies), :]` gets the same values. Until 3.2 a call on
+  two-sided coefficients emits a `PowerSidednessWarning` once per session.
+  The results of `multitaper_connectivity` and `connectivity_to_xarray` were
+  already trimmed so; they are unchanged and do not warn.
 - `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
   defaulted to 60. Near-singular cross-spectra (highly correlated channels)
   can need several hundred Wilson iterations, and the loop still stops as soon
@@ -631,11 +643,8 @@ The migration guide for code written against 2.x is
   to unpack it: `(values, labels)` from `canonical_coherence` and the other
   scalar group measures, a `MultivariateConnectivityResult` from
   `canonical_coherency` and `maximized_imaginary_coherency_components`, and
-  two arrays from `global_coherence`, whose frequency axis (unlike the other
-  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
-  non-negative ones. `global_coherence` documents that it ignores
-  `expectation_type` (every trial and taper of a window is decomposed) and
-  names its second return value `vectors`.
+  two arrays from `global_coherence`. `global_coherence` names its second
+  return value `vectors`.
 - `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
   says that it labels the two-sided FFT bins of `fft()` and that
   `Connectivity.frequencies`, the non-negative bins, labels results; the

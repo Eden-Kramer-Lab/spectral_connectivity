@@ -431,17 +431,24 @@ class DirectedOrientationWarning(UserWarning):
 
 
 class PowerSidednessWarning(UserWarning):
-    """``Connectivity.power()`` is one-sided, unlike in spectral_connectivity 2.x.
+    """A result's frequency sidedness differs from spectral_connectivity 2.x.
 
     Emitted by :meth:`Connectivity.power` when it is called without
     ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
     density, with the interior frequency bins doubled, where 2.x returned the
     two-sided density, so code written for 2.x keeps running and gets values
-    twice as large away from 0 Hz and Nyquist. This warning is temporary. It
-    appears once per Python session;
-    ``warnings.simplefilter("always", PowerSidednessWarning)`` shows it at every
-    call, and a call made while it is ignored does not count as shown. Pass
-    ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
+    twice as large away from 0 Hz and Nyquist. Pass ``one_sided=True`` or
+    ``one_sided=False`` to the call to silence it.
+
+    Also emitted by :meth:`Connectivity.global_coherence` on two-sided
+    coefficients: since 3.0 it returns only the non-negative frequencies,
+    labelled by :attr:`Connectivity.frequencies`, where 2.x returned every bin
+    of the two-sided transform, labelled by :attr:`Connectivity.all_frequencies`.
+
+    This warning is temporary. Each of the two notices appears once per Python
+    session; ``warnings.simplefilter("always", PowerSidednessWarning)`` shows
+    them at every call, and a call made while it is ignored does not count as
+    shown. Silence them with
     ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
 
     By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
@@ -1022,9 +1029,9 @@ class Connectivity:
       (``result.scores``, ``result.connections``, ``result.filters``, ...)
       rather than unpacking it.
     - ``global_coherence`` (which takes no groups) returns two arrays,
-      ``fractions, vectors = conn.global_coherence()``. Unlike every other
-      measure, its frequency axis holds all ``n_fft_samples`` FFT bins; see
-      its Notes for how to line it up with :attr:`frequencies`.
+      ``fractions, vectors = conn.global_coherence()``, whose frequency axis,
+      like every other measure's, holds the non-negative frequencies (2.x
+      returned every FFT bin).
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
@@ -1043,11 +1050,8 @@ class Connectivity:
     >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
     (1, 33, 1, 1)
     >>> fractions, vectors = conn.global_coherence()
-    >>> fractions.shape, vectors.shape  # 64 FFT bins: all of them, not 33
-    ((1, 64, 1), (1, 64, 4, 1))
-    >>> n_frequencies = len(conn.frequencies)
-    >>> fractions[..., :n_frequencies, :].shape  # aligned with conn.frequencies
-    (1, 33, 1)
+    >>> fractions.shape, vectors.shape  # (n_time_windows, n_frequencies, ...)
+    ((1, 33, 1), (1, 33, 4, 1))
 
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
@@ -4086,26 +4090,28 @@ class Connectivity:
         Returns
         -------
         global_coherence : ndarray
-            Shape (n_time_windows, n_fft_samples, n_components).
+            Shape (n_time_windows, n_frequencies, n_components).
             The fraction of total coherent power captured by each component
             (eigenvalue of the cross-spectral matrix divided by the sum of all
             eigenvalues), ordered strongest component first.
         vectors : ndarray
-            Shape (n_time_windows, n_fft_samples, n_signals, n_components).
+            Shape (n_time_windows, n_frequencies, n_signals, n_components).
             Each component's unit-norm weights over the signals (the left
             singular vectors of the coefficient matrix), in the same order;
             the wrappers call them ``global_coherence_vectors``.
 
         Notes
         -----
-        **Frequency axis**: unlike every other public measure, which returns
-        only the non-negative frequencies, this method returns all
-        ``n_fft_samples`` bins of the (two-sided) transform in FFT order,
-        labelled by :attr:`all_frequencies`. The first ``len(frequencies)``
-        of them are the non-negative bins, so
-        ``global_coherence[..., :len(conn.frequencies), :]`` and
-        ``vectors[..., :len(conn.frequencies), :, :]`` line up with
-        :attr:`frequencies`; the wrappers return them trimmed so.
+        **Frequency axis**: the non-negative frequencies, labelled by
+        :attr:`frequencies`, as for every other measure.
+
+        .. versionchanged:: 3.0
+           2.x returned every bin of the two-sided transform, labelled by
+           :attr:`all_frequencies`. For a real signal the negative bins repeat
+           the non-negative ones (the same fractions, conjugated vectors).
+           Until 3.2, a call on two-sided coefficients emits a
+           :class:`~spectral_connectivity.PowerSidednessWarning` once per
+           Python session as a reminder.
 
         **Observations**: it does not follow ``expectation_type``. Each time
         window is decomposed from all of its trials and tapers, so the
@@ -4153,11 +4159,12 @@ class Connectivity:
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
         >>> global_coherence, vectors = connectivity.global_coherence(max_rank=1)
-        >>> # Unlike the pairwise measures, the frequency axis spans all FFT bins.
-        >>> global_coherence.shape  # (n_time_windows, n_fft_samples, n_components)
-        (1, 1000, 1)
-        >>> vectors.shape  # (n_time_windows, n_fft_samples, n_signals, n_components)
-        (1, 1000, 2, 1)
+        >>> global_coherence.shape  # (n_time_windows, n_frequencies, n_components)
+        (1, 501, 1)
+        >>> vectors.shape  # (n_time_windows, n_frequencies, n_signals, n_components)
+        (1, 501, 2, 1)
+        >>> float(connectivity.frequencies[20])
+        10.0
         >>> # One component captures most of the power of the coupled pair (10 Hz = bin 20).
         >>> bool(global_coherence[0, 20, 0] > 0.8)
         True
@@ -4204,6 +4211,11 @@ class Connectivity:
         # decomposition fail, which is reported in the user's terms; NumPy's
         # "invalid value" RuntimeWarning from the scaling before it would only
         # repeat that, so it is silenced for such coefficients.
+        # Only the non-negative frequencies are reported, so only those are
+        # decomposed. For a real signal S(-f) = conj(S(f)): the negative bins
+        # have the same fractions and conjugated vectors.
+        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
+        weights = self._observation_weights
         with (
             self._decomposition_of_nonfinite_coefficients("global_coherence"),
             contextlib.nullcontext()
@@ -4211,8 +4223,8 @@ class Connectivity:
             else np.errstate(invalid="ignore", divide="ignore"),
         ):
             global_coherence, unnormalized_global_coherence = _global_coherence(
-                self._fourier_coefficients,
-                self._observation_weights,
+                self._fourier_coefficients[..., :n_nonnegative, :],
+                None if weights is None else weights[..., :n_nonnegative, :],
                 max_rank,
                 max_workspace_elements,
             )
@@ -4227,6 +4239,21 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
 
+        if not self._is_one_sided and _warn_orientation_change.get():
+            # Remove in 3.2, with DirectedOrientationWarning (issue #98).
+            warn_migration(
+                f"{_ORIENTATION_WARNING_PREFIX}Connectivity.global_coherence "
+                "returns only the non-negative frequencies, labelled by "
+                "Connectivity.frequencies, like every other measure. 2.x returned "
+                "every bin of the two-sided transform, labelled by all_frequencies; "
+                "for a real signal the negative bins repeat the non-negative ones "
+                "(the same fractions, conjugated vectors), so nothing is lost. "
+                "Label the frequency axis of code written for 2.x with frequencies. "
+                "This notice is temporary and will be removed in 3.2. See the "
+                f"migration guide: {_MIGRATION_GUIDE_URL}. "
+                + _silence_hint(PowerSidednessWarning),
+                PowerSidednessWarning,
+            )
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
     def _phase_locking_value(

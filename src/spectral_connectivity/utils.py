@@ -309,12 +309,13 @@ _current_warning_filters: Callable[[], Sequence[Any]] = getattr(
 def warn_migration(message: str, category: type[UserWarning]) -> None:
     """Issue a migration notice once per session, unless a warnings filter applies.
 
-    Each message (one ``PowerSidednessWarning``, one
-    ``DirectedOrientationWarning`` per measure) is issued until the user has
-    seen it once. Later it is issued again only if a warnings filter in effect
-    could match it, so a filter the user set (``-W``, ``PYTHONWARNINGS``,
-    ``warnings.simplefilter("always")`` or ``"error"``, ``pytest.warns``)
-    still decides; Python's own default filters match no ``UserWarning``.
+    Each message (the ``PowerSidednessWarning`` of ``power`` and of
+    ``global_coherence``, one ``DirectedOrientationWarning`` per measure) is
+    issued until the user has seen it once. Later it is issued again only if
+    a warnings filter in effect could match it, so a filter the user set
+    (``-W``, ``PYTHONWARNINGS``, ``warnings.simplefilter("always")`` or
+    ``"error"``, ``pytest.warns``) still decides; Python's own default
+    filters match no ``UserWarning``.
     Module and line restrictions are not checked, so a filter limited to a
     module counts as matching.
 
