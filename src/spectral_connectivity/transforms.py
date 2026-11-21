@@ -295,9 +295,10 @@ def suggest_parameters(
     and analysis goals. It helps answer the common question: "What parameters
     should I use for my data?"
 
-    ``frequency_resolution`` and the returned ``frequency_resolution``
-    refer to full DPSS concentration bandwidth in Hz, rather than FFT bin
-    spacing.
+    ``frequency_resolution`` (the target you pass) and the returned
+    ``frequency_resolution`` (the resolution achieved) are both full DPSS
+    concentration bandwidths in Hz, ``2 * NW / time_window_duration``, not FFT
+    bin spacing.
 
     .. versionchanged:: 3.0
        The target resolution is named ``frequency_resolution``, as in
@@ -314,12 +315,14 @@ def suggest_parameters(
         Total duration in seconds of your signal.
     frequency_resolution : float, optional
         Target frequency resolution in Hz. If specified, parameters will be
-        chosen to achieve approximately this resolution.
-        Cannot be specified together with desired_n_tapers.
+        chosen to achieve approximately this resolution. Given with
+        ``desired_n_tapers``, it takes precedence (see Warns).
     desired_n_tapers : int, optional
         Target number of tapers for variance reduction. If specified,
         time_halfbandwidth_product will be chosen to achieve this.
-        Cannot be specified together with frequency_resolution.
+        ``desired_n_tapers`` is a target; the returned ``n_tapers`` is what
+        you get. Ignored, with a warning, when ``frequency_resolution`` is
+        also given.
     desired_freq_resolution : float, optional
         Deprecated name of ``frequency_resolution``, by keyword only; removed
         in 4.0. Giving both raises ``ValueError``.
