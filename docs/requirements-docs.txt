@@ -2,7 +2,7 @@ numpydoc>=1.6
 sphinx
 docutils
 myst_nb
-MyST-Parser
+MyST-Parser>=5.1  # the alert extension
 pydata-sphinx-theme
 sphinx-autobuild
 sphinx-copybutton

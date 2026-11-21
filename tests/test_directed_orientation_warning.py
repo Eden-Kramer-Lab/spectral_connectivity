@@ -80,7 +80,7 @@ def test_changed_measure_warns_at_the_callers_line(connectivity, method):
     assert message.startswith("Since spectral_connectivity 3.0, ")
     assert method in message
     assert "[..., source, target]" in message
-    assert "migration-guide" in message
+    assert "https://spectral-connectivity.readthedocs.io/en/latest/migration.html" in message
     assert _ONCE_PER_SESSION in message
     assert warning.filename == __file__
 

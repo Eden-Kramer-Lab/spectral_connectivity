@@ -451,10 +451,7 @@ class PowerSidednessWarning(UserWarning):
     """
 
 
-_MIGRATION_GUIDE_URL = (
-    "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/"
-    "CHANGELOG.md#migration-guide"
-)
+_MIGRATION_GUIDE_URL = "https://spectral-connectivity.readthedocs.io/en/latest/migration.html"
 # Every DirectedOrientationWarning and PowerSidednessWarning message starts with
 # this, so pyproject.toml can filter them by message: a category filter would
 # import the package while pytest reads its configuration, before coverage starts.

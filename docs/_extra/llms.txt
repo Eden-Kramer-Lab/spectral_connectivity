@@ -9,17 +9,21 @@ Use `multitaper_connectivity(time_series, sampling_frequency=..., method=...)`
 with `time_series` shaped `(n_time_samples, n_trials, n_signals)`. Call
 `list_measures()` for every valid `method` and what its values mean. In the
 wrapper's results, `result.sel(source="a", target="b")` is the influence of `a`
-on `b`; the lower-level `Connectivity` arrays use two different index orders.
+on `b`; the lower-level `Connectivity` arrays use the same source-first order,
+`result[..., i, j]` is `i -> j` for every directed measure.
 
 ## Docs
 
-- [Guide for AI coding assistants](https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html): the workflow, direction conventions, parameter choice, and pitfalls
+- [Guide for AI coding assistants](https://spectral-connectivity.readthedocs.io/en/latest/llm_guide.html): the workflow, direction conventions, parameter choice, and API pitfalls
+- [Choosing a measure](https://spectral-connectivity.readthedocs.io/en/latest/choosing_a_measure.html): which measure answers which question, and the scientific pitfalls common to every measure
 - [Cookbook](https://spectral-connectivity.readthedocs.io/en/latest/cookbook.html): short recipes for common tasks
+- [Migrating from 2.x to 3.0](https://spectral-connectivity.readthedocs.io/en/latest/migration.html): what code written for 2.x has to change
 - [Connectivity Metric Ranges](https://spectral-connectivity.readthedocs.io/en/latest/CONNECTIVITY_METRIC_RANGES.html): range, units, orientation, and interpretation of every measure
 - [API reference](https://spectral-connectivity.readthedocs.io/en/latest/api.html): every public function and class
 
 ## Optional
 
-- [Introductory tutorial](https://spectral-connectivity.readthedocs.io/en/latest/examples/Intro_tutorial.html)
-- [Tutorial on simulated examples](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_On_Simulated_Examples.html)
+- [Getting started: from time series to connectivity](https://spectral-connectivity.readthedocs.io/en/latest/examples/Intro_tutorial.html)
+- [Connectivity measures on simulated signals](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_On_Simulated_Examples.html)
+- [Directed connectivity on published autoregressive models](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_Using_Paper_Examples.html)
 - [Source code](https://github.com/Eden-Kramer-Lab/spectral_connectivity)

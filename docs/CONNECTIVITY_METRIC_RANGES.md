@@ -133,9 +133,3 @@ Two differences are deliberate and are kept: `imaginary_coherence` is 0 (to
 within rounding) on the diagonal where the signed `imaginary_coherency` is NaN,
 and coherence is NaN where its value would be 1. To treat every
 self-connection the same way, mask it yourself; the cookbook's "Mask or fill the diagonal" recipe shows how.
-
-## Notes
-
-- For metrics theoretically bounded in [0, 1], numerical implementations should clamp to the interval after computation to avoid tiny overflows (e.g., 1 ± 1e−12). Unbiased estimators such as PPC and the debiased PLI variants must retain legitimate negative finite-sample values.
-- For phase‑based metrics, choose an expectation (sample) axis (trials/tapers/segments) and aggregate **only** across that axis.
-- Document the shapes/dtypes of inputs and outputs in each docstring per NumPy style.

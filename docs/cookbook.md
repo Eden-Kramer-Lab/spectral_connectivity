@@ -675,7 +675,7 @@ Labels along averaged trial axes are omitted.
 
 The result-schema migration is separate from the supported public property and
 helper names. The [migration
-guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide)
+guide](migration.md)
 maps each 2.0.1 `mt_*` attribute, and each attribute renamed during 3.0
 development, to the keys above.
 

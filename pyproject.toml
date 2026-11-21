@@ -256,6 +256,7 @@ include = [
     "/docs/CONNECTIVITY_METRIC_RANGES.md",
     "/docs/cookbook.md",
     "/docs/llm_guide.md",
+    "/docs/choosing_a_measure.md",
     "README.md",
     "LICENSE",
     "CITATION.cff",

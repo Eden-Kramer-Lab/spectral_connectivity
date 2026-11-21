@@ -80,8 +80,6 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "**.ipynb_checkpoints",
-    "pyproject.toml",
-    "README.md",
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -129,6 +127,7 @@ intersphinx_mapping = {
 
 # MyST
 myst_enable_extensions = [
+    "alert",  # GitHub's > [!WARNING] blocks, which the included README uses
     "dollarmath",
     "amsmath",
     "deflist",
@@ -138,7 +137,6 @@ myst_enable_extensions = [
 myst_heading_anchors = 3
 
 # MyST-NB
-nb_execution_mode = "cache"
 nb_execution_mode = "off"
 
 

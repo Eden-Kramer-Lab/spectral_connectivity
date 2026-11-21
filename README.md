@@ -9,50 +9,40 @@
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
 [![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
-[**Tutorials**](#tutorials)
-| [**Documentation**](#documentation)
+[**Installation**](#installation)
+| [**Tutorials**](#tutorials)
 | [**Usage Example**](#usage-example)
-| [**Installation**](#installation)
+| [**Documentation**](#documentation)
+| [**GPU Acceleration**](#gpu-acceleration)
 | [**Developer Installation**](#developer-installation)
 | [**Contributing**](#contributing)
 | [**License**](#license)
 | [**Citation**](#citation)
 
 > [!WARNING]
-> **Upgrading from 2.x: the Granger and transfer-function measures changed
-> direction.** `result[..., i, j]` from the `Connectivity` methods of the
-> spectral Granger family, directed transfer function, directed coherence,
-> (generalized) partial directed coherence, and direct directed transfer
-> function is now `i -> j` (2.x returned `j -> i`). For pairwise and subset
-> spectral Granger prediction, the directed measures the 2.x wrapper accepted,
-> `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
-> (2.x returned `b -> a`). Indexing code written for 2.x still runs but reads
-> the opposite direction: swap its indices and recompute stored results.
-> `phase_slope_index`, `group_delay`, and `delay` were already source first; do
-> not swap them. `directed_phase_lag_index` is new in 3.0 and also source
-> first. Until 3.2 the `Connectivity` methods that existed in 2.x (pairwise and
-> subset spectral Granger, directed transfer function, directed coherence,
-> (generalized) partial directed coherence, and direct directed transfer
-> function) emit a `DirectedOrientationWarning` as a reminder, as do
-> `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and
-> subset spectral Granger prediction; silence it with
-> `warnings.filterwarnings("ignore",
-> category=spectral_connectivity.DirectedOrientationWarning)`. It is shown
-> once per session for each measure; to see it at every call, use
-> `warnings.simplefilter("always",
-> spectral_connectivity.DirectedOrientationWarning)`. See the
-> [migration guide](CHANGELOG.md#migration-guide).
+> **Upgrading from 2.x? Two changes alter almost every directed or power result
+> without raising an error.**
 >
-> **`Connectivity.power()` is one-sided since 3.0.** The bins between 0 Hz and
-> Nyquist are twice the 2.x values, so integrating over the non-negative
-> frequencies gives the signal's power. `power(one_sided=False)` returns the
-> 2.x values. Until 3.2, calling `Connectivity.power()` without `one_sided` on
-> two-sided coefficients emits a `PowerSidednessWarning` (once per session;
-> `warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning)`
-> shows it at every call); pass `one_sided=True` to silence it. The power that
-> `multitaper_connectivity` and `connectivity_to_xarray` return (including by
-> default) is the one-sided density too, and they do not warn: halve its
-> interior bins to compare with a 2.x result.
+> + **Directed measures changed direction.** `result[..., i, j]` from the
+>   `Connectivity` methods of the spectral Granger family, directed transfer
+>   function, directed coherence, (generalized) partial directed coherence, and
+>   direct directed transfer function is now `i -> j` (2.x returned `j -> i`).
+>   For pairwise and subset spectral Granger prediction,
+>   `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
+>   (2.x returned `b -> a`). Swap the indices in code written for 2.x and
+>   recompute stored results; `phase_slope_index`, `group_delay`, and `delay`
+>   were already source first.
+> + **Power is one-sided.** `Connectivity.power()` and the power that
+>   `multitaper_connectivity` and `connectivity_to_xarray` return are twice the
+>   2.x values between 0 Hz and Nyquist; `power(one_sided=False)` returns the
+>   2.x values.
+>
+> Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
+> `PowerSidednessWarning` as a reminder, once per Python session (for each
+> measure); `warnings.simplefilter("always", ...)` with the warning's class
+> shows it at every call. Several other values also changed
+> without an error. The [migration guide](docs/migration.md) lists which calls
+> warn, how to silence them, and every other change.
 
 ## What is spectral_connectivity?
 
@@ -69,34 +59,76 @@ efficiently summarize brain-area level coherences from multielectrode recordings
   `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
   importing the package. Public results are returned as NumPy arrays.
 
-### Tutorials
+## Installation
 
-See the following notebooks for more information on how to use the package:
+Requires Python >= 3.10.
 
-+ [Tutorial](examples/Intro_tutorial.ipynb)
-+ [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
-+ [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
+```bash
+pip install spectral_connectivity
+```
 
-The simulated-examples notebook builds every case with `spectral_connectivity.simulate` and asserts what each plot shows.
+or
 
-### Usage Example
+```bash
+conda install -c edeno spectral_connectivity
+```
+
+GPU acceleration is optional; see [GPU Acceleration](#gpu-acceleration) to set
+it up. To contribute, see [Developer Installation](#developer-installation).
+
+## Tutorials
+
++ [Getting started: from time series to connectivity](examples/Intro_tutorial.ipynb):
+  start here; coherence from a time series, and the settings that matter.
++ [Connectivity measures on simulated signals](examples/Tutorial_On_Simulated_Examples.ipynb):
+  what each measure shows on signals with known, planted coupling.
++ [Directed connectivity on published autoregressive models](examples/Tutorial_Using_Paper_Examples.ipynb):
+  Granger and transfer-function measures on models from the literature.
+
+## Usage Example
 
 The quickest way to get connectivity measures is the high-level
 `multitaper_connectivity` function, which runs the multitaper transform and
-returns labeled [xarray](https://docs.xarray.dev/) objects (dimensions such as
-`time`, `frequency`, `source`, `target`):
+returns labeled [xarray](https://docs.xarray.dev/) objects. This example runs
+as is: it simulates four signals, three of which share a 10 Hz rhythm, and
+plots the coherence of one pair.
 
 ```python
-from spectral_connectivity import multitaper_connectivity
+import matplotlib.pyplot as plt
 
-# time_series has shape (n_time_samples, n_trials, n_signals)
+from spectral_connectivity import multitaper_connectivity
+from spectral_connectivity.simulate import simulate_shared_oscillation
+
+sampling_frequency = 500  # samples per second, in Hz
+
+# Your data goes in an array shaped (n_time_samples, n_trials, n_signals).
+# Here: 20 trials of 10 s (5000 samples) from 4 signals. Signals a, b, and c
+# share a 10 Hz oscillation; d is noise only.
+time_series = simulate_shared_oscillation(
+    frequency=10,  # Hz
+    sampling_frequency=sampling_frequency,
+    n_time_samples=5000,
+    n_trials=20,
+    amplitudes=[1.0, 1.0, 1.0, 0.0],
+    noise_levels=1.0,
+    random_state=0,
+)
+print(time_series.shape)  # (5000, 20, 4)
+
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
     method="magnitude_squared_coherence",
+    signal_names=["a", "b", "c", "d"],
     time_halfbandwidth_product=3,
 )
-# -> DataArray with dims (time, frequency, source, target)
+print(coherence.dims)  # ('time', 'frequency', 'source', 'target')
+
+# Select one pair. With no time_window_duration the whole trial is one time
+# window, so take that window and plot coherence against frequency (Hz).
+coherence.sel(source="a", target="b").isel(time=0).plot()
+plt.xlim(0, 50)
+plt.show()
 
 # Ask for several measures at once (returns an xarray.Dataset)
 measures = multitaper_connectivity(
@@ -106,9 +138,25 @@ measures = multitaper_connectivity(
 )
 ```
 
+A few terms used throughout:
+
++ **Taper**: a window function that multiplies each stretch of data before
+  its Fourier transform. The multitaper method uses several orthogonal tapers
+  (Slepian sequences, or DPSS) and averages over them, which lowers the
+  variance of the estimate.
++ **Time-halfbandwidth product** (`time_halfbandwidth_product`, NW): sets two
+  things. The frequency resolution is `2 * NW / time_window_duration` Hz: the
+  width of the spectral smoothing (the full DPSS concentration bandwidth),
+  which FFT bin spacing and zero-padding do not change. The number of tapers
+  is `2 * NW - 1`, rounded down (5 for NW = 3). Larger NW gives smoother, less
+  noisy spectra but coarser frequency resolution.
++ **Observations**: the trials x tapers that each estimate averages over.
+  Normalized measures such as coherence need several of them.
+
 The common multitaper settings, like `time_halfbandwidth_product` here, are
-named arguments: `time_window_duration`, `time_window_step`,
-`time_halfbandwidth_product`, `n_tapers`, and `detrend_type`. Any other
+named arguments: `time_window_duration` (seconds; default the whole trial),
+`time_window_step` (seconds), `time_halfbandwidth_product`, `n_tapers`, and
+`detrend_type`. Any other
 `Multitaper` setting goes in `transform_kwargs={...}` (e.g.
 `transform_kwargs={"n_fft_samples": 1024}`), options for the measure itself go
 in `connectivity_kwargs={...}`, and group measures take `group_labels` (see
@@ -117,14 +165,19 @@ and the
 [group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).
 
 The `3` above is a common default. To pick values from your recording's length
-and the frequency resolution you need, use `suggest_parameters`:
+and the frequency resolution you need, use `suggest_parameters`, giving it the
+duration of one trial. The window must fit in that duration: if the
+resolution you ask for needs a longer window, it raises a `ValueError`. If
+fewer than three windows would fit per trial, it shortens the window, keeping
+the resolution where possible by using fewer tapers, and warns if that leaves
+fewer than two tapers:
 
 ```python
 from spectral_connectivity import suggest_parameters
 
 params = suggest_parameters(
     sampling_frequency=sampling_frequency,
-    signal_duration=10.0,  # seconds
+    signal_duration=time_series.shape[0] / sampling_frequency,  # 10 s per trial
     frequency_resolution=2.0,  # Hz
 )
 # -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
@@ -149,6 +202,18 @@ from spectral_connectivity import list_measures
 # Every valid method name, e.g. filter to the directed measures
 directed = [m.name for m in list_measures(directed=True)]
 ```
+
+### Choosing a measure
+
+| Your question | Start with (**try first**) | Watch out for |
+| --- | --- | --- |
+| Are two signals coupled? | **`magnitude_squared_coherence`**, `phase_locking_value`, `pairwise_phase_consistency` | Few trials x tapers bias coherence and phase locking upward; a single observation gives 1 for any data. |
+| Could it be volume conduction (zero-lag mixing)? | `imaginary_coherence`, **`weighted_phase_lag_index`**, `debiased_squared_weighted_phase_lag_index` | They also ignore genuine zero-lag and anti-phase coupling. |
+| Which signal leads? | **`phase_slope_index`**, `pairwise_spectral_granger_prediction`, `conditional_spectral_granger_prediction` | Granger measures need long windows and a two-sided transform. |
+| How are two groups of signals coupled? | **`canonical_coherence`**, `blockwise_spectral_granger_prediction` | Pass `group_labels`, one label per signal. |
+
+[Choosing a measure](docs/choosing_a_measure.md) has the full table and the
+pitfalls common to every measure.
 
 See the [**Cookbook**](docs/cookbook.md) for short, copy-pasteable recipes
 covering functional and directed connectivity, reading the labeled output,
@@ -188,37 +253,51 @@ from `a` to `b`, and the lower-level `Connectivity` arrays use the same order:
 `result[..., i, j]` is `i -> j`. For lead/lag measures a positive value means
 the source leads. The directed-transfer-function family is available by name
 as an opt-in method. `list_measures()` reports each measure's value range,
-units, and interpretation; see
-[Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
+units, and interpretation.
 
-#### Lower-level API
+### Lower-level API
 
 For finer control (or if you already have Fourier coefficients from another
 method), use the `Multitaper` and `Connectivity` classes directly:
 
 ```python
-from spectral_connectivity import Multitaper, Connectivity
+from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity.simulate import simulate_shared_oscillation
 
-# Compute multitaper spectral estimate
+sampling_frequency = 500  # Hz
+# (n_time_samples, n_trials, n_signals): 20 trials of 10 s from 4 signals
+time_series = simulate_shared_oscillation(
+    frequency=10, sampling_frequency=sampling_frequency, n_time_samples=5000,
+    n_trials=20, amplitudes=[1.0, 1.0, 1.0, 0.0], noise_levels=1.0, random_state=0,
+)
+brain_area_labels = ["CA1", "CA1", "PFC", "PFC"]  # one group label per signal
+
+# Compute multitaper spectral estimate in 1 s windows every 0.5 s
 m = Multitaper(
-    time_series=signals,
+    time_series=time_series,
     sampling_frequency=sampling_frequency,
-    time_halfbandwidth_product=time_halfbandwidth_product,
-    time_window_duration=0.060,
-    time_window_step=0.060,
-    start_time=time[0],
+    time_halfbandwidth_product=3,
+    time_window_duration=1.0,  # seconds
+    time_window_step=0.5,  # seconds
+    start_time=0.0,  # time of the first sample, in seconds
     # fft_workers=-1,  # optional: parallelize the CPU FFT across all cores
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.)
+# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.) Its
+# expectation_type says which axes the cross-spectrum is averaged over: the
+# default "trials_tapers" keeps one estimate per time window.
 c = Connectivity.from_transform(m)
 
-# Here are a couple of examples
+# Here are a couple of examples. Pairwise measures return NumPy arrays shaped
+# (n_time_windows, n_frequencies, n_signals, n_signals), (19, 251, 4, 4) here;
+# power drops the last axis. c.time (window centers, s) and c.frequencies (Hz)
+# label the first two axes.
 power = c.power(one_sided=True)  # one-sided spectral power density
 coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
-canonical_coherence = c.canonical_coherence(brain_area_labels)
+# Group measures return (values, group labels)
+canonical_coherence, area_labels = c.canonical_coherence(brain_area_labels)
 # Exact Vidaurre CaCoh is complex and component-resolved. Rich MIC uses the
 # same result schema; both include filters, patterns, and group membership.
 cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
@@ -238,9 +317,11 @@ frequency-reduced, so `frequency_bands` and `frequency_decimation` leave them
 as computed over `frequency_range`.
 
 The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
-wavelet transforms. Morlet coefficients are one-sided, so they support
-functional measures but deliberately reject Wilson-factorized directed
-measures:
+wavelet transforms. Morlet coefficients are one-sided, so they support the
+functional measures but deliberately reject the directed ones (the spectral
+Granger and transfer-function families). Those use Wilson's algorithm to
+factor the spectrum into a transfer function and noise covariance, which needs
+both positive and negative frequencies:
 
 ```python
 from spectral_connectivity import (
@@ -282,7 +363,8 @@ the xarray wrapper carries it as a two-dimensional coordinate.
 satisfying the `SpectralTransform` protocol (an `fft()` method plus
 `frequencies` and `time`). `help(SpectralTransform)` gives its optional
 attributes, the `fft()` ownership rule, and the scaling that makes `power()` a
-density; the [cookbook](docs/cookbook.md) has a worked example.
+density; the cookbook has a
+[worked example](docs/cookbook.md#plug-in-your-own-transform).
 
 For DPSS transforms, `taper_weighting="uniform"` preserves the historical
 behavior; `"eigen"` weights by concentration ratio and `"adaptive"` applies
@@ -292,51 +374,57 @@ spectral dynamic range or line noise makes some tapers systematically leakier).
 Already have full two-sided FFT coefficients? `fourier_connectivity` accepts
 NumPy arrays or labeled DataArrays in the core
 `(time, trial, taper, frequency, signal)` layout (with documented shorter
-forms), preserving frequency, time, and signal coordinates.
+forms), preserving frequency, time, and signal coordinates, and returns the
+same labeled results as `multitaper_connectivity`.
 
-Uncertainty for real-valued measures is available through
-`Connectivity.jackknife(...)`, with automatic variance-stabilizing
-transformations (log for power, `atanh(sqrt(.))` for magnitude-squared
-coherence, and circular for phase).
+The labeled results share one schema, `output_schema_version=1`: common
+transform and observation attributes, the estimator's qualified bandwidth, and
+one `transform_parameters_json` record of the settings. See the
+[result-schema reference and migration examples](docs/cookbook.md#result-schema-and-transform-bandwidth).
 
-### Documentation
+For uncertainty, `Connectivity.jackknife(method)` recomputes a real-valued
+measure, leaving out one trial/taper observation at a time. It returns a
+bias-corrected estimate, standard error, and confidence interval, and applies
+a variance-stabilizing transformation automatically: log for power,
+`atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.
 
+## Documentation
+
+<!-- docs/index.md skips from here: a link to the docs site itself. -->
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
+<!-- docs/index.md resumes here. -->
 
-For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
++ [Cookbook](docs/cookbook.md): short recipes for common tasks.
++ [Choosing a measure](docs/choosing_a_measure.md): which measure answers
+  which question, and the pitfalls common to every measure.
++ [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md): the range,
+  units, diagonal, and interpretation of every measure.
++ [Migrating from 2.x to 3.0](docs/migration.md).
 
-### Implemented Measures
+## Implemented Measures
 
-Functional
+The complete list, with each measure's `method` name, value range, units,
+diagonal, and interpretation, is generated from the code into
+[Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md);
+`list_measures()` returns the same records in Python. By family:
 
-1. coherency
-2. cross_spectral_density
-3. magnitude_squared_coherence and coherence_phase
-4. imaginary_coherence and signed imaginary_coherency
-5. partial_coherence
-6. canonical_coherence and exact complex canonical_coherency (CaCoh)
-7. maximized_imaginary_coherency (score-only or component-resolved) and multivariate_interaction_measure
-8. phase_locking_value and corrected_imaginary_phase_locking_value
-9. phase_lag_index, directed_phase_lag_index, and weighted_phase_lag_index
-10. debiased_squared_phase_lag_index
-11. debiased_squared_weighted_phase_lag_index
-12. pairwise_phase_consistency
-13. global_coherence
++ **Spectra**: power and the cross-spectral density.
++ **Coherence**: coherency, its squared magnitude, phase, and imaginary part,
+  and partial coherence.
++ **Phase synchrony**: the phase-locking value and its corrected imaginary
+  form, pairwise phase consistency, and the phase lag index with its weighted
+  and debiased forms.
++ **Between groups of signals**: canonical coherence and coherency, maximized
+  imaginary coherency, the multivariate interaction measure, and global
+  coherence.
++ **Directed influence**: spectral Granger prediction (pairwise, subset,
+  conditional, blockwise, time-reversed) and the transfer-function family
+  (directed transfer function, directed coherence, partial directed coherence
+  and its generalized form, direct directed transfer function).
++ **Lead and lag**: the phase slope index, group delay, delay, and the directed
+  phase lag index.
 
-Directed
-
-1. directed_transfer_function
-2. directed_coherence
-3. partial_directed_coherence
-4. generalized_partial_directed_coherence
-5. direct_directed_transfer_function
-6. group_delay
-7. pairwise_spectral_granger_prediction
-8. conditional_spectral_granger_prediction
-9. blockwise_spectral_granger_prediction
-10. time_reversed_spectral_granger_prediction
-
-### Package Dependencies
+## Package Dependencies
 
 `spectral_connectivity` requires:
 
@@ -346,188 +434,74 @@ Directed
 + scipy
 + xarray
 
-See [pyproject.toml](pyproject.toml) for the authoritative list of dependencies and their minimum versions.
+See [pyproject.toml](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/pyproject.toml) for the authoritative list of dependencies and their minimum versions.
 
-### GPU Acceleration
+## GPU Acceleration
 
-`spectral_connectivity` supports GPU acceleration using
-[CuPy](https://cupy.dev/), which can accelerate large workloads when a suitable
-CUDA device is available.
+GPU acceleration is optional. The core transforms and connectivity
+calculations can run on an NVIDIA GPU through [CuPy](https://cupy.dev/), which
+helps with large workloads (many signals, trials, or windows, or several
+measures from the same data). For small datasets (fewer than 10 signals and
+1000 time points) the CPU may be faster, because of the cost of moving data to
+the GPU. Results are NumPy arrays either way.
 
-#### GPU Setup Options
+1. Install CuPy. With pip on CUDA 12, the package's `gpu` extra installs
+   `cupy-cuda12x>=13.0`:
 
-There are three ways to enable GPU acceleration:
+   ```bash
+   pip install "spectral-connectivity[gpu]"
+   ```
 
-**Option 1: Environment Variable (Shell)**
+   With conda, `conda install -c conda-forge cupy` picks the CUDA version for
+   you. For another CUDA version (`nvidia-smi` shows yours), install the
+   matching CuPy 13+ package instead of the extra, e.g.
+   `pip install "cupy-cuda11x>=13.0"`; see the
+   [CuPy installation guide](https://docs.cupy.dev/en/stable/install.html).
 
-```bash
-export SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
-python your_script.py
-```
+2. Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` **before** importing
+   `spectral_connectivity`. The backend is chosen once, at import, so setting
+   the variable later has no effect. In a shell, run
+   `export SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before starting Python. In a
+   Jupyter notebook, run `%env SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` in the
+   first cell (restart the kernel if the package was already imported). In a
+   script, set it above the first import of the package:
 
-**Option 2: Environment Variable (Python Script)**
+   ```python
+   import os
 
-```python
-import os
+   os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
 
-# IMPORTANT: Must set BEFORE importing spectral_connectivity
-# (Python loads modules once; changing the variable after import has no effect)
-os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
+   import spectral_connectivity as sc
+   ```
 
-from spectral_connectivity import Multitaper, Connectivity
+3. Check which backend is active:
 
-# Verify GPU is active
-import spectral_connectivity as sc
+   ```python
+   backend = sc.get_compute_backend()
+   print(backend["message"])
+   ```
 
-backend = sc.get_compute_backend()
-print(backend["message"])
-# Should print: "Using GPU backend with CuPy on <your GPU name>"
-```
+   On a GPU the message is `Using GPU backend with CuPy on <your GPU name>.`
+   On the CPU it says the NumPy backend is in use and how to enable the GPU,
+   for example by installing CuPy or setting the variable before importing. The
+   dictionary also holds `backend` (`"cpu"` or `"gpu"`), `gpu_enabled`
+   (whether the variable requested the GPU), `gpu_available` (whether CuPy is
+   installed), and `device_name`.
 
-**Option 3: Environment Variable (Jupyter Notebook)**
+Troubleshooting:
 
-```python
-# In first cell (before any imports):
-%env SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
++ **Importing the package raises `RuntimeError: GPU support was explicitly
+  requested ... but CuPy is not installed`.** Install CuPy as in step 1,
+  matching your CUDA version; `python -c "import cupy; print(cupy.__version__)"`
+  checks the install and `nvidia-smi` the CUDA driver.
++ **The GPU is not used although CuPy is installed and the variable is set.**
+  The variable must be set before `import spectral_connectivity`; set later, it
+  has no effect (and the message may still suggest installing CuPy). Move it
+  above the first import, or restart the notebook kernel.
++ **Out of GPU memory.** Process fewer trials or time windows per call, or run
+  on the CPU: unset the variable and restart Python.
 
-# In second cell:
-from spectral_connectivity import Multitaper, Connectivity
-import spectral_connectivity as sc
-
-# Verify GPU is active
-backend = sc.get_compute_backend()
-print(f"Backend: {backend['backend']}")
-print(f"Device: {backend['device_name']}")
-# Should show: Backend: gpu, Device: <your GPU name>
-
-# Note: If you already imported spectral_connectivity before setting the
-# environment variable, you must restart your kernel for changes to take effect:
-# Kernel → Restart & Clear Output, then run cells again
-```
-
-#### Installing CuPy
-
-**Recommended (conda - auto-detects CUDA version):**
-
-```bash
-conda install -c conda-forge cupy
-```
-
-**Recommended pip installation (CUDA 12):**
-
-```bash
-pip install "spectral-connectivity[gpu]"
-```
-
-The package's GPU extra installs `cupy-cuda12x>=13.0`. For another CUDA version,
-install the corresponding CuPy 13+ distribution directly instead of the extra.
-
-```bash
-# Check your CUDA version first: nvidia-smi
-pip install "cupy-cuda11x>=13.0"  # CUDA 11.x
-pip install "cupy-cuda12x>=13.0"  # CUDA 12.x
-```
-
-See [CuPy Installation Guide](https://docs.cupy.dev/en/stable/install.html) for detailed instructions and GPU-specific requirements.
-
-#### Checking GPU Status
-
-Use `get_compute_backend()` to check if GPU acceleration is enabled:
-
-```python
-import spectral_connectivity as sc
-
-backend = sc.get_compute_backend()
-print(backend["message"])
-# Example output (GPU enabled):
-# "Using GPU backend with CuPy on NVIDIA Tesla V100-SXM2-16GB."
-
-# Or if GPU not available:
-# "Using CPU backend with NumPy. To enable GPU acceleration:
-#   1. Install CuPy: 'conda install -c conda-forge cupy' or
-#      'pip install "spectral-connectivity[gpu]"'
-#   2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing
-# See documentation for detailed setup instructions."
-
-# Check all details
-for key, value in backend.items():
-    print(f"{key}: {value}")
-```
-
-Output fields:
-- `backend`: Either "cpu" or "gpu"
-- `gpu_enabled`: Whether GPU was requested via environment variable
-- `gpu_available`: Whether CuPy is installed and importable
-- `device_name`: Name of compute device (e.g., "CPU" or "GPU (Compute Capability 7.5)")
-- `message`: Human-readable explanation of current configuration
-
-#### Troubleshooting GPU Issues
-
-**Issue: "GPU support was requested but CuPy is not installed"**
-
-Solution: Install CuPy as shown above, ensuring the CUDA version matches your system.
-
-**Issue: GPU not being used even after setting environment variable**
-
-Possible causes:
-1. Environment variable set *after* importing spectral_connectivity
-   - Solution: Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before any imports
-   - In scripts: Move the `os.environ[...]` line to the very top, before all spectral_connectivity imports
-   - In notebooks: Restart kernel (Kernel → Restart & Clear Output) and set variable in first cell
-2. CuPy not installed or CUDA version mismatch
-   - Solution: Run `python -c "import cupy; print(cupy.__version__)"` to verify installation
-3. CUDA not available on system
-   - Solution: Check CUDA installation with `nvidia-smi`
-4. Environment variable set in script but after import statement
-   - Solution: Ensure `os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'` appears before `from spectral_connectivity import ...`
-
-**Issue: Out of memory errors on GPU**
-
-Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
-```python
-# Remove or unset the environment variable
-os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
-```
-
-**Issue: Need to check GPU vs CPU performance**
-
-Use `get_compute_backend()` to verify which backend is active, then compare timing:
-
-```python
-import time
-import spectral_connectivity as sc
-
-backend = sc.get_compute_backend()
-print(f"Running on: {backend['backend']}")
-
-start = time.time()
-# Your spectral connectivity code here
-elapsed = time.time() - start
-print(f"Elapsed time: {elapsed:.2f}s")
-```
-
-#### When to Use GPU Acceleration
-
-GPU acceleration is most beneficial for:
-- Large datasets (many signals, long recordings, or many trials)
-- High frequency resolution (small time windows, many tapers)
-- Computing multiple connectivity measures from the same data
-
-For small datasets (< 10 signals, < 1000 time points), CPU may be faster due to GPU transfer overhead.
-
-### Installation
-
-```bash
-pip install spectral_connectivity
-```
-
-or
-
-```bash
-conda install -c edeno spectral_connectivity
-```
-
-### Developer Installation
+## Developer Installation
 
 If you want to make contributions to this library, please use this installation.
 
@@ -557,52 +531,9 @@ pip install -e .[dev]
 `uv.lock` pins the development environment; `uv lock` refreshes it after a
 dependency change, and CI checks that it is current.
 
-## Releases
-
-This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based on git tags. The version is automatically determined from the repository state:
-
-- **Tagged releases**: `1.2.0`
-- **Development versions**: `1.2.0.dev5+g1a2b3c4` (5 commits since tag + git hash)
-
-### Making a Release
-
-Releases are published **automatically by CI**: pushing a `v*` tag runs the
-*Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
-to PyPI via trusted publishing (after approval in the protected `pypi`
-environment). Do **not** run `twine upload` by hand — that bypasses the tests,
-attestations, and approval gate. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-full process and the required one-time setup.
-
-```bash
-# Update CHANGELOG.md, then tag and push -- CI does the rest.
-git tag -a v1.2.0 -m "v1.2.0"
-git push origin v1.2.0
-```
-
-Conda packages are published separately and manually:
-
-```bash
-conda build conda-recipe/ --output-folder ./conda-builds
-anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
-```
-
-The version number is automatically extracted from the git tag (without the 'v' prefix).
-
-### Conda Package
-
-This package is also available on conda via the `edeno` channel:
-
-```bash
-conda install -c edeno spectral_connectivity
-```
-
-**Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
-- 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
-- Or volunteer to help maintain the conda-forge feedstock
-
 ## Contributing
 
-We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
+We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md) for details on:
 
 + How to report bugs and request features
 + Development workflow and coding standards
@@ -613,7 +544,7 @@ For questions or discussions, please open an issue on GitHub.
 
 ## License
 
-This project is licensed under the **GPL-3.0** License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GPL-3.0** License - see the [LICENSE](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/LICENSE) file for details.
 
 ## Citation
 
@@ -632,3 +563,14 @@ For citation, please use the following:
 disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
 + The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
+
+## Releases
+
+Releases are published by CI from version tags, and the version number comes
+from the tag. Maintainers: see
+[How to make a release](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md#how-to-make-a-release).
+
+**Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
+
++ 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
++ Or volunteer to help maintain the conda-forge feedstock
