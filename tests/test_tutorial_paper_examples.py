@@ -504,7 +504,29 @@ _PUBLISHED_MODELS = {
         ],
         np.diag([0.6, 0.5, 0.3, 0.3, 0.6]),
     ),
+    # Dhamala, Rangarajan & Ding (2008), "Analyzing information flow in brain
+    # networks with nonparametric Granger causality", NeuroImage 41, 354-362
+    # (author manuscript PMC2685256): the three-node model of "The simulation
+    # models", with var(eta) = 0.25, var(xi) = 1, var(epsilon) = 0.25 from its
+    # Fourier analysis. x1, x2, x3 are its X, Y, Z.
+    "Dhamala_example1": _published_model(
+        2,
+        3,
+        [
+            (1, 1, 1, 0.8),
+            (1, 1, 2, -0.5),
+            (1, 3, 1, 0.4),
+            (2, 2, 1, 0.53),
+            (2, 2, 2, -0.8),
+            (3, 3, 1, 0.5),
+            (3, 3, 2, -0.2),
+            (3, 2, 1, 0.5),
+        ],
+        np.diag([0.25, 1.0, 0.25]),
+    ),
 }
+# Examples whose markdown displays their equations.
+_DISPLAYED_EXAMPLES = [name for name in _PUBLISHED_MODELS if name.startswith("ding_")]
 
 
 @pytest.mark.parametrize("example", list(_PUBLISHED_MODELS))
@@ -534,7 +556,7 @@ def _displayed_coefficients(example, n_lags, n_signals):
     return coefficients
 
 
-@pytest.mark.parametrize("example", list(_PUBLISHED_MODELS))
+@pytest.mark.parametrize("example", _DISPLAYED_EXAMPLES)
 def test_example_displays_the_published_equations(example):
     """The equations the tutorial shows for an example are the published ones.
     Example 2a showed the lag-two x2 term that only 2b has, and Example 3 the
