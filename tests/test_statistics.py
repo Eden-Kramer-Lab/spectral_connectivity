@@ -1,3 +1,4 @@
+import contextlib
 import subprocess
 import sys
 import warnings
@@ -495,6 +496,14 @@ def test_coherence_rate_adjustment_nonpositive_argument_is_nan():
     assert np.isfinite(adjustment[1])
 
 
+def _noted_if_noise(added_poisson_rate):
+    """The notice that a non-zero noise rate gets about the 3.0 meaning of the
+    second rate, expected exactly when that rate is non-zero."""
+    if added_poisson_rate:
+        return pytest.warns(UserWarning, match="firing_rate_condition2 includes")
+    return contextlib.nullcontext()
+
+
 @pytest.mark.parametrize("is_one_sided", [True, False], ids=["one_sided", "two_sided"])
 @pytest.mark.parametrize("dt", [1.0, 0.002])
 @pytest.mark.parametrize("added_poisson_rate", [0.0, 6.0])
@@ -540,14 +549,15 @@ def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_pro
     spike_spectrum, coherence = spectra(1.0, 0.0)
     _, thinned_coherence = spectra(alpha, added_poisson_rate)
 
-    factor = coherence_rate_adjustment(
-        rate,
-        alpha * rate + added_poisson_rate,
-        2 * spike_spectrum if is_one_sided else spike_spectrum,
-        homogeneous_poisson_noise=added_poisson_rate,
-        dt=dt,
-        is_one_sided=is_one_sided,
-    )
+    with _noted_if_noise(added_poisson_rate):
+        factor = coherence_rate_adjustment(
+            rate,
+            alpha * rate + added_poisson_rate,
+            2 * spike_spectrum if is_one_sided else spike_spectrum,
+            homogeneous_poisson_noise=added_poisson_rate,
+            dt=dt,
+            is_one_sided=is_one_sided,
+        )
 
     np.testing.assert_allclose(factor, thinned_coherence / coherence, rtol=1e-12)
     # The ratio is far from 1 and varies with frequency, so it is a real check.
@@ -755,14 +765,15 @@ def test_coherence_rate_adjustment_predicts_the_coherence_of_a_thinned_spike_tra
     coherence = np.abs(connectivity.coherency()[0, at_40_hz])  # (signal, signal)
     full, second = coherence[0, 1], coherence[0, 2]
 
-    factor = coherence_rate_adjustment(
-        rate,
-        kept_fraction * rate + added_poisson_rate,
-        connectivity.power(one_sided=is_one_sided)[0, [at_40_hz], 1],
-        homogeneous_poisson_noise=added_poisson_rate,
-        dt=dt,
-        is_one_sided=is_one_sided,
-    )[0]
+    with _noted_if_noise(added_poisson_rate):
+        factor = coherence_rate_adjustment(
+            rate,
+            kept_fraction * rate + added_poisson_rate,
+            connectivity.power(one_sided=is_one_sided)[0, [at_40_hz], 1],
+            homogeneous_poisson_noise=added_poisson_rate,
+            dt=dt,
+            is_one_sided=is_one_sided,
+        )[0]
 
     n_observations = connectivity.n_observations
     relative_standard_error = np.hypot(
@@ -778,6 +789,25 @@ def test_coherence_rate_adjustment_predicts_the_coherence_of_a_thinned_spike_tra
 def test_coherence_rate_adjustment_one_sided_flag_must_be_a_bool(not_a_flag):
     with pytest.raises(TypeError, match="is_one_sided must be a bool"):
         coherence_rate_adjustment(15.0, 10.0, np.array([1.0, 2.0]), is_one_sided=not_a_flag)
+
+
+def test_coherence_rate_adjustment_notes_the_meaning_of_the_second_rate_with_noise():
+    """With added Poisson spikes, firing_rate_condition2 means the measured rate,
+    added spikes included, where 2.x needed the rate of the kept spikes only.
+    A 2.x call passing that rate still runs, so every call with a non-zero
+    noise rate says what the argument means, once, at the caller's line. A
+    call without added spikes, whose meaning did not change, is silent."""
+    spectrum = np.array([4.0, 6.0, 9.0])
+    with pytest.warns(UserWarning, match="firing_rate_condition2 includes") as record:
+        coherence_rate_adjustment(
+            15.0, 12.0, spectrum, homogeneous_poisson_noise=3.0, is_one_sided=False
+        )
+    assert len(record) == 1
+    assert record[0].filename == __file__
+    assert "add the noise rate" in str(record[0].message)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        coherence_rate_adjustment(15.0, 12.0, spectrum, is_one_sided=False)
 
 
 def test_coherence_rate_adjustment_says_so_when_it_assumes_a_one_sided_spectrum():

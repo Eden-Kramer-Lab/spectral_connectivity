@@ -841,6 +841,12 @@ def coherence_rate_adjustment(
         only if the experiment tells you what it is, and leave 0 when spikes
         are only removed. Must be at least 0 and below
         ``firing_rate_condition2``.
+
+        .. versionchanged:: 3.0
+           ``firing_rate_condition2`` includes these spikes. 2.x took it as
+           the rate of the kept spikes alone, against its documentation, so
+           a call with a non-zero rate here warns about the change (until
+           4.0).
     dt : float, default=1
         Width of the time bins the spikes are counted in, in seconds: for a
         spectrum from this package, ``1 / sampling_frequency`` of the spike
@@ -927,6 +933,20 @@ def coherence_rate_adjustment(
             "the noise rate to it."
         )
         raise ValueError(msg)
+    if homogeneous_poisson_noise > 0:
+        # Remove in 4.0 (issue #101).
+        warnings.warn(
+            "coherence_rate_adjustment, changed in spectral_connectivity 3.0: "
+            "firing_rate_condition2 includes the spikes counted in "
+            "homogeneous_poisson_noise: it is the second condition's measured "
+            "rate. 2.x took it as the rate of the kept spikes alone. If a call "
+            "written for 2.x passed that rate, add the noise rate to it. This "
+            "notice is shown for every call with added spikes until 4.0; "
+            "filter it with warnings.filterwarnings('ignore', "
+            "message='coherence_rate_adjustment, changed in').",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
     if is_one_sided is None:
         warnings.warn(
             "coherence_rate_adjustment was not told whether spike_power_spectrum "

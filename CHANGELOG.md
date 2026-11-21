@@ -51,7 +51,7 @@ their rows).
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
 | One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density |
 | `coherence_rate_adjustment(rate1, rate2, power, ...)` was given 2.x's `power()`, a two-sided density | Say which density the spectrum is. With 3.0's one-sided `power()` pass `is_one_sided=True`: the factor is the same as in 2.x at interior frequencies, and not valid in the 0 Hz and Nyquist bins, where a one-sided density is not doubled. With a two-sided spectrum (your own, or `power(one_sided=False)`) pass `is_one_sided=False`. Without the keyword the call warns and assumes one-sided |
-| `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. Calls with the default noise of 0 are unchanged |
+| `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. Every call with a non-zero noise rate warns about this until 4.0. Calls with the default noise of 0 are unchanged and silent |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008). The sign is unchanged, but the sum has far fewer terms, so values are smaller by one to several orders of magnitude: recompute, and re-derive any threshold |
 | `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time, the midpoint of the window's first and last samples: the 2.x label plus `(n_time_samples_per_window - 1) / (2 * sampling_frequency)` (0.245 s, not 0.25 s, for the first 50-sample window at 100 Hz) |
@@ -748,7 +748,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   for the documented argument the factor was too large: 0.90, 0.81 and 0.74
   where the thinned process gives 0.69, 0.54 and 0.46 in the case run. A
   noise rate that is negative, not finite, or not below the second rate raises
-  a `ValueError`.
+  a `ValueError`. A 2.x call that passed the kept-spike rate still runs, so a
+  call with a non-zero noise rate warns that the argument's meaning changed,
+  until 4.0; `warnings.filterwarnings("ignore", message="coherence_rate_adjustment,
+  changed in")` silences it.
 - *Unreleased:* `Connectivity`, `Connectivity.from_transform`, and
   `from_multitaper` reject a `dtype` that is not complex with a `TypeError`
   before any FFT. Once `blocks` was removed, `dtype=None` (for instance 2.x's
