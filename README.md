@@ -9,10 +9,11 @@
 [![Documentation Status](https://readthedocs.org/projects/spectral-connectivity/badge/?version=latest)](https://spectral-connectivity.readthedocs.io/en/latest/?badge=latest)
 [![codecov](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity/branch/master/graph/badge.svg)](https://codecov.io/gh/Eden-Kramer-Lab/spectral_connectivity)
 
-[**Tutorials**](#tutorials)
-| [**Documentation**](#documentation)
+[**Installation**](#installation)
+| [**Tutorials**](#tutorials)
 | [**Usage Example**](#usage-example)
-| [**Installation**](#installation)
+| [**Documentation**](#documentation)
+| [**GPU Acceleration**](#gpu-acceleration)
 | [**Developer Installation**](#developer-installation)
 | [**Contributing**](#contributing)
 | [**License**](#license)
@@ -68,6 +69,23 @@ efficiently summarize brain-area level coherences from multielectrode recordings
 + core transforms and connectivity calculations support GPU acceleration when
   `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
   importing the package. Public results are returned as NumPy arrays.
+
+### Installation
+
+Requires Python >= 3.10.
+
+```bash
+pip install spectral_connectivity
+```
+
+or
+
+```bash
+conda install -c edeno spectral_connectivity
+```
+
+GPU acceleration is optional; see [GPU Acceleration](#gpu-acceleration) to set
+it up. To contribute, see [Developer Installation](#developer-installation).
 
 ### Tutorials
 
@@ -413,182 +431,66 @@ See [pyproject.toml](pyproject.toml) for the authoritative list of dependencies 
 
 ### GPU Acceleration
 
-`spectral_connectivity` supports GPU acceleration using
-[CuPy](https://cupy.dev/), which can accelerate large workloads when a suitable
-CUDA device is available.
+GPU acceleration is optional. The core transforms and connectivity
+calculations can run on an NVIDIA GPU through [CuPy](https://cupy.dev/), which
+helps with large workloads (many signals, trials, or windows, or several
+measures from the same data). For small datasets (fewer than 10 signals and
+1000 time points) the CPU may be faster, because of the cost of moving data to
+the GPU. Results are NumPy arrays either way.
 
-#### GPU Setup Options
+1. Install CuPy. With pip on CUDA 12, the package's `gpu` extra installs
+   `cupy-cuda12x>=13.0`:
 
-There are three ways to enable GPU acceleration:
+   ```bash
+   pip install "spectral-connectivity[gpu]"
+   ```
 
-**Option 1: Environment Variable (Shell)**
+   With conda, `conda install -c conda-forge cupy` picks the CUDA version for
+   you. For another CUDA version (`nvidia-smi` shows yours), install the
+   matching CuPy 13+ package instead of the extra, e.g.
+   `pip install "cupy-cuda11x>=13.0"`; see the
+   [CuPy installation guide](https://docs.cupy.dev/en/stable/install.html).
 
-```bash
-export SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
-python your_script.py
-```
+2. Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` **before** importing
+   `spectral_connectivity`. The backend is chosen once, at import, so setting
+   the variable later has no effect. In a shell, run
+   `export SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before starting Python. In a
+   Jupyter notebook, run `%env SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` in the
+   first cell (restart the kernel if the package was already imported). In a
+   script, set it above the first import of the package:
 
-**Option 2: Environment Variable (Python Script)**
+   ```python
+   import os
 
-```python
-import os
+   os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
 
-# IMPORTANT: Must set BEFORE importing spectral_connectivity
-# (Python loads modules once; changing the variable after import has no effect)
-os.environ["SPECTRAL_CONNECTIVITY_ENABLE_GPU"] = "true"
+   import spectral_connectivity as sc
+   ```
 
-from spectral_connectivity import Multitaper, Connectivity
+3. Check which backend is active:
 
-# Verify GPU is active
-import spectral_connectivity as sc
+   ```python
+   backend = sc.get_compute_backend()
+   print(backend["message"])
+   ```
 
-backend = sc.get_compute_backend()
-print(backend["message"])
-# Should print: "Using GPU backend with CuPy on <your GPU name>"
-```
+   On a GPU the message is `Using GPU backend with CuPy on <your GPU name>.`;
+   on the CPU it says so and lists the steps above that are missing. The
+   dictionary also holds `backend` (`"cpu"` or `"gpu"`), `gpu_enabled`
+   (whether the variable requested the GPU), `gpu_available` (whether CuPy is
+   installed), and `device_name`.
 
-**Option 3: Environment Variable (Jupyter Notebook)**
+Troubleshooting:
 
-```python
-# In first cell (before any imports):
-%env SPECTRAL_CONNECTIVITY_ENABLE_GPU=true
-
-# In second cell:
-from spectral_connectivity import Multitaper, Connectivity
-import spectral_connectivity as sc
-
-# Verify GPU is active
-backend = sc.get_compute_backend()
-print(f"Backend: {backend['backend']}")
-print(f"Device: {backend['device_name']}")
-# Should show: Backend: gpu, Device: <your GPU name>
-
-# Note: If you already imported spectral_connectivity before setting the
-# environment variable, you must restart your kernel for changes to take effect:
-# Kernel → Restart & Clear Output, then run cells again
-```
-
-#### Installing CuPy
-
-**Recommended (conda - auto-detects CUDA version):**
-
-```bash
-conda install -c conda-forge cupy
-```
-
-**Recommended pip installation (CUDA 12):**
-
-```bash
-pip install "spectral-connectivity[gpu]"
-```
-
-The package's GPU extra installs `cupy-cuda12x>=13.0`. For another CUDA version,
-install the corresponding CuPy 13+ distribution directly instead of the extra.
-
-```bash
-# Check your CUDA version first: nvidia-smi
-pip install "cupy-cuda11x>=13.0"  # CUDA 11.x
-pip install "cupy-cuda12x>=13.0"  # CUDA 12.x
-```
-
-See [CuPy Installation Guide](https://docs.cupy.dev/en/stable/install.html) for detailed instructions and GPU-specific requirements.
-
-#### Checking GPU Status
-
-Use `get_compute_backend()` to check if GPU acceleration is enabled:
-
-```python
-import spectral_connectivity as sc
-
-backend = sc.get_compute_backend()
-print(backend["message"])
-# Example output (GPU enabled):
-# "Using GPU backend with CuPy on NVIDIA Tesla V100-SXM2-16GB."
-
-# Or if GPU not available:
-# "Using CPU backend with NumPy. To enable GPU acceleration:
-#   1. Install CuPy: 'conda install -c conda-forge cupy' or
-#      'pip install "spectral-connectivity[gpu]"'
-#   2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing
-# See documentation for detailed setup instructions."
-
-# Check all details
-for key, value in backend.items():
-    print(f"{key}: {value}")
-```
-
-Output fields:
-- `backend`: Either "cpu" or "gpu"
-- `gpu_enabled`: Whether GPU was requested via environment variable
-- `gpu_available`: Whether CuPy is installed and importable
-- `device_name`: Name of compute device (e.g., "CPU" or "GPU (Compute Capability 7.5)")
-- `message`: Human-readable explanation of current configuration
-
-#### Troubleshooting GPU Issues
-
-**Issue: "GPU support was requested but CuPy is not installed"**
-
-Solution: Install CuPy as shown above, ensuring the CUDA version matches your system.
-
-**Issue: GPU not being used even after setting environment variable**
-
-Possible causes:
-1. Environment variable set *after* importing spectral_connectivity
-   - Solution: Set `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` before any imports
-   - In scripts: Move the `os.environ[...]` line to the very top, before all spectral_connectivity imports
-   - In notebooks: Restart kernel (Kernel → Restart & Clear Output) and set variable in first cell
-2. CuPy not installed or CUDA version mismatch
-   - Solution: Run `python -c "import cupy; print(cupy.__version__)"` to verify installation
-3. CUDA not available on system
-   - Solution: Check CUDA installation with `nvidia-smi`
-4. Environment variable set in script but after import statement
-   - Solution: Ensure `os.environ['SPECTRAL_CONNECTIVITY_ENABLE_GPU'] = 'true'` appears before `from spectral_connectivity import ...`
-
-**Issue: Out of memory errors on GPU**
-
-Solution: Use smaller batch sizes or switch back to CPU for very large datasets:
-```python
-# Remove or unset the environment variable
-os.environ.pop("SPECTRAL_CONNECTIVITY_ENABLE_GPU", None)
-```
-
-**Issue: Need to check GPU vs CPU performance**
-
-Use `get_compute_backend()` to verify which backend is active, then compare timing:
-
-```python
-import time
-import spectral_connectivity as sc
-
-backend = sc.get_compute_backend()
-print(f"Running on: {backend['backend']}")
-
-start = time.time()
-# Your spectral connectivity code here
-elapsed = time.time() - start
-print(f"Elapsed time: {elapsed:.2f}s")
-```
-
-#### When to Use GPU Acceleration
-
-GPU acceleration is most beneficial for:
-- Large datasets (many signals, long recordings, or many trials)
-- High frequency resolution (small time windows, many tapers)
-- Computing multiple connectivity measures from the same data
-
-For small datasets (< 10 signals, < 1000 time points), CPU may be faster due to GPU transfer overhead.
-
-### Installation
-
-```bash
-pip install spectral_connectivity
-```
-
-or
-
-```bash
-conda install -c edeno spectral_connectivity
-```
++ **Importing the package raises `RuntimeError: GPU support was explicitly
+  requested ... but CuPy is not installed`.** Install CuPy as in step 1,
+  matching your CUDA version; `python -c "import cupy; print(cupy.__version__)"`
+  checks the install and `nvidia-smi` the CUDA driver.
++ **The GPU is not used although the variable is set.** It was set after the
+  package was imported: move it above the first import, or restart the
+  notebook kernel.
++ **Out of GPU memory.** Process fewer trials or time windows per call, or run
+  on the CPU: unset the variable and restart Python.
 
 ### Developer Installation
 
