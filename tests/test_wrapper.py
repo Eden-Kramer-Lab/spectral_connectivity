@@ -409,6 +409,29 @@ def test_accepts_documented_2d_input():
     np.testing.assert_allclose(result_2d.values, result_3d.values, equal_nan=True)
 
 
+def test_nested_list_input_matches_the_array_input():
+    """A nested list is read like the array it describes: 2-D time series in
+    multitaper_connectivity, and 3-D and 4-D coefficients in
+    fourier_connectivity, whose shapes the wrappers check before converting."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    from_array = multitaper_connectivity(data, sampling_frequency=500, method="power")
+    from_list = multitaper_connectivity(data.tolist(), sampling_frequency=500, method="power")
+    xr.testing.assert_identical(from_list, from_array)
+
+    # A contiguous copy, which the list's array is: a strided view can change
+    # the summation order, and so the last bit.
+    coefficients = np.ascontiguousarray(
+        Multitaper(data[:, np.newaxis, :], sampling_frequency=500).fft()[0]
+    )
+    frequencies = np.fft.fftfreq(coefficients.shape[-2], d=1 / 500)
+    for layout in (coefficients[0], coefficients):  # 3-D and 4-D
+        from_array = fourier_connectivity(layout, frequencies=frequencies, method="coherency")
+        from_list = fourier_connectivity(
+            layout.tolist(), frequencies=frequencies, method="coherency"
+        )
+        xr.testing.assert_identical(from_list, from_array)
+
+
 # Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
 # are deliberately unsorted, so per-signal power exposes a data/label
 # mispairing, a channel reversal, or a label sort (a symmetric two-signal

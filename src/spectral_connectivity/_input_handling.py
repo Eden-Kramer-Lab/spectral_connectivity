@@ -13,6 +13,7 @@ import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
 
+from spectral_connectivity._backend import xp
 from spectral_connectivity.utils import (
     BackendArray,
     _validate_sampling_frequency,
@@ -689,7 +690,9 @@ def _unwrap_xarray_input(
                 "time_dim, trial_dim, and signal_dim apply only to an xarray.DataArray input."
             )
             raise TypeError(msg)
-        return _UnwrappedInput(time_series, signal_names, None, None, None, None)
+        # Convert array-likes (a nested list, say) so the wrapper's shape
+        # checks read the shape the list describes.
+        return _UnwrappedInput(xp.asarray(time_series), signal_names, None, None, None, None)
 
     dimension_order = _resolve_dataarray_dimensions(
         time_series,
@@ -783,8 +786,9 @@ def _unwrap_fourier_input(
         if any(dimension is not None for dimension in dimension_arguments.values()):
             msg = "The *_dim arguments apply only to an xarray.DataArray input."
             raise TypeError(msg)
-        data = fourier_coefficients
-        ndim = getattr(data, "ndim", None)
+        # Convert array-likes (a nested list, say) before reading the layout.
+        data = xp.asarray(fourier_coefficients)
+        ndim = data.ndim
         if ndim == 3:
             # (observation, frequency, signal)
             data = data[np.newaxis, :, np.newaxis, :, :]
