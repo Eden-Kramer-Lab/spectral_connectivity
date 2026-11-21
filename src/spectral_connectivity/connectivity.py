@@ -824,7 +824,8 @@ class Connectivity:
         signals need at least 2 signals (``power()`` and
         ``cross_spectral_density()`` take one). NaN or Inf values are accepted
         with a ``UserWarning`` and propagate to the estimates computed from
-        them.
+        them, except that ``canonical_coherence`` and ``global_coherence``,
+        whose decompositions do not converge on them, raise ``ValueError``.
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
