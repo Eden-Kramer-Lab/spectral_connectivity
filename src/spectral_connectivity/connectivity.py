@@ -415,11 +415,18 @@ class DirectedOrientationWarning(UserWarning):
     ``sel(source=a, target=b)`` was ``b -> a`` in 2.x (the 2.x wrapper rejected
     the transfer-function measures).
     Code written for 2.x keeps running but reads the opposite direction. This
-    warning is temporary. It appears once per Python session for each measure
-    (for the wrappers' labels, and for the ``Connectivity`` method's array);
+    warning is temporary. It appears once per Python session for each measure:
+    once for calls through the wrappers (about ``sel(source, target)``) and
+    once for calls to the ``Connectivity`` method (about the array's axes).
     ``warnings.simplefilter("always", DirectedOrientationWarning)`` shows it at
-    every call. Silence it, without hiding other warnings, with
+    every call; a call made while it is ignored does not count as shown.
+    Silence it, without hiding other warnings, with
     ``warnings.filterwarnings("ignore", category=DirectedOrientationWarning)``.
+
+    By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
+    records nothing once the notice has been shown; add
+    ``warnings.simplefilter("always", DirectedOrientationWarning)`` inside it
+    (``pytest.warns`` does the equivalent).
     """
 
 
@@ -433,9 +440,14 @@ class PowerSidednessWarning(UserWarning):
     twice as large away from 0 Hz and Nyquist. This warning is temporary. It
     appears once per Python session;
     ``warnings.simplefilter("always", PowerSidednessWarning)`` shows it at every
-    call. Pass ``one_sided=True`` or ``one_sided=False`` to the call, or
-    silence it with
+    call, and a call made while it is ignored does not count as shown. Pass
+    ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
     ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
+
+    By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
+    records nothing once the notice has been shown; add
+    ``warnings.simplefilter("always", PowerSidednessWarning)`` inside it
+    (``pytest.warns`` does the equivalent).
     """
 
 
