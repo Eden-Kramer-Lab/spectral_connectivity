@@ -198,6 +198,9 @@ def _canonical_coherency_components(
     for component in range(n_components):
         restricted = basis_a.swapaxes(-1, -2) @ whitened @ basis_b
         magnitude, phase, left, right = _optimize_canonical_coherency_phase(restricted)
+        # The top singular value of a whitened (coherency) matrix is at most 1;
+        # where it reaches 1, rounding left it up to 1.2e-14 above.
+        magnitude = xp.minimum(magnitude, 1.0)
         filter_a = (transform_aa @ basis_a @ left[..., :, :1])[..., 0]
         filter_b = (transform_bb @ basis_b @ right[..., :, :1])[..., 0]
         pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
@@ -546,8 +549,9 @@ def _global_coherence_components(
     # The cross-spectral matrix is PSD by construction (``scaled @ scaledᴴ``), so
     # any negative eigenvalue is round-off in eigh and is clipped to 0. (The thin
     # path's squared norms are non-negative already, so the clip is a no-op
-    # there.)
-    fractions = xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
+    # there.) A component holding all the power is a fraction of 1, which
+    # rounding left up to 7e-16 above.
+    fractions = xp.clip(component_power / safe_total[..., xp.newaxis], 0.0, 1.0)
 
     undefined = is_zero_power[..., 0, 0]
     fractions = xp.where(undefined[:, xp.newaxis], xp.nan, fractions)
@@ -676,7 +680,7 @@ def _estimate_global_coherence(
         unnormalized_global_coherence, singular_values, _ = xp.linalg.svd(
             scaled_coefficients, full_matrices=False
         )
-        global_coherence = singular_values[:max_rank] ** 2 / total_power
+        global_coherence = xp.minimum(singular_values[:max_rank] ** 2 / total_power, 1.0)
         unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]
     else:
         # ARPACK (SciPy's svds) starts from a random vector unless given one,
@@ -696,7 +700,7 @@ def _estimate_global_coherence(
         order = xp.argsort(singular_values)[::-1]
         singular_values = singular_values[order]
         unnormalized_global_coherence = unnormalized_global_coherence[:, order]
-        global_coherence = singular_values**2 / total_power
+        global_coherence = xp.minimum(singular_values**2 / total_power, 1.0)
 
     return global_coherence, unnormalized_global_coherence
 

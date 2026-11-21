@@ -3191,16 +3191,24 @@ class Connectivity:
 
         n_groups = len(labels)
         new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
-        magnitude = _squared_magnitude(
-            xp.stack(
-                [
-                    _estimate_canonical_coherence(fourier_coefficients1, fourier_coefficients2)
-                    for fourier_coefficients1, fourier_coefficients2 in combinations(
-                        normalized_fourier_coefficients, 2
-                    )
-                ],
-                axis=-1,
-            )
+        # A canonical correlation is at most 1; with fewer observations than
+        # signals it reaches 1, where rounding left it up to 4e-15 above.
+        magnitude = xp.clip(
+            _squared_magnitude(
+                xp.stack(
+                    [
+                        _estimate_canonical_coherence(
+                            fourier_coefficients1, fourier_coefficients2
+                        )
+                        for fourier_coefficients1, fourier_coefficients2 in combinations(
+                            normalized_fourier_coefficients, 2
+                        )
+                    ],
+                    axis=-1,
+                )
+            ),
+            0.0,
+            1.0,
         )
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)

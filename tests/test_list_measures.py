@@ -1,5 +1,6 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
+import itertools
 import warnings
 
 import numpy as np
@@ -1044,3 +1045,72 @@ def test_cropping_and_decimation_leave_measure_attributes_unchanged(coupled_time
     )
     for name in names:
         _assert_records_how_to_read(_MEASURES[name], result[name])
+
+
+_UNIT_INTERVAL_MEASURES = [
+    measure for measure in list_measures() if tuple(measure.value_range) == (0.0, 1.0)
+]
+
+
+def _rank_deficient_series(n_trials, n_signals, layout, seed):
+    """Few-sample series whose measures reach the ends of [0, 1]: plain noise,
+    a channel duplicated or rescaled, or a mixture with a collinear channel."""
+    rng = np.random.default_rng(seed)
+    series = rng.standard_normal((64, n_trials, n_signals))
+    if layout == "duplicate":
+        series[..., -1] = series[..., 0]
+    elif layout == "scaled":
+        series[..., -1] = 3.7 * series[..., 0]
+    elif layout == "mixed":
+        series = series @ rng.standard_normal((n_signals, n_signals))
+        series[..., -1] = series[..., 0] - 0.5 * series[..., 1]
+    return series
+
+
+@pytest.fixture(scope="module")
+def rank_deficient_connectivities():
+    """Connectivity for 1-4 trials, 1-3 tapers, and 3 or 8 signals (fewer
+    observations than signals in many), over the layouts above."""
+    connectivities = []
+    for n_trials, n_tapers, n_signals, layout, seed in itertools.product(
+        [1, 2, 4], [1, 2, 3], [3, 8], ["noise", "duplicate", "scaled", "mixed"], range(4)
+    ):
+        transform = Multitaper(
+            _rank_deficient_series(n_trials, n_signals, layout, seed),
+            sampling_frequency=100,
+            time_halfbandwidth_product=max(1.0, (n_tapers + 1) / 2),
+            n_tapers=n_tapers,
+        )
+        connectivities.append(Connectivity.from_transform(transform))
+    return connectivities
+
+
+@pytest.mark.parametrize("measure", _UNIT_INTERVAL_MEASURES, ids=lambda measure: measure.name)
+def test_unit_interval_measures_stay_in_range(measure, rank_deficient_connectivities):
+    """A measure whose range is [0, 1] never leaves it, even where it reaches
+    an end with few observations or collinear channels (canonical coherence
+    and global coherence were up to 4e-15 above 1 there). A complex measure's
+    magnitude may exceed 1 by a few ulps, the rounding of ``abs`` itself."""
+    tolerance = 4 * np.finfo(float).eps if measure.is_complex else 0.0
+    takes_groups = "group_labels" in _MEASURE_KWARGS.get(measure.name, {})
+    n_finite = 0
+    for connectivity in rank_deficient_connectivities:
+        kwargs = (
+            {"group_labels": np.arange(connectivity.n_signals) % 2} if takes_groups else {}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = getattr(connectivity, measure.name)(**kwargs)
+        if hasattr(result, "scores"):
+            result = result.scores
+        elif isinstance(result, tuple):
+            result = result[0]
+        values = np.abs(result) if np.iscomplexobj(result) else np.asarray(result)
+        # Undefined entries (the masked diagonal, an unconverged factorization)
+        # are NaN, which says so; only finite values must lie in the range.
+        values = values[np.isfinite(values)]
+        n_finite += values.size
+        if values.size:
+            assert values.min() >= 0.0
+            assert values.max() <= 1.0 + tolerance, values.max() - 1
+    assert n_finite > 0

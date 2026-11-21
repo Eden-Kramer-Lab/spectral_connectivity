@@ -1387,6 +1387,14 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   that the variable must be set before the import and to restart the
   interpreter, where it said to install CuPy and set the variable, both
   already done.
+- `canonical_coherence`, the magnitude of `canonical_coherency`, and
+  `global_coherence` stay within [0, 1]. Where they reach 1 (fewer
+  observations than signals, or a duplicated or collinear channel) rounding
+  left them up to 4e-15, 1.2e-14, and 7e-16 above 1
+  (`canonical_coherence` was 1.000000000000003 for white noise with 4 trials,
+  8 signals in two groups, and 1 taper). A sweep of every measure whose range is [0, 1] over such inputs
+  found no other value above 1, except the magnitude of the complex
+  `coherency` by up to 3 ulps (7e-16), the precision of the magnitude itself.
 
 ### Performance
 
