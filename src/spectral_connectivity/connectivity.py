@@ -1735,15 +1735,17 @@ class Connectivity:
         root_power = xp.sqrt(self._power[..., :n_nonnegative, :])
         return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
 
-    def _nonnegative_fourier_coefficients(self) -> NDArray[np.complexfloating]:
+    def _nonnegative_fourier_coefficients(
+        self, dtype: DTypeLike | None = None
+    ) -> NDArray[np.complexfloating]:
         """Fourier coefficients at the non-negative frequencies, at ``self._dtype``.
 
-        A view when the dtype already matches.
+        ``dtype`` overrides the precision. A view when the dtype already matches.
         """
         n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
         coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
             ..., :n_nonnegative, :
-        ].astype(self._dtype, copy=False)
+        ].astype(self._dtype if dtype is None else dtype, copy=False)
         return coefficients
 
     def _nonnegative_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -1785,7 +1787,10 @@ class Connectivity:
         return self._cached_reduced_cross_spectral_matrix
 
     def _reduced_cross_spectral_matrix(
-        self, fourier_coefficients: NDArray[np.complexfloating] | None = None
+        self,
+        fourier_coefficients: NDArray[np.complexfloating] | None = None,
+        *,
+        dtype: DTypeLike | None = None,
     ) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix via a single batched matmul.
 
@@ -1808,6 +1813,8 @@ class Connectivity:
             ``_subset_cross_spectral_matrix`` passes a pair axis as ``batch``.
             The frequency axis may hold only the leading bins (e.g. the
             non-negative frequencies); observation weights are sliced to match.
+        dtype : complex dtype, optional
+            Precision of the product; ``self._dtype`` by default.
 
         Returns
         -------
@@ -1862,7 +1869,7 @@ class Connectivity:
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
         # Cast before multiplying (see _complex_inner_product).
-        observations = observations.astype(self._dtype, copy=False)
+        observations = observations.astype(self._dtype if dtype is None else dtype, copy=False)
         cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
             xp.swapaxes(observations, -1, -2), xp.conj(observations)
         )
@@ -3922,7 +3929,9 @@ class Connectivity:
 
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
-    def _phase_locking_value(self) -> NDArray[np.complexfloating]:
+    def _phase_locking_value(
+        self, dtype: DTypeLike | None = None
+    ) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
         #   (z_i conj(z_j)) / |z_i conj(z_j)| = (z_i / |z_i|) conj(z_j / |z_j|),
@@ -3942,7 +3951,7 @@ class Connectivity:
         # dtype already matches (the division below allocates a fresh array).
         # Only the non-negative frequencies are reported, so only those are
         # normalized and reduced.
-        coefficients = self._nonnegative_fourier_coefficients()
+        coefficients = self._nonnegative_fourier_coefficients(dtype)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -3962,7 +3971,7 @@ class Connectivity:
         normalized: NDArray[np.complexfloating] = _divide_where(
             coefficients, magnitude, ~zero_magnitude, xp.nan
         )
-        return self._reduced_cross_spectral_matrix(normalized)
+        return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 
     @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
@@ -4033,8 +4042,11 @@ class Connectivity:
         real part just below 1 and its imaginary part of rounding size, and
         the square root in the denominator amplifies that by about
         ``1 / sqrt(eps)``. The diagonal is therefore rounding noise below about
-        ``sqrt(eps)`` of the computation precision (1.5e-8 in float64,
-        3.5e-4 in float32), and exactly 0 only where the rounding cancels.
+        ``sqrt(eps)`` of the computation precision, and exactly 0 only where
+        the rounding cancels. The PLV behind this measure is formed in at least
+        complex128 whatever ``dtype`` is, so that noise is below about 1.5e-8,
+        and a small consistent lag (1e-4 rad, say) of complex64 coefficients
+        still gives 1; the result is returned at the precision of ``dtype``.
         A zero-power signal's PLV is NaN, and so is its diagonal entry here.
 
         References
@@ -4061,7 +4073,11 @@ class Connectivity:
         >>> bool(ciplv[0, 20, 0, 1] > 0.2)
         True
         """
-        complex_plv = self._phase_locking_value()
+        # ``1 - Re(PLV)**2`` cancels for a small consistent lag, which a
+        # complex64 PLV cannot represent: a lag of 1e-4 rad rounds Re(PLV) to
+        # 1, and the ratio to 0 instead of 1. The coefficients carry the lag
+        # to their own precision, so the PLV is formed in at least complex128.
+        complex_plv = self._phase_locking_value(xp.promote_types(self._dtype, xp.complex128))
         numerator = xp.abs(complex_plv.imag)
         denominator_squared = xp.maximum(0.0, 1.0 - complex_plv.real**2)
         denominator = xp.sqrt(denominator_squared)
@@ -4072,7 +4088,8 @@ class Connectivity:
         nonzero = denominator > xp.finfo(denominator.dtype).tiny
         result = _divide_where(numerator, denominator, nonzero, 0.0)
         result[xp.isnan(complex_plv)] = xp.nan
-        return xp.clip(result, 0.0, 1.0)
+        # Reported at the precision of ``dtype``, like the other measures.
+        return xp.clip(result, 0.0, 1.0).astype(xp.finfo(self._dtype).dtype, copy=False)
 
     @cached_property
     def _imaginary_moment_cache(self) -> dict[str, BackendArray]:

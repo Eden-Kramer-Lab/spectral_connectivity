@@ -519,6 +519,27 @@ def test_corrected_imaginary_phase_locking_value():
     assert quadrature_result[1, 0] == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("lag", [1e-4, 1e-3, 0.3])
+def test_corrected_imaginary_phase_locking_value_of_a_small_consistent_lag(dtype, lag):
+    """A perfectly consistent lag ``phi`` gives ``|sin phi| / sqrt(1 - cos**2
+    phi) = 1`` for any ``phi`` in (0, pi). A complex64 PLV rounds ``cos(1e-4)``
+    to 1, which made the denominator 0 and the result 0; the coefficients hold
+    the lag to float32 precision, so the result is 1 at either precision, and
+    it is reported at the precision of ``dtype``."""
+    rng = np.random.default_rng(3)
+    common = np.exp(1j * rng.uniform(0, 2 * np.pi, 10))
+    coefficients = np.zeros((1, 1, 10, 4, 2), dtype=np.complex64)
+    coefficients[..., 0] = common[None, None, :, None]
+    coefficients[..., 1] = (common * np.exp(-1j * lag))[None, None, :, None]
+
+    result = Connectivity(coefficients, dtype=dtype).corrected_imaginary_phase_locking_value()
+
+    assert result.dtype == np.finfo(dtype).dtype
+    np.testing.assert_allclose(result[..., 0, 1], 1.0, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(result[..., 1, 0], 1.0, rtol=0, atol=1e-6)
+
+
 def test_phase_lag_index_sets_zero_phase_signals_to_zero():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(

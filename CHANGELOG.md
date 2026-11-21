@@ -785,6 +785,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- *Unreleased:* `corrected_imaginary_phase_locking_value` forms its PLV in at
+  least complex128, so a small consistent lag of complex64 coefficients gives
+  1, as the definition does; a lag of 1e-4 rad rounded `Re(PLV)` to 1 and gave
+  0. The result keeps the precision of `dtype`.
 - `debiased_squared_phase_lag_index` is the mean of `s_k s_l` over pairs of
   distinct observations, for `s` the sign of the imaginary cross-spectrum. 2.x
   and earlier 3.0 builds used Vinck's `(n * PLI**2 - 1) / (n - 1)`, which
