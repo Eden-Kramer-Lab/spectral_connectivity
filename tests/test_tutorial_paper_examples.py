@@ -271,9 +271,10 @@ _BIAS_BUDGET = (0.25, 0.01)
 # attributes to the source, is held to a budget relative to each influence's
 # own share, (relative, absolute) as above. The absolute part is about twice
 # the largest share estimated where a model has no direct influence (0.0027).
-# With the tutorial's seed the furthest estimate uses 0.53 of its budget and
-# the furthest expected spectrum 0.55 of its, while an all-zero dDTF uses 2.3
-# or more of both in every example.
+# With the tutorial's seed the furthest estimate uses 0.53 of its budget, and
+# 0.82 over 31 seeds of every plotted example (434 simulations, none over
+# budget); the furthest expected spectrum, which no seed changes, uses 0.55 of
+# its. An all-zero dDTF uses 2.3 or more of both in every example.
 _SUMMED_DDTF_ESTIMATE_BUDGET = (0.3, 0.005)
 _SUMMED_DDTF_BIAS_BUDGET = (0.25, 0.005)
 
