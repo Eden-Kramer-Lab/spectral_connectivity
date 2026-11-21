@@ -160,8 +160,10 @@ Prefer the wrapper's labeled results so you never index these by hand.
 - **Avoid the deprecated 2.x spellings** in new code: use
   `magnitude_squared_coherence` (not `coherence_magnitude`, and index default
   results by the new name), `Connectivity.from_transform` (not
-  `from_multitaper`),
-  `power_confidence_intervals(n_observations=...)` (not `n_tapers=`), and
+  `from_multitaper`), `power_confidence_intervals(n_observations=...,
+  confidence_level=...)` (not `n_tapers=` or `ci=`),
+  `suggest_parameters(frequency_resolution=...)` (not
+  `desired_freq_resolution=`), and
   the `transform_kwargs`/`connectivity_kwargs` mappings for advanced
   settings. Each old form still works through 3.x with a
   `DeprecationWarning`.
