@@ -15,6 +15,7 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
+from spectral_connectivity._array_utils import _clip_rounding_above_one
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
     _SINGLE_SIGNAL_MEASURES,
@@ -25,6 +26,7 @@ from spectral_connectivity.wrapper import (
     MeasureInfo,
     frequency_band_reduce,
 )
+from tests._backend_helpers import to_device, to_host
 
 
 def test_lists_every_registered_measure():
@@ -1114,3 +1116,40 @@ def test_unit_interval_measures_stay_in_range(measure, rank_deficient_connectivi
             assert values.min() >= 0.0
             assert values.max() <= 1.0 + tolerance, values.max() - 1
     assert n_finite > 0
+
+
+def test_only_rounding_above_one_is_clipped():
+    """Values within 1e-10 above 1 become 1; larger ones, which would be an
+    error rather than rounding, and NaN are left as they are."""
+    values = np.array([0.5, 1.0, 1 + 4e-15, 1 + 1e-10, 1 + 1e-9, 1.5, np.nan])
+    np.testing.assert_array_equal(
+        to_host(_clip_rounding_above_one(to_device(values))),
+        [0.5, 1.0, 1.0, 1.0, 1 + 1e-9, 1.5, np.nan],
+    )
+
+
+@pytest.mark.parametrize(("scale", "clipped"), [(1 + 1e-12, True), (1.2, False)])
+def test_canonical_coherence_clips_only_rounding(monkeypatch, scale, clipped):
+    """A canonical correlation pushed just above 1 is clipped to 1; one pushed
+    well above it (as a normalization error would) stays visible."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    estimate = connectivity_module._estimate_canonical_coherence
+    monkeypatch.setattr(
+        connectivity_module,
+        "_estimate_canonical_coherence",
+        lambda first, second: estimate(first, second) * scale,
+    )
+    # Fewer observations than signals in a group: the canonical correlation is 1.
+    series = np.random.default_rng(12).standard_normal((128, 2, 6))
+    connectivity = Connectivity.from_transform(
+        Multitaper(series, 100, time_halfbandwidth_product=1, n_tapers=1)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        coherence, _ = connectivity.canonical_coherence(np.array([0, 0, 0, 1, 1, 1]))
+    largest = np.nanmax(coherence)
+    if clipped:
+        assert largest == 1.0
+    else:
+        assert largest > 1.2

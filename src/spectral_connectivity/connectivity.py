@@ -18,6 +18,7 @@ from numpy.typing import DTypeLike, NDArray
 from spectral_connectivity._array_utils import (
     TIKHONOV_REGULARIZATION_FACTOR,
     _batched_inverse_square_root,
+    _clip_rounding_above_one,
     _complex_inner_product,
     _conjugate_transpose,
     _divide_where,
@@ -3275,7 +3276,7 @@ class Connectivity:
         new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
         # A canonical correlation is at most 1; with fewer observations than
         # signals it reaches 1, where rounding left it up to 4e-15 above.
-        magnitude = xp.clip(_squared_magnitude(canonical_coherency), 0.0, 1.0)
+        magnitude = _clip_rounding_above_one(_squared_magnitude(canonical_coherency))
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
         if observation_weights is not None:

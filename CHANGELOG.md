@@ -1419,9 +1419,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   observations than signals, or a duplicated or collinear channel) rounding
   left them up to 4e-15, 1.2e-14, and 7e-16 above 1
   (`canonical_coherence` was 1.000000000000003 for white noise with 4 trials,
-  8 signals in two groups, and 1 taper). A sweep of every measure whose range is [0, 1] over such inputs
-  found no other value above 1, except the magnitude of the complex
-  `coherency` by up to 3 ulps (7e-16), the precision of the magnitude itself.
+  8 signals in two groups, and 1 taper). Only values within 1e-10 above 1
+  are set to 1: a value further above it would be an error rather than
+  rounding, and is left visible. A sweep of every measure whose range is
+  [0, 1] over such inputs found no other value above 1, except the magnitude
+  of the complex `coherency` by up to 3 ulps (7e-16), the precision of the
+  magnitude itself.
 - Every observation count of the statistics helpers is checked the same way,
   so the same bad count gets the same message, naming the argument, the
   counts it takes, and `Connectivity.n_observations`:
