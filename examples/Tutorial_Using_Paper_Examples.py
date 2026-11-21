@@ -353,9 +353,9 @@ plot_directional(*baccala_example6(), time_halfbandwidth_product=1)
 
 # %%
 def ding_example1():
-    """Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-    basic theory and application to neuroscience. Handbook of Time Series
-    Analysis: Recent Theoretical Developments and Applications 437.
+    """Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+    basic theory and application to neuroscience. In Handbook of Time Series
+    Analysis, pp. 437–460.
     """
     sampling_frequency = 200
     n_time_samples, n_lags, n_signals = 1000, 2, 2
@@ -399,9 +399,9 @@ plot_directional(*ding_example1(), time_halfbandwidth_product=3)
 
 # %%
 def ding_example2a():
-    """Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-    basic theory and application to neuroscience. Handbook of Time Series Analysis:
-    Recent Theoretical Developments and Applications 437."""
+    """Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+    basic theory and application to neuroscience. In Handbook of Time Series
+    Analysis, pp. 437–460."""
     sampling_frequency = 200
     n_time_samples, n_lags, n_signals = 500, 2, 3
     coefficients = np.zeros((n_lags, n_signals, n_signals))
@@ -448,9 +448,9 @@ plot_directional(*ding_example2a())
 
 # %%
 def ding_example2b():
-    """Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-    basic theory and application to neuroscience. Handbook of Time Series Analysis:
-    Recent Theoretical Developments and Applications 437."""
+    """Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+    basic theory and application to neuroscience. In Handbook of Time Series
+    Analysis, pp. 437–460."""
     sampling_frequency = 200
     n_time_samples, n_lags, n_signals = 500, 2, 3
     coefficients = np.zeros((n_lags, n_signals, n_signals))
@@ -498,9 +498,9 @@ plot_directional(*ding_example2b(), time_halfbandwidth_product=2)
 
 # %%
 def ding_example3():
-    """Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-    basic theory and application to neuroscience. Handbook of Time Series Analysis:
-    Recent Theoretical Developments and Applications 437."""
+    """Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+    basic theory and application to neuroscience. In Handbook of Time Series
+    Analysis, pp. 437–460."""
     sampling_frequency = 200
     n_time_samples, n_lags, n_signals = 1000, 3, 5
     coefficients = np.zeros((n_lags, n_signals, n_signals))
