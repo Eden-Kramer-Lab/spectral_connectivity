@@ -72,6 +72,7 @@ their rows).
 | `partial_directed_coherence(keep_cupy=...)` | Remove `keep_cupy`; public measures consistently return NumPy arrays |
 | `multitaper_connectivity(method=None)` computed every public measure outside a short exclusion list, including `pairwise_spectral_granger_prediction` and the complex `coherency` | `method=None` computes `DEFAULT_METHODS`, which holds no directed measure and not `coherency` (complex arrays do not serialize portably across xarray versions and NetCDF engines), so `result["coherency"]` on a default result raises `KeyError`; request `method=[..., "coherency"]` or `method="pairwise_spectral_granger_prediction"` (or any directed measure; the blockwise measure also needs `group_labels` and the subset measure `pairs`) by name. With a single observation (one trial and one taper) `method=None` raises `ValueError`, because `debiased_squared_phase_lag_index`, `debiased_squared_weighted_phase_lag_index`, and `pairwise_phase_consistency` need two; 2.x returned its Dataset with non-finite values there. Request the other measures by name. `coherence_magnitude` is now `magnitude_squared_coherence` (row below) |
 | `Multitaper` defaulted `sampling_frequency` to 1000 Hz | `sampling_frequency` is required; pass your rate |
+| `Multitaper(...)` with an invalid window (longer than the recording, rounding to 0 samples, or too short for DPSS tapers at its `time_halfbandwidth_product`) was constructed and failed at its first `fft()`; 2.0.1 returned an empty transform or raised `ZeroDivisionError` or SciPy's `select_range` error there | The constructor raises the `ValueError`, because it now computes the DPSS tapers, once (0.11 s for a 100,000-sample window in the case run, time `fft()` no longer spends). In code that catches these errors, wrap the constructor rather than `fft()` |
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
@@ -815,10 +816,15 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `transform_parameters_json` said 50 (only `n_observations` counted 5). The
   warning names both counts and the remedies (a larger
   `time_halfbandwidth_product`, or `is_low_bias=False`); the request is kept as
-  `requested_n_tapers` in `transform_parameters_json`. The DPSS tapers are now
+  `requested_n_tapers` in `transform_parameters_json`. Saved results differ
+  accordingly: older files hold the request in `mt_n_tapers` and
+  `estimator.n_tapers` and have no `requested_n_tapers`; new files hold the
+  count used there and the `n_tapers` argument in `requested_n_tapers` (`null`
+  when it was not given). To compare the two, match an old `n_tapers` with a
+  new `requested_n_tapers` and check `n_observations`. The DPSS tapers are now
   generated when the `Multitaper` is constructed, so a window too short for
   them, too long for the recording, or of zero samples raises there rather
-  than at the first `fft()`.
+  than at the first `fft()` (see the migration guide).
 - *Unreleased:* `coherence_rate_adjustment` given `Connectivity.power()`
   returned a factor too close to 1: 0.81 where the coherence of a thinned
   spike train fell to 0.71 of the original. `power()` became one-sided in 3.0
