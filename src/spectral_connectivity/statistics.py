@@ -736,9 +736,11 @@ def _validated_real_valued(
             msg = (
                 f"real_valued has shape {mask.shape}, which does not broadcast "
                 f"against {estimates_name} of shape {estimates_shape}. Align it "
-                "with their frequency axis: for estimates shaped "
-                "(..., n_frequencies, n_signals, n_signals), pass "
-                "Connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis]."
+                "with their frequency axis: pass "
+                "Connectivity.real_valued_frequencies[:, np.newaxis] for power "
+                "shaped (..., n_frequencies, n_signals), or [:, np.newaxis, "
+                "np.newaxis] for coherency shaped (..., n_frequencies, "
+                "n_signals, n_signals)."
             )
             raise ValueError(msg) from None
     return mask

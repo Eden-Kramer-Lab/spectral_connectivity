@@ -35,8 +35,9 @@ def _weight_observations(values: BackendArray, weights: BackendArray) -> Backend
     The product is zeroed in place, so no second ``values``-sized array is made.
     """
     # 0 * inf is NaN with an invalid-value flag; those entries are zeroed below.
+    # asarray keeps a 0-d product an array, which copyto can write into.
     with np.errstate(invalid="ignore"):
-        weighted = values * weights
+        weighted = xp.asarray(values * weights)
     xp.copyto(weighted, 0, where=xp.broadcast_to(weights == 0, weighted.shape))
     return weighted
 

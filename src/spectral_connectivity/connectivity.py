@@ -5651,7 +5651,8 @@ class Connectivity:
         apply it themselves.
 
         A bin counts as real when every coefficient's imaginary part is exactly
-        0, ignoring NaN coefficients. The package's transforms give exactly
+        0, ignoring NaN coefficients (a bin with no finite coefficient does not
+        count). The package's transforms give exactly
         real coefficients there on the CPU and the GPU alike; coefficients
         computed elsewhere may carry rounding in those bins and then do not
         count.
@@ -5676,11 +5677,14 @@ class Connectivity:
     @cached_property
     def _real_valued_frequency_mask(self) -> NDArray[np.bool_]:
         """:attr:`real_valued_frequencies`, scanned once per set of coefficients."""
-        imaginary = self._nonnegative_fourier_coefficients(
-            self._fourier_coefficients.dtype
-        ).imag
+        coefficients = self._nonnegative_fourier_coefficients(self._fourier_coefficients.dtype)
+        imaginary = coefficients.imag
+        # NaN in either part: np.nan assigned to a complex array is nan + 0j.
+        is_nan = xp.isnan(coefficients)
+        axes = (0, 1, 2, 4)
+        # A bin with no finite coefficient gives no evidence either way: not real.
         real: NDArray[np.bool_] = to_numpy(
-            xp.all((imaginary == 0) | xp.isnan(imaginary), axis=(0, 1, 2, 4))
+            xp.all((imaginary == 0) | is_nan, axis=axes) & ~xp.all(is_nan, axis=axes)
         )
         return real
 

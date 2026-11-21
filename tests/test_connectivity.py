@@ -3970,6 +3970,13 @@ def test_real_valued_frequencies_ignore_nan_coefficients():
         multitaper = Multitaper(time_series, sampling_frequency=100, n_fft_samples=64)
         real_bins = Connectivity.from_transform(multitaper).real_valued_frequencies
     np.testing.assert_array_equal(np.flatnonzero(real_bins), [0, 32])
+    # A bin with no finite coefficient gives no evidence that it is real.
+    coefficients = rng.standard_normal((1, 2, 2, 8, 2)) + 0j  # real everywhere
+    coefficients[..., 2, :] = np.nan  # nan + 0j: only the real part is NaN
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        real_bins = Connectivity(coefficients).real_valued_frequencies
+    np.testing.assert_array_equal(real_bins, [True, True, False, True, True])
 
 
 @pytest.mark.parametrize("n_fft", [64, 65])

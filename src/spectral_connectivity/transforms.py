@@ -2098,7 +2098,9 @@ class Multitaper(_WindowedFourierTransform):
         # point leave that at rounding level; sqrt(eps) admits orthogonal
         # tapers computed elsewhere to a lower precision.
         # Custom tapers may be integers (a boxcar of ones, say).
-        tapers = self._tapers.astype(xp.result_type(self._tapers.dtype, xp.float32))
+        tapers = self._tapers.astype(
+            xp.result_type(self._tapers.dtype, xp.float32), copy=False
+        )
         gram = xp.matmul(tapers.T, tapers)
         norms = xp.sqrt(xp.diagonal(gram))
         correlation = xp.abs(gram) / (norms[:, xp.newaxis] * norms[xp.newaxis, :])
