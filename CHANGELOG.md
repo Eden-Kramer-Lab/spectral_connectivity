@@ -785,6 +785,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- `debiased_squared_phase_lag_index` is the mean of `s_k s_l` over pairs of
+  distinct observations, for `s` the sign of the imaginary cross-spectrum. 2.x
+  and earlier 3.0 builds used Vinck's `(n * PLI**2 - 1) / (n - 1)`, which
+  assumes every sign is +/-1: an observation whose imaginary cross-spectrum is
+  exactly 0 (an in-phase or all-zero trial or taper among lagged ones) has sign
+  0, and the shortcut then subtracted too much (signs `[0, +1, +1]` gave 1/6
+  instead of 1/3). Results without such observations are unchanged.
 - The Wilson factorization behind every directed measure (the spectral Granger
   family, `directed_transfer_function`, `directed_coherence`,
   `partial_directed_coherence`, `generalized_partial_directed_coherence`,

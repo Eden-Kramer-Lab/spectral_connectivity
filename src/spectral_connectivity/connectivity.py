@@ -172,13 +172,20 @@ EXPECTATION_AXES = {
 # called, not at import, so a swapped backend (the device-emulation tests) applies.
 _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
     "sign": lambda imaginary: xp.sign(imaginary),
+    "nonzero": lambda imaginary: xp.abs(xp.sign(imaginary)),
     "imaginary": lambda imaginary: imaginary,
     "absolute": lambda imaginary: xp.abs(imaginary),
     "squared": lambda imaginary: imaginary**2,
 }
 # Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
 # moment is exactly antisymmetric (-1) or symmetric (+1) across the signal pair.
-_IMAGINARY_MOMENT_PAIR_SYMMETRY = {"sign": -1, "imaginary": -1, "absolute": 1, "squared": 1}
+_IMAGINARY_MOMENT_PAIR_SYMMETRY = {
+    "sign": -1,
+    "nonzero": 1,
+    "imaginary": -1,
+    "absolute": 1,
+    "squared": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -254,7 +261,7 @@ def _validated_rank(rank: int | None) -> int | None:
 # is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
 # Fewest averaged observations (``Connectivity.n_observations``) at which, without
-# observation weights, the first phase-lag measure reduces all four moments from
+# observation weights, the first phase-lag measure reduces all the moments from
 # one tile pass instead of only the requested ones. A tile holds n_observations
 # times as many values as each reduced moment, so with many observations the
 # tile formation dominates and two extra reductions are nearly free, while with
@@ -4104,7 +4111,7 @@ class Connectivity:
         The phase-lag-index family (``phase_lag_index``,
         ``weighted_phase_lag_index``, ``debiased_squared_phase_lag_index``, and
         ``debiased_squared_weighted_phase_lag_index``) each average a function --
-        ``sign``, identity, ``abs`` or square -- of the imaginary part of the
+        ``sign``, its square, identity, ``abs`` or square -- of the imaginary part of the
         per-observation cross-spectral matrix, with the diagonal zeroed. This
         returns the requested reduced moments from a cache, computing any that
         are missing from signal-row tiles of the observation-level
@@ -4117,15 +4124,17 @@ class Connectivity:
         ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` averaged observations,
         forming the tiles (memory traffic over every observation) dominates the
         cost and each reduction is a single further pass over a tile, so the
-        first request reduces all four moments from one formation; that costs
+        first request reduces all five moments from one formation; that costs
         less than forming the tiles again for a later measure that needs
-        different moments. The four reduced moments (each ``(n_time_windows,
+        different moments. The five reduced moments (each ``(n_time_windows,
         n_frequencies, n_signals, n_signals)`` for the default expectation) are
         then retained until :meth:`clear_cache`. In this regime a single
         measure is also faster and has a lower peak than before (741 -> 536 MB
         of traced allocation for one measure on a 100-trial, 5-taper,
-        1001-bin, 32-signal spectrum), because the tiles reuse two buffers
-        instead of fresh temporaries.
+        1001-bin, 32-signal spectrum, with the four moments other than
+        ``nonzero``), because the tiles reuse two buffers instead of fresh
+        temporaries. Adding ``nonzero`` added one reduced moment, 8 MB, to that
+        peak and no measurable time.
 
         Otherwise only the missing requested moments are computed. With few
         observations (e.g. a time-resolved single-trial spectrum with 3
@@ -4149,8 +4158,10 @@ class Connectivity:
         Parameters
         ----------
         *keys : str
-            Any of ``"sign"``, ``"imaginary"``, ``"absolute"``, ``"squared"`` for
-            ``E[sign(Im)]``, ``E[Im]``, ``E[|Im|]`` and ``E[Im**2]``.
+            Any of ``"sign"``, ``"nonzero"``, ``"imaginary"``, ``"absolute"``,
+            ``"squared"`` for ``E[sign(Im)]``, ``E[sign(Im)**2]`` (the fraction
+            of observations whose ``Im`` is not 0), ``E[Im]``, ``E[|Im|]`` and
+            ``E[Im**2]``.
 
         Returns
         -------
@@ -4173,7 +4184,7 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
-            # Without weights and with many observations all four moments are
+            # Without weights and with many observations all the moments are
             # cheap single-pass reductions of the tile, so they are computed
             # together (see PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS). Otherwise
             # only the missing requested ones are: with weights each is a full
@@ -4271,7 +4282,7 @@ class Connectivity:
         stop: int,
         squared_subscripts: str,
     ) -> None:
-        """Average the four phase-lag moments of one tile into ``moments``.
+        """Average the phase-lag moments of one tile into ``moments``.
 
         Parameters
         ----------
@@ -4281,9 +4292,9 @@ class Connectivity:
         scratch : array, same shape as ``imaginary``
             Workspace; overwritten.
         moments : dict of str to array, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
-            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all four
-            or the requested subset (see :meth:`_imaginary_cross_spectrum_moments`).
-            The block
+            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all of
+            them or the requested subset (see
+            :meth:`_imaginary_cross_spectrum_moments`). The block
             ``[..., start:stop, start:]`` of each is written.
         start, stop : int
             The tile's source rows.
@@ -4313,13 +4324,18 @@ class Connectivity:
 
         observation_axes = self._expectation_axes
         n_observations = self.n_observations
-        if "sign" in moments:
+        if "sign" in moments or "nonzero" in moments:
             positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
             negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
             invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
-            moments["sign"][block] = xp.where(
-                invalid, xp.nan, (positive - negative) / n_observations
-            )
+            if "sign" in moments:
+                moments["sign"][block] = xp.where(
+                    invalid, xp.nan, (positive - negative) / n_observations
+                )
+            if "nonzero" in moments:
+                moments["nonzero"][block] = xp.where(
+                    invalid, xp.nan, (positive + negative) / n_observations
+                )
         if "imaginary" in moments:
             moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
         if "squared" in moments:
@@ -4577,13 +4593,16 @@ class Connectivity:
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
-        mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
-        # Vinck's closed form assumes sign(Im) is +/-1 for every observation.
+        mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
+            "sign", "nonzero", "absolute"
+        )
+        # The mean of s_k s_l over ordered pairs of distinct observations,
+        # (n**2 m**2 - sum_k s_k**2) / (n (n - 1)), is unbiased for E[s]**2.
+        # sum_k s_k**2 / n is the fraction of observations whose Im is not 0;
+        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1.
+        debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
         # Where there is no phase lag (in-phase signals, the zeroed diagonal)
-        # the signs are 0 or rounding noise and the form would report the
-        # spurious lower bound -1 / (n - 1) or a noise value; there is no lag
-        # to estimate, so 0.
-        debiased = (n_observations * mean_sign.real**2 - 1.0) / (n_observations - 1.0)
+        # the signs are rounding noise; there is no lag to estimate, so 0.
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
     @_asnumpy

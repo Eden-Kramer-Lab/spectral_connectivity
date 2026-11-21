@@ -2011,7 +2011,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
-PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
+PHASE_LAG_MOMENTS = ("sign", "nonzero", "imaginary", "absolute", "squared")
 
 
 def _many_observation_coefficients(rng, n_signals=4):
@@ -2049,7 +2049,7 @@ def test_lone_phase_lag_index_computes_all_moments_only_with_many_observations(
 
 @pytest.mark.parametrize("offset", [-1, 0], ids=["just_below", "at"])
 def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
-    """A lone PLI reduces all four moments from exactly
+    """A lone PLI reduces all five moments from exactly
     ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` observations, not one fewer."""
     n_observations = PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS + offset
     shape = (1, n_observations, 1, 16, 3)
@@ -2064,7 +2064,7 @@ def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
 
 def test_reassigning_observation_weights_recomputes_phase_lag_moments():
     """Weights assigned after a measure has run replace the unweighted moments
-    it cached (all four, with this many observations)."""
+    it cached (all five, with this many observations)."""
     rng = np.random.default_rng(6)
     fc = _many_observation_coefficients(rng)
     weights = rng.uniform(0.2, 1.8, size=(*fc.shape[:-1], 1))
@@ -2081,7 +2081,7 @@ def test_reassigning_observation_weights_recomputes_phase_lag_moments():
 
 @pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
 def test_phase_lag_moments_are_computed_together_once(first_measure):
-    """With many observations, any one phase-lag measure caches all four
+    """With many observations, any one phase-lag measure caches all five
     moments from one pass over the tiles, so every later measure of the family
     reads them without re-forming a tile."""
     conn = Connectivity(_many_observation_coefficients(np.random.default_rng(1)))
@@ -2092,7 +2092,7 @@ def test_phase_lag_moments_are_computed_together_once(first_measure):
         getattr(conn, first_measure)()
         assert reduce_tile.call_count == 1  # 4 signals fit in one tile
         cached = dict(conn.__dict__["_imaginary_moment_cache"])
-        assert set(cached) == {"sign", "imaginary", "absolute", "squared"}
+        assert set(cached) == set(PHASE_LAG_MOMENTS)
 
         for measure in PHASE_LAG_MEASURES:
             getattr(conn, measure)()
@@ -2161,7 +2161,7 @@ def hann_morlet_coefficients():
     coefficients : ndarray, shape (30, 4, 20, 2, 3)
         One-sided (time, trial, smoothing sample, frequency, signal): 80
         observations, enough that without weights a lone measure would reduce
-        all four phase-lag moments.
+        all five phase-lag moments.
     weights : ndarray, shape (30, 4, 20, 2, 1)
     """
     rng = np.random.default_rng(11)
@@ -4096,6 +4096,61 @@ def test_phase_lag_family_is_scale_invariant(measure, scale):
     reference = getattr(Connectivity(coefficients), measure)()
     scaled = getattr(Connectivity(coefficients * scale), measure)()
     np.testing.assert_allclose(scaled, reference, rtol=1e-9, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "signs",
+    [[0, 1, 1], [0, 0, 1, -1], [1, 1, 1, -1], [0, 1, -1, 1, 1]],
+    ids=["one_zero", "two_zeros_balanced", "no_zero", "zero_among_five"],
+)
+def test_debiased_squared_phase_lag_index_averages_products_of_distinct_observations(signs):
+    """The unbiased estimator of ``E[sign(Im S_xy)]**2`` is the mean of
+    ``s_k s_l`` over ordered pairs of distinct observations,
+    ``(n**2 m**2 - sum_k s_k**2) / (n (n - 1))`` with ``m`` the mean sign.
+    Vinck's ``(n m**2 - 1) / (n - 1)`` is that form only when every sign is
+    +/-1; an observation whose imaginary cross-spectrum is exactly 0 has sign 0
+    and squared sign 0. Signs [0, +1, +1] gave 1/6 instead of 1/3."""
+    signs = np.asarray(signs)
+    n_observations = signs.size
+    # Im(X_0 conj(X_1)) = -Im(X_1) for X_0 = 1, so X_1 = 1, -1j, 1j give 0, +1, -1.
+    second = np.select([signs == 0, signs > 0], [1.0 + 0j, -1j], 1j)
+    coefficients = np.zeros((1, 1, n_observations, 4, 2), dtype=complex)
+    coefficients[..., 0] = 1.0
+    coefficients[..., 1] = second[None, None, :, None]
+    distinct = ~np.eye(n_observations, dtype=bool)
+    expected = np.outer(signs, signs)[distinct].mean()
+
+    result = Connectivity(coefficients).debiased_squared_phase_lag_index()
+
+    np.testing.assert_allclose(result[0, :, 0, 1], expected, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(result[0, :, 1, 0], expected, rtol=0, atol=1e-15)
+
+
+def test_debiased_squared_phase_lag_index_is_unbiased_with_in_phase_observations():
+    """With in-phase observations (``Im S_xy`` exactly 0) mixed in, the mean
+    sign is ``(1 - p0) q`` and the estimator stays unbiased for its square.
+    Treating every squared sign as 1 subtracts ``p0 / (n - 1)`` too much."""
+    rng = np.random.default_rng(20261121)
+    mean_lead, concentration, n_observations, n_replicates = 0.6, 1.5, 5, 100_000
+    in_phase_probability = 0.3
+    coefficients = _von_mises_lead_coefficients(
+        rng, mean_lead, concentration, n_replicates, n_observations
+    )
+    in_phase = rng.random(coefficients.shape[:3]) < in_phase_probability
+    coefficients[..., 1] = np.where(
+        in_phase[..., np.newaxis], 0.5 * coefficients[..., 0], coefficients[..., 1]
+    )
+    probability_leading = _von_mises_expectation(
+        lambda angle: np.sin(angle) > 0, mean_lead, concentration
+    )
+    expected = ((1 - in_phase_probability) * (2 * probability_leading - 1)) ** 2
+    shortcut_bias = in_phase_probability / (n_observations - 1)
+
+    debiased = Connectivity(coefficients).debiased_squared_phase_lag_index()[:, 0, 0, 1]
+
+    mean_debiased, limit = _monte_carlo_mean_and_limit(debiased)
+    assert abs(mean_debiased - expected) < limit
+    assert shortcut_bias > 10 * limit
 
 
 def test_debiased_squared_phase_lag_index_is_zero_for_exactly_zero_imaginary_part():
