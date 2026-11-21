@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.5
 #   kernelspec:
 #     display_name: spectral_connectivity
 #     language: python
@@ -14,9 +14,19 @@
 # ---
 
 # %% [markdown]
-# # More Usage Examples
+# # Directed connectivity on published autoregressive models
 #
-# Here we simulate multivariate autoregressive processes from papers in order to show how various directed connectivity measures work. See the papers for details.
+# **Goal:** compare the directed measures (pairwise spectral Granger prediction, the directed transfer function, partial directed coherence and its generalized form, and the direct directed transfer function) on vector autoregressive models from the literature, whose true connections are known from their coefficients.
+#
+# **You need:** the [getting-started tutorial](Intro_tutorial.ipynb). Some familiarity with Granger causality helps; each section gives its model's equations.
+#
+# Each grid of plots shows every measure for every ordered pair of signals, titled source → target, followed by the power spectrum. The models come from:
+#
+# - Baccalá, L.A., and Sameshima, K. (2001). Partial directed coherence: a new concept in neural structure determination. Biological Cybernetics 84, 463–474. https://doi.org/10.1007/PL00007990
+# - Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality: basic theory and application to neuroscience. In Handbook of Time Series Analysis, pp. 437–460. https://doi.org/10.1002/9783527609970.ch17
+# - Dhamala, M., Rangarajan, G., and Ding, M. (2008). Analyzing information flow in brain networks with nonparametric Granger causality. NeuroImage 41, 354–362. https://doi.org/10.1016/j.neuroimage.2008.02.020
+# - Nedungadi, A.G., Ding, M., and Rangarajan, G. (2011). Block coherence: a method for measuring the interdependence between two blocks of neurobiological time series. Biological Cybernetics 104, 197–207. https://doi.org/10.1007/s00422-011-0429-7
+# - Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A 371, 20110610. https://doi.org/10.1098/rsta.2011.0610
 
 # %%
 import warnings
@@ -331,9 +341,9 @@ plot_directional(*baccala_example6(), time_halfbandwidth_product=1)
 # %% [markdown]
 # ## Ding Example 1
 #
-# > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-#     basic theory and application to neuroscience. Handbook of Time Series
-#     Analysis: Recent Theoretical Developments and Applications 437.
+# > Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+#     basic theory and application to neuroscience. In Handbook of Time Series
+#     Analysis, pp. 437–460.
 #
 # $$ x_1 = 0.9x_1(n-1) -0.5x_1(n-2) + w_1 $$
 # $$ x_2 = 0.8x_2(n-1) -0.5x_2(n-2) + 0.16x_1(n-1) -0.2x_1(n-2) + w_2 $$
@@ -375,9 +385,9 @@ plot_directional(*ding_example1(), time_halfbandwidth_product=3)
 # %% [markdown]
 # ## Ding Example 2a
 #
-# > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-#     basic theory and application to neuroscience. Handbook of Time Series
-#     Analysis: Recent Theoretical Developments and Applications 437.
+# > Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+#     basic theory and application to neuroscience. In Handbook of Time Series
+#     Analysis, pp. 437–460.
 #
 # $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + w_1 $$
 # $$ x_2 = 0.9x_2(n-1) - 0.8x_2(n-2) + w_2$$
@@ -424,9 +434,9 @@ plot_directional(*ding_example2a())
 # %% [markdown]
 # ## Ding Example 2b
 #
-# > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-#     basic theory and application to neuroscience. Handbook of Time Series
-#     Analysis: Recent Theoretical Developments and Applications 437.
+# > Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+#     basic theory and application to neuroscience. In Handbook of Time Series
+#     Analysis, pp. 437–460.
 #
 # $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$
 # $$ x_2 = 0.9x_2(n-1) - 0.8x_2(n-2) + w_2$$
@@ -473,9 +483,9 @@ plot_directional(*ding_example2b(), time_halfbandwidth_product=2)
 # %% [markdown]
 # ## Ding Example 3
 #
-# > Ding, M., Chen, Y., and Bressler, S.L. (2006). 17 Granger causality:
-#     basic theory and application to neuroscience. Handbook of Time Series Analysis:
-#     Recent Theoretical Developments and Applications 437.
+# > Ding, M., Chen, Y., and Bressler, S.L. (2006). Granger causality:
+#     basic theory and application to neuroscience. In Handbook of Time Series
+#     Analysis, pp. 437–460.
 #
 # $$ x_1 = 0.95\sqrt2x_1(n-1) - 0.9025x_1(n-2) + w_1 $$
 # $$ x_2 = 0.5x_1(n-2) + w_2 $$
@@ -607,7 +617,7 @@ plot_directional(*Nedungadi_example2(), time_halfbandwidth_product=3)
 # %% [markdown]
 # ## Wen Example 1
 #
-# > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610–20110610.
+# > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610.
 #
 # ![image.png](attachment:image.png)
 
@@ -654,7 +664,7 @@ plot_directional(*Wen_example1(), time_halfbandwidth_product=1)
 # %% [markdown]
 # ## Wen Example 2
 #
-# > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610–20110610.
+# > Wen, X., Rangarajan, G., and Ding, M. (2013). Multivariate Granger causality: an estimation framework based on factorization of the spectral density matrix. Philosophical Transactions of the Royal Society A: Mathematical, Physical and Engineering Sciences 371, 20110610.
 #
 # ![image.png](attachment:image.png)
 

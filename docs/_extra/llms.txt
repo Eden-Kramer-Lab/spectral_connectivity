@@ -22,6 +22,7 @@ on `b`; the lower-level `Connectivity` arrays use two different index orders.
 
 ## Optional
 
-- [Introductory tutorial](https://spectral-connectivity.readthedocs.io/en/latest/examples/Intro_tutorial.html)
-- [Tutorial on simulated examples](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_On_Simulated_Examples.html)
+- [Getting started: from time series to connectivity](https://spectral-connectivity.readthedocs.io/en/latest/examples/Intro_tutorial.html)
+- [Connectivity measures on simulated signals](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_On_Simulated_Examples.html)
+- [Directed connectivity on published autoregressive models](https://spectral-connectivity.readthedocs.io/en/latest/examples/Tutorial_Using_Paper_Examples.html)
 - [Source code](https://github.com/Eden-Kramer-Lab/spectral_connectivity)

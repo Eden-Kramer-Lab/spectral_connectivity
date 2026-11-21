@@ -89,13 +89,12 @@ it up. To contribute, see [Developer Installation](#developer-installation).
 
 ### Tutorials
 
-See the following notebooks for more information on how to use the package:
-
-+ [Tutorial](examples/Intro_tutorial.ipynb)
-+ [Usage Examples](examples/Tutorial_On_Simulated_Examples.ipynb)
-+ [More Usage Examples](examples/Tutorial_Using_Paper_Examples.ipynb)
-
-The simulated-examples notebook builds every case with `spectral_connectivity.simulate` and asserts what each plot shows.
++ [Getting started: from time series to connectivity](examples/Intro_tutorial.ipynb):
+  start here; coherence from a time series, and the settings that matter.
++ [Connectivity measures on simulated signals](examples/Tutorial_On_Simulated_Examples.ipynb):
+  what each measure shows on signals with known, planted coupling.
++ [Directed connectivity on published autoregressive models](examples/Tutorial_Using_Paper_Examples.ipynb):
+  Granger and transfer-function measures on models from the literature.
 
 ### Usage Example
 
