@@ -292,6 +292,11 @@ def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") 
     )
 
 
+def both_spellings_message(function: str, new: str, old: str) -> str:
+    """The ``ValueError`` message for a call given a setting under both names."""
+    return f"{function} was given both {new} and its deprecated name {old}; pass only {new}."
+
+
 _issued_migration_messages: set[str] = set()
 # The filters in effect at the call. Under Python 3.14's context-aware warnings
 # (the default on free-threaded builds) those a catch_warnings block sets, as

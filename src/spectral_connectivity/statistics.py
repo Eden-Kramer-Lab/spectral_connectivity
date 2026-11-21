@@ -19,6 +19,7 @@ from numpy.typing import NDArray
 
 from spectral_connectivity.utils import (
     _validated_flag,
+    both_spellings_message,
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
@@ -1365,9 +1366,8 @@ def power_confidence_intervals(
     """
     if n_tapers is not None:
         if n_observations is not None:
-            msg = (
-                "power_confidence_intervals was given both n_observations and its "
-                "deprecated name n_tapers; pass only n_observations."
+            msg = both_spellings_message(
+                "power_confidence_intervals", "n_observations", "n_tapers"
             )
             raise ValueError(msg)
         n_observations = n_tapers
@@ -1377,9 +1377,8 @@ def power_confidence_intervals(
     level_name = "confidence_level"
     if ci is not None:
         if confidence_level is not _DEFAULT_CONFIDENCE_LEVEL:
-            msg = (
-                "power_confidence_intervals was given both confidence_level and its "
-                "deprecated name ci; pass only confidence_level."
+            msg = both_spellings_message(
+                "power_confidence_intervals", "confidence_level", "ci"
             )
             raise ValueError(msg)
         confidence_level, level_name = ci, "ci"

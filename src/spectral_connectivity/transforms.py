@@ -35,6 +35,7 @@ from spectral_connectivity.utils import (
     TIME_SERIES_RAGGED_FIX,
     BackendArray,
     _validate_sampling_frequency,
+    both_spellings_message,
     is_positive_integer,
     mark_readonly_if_supported,
     numeric_array,
@@ -416,10 +417,8 @@ def suggest_parameters(
     """
     if desired_freq_resolution is not None:
         if frequency_resolution is not None:
-            msg = (
-                "suggest_parameters was given both frequency_resolution and its "
-                "deprecated name desired_freq_resolution; pass only "
-                "frequency_resolution."
+            msg = both_spellings_message(
+                "suggest_parameters", "frequency_resolution", "desired_freq_resolution"
             )
             raise ValueError(msg)
         frequency_resolution = desired_freq_resolution
