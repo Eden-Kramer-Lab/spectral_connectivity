@@ -78,12 +78,37 @@ True
 - **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
   take `abs(coherency)` for the unsquared magnitude. A measure variable's
   `quantity` and `formula` attrs say which form a coherency-family value has.
-- **Diagonals differ by measure.** A self-connection is NaN for coherence (a
-  mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
-  `phase_locking_value`, to within rounding (NaN for a flat, zero-power
-  signal). Read a variable's `diagonal_policy` attr, and before averaging over
-  pairs mask a pairwise variable `v` with `v.where(v.source != v.target)` (not
-  a whole Dataset, whose `power` has no `target` axis).
+- **Diagonals differ by measure.** Coherence masks each self-connection with
+  NaN (its value would be 1), while `imaginary_coherence` gives 0 and
+  `phase_locking_value` gives 1, to within rounding (NaN for a flat,
+  zero-power signal). A variable's `diagonal_policy` attr says which, and the
+  [diagonal values table](CONNECTIVITY_METRIC_RANGES.md#diagonal-values) lists
+  every measure. Before averaging over pairs, mask each pairwise variable `v`
+  with `v.where(v.source != v.target)`; a whole Dataset cannot be masked this
+  way, because its `power` has no `target` axis:
+
+```python
+>>> measures = multitaper_connectivity(
+...     unrelated,
+...     sampling_frequency=500,
+...     method=["magnitude_squared_coherence", "imaginary_coherence", "phase_locking_value"],
+...     signal_names=["a", "b"],
+... )
+>>> self_connection = measures.sel(source="a", target="a")
+>>> {name: self_connection[name].attrs["diagonal_policy"] for name in self_connection.data_vars}
+{'magnitude_squared_coherence': 'masked_nan', 'imaginary_coherence': 'constant', 'phase_locking_value': 'constant'}
+>>> bool(self_connection.magnitude_squared_coherence.isnull().all())
+True
+>>> bool(np.allclose(self_connection.imaginary_coherence, 0))
+True
+>>> bool(np.allclose(self_connection.phase_locking_value, 1))
+True
+>>> locking = measures.phase_locking_value
+>>> locking.where(locking.source != locking.target).mean(["source", "target"]).dims
+('time', 'frequency')
+
+```
+
 - **Directed measures need a two-sided spectrum.** The Granger and
   directed-transfer-function families work with `multitaper_connectivity`, but
   not with Morlet wavelets or other one-sided coefficients, which raise a
