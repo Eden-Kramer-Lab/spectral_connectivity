@@ -1026,12 +1026,8 @@ class Connectivity:
       rather than unpacking it.
     - ``global_coherence`` (which takes no groups) returns two arrays,
       ``fractions, vectors = conn.global_coherence()``. Unlike every other
-      measure, its frequency axis holds all ``n_fft_samples`` FFT bins in FFT
-      order, labelled by :attr:`all_frequencies`; the first
-      ``len(conn.frequencies)`` are the non-negative ones, so
-      ``fractions[..., :len(conn.frequencies), :]`` and
-      ``vectors[..., :len(conn.frequencies), :, :]`` line up with
-      :attr:`frequencies` (the wrappers return them trimmed so).
+      measure, its frequency axis holds all ``n_fft_samples`` FFT bins; see
+      its Notes for how to line it up with :attr:`frequencies`.
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
