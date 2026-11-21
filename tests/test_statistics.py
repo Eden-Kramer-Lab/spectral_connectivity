@@ -341,6 +341,62 @@ def test_coherence_rate_adjustment_nonpositive_argument_is_nan():
     assert np.isfinite(adjustment[1])
 
 
+@pytest.mark.parametrize("dt", [1.0, 0.002])
+@pytest.mark.parametrize("added_poisson_rate", [0.0, 6.0])
+def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_process(
+    added_poisson_rate, dt
+):
+    """The factor equals thinned / full spike-field coherence, from the spectra.
+
+    A doubly stochastic Poisson process with intensity lambda(t) (mean ``rate``,
+    spectrum ``S_lambda``) counted in bins of width ``dt`` has the two-sided
+    spectral density ``dt**2 * (rate + S_lambda)`` and the cross-spectrum
+    ``dt * S_lambda_field`` with a field. Keeping each spike with probability
+    ``alpha`` gives intensity ``alpha * lambda(t)``, and independent Poisson
+    spikes at rate ``beta`` add ``dt**2 * beta`` to the spike spectrum and
+    nothing to the cross-spectrum. Both coherence magnitudes therefore follow
+    from the spectra alone, without the function's expression: inverting the
+    rate ratio, dropping ``dt**2``, or dropping the added-spike term each
+    changes the ratio.
+
+    The second rate passed is that of the kept spikes, ``alpha * rate``, not the
+    second condition's total rate ``alpha * rate + beta``.
+    """
+    frequencies = np.linspace(1.0, 100.0, 50)
+    rate, alpha = 15.0, 0.4
+    intensity_spectrum = 40.0 / (1 + ((frequencies - 30.0) / 10.0) ** 2)
+    field_spectrum = 2.0 + 300.0 / (1 + ((frequencies - 25.0) / 15.0) ** 2)
+    intensity_field_coherency = 0.9 * np.exp(-frequencies / 80.0 + 0.02j * frequencies)
+    intensity_field_cross_spectrum = intensity_field_coherency * np.sqrt(
+        intensity_spectrum * field_spectrum
+    )
+
+    def spectra(kept_fraction, added_rate):
+        """Spike spectrum and spike-field coherence magnitude of the binned counts."""
+        spike_spectrum = dt**2 * (
+            kept_fraction * rate + kept_fraction**2 * intensity_spectrum + added_rate
+        )
+        cross_spectrum = dt * kept_fraction * intensity_field_cross_spectrum
+        coherence = np.abs(cross_spectrum) / np.sqrt(spike_spectrum * field_spectrum)
+        return spike_spectrum, coherence
+
+    spike_spectrum, coherence = spectra(1.0, 0.0)
+    _, thinned_coherence = spectra(alpha, added_poisson_rate)
+
+    factor = coherence_rate_adjustment(
+        rate,
+        alpha * rate,
+        spike_spectrum,
+        homogeneous_poisson_noise=added_poisson_rate,
+        dt=dt,
+    )
+
+    np.testing.assert_allclose(factor, thinned_coherence / coherence, rtol=1e-12)
+    # The ratio is far from 1 and varies with frequency, so it is a real check.
+    assert factor.max() < 0.9
+    assert factor.max() - factor.min() > 0.1
+
+
 def test_power_bias_and_variance_match_log_chi2_moments():
     """Multitaper power S_hat/S ~ chi2_nu / nu with nu = 2 * n_obs.
 
