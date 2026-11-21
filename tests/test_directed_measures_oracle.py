@@ -50,6 +50,8 @@ from tests._var_oracle import (
     _dense_stable_var,
     _fourier_coefficients_with_cross_spectrum,
     _pairwise_granger_from_state_space,
+    _time_reversed_var,
+    _var_autocovariance,
 )
 
 # A unidirectional VAR: signal 0 drives signal 1 (lower-triangular coefficients),
@@ -630,6 +632,76 @@ def test_time_reversed_granger_flips_unidirectional_oracle(var_oracle):
     # innovations can leave a small residual in the original direction.
     assert np.nanmax(reversed_gc[..., 1, 0]) > 0.5
     assert np.nanmax(reversed_gc[..., 1, 0]) > 10 * np.nanmax(reversed_gc[..., 0, 1])
+
+
+@pytest.mark.parametrize("n_lags", [1, 2, 3])
+def test_var_autocovariance_is_the_inverse_transform_of_the_spectrum(n_lags):
+    """``Gamma(h) = E[x(t + h) x(t)^T]`` from the state covariance and the
+    Yule-Walker recursion equals the inverse Fourier transform of the model's
+    spectrum, at lags below, at and beyond the model's order. The lag-one
+    covariance is not symmetric, so a transposed convention would fail."""
+    n_fft, max_lag = 4096, 6
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=3, n_lags=n_lags, spectral_radius=0.8, seed=n_lags
+    )
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    from_spectrum = np.fft.ifft(spectrum, axis=0)[: max_lag + 1].real
+
+    gamma = _var_autocovariance(coefficients, noise_covariance, max_lag)
+
+    assert np.abs(gamma[1] - gamma[1].T).max() > 0.1
+    np.testing.assert_allclose(gamma, from_spectrum, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(
+        _var_autocovariance(coefficients, noise_covariance, 0), gamma[:1]
+    )
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "noise_covariance"),
+    [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
+    ids=["chain", "dense_correlated"],
+)
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+def test_time_reversed_granger_matches_the_reversed_var(
+    coefficients, noise_covariance, conjugate_symmetric
+):
+    """Read backwards in time, a VAR is again a VAR, with coefficients and
+    innovations that follow from its autocovariance. Time-reversed Granger of
+    the forward spectrum equals the state-space pairwise Granger of that
+    reversed VAR. It is not the forward result with the two directions
+    exchanged, which a transposed output would give."""
+    n_fft = 1024
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    reversed_coefficients, reversed_noise = _time_reversed_var(coefficients, noise_covariance)
+    # Premise: the reversed VAR has the transposed spectrum.
+    np.testing.assert_allclose(
+        _analytic_var(reversed_coefficients, reversed_noise, n_fft)[2],
+        spectrum.swapaxes(-1, -2),
+        atol=1e-10,
+        rtol=0,
+    )
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        ),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        time_reversed = connectivity.time_reversed_spectral_granger_prediction()[0]
+
+    oracle = _pairwise_granger_from_state_space(reversed_coefficients, reversed_noise, n_fft)
+    forward = _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    exchanged = forward.swapaxes(-1, -2)
+    # Premise: reversal does more than exchange the directions.
+    assert np.abs(oracle - exchanged)[:, off_diagonal].max() > 0.05
+    np.testing.assert_allclose(
+        time_reversed[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
 
 
 # Signal 0 drives 1 and 1 drives 2, with poles at 0.9, 0.8 and 0.7: the

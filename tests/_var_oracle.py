@@ -5,14 +5,14 @@ covariance ``Sigma``, the transfer function and cross-spectrum are known
 exactly; these helpers build them and Fourier coefficients that reproduce
 them, so a ``Connectivity`` can be fed an exact spectrum (see
 ``tests/test_directed_measures_oracle.py``). The VAR's state-space form gives
-the spectral Granger measure between sub-processes without factoring a
-spectrum.
+what needs no spectrum: its autocovariance, the spectral Granger measure
+between sub-processes, and the VAR its time reversal follows.
 """
 
 import itertools
 
 import numpy as np
-from scipy.linalg import solve_discrete_are
+from scipy.linalg import solve_discrete_are, solve_discrete_lyapunov
 
 
 def _analytic_var(coefficients, noise_covariance, n_fft):
@@ -188,6 +188,58 @@ def _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft):
     block measure with every signal a block of its own."""
     blocks = [[signal] for signal in range(coefficients.shape[-1])]
     return _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
+
+
+def _var_autocovariance(coefficients, noise_covariance, max_lag):
+    """``Gamma(h) = E[x(t + h) x(t)^T]`` of a VAR for ``h = 0 ... max_lag``,
+    shape ``(max_lag + 1, n_signals, n_signals)``.
+
+    The covariance of the state ``[x(t - 1), ..., x(t - n_lags)]`` solves a
+    discrete Lyapunov equation and holds the lags below ``n_lags``; the
+    Yule-Walker recursion ``Gamma(h) = sum_k A_k Gamma(h - k)`` gives the rest.
+    """
+    n_lags, n_signals, _ = coefficients.shape
+    companion = _companion_matrix(coefficients)
+    state_noise = np.zeros_like(companion)
+    state_noise[:n_signals, :n_signals] = noise_covariance
+    state_covariance = solve_discrete_lyapunov(companion, state_noise)
+    gamma = list(
+        state_covariance[:n_signals].reshape(n_signals, n_lags, n_signals).swapaxes(0, 1)
+    )
+    for lag in range(n_lags, max_lag + 1):
+        gamma.append(sum(coefficients[k] @ gamma[lag - k - 1] for k in range(n_lags)))
+    return np.stack(gamma[: max_lag + 1])
+
+
+def _time_reversed_var(coefficients, noise_covariance):
+    """The VAR that a VAR follows when read backwards in time:
+    ``(coefficients, noise_covariance)``.
+
+    The reversed process ``y(s) = x(-s)`` has the autocovariance of ``x``
+    transposed at every lag, and is again a VAR of the same order. Its
+    coefficients ``B_k`` solve the Yule-Walker equations of that
+    autocovariance, ``Gamma(j)^T = sum_k B_k Gamma(j - k)^T`` for
+    ``j = 1 ... n_lags``, and its innovation covariance is
+    ``Gamma(0) - sum_k B_k Gamma(k)``.
+    """
+    n_lags = coefficients.shape[0]
+    gamma = _var_autocovariance(coefficients, noise_covariance, n_lags)
+
+    def reversed_gamma(lag):
+        return gamma[lag].T if lag >= 0 else gamma[-lag]
+
+    lags = range(1, n_lags + 1)
+    # [B_1 ... B_n] @ system = right_hand_side, block (k, j) of system being
+    # the reversed autocovariance at lag j - k.
+    system = np.block([[reversed_gamma(j - k) for j in lags] for k in lags])
+    right_hand_side = np.concatenate([reversed_gamma(j) for j in lags], axis=1)
+    reversed_coefficients = np.stack(
+        np.split(np.linalg.solve(system.T, right_hand_side.T).T, n_lags, axis=1)
+    )
+    reversed_noise = gamma[0] - sum(
+        reversed_coefficients[k] @ gamma[k + 1] for k in range(n_lags)
+    )
+    return reversed_coefficients, reversed_noise
 
 
 # A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with 0.8 couplings, strong
