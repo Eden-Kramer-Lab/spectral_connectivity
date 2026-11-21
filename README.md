@@ -35,8 +35,8 @@
 > (generalized) partial directed coherence, and direct directed transfer
 > function) emit a `DirectedOrientationWarning` as a reminder, as do
 > `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and
-> subset spectral Granger prediction; silence it with
-> `warnings.filterwarnings("ignore",
+> subset spectral Granger prediction, once per session for each measure;
+> silence it with `warnings.filterwarnings("ignore",
 > category=spectral_connectivity.DirectedOrientationWarning)`. See the
 > [migration guide](CHANGELOG.md#migration-guide).
 >
@@ -44,8 +44,8 @@
 > Nyquist are twice the 2.x values, so integrating over the non-negative
 > frequencies gives the signal's power. `power(one_sided=False)` returns the
 > 2.x values. Until 3.2, calling `Connectivity.power()` without `one_sided` on
-> two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True`
-> to silence it. The power that `multitaper_connectivity` and
+> two-sided coefficients emits a `PowerSidednessWarning` (once per session);
+> pass `one_sided=True` to silence it. The power that `multitaper_connectivity` and
 > `connectivity_to_xarray` return (including by default) is the one-sided
 > density too, and they do not warn: halve its interior bins to compare with a
 > 2.x result.

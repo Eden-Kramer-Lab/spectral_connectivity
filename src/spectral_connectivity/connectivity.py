@@ -414,7 +414,10 @@ class DirectedOrientationWarning(UserWarning):
     ``sel(source=a, target=b)`` was ``b -> a`` in 2.x (the 2.x wrapper rejected
     the transfer-function measures).
     Code written for 2.x keeps running but reads the opposite direction. This
-    warning is temporary; silence it, without hiding other warnings, with
+    warning is temporary. It appears once per Python session for each measure
+    (for the wrappers' labels, and for the ``Connectivity`` method's array);
+    ``warnings.simplefilter("always", DirectedOrientationWarning)`` shows it at
+    every call. Silence it, without hiding other warnings, with
     ``warnings.filterwarnings("ignore", category=DirectedOrientationWarning)``.
     """
 
@@ -426,10 +429,48 @@ class PowerSidednessWarning(UserWarning):
     ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
     density, with the interior frequency bins doubled, where 2.x returned the
     two-sided density, so code written for 2.x keeps running and gets values
-    twice as large away from 0 Hz and Nyquist. This warning is temporary; pass
-    ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
+    twice as large away from 0 Hz and Nyquist. This warning is temporary. It
+    appears once per Python session;
+    ``warnings.simplefilter("always", PowerSidednessWarning)`` shows it at every
+    call. Pass ``one_sided=True`` or ``one_sided=False`` to the call, or
+    silence it with
     ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
     """
+
+
+_issued_migration_messages: set[str] = set()
+# The filters in effect at the call. Under Python 3.14's context-aware warnings
+# (the default on free-threaded builds) those a catch_warnings block sets, as
+# pytest.warns does, are not in warnings.filters; 3.14's _get_filters has them.
+_current_warning_filters: Callable[[], Sequence[Any]] = getattr(
+    warnings, "_get_filters", lambda: warnings.filters
+)
+
+
+def _warn_migration(message: str, category: type[UserWarning]) -> None:
+    """Issue a migration notice once per session, unless a warnings filter applies.
+
+    Each message (one ``PowerSidednessWarning``, one
+    ``DirectedOrientationWarning`` per measure) is issued the first time it
+    arises. Later it is issued again only if a warnings filter in effect
+    could match it, so a filter the user set (``-W``, ``PYTHONWARNINGS``,
+    ``warnings.simplefilter("always")`` or ``"error"``, ``pytest.warns``)
+    still decides; Python's own default filters match no ``UserWarning``.
+    Module and line restrictions are not checked, so a filter limited to a
+    module lets repeats through to Python's default action (once per line).
+
+    Python's ``"once"`` action would not do: it forgets what it showed
+    whenever any code changes the filters, as ``warnings.catch_warnings``
+    does, and a filter the package registered at import is dropped when the
+    import runs inside ``catch_warnings`` (as pytest collects test modules).
+    """
+    if message in _issued_migration_messages and not any(
+        issubclass(category, filter_category) and (pattern is None or pattern.match(message))
+        for _, pattern, filter_category, _, _ in _current_warning_filters()
+    ):
+        return
+    _issued_migration_messages.add(message)
+    warnings.warn(message, category, stacklevel=stacklevel_outside_package())
 
 
 _MIGRATION_GUIDE_URL = (
@@ -479,14 +520,13 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         result = connectivity_measure(*args, **kwargs)
         if _warn_orientation_change.get():
-            warnings.warn(
+            _warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
                 "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
                 "returned [..., target, source]; review the indexing and "
                 "normalization axes of code written for 2.x. See the migration "
                 f"guide: {_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
                 DirectedOrientationWarning,
-                stacklevel=stacklevel_outside_package(),
             )
         return result
 
@@ -2566,8 +2606,8 @@ class Connectivity:
             also what an omitted ``one_sided`` gives. Called without it on
             two-sided coefficients, ``power`` warns that 2.x returned the
             two-sided density
-            (:class:`~spectral_connectivity.PowerSidednessWarning`, until
-            3.2); pass ``True`` to confirm and silence it.
+            (:class:`~spectral_connectivity.PowerSidednessWarning`, once per
+            session, until 3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
             non-negative frequencies only: no bin is doubled, as for a
             spectrum laid out over negative and positive frequencies. For a
@@ -2624,7 +2664,7 @@ class Connectivity:
         if one_sided is None:
             if not self._is_one_sided and _warn_orientation_change.get():
                 # Remove in 3.2, with DirectedOrientationWarning (issue #98).
-                warnings.warn(
+                _warn_migration(
                     f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
                     "one-sided power spectral density: the bins between 0 Hz and "
                     "Nyquist are doubled, so integrating over the non-negative "
@@ -2635,7 +2675,6 @@ class Connectivity:
                     'Silence all of these with warnings.filterwarnings("ignore", '
                     "category=spectral_connectivity.PowerSidednessWarning).",
                     PowerSidednessWarning,
-                    stacklevel=stacklevel_outside_package(),
                 )
             one_sided = True
         if _validated_flag("one_sided", one_sided):

@@ -4,6 +4,10 @@
 suite, so each test here records warnings with the ``"always"`` filter.
 """
 
+import json
+import os
+import subprocess
+import sys
 import warnings
 
 import numpy as np
@@ -91,6 +95,65 @@ def test_repeated_calls_warn_once_under_the_default_filter(connectivity):
         for _ in range(3):
             connectivity.directed_transfer_function()
     assert len(_orientation_warnings(record)) == 1
+
+
+_SESSION_SCRIPT = """
+import json
+import warnings
+
+import numpy as np
+
+shown = []
+# Record what Python's filters let through, without changing the filters.
+warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
+    str(message).split()[3]
+)
+from spectral_connectivity import (
+    Connectivity,
+    DirectedOrientationWarning,
+    Multitaper,
+    multitaper_connectivity,
+)
+
+time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
+connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
+granger = "pairwise_spectral_granger_prediction"
+connectivity.directed_transfer_function()
+connectivity.directed_transfer_function()  # another line
+connectivity.jackknife("directed_transfer_function")
+connectivity.partial_directed_coherence()
+multitaper_connectivity(time_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(time_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(
+    time_series,
+    sampling_frequency=100,
+    method="subset_pairwise_spectral_granger_prediction",
+    connectivity_kwargs={"pairs": [(0, 1)]},
+)
+first = list(shown)
+warnings.simplefilter("always", DirectedOrientationWarning)
+connectivity.directed_transfer_function()
+print(json.dumps([first, shown[len(first):]]))
+"""
+
+
+def test_warning_appears_once_per_session_for_each_measure():
+    """Under Python's default filters each measure's notice appears once per
+    session, whichever line calls it; the wrappers' label notice is separate,
+    and also once per measure. A filter set after import shows it again."""
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
+    output = subprocess.check_output(
+        [sys.executable, "-c", _SESSION_SCRIPT], text=True, env=environment
+    )
+    first, after_always = json.loads(output)
+    # Each message's fourth word: the measure, or "sel(source=a," for the labels.
+    assert first == [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "sel(source=a,",
+        "sel(source=a,",
+    ]
+    assert after_always == ["directed_transfer_function"]
 
 
 def test_filtering_the_category_silences_it(connectivity):

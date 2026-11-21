@@ -5,6 +5,10 @@
 ``"always"`` filter.
 """
 
+import json
+import os
+import subprocess
+import sys
 import warnings
 
 import numpy as np
@@ -106,11 +110,13 @@ def test_labelled_power_is_silent(time_series):
 
 def test_jackknife_of_power_warns_once_for_its_full_estimate(connectivity):
     """The jackknife's estimate is power(), so it carries the same notice,
-    once: its leave-one-out replicates do not repeat it."""
+    once, at the jackknife call: its leave-one-out replicates do not repeat
+    it. A ``one_sided`` passed through to ``power`` is honored."""
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.jackknife("power")
-    assert len(_sidedness_warnings(record)) == 1
+    (warning,) = _sidedness_warnings(record)
+    assert warning.filename == __file__
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.jackknife("power", one_sided=True)
@@ -123,3 +129,85 @@ def test_warning_is_silenced_by_its_category(connectivity):
         warnings.filterwarnings("ignore", category=PowerSidednessWarning)
         connectivity.power()
     assert _sidedness_warnings(record) == []
+
+
+_SESSION_SCRIPT = """
+import json
+import warnings
+
+import numpy as np
+
+shown = []
+# Record what Python's filters let through, without changing the filters.
+warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
+    category.__name__
+)
+from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
+
+time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
+connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
+counts = []
+connectivity.power()
+counts.append(len(shown))
+with warnings.catch_warnings():  # resets what Python's "once" action showed
+    pass
+connectivity.power()  # another line
+connectivity.jackknife("power")
+counts.append(len(shown))
+warnings.simplefilter("always", PowerSidednessWarning)
+connectivity.power()
+connectivity.power()
+counts.append(len(shown))
+warnings.simplefilter("error", PowerSidednessWarning)
+try:
+    connectivity.power()
+except PowerSidednessWarning:
+    counts.append("raised")
+print(json.dumps(counts))
+"""
+
+
+def test_warning_appears_once_per_session_unless_a_filter_says_otherwise():
+    """Under Python's default filters the notice appears once per session,
+    not at every line that calls ``power()``; a filter the user sets after
+    import still shows it every time, or turns it into an error."""
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
+    output = subprocess.check_output(
+        [sys.executable, "-c", _SESSION_SCRIPT], text=True, env=environment
+    )
+    assert json.loads(output) == [1, 1, 3, "raised"]
+
+
+_CONTEXT_SCRIPT = """
+import warnings
+
+import numpy as np
+
+from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
+
+time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
+connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
+counts = []
+for _ in range(2):
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.power()
+    counts.append(sum(issubclass(w.category, PowerSidednessWarning) for w in record))
+print(counts)
+"""
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 14), reason="context-aware warnings are new in Python 3.14"
+)
+def test_a_repeat_obeys_a_filter_set_in_catch_warnings_under_context_aware_warnings():
+    """Python 3.14's context-aware warnings (the default on free-threaded
+    builds) keep the filters a ``catch_warnings`` block sets, as
+    ``pytest.warns`` does, out of ``warnings.filters``."""
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
+    output = subprocess.check_output(
+        [sys.executable, "-X", "context_aware_warnings=1", "-c", _CONTEXT_SCRIPT],
+        text=True,
+        env=environment,
+    )
+    assert output.strip() == "[1, 1]"

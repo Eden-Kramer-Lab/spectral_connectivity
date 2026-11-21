@@ -20,12 +20,13 @@ that existed in 2.x (pairwise and subset spectral Granger, directed transfer
 function, directed coherence, (generalized) partial directed coherence, and
 direct directed transfer function) emit a `DirectedOrientationWarning` as a
 reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
-pairwise and subset spectral Granger prediction; silence it with
+pairwise and subset spectral Granger prediction, once per session for each
+measure; silence it with
 `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
-the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` when called without
-`one_sided` on two-sided coefficients; the wrappers' power results changed the
+the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
+when called without `one_sided` on two-sided coefficients; the wrappers' power results changed the
 same way without a warning (see the migration row).
 
 This release includes corrected numerical definitions and therefore requires a
@@ -111,11 +112,16 @@ their rows).
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
   when they compute pairwise or subset spectral Granger prediction (the 2.x
   wrapper rejected the transfer-function measures). It points at the calling
-  line, so Python's default filter shows it once per call site.
+  line and appears once per Python session for each measure (the wrappers'
+  label notice and the `Connectivity` method's array notice are separate);
+  `warnings.simplefilter("always",
+  spectral_connectivity.DirectedOrientationWarning)` shows it at every call,
+  and any other filter on it (such as `"error"`) applies as usual.
 - `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
-  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. Pass
+  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It appears
+  once per Python session, like `DirectedOrientationWarning`. Pass
   `one_sided=True` (or `False` for the 2.x values) or silence it with
   `warnings.filterwarnings("ignore",
   category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
