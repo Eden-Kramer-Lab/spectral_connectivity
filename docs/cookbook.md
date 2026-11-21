@@ -465,6 +465,52 @@ results recording `frequency_interval_closed="neither"` and a
 on this grid `phase_slope_index(frequencies_of_interest=(10, 50))` becomes
 `phase_slope_index(frequency_range=(12.0, 48.0))`. It is removed in 4.0.
 
+## Compare spike-field coherence across firing rates
+
+Spike-field coherence falls when a neuron fires less, even if its coupling to
+the field is unchanged. `coherence_rate_adjustment` gives the factor by which
+it falls when spikes are removed at random, so the coherence at a lower rate
+can be compared with what the rate change alone predicts.
+
+Give the transform spike counts per sample (0 or 1), not a rate, and pass the
+bin width as `dt = 1 / sampling_frequency`. The spectrum to pass is
+`Connectivity.power()` of the higher-rate spike train, which is a one-sided
+density: say so with `is_one_sided=True`.
+
+```python
+>>> from spectral_connectivity import Connectivity, Multitaper
+>>> from spectral_connectivity.statistics import coherence_rate_adjustment
+>>> sampling_frequency = 500
+>>> time = np.arange(250)[:, np.newaxis] / sampling_frequency
+>>> oscillation = np.cos(2 * np.pi * 40 * time + rng.uniform(0, 2 * np.pi, (1, 400)))
+>>> field = oscillation + 0.5 * rng.standard_normal(oscillation.shape)
+>>> spikes = rng.poisson(100 * (1 + 0.9 * oscillation) / sampling_frequency)
+>>> fewer_spikes = rng.binomial(spikes, 0.25)  # a quarter of the spikes, same coupling
+>>> signals = np.stack([field, spikes, fewer_spikes], axis=-1).astype(float)
+>>> connectivity = Connectivity.from_transform(
+...     Multitaper(signals, sampling_frequency=sampling_frequency)
+... )
+>>> coherence = np.abs(connectivity.coherency()[0])  # (frequency, signal, signal)
+>>> factor = coherence_rate_adjustment(
+...     spikes.mean() * sampling_frequency,  # spikes per second
+...     fewer_spikes.mean() * sampling_frequency,
+...     connectivity.power()[0, :, 1],
+...     dt=1 / sampling_frequency,
+...     is_one_sided=True,
+... )
+>>> at_40_hz = int(np.argmin(np.abs(connectivity.frequencies - 40)))
+>>> expected = coherence[at_40_hz, 0, 1] * factor[at_40_hz]
+>>> bool(abs(coherence[at_40_hz, 0, 2] - expected) < 0.05)
+True
+
+```
+
+The factor multiplies the coherence magnitude, not its square. With the
+one-sided `power()` it is not valid at 0 Hz or at the Nyquist frequency:
+leave those two bins out, or pass `connectivity.power(one_sided=False)` with
+`is_one_sided=False`. Without `is_one_sided` the function assumes a one-sided
+spectrum and warns.
+
 ## Bring your own Fourier coefficients
 
 If you already have Fourier coefficients (e.g. from a wavelet transform), skip

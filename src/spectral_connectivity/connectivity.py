@@ -2357,9 +2357,14 @@ class Connectivity:
             real signal the negative frequencies mirror the interior positive
             ones, so integrating this density over the returned frequencies
             gives about half the signal power. It is the density that
-            formulas written for a two-sided spectrum take, and what
-            ``power()`` returned in 2.x. Not available for one-sided input,
+            formulas written for a two-sided spectrum take, such as
+            :func:`~spectral_connectivity.statistics.coherence_rate_adjustment`
+            with ``is_one_sided=False``. Not available for one-sided input,
             whose two-sided scale is not known.
+
+            .. versionchanged:: 3.0
+               The default result is one-sided. ``one_sided=False`` returns
+               what ``power()`` returned in 2.x.
 
         Returns
         -------
@@ -2393,6 +2398,11 @@ class Connectivity:
         (1, 501, 2)
         >>> connectivity.frequencies[[0, -1]]  # 0 Hz up to Nyquist in 0.5 Hz steps
         array([  0., 250.])
+        >>> two_sided = connectivity.power(one_sided=False)
+        >>> bool(np.allclose(power[0, 1:-1], 2 * two_sided[0, 1:-1]))  # interior bins
+        True
+        >>> bool(np.allclose(power[0, [0, -1]], two_sided[0, [0, -1]]))  # 0 Hz, Nyquist
+        True
         """
         if _validated_flag("one_sided", one_sided):
             return self._one_sided_density(self._power, frequency_axis=-2)
