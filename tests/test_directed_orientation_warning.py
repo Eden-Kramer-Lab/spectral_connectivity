@@ -137,6 +137,37 @@ def test_warning_appears_once_per_session_for_each_measure():
     assert [message.split()[3] for message in after_always] == ["directed_transfer_function"]
 
 
+_NONFINITE_SCRIPT = """
+nan_series = time_series.copy()
+nan_series[10, 0, 0] = np.nan
+nan_connectivity = Connectivity.from_transform(
+    Multitaper(nan_series, sampling_frequency=100)
+)
+granger = "pairwise_spectral_granger_prediction"
+nan_connectivity.directed_transfer_function()
+nan_connectivity.directed_transfer_function()  # another line
+nan_connectivity.partial_directed_coherence()
+multitaper_connectivity(nan_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(nan_series, sampling_frequency=100, method=granger)
+print(json.dumps(shown))
+"""
+
+
+def test_nonfinite_input_still_shows_each_notice_once_per_session():
+    """A directed measure of NaN coefficients drops its factorization
+    warnings inside ``catch_warnings``; the orientation notice, issued
+    outside that block, still appears once per measure, and so does the
+    wrappers' label notice."""
+    shown = run_fresh_session(_NONFINITE_SCRIPT)
+    notices = [message.split()[3] for message in shown if message.startswith("Since ")]
+    assert notices == [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "sel(source=a,",
+    ]
+    assert any("NaN or infinite value" in message for message in shown)
+
+
 def test_filtering_the_category_silences_it(connectivity):
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
