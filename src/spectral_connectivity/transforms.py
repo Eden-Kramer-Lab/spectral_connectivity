@@ -977,27 +977,30 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
             stacklevel=stacklevel_outside_package(),
         )
 
-    is_nonfinite = ~xp.isfinite(time_series)
+    is_finite = xp.isfinite(time_series)
+    # One pass and one device synchronization for the common, finite input;
+    # the counts and locations are computed only for a warning.
+    if bool(xp.all(is_finite)):
+        return True
+    is_nonfinite = ~is_finite
     n_nonfinite = int(xp.sum(is_nonfinite))
-    if n_nonfinite:
-        where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
-        if time_series.shape[1] > 1:
-            where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
-        warnings.warn(
-            f"time_series contains {n_nonfinite} NaN or infinite "
-            f"value{'' if n_nonfinite == 1 else 's'} (0-based indices: {where}). They "
-            "propagate to "
-            "the outputs: the power of an affected signal is NaN in every time "
-            "window containing one, as is every connectivity value involving that "
-            "signal there (every value, for measures that model all signals "
-            "jointly, such as partial coherence and Granger prediction). "
-            "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
-            "affected trials or signals before the analysis; "
-            "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
-            UserWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
-    return n_nonfinite == 0
+    where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
+    if time_series.shape[1] > 1:
+        where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
+    warnings.warn(
+        f"time_series contains {n_nonfinite} NaN or infinite "
+        f"value{'' if n_nonfinite == 1 else 's'} (0-based indices: {where}). They "
+        "propagate to the outputs: the power of an affected signal is NaN in every "
+        "time window containing one, as is every connectivity value involving that "
+        "signal there (every value, for measures that model all signals "
+        "jointly, such as partial coherence and Granger prediction). "
+        "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
+        "affected trials or signals before the analysis; "
+        "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
+        UserWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+    return False
 
 
 class _WindowedFourierTransform:

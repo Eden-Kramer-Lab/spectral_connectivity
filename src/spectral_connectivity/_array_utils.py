@@ -21,7 +21,7 @@ def _clip_rounding_above_one(values: BackendArray) -> BackendArray:
     NaN.
     """
     rounded_up = (values > 1) & (values <= 1 + ROUNDING_ABOVE_ONE)
-    return xp.where(rounded_up, xp.asarray(1, dtype=values.dtype), values)
+    return xp.where(rounded_up, values.dtype.type(1), values)
 
 
 def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:

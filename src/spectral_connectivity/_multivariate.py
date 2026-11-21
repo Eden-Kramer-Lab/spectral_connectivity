@@ -550,11 +550,8 @@ def _global_coherence_components(
     # The cross-spectral matrix is PSD by construction (``scaled @ scaledᴴ``), so
     # any negative eigenvalue is round-off in eigh and is clipped to 0. (The thin
     # path's squared norms are non-negative already, so the clip is a no-op
-    # there.) A component holding all the power is a fraction of 1, which
-    # rounding left up to 7e-16 above.
-    fractions = _clip_rounding_above_one(
-        xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
-    )
+    # there.)
+    fractions = xp.clip(component_power, 0.0, None) / safe_total[..., xp.newaxis]
 
     undefined = is_zero_power[..., 0, 0]
     fractions = xp.where(undefined[:, xp.newaxis], xp.nan, fractions)
@@ -683,9 +680,7 @@ def _estimate_global_coherence(
         unnormalized_global_coherence, singular_values, _ = xp.linalg.svd(
             scaled_coefficients, full_matrices=False
         )
-        global_coherence = _clip_rounding_above_one(
-            singular_values[:max_rank] ** 2 / total_power
-        )
+        global_coherence = singular_values[:max_rank] ** 2 / total_power
         unnormalized_global_coherence = unnormalized_global_coherence[:, :max_rank]
     else:
         # ARPACK (SciPy's svds) starts from a random vector unless given one,
@@ -705,7 +700,7 @@ def _estimate_global_coherence(
         order = xp.argsort(singular_values)[::-1]
         singular_values = singular_values[order]
         unnormalized_global_coherence = unnormalized_global_coherence[:, order]
-        global_coherence = _clip_rounding_above_one(singular_values**2 / total_power)
+        global_coherence = singular_values**2 / total_power
 
     return global_coherence, unnormalized_global_coherence
 
@@ -747,14 +742,17 @@ def _global_coherence(
     # observation column by sqrt(weight) produces the weighted cross-spectrum. The
     # scalar division by sum(weight) cancels when component power is normalized
     # by total power.
+    # A component holding all the power is a fraction of 1, which rounding left
+    # up to 7e-16 above; either path's fractions are clipped once, at the end.
     if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
         if observation_weights is not None:
             fourier_coefficients = _weight_observations(
                 fourier_coefficients, xp.sqrt(observation_weights)
             )
-        return _batched_global_coherence(
+        fractions, vectors = _batched_global_coherence(
             fourier_coefficients, max_rank, max_workspace_elements
         )
+        return _clip_rounding_above_one(fractions), vectors
 
     # A user who tuned max_workspace_elements for memory gets no effect here (the
     # per-bin path decomposes one bin at a time); note it so the setting having
@@ -794,4 +792,4 @@ def _global_coherence(
                 global_coherence[time_ind, freq_ind],
                 unnormalized_global_coherence[time_ind, freq_ind],
             ) = _estimate_global_coherence(bin_coefficients, max_rank=max_rank)
-    return global_coherence, unnormalized_global_coherence
+    return _clip_rounding_above_one(global_coherence), unnormalized_global_coherence
