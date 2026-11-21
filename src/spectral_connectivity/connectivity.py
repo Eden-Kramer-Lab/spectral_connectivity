@@ -4073,7 +4073,16 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
-        with self._decomposition_of_nonfinite_coefficients("global_coherence"):
+        # NaN or Inf coefficients (unless zero weights omit them) make the
+        # decomposition fail, which is reported in the user's terms; NumPy's
+        # "invalid value" RuntimeWarning from the scaling before it would only
+        # repeat that, so it is silenced for such coefficients.
+        with (
+            self._decomposition_of_nonfinite_coefficients("global_coherence"),
+            contextlib.nullcontext()
+            if self._coefficients_are_finite
+            else np.errstate(invalid="ignore", divide="ignore"),
+        ):
             global_coherence, unnormalized_global_coherence = _global_coherence(
                 self._fourier_coefficients,
                 self._observation_weights,

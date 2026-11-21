@@ -922,3 +922,16 @@ def test_decompositions_name_nonfinite_coefficients(measure, kwargs, route):
         ) as excinfo:
             compute(**kwargs)
     assert isinstance(excinfo.value.__cause__, np.linalg.LinAlgError)
+
+
+def test_global_coherence_raises_before_numpy_warns_on_nonfinite_coefficients():
+    """On the class path, global_coherence says it cannot be computed from NaN
+    or Inf before its scaling emits NumPy's "invalid value" RuntimeWarning."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(_coefficients_with_nan())
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+            connectivity.global_coherence()
+    assert record == []

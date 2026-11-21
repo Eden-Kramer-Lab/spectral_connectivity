@@ -1347,7 +1347,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   which is kept as the cause. `canonical_coherency`,
   `maximized_imaginary_coherency` (and its components), and
   `multivariate_interaction_measure` already returned NaN there, and still
-  do.
+  do. `global_coherence` no longer emits NumPy's "invalid value encountered
+  in divide" `RuntimeWarning` before that error.
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0
