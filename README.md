@@ -38,7 +38,9 @@
 >   2.x values.
 >
 > Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
-> `PowerSidednessWarning` as a reminder. Several other values also changed
+> `PowerSidednessWarning` as a reminder, once per Python session (for each
+> measure); `warnings.simplefilter("always", ...)` with the warning's class
+> shows it at every call. Several other values also changed
 > without an error. The [migration guide](docs/migration.md) lists which calls
 > warn, how to silence them, and every other change.
 

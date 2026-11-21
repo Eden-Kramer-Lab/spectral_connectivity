@@ -24,14 +24,21 @@ for 2.x has to change.
    direct directed transfer function), `Connectivity.jackknife` of those
    measures, and `multitaper_connectivity` and `connectivity_to_xarray` for
    pairwise and subset spectral Granger prediction emit a
-   `DirectedOrientationWarning` as a reminder; silence it with
+   `DirectedOrientationWarning` as a reminder, once per Python session for
+   each measure (and once more if the same measure is computed both through a
+   wrapper and through its `Connectivity` method). Show it at every call with
+   `warnings.simplefilter("always",
+   spectral_connectivity.DirectedOrientationWarning)`, or silence it with
    `warnings.filterwarnings("ignore",
    category=spectral_connectivity.DirectedOrientationWarning)`.
 2. **Expect one-sided power.** `Connectivity.power()` returns the one-sided
    density: the bins between 0 Hz and Nyquist are twice the 2.x values.
    `power(one_sided=False)` returns the 2.x values. Until 3.2, calling
    `Connectivity.power()` without `one_sided` on two-sided coefficients emits a
-   `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power in
+   `PowerSidednessWarning`, once per Python session
+   (`warnings.simplefilter("always",
+   spectral_connectivity.PowerSidednessWarning)` shows it at every call); pass
+   `one_sided=True` to silence it. The power in
    `multitaper_connectivity` and `connectivity_to_xarray` results changed the
    same way without a warning: halve its interior bins to compare with 2.x.
 3. **Recompute results whose values changed without an error.** Besides
@@ -102,7 +109,7 @@ Values that changed for the functional, lead/lag, and group measures, the power 
 | `weighted_phase_lag_index` was about 0 for small-amplitude data, whatever the true value: at 1 kHz it began to fail at a standard deviation of 1e-6 and was about 1e-17 at every frequency by 3e-7 (MEG in tesla, for example) | Invariant to the data's amplitude. Recompute weighted phase-lag results obtained from data stored in small units |
 | A zero-lag pair (a channel and a scaled copy of it) gave a `phase_lag_index` up to +-1, a `debiased_squared_phase_lag_index` up to 1, and a `debiased_squared_weighted_phase_lag_index` anywhere in [-1, 1], read from the sign of rounding noise (largest with few observations) | 0 for all three, and 0.5 for `directed_phase_lag_index`: "no phase lag" is judged relative to the pair's power |
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
-| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density. Until 3.2, `Connectivity.power()` without `one_sided` on two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power in `multitaper_connectivity` and `connectivity_to_xarray` results (including by default) changed the same way without a warning: halve its interior bins to compare with 2.x |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density. Until 3.2, `Connectivity.power()` without `one_sided` on two-sided coefficients emits a `PowerSidednessWarning` (once per Python session); pass `one_sided=True` to silence it. The power in `multitaper_connectivity` and `connectivity_to_xarray` results (including by default) changed the same way without a warning: halve its interior bins to compare with 2.x |
 | `coherence_rate_adjustment(rate1, rate2, power, ...)` was given 2.x's `power()`, a two-sided density | Say which density the spectrum is. With 3.0's one-sided `power()` pass `is_one_sided=True`: the factor is the same as in 2.x at interior frequencies (with no added Poisson spikes; see the next row) and differs at 0 Hz and Nyquist, where a one-sided density is not doubled. Leave 0 Hz out in any case; at Nyquist pass the two-sided density. With a two-sided spectrum (your own, or `power(one_sided=False)`) pass `is_one_sided=False`. Without the keyword the call warns and assumes one-sided |
 | `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. A call with a non-zero noise rate warns about this until 4.0. Calls with the default noise of 0 are unchanged and silent |
 | `Multitaper` accepted a complex-valued time series, although its outputs cover only the non-negative frequencies and the one-sided quantities assume the negative ones mirror them | `Multitaper`, `ShortTimeFourierTransform`, `Welch`, `MorletWavelet`, and `multitaper_connectivity` raise `TypeError` for a complex time series. Pass its real and imaginary parts as separate real signals, or compute the Fourier coefficients yourself and pass them to `Connectivity`, whose `power(one_sided=True)` and `cross_spectral_density()` add each interior negative frequency to its positive one, `S(f) + conj(S(-f))`. That doubles the bin for a real signal, as 3.0 does, but no longer counts a complex tone at `+f` twice (one-sided total 2 for unit power) and one at `-f` not at all (total 0) |
