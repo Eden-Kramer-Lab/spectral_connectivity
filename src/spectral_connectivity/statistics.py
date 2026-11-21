@@ -858,12 +858,12 @@ def coherence_rate_adjustment(
         ``Connectivity.power()`` returns it (``True``), or a two-sided one,
         such as ``Connectivity.power(one_sided=False)`` (``False``). The
         adjustment is defined for the two-sided density, which is half of the
-        one-sided one. If omitted, the spectrum is taken as one-sided and a
-        warning says so, because the two cannot be told apart from their
-        values.
+        one-sided one at frequencies other than 0 Hz and Nyquist. If omitted,
+        the spectrum is taken as one-sided and a warning says so, because the
+        two cannot be told apart from their values.
 
-        .. versionchanged:: 3.0
-           New. In 2.x the spectrum was read as two-sided, which is what
+        .. versionadded:: 3.0
+           In 2.x the spectrum was read as two-sided, which is what
            ``power()`` returned then.
 
     Returns
@@ -871,12 +871,14 @@ def coherence_rate_adjustment(
     rate_adjustment_factor : NDArray[floating], shape (n_frequencies,)
         Factor that multiplies the magnitude of the first condition's
         coherence (not its square); at most 1 when the rate does not rise.
-        ``NaN`` where it is undefined. Leave out the value at 0 Hz, and at
-        the frequencies within a taper's bandwidth of it: there the estimated
-        spike spectrum is dominated by the train's mean, or by its removal,
-        not by its fluctuations. The value at the Nyquist frequency is valid
-        only with a two-sided spectrum, because a one-sided density is not
-        doubled there.
+        ``NaN`` where it is undefined. Leave out the value at 0 Hz, and with
+        the default mean removal (``detrend_type="constant"``) the values
+        within a taper's bandwidth of it: the removal of each window's mean
+        distorts the estimated spike spectrum there. Without mean removal the
+        mean's power dominates 0 Hz, and with added Poisson spikes the
+        distortion reaches further. The value at the Nyquist frequency is
+        valid only with a two-sided spectrum, because a one-sided density is
+        not doubled there.
 
     Examples
     --------

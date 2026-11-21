@@ -577,7 +577,7 @@ def _check_measure_settings(
         # Checked for the whole request, so the answer does not depend on
         # where power stands among the methods.
         msg = (
-            f"connectivity_kwargs one_sided={measure_settings['one_sided']!r} is not "
+            f"one_sided={measure_settings['one_sided']!r} is not "
             "supported for 'power' in a labelled result, which is always the "
             "one-sided density: its attributes say so and its band integrals rely "
             "on it. For the two-sided density, build the object yourself: "

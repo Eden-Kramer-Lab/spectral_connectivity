@@ -506,8 +506,9 @@ True
 ```
 
 The factor multiplies the coherence magnitude, not its square. Leave out the
-0 Hz bin, where the estimated spectrum is dominated by the spike train's mean
-(or by its removal), and the lowest bins within a taper's bandwidth of it. At
+0 Hz bin and, with the default mean removal, the bins within a taper's
+bandwidth of it, where removing each window's mean distorts the spike
+spectrum. At
 the Nyquist frequency the factor is valid only with a two-sided spectrum:
 `connectivity.power(one_sided=False)` with `is_one_sided=False`. Without
 `is_one_sided` the function assumes a one-sided spectrum and warns.
