@@ -1366,6 +1366,16 @@ def test_nonfinite_coefficients_from_another_transform_still_warn():
         Connectivity.from_transform(NonFiniteTransform())
 
 
+def test_fft_without_the_finite_flag_works():
+    """A subclass from outside the package whose constructor does not record
+    whether its time series is finite still transforms (as if it were)."""
+    series = np.random.default_rng(45).standard_normal((100, 1, 2))
+    transform = Multitaper(series, 1000)
+    expected = to_host(transform.fft())
+    del transform._time_series_is_finite
+    np.testing.assert_array_equal(to_host(transform.fft()), expected)
+
+
 _RNG = np.random.default_rng(42)
 _WITH_NAN = _RNG.standard_normal((100, 1, 1))
 _WITH_NAN[50, 0, 0] = np.nan

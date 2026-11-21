@@ -1496,12 +1496,13 @@ Frequency Analysis
             step_size=self.n_time_samples_per_step,
             axis=0,
         )
-        # NaN or Inf input was reported at construction; detrending and tapering
+        # NaN or Inf input was reported at construction (a subclass outside the
+        # package may not record whether it was); detrending and tapering
         # it (Inf times a taper's zero end) would add NumPy "invalid value"
         # RuntimeWarnings about the same values.
         with (
             contextlib.nullcontext()
-            if self._time_series_is_finite
+            if getattr(self, "_time_series_is_finite", True)
             else np.errstate(invalid="ignore")
         ):
             if self.detrend_type is not None:
