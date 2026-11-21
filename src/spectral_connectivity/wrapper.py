@@ -728,8 +728,15 @@ def connectivity_to_xarray(
         [method], measure_settings, group_labels
     )
     connectivity = Connectivity.from_transform(m)
-    # Only the missing-labels message needs the signal count, which a custom
-    # transform may expose only through its coefficients, so it follows the FFT.
+    # The signal-count and missing-labels messages need the signal count,
+    # which a custom transform may expose only through its coefficients, so
+    # they follow the FFT.
+    _require_two_signals(
+        [method],
+        connectivity.n_signals,
+        subject="The transform",
+        keep_signal_axis=_KEEP_TRANSFORM_SIGNAL_AXIS,
+    )
     _require_group_labels([method], group_labels, connectivity.n_signals)
     if group_methods:
         measure_settings["group_labels"] = group_labels
@@ -886,12 +893,33 @@ def _resolve_group_labels(
     return group_labels, label_free_kwargs, frozenset(group_methods)
 
 
-def _require_two_signals(methods: Sequence[str], n_signals: int) -> None:
+# How to keep the signal axis when selecting one channel, for the layouts
+# multitaper_connectivity takes, and for a transform's 3-D one.
+_KEEP_SIGNAL_AXIS = (
+    "When selecting one channel, keep the signal axis: x[:, [i]] rather "
+    "than x[:, i] for (n_time_samples, n_signals) input, and x[:, :, [i]] "
+    "rather than x[:, :, i] for (n_time_samples, n_trials, n_signals) input."
+)
+_KEEP_TRANSFORM_SIGNAL_AXIS = (
+    "When selecting one channel of the time series for the transform, keep "
+    "the signal axis: x[:, :, [i]] rather than x[:, :, i]."
+)
+
+
+def _require_two_signals(
+    methods: Sequence[str],
+    n_signals: int,
+    *,
+    subject: str = "The time series",
+    keep_signal_axis: str = _KEEP_SIGNAL_AXIS,
+) -> None:
     """Raise, in the wrapper's terms, if a measure relating signals gets one.
 
     ``Connectivity`` raises too, but names its ``fourier_coefficients``, which a
-    caller of :func:`multitaper_connectivity` never sees. Unregistered
-    extension measures are left to their own checks.
+    caller of a wrapper never sees. ``subject`` is what has the one signal,
+    and ``keep_signal_axis`` how to select a channel without dropping its
+    axis, for the input the wrapper was given. Unregistered extension
+    measures are left to their own checks.
     """
     pairwise = [
         name
@@ -910,11 +938,8 @@ def _require_two_signals(methods: Sequence[str], n_signals: int) -> None:
         else "relate pairs of signals and need"
     )
     msg = (
-        f"The time series has {n_signals} signal, but {named} {verbs} at least "
-        "2. For the spectrum of one signal use method='power'. "
-        "When selecting one channel, keep the signal axis: x[:, [i]] rather "
-        "than x[:, i] for (n_time_samples, n_signals) input, and x[:, :, [i]] "
-        "rather than x[:, :, i] for (n_time_samples, n_trials, n_signals) input."
+        f"{subject} has {n_signals} signal, but {named} {verbs} at least "
+        f"2. For the spectrum of one signal use method='power'. {keep_signal_axis}"
     )
     raise ValueError(msg)
 

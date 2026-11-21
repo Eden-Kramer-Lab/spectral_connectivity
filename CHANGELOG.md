@@ -1303,7 +1303,11 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   at least 2, before any FFT, where it raised `Connectivity`'s message about
   `fourier_coefficients`, an argument the wrapper's caller never passes. It
   points to `method='power'` for one signal and to keeping the signal axis
-  when selecting a channel (`x[:, [i]]`, not `x[:, i]`).
+  when selecting a channel (`x[:, [i]]`, not `x[:, i]`). The message names
+  at most three of the requested measures and counts the rest.
+  `connectivity_to_xarray` given a transform of one signal says, likewise,
+  that the transform has 1 signal (after the FFT, since a custom transform
+  may give its signal count only through its coefficients).
 - A time series containing NaN or Inf gives one warning instead of three or
   more. `multitaper_connectivity` warned about the time series, then about
   `fourier_coefficients` (an argument its caller never passes), then with

@@ -25,6 +25,7 @@ from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     MeasureInfo,
+    connectivity_to_xarray,
     frequency_band_reduce,
 )
 from tests._backend_helpers import to_device, to_host
@@ -339,6 +340,20 @@ def test_single_signal_message_names_a_few_of_many_measures():
     )
     with pytest.raises(ValueError, match="^" + re.escape(expected)):
         multitaper_connectivity(time_series, sampling_frequency=100)
+
+
+def test_connectivity_to_xarray_names_the_transform_for_a_single_signal():
+    """connectivity_to_xarray says the transform has one signal, in its own
+    terms rather than Connectivity's fourier_coefficients."""
+    transform = Multitaper(np.random.default_rng(35).standard_normal((200, 2, 1)), 100)
+    expected = (
+        "The transform has 1 signal, but magnitude_squared_coherence relates pairs "
+        "of signals and needs at least 2. For the spectrum of one signal use "
+        "method='power'. When selecting one channel of the time series for the "
+        "transform, keep the signal axis: x[:, :, [i]] rather than x[:, :, i]."
+    )
+    with pytest.raises(ValueError, match="^" + re.escape(expected) + "$"):
+        connectivity_to_xarray(transform, "magnitude_squared_coherence")
 
 
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
