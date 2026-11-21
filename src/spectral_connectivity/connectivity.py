@@ -867,6 +867,15 @@ class Connectivity:
     ``result.sel(source=a, target=b)`` is ``a -> b`` (or "``a`` leads ``b``").
     Prefer them unless you need this lower-level API.
 
+    **Coefficients of a complex signal**: the transforms take only real time
+    series, whose negative frequencies mirror the positive ones. Two-sided
+    coefficients passed here directly may come from a complex signal, whose
+    spectrum is not conjugate-symmetric. Then :meth:`power` and
+    :meth:`cross_spectral_density` add each negative frequency to its positive
+    one (``S(f) + conj(S(-f))``), while every other measure, coherency
+    included, describes the non-negative frequencies ``f`` only; the directed
+    measures factor the full two-sided spectrum.
+
     Intermediates shared across measures (the expected cross-spectral matrix,
     power, phase-lag moments, and the minimum-phase factor with the transfer
     function, noise covariance, and MVAR coefficients derived from it) are
@@ -1678,7 +1687,7 @@ class Connectivity:
             slice(self._nonnegative_frequency_count(n_fft_samples)),
             *trailing,
         )
-        density: BackendArray = spectrum[index].copy()
+        nonnegative = spectrum[index]
         n_interior = (n_fft_samples - 1) // 2
         interior: tuple[Any, ...] = (..., slice(1, n_interior + 1), *trailing)
         partners: tuple[Any, ...] = (
@@ -1686,7 +1695,17 @@ class Connectivity:
             slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
             *trailing,
         )
-        density[interior] += xp.conj(spectrum[partners])
+        # One output buffer: the partners' conjugate is written into it and the
+        # positive bins added in place; 0 Hz and Nyquist are copied as they are.
+        density: BackendArray = xp.empty_like(nonnegative)
+        xp.conj(spectrum[partners], out=density[interior])
+        density[interior] += nonnegative[interior]
+        unpaired_bins: tuple[tuple[Any, ...], ...] = (
+            (..., slice(0, 1), *trailing),
+            (..., slice(n_interior + 1, None), *trailing),
+        )
+        for unpaired in unpaired_bins:
+            density[unpaired] = nonnegative[unpaired]
         return density
 
     @property
@@ -4352,8 +4371,17 @@ class Connectivity:
         """
         block = (..., slice(start, stop), slice(start, None))
         if self._observation_weights is not None:
+            if "sign" in moments or "nonzero" in moments:
+                # One sign pass into the scratch buffer serves both moments.
+                xp.sign(imaginary, out=scratch)
+                if "sign" in moments:
+                    moments["sign"][block] = self._expectation(scratch)
+                if "nonzero" in moments:
+                    xp.abs(scratch, out=scratch)
+                    moments["nonzero"][block] = self._expectation(scratch)
             for key, reduced in moments.items():
-                reduced[block] = self._expectation(_IMAGINARY_MOMENTS[key](imaginary))
+                if key not in ("sign", "nonzero"):
+                    reduced[block] = self._expectation(_IMAGINARY_MOMENTS[key](imaginary))
             return
 
         observation_axes = self._expectation_axes
@@ -5643,8 +5671,14 @@ class Connectivity:
         >>> connectivity.frequencies[connectivity.real_valued_frequencies].tolist()
         [0.0, 50.0]
         """
-        n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
-        imaginary = self._fourier_coefficients[..., :n_nonnegative, :].imag
+        return self._real_valued_frequency_mask.copy()
+
+    @cached_property
+    def _real_valued_frequency_mask(self) -> NDArray[np.bool_]:
+        """:attr:`real_valued_frequencies`, scanned once per set of coefficients."""
+        imaginary = self._nonnegative_fourier_coefficients(
+            self._fourier_coefficients.dtype
+        ).imag
         real: NDArray[np.bool_] = to_numpy(
             xp.all((imaginary == 0) | xp.isnan(imaginary), axis=(0, 1, 2, 4))
         )
@@ -5711,7 +5745,7 @@ class Connectivity:
             self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
-            real_valued=self.real_valued_frequencies[frequency_mask][:, np.newaxis],
+            real_valued=self._real_valued_frequency_mask[frequency_mask][:, np.newaxis],
         )
         coherence_phase = np.ma.masked_array(
             _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),

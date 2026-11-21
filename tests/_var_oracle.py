@@ -18,6 +18,29 @@ import numpy as np
 from scipy.linalg import solve_discrete_lyapunov
 
 
+def _state_space_form(coefficients, noise_covariance):
+    """A VAR's state space ``(A, C, K, Q)``: ``s(t + 1) = A s(t) + K e(t)`` for
+    the state ``s(t) = [x(t - 1), ..., x(t - n_lags)]``, observed as ``x(t) =
+    C s(t) + e(t)``, with state noise covariance ``Q = K Sigma K^T``."""
+    n_signals = coefficients.shape[-1]
+    C = np.concatenate(list(coefficients), axis=1)
+    A = _companion_matrix(coefficients)
+    K = np.zeros((A.shape[0], n_signals))
+    K[:n_signals] = np.eye(n_signals)
+    return A, C, K, K @ noise_covariance @ K.T
+
+
+def _observed_subsystem(C, K, noise_covariance, members):
+    """``(C_sub, R, S)`` for observing only the signals ``members``: their
+    observation rows, innovation covariance, and state-observation noise
+    covariance."""
+    return (
+        C[members],
+        noise_covariance[np.ix_(members, members)],
+        K @ noise_covariance[:, members],
+    )
+
+
 def _prediction_error_covariance(A, C, Q, R, S, max_iterations=100_000):
     """Steady-state state prediction-error covariance ``P`` of a Kalman filter.
 
@@ -188,20 +211,13 @@ def _block_granger_from_state_space(coefficients, noise_covariance, n_fft, block
     ``blocks`` lists the signal indices of each block. Values are on the
     non-negative FFT grid; the diagonal is NaN.
     """
-    n_signals = coefficients.shape[-1]
-    C = np.concatenate(list(coefficients), axis=1)
-    A = _companion_matrix(coefficients)
-    K = np.zeros((A.shape[0], n_signals))
-    K[:n_signals] = np.eye(n_signals)
-    Q = K @ noise_covariance @ K.T
+    A, C, K, Q = _state_space_form(coefficients, noise_covariance)
     z = np.exp(2j * np.pi * np.arange(n_fft // 2 + 1) / n_fft)
     resolvent = np.linalg.inv(z[:, None, None] * np.eye(A.shape[0]) - A)
     granger = np.full((z.size, len(blocks), len(blocks)), np.nan)
     for first, second in itertools.combinations(range(len(blocks)), 2):
         members = [*blocks[first], *blocks[second]]
-        C_sub = C[members]
-        R = noise_covariance[np.ix_(members, members)]
-        S = K @ noise_covariance[:, members]
+        C_sub, R, S = _observed_subsystem(C, K, noise_covariance, members)
         P = _prediction_error_covariance(A, C_sub, Q, R, S)
         V = C_sub @ P @ C_sub.conj().T + R
         gain = (A @ P @ C_sub.conj().T + S) @ np.linalg.inv(V)

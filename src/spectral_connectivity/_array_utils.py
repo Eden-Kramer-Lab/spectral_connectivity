@@ -32,8 +32,13 @@ def _weight_observations(values: BackendArray, weights: BackendArray) -> Backend
     edge estimate, say) must not reach a weighted sum as ``0 * NaN``. The
     weights may be scaled first (``sqrt`` of the observation weights, for a
     product of two weighted coefficients); they broadcast against ``values``.
+    The product is zeroed in place, so no second ``values``-sized array is made.
     """
-    return xp.where(weights > 0, values, 0) * weights
+    # 0 * inf is NaN with an invalid-value flag; those entries are zeroed below.
+    with np.errstate(invalid="ignore"):
+        weighted = values * weights
+    xp.copyto(weighted, 0, where=xp.broadcast_to(weights == 0, weighted.shape))
+    return weighted
 
 
 def _divide_where(

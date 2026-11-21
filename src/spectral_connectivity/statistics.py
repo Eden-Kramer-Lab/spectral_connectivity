@@ -778,13 +778,11 @@ def coherence_significance_pvalue(
         (n_tapers * n_trials).
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
-        array broadcast against ``coherency``: for coherency over
-        ``Connectivity.frequencies``, ``Connectivity.real_valued_frequencies``
-        (0 Hz and, for an even FFT length, Nyquist for a real signal),
-        broadcast over the signal pair axes as
+        array broadcast against ``coherency``; see
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies` for
+        which bins and why. For coherency shaped ``(..., n_frequencies,
+        n_signals, n_signals)`` pass
         ``real_valued_frequencies[:, np.newaxis, np.newaxis]``.
-        :meth:`~spectral_connectivity.Connectivity.group_delay` and
-        :meth:`~spectral_connectivity.Connectivity.delay` apply it themselves.
 
     Returns
     -------
@@ -831,8 +829,17 @@ def coherence_significance_pvalue(
     complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
     if not np.any(real_valued):
         return complex_null
-    real_null = scipy.stats.beta.sf(magnitude_squared_coherence, 0.5, (n_observations - 1) / 2)
-    p_values: NDArray[np.floating] = np.where(real_valued, real_null, complex_null)
+    # Only the real-valued entries (typically two bins) need the beta tail.
+    shape = np.broadcast_shapes(real_valued.shape, np.shape(complex_null))
+    is_real = np.broadcast_to(real_valued, shape)
+    p_values: NDArray[np.floating] = np.array(
+        np.broadcast_to(complex_null, shape), dtype=float, copy=True
+    )
+    p_values[is_real] = scipy.stats.beta.sf(
+        np.broadcast_to(magnitude_squared_coherence, is_real.shape)[is_real],
+        0.5,
+        (n_observations - 1) / 2,
+    )
     return p_values
 
 
@@ -1119,13 +1126,12 @@ def power_confidence_intervals(
         Giving both raises ``ValueError``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
-        array broadcast against ``power``: for ``Connectivity.power()``, of
-        shape ``(..., n_frequencies, n_signals)``,
-        ``Connectivity.real_valued_frequencies[:, np.newaxis]`` (0 Hz and, for
-        an even FFT length, Nyquist for a real signal). Each such coefficient
-        carries one degree of freedom rather than two, so
-        those bins use ``n_observations`` degrees of freedom; with
-        ``2 * n_observations`` there, a nominal 95% interval from five
+        array broadcast against ``power``; see
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies` for
+        which bins and why. For ``Connectivity.power()``, shaped ``(...,
+        n_frequencies, n_signals)``, pass ``real_valued_frequencies[:,
+        np.newaxis]``. Those bins use ``n_observations`` degrees of freedom; with
+        ``2 * n_observations`` there a nominal 95% interval from five
         observations covers 83%.
 
     Returns
@@ -1216,7 +1222,7 @@ def power_confidence_intervals(
     # previous behavior) produces an interval with coverage 2 * ci - 1 (a
     # requested 95% interval only covered ~90%).
     real_valued = _validated_real_valued(real_valued, power_values.shape, "power")
-    degrees_of_freedom = np.where(real_valued, n_observations, 2 * n_observations)
+    degrees_of_freedom = 2 * _chi_squared_shape(n_observations, real_valued)
     alpha = 1 - ci
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
@@ -1268,8 +1274,8 @@ def power_bias(
         n_observations is n_tapers * n_trials
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
-        mask such as ``Connectivity.real_valued_frequencies`` (0 Hz and, for an
-        even FFT length, Nyquist for a real signal).
+        mask such as
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies`.
 
     Returns
     -------

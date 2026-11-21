@@ -736,16 +736,16 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
 
     Every transform reports the non-negative frequencies, and the one-sided
     quantities built on them assume the negative frequencies mirror the
-    positive ones, as they do for a real signal. An array's dtype is read
-    without converting it (CuPy and xarray included).
+    positive ones, as they do for a real signal. ``np.iscomplexobj`` reads an
+    array's dtype without converting it (CuPy and xarray included).
     """
-    dtype = getattr(time_series, "dtype", None)
-    if dtype is None:
-        dtype = np.asarray(time_series).dtype
-    if np.dtype(dtype).kind == "c":
+    if np.iscomplexobj(time_series):
+        dtype = getattr(time_series, "dtype", None)
+        if dtype is None:
+            dtype = np.asarray(time_series).dtype
         msg = (
-            f"{transform} got a complex-valued time series (dtype "
-            f"{dtype}). Its outputs cover only the "
+            f"{transform} got a complex-valued time series (dtype {dtype}). "
+            "Its outputs cover only the "
             "non-negative frequencies and assume the negative ones mirror them, "
             "which holds only for a real signal: the negative-frequency content "
             "of a complex signal would be lost, and its positive-frequency "

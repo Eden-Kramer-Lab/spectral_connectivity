@@ -484,7 +484,7 @@ def test_log_power_statistics_hold_at_real_valued_bins():
     z = power_fisher_z_transform(estimates, n_observations, true_power, real_valued=True)
     complex_z = power_fisher_z_transform(estimates, n_observations, true_power)
 
-    mean_limit = 5 * log_ratio.std() / np.sqrt(n_rep)
+    mean_limit = 5 * log_ratio.std(ddof=1) / np.sqrt(n_rep)
     assert abs(log_ratio.mean() - bias) < mean_limit
     # Variance of a sample variance: 5 SE from the fourth central moment.
     centered = log_ratio - log_ratio.mean()

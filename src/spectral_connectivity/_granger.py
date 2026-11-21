@@ -23,6 +23,7 @@ from numpy.typing import NDArray
 from spectral_connectivity._array_utils import (
     _batched_eigvalsh,
     _conjugate_transpose,
+    _divide_where,
     _regularized_inverse,
     _squared_magnitude,
 )
@@ -575,13 +576,13 @@ def _estimate_conditional_spectral_granger_prediction(
     # with a zero target row/column off the diagonal and H' = H P^{-1}.
     identity = xp.eye(n_signals, dtype=full_covariance.dtype)
     unit_target = identity[:, target]
-    # A failed factorization leaves the covariance NaN, which the calling
-    # measure reports by pair; NumPy flags a complex NaN quotient as invalid
-    # (a real one is silent), so that flag is not raised here.
-    with np.errstate(invalid="ignore"):
-        coupling = (
-            full_covariance[..., :, target] / full_covariance[..., target : target + 1, target]
-        )
+    # The target's innovation variance is the real diagonal entry. A failed
+    # factorization leaves it NaN, which the calling measure reports by pair;
+    # _divide_where keeps the NaN without NumPy's complex-division warning.
+    target_variance = xp.real(full_covariance[..., target : target + 1, target])
+    coupling = _divide_where(
+        full_covariance[..., :, target], target_variance, target_variance > 0, xp.nan
+    )
     coupling = coupling - unit_target  # zero at the target itself
     normalizer = identity - coupling[..., :, xp.newaxis] * unit_target
     inverse_normalizer = identity + coupling[..., :, xp.newaxis] * unit_target
