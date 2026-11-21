@@ -244,12 +244,20 @@ def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
     return array
 
 
+# How to install the GPU dependencies: the package's gpu extra pins the CuPy
+# build for CUDA 12 (cupy-cuda12x), where `pip install cupy` builds from source.
+GPU_INSTALL_HINT = (
+    'pip install "spectral-connectivity[gpu]" (or, with conda, '
+    "conda install -c conda-forge cupy)"
+)
+
+
 def gpu_request_error_message() -> str:
     """Error text for a GPU request (see ``GPU_ENV_VAR``) without CuPy installed."""
     return (
         f"GPU support was explicitly requested via "
         f"{GPU_ENV_VAR}={os.environ.get(GPU_ENV_VAR, '')!r}, but CuPy is not installed. "
-        "Please install CuPy with: 'pip install cupy' or 'conda install cupy'"
+        f"Install it with {GPU_INSTALL_HINT}, or unset {GPU_ENV_VAR} to use the CPU."
     )
 
 
@@ -414,9 +422,21 @@ def get_compute_backend() -> dict[str, Any]:
     elif gpu_enabled and not cupy_available:
         message = (
             "GPU acceleration was requested (SPECTRAL_CONNECTIVITY_ENABLE_GPU='true') "
-            "but CuPy is not installed. Install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'. "
+            f"but CuPy is not installed. Install it with {GPU_INSTALL_HINT}, then "
+            "restart the Python interpreter: the variable is read when "
+            "spectral_connectivity is imported. "
             "Currently using CPU backend with NumPy."
+        )
+    elif gpu_enabled and cupy_available:
+        # Requested and installed, yet the CPU backend was imported: the
+        # variable was set after spectral_connectivity was imported.
+        message = (
+            "Using CPU backend with NumPy. GPU acceleration was requested "
+            "(SPECTRAL_CONNECTIVITY_ENABLE_GPU='true') and CuPy is installed, but "
+            "the variable was set after spectral_connectivity was imported, and "
+            "the backend is chosen at import. Restart the Python interpreter (in "
+            "a notebook, restart the kernel) and set the variable before "
+            "`import spectral_connectivity`."
         )
     elif not gpu_enabled and cupy_available:
         message = (
@@ -428,7 +448,7 @@ def get_compute_backend() -> dict[str, Any]:
     else:  # CPU mode, cupy not available
         message = (
             "Using CPU backend with NumPy. To enable GPU acceleration:\n"
-            "  1. Install CuPy: 'conda install -c conda-forge cupy' or 'pip install cupy'\n"
+            f"  1. Install CuPy: {GPU_INSTALL_HINT}\n"
             "  2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing\n"
             "See documentation for detailed setup instructions."
         )

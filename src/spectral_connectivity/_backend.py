@@ -44,7 +44,7 @@ if not TYPE_CHECKING and is_gpu_enabled():
         msg = (
             f"GPU support requires cupy-cuda12x>=13.0, but CuPy {xp.__version__} "
             f"is installed: cupyx.scipy.signal.detrend (used by transforms.detrend) "
-            f"was added in CuPy 13. Upgrade with 'pip install -U cupy-cuda12x'."
+            f'was added in CuPy 13. Upgrade with pip install -U "spectral-connectivity[gpu]".'
         )
         raise RuntimeError(msg) from exc
 

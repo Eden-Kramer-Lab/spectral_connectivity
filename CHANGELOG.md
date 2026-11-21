@@ -1378,6 +1378,15 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
   array in the other order cannot be detected, so it is analyzed with trials
   and signals exchanged.
+- The GPU messages of `get_compute_backend()` and of the import-time GPU
+  check say to install `pip install "spectral-connectivity[gpu]"` (the extra
+  that pins the CUDA 12 build, `cupy-cuda12x`), or `conda install -c
+  conda-forge cupy`; they said `pip install cupy`, which builds CuPy from
+  source. With CuPy installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU` set only
+  after `spectral_connectivity` was imported, `get_compute_backend()` says
+  that the variable must be set before the import and to restart the
+  interpreter, where it said to install CuPy and set the variable, both
+  already done.
 
 ### Performance
 
