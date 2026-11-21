@@ -1646,14 +1646,17 @@ class Connectivity:
     def _one_sided_density(self, spectrum: BackendArray, frequency_axis: int) -> BackendArray:
         """Fold a cached (cross-)spectral density onto non-negative frequencies.
 
-        Two-sided input is trimmed to its non-negative bins and the interior
-        positive-frequency bins are doubled, so the one-sided density integrates
-        to the same total power as the two-sided spectrum. DC (bin 0) is unique;
-        the Nyquist bin (present only for an even FFT length) is also unique, so
-        neither is doubled. The scale matches the spectrum's real dtype so a
-        float32 (complex64) request is not silently upcast to float64.
-        One-sided input is returned as a copy, detached from the cache so a
-        caller mutating the result cannot corrupt measures that reuse it.
+        Two-sided input is trimmed to its non-negative bins and each interior
+        bin ``S(f)`` gains its negative-frequency partner as ``conj(S(-f))``,
+        so the one-sided density integrates to the same total power as the
+        two-sided spectrum. For a real signal ``S(-f) = conj(S(f))``, so the
+        bin is doubled (exactly, for an exactly conjugate-symmetric FFT); for
+        the coefficients of a complex signal the power on the diagonal is
+        ``P(f) + P(-f)`` rather than twice one side. The fold keeps the matrix
+        Hermitian. DC (bin 0) and the Nyquist bin (present only for an even FFT
+        length) have no partner and are kept as they are. One-sided input is
+        returned as a copy, detached from the cache so a caller mutating the
+        result cannot corrupt measures that reuse it.
 
         Parameters
         ----------
@@ -1675,12 +1678,15 @@ class Connectivity:
             slice(self._nonnegative_frequency_count(n_fft_samples)),
             *trailing,
         )
-        one_sided = spectrum[index]
-        scale = xp.full((one_sided.shape[frequency_axis],), 2.0, dtype=one_sided.real.dtype)
-        scale[0] = 1.0
-        if n_fft_samples % 2 == 0:
-            scale[-1] = 1.0
-        density: BackendArray = one_sided * scale.reshape((-1,) + (1,) * (-frequency_axis - 1))
+        density: BackendArray = spectrum[index].copy()
+        n_interior = (n_fft_samples - 1) // 2
+        interior: tuple[Any, ...] = (..., slice(1, n_interior + 1), *trailing)
+        partners: tuple[Any, ...] = (
+            ...,
+            slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
+            *trailing,
+        )
+        density[interior] += xp.conj(spectrum[partners])
         return density
 
     @property
@@ -2367,11 +2373,15 @@ class Connectivity:
     def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
         """Return the power spectral density of the signal (one-sided by default).
 
-        Only the non-negative frequencies are returned, with the interior
-        positive-frequency bins doubled so that integrating the returned
-        spectrum over frequency recovers the full signal power (the negative
-        frequencies of a real signal carry equal power). The DC bin, and the
-        Nyquist bin for an even FFT length, are not doubled.
+        Only the non-negative frequencies are returned. Each interior
+        positive-frequency bin holds its own power plus that of the matching
+        negative frequency, ``P(f) + P(-f)``, so integrating the returned
+        spectrum over frequency recovers the full signal power. For a real
+        signal the two are equal, so the bin is doubled; for the coefficients
+        of a complex signal (which the transforms refuse, but which can be
+        passed to ``Connectivity`` directly) the sum keeps a tone at ``-f``,
+        though not which side it was on. The DC bin, and the Nyquist bin for an
+        even FFT length, have no partner and are returned as they are.
 
         For one-sided input (``is_one_sided=True``) the coefficients are
         returned as provided: a one-sided transform such as
@@ -2480,10 +2490,12 @@ class Connectivity:
 
         The diagonal contains the one-sided power spectral densities returned
         by :meth:`power`; off-diagonal entries retain both the amplitude and
-        relative-phase information between signal pairs.  Interior positive
-        frequency bins are doubled so that the one-sided result has the same
-        total power as the two-sided spectrum.  DC and, for an even FFT length,
-        Nyquist are not doubled.
+        relative-phase information between signal pairs.  Each interior
+        positive-frequency bin ``S(f)`` adds ``conj(S(-f))``, so that the
+        one-sided result has the same total power as the two-sided spectrum;
+        for a real signal ``S(-f) = conj(S(f))`` and the bin is doubled.  DC
+        and, for an even FFT length, Nyquist have no partner and are kept as
+        they are.
 
         Returns
         -------

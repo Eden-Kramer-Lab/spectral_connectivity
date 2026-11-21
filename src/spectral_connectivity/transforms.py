@@ -731,6 +731,31 @@ def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
     raise ValueError(msg)
 
 
+def _reject_complex_time_series(time_series: Any, transform: str) -> None:
+    """Refuse a complex-valued time series, whose spectrum is not symmetric.
+
+    Every transform reports the non-negative frequencies, and the one-sided
+    quantities built on them assume the negative frequencies mirror the
+    positive ones, as they do for a real signal. An array's dtype is read
+    without converting it (CuPy and xarray included).
+    """
+    dtype = getattr(time_series, "dtype", None)
+    if dtype is None:
+        dtype = np.asarray(time_series).dtype
+    if np.dtype(dtype).kind == "c":
+        msg = (
+            f"{transform} got a complex-valued time series (dtype "
+            f"{dtype}). Its outputs cover only the "
+            "non-negative frequencies and assume the negative ones mirror them, "
+            "which holds only for a real signal: the negative-frequency content "
+            "of a complex signal would be lost, and its positive-frequency "
+            "content double-counted. Pass a real time series (for example the "
+            "real and imaginary parts as separate signals), or compute the "
+            "Fourier coefficients yourself and pass them to Connectivity."
+        )
+        raise TypeError(msg)
+
+
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
     """Reject a time series that is not ``(n_time_samples, n_trials, n_signals)``.
 
@@ -1432,7 +1457,8 @@ class Multitaper(_WindowedFourierTransform):
     Parameters
     ----------
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
-        Input time series data. **Must be 3D array.**
+        Input time series data. **Must be a real-valued 3D array**; a complex
+        one raises ``TypeError``.
         - n_time_samples: number of time points
         - n_trials: number of trials (use 1 for single trial)
         - n_signals: number of signals/channels
@@ -1683,6 +1709,7 @@ class Multitaper(_WindowedFourierTransform):
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        _reject_complex_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
         self.fft_workers = fft_workers
@@ -2130,7 +2157,8 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        Real-valued input signals (a complex series raises ``TypeError``).
+        Use :func:`prepare_time_series` for 1-D/2-D input. An
         ``xarray.DataArray`` is read by position; one whose dimension names
         put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
@@ -2199,6 +2227,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        _reject_complex_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2376,7 +2405,8 @@ class Welch:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        Real-valued input signals (a complex series raises ``TypeError``).
+        Use :func:`prepare_time_series` for 1-D/2-D input. An
         ``xarray.DataArray`` is read by position; one whose dimension names
         put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
@@ -2434,6 +2464,7 @@ class Welch:
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        _reject_complex_time_series(time_series, type(self).__name__)
         # np.shape reads arrays' own shape (no copy) and also measures nested lists.
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
@@ -2681,7 +2712,8 @@ class MorletWavelet:
     Parameters
     ----------
     time_series : ndarray, shape (n_time_samples, n_trials, n_signals)
-        Input signals. Use :func:`prepare_time_series` for 1-D/2-D input. An
+        Real-valued input signals (a complex series raises ``TypeError``).
+        Use :func:`prepare_time_series` for 1-D/2-D input. An
         ``xarray.DataArray`` is read by position; one whose dimension names
         put time, trials, or signals on another axis raises ``ValueError``.
     sampling_frequency : float
@@ -2759,6 +2791,7 @@ class MorletWavelet:
         start_time: float = 0.0,
     ) -> None:
         _check_labeled_axis_order(time_series, type(self).__name__)
+        _reject_complex_time_series(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."

@@ -2600,3 +2600,39 @@ def test_default_frequency_grid_matches_scipy_on_every_backend():
     np.testing.assert_allclose(
         to_host(multitaper.frequencies), np.fft.fftfreq(3630, d=1 / 1000), rtol=1e-12
     )
+
+
+_COMPLEX_REFUSING_TRANSFORMS = {
+    "Multitaper": lambda series: Multitaper(series, sampling_frequency=100),
+    "ShortTimeFourierTransform": lambda series: ShortTimeFourierTransform(
+        series, sampling_frequency=100, n_time_samples_per_window=50
+    ),
+    "Welch": lambda series: Welch(series, sampling_frequency=100),
+    "MorletWavelet": lambda series: MorletWavelet(
+        series, sampling_frequency=100, frequencies=[13.0]
+    ),
+    # The wrapper builds a Multitaper, which refuses it.
+    "Multitaper (wrapper)": lambda series: multitaper_connectivity(
+        series, sampling_frequency=100, method="magnitude_squared_coherence"
+    ),
+}
+
+
+@pytest.mark.parametrize("transform", list(_COMPLEX_REFUSING_TRANSFORMS))
+def test_transforms_refuse_a_complex_time_series(transform):
+    """The transforms report only non-negative frequencies and assume the
+    negative ones mirror them, which holds only for real signals. A complex
+    series was accepted: power doubled a +13 Hz tone and lost a -13 Hz one, and
+    MorletWavelet cast the input to real, turning 1j * cos into zeros."""
+    rng = np.random.default_rng(13)
+    time = np.arange(400) / 100
+    series = np.exp(2j * np.pi * 13 * time)[:, np.newaxis, np.newaxis] + 0.1 * (
+        rng.standard_normal((400, 1, 2)) + 1j * rng.standard_normal((400, 1, 2))
+    )
+    name = transform.split(" ")[0]
+    with pytest.raises(TypeError, match=f"{name} got a complex-valued time series"):
+        _COMPLEX_REFUSING_TRANSFORMS[transform](series)
+    # Its real and imaginary parts are accepted as separate real signals.
+    _COMPLEX_REFUSING_TRANSFORMS[transform](
+        np.concatenate([series.real, series.imag], axis=-1)
+    )

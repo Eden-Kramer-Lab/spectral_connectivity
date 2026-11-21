@@ -3924,6 +3924,64 @@ def test_power_one_sided_must_be_a_bool(not_a_flag):
         Connectivity(coefficients).power(one_sided=not_a_flag)
 
 
+@pytest.mark.parametrize("n_fft", [64, 65])
+@pytest.mark.parametrize("tone_bin", [13, -13])
+def test_power_of_complex_coefficients_folds_both_signs_of_frequency(n_fft, tone_bin):
+    """A complex tone at -f carries its power at -f only, so doubling P(f)
+    counted a tone at +13 bins twice (one-sided total 2) and one at -13 bins
+    not at all (about 0). P(f) + P(-f) gives each its full power, 1."""
+    time = np.arange(n_fft)
+    tone = np.exp(2j * np.pi * tone_bin * time / n_fft)
+    # A unit-power tone's DFT, scaled so that the mean |X|**2 over bins is 1.
+    coefficients = np.fft.fft(tone) / np.sqrt(n_fft)
+    coefficients = np.broadcast_to(
+        coefficients[None, None, None, :, None], (1, 1, 1, n_fft, 2)
+    )
+
+    power = Connectivity(coefficients.copy()).power(one_sided=True)[0, :, 0]
+
+    assert power[abs(tone_bin)] == pytest.approx(n_fft, rel=1e-12)
+    assert power.sum() == pytest.approx(n_fft, rel=1e-12)
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_power_of_a_real_signal_is_exactly_twice_its_positive_frequencies(n_fft):
+    """Folding S(f) + conj(S(-f)) doubles the interior bins of a real
+    signal's exactly conjugate-symmetric spectrum bit for bit, for power and
+    the cross-spectral density alike."""
+    rng = np.random.default_rng(5)
+    multitaper = Multitaper(
+        rng.standard_normal((n_fft, 3, 2)), sampling_frequency=100, n_fft_samples=n_fft
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    interior = slice(1, (n_fft + 1) // 2)
+    power = to_host(connectivity._power)[..., : n_fft // 2 + 1, :].copy()
+    power[..., interior, :] *= 2
+    np.testing.assert_array_equal(connectivity.power(one_sided=True), power)
+    cross_spectrum = to_host(connectivity._expectation_cross_spectral_matrix())
+    cross_spectrum = cross_spectrum[..., : n_fft // 2 + 1, :, :].copy()
+    cross_spectrum[..., interior, :, :] *= 2
+    np.testing.assert_array_equal(connectivity.cross_spectral_density(), cross_spectrum)
+
+
+def test_cross_spectral_density_of_complex_coefficients_is_hermitian_with_power_diagonal():
+    """For coefficients that are not conjugate-symmetric the fold
+    S(f) + conj(S(-f)) is still Hermitian, and its diagonal is power()."""
+    rng = np.random.default_rng(6)
+    shape = (1, 3, 2, 16, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    connectivity = Connectivity(coefficients)
+    cross_spectrum = connectivity.cross_spectral_density()
+    np.testing.assert_allclose(
+        cross_spectrum, np.conj(np.swapaxes(cross_spectrum, -1, -2)), rtol=0, atol=1e-14
+    )
+    np.testing.assert_allclose(
+        np.diagonal(cross_spectrum, axis1=-2, axis2=-1).real,
+        connectivity.power(one_sided=True),
+        rtol=1e-14,
+    )
+
+
 def test_power_one_sided_integrates_to_signal_power():
     """Parseval oracle for the one-sided PSD convention.
 
@@ -4701,10 +4759,14 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
     assert power.transformation == "log"
     assert np.all(power.confidence_interval[0] > 0)
 
-    # On the log scale the (constant) one-sided power scaling cancels, so the
-    # relative standard error is the jackknife SE of log(mean |x|**2).
+    # The relative standard error is the jackknife SE of the log of the
+    # one-sided power, mean |x(f)|**2 + mean |x(-f)|**2 at the interior bins
+    # (these random coefficients are not conjugate-symmetric).
     def log_power(observations):
-        return np.log(np.mean(np.abs(observations) ** 2, axis=0))[:7]
+        two_sided = np.mean(np.abs(observations) ** 2, axis=0)
+        one_sided = two_sided[:7].copy()
+        one_sided[1:6] += two_sided[11:6:-1]
+        return np.log(one_sided)
 
     expected_relative_error = _leave_one_out_standard_error(
         log_power, _trial_taper_observations(coefficients)
