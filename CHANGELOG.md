@@ -950,9 +950,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   names that say nothing of a role
   (`dim_0`, `session`) are still read by position, and
   `multitaper_connectivity` assigns axes from dimension names itself.
-- `Multitaper` reports the supplied column count for custom tapers. For DPSS,
-  as in 2.x, `n_tapers` is the requested count, not the number kept after
-  low-bias filtering.
+- `Multitaper` reports the number of tapers used: the column count for
+  custom tapers (2.x reported `n_tapers` if given, else the count NW
+  implies); for DPSS the requested count less any that low-bias filtering
+  dropped (see the low-bias entry above).
 - `Multitaper` rejects an impossible `n_tapers` when it is constructed: zero,
   negative, larger than the window, a boolean, or disagreeing with the columns
   of supplied `tapers`, or not a whole number. 2.x accepted these: it failed
