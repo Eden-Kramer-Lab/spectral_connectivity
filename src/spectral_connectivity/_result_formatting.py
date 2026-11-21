@@ -59,18 +59,7 @@ def _check_method_accepts_kwargs(
     the sentence "If <keyword> is a transform setting, ..." for the calling
     wrapper; ``None`` (``connectivity_to_xarray``, whose transform is already
     built) adds no hint.
-
-    It also refuses ``power`` with ``one_sided=False``: a labelled power result
-    is described, and integrated over frequency bands, as a one-sided density.
     """
-    if method == "power" and kwargs.get("one_sided", True) is not True:
-        msg = (
-            "A labelled power result is the one-sided density: its attributes "
-            "say so and its band integrals rely on it. For the two-sided "
-            "density, call Connectivity.power(one_sided=False) on the "
-            "Connectivity object."
-        )
-        raise ValueError(msg)
     parameters = inspect.signature(measure).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         return
