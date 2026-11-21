@@ -1517,12 +1517,11 @@ def multitaper_connectivity(
         layout = getattr(error, "_transposed_layout", None)
         if layout is None:
             raise
-        n_time, n_signals, cause = layout
+        n_time, n_signals = layout
         # Multitaper names only its own 3-D layout; this function takes 2-D too.
         raise _transposed_layout_error(
             n_time,
             n_signals,
-            cause,
             "(n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)",
         ) from error.__cause__
     # Check the signal count and missing labels before Connectivity.from_transform

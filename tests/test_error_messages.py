@@ -395,17 +395,67 @@ def test_transposed_input_names_its_layout(call, expected):
             match="^"
             + re.escape(
                 f"Your array has 3 time samples and 1000 signals; expected {expected}. "
-                "Did you mean x.T? Read as given, its window is too short: "
-            ),
-        ):
+                "It looks transposed: put time on the first axis, e.g. x.T. Read as "
+                "given, its recording is too short to analyze."
+            )
+            + "$",
+        ) as excinfo:
             call()
     assert record == []
+    # The window error, with its advice for an array laid out as intended,
+    # stays the cause.
+    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert "window" in str(excinfo.value.__cause__)
 
 
 def test_short_window_without_transposed_layout_keeps_its_message():
     """An array with more time samples than signals keeps the window advice."""
     with pytest.raises(ValueError, match=r"^time_halfbandwidth_product \(NW=3\)"):
         Multitaper(np.ones((4, 1, 2)), sampling_frequency=500)
+
+
+_WIDE = np.random.default_rng(5).standard_normal((200, 1, 300))
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        pytest.param(
+            lambda: Multitaper(_WIDE, 500, start_time="x"),
+            "start_time must be a finite scalar",
+            id="Multitaper-start_time",
+        ),
+        pytest.param(
+            lambda: Multitaper(_WIDE, 500, start_time=np.nan),
+            "start_time must be a finite scalar",
+            id="Multitaper-nan_start_time",
+        ),
+        pytest.param(
+            lambda: Multitaper(_WIDE, 500, n_tapers=2.5),
+            "n_tapers must be an integer",
+            id="Multitaper-n_tapers",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(_WIDE, 500, start_time=np.nan),
+            "start_time must be a finite scalar",
+            id="STFT-start_time",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _WIDE[:, 0, :], 500, transform_kwargs={"start_time": "x"}
+            ),
+            "start_time must be a finite scalar",
+            id="wrapper-start_time",
+        ),
+    ],
+)
+def test_other_errors_on_a_wide_array_are_not_called_transposed(call, match):
+    """Only a recording too short for its window is reported as a layout
+    problem; any other error on an array with more signals than time samples
+    keeps its own message."""
+    with pytest.raises(ValueError, match="^" + match) as excinfo:
+        call()
+    assert "transposed" not in str(excinfo.value)
 
 
 _TWO_SIGNALS = np.random.default_rng(2).standard_normal((500, 2))

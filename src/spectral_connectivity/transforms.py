@@ -893,38 +893,45 @@ def _validate_window_step(
         )
 
 
-def _transposed_layout_error(
-    n_time: int, n_signals: int, cause: str, expected: str
-) -> ValueError:
-    """The error for a window too short for a series with more signals than
-    time samples, which is most likely transposed.
+class _RecordingTooShortError(ValueError):
+    """The recording is too short for the window: the window is longer than
+    it, or, spanning it, too short for the DPSS tapers.
 
-    It says so instead of advising a longer window. ``cause`` is the window
-    error, kept in the message and, with the counts, as the
-    ``_transposed_layout`` attribute, from which a caller accepting other
-    layouts (``expected``) rebuilds the message.
+    Raised where those two checks fail, so :func:`_transposed_layout_hint`
+    can tell them from every other ``ValueError``.
+    """
+
+
+def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> ValueError:
+    """The error for a recording too short for its window when it has more
+    signals than time samples, so is most likely transposed.
+
+    It says so instead of advising a longer window (the window error is the
+    ``__cause__``). The counts are kept as the ``_transposed_layout``
+    attribute, from which a caller accepting other layouts (``expected``)
+    rebuilds the message.
     """
     error = ValueError(
         f"Your array has {n_time} time sample{'' if n_time == 1 else 's'} and "
-        f"{n_signals} signals; expected {expected}. Did you mean x.T? Read as "
-        f"given, its window is too short: {cause}"
+        f"{n_signals} signals; expected {expected}. It looks transposed: put "
+        "time on the first axis, e.g. x.T. Read as given, its recording is too "
+        "short to analyze."
     )
-    error._transposed_layout = (n_time, n_signals, cause)  # type: ignore[attr-defined]
+    error._transposed_layout = (n_time, n_signals)  # type: ignore[attr-defined]
     return error
 
 
 @contextlib.contextmanager
 def _transposed_layout_hint(time_series: BackendArray) -> Iterator[None]:
-    """Re-raise a window ``ValueError`` as a layout error when the
-    ``(n_time_samples, n_trials, n_signals)`` series looks transposed."""
+    """Re-raise a recording too short for its window as a layout error when
+    the ``(n_time_samples, n_trials, n_signals)`` series looks transposed;
+    every other ``ValueError`` passes unchanged."""
     try:
         yield
-    except ValueError as error:
+    except _RecordingTooShortError as error:
         n_time, _, n_signals = time_series.shape
         if n_time < n_signals:
-            raise _transposed_layout_error(
-                n_time, n_signals, str(error), _TRANSFORM_LAYOUT
-            ) from error
+            raise _transposed_layout_error(n_time, n_signals, _TRANSFORM_LAYOUT) from error
         raise
 
 
@@ -1287,7 +1294,7 @@ Frequency Analysis
                 f"(time_window_duration <= "
                 f"{n_time_samples / self.sampling_frequency} s)."
             )
-            raise ValueError(msg)
+            raise _RecordingTooShortError(msg)
         return self._n_time_samples_per_window
 
     @property
@@ -3846,8 +3853,10 @@ def dpss_windows(
             f"decomposition, got {n_time_samples_per_window}. A single-sample "
             f"window carries no spectral information."
         )
-        raise ValueError(msg)
+        raise _RecordingTooShortError(msg)
     if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
+        # NW <= 0 is a bad NW; NW >= n / 2, a window too short for it.
+        too_short = time_halfbandwidth_product > 0
         msg = (
             f"time_halfbandwidth_product (NW={time_halfbandwidth_product}) must "
             f"satisfy 0 < NW < n_time_samples_per_window / 2 "
@@ -3856,7 +3865,7 @@ def dpss_windows(
             f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
             f"longer window or a smaller time_halfbandwidth_product."
         )
-        raise ValueError(msg)
+        raise (_RecordingTooShortError if too_short else ValueError)(msg)
     if not 1 <= n_tapers <= n_time_samples_per_window:
         msg = (
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
