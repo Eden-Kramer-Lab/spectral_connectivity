@@ -4200,6 +4200,42 @@ class Connectivity:
         signals as given, so put them on a common scale first if their units
         differ.
 
+        **Interpreting the value**:
+
+        - *Floor*: with ``n`` pooled observations (:attr:`n_observations`:
+          trials x tapers by default, times the windows when time is pooled)
+          and ``p`` signals, the leading value is at least ``1 / min(n, p)``
+          whatever the data, and 1 for one observation; it warns when
+          ``n < p``.
+        - *Bias without coupling*: independent signals of equal power have the
+          value ``1 / p``, but the estimate is well above it unless
+          ``n >> p`` (about 3 times at ``n = p`` and 1.4 times at ``n = 20 p``,
+          by Monte Carlo). Compare values only at matched ``n`` and ``p``
+          (trial counts, rejected epochs, and removed channels all change
+          them), or against a null simulated at the same ``n`` and ``p``.
+        - *Effective observations*: correlated observations (overlapping
+          windows, ``time_bins_are_independent=False``; overlapping Welch
+          segments or Morlet smoothing, ``observations_are_independent=False``)
+          count fewer than ``n``, so the bias is larger than ``n`` suggests.
+        - *Pooling time*: pooling windows whose coherent pattern changes
+          lowers the value, so a smaller value after longer pooling is not by
+          itself evidence of weaker coherence.
+        - *Raw cross-spectrum*: the matrix is not normalized to coherency, so
+          high-power channels weigh more, and per-channel gain, a common
+          reference, and volume conduction raise the value without coupling.
+          Published analyses re-reference to a surface Laplacian first [2]_,
+          [3]_.
+        - *Mean, not median*: pooling over time is an equal-weight mean, as in
+          Chronux ``CrossSpecMatc`` (whose ``Ctot`` is ``"time_trials_tapers"``
+          on non-overlapping windows), not the median over windows of the
+          taper-averaged matrices that Purdon et al. [2]_ and Weiner et al.
+          [3]_ decompose, which is not provided.
+        - *0 Hz and Nyquist*: the coefficients of a real signal are real
+          there (:attr:`real_valued_frequencies`), so the matrix is real and
+          its bias without coupling slightly larger (a few percent, by Monte
+          Carlo) than at the other frequencies.
+        - No significance test or interval is returned.
+
         **Algorithm**: when the number of estimates (the pooled
         observations, :attr:`n_observations`) is at least ``n_signals`` and
         ``n_signals`` is small
@@ -4223,6 +4259,19 @@ class Connectivity:
                Habeeb, K., and Brown, E.N. (2011). Tracking brain states under
                general anesthesia by using global coherence analysis.
                Proceedings of the National Academy of Sciences 108, 8832-8837.
+        .. [2] Purdon, P.L., Pierce, E.T., Mukamel, E.A., Prerau, M.J., Walsh,
+               J.L., Wong, K.F.K., Salazar-Gomez, A.F., Harrell, P.G., Sampson,
+               A.L., Cimenser, A., et al. (2013). Electroencephalogram
+               signatures of loss and recovery of consciousness from propofol.
+               Proceedings of the National Academy of Sciences 110(12),
+               E1142. https://doi.org/10.1073/pnas.1221180110
+        .. [3] Weiner, V.S., Zhou, D.W., Kahali, P., Stephen, E.P.,
+               Peterfreund, R.A., Aglio, L.S., Szabo, M.D., Eskandar, E.N.,
+               Salazar-Gomez, A.F., Sampson, A.L., Cash, S.S., Brown, E.N., and
+               Purdon, P.L. (2023). Propofol disrupts alpha dynamics in
+               functionally distinct thalamocortical networks during loss of
+               consciousness. Proceedings of the National Academy of Sciences
+               120(11), e2207831120. https://doi.org/10.1073/pnas.2207831120
 
         Examples
         --------

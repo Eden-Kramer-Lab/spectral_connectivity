@@ -669,7 +669,16 @@ The migration guide for code written against 2.x is
   scalar group measures, a `MultivariateConnectivityResult` from
   `canonical_coherency` and `maximized_imaginary_coherency_components`, and
   two arrays from `global_coherence`. `global_coherence` names its second
-  return value `vectors`.
+  return value `vectors`, and its Notes say how to read the value: its floor
+  of `1 / min(n_observations, n_signals)`, its bias above `1 / n_signals`
+  without coupling (compare values only at matched numbers of observations
+  and signals), the smaller effective count of correlated or overlapping
+  observations, the lower value from pooling windows whose coherent pattern
+  changes, the effect of channel gain, reference, and volume conduction on a
+  raw cross-spectrum, that pooling time is Chronux's equal-weight mean rather
+  than the median over windows of Purdon et al. (2013) and Weiner et al.
+  (2023), the real matrices at 0 Hz and Nyquist, and that no significance
+  test is returned.
 - `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
   says that it labels the two-sided FFT bins of `fft()` and that
   `Connectivity.frequencies`, the non-negative bins, labels results; the
