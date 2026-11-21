@@ -19,8 +19,11 @@ for 2.x has to change.
    reads the opposite direction, so swap its indices and recompute stored
    results. `phase_slope_index`, `group_delay`, and `delay` were already
    source first: do not swap them. Until 3.2 the `Connectivity` methods that
-   existed in 2.x, and `multitaper_connectivity` and `connectivity_to_xarray`
-   for pairwise and subset spectral Granger prediction, emit a
+   existed in 2.x (pairwise and subset spectral Granger, directed transfer
+   function, directed coherence, (generalized) partial directed coherence, and
+   direct directed transfer function), and `multitaper_connectivity` and
+   `connectivity_to_xarray` for pairwise and subset spectral Granger
+   prediction, emit a
    `DirectedOrientationWarning` as a reminder; silence it with
    `warnings.filterwarnings("ignore",
    category=spectral_connectivity.DirectedOrientationWarning)`.
