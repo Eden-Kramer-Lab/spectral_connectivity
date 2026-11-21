@@ -1292,13 +1292,14 @@ def test_multitaper_warns_on_nan_input(bad_value):
     with pytest.warns(
         UserWarning,
         match=re.escape(
-            "time_series contains 2 NaN or infinite values (trials [1, 2], signals [0, 2])"
+            "time_series contains 2 NaN or infinite values (0-based indices: trials "
+            "[1, 2], signals [0, 2])"
         ),
     ) as record:
         Multitaper(time_series=time_series, sampling_frequency=1000)
     message = str(record[0].message)
     assert "propagate to the outputs" in message
-    assert "np.argwhere(~np.isfinite(time_series))" in message
+    assert "np.argwhere(~np.isfinite(x))" in message
 
 
 _NONFINITE = np.random.default_rng(43).standard_normal((400, 2, 3))

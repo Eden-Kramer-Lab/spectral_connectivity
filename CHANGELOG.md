@@ -1316,7 +1316,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   windows containing them, NaN connectivity for every pair involving those
   signals, or for every pair with measures that model all signals jointly),
   and says to interpolate the samples or drop the trials or signals, with
-  `np.argwhere(~np.isfinite(time_series))` to find them. The input is still
+  `np.argwhere(~np.isfinite(x))` to find them (the indices it gives are
+  0-based). The input is still
   accepted. `Connectivity` built directly from coefficients, or from another
   transform, still warns about NaN or Inf in `fourier_coefficients`, and its
   docstring no longer says they must be finite. `Connectivity` measures

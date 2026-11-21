@@ -975,14 +975,15 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
             where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
         warnings.warn(
             f"time_series contains {n_nonfinite} NaN or infinite "
-            f"value{'' if n_nonfinite == 1 else 's'} ({where}). They propagate to "
+            f"value{'' if n_nonfinite == 1 else 's'} (0-based indices: {where}). They "
+            "propagate to "
             "the outputs: the power of an affected signal is NaN in every time "
             "window containing one, as is every connectivity value involving that "
             "signal there (every value, for measures that model all signals "
             "jointly, such as partial coherence and Granger prediction). "
             "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
             "affected trials or signals before the analysis; "
-            "np.argwhere(~np.isfinite(time_series)) lists their indices.",
+            "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
