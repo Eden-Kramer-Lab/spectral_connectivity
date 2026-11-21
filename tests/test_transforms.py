@@ -2527,9 +2527,8 @@ def test_welch_default_segment_reads_the_length_of_a_nested_list():
                 r"shape \(1, 1, 1\)"
             ),
         ),
-        (None, {}, r"Welch needs a segment of at least 2 samples.*has shape \(\)"),
     ],
-    ids=["duration_rounds_to_zero", "one_sample_series", "none"],
+    ids=["duration_rounds_to_zero", "one_sample_series"],
 )
 def test_welch_reports_a_short_segment_in_its_own_terms(time_series, kwargs, match):
     with pytest.raises(ValueError, match=match):

@@ -32,10 +32,12 @@ from spectral_connectivity._backend import (
 )
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
+    TIME_SERIES_RAGGED_FIX,
     BackendArray,
     _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
+    numeric_array,
     reject_sampling_frequency_aliases,
     stacklevel_outside_package,
     to_numpy,
@@ -680,6 +682,8 @@ class SpectralTransform(Protocol):
 
 # The axis each role is on in a transform's input.
 _INPUT_AXIS_ROLES = ("time", "trial", "signal")
+# The shape every transform takes its time series in.
+_TRANSFORM_LAYOUT = "(n_time_samples, n_trials, n_signals)"
 
 
 def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
@@ -919,7 +923,7 @@ def _transposed_layout_hint(time_series: BackendArray) -> Iterator[None]:
         n_time, _, n_signals = time_series.shape
         if n_time < n_signals:
             raise _transposed_layout_error(
-                n_time, n_signals, str(error), "(n_time_samples, n_trials, n_signals)"
+                n_time, n_signals, str(error), _TRANSFORM_LAYOUT
             ) from error
         raise
 
@@ -1803,6 +1807,9 @@ class Multitaper(_WindowedFourierTransform):
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        time_series = numeric_array(
+            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
+        )
         _reject_complex_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
@@ -2380,6 +2387,9 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        time_series = numeric_array(
+            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
+        )
         _reject_complex_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
@@ -2620,6 +2630,9 @@ class Welch:
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
         _check_labeled_axis_order(time_series, type(self).__name__)
+        time_series = numeric_array(
+            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
+        )
         _reject_complex_time_series(time_series, type(self).__name__)
         # np.shape reads arrays' own shape (no copy) and also measures nested lists.
         data_shape = np.shape(time_series)
@@ -2952,6 +2965,9 @@ class MorletWavelet:
         start_time: float = 0.0,
     ) -> None:
         _check_labeled_axis_order(time_series, type(self).__name__)
+        time_series = numeric_array(
+            time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX
+        )
         _reject_complex_time_series(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:

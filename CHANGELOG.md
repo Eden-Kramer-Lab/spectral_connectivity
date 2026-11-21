@@ -1413,6 +1413,15 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   value of an array is ambiguous" for one. `coherence_significance_pvalue`
   takes a single count, and says so for an array, because its real-valued
   bins use one count for the call.
+- `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
+  given a ragged nested list, or values that are not numbers (strings,
+  `None`), raise an error naming the `(n_time_samples, n_trials, n_signals)`
+  array they take and how to fix it, as `multitaper_connectivity` does,
+  where they raised NumPy's "inhomogeneous shape" message, a `ufunc
+  'isfinite'` error for strings (`MorletWavelet` accepted an array of
+  strings), or, for `Welch(None)`, one about its segment length.
+  `fourier_connectivity` names its coefficient layouts for a ragged list
+  too.
 
 ### Performance
 

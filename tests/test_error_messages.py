@@ -539,3 +539,69 @@ def test_constructors_keep_their_signatures():
     for transform in (Multitaper, ShortTimeFourierTransform, Welch, MorletWavelet):
         parameters = inspect.signature(transform).parameters
         assert list(parameters)[:2] == ["time_series", "sampling_frequency"]
+
+
+_TRANSFORMS = {
+    "Multitaper": lambda ts: Multitaper(ts, 500),
+    "STFT": lambda ts: ShortTimeFourierTransform(ts, 500),
+    "Welch": lambda ts: Welch(ts, 500),
+    "MorletWavelet": lambda ts: MorletWavelet(ts, 500, frequencies=[10.0]),
+}
+_LAYOUT = "(n_time_samples, n_trials, n_signals)"
+
+
+@pytest.mark.parametrize("make", _TRANSFORMS.values(), ids=list(_TRANSFORMS))
+def test_transforms_name_a_ragged_nested_list(make):
+    """A nested list with rows of different lengths raises naming the array
+    each transform takes, not NumPy's inhomogeneous-shape message."""
+    ragged = [[[1.0, 2.0]], [[3.0]]]
+    with pytest.raises(
+        ValueError,
+        match="^"
+        + re.escape(
+            f"time_series must be a numeric array of shape {_LAYOUT}, but NumPy "
+            "cannot make it one array: its nested lists have rows of different "
+            "lengths. Give every signal (and trial) the same number of samples"
+        ),
+    ):
+        make(ragged)
+
+
+@pytest.mark.parametrize("make", _TRANSFORMS.values(), ids=list(_TRANSFORMS))
+@pytest.mark.parametrize(
+    ("values", "received"),
+    [
+        ([[["a", "b"]]] * 8, "values of dtype <U1"),
+        (np.full((8, 1, 2), "a"), "values of dtype <U1"),
+        (None, "NoneType None"),
+    ],
+    ids=["list", "array", "none"],
+)
+def test_transforms_name_values_that_are_not_numbers(make, values, received):
+    """Strings or None raise naming the array and the conversion, not a ufunc
+    error (or, for Welch given None, a message about its segment length)."""
+    with pytest.raises(
+        TypeError,
+        match="^"
+        + re.escape(
+            f"time_series must be a numeric array of shape {_LAYOUT}, got {received}, "
+            "not numbers. Convert them first, e.g. np.asarray(time_series, dtype=float)."
+        )
+        + "$",
+    ):
+        make(values)
+
+
+def test_fourier_connectivity_names_a_ragged_nested_list():
+    """The coefficients' list path names its layouts for a ragged list."""
+    ragged = [[[1 + 1j, 2j], [3j]]]
+    with pytest.raises(
+        ValueError,
+        match="^"
+        + re.escape(
+            "fourier_coefficients must be a numeric array of shape (observation, "
+            "frequency, signal), (trial, taper, frequency, signal), or (time, trial, "
+            "taper, frequency, signal), but NumPy cannot make it one array"
+        ),
+    ):
+        fourier_connectivity(ragged, frequencies=np.arange(2.0))

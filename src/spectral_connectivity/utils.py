@@ -197,6 +197,58 @@ def reject_sampling_frequency_aliases(
     return wrapper
 
 
+# How to even out a ragged nested-list time series (see numeric_array).
+TIME_SERIES_RAGGED_FIX = (
+    "Give every signal (and trial) the same number of samples, trimming or "
+    "padding them, then pass the result."
+)
+
+
+def numeric_array(
+    value: Any,
+    name: str,
+    layout: str,
+    ragged_fix: str,
+    dtype_example: str = "float",
+) -> BackendArray:
+    """Convert array-like input (a nested list, say) to an array of numbers.
+
+    Converting first lets the caller's shape checks read the shape a list
+    describes. A ragged list, or values that are not numbers, raise naming
+    ``name`` and the ``layout`` it must have rather than with NumPy's message;
+    ``ragged_fix`` says how to even out the rows. An array (NumPy, CuPy, or an
+    ``xarray.DataArray``) is returned as it is, so the caller makes the one
+    device copy and can still read a DataArray's dimension names. An
+    array-like whose ``dtype`` NumPy cannot read is converted like a list.
+    """
+    data: BackendArray = value
+    try:
+        np.dtype(value.dtype)
+    except (AttributeError, TypeError):
+        try:
+            data = np.asarray(value)
+        except ValueError as error:
+            msg = (
+                f"{name} must be a numeric array of shape {layout}, but NumPy "
+                "cannot make it one array: its nested lists have rows of "
+                f"different lengths. {ragged_fix}"
+            )
+            raise ValueError(msg) from error
+    if data.dtype.kind not in "biufc":
+        received = (
+            f"{type(value).__name__} {value!r}"
+            if data.ndim == 0
+            else f"values of dtype {data.dtype}"
+        )
+        msg = (
+            f"{name} must be a numeric array of shape {layout}, got {received}, "
+            f"not numbers. Convert them first, e.g. np.asarray({name}, "
+            f"dtype={dtype_example})."
+        )
+        raise TypeError(msg)
+    return data
+
+
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
     """Warn that ``old`` is deprecated, at the first caller outside the package.
 
