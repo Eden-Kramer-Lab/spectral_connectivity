@@ -4415,17 +4415,15 @@ class Connectivity:
         if not self._is_one_sided and _warn_orientation_change.get():
             # Remove in 3.2, with DirectedOrientationWarning (issue #98).
             warn_migration(
-                f"{_ORIENTATION_WARNING_PREFIX}Connectivity.global_coherence "
-                "returns only the non-negative frequencies, labelled by "
-                "Connectivity.frequencies, like every other measure. 2.x returned "
-                "every bin of the two-sided transform, labelled by all_frequencies; "
-                "for a real signal the negative bins repeat the non-negative ones "
-                "(the same fractions, conjugated vectors), so nothing is lost. "
-                "Label the frequency axis of code written for 2.x with frequencies. "
-                "It also follows expectation_type, which 2.x ignored: the default, "
-                "'trials_tapers', pools each time window's trials and tapers as 2.x "
-                "did for every setting. This notice is temporary and will be removed in 3.2. See the "
-                f"migration guide: {_MIGRATION_GUIDE_URL}. " + _silence_hint(SidednessWarning),
+                f"{_ORIENTATION_WARNING_PREFIX}Connectivity.global_coherence returns "
+                "only the non-negative frequencies, labelled by "
+                "Connectivity.frequencies (2.x returned every bin of the two-sided "
+                "transform, labelled by all_frequencies; for a real signal the "
+                "negative bins only repeated the positive ones). Label the frequency axis with "
+                "frequencies and drop indexing from the end of the axis. It also "
+                "honours expectation_type; the default is unchanged. This notice "
+                f"will be removed in 3.2; see the migration guide: {_MIGRATION_GUIDE_URL}. "
+                + _silence_hint(SidednessWarning),
                 SidednessWarning,
             )
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)

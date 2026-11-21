@@ -144,10 +144,11 @@ def test_global_coherence_warns_once_at_the_call(connectivity):
     assert warning.filename == __file__
     message = str(warning.message)
     assert message.startswith("Since spectral_connectivity 3.0,")
-    assert "only the non-negative frequencies" in message
+    assert "returns only the non-negative frequencies" in message
     assert "labelled by Connectivity.frequencies" in message
-    assert "all_frequencies" in message
-    assert "follows expectation_type, which 2.x ignored" in message
+    assert "labelled by all_frequencies" in message
+    assert "drop indexing from the end of the axis" in message
+    assert "honours expectation_type; the default is unchanged" in message
     assert "removed in 3.2" in message
     assert "migration.html" in message
     assert (
@@ -155,6 +156,8 @@ def test_global_coherence_warns_once_at_the_call(connectivity):
         "category=spectral_connectivity.SidednessWarning)."
     ) in message
     assert fractions.shape[1] == connectivity.frequencies.size
+    # Short: the statement before the link is a few sentences.
+    assert len(message.split("; see the migration guide")[0]) < 500
 
 
 def test_global_coherence_of_one_sided_coefficients_is_silent(time_series):
