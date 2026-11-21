@@ -108,7 +108,10 @@ class TestGetComputeBackend:
         assert result["device_name"] == "CPU"
         assert "GPU acceleration was requested" in result["message"]
         assert "CuPy is not installed" in result["message"]
-        assert 'pip install "spectral-connectivity[gpu]"' in result["message"]
+        assert (
+            'Install it with: pip install "spectral-connectivity[gpu]" (or with conda: '
+            "conda install -c conda-forge cupy), then restart"
+        ) in result["message"]
         assert "restart the Python interpreter" in result["message"]
 
     def test_cupy_installed_but_not_requested_message(
@@ -200,7 +203,7 @@ def test_gpu_request_without_cupy_fails_import(value):
     assert "RuntimeError: GPU support was explicitly requested" in result.stderr
     assert f"{GPU_ENV_VAR}={value!r}" in result.stderr
     assert "CuPy is not installed" in result.stderr
-    assert 'pip install "spectral-connectivity[gpu]"' in result.stderr
+    assert 'Install it with: pip install "spectral-connectivity[gpu]"' in result.stderr
 
 
 class TestIsGpuEnabled:

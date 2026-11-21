@@ -316,7 +316,7 @@ def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
 # How to install the GPU dependencies: the package's gpu extra pins the CuPy
 # build for CUDA 12 (cupy-cuda12x), where `pip install cupy` builds from source.
 GPU_INSTALL_HINT = (
-    'pip install "spectral-connectivity[gpu]" (or, with conda, '
+    'pip install "spectral-connectivity[gpu]" (or with conda: '
     "conda install -c conda-forge cupy)"
 )
 
@@ -326,7 +326,7 @@ def gpu_request_error_message() -> str:
     return (
         f"GPU support was explicitly requested via "
         f"{GPU_ENV_VAR}={os.environ.get(GPU_ENV_VAR, '')!r}, but CuPy is not installed. "
-        f"Install it with {GPU_INSTALL_HINT}, or unset {GPU_ENV_VAR} to use the CPU."
+        f"Install it with: {GPU_INSTALL_HINT}. Or unset {GPU_ENV_VAR} to use the CPU."
     )
 
 
@@ -491,9 +491,9 @@ def get_compute_backend() -> dict[str, Any]:
     elif gpu_enabled and not cupy_available:
         message = (
             "GPU acceleration was requested (SPECTRAL_CONNECTIVITY_ENABLE_GPU='true') "
-            f"but CuPy is not installed. Install it with {GPU_INSTALL_HINT}, then "
-            "restart the Python interpreter: the variable is read when "
-            "spectral_connectivity is imported. "
+            f"but CuPy is not installed. Install it with: {GPU_INSTALL_HINT}, then "
+            "restart the Python interpreter (the variable is read when "
+            "spectral_connectivity is imported). "
             "Currently using CPU backend with NumPy."
         )
     elif gpu_enabled and cupy_available:
