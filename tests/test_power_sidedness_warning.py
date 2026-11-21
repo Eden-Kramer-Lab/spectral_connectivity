@@ -178,6 +178,75 @@ def test_warning_appears_once_per_session_unless_a_filter_says_otherwise():
     assert json.loads(output) == [1, 1, 3, "raised"]
 
 
+_SILENCED_FIRST_SCRIPT = """
+import json
+import warnings
+
+import numpy as np
+
+shown = []
+warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
+    category.__name__
+)
+from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
+
+time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
+connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
+counts = []
+# Silenced, then un-silenced: the notice was never seen, so it is still due.
+warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+connectivity.power()
+warnings.resetwarnings()
+connectivity.power()
+connectivity.power()  # another line
+counts.append(len(shown))
+print(json.dumps(counts))
+"""
+
+_ERROR_FIRST_SCRIPT = """
+import json
+import warnings
+
+import numpy as np
+
+shown = []
+warnings.showwarning = lambda message, category, *args, **kwargs: shown.append(
+    category.__name__
+)
+from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
+
+time_series = np.random.default_rng(0).standard_normal((64, 3, 2))
+connectivity = Connectivity.from_transform(Multitaper(time_series, sampling_frequency=100))
+counts = []
+# Raised as an error: the user read the message in the exception, so it counts.
+warnings.filterwarnings("error", category=PowerSidednessWarning)
+try:
+    connectivity.power()
+except PowerSidednessWarning:
+    counts.append("raised")
+warnings.resetwarnings()
+connectivity.power()
+counts.append(len(shown))
+print(json.dumps(counts))
+"""
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [(_SILENCED_FIRST_SCRIPT, [1]), (_ERROR_FIRST_SCRIPT, ["raised", 0])],
+    ids=["ignored-first-call-does-not-count", "raised-first-call-counts"],
+)
+def test_only_a_notice_the_user_saw_uses_up_the_session(script, expected):
+    """An ignored call does not count as shown, so the notice appears once
+    the filter is removed (a notebook that silenced it, then un-silenced it).
+    A call raised as an error does: its message was in the exception."""
+    environment = {k: v for k, v in os.environ.items() if k != "PYTHONWARNINGS"}
+    output = subprocess.check_output(
+        [sys.executable, "-c", script], text=True, env=environment
+    )
+    assert json.loads(output) == expected
+
+
 _CONTEXT_SCRIPT = """
 import warnings
 

@@ -451,25 +451,36 @@ def _warn_migration(message: str, category: type[UserWarning]) -> None:
     """Issue a migration notice once per session, unless a warnings filter applies.
 
     Each message (one ``PowerSidednessWarning``, one
-    ``DirectedOrientationWarning`` per measure) is issued the first time it
-    arises. Later it is issued again only if a warnings filter in effect
+    ``DirectedOrientationWarning`` per measure) is issued until the user has
+    seen it once. Later it is issued again only if a warnings filter in effect
     could match it, so a filter the user set (``-W``, ``PYTHONWARNINGS``,
     ``warnings.simplefilter("always")`` or ``"error"``, ``pytest.warns``)
     still decides; Python's own default filters match no ``UserWarning``.
     Module and line restrictions are not checked, so a filter limited to a
-    module lets repeats through to Python's default action (once per line).
+    module counts as matching.
+
+    A call whose first matching filter is ``"ignore"`` does not count as
+    seen, so a notice silenced and later un-silenced still appears once. A
+    call turned into an error does count: the exception carried the message.
 
     Python's ``"once"`` action would not do: it forgets what it showed
     whenever any code changes the filters, as ``warnings.catch_warnings``
     does, and a filter the package registered at import is dropped when the
     import runs inside ``catch_warnings`` (as pytest collects test modules).
     """
-    if message in _issued_migration_messages and not any(
-        issubclass(category, filter_category) and (pattern is None or pattern.match(message))
-        for _, pattern, filter_category, _, _ in _current_warning_filters()
-    ):
+    action = next(
+        (
+            filter_action
+            for filter_action, pattern, filter_category, _, _ in _current_warning_filters()
+            if issubclass(category, filter_category)
+            and (pattern is None or pattern.match(message))
+        ),
+        None,
+    )
+    if message in _issued_migration_messages and action is None:
         return
-    _issued_migration_messages.add(message)
+    if action != "ignore":
+        _issued_migration_messages.add(message)
     warnings.warn(message, category, stacklevel=stacklevel_outside_package())
 
 

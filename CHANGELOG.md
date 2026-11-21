@@ -118,7 +118,10 @@ their rows).
   label notice and the `Connectivity` method's array notice are separate);
   `warnings.simplefilter("always",
   spectral_connectivity.DirectedOrientationWarning)` shows it at every call,
-  and any other filter on it (such as `"error"`) applies as usual.
+  and any other filter on it (such as `"error"`) applies as usual. A call
+  made while it is ignored does not count as shown, so removing the filter
+  shows it once; a call turned into an error counts, since the exception
+  carried the message.
 - `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
