@@ -770,15 +770,18 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `simulate_shared_oscillation(300, 500, 1000, 5, amplitudes=[1, 1])` returned
   the 200 Hz sinusoid that 300 Hz aliases to at 500 Hz without a sign.
 - `simulate_MVAR` warns when its coefficients are unstable (the spectral
-  radius of their companion matrix is at least 1), giving the radius and
-  saying to scale the coefficients down until it is below 1:
+  radius of their companion matrix is at least 1), giving the radius (naming
+  a radius of 1 a unit root) and a scaling that brings it to 0.9 for any
+  number of lags (`A_k` times `c**k` scales the radius by `c`):
   `simulate_MVAR(np.array([[[1.5, 0], [0, 1.5]]]), n_time_samples=200)`
   returned values near 1e52 without a sign. Malformed input raises a
   `ValueError` naming the expected shape and the one received, where NumPy
   failed with an unrelated message: coefficients that are not
   `(n_lags, n_signals, n_signals)` (2-D, or non-square), a `noise_covariance`
   of another size than the signals, a count that is not a positive integer
-  (`n_trials=2.5`), or a negative `n_burnin_samples`.
+  (`n_trials=2.5`), or a negative `n_burnin_samples`. Complex coefficients,
+  which it cannot simulate (NumPy failed with a casting error), raise a
+  `TypeError`.
 - `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
   they take coherency (`Connectivity.coherency()`) or its magnitude, not
   `magnitude_squared_coherence()`. Both square or read the absolute value of

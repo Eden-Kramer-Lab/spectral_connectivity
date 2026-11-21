@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pytest
 
@@ -183,10 +185,34 @@ def test_simulate_MVAR_warns_for_unstable_coefficients():
             np.array([[[1.5, 0.0], [0.0, 1.5]]]), n_time_samples=200, random_state=0
         )
     assert np.abs(diverged).max() > 1e30
-    with pytest.warns(UserWarning, match=r"is 1\.06.*below 1"):
+    with pytest.warns(UserWarning, match=r"is 1\.064 ") as record:
         simulate_MVAR(np.array([[[0.5]], [[0.6]]]), random_state=0)
+    # The advice works for several lags: scaling A_k by c**k scales the radius
+    # by c, so the c the message gives brings it to 0.9, silently.
+    c = float(re.search(r"c = ([0-9.]+)", str(record[0].message)).group(1))
+    scaled = np.array([[[0.5]], [[0.6]]]) * c ** np.arange(1, 3)[:, np.newaxis, np.newaxis]
+    assert _companion_radius(scaled) == pytest.approx(0.9, rel=1e-3)
+    simulate_MVAR(scaled, random_state=0)
+    # A unit root is named as such.
+    with pytest.warns(UserWarning, match=r"is 1 \(a unit root"):
+        simulate_MVAR(np.array([[[1.0]]]), random_state=0)
     # A stable model (radius 0.6 and 0.5) is silent.
     simulate_MVAR(np.array([[[0.5, 0.3], [0.0, 0.6]]]), random_state=0)
+
+
+def _companion_radius(coefficients):
+    """Largest eigenvalue magnitude of a VAR's companion matrix."""
+    n_lags, n_signals, _ = coefficients.shape
+    companion = np.eye(n_lags * n_signals, k=-n_signals)
+    companion[:n_signals] = np.concatenate(coefficients, axis=1)
+    return np.max(np.abs(np.linalg.eigvals(companion)))
+
+
+def test_simulate_MVAR_rejects_complex_coefficients():
+    """A complex model cannot be simulated with real innovations; NumPy failed
+    later with a casting error."""
+    with pytest.raises(TypeError, match="coefficients must be real"):
+        simulate_MVAR(np.array([[[0.5 + 0.1j]]]))
 
 
 @pytest.mark.parametrize(

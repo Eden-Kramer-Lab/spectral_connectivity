@@ -112,6 +112,8 @@ def simulate_MVAR(
 
     Raises
     ------
+    TypeError
+        If ``coefficients`` is complex.
     ValueError
         If ``coefficients`` is not of shape ``(n_lags, n_signals, n_signals)``,
         ``noise_covariance`` not of shape ``(n_signals, n_signals)``,
@@ -141,6 +143,13 @@ def simulate_MVAR(
 
     """
     coefficients = np.asarray(coefficients)
+    if np.iscomplexobj(coefficients):
+        msg = (
+            f"coefficients must be real, got dtype {coefficients.dtype}. "
+            "simulate_MVAR draws real Gaussian innovations, so it simulates real "
+            "processes only; pass the real coefficient matrices."
+        )
+        raise TypeError(msg)
     if coefficients.ndim != 3 or coefficients.shape[1] != coefficients.shape[2]:
         hint = (
             "; for a single lag, pass coefficients[np.newaxis]"
@@ -175,15 +184,21 @@ def simulate_MVAR(
         companion = np.eye(n_lags * n_signals, k=-n_signals)
         companion[:n_signals] = np.concatenate(coefficients, axis=1)
         spectral_radius = float(np.max(np.abs(np.linalg.eigvals(companion))))
-        if spectral_radius >= 1:
+        if spectral_radius >= 1 or np.isclose(spectral_radius, 1, rtol=1e-12, atol=0):
+            if np.isclose(spectral_radius, 1, rtol=1e-12, atol=0):
+                radius = "1 (a unit root: the series wanders like a random walk)"
+            else:
+                radius = f"{spectral_radius:.4g} (above 1: the series grows without bound)"
+            # Scaling A_k by c**k scales every companion eigenvalue by c.
+            scale = 0.9 / spectral_radius
             warnings.warn(
                 "The MVAR coefficients are unstable: the spectral radius of their "
-                f"companion matrix is {spectral_radius:.4g}, at least 1, so the "
-                "process has no stationary state and the simulated series grows "
-                "without bound (or, at exactly 1, wanders). Its spectrum and "
-                "connectivity are undefined. Scale the coefficients down until "
-                "the radius is below 1 (for one lag, divide them by more than "
-                f"{spectral_radius:.4g}).",
+                f"companion matrix is {radius}, so the process has no stationary "
+                "state and its spectrum and connectivity are undefined. Scale the "
+                "coefficients until the radius is below 1: multiplying each lag's "
+                "matrix A_k (coefficients[k - 1]) by c**k multiplies the radius by "
+                "c, so coefficients * c ** np.arange(1, n_lags + 1)[:, np.newaxis, "
+                f"np.newaxis] with c = {scale:.6g} gives a radius of 0.9.",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )
