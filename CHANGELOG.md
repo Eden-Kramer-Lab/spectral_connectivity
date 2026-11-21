@@ -1371,6 +1371,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   "Did you mean sampling_frequency (in Hz)?", where the `TypeError` for the
   unexpected keyword suggested nothing. `transform_kwargs={"fs": ...}` gets
   the same hint.
+- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
+  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
+  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
+  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
+  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
+  array in the other order cannot be detected, so it is analyzed with trials
+  and signals exchanged.
 
 ### Performance
 

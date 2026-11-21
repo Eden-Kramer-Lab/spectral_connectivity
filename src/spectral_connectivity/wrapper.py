@@ -1122,8 +1122,14 @@ def multitaper_connectivity(
     Parameters
     ----------
     time_series : NDArray[floating] or xarray.DataArray,
-        shape (n_times, n_trials, n_channels) or (n_times, n_channels)
-        Time series data. For multiple trials, trials are averaged in spectral
+        shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+        Time series data, time first. In a 3-D array **trials are the middle
+        axis and signals the last**: ``x[:, k, :]`` is trial ``k``. An array of
+        shape ``(500, 3, 40)`` is read as 500 time samples of 3 trials of 40
+        signals; if it holds 3 signals and 40 trials, pass
+        ``np.swapaxes(x, 1, 2)``. Array input cannot be checked for this (a
+        DataArray's dimension names can). A 2-D array is one trial. For
+        multiple trials, trials are averaged in spectral
         domain. For a DataArray, common time/trial/signal dimension names are
         inferred and transposed automatically; use ``time_dim``, ``trial_dim``,
         and ``signal_dim`` for domain-specific names. Ambiguous names raise rather

@@ -1538,10 +1538,16 @@ class Multitaper(_WindowedFourierTransform):
     ----------
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
         Input time series data. **Must be a real-valued 3D array**; a complex
-        one raises ``TypeError``.
+        one raises ``TypeError``. **Trials are the middle axis and signals the
+        last**: ``x[:, k, :]`` is trial ``k``.
+
         - n_time_samples: number of time points
         - n_trials: number of trials (use 1 for single trial)
         - n_signals: number of signals/channels
+
+        An array of shape ``(500, 3, 40)`` is read as 500 time samples of 3
+        trials of 40 signals; if it holds 3 signals and 40 trials, pass
+        ``np.swapaxes(x, 1, 2)``. The order cannot be checked from the values.
         Multiple trials are averaged in the spectral domain.
 
         **Important:** If your data is 1D or 2D, use `prepare_time_series()`
