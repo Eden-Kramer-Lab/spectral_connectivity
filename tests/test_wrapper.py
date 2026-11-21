@@ -1000,6 +1000,51 @@ def test_dataarray_infers_sampling_frequency_from_time_coordinate():
     assert float(inferred.frequency.max()) == pytest.approx(sampling_frequency / 2)
 
 
+def _recording(time, **coordinate_attrs):
+    """Two channels of noise on a ``time`` coordinate with the given attrs."""
+    raw = np.random.default_rng(38).standard_normal((time.size, 2))
+    data = xr.DataArray(raw, dims=("time", "channel"), coords={"time": time})
+    data.time.attrs.update(coordinate_attrs)
+    return data
+
+
+def test_inferred_rate_warns_for_a_millisecond_time_coordinate():
+    """A coordinate in milliseconds is read as seconds, giving a rate 1000 times
+    too low: inference warns, naming the rate and the conversion, when the rate
+    is below 1 Hz or the coordinate's units say milliseconds."""
+    at_500_hz = _recording(np.arange(1000) / 500 * 1000)  # ms, no units
+    with pytest.warns(UserWarning, match=r"inferred as 0\.5 Hz") as record:
+        result = multitaper_connectivity(at_500_hz, method="power")
+    message = str(record[0].message)
+    assert "elapsed seconds" in message
+    assert 'da.assign_coords(time=(da.time / 1000).assign_attrs(units="s"))' in message
+    assert "sampling_frequency=0.5 " in message
+    assert result.attrs["sampling_frequency"] == pytest.approx(0.5)
+
+    # Above 1 Hz, the units attribute is what gives a millisecond axis away.
+    at_2_khz = _recording(np.arange(1000) / 2000 * 1000, units="ms")
+    with pytest.warns(UserWarning, match=r"inferred as 2 Hz.*units attribute is 'ms'"):
+        multitaper_connectivity(at_2_khz, method="power")
+    converted = at_2_khz.assign_coords(time=(at_2_khz.time / 1000).assign_attrs(units="s"))
+    assert multitaper_connectivity(converted, method="power").attrs["sampling_frequency"] == (
+        pytest.approx(2000)
+    )
+
+
+def test_inferred_slow_rate_is_silent_when_confirmed():
+    """Slow data (fMRI at TR = 2 s is 0.5 Hz) is legitimate: passing the rate,
+    or stating seconds as the coordinate's units, silences the warning."""
+    fmri = _recording(np.arange(200) * 2.0)
+    with pytest.warns(UserWarning, match=r"inferred as 0\.5 Hz"):
+        multitaper_connectivity(fmri, method="power")
+    explicit = multitaper_connectivity(fmri, sampling_frequency=0.5, method="power")
+    stated = multitaper_connectivity(
+        _recording(np.arange(200) * 2.0, units="s"), method="power"
+    )
+    assert explicit.attrs["sampling_frequency"] == 0.5
+    assert stated.attrs["sampling_frequency"] == 0.5
+
+
 def test_dataarray_infers_rate_from_precise_float32_time_coordinate():
     """Float32 can infer a rate when a zero-based axis retains enough precision."""
     sampling_frequency = 1000

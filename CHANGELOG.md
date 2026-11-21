@@ -744,6 +744,16 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
+  rate of a DataArray from a time coordinate that may be in milliseconds: when
+  the inferred rate is below 1 Hz (unless the coordinate's `units` attribute
+  says seconds), or when that attribute says milliseconds. The coordinate is
+  read as elapsed seconds, so 500 Hz data on a millisecond axis gave 0.5 Hz
+  and a frequency axis ending at 0.25 Hz without a sign. The warning gives the
+  inferred rate and the conversion,
+  `da.assign_coords(time=(da.time / 1000).assign_attrs(units="s"))`; for slow
+  recordings such as fMRI, passing `sampling_frequency` silences it. A rate
+  passed explicitly never warns.
 - *Unreleased:* `multitaper_connectivity` accepts a nested list as 2-D
   `(time, signal)` input, and `fourier_connectivity` one as 3-D or 4-D
   coefficients, as they do the same array. Both read the layout before

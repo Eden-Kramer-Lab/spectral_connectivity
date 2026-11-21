@@ -712,7 +712,10 @@ the duration it is given.
 
 `time_series` may be an `xarray.DataArray`. Dimension names, not positions,
 define the roles, so a `time` coordinate in seconds supplies the sampling
-frequency and the signal labels become the `source`/`target` coordinates:
+frequency and the signal labels become the `source`/`target` coordinates. A
+coordinate in milliseconds would give a rate 1000 times too low; inference warns
+when the rate is below 1 Hz or the coordinate's `units` attribute says
+milliseconds:
 
 ```python
 >>> import xarray as xr

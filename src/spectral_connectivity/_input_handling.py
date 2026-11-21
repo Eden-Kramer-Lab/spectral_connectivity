@@ -571,7 +571,45 @@ def _time_axis_from_dataarray(
                 "start_time or make the values agree."
             )
             raise ValueError(msg)
+    if inferred_sampling_frequency is not None:
+        _warn_if_inferred_rate_looks_like_milliseconds(
+            coordinate_name, coordinate.attrs.get("units"), inferred_sampling_frequency
+        )
     return _TimeAxis(inferred_sampling_frequency, inferred_start_time)
+
+
+_MILLISECOND_UNITS = frozenset({"ms", "msec", "msecs", "millisecond", "milliseconds"})
+_SECOND_UNITS = frozenset({"s", "sec", "secs", "second", "seconds"})
+
+
+def _warn_if_inferred_rate_looks_like_milliseconds(
+    coordinate_name: Hashable, units: Any, sampling_frequency: float
+) -> None:
+    """Warn when a rate inferred from a time coordinate suggests milliseconds.
+
+    The coordinate is read as elapsed seconds, so one in milliseconds gives a
+    rate 1000 times too low. Warn when its ``units`` attribute says
+    milliseconds, or, unless it says seconds, when the rate is below 1 Hz,
+    which slow recordings (fMRI) legitimately have too.
+    """
+    stated = units.strip().lower() if isinstance(units, str) else None
+    in_milliseconds = stated in _MILLISECOND_UNITS
+    if not in_milliseconds and (stated in _SECOND_UNITS or sampling_frequency >= 1):
+        return
+    units_note = f", although its units attribute is {units!r}" if in_milliseconds else ""
+    warnings.warn(
+        f"sampling_frequency was inferred as {sampling_frequency:.6g} Hz from the "
+        f"DataArray time coordinate {coordinate_name!r}, which is read as elapsed "
+        f"seconds{units_note}. A coordinate in milliseconds gives a sampling rate, "
+        "and frequencies, 1000 times too low: convert it to seconds with "
+        f"da.assign_coords({coordinate_name}=(da.{coordinate_name} / 1000)"
+        '.assign_attrs(units="s")). If '
+        f"{sampling_frequency:.6g} Hz is the true rate (fMRI at TR = 2 s is 0.5 Hz), "
+        f"pass sampling_frequency={sampling_frequency:.6g} to confirm it and silence "
+        "this warning.",
+        UserWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
 
 
 def _signal_labels_from_dataarray(
