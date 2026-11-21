@@ -140,7 +140,7 @@ def _get_initial_conditions(
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
-        logger.warning(
+        logger.debug(
             "Computing the initial conditions using the Cholesky failed for "
             "some sub-spectra; using a deterministic fallback for those."
         )

@@ -12,7 +12,12 @@ import warnings
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity import (
+    Connectivity,
+    DirectedOrientationWarning,
+    Multitaper,
+    multitaper_connectivity,
+)
 from spectral_connectivity.transforms import (
     MorletWavelet,
     ShortTimeFourierTransform,
@@ -655,3 +660,83 @@ def test_fourier_connectivity_names_a_ragged_nested_list():
         ),
     ):
         fourier_connectivity(ragged, frequencies=np.arange(2.0))
+
+
+def _series_with_nan():
+    series = np.random.default_rng(6).standard_normal((1000, 3, 3))
+    series[10, 1, 0] = np.nan
+    series[500, 2, 2] = np.inf
+    return series
+
+
+def _coefficients_with_nan():
+    coefficients = Multitaper(np.random.default_rng(7).standard_normal((400, 3, 3)), 500).fft()
+    coefficients[0, 1, 0, 5, 0] = np.nan
+    return coefficients
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _series_with_nan(), 500, method="pairwise_spectral_granger_prediction"
+            ),
+            "time_series contains 2 NaN or infinite values",
+            id="wrapper-pairwise_granger",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _series_with_nan(), 500, method="directed_transfer_function"
+            ),
+            "time_series contains 2 NaN or infinite values",
+            id="wrapper-DTF",
+        ),
+        pytest.param(
+            lambda: Connectivity.from_transform(
+                Multitaper(_series_with_nan(), 500)
+            ).partial_directed_coherence(),
+            "time_series contains 2 NaN or infinite values",
+            id="from_transform-PDC",
+        ),
+        pytest.param(
+            lambda: Connectivity(
+                _coefficients_with_nan()
+            ).conditional_spectral_granger_prediction(),
+            "fourier_coefficients contains NaN or Inf values.",
+            id="Connectivity-conditional_granger",
+        ),
+    ],
+)
+def test_directed_measures_on_nonfinite_input_give_only_the_nan_warning(call, expected, capfd):
+    """The factorization's failure warnings (Cholesky fallback, Wilson
+    non-convergence, NaN at every frequency) blamed duplicated channels for
+    the NaN the user was already warned about; only that warning (and the
+    orientation reminder) remains, and nothing is logged to stderr."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    messages = [
+        str(w.message)
+        for w in record
+        if not issubclass(w.category, DirectedOrientationWarning)
+    ]
+    assert len(messages) == 1
+    assert messages[0].startswith(expected)
+    assert capfd.readouterr().err == ""
+
+
+def test_directed_measures_on_finite_collinear_input_still_warn():
+    """With finite coefficients the factorization warnings are the only sign
+    of a duplicated channel, so they stay."""
+    series = np.random.default_rng(8).standard_normal((400, 3, 3))
+    series[..., 2] = series[..., 0]
+    connectivity = Connectivity.from_transform(Multitaper(series, 500))
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.pairwise_spectral_granger_prediction()
+    assert any(
+        "duplicated" in str(w.message)
+        for w in record
+        if not issubclass(w.category, DirectedOrientationWarning)
+    )

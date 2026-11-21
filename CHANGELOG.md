@@ -1322,6 +1322,18 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   docstring no longer says they must be finite. `Connectivity` measures
   called after `from_transform` can still emit NumPy `RuntimeWarning`s on
   such values; `multitaper_connectivity` does not.
+- The spectral Granger and transfer-function measures computed from NaN or
+  Inf coefficients no longer add the warnings of their failed factorization,
+  which blamed duplicated or collinear channels for the NaN already warned
+  about: the Cholesky fallback, the Wilson non-convergence, the "NaN at every
+  frequency" pair list, and the conditional and block Granger
+  innovation-spectrum warnings. `pairwise_spectral_granger_prediction` gave
+  four of them and DTF two, besides the NaN warning, in the case run; any
+  path to `Connectivity` (the wrapper, `from_transform`, or coefficients
+  passed directly) now gives the NaN warning alone, plus the
+  `DirectedOrientationWarning` reminder. Finite coefficients keep every
+  warning. The Cholesky fallback is no longer also logged at WARNING level,
+  which printed it to stderr a second time.
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0

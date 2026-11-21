@@ -516,6 +516,40 @@ def _ignore_nan_propagation_warnings(
     return wrapper
 
 
+# The starts of the warnings a spectral factorization gives when it fails.
+# Computed from NaN or Inf coefficients it always fails, and these warnings
+# then blame duplicated or collinear channels for what the NaN warning
+# already explained.
+_FACTORIZATION_FAILURE_WARNINGS = (
+    "Computing the initial conditions using the Cholesky failed",
+    "Wilson minimum-phase decomposition did not converge",
+    r"\w+: NaN at every frequency",
+    "Conditional spectral Granger: the total or intrinsic innovation",
+    "Block spectral Granger: the intrinsic or total target spectrum",
+)
+
+
+def _factorization_explained_by_nonfinite_input(
+    directed_measure: Callable[_P, _R],
+) -> Callable[_P, _R]:
+    """Drop the factorization-failure warnings of a directed measure computed
+    from NaN or Inf coefficients, which were already warned about (by the
+    transform for its time series, or by ``Connectivity`` for coefficients
+    passed directly). Finite coefficients keep every warning."""
+
+    @wraps(directed_measure)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        connectivity = cast("Connectivity", args[0])
+        if connectivity._coefficients_are_finite:
+            return directed_measure(*args, **kwargs)
+        with warnings.catch_warnings():
+            for message in _FACTORIZATION_FAILURE_WARNINGS:
+                warnings.filterwarnings("ignore", message=message, category=UserWarning)
+            return directed_measure(*args, **kwargs)
+
+    return wrapper
+
+
 _ABSENT = object()
 
 
@@ -1162,7 +1196,11 @@ class Connectivity:
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
-        if not xp.all(xp.isfinite(value)):
+        # Read by the directed measures and the multivariate kernels, whose
+        # failures on NaN or Inf are explained by the warning below (or the
+        # transform's).
+        self._coefficients_are_finite = bool(xp.all(xp.isfinite(value)))
+        if not self._coefficients_are_finite:
             warnings.warn(
                 f"{_NONFINITE_COEFFICIENTS_WARNING} This may indicate:\n"
                 "  - NaN/Inf in your input time series data\n"
@@ -4835,6 +4873,7 @@ class Connectivity:
     @_orientation_changed
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def pairwise_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return amount of power at a node explained by other nodes.
 
@@ -4924,6 +4963,7 @@ class Connectivity:
     @_orientation_changed
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def subset_pairwise_spectral_granger_prediction(
         self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.floating]:
@@ -4993,6 +5033,7 @@ class Connectivity:
 
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction after time reversal.
 
@@ -5053,6 +5094,7 @@ class Connectivity:
 
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction conditioned on all others.
 
@@ -5158,6 +5200,7 @@ class Connectivity:
         _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
         return result
 
+    @_factorization_explained_by_nonfinite_input
     def blockwise_spectral_granger_prediction(
         self, group_labels: NDArray[np.integer]
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -5230,6 +5273,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def directed_transfer_function(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by inflow.
 
@@ -5295,6 +5339,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def directed_coherence(self) -> NDArray[np.floating]:
         """Return the squared directed coherence (noise-weighted DTF).
 
@@ -5404,6 +5449,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by outflow.
 
@@ -5468,6 +5514,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def generalized_partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return generalized partial directed coherence.
 
@@ -5541,6 +5588,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def direct_directed_transfer_function(self) -> NDArray[np.floating]:
         """Return the direct directed transfer function (dDTF).
 
