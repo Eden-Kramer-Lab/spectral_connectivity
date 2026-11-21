@@ -50,7 +50,8 @@ The migration guide for code written against 2.x is
   `connectivity_kwargs={"one_sided": False}` and point to the method.
 - `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
   3.2) emitted by the seven `Connectivity` methods whose arrays were target
-  first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
+  first in 2.x, by `Connectivity.jackknife` of those measures, and by
+  `multitaper_connectivity` and `connectivity_to_xarray`
   when they compute pairwise or subset spectral Granger prediction (the 2.x
   wrapper rejected the transfer-function measures). It points at the calling
   line and appears once per Python session for each measure, and for each

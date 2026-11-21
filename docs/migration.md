@@ -21,9 +21,9 @@ for 2.x has to change.
    source first: do not swap them. Until 3.2 the `Connectivity` methods that
    existed in 2.x (pairwise and subset spectral Granger, directed transfer
    function, directed coherence, (generalized) partial directed coherence, and
-   direct directed transfer function), and `multitaper_connectivity` and
-   `connectivity_to_xarray` for pairwise and subset spectral Granger
-   prediction, emit a
+   direct directed transfer function), `Connectivity.jackknife` of those
+   measures, and `multitaper_connectivity` and `connectivity_to_xarray` for
+   pairwise and subset spectral Granger prediction emit a
    `DirectedOrientationWarning` as a reminder; silence it with
    `warnings.filterwarnings("ignore",
    category=spectral_connectivity.DirectedOrientationWarning)`.
