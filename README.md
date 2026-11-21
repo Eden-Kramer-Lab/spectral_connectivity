@@ -61,7 +61,7 @@ efficiently summarize brain-area level coherences from multielectrode recordings
   `cupy` is installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` is set before
   importing the package. Public results are returned as NumPy arrays.
 
-### Installation
+## Installation
 
 Requires Python >= 3.10.
 
@@ -78,7 +78,7 @@ conda install -c edeno spectral_connectivity
 GPU acceleration is optional; see [GPU Acceleration](#gpu-acceleration) to set
 it up. To contribute, see [Developer Installation](#developer-installation).
 
-### Tutorials
+## Tutorials
 
 + [Getting started: from time series to connectivity](examples/Intro_tutorial.ipynb):
   start here; coherence from a time series, and the settings that matter.
@@ -87,7 +87,7 @@ it up. To contribute, see [Developer Installation](#developer-installation).
 + [Directed connectivity on published autoregressive models](examples/Tutorial_Using_Paper_Examples.ipynb):
   Granger and transfer-function measures on models from the literature.
 
-### Usage Example
+## Usage Example
 
 The quickest way to get connectivity measures is the high-level
 `multitaper_connectivity` function, which runs the multitaper transform and
@@ -204,7 +204,7 @@ from spectral_connectivity import list_measures
 directed = [m.name for m in list_measures(directed=True)]
 ```
 
-#### Choosing a measure
+### Choosing a measure
 
 | Your question | Start with (**try first**) | Watch out for |
 | --- | --- | --- |
@@ -256,7 +256,7 @@ the source leads. The directed-transfer-function family is available by name
 as an opt-in method. `list_measures()` reports each measure's value range,
 units, and interpretation.
 
-#### Lower-level API
+### Lower-level API
 
 For finer control (or if you already have Fourier coefficients from another
 method), use the `Multitaper` and `Connectivity` classes directly:
@@ -389,7 +389,7 @@ bias-corrected estimate, standard error, and confidence interval, applying an
 automatic variance-stabilizing transformation (log for power, `atanh(sqrt(.))`
 for magnitude-squared coherence, and circular for phase).
 
-### Documentation
+## Documentation
 
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
 
@@ -401,7 +401,7 @@ See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs
   units, diagonal, and interpretation of every measure.
 + [Migrating from 2.x to 3.0](docs/migration.md).
 
-### Implemented Measures
+## Implemented Measures
 
 The complete list, with each measure's `method` name, value range, units,
 diagonal, and interpretation, is generated from the code into
@@ -423,7 +423,7 @@ diagonal, and interpretation, is generated from the code into
 + **Lead and lag**: the phase slope index, group delay, delay, and the directed
   phase lag index.
 
-### Package Dependencies
+## Package Dependencies
 
 `spectral_connectivity` requires:
 
@@ -435,7 +435,7 @@ diagonal, and interpretation, is generated from the code into
 
 See [pyproject.toml](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/pyproject.toml) for the authoritative list of dependencies and their minimum versions.
 
-### GPU Acceleration
+## GPU Acceleration
 
 GPU acceleration is optional. The core transforms and connectivity
 calculations can run on an NVIDIA GPU through [CuPy](https://cupy.dev/), which
@@ -500,7 +500,7 @@ Troubleshooting:
 + **Out of GPU memory.** Process fewer trials or time windows per call, or run
   on the CPU: unset the variable and restart Python.
 
-### Developer Installation
+## Developer Installation
 
 If you want to make contributions to this library, please use this installation.
 
