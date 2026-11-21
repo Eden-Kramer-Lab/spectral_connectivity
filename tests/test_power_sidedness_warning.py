@@ -16,8 +16,10 @@ from spectral_connectivity import (
     MorletWavelet,
     Multitaper,
     PowerSidednessWarning,
+    fourier_connectivity,
     multitaper_connectivity,
 )
+from spectral_connectivity.wrapper import connectivity_to_xarray
 
 
 @pytest.fixture(scope="module")
@@ -69,19 +71,50 @@ def test_power_of_one_sided_coefficients_is_silent(time_series):
     morlet = Connectivity.from_transform(
         MorletWavelet(time_series, sampling_frequency=100, frequencies=np.array([10.0, 20.0]))
     )
+    # (frequency, trial, signal) -> (time window, trial, taper, frequency, signal)
+    half_spectrum = np.moveaxis(np.fft.rfft(time_series, axis=0), 0, 1)
+    declared = Connectivity(half_spectrum[np.newaxis, :, np.newaxis], is_one_sided=True)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         morlet.power()
+        declared.power()
     assert _sidedness_warnings(record) == []
 
 
 def test_labelled_power_is_silent(time_series):
-    """A labelled result states its sidedness in its attributes."""
+    """The wrappers' power results are one-sided too and do not warn, a
+    documented exception; their attributes state the sidedness."""
+    multitaper = Multitaper(time_series, sampling_frequency=100)
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
-        result = multitaper_connectivity(time_series, sampling_frequency=100, method="power")
+        results = [
+            multitaper_connectivity(time_series, sampling_frequency=100, method="power"),
+            multitaper_connectivity(time_series, sampling_frequency=100),
+            connectivity_to_xarray(multitaper, "power"),
+            fourier_connectivity(
+                multitaper.fft(), multitaper.frequencies, method="power", is_one_sided=False
+            ),
+        ]
     assert _sidedness_warnings(record) == []
-    assert "One-sided" in result.attrs["interpretation"]
+    assert all(
+        "One-sided" in result["power"].attrs["interpretation"]
+        if "power" in getattr(result, "data_vars", {})
+        else "One-sided" in result.attrs["interpretation"]
+        for result in results
+    )
+
+
+def test_jackknife_of_power_warns_once_for_its_full_estimate(connectivity):
+    """The jackknife's estimate is power(), so it carries the same notice,
+    once: its leave-one-out replicates do not repeat it."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.jackknife("power")
+    assert len(_sidedness_warnings(record)) == 1
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.jackknife("power", one_sided=True)
+    assert _sidedness_warnings(record) == []
 
 
 def test_warning_is_silenced_by_its_category(connectivity):

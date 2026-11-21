@@ -23,6 +23,10 @@ reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
 pairwise and subset spectral Granger prediction; silence it with
 `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
+`Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
+the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` when called without
+`one_sided` on two-sided coefficients; the wrappers' power results changed the
+same way without a warning (see the migration row).
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
@@ -49,7 +53,7 @@ their rows).
 | The spectral Granger and transfer-function measures (DTF, PDC, directed coherence) depended on the data's units, through an absolute convergence threshold: values changed by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored in volts), and by more below that | Invariant to the data's scale. Recompute directed results obtained from small-amplitude data |
 | A zero-lag pair (a channel and a scaled copy of it) gave a `phase_lag_index` up to +-1, a `debiased_squared_phase_lag_index` up to 1, and a `debiased_squared_weighted_phase_lag_index` anywhere in [-1, 1], read from the sign of rounding noise (largest with few observations) | 0 for all three, and 0.5 for `directed_phase_lag_index`: "no phase lag" is judged relative to the pair's power |
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
-| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density. Until 3.2, `power()` without `one_sided` on two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density. Until 3.2, `Connectivity.power()` without `one_sided` on two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power in `multitaper_connectivity` and `connectivity_to_xarray` results (including by default) changed the same way without a warning: halve its interior bins to compare with 2.x |
 | `coherence_rate_adjustment(rate1, rate2, power, ...)` was given 2.x's `power()`, a two-sided density | Say which density the spectrum is. With 3.0's one-sided `power()` pass `is_one_sided=True`: the factor is the same as in 2.x at interior frequencies (with no added Poisson spikes; see the next row) and differs at 0 Hz and Nyquist, where a one-sided density is not doubled. Leave 0 Hz out in any case; at Nyquist pass the two-sided density. With a two-sided spectrum (your own, or `power(one_sided=False)`) pass `is_one_sided=False`. Without the keyword the call warns and assumes one-sided |
 | `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. A call with a non-zero noise rate warns about this until 4.0. Calls with the default noise of 0 are unchanged and silent |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008). The sign is unchanged, but the sum has far fewer terms, so values are smaller by one to several orders of magnitude: recompute, and re-derive any threshold |
@@ -106,6 +110,14 @@ their rows).
   when they compute pairwise or subset spectral Granger prediction (the 2.x
   wrapper rejected the transfer-function measures). It points at the calling
   line, so Python's default filter shows it once per call site.
+- `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
+  emitted by `Connectivity.power()` called without `one_sided` on two-sided
+  coefficients, and once by `jackknife("power")` for its full estimate: since
+  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. Pass
+  `one_sided=True` (or `False` for the 2.x values) or silence it with
+  `warnings.filterwarnings("ignore",
+  category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
+  results do not emit it.
 - Public simulators with planted, known structure in
   `spectral_connectivity.simulate`: `simulate_lagged_broadband` (noisy copies of
   one white-noise source, each delayed by a whole number of samples given as

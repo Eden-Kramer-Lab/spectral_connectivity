@@ -2365,9 +2365,10 @@ class Connectivity:
         Parameters
         ----------
         one_sided : bool, optional
-            ``True`` (the default) returns the one-sided density described
-            above. Called without it on two-sided coefficients, ``power``
-            warns that 2.x returned the two-sided density
+            ``True`` returns the one-sided density described above, which is
+            also what an omitted ``one_sided`` gives. Called without it on
+            two-sided coefficients, ``power`` warns that 2.x returned the
+            two-sided density
             (:class:`~spectral_connectivity.PowerSidednessWarning`, until
             3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
@@ -2412,7 +2413,7 @@ class Connectivity:
         >>> signals += 0.5 * rng.standard_normal(signals.shape)
         >>> multitaper = Multitaper(signals, sampling_frequency=500)
         >>> connectivity = Connectivity.from_transform(multitaper)
-        >>> power = connectivity.power()
+        >>> power = connectivity.power(one_sided=True)
         >>> power.shape  # (n_time_windows, n_frequencies, n_signals)
         (1, 501, 2)
         >>> connectivity.frequencies[[0, -1]]  # 0 Hz up to Nyquist in 0.5 Hz steps
@@ -2494,7 +2495,7 @@ class Connectivity:
         >>> csd.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
         (1, 501, 2, 2)
         >>> # The diagonal is the power spectrum; the matrix is Hermitian.
-        >>> bool(np.allclose(csd[..., 0, 0].real, connectivity.power()[..., 0]))
+        >>> bool(np.allclose(csd[..., 0, 0].real, connectivity.power(one_sided=True)[..., 0]))
         True
         >>> bool(np.allclose(csd[..., 0, 1], np.conj(csd[..., 1, 0])))
         True

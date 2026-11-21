@@ -43,8 +43,12 @@
 > **`Connectivity.power()` is one-sided since 3.0.** The bins between 0 Hz and
 > Nyquist are twice the 2.x values, so integrating over the non-negative
 > frequencies gives the signal's power. `power(one_sided=False)` returns the
-> 2.x values. Until 3.2, calling `power()` without `one_sided` emits a
-> `PowerSidednessWarning`; pass `one_sided=True` to silence it.
+> 2.x values. Until 3.2, calling `Connectivity.power()` without `one_sided` on
+> two-sided coefficients emits a `PowerSidednessWarning`; pass `one_sided=True`
+> to silence it. The power that `multitaper_connectivity` and
+> `connectivity_to_xarray` return (including by default) is the one-sided
+> density too, and they do not warn: halve its interior bins to compare with a
+> 2.x result.
 
 ## What is spectral_connectivity?
 
