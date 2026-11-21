@@ -3,6 +3,7 @@
 import contextlib
 import difflib
 import functools
+import inspect
 import os
 import sys
 import warnings
@@ -29,6 +30,7 @@ else:
     BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
 _P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def is_positive_integer(value: Any, minimum: int = 1) -> bool:
@@ -181,27 +183,33 @@ def sampling_frequency_hint(sampling_frequency_given: bool) -> str:
 
 
 def reject_sampling_frequency_aliases(
-    init: Callable[_P, None],
-) -> Callable[_P, None]:
-    """Make a transform's ``__init__`` answer ``fs=...`` with the parameter's name.
+    function: Callable[_P, _R],
+) -> Callable[_P, _R]:
+    """Make a function, or a transform's ``__init__``, that takes
+    ``sampling_frequency`` answer ``fs=...`` with the parameter's name.
 
     Python's own ``TypeError`` for an unexpected keyword names no alternative;
-    this one adds :func:`sampling_frequency_hint`. Other calls pass through,
-    and the signature is unchanged for ``inspect``. ``sampling_frequency`` is
-    the second parameter after ``self`` of every transform it decorates.
+    this one adds :func:`sampling_frequency_hint`, and names the class for an
+    ``__init__``. Other calls pass through, and the signature is unchanged for
+    ``inspect``.
     """
+    parameters = list(inspect.signature(function).parameters)
+    is_method = parameters[0] == "self"
+    # sampling_frequency was given if passed by name or reached by position.
+    position = parameters.index("sampling_frequency")
 
-    @functools.wraps(init)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
+    @functools.wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         alias = next((name for name in kwargs if name in SAMPLING_FREQUENCY_ALIASES), None)
         if alias is not None:
-            given = "sampling_frequency" in kwargs or len(args) > 2
+            given = "sampling_frequency" in kwargs or len(args) > position
+            name = type(args[0]).__name__ if is_method else function.__name__
             msg = (
-                f"{type(args[0]).__name__}() got an unexpected keyword "
+                f"{name}() got an unexpected keyword "
                 f"argument {alias!r}.{sampling_frequency_hint(given)}"
             )
             raise TypeError(msg)
-        init(*args, **kwargs)
+        return function(*args, **kwargs)
 
     return wrapper
 

@@ -28,6 +28,8 @@ from spectral_connectivity.transforms import (
     Welch,
     detrend,
     dpss_windows,
+    estimate_frequency_resolution,
+    suggest_parameters,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray, fourier_connectivity
 from tests._backend_helpers import to_host
@@ -669,6 +671,16 @@ _RATE_CALLS = {
         lambda **kw: MorletWavelet(_SERIES, frequencies=[10.0], **kw),
         "MorletWavelet",
     ),
+    "suggest_parameters": (
+        lambda **kw: suggest_parameters(signal_duration=2.0, **kw),
+        "suggest_parameters",
+    ),
+    "estimate_frequency_resolution": (
+        lambda **kw: estimate_frequency_resolution(
+            time_window_duration=1.0, time_halfbandwidth_product=3, **kw
+        ),
+        "estimate_frequency_resolution",
+    ),
 }
 
 
@@ -708,6 +720,8 @@ def test_an_alias_beside_a_positional_sampling_frequency_is_answered_with_drop_i
         Multitaper(_SERIES, 500, fs=500)
     with pytest.raises(TypeError, match="pass only sampling_frequency"):
         multitaper_connectivity(_SERIES, 500, transform_kwargs={"sfreq": 500})
+    with pytest.raises(TypeError, match="pass only sampling_frequency"):
+        suggest_parameters(500, 2.0, fs=500)
 
 
 def test_constructors_keep_their_signatures():
@@ -717,6 +731,17 @@ def test_constructors_keep_their_signatures():
     for transform in (Multitaper, ShortTimeFourierTransform, Welch, MorletWavelet):
         parameters = inspect.signature(transform).parameters
         assert list(parameters)[:2] == ["time_series", "sampling_frequency"]
+    assert list(inspect.signature(suggest_parameters).parameters) == [
+        "sampling_frequency",
+        "signal_duration",
+        "desired_freq_resolution",
+        "desired_n_tapers",
+    ]
+    assert list(inspect.signature(estimate_frequency_resolution).parameters) == [
+        "sampling_frequency",
+        "time_window_duration",
+        "time_halfbandwidth_product",
+    ]
 
 
 _TRANSFORMS = {

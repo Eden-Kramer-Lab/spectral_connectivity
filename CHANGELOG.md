@@ -1417,7 +1417,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   the ones it can (`'trials_tapers'`, the default, `'trials'`, or
   `'tapers'`) and the one the `Connectivity` has.
 - `multitaper_connectivity`, `Multitaper`, `ShortTimeFourierTransform`,
-  `Welch`, and `MorletWavelet` answer another package's name for the sampling
+  `Welch`, `MorletWavelet`, `suggest_parameters`, and
+  `estimate_frequency_resolution` answer another package's name for the sampling
   rate (`fs`, `Fs`, `sfreq`, `srate`, `sampling_rate`, `sample_rate`) with
   "Did you mean sampling_frequency (in Hz)?", where the `TypeError` for the
   unexpected keyword suggested nothing. `transform_kwargs={"fs": ...}` gets

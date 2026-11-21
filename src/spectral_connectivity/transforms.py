@@ -134,6 +134,7 @@ class MultitaperParameters(TypedDict):
     nyquist_frequency: float
 
 
+@reject_sampling_frequency_aliases
 def estimate_frequency_resolution(
     sampling_frequency: float,  # noqa: ARG001 -- public API; resolution does not use it
     time_window_duration: float,
@@ -277,6 +278,7 @@ def _ceil_hundredths(value: float) -> float:
     return float(np.ceil(round(value * 100, 6)) / 100)
 
 
+@reject_sampling_frequency_aliases
 def suggest_parameters(
     sampling_frequency: float,
     signal_duration: float,
