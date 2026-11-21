@@ -9,7 +9,8 @@ Use `multitaper_connectivity(time_series, sampling_frequency=..., method=...)`
 with `time_series` shaped `(n_time_samples, n_trials, n_signals)`. Call
 `list_measures()` for every valid `method` and what its values mean. In the
 wrapper's results, `result.sel(source="a", target="b")` is the influence of `a`
-on `b`; the lower-level `Connectivity` arrays use two different index orders.
+on `b`; the lower-level `Connectivity` arrays use the same source-first order,
+`result[..., i, j]` is `i -> j` for every directed measure.
 
 ## Docs
 
