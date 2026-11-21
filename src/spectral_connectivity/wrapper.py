@@ -60,6 +60,8 @@ from spectral_connectivity.connectivity import (
 )
 from spectral_connectivity.transforms import Multitaper, _transposed_layout_error
 from spectral_connectivity.utils import (
+    SAMPLING_FREQUENCY_ALIASES,
+    SAMPLING_FREQUENCY_HINT,
     _validated_flag,
     close_names,
     did_you_mean,
@@ -450,6 +452,8 @@ def _unknown_setting_message(problem: str, key: Any) -> str:
     says so, since it goes outside ``transform_kwargs``.
     """
     message = f"{problem} {key!r}."
+    if key in SAMPLING_FREQUENCY_ALIASES:
+        return message + SAMPLING_FREQUENCY_HINT
     close = close_names(str(key), _MULTITAPER_SETTINGS)
     message += did_you_mean(close)
     named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]

@@ -6,10 +6,10 @@ import functools
 import os
 import sys
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from types import FrameType
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 else:
     BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
+_P = ParamSpec("_P")
 
 
 def is_positive_integer(value: Any, minimum: int = 1) -> bool:
@@ -162,6 +163,38 @@ def did_you_mean(names: Iterable[str]) -> str:
     """``" Did you mean 'a', 'b'?"`` for ``names`` (repeats dropped), or ``""``."""
     unique = list(dict.fromkeys(names))
     return f" Did you mean {', '.join(map(repr, unique))}?" if unique else ""
+
+
+# Names other packages give the sampling rate, which no string metric relates
+# to ``sampling_frequency``.
+SAMPLING_FREQUENCY_ALIASES = frozenset(
+    {"fs", "Fs", "sfreq", "srate", "sampling_rate", "sample_rate"}
+)
+SAMPLING_FREQUENCY_HINT = " Did you mean sampling_frequency (in Hz)?"
+
+
+def reject_sampling_frequency_aliases(
+    init: Callable[_P, None],
+) -> Callable[_P, None]:
+    """Make a transform's ``__init__`` answer ``fs=...`` with the parameter's name.
+
+    Python's own ``TypeError`` for an unexpected keyword names no alternative;
+    this one adds :data:`SAMPLING_FREQUENCY_HINT`. Other calls pass through,
+    and the signature is unchanged for ``inspect``.
+    """
+
+    @functools.wraps(init)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> None:
+        alias = next((name for name in kwargs if name in SAMPLING_FREQUENCY_ALIASES), None)
+        if alias is not None:
+            msg = (
+                f"{type(args[0]).__name__}() got an unexpected keyword "
+                f"argument {alias!r}.{SAMPLING_FREQUENCY_HINT}"
+            )
+            raise TypeError(msg)
+        init(*args, **kwargs)
+
+    return wrapper
 
 
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:

@@ -494,3 +494,48 @@ def test_jackknife_names_the_expectation_type_to_build_with(expectation_type):
     message = str(excinfo.value)
     assert "expectation_type='trials_tapers' (the default), 'trials', or 'tapers'" in message
     assert f"this one has expectation_type={expectation_type!r}" in message
+
+
+_RATE_ALIASES = ["fs", "Fs", "sfreq", "srate", "sampling_rate", "sample_rate"]
+_SERIES = np.random.default_rng(4).standard_normal((500, 2, 2))
+_RATE_CALLS = {
+    "multitaper_connectivity": (
+        lambda **kw: multitaper_connectivity(_SERIES, **kw),
+        "multitaper_connectivity",
+    ),
+    "Multitaper": (lambda **kw: Multitaper(_SERIES, **kw), "Multitaper"),
+    "STFT": (
+        lambda **kw: ShortTimeFourierTransform(_SERIES, **kw),
+        "ShortTimeFourierTransform",
+    ),
+    "Welch": (lambda **kw: Welch(_SERIES, **kw), "Welch"),
+    "MorletWavelet": (
+        lambda **kw: MorletWavelet(_SERIES, frequencies=[10.0], **kw),
+        "MorletWavelet",
+    ),
+}
+
+
+@pytest.mark.parametrize(("call", "name"), _RATE_CALLS.values(), ids=list(_RATE_CALLS))
+@pytest.mark.parametrize("alias", _RATE_ALIASES)
+def test_sampling_rate_aliases_point_to_sampling_frequency(call, name, alias):
+    """Other packages' names for the sampling rate, which no string metric
+    relates to sampling_frequency, are answered with its name."""
+    with pytest.raises(
+        TypeError,
+        match="^"
+        + re.escape(
+            f"{name}() got an unexpected keyword argument {alias!r}. "
+            "Did you mean sampling_frequency (in Hz)?"
+        ),
+    ):
+        call(**{alias: 500})
+
+
+def test_constructors_keep_their_signatures():
+    """The alias check leaves each transform's signature intact for inspect."""
+    import inspect
+
+    for transform in (Multitaper, ShortTimeFourierTransform, Welch, MorletWavelet):
+        parameters = inspect.signature(transform).parameters
+        assert list(parameters)[:2] == ["time_series", "sampling_frequency"]

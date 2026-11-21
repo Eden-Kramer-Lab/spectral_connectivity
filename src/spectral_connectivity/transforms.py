@@ -36,6 +36,7 @@ from spectral_connectivity.utils import (
     _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
+    reject_sampling_frequency_aliases,
     stacklevel_outside_package,
     to_numpy,
 )
@@ -1773,6 +1774,7 @@ class Multitaper(_WindowedFourierTransform):
             raise AttributeError(msg)
         object.__setattr__(self, name, value)
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2335,6 +2337,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     # A 1-sample "Hann" window is the rectangular window [1.0], not a taper.
     _MIN_WINDOW_SAMPLES = 2
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2585,6 +2588,7 @@ class Welch:
     _transform_name = "welch"
     is_one_sided = False
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2923,6 +2927,7 @@ class MorletWavelet:
     # Connectivity must not double them again.
     is_one_sided = True
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
