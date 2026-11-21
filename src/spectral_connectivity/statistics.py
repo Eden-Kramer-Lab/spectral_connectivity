@@ -638,7 +638,8 @@ def coherence_fisher_z_transform(
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
     # and non-finite/fractional counts give NaN with a runtime warning. n_obs2
     # keeps its own check: 0 (no second sample) is valid there.
-    _check_n_observations(
+    # Checked here, too, so the message names n_obs1.
+    _validated_n_observations(
         n_obs1, 2, "The coherence bias is undefined below 2 observations.", name="n_obs1"
     )
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
@@ -663,7 +664,7 @@ def coherence_fisher_z_transform(
 
     z1: NDArray[np.floating] = np.arctanh(coherence_magnitude1) - bias1
     z2: NDArray[np.floating] = np.arctanh(coherence_magnitude2) - bias2
-    scale: float = np.sqrt(bias1 + bias2)
+    scale = np.sqrt(bias1 + bias2)
     return (z1 - z2) / scale
 
 
@@ -856,10 +857,10 @@ def coherence_significance_pvalue(
     return p_values
 
 
-def _check_n_observations(
+def _validated_n_observations(
     n_observations: Any, minimum: int, why_below_minimum: str, name: str = "n_observations"
-) -> None:
-    """Check observation counts, a scalar or one per estimate.
+) -> NDArray[Any]:
+    """Observation counts, a scalar or one per estimate, as a validated array.
 
     Raises ``TypeError`` unless every count is a real number (a boolean, a
     string, or None is not a count), and ``ValueError`` unless every count is
@@ -884,9 +885,10 @@ def _check_n_observations(
             f"{why_below_minimum + ' ' if below_minimum else ''}{how}"
         )
         raise ValueError(msg)
+    return counts
 
 
-def coherence_bias(n_observations: int) -> float:
+def coherence_bias(n_observations: int) -> float | NDArray[np.floating]:
     """Estimate bias correction for coherence estimates.
 
     Coherence estimates are biased by finite sample size. This function
@@ -930,13 +932,13 @@ def coherence_bias(n_observations: int) -> float:
            Journal of Neuroscience Methods 159,
            337-345. 10.1016/j.jneumeth.2006.07.011.
     """
-    _check_n_observations(
+    counts = _validated_n_observations(
         n_observations,
         2,
         "The bias, 1 / (2 * n_observations - 2), is undefined below 2 observations.",
     )
-    degrees_of_freedom = 2 * n_observations
-    return 1.0 / (degrees_of_freedom - 2)
+    degrees_of_freedom = 2 * counts
+    return _float_if_scalar(1.0 / (degrees_of_freedom - 2))
 
 
 def coherence_rate_adjustment(
@@ -1289,7 +1291,7 @@ def power_confidence_intervals(
 
 
 def _chi_squared_shape(
-    n_observations: int, real_valued: bool | NDArray[np.bool_]
+    n_observations: int | NDArray[Any], real_valued: bool | NDArray[np.bool_]
 ) -> NDArray[np.floating]:
     """Shape ``nu / 2`` of a power estimate's chi-squared distribution.
 
@@ -1350,10 +1352,10 @@ def power_bias(
     >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
     At a real-valued bin: -0.010033
     """
-    _check_n_observations(
+    counts = _validated_n_observations(
         n_observations, 1, "The digamma function has poles at 0 and the negative integers."
     )
-    shape = _chi_squared_shape(n_observations, real_valued)
+    shape = _chi_squared_shape(counts, real_valued)
     return _float_if_scalar(scipy.special.psi(shape) - np.log(shape))
 
 
@@ -1401,10 +1403,10 @@ def power_variance(
     chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
     bin ``nu = n_observations``, which about doubles it.
     """
-    _check_n_observations(
+    counts = _validated_n_observations(
         n_observations, 1, "The trigamma function has poles at 0 and the negative integers."
     )
-    shape = _chi_squared_shape(n_observations, real_valued)
+    shape = _chi_squared_shape(counts, real_valued)
     return _float_if_scalar(scipy.special.polygamma(1, shape))
 
 

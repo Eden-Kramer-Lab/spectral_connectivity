@@ -764,8 +764,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   returned -0.5 for 0 and divided by zero for 1), and the power helpers at
   least 1 (0 hit the digamma and trigamma poles). A non-finite or fractional
   count raises too, naming the offending values of an array of counts (one
-  per estimate, still accepted). A boolean, a string, or None raises a
-  `TypeError`: `power_bias(True)` read it as one observation and
+  per estimate, still accepted, as an array or a list). A boolean, a string,
+  or None raises a `TypeError`: `power_bias(True)` read it as one observation and
   `coherence_bias(True)` divided by zero. `coherence_fisher_z_transform`
   checks `n_obs1` the same way.
 - *Unreleased:* `simulate_shared_oscillation` raises a `ValueError` naming

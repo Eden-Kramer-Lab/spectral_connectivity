@@ -1053,6 +1053,13 @@ def test_array_counts_broadcast_against_a_scalar_real_valued(function, kwargs):
     np.testing.assert_allclose(result, expected, rtol=1e-15)
 
 
+@pytest.mark.parametrize("function", [coherence_bias, power_bias, power_variance])
+def test_a_list_of_counts_is_read_like_the_array(function):
+    """A list passed validation but then failed in the arithmetic
+    ("unsupported operand type(s) for -: 'list' and 'int'")."""
+    np.testing.assert_array_equal(function([3, 4]), function(np.array([3, 4])))
+
+
 def test_pole_is_named_only_for_a_count_at_a_pole():
     with pytest.raises(ValueError, match="poles at 0"):
         power_bias(0)
