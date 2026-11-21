@@ -1298,6 +1298,202 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   x5 read 6.5 where the model has 4.3. Every example of that tutorial is now
   tested against the true values of the model it simulates
   (`tests/test_tutorial_paper_examples.py`).
+- *Unreleased:* `multitaper_connectivity` given one signal for a measure that
+  relates signals says that the time series has 1 signal and the measure needs
+  at least 2, before any FFT, where it raised `Connectivity`'s message about
+  `fourier_coefficients`, an argument the wrapper's caller never passes. It
+  points to `method='power'` for one signal and to keeping the signal axis
+  when selecting a channel (`x[:, [i]]`, not `x[:, i]`). The message names
+  at most three of the requested measures and counts the rest.
+  `connectivity_to_xarray` given a transform of one signal says, likewise,
+  that the transform has 1 signal (after the FFT, since a custom transform
+  may give its signal count only through its coefficients).
+- A time series containing NaN or Inf gives one warning instead of three or
+  more. `multitaper_connectivity` warned about the time series, then about
+  `fourier_coefficients` (an argument its caller never passes), then with
+  NumPy `RuntimeWarning`s such as "invalid value encountered in divide";
+  `Connectivity.from_transform` after `Multitaper`,
+  `ShortTimeFourierTransform`, or `Welch` gave the first two, and the
+  transforms' `fft()` a `RuntimeWarning` too. In 2.0.1,
+  `multitaper_connectivity` gave the time-series warning and the
+  `fourier_coefficients` warning (for `coherence_magnitude` in the case run),
+  each a dozen lines of generic causes and suggestions. The remaining warning
+  gives the
+  number of such values and the trials and signals holding them, says that
+  they propagate to the outputs (NaN power for the affected signals in the
+  windows containing them, NaN connectivity for every pair involving those
+  signals, or for every pair with measures that model all signals jointly,
+  while `canonical_coherence` and `global_coherence` raise a `ValueError`),
+  and says to interpolate the samples or drop the trials or signals, with
+  `np.argwhere(~np.isfinite(x))` to find them (the indices it gives are
+  0-based). The input is still
+  accepted. `Connectivity` built directly from coefficients, or from another
+  transform, still warns about NaN or Inf in `fourier_coefficients`, and its
+  docstring no longer says they must be finite. `Connectivity` measures
+  called after `from_transform` can still emit NumPy `RuntimeWarning`s on
+  such values; `multitaper_connectivity` does not.
+- The spectral Granger and transfer-function measures computed from NaN or
+  Inf coefficients no longer add the warnings of their failed factorization,
+  which blamed duplicated or collinear channels for the NaN already warned
+  about: the Cholesky fallback, the Wilson non-convergence, the "NaN at every
+  frequency" pair list, and the conditional and block Granger
+  innovation-spectrum warnings. `pairwise_spectral_granger_prediction` gave
+  four of them and DTF two, besides the NaN warning, in the case run; any
+  path to `Connectivity` (the wrapper, `from_transform`, or coefficients
+  passed directly) now gives the NaN warning alone, plus the
+  `DirectedOrientationWarning` reminder. Finite coefficients keep every
+  warning. The Cholesky fallback is no longer also logged at WARNING level,
+  which printed it to stderr a second time. The warnings are dropped with
+  `warnings.catch_warnings`, here and for the `fourier_coefficients` warning
+  after a transform's NaN warning, which changes the process-wide warning
+  filters while the measure runs: with NaN or Inf input it is not
+  thread-safe (another thread's matching warnings are dropped meanwhile),
+  and a warning already shown once may be shown again. Finite input never
+  changes the filters.
+- `canonical_coherence` and `global_coherence` computed from NaN or Inf
+  coefficients raise a `ValueError` saying the measure cannot be computed
+  because the coefficients contain NaN or Inf, and to interpolate or remove
+  those samples or drop the affected trials or signals; they raised LAPACK's
+  `LinAlgError` ("SVD did not converge", "Eigenvalues did not converge"),
+  which is kept as the cause. The same `ValueError` is raised when the
+  decomposition returns NaN for such coefficients rather than raising, as
+  CuPy's do (simulated here; no GPU run), unless zero observation weights
+  omit them. `canonical_coherency`,
+  `maximized_imaginary_coherency` (and its components), and
+  `multivariate_interaction_measure` already returned NaN there, and still
+  do. `global_coherence` no longer emits NumPy's "invalid value encountered
+  in divide" `RuntimeWarning` before that error.
+- `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
+  naming `significance_threshold` when it is not a number strictly between 0
+  and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0
+  counted every bin as significant and 0 none, without a sign; development
+  builds raised from deep in the statistics module about an `alpha` the
+  caller never passed.
+- `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and
+  `multitaper_connectivity` reject an unknown `detrend_type` (e.g.
+  `"quadratic"`) when constructed, with a `ValueError` naming `detrend_type`
+  and listing `'constant'`, `'linear'`, and `None`. It was accepted and failed
+  at the first `fft()` with `detrend`'s message about its `type` argument
+  (`Example: detrend(data, type='linear')`), as `Multitaper` did in 2.0.1
+  (`ShortTimeFourierTransform` and `Welch` are new in 3.0). Code that catches
+  this error should wrap the constructor.
+- A transposed time series, e.g. `multitaper_connectivity(x.T,
+  sampling_frequency=500)` for a `(1000, 3)` recording, raises a `ValueError`
+  that says so: "Your array has 3 time samples and 1000 signals; expected
+  (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals). It
+  looks transposed: put time on the first axis, e.g. x.T." The window error
+  it replaces, which advised a longer window or a smaller
+  `time_halfbandwidth_product`, is its `__cause__`; the transposition hint
+  was a separate `UserWarning`. 2.0.1, which took only 3-D input, gave that
+  warning and then SciPy's "select_range out of bounds" for
+  `multitaper_connectivity(x.T[:, np.newaxis, :], 500)`. This applies to
+  `Multitaper` (which names only its 3-D layout) and
+  `ShortTimeFourierTransform` too, when an array with more signals than time
+  samples is too short for its window (the window is longer than the
+  recording, or too short for the DPSS tapers). Every other error on such an
+  array (a bad `start_time`, say) keeps its own message, and such an array
+  whose window fits still only warns. `Multitaper` now emits its warnings
+  about the time series (transposed, NaN or Inf) after every check has
+  passed, so a call that raises does not warn first, as
+  `ShortTimeFourierTransform` already did.
+- `multitaper_connectivity` and `fourier_connectivity` given a `method` that
+  is neither a measure name nor a list of names (`method=3`, or a list holding
+  a number) raise a `TypeError` saying what `method` may be, giving what was
+  received, and pointing to `list_measures()`. They raised a bare
+  `TypeError: 'int' object is not iterable`, or an `AttributeError` for a
+  list holding a non-string.
+- *Unreleased:* `Connectivity.jackknife` errors say how to fix the call. An
+  unknown measure (`jackknife("coherence")`) gets the wrapper's suggestions
+  ("Did you mean 'magnitude_squared_coherence', ...?") and a pointer to
+  `list_measures()`, where the message said only that `method` must name a
+  public connectivity measure. A `method` that is not a string
+  (`jackknife(3)`) raises the wrappers' `TypeError` ("method must be a measure
+  name (str), got int 3. ..."), where it raised an `AttributeError` from
+  `str.startswith`. An invalid `confidence_level`
+  (`confidence_level=95`) is echoed with "e.g. 0.95 for a 95% interval" and
+  rejected before the leave-one-out estimates are computed, here and in
+  `jackknife_confidence_interval`; a NumPy scalar or 0-d array is accepted as
+  before. An `expectation_type` it cannot use names
+  the ones it can (`'trials_tapers'`, the default, `'trials'`, or
+  `'tapers'`) and the one the `Connectivity` has.
+- `multitaper_connectivity`, `Multitaper`, `ShortTimeFourierTransform`,
+  `Welch`, `MorletWavelet`, `suggest_parameters`, and
+  `estimate_frequency_resolution` answer another package's name for the sampling
+  rate (`fs`, `Fs`, `sfreq`, `srate`, `sampling_rate`, `sample_rate`) with
+  "Did you mean sampling_frequency (in Hz)?", where the `TypeError` for the
+  unexpected keyword suggested nothing. `transform_kwargs={"fs": ...}` gets
+  the same hint. Given beside `sampling_frequency`, the alias is answered
+  with "pass only sampling_frequency (in Hz)". `fourier_connectivity`, which
+  takes no sampling rate, keeps Python's `TypeError` for `fs=`.
+- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
+  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
+  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
+  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
+  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
+  array in the other order cannot be detected, so it is analyzed with trials
+  and signals exchanged.
+- The GPU messages of `get_compute_backend()` and of the import-time GPU
+  check say to install `pip install "spectral-connectivity[gpu]"` (the extra
+  that pins the CUDA 12 build, `cupy-cuda12x`), or `conda install -c
+  conda-forge cupy`; they said `pip install cupy`, which builds CuPy from
+  source. With CuPy installed and `SPECTRAL_CONNECTIVITY_ENABLE_GPU` set only
+  after `spectral_connectivity` was imported, `get_compute_backend()` says
+  that the variable must be set before the import and to restart the
+  interpreter, where it said to install CuPy and set the variable, both
+  already done.
+- `canonical_coherence`, the magnitude of `canonical_coherency`, and
+  `global_coherence` stay within [0, 1]. Where they reach 1 (fewer
+  observations than signals, or a duplicated or collinear channel) rounding
+  left them up to 4e-15, 1.2e-14, and 7e-16 above 1
+  (`canonical_coherence` was 1.000000000000003 for white noise with 4 trials,
+  8 signals in two groups, and 1 taper). Only values within 1e-10 above 1
+  are set to 1: a value further above it would be an error rather than
+  rounding, and is left visible. A sweep of every measure whose range is
+  [0, 1] over such inputs found no other value above 1, except the magnitude
+  of the complex `coherency` by up to 3 ulps (7e-16), the precision of the
+  magnitude itself.
+- Every observation count of the statistics helpers is checked the same way,
+  so the same bad count gets the same message, naming the argument, the
+  counts it takes, and `Connectivity.n_observations`:
+  `coherence_significance_pvalue`, `power_confidence_intervals`, and both
+  counts of `coherence_fisher_z_transform` and `power_fisher_z_transform`
+  now check theirs as `coherence_bias`, `power_bias`, and `power_variance`
+  do. A boolean, a string, or None raises a `TypeError` there too:
+  `power_confidence_intervals(True)` read `True` as 1 observation, and
+  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
+  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
+  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
+  one-sample test, got 1."). Both counts of the Fisher z-transforms and the
+  count of `power_confidence_intervals` take an array, one count per
+  estimate, where 0 in `n_obs2` means no second sample for that estimate;
+  all but `coherence_fisher_z_transform`'s `n_obs1` raised NumPy's "truth
+  value of an array is ambiguous" for one. `coherence_significance_pvalue`
+  takes a single count, and says so for an array, because its real-valued
+  bins use one count for the call.
+- `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
+  given a ragged nested list, or values that are not numbers (strings,
+  `None`), raise an error naming the `(n_time_samples, n_trials, n_signals)`
+  array they take and how to fix it, as `multitaper_connectivity` does,
+  where they raised NumPy's "inhomogeneous shape" message, a `ufunc
+  'isfinite'` error for strings (`MorletWavelet` accepted an array of
+  strings), or, for `Welch(None)`, one about its segment length.
+  `Welch(None)` now raises a `TypeError`, not that `ValueError`.
+  `fourier_connectivity` names its coefficient layouts for a ragged list
+  too. An object-dtype array holding numbers is read as those numbers by all
+  four transforms and both wrappers, as `MorletWavelet` read it; `Multitaper`,
+  `ShortTimeFourierTransform`, and `Welch` raised NumPy's `isfinite` error
+  for one.
+- `multitaper_connectivity` given an array of 1 or 4 or more dimensions says
+  so in its own terms: "time_series has 1 dimension, shape (200,).
+  multitaper_connectivity needs (n_time_samples, n_signals) or
+  (n_time_samples, n_trials, n_signals). For one signal use x[:, np.newaxis]
+  with method='power'." It raised `Multitaper`'s "Expected 3D array" error,
+  which points to `prepare_time_series`, a helper for `Multitaper`'s 3-D
+  input.
+- `Multitaper` given an `n_tapers` that is not a number (`n_tapers="5"`, or a
+  list) raises a `TypeError` naming `n_tapers` and the integer it takes,
+  where it raised NumPy's `ufunc 'isfinite'` error. A NumPy integer or a 0-d
+  array is still accepted, and `n_tapers=True` keeps its `ValueError`.
 
 ### Performance
 

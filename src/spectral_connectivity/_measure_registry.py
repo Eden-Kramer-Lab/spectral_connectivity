@@ -668,6 +668,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
 }
 
 
+# The measures that describe one signal at a time, defined for a single signal;
+# every other registered measure relates signals and needs at least two.
+_SINGLE_SIGNAL_MEASURES = frozenset({"power", "cross_spectral_density"})
+
 # Output kinds whose estimator consumes a frequency interval.
 _FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})
 
@@ -727,6 +731,16 @@ def _reduces_frequency(method: str) -> bool:
     return spec is not None and "frequency" not in spec.dims
 
 
+def _method_type_message(accepted: str, received: str) -> str:
+    """The message for a ``method`` of the wrong type: what the caller takes
+    (``accepted``), what it got, and where the names are listed."""
+    return (
+        f"method must be {accepted}, got {received}. Call "
+        "spectral_connectivity.list_measures() to see the measure names, "
+        "e.g. method='magnitude_squared_coherence'."
+    )
+
+
 def _requested_methods(
     method: str | Iterable[str] | None, defaults: Sequence[str]
 ) -> tuple[list[str], dict[str, str], bool]:
@@ -755,7 +769,19 @@ def _requested_methods(
     elif isinstance(method, str):
         requested = [method]
     else:
+        # The annotation is the contract; these checks are for user input.
+        accepted = "a measure name (str), a list of names, or None (the default measures)"
+        if not isinstance(method, Iterable):
+            received = f"{type(method).__name__} {method!r}"  # type: ignore[unreachable]
+            raise TypeError(_method_type_message(accepted, received))
         requested = list(method)
+        not_names = [name for name in requested if not isinstance(name, str)]  # type: ignore[redundant-expr]
+        if not_names:
+            received = (
+                f"a {type(method).__name__} holding "
+                f"{type(not_names[0]).__name__} {not_names[0]!r}"
+            )
+            raise TypeError(_method_type_message(accepted, received))
     if not requested:
         msg = "method must name at least one connectivity measure; got an empty list."
         raise ValueError(msg)

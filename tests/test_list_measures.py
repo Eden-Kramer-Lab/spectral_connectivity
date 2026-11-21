@@ -1,5 +1,7 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
+import itertools
+import re
 import warnings
 
 import numpy as np
@@ -14,13 +16,19 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
-from spectral_connectivity._measure_registry import _MEASURE_SPECS
+from spectral_connectivity._array_utils import _clip_rounding_above_one
+from spectral_connectivity._measure_registry import (
+    _MEASURE_SPECS,
+    _SINGLE_SIGNAL_MEASURES,
+)
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
     MeasureInfo,
+    connectivity_to_xarray,
     frequency_band_reduce,
 )
+from tests._backend_helpers import to_device, to_host
 
 
 def test_lists_every_registered_measure():
@@ -277,11 +285,6 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
             compute(**kwargs)
 
 
-# The measures that describe one signal at a time: defined for a single signal,
-# and not fixed by a single observation.
-_SINGLE_SIGNAL_MEASURES = {"power", "cross_spectral_density"}
-
-
 def _complex_noise(shape, seed):
     rng = np.random.default_rng(seed)
     return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
@@ -303,6 +306,54 @@ def test_every_measure_between_signals_refuses_a_single_signal(measure):
     }
     with pytest.raises(ValueError, match="at least 2 signals"):
         compute(**one_signal_kwargs)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_wrapper_names_the_time_series_for_a_single_signal(measure):
+    """multitaper_connectivity says the time series has one signal, in its own
+    terms (not the Connectivity's fourier_coefficients), before any FFT."""
+    time_series = np.random.default_rng(33).standard_normal((200, 1))
+    kwargs = {"sampling_frequency": 100, "method": measure.name}
+    if "group_labels" in _MEASURE_KWARGS.get(measure.name, {}):
+        kwargs["group_labels"] = ["a"]
+    if measure.name in _SINGLE_SIGNAL_MEASURES:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            multitaper_connectivity(time_series, **kwargs)
+        return
+    with pytest.raises(ValueError, match=r"^The time series has 1 signal") as excinfo:
+        multitaper_connectivity(time_series, **kwargs)
+    message = str(excinfo.value)
+    assert "fourier_coefficients" not in message
+    assert "method='power'" in message
+    assert "x[:, [i]] rather than x[:, i]" in message
+
+
+def test_single_signal_message_names_a_few_of_many_measures():
+    """For the default set, the message names three measures and counts the
+    rest rather than listing all of them."""
+    time_series = np.random.default_rng(34).standard_normal((200, 1))
+    pairwise = [name for name in DEFAULT_METHODS if name not in _SINGLE_SIGNAL_MEASURES]
+    expected = (
+        f"The time series has 1 signal, but {', '.join(pairwise[:3])}, and "
+        f"{len(pairwise) - 3} more measures relate pairs of signals and need at least 2."
+    )
+    with pytest.raises(ValueError, match="^" + re.escape(expected)):
+        multitaper_connectivity(time_series, sampling_frequency=100)
+
+
+def test_connectivity_to_xarray_names_the_transform_for_a_single_signal():
+    """connectivity_to_xarray says the transform has one signal, in its own
+    terms rather than Connectivity's fourier_coefficients."""
+    transform = Multitaper(np.random.default_rng(35).standard_normal((200, 2, 1)), 100)
+    expected = (
+        "The transform has 1 signal, but magnitude_squared_coherence relates pairs "
+        "of signals and needs at least 2. For the spectrum of one signal use "
+        "method='power'. When selecting one channel of the time series for the "
+        "transform, keep the signal axis: x[:, :, [i]] rather than x[:, :, i]."
+    )
+    with pytest.raises(ValueError, match="^" + re.escape(expected) + "$"):
+        connectivity_to_xarray(transform, "magnitude_squared_coherence")
 
 
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
@@ -1025,3 +1076,109 @@ def test_cropping_and_decimation_leave_measure_attributes_unchanged(coupled_time
     )
     for name in names:
         _assert_records_how_to_read(_MEASURES[name], result[name])
+
+
+_UNIT_INTERVAL_MEASURES = [
+    measure for measure in list_measures() if tuple(measure.value_range) == (0.0, 1.0)
+]
+
+
+def _rank_deficient_series(n_trials, n_signals, layout, seed):
+    """Few-sample series whose measures reach the ends of [0, 1]: plain noise,
+    a channel duplicated or rescaled, or a mixture with a collinear channel."""
+    rng = np.random.default_rng(seed)
+    series = rng.standard_normal((64, n_trials, n_signals))
+    if layout == "duplicate":
+        series[..., -1] = series[..., 0]
+    elif layout == "scaled":
+        series[..., -1] = 3.7 * series[..., 0]
+    elif layout == "mixed":
+        series = series @ rng.standard_normal((n_signals, n_signals))
+        series[..., -1] = series[..., 0] - 0.5 * series[..., 1]
+    return series
+
+
+@pytest.fixture(scope="module")
+def rank_deficient_connectivities():
+    """Connectivity for 1-4 trials, 1-3 tapers, and 3 or 8 signals (fewer
+    observations than signals in many), over the layouts above."""
+    connectivities = []
+    for n_trials, n_tapers, n_signals, layout, seed in itertools.product(
+        [1, 2, 4], [1, 2, 3], [3, 8], ["noise", "duplicate", "scaled", "mixed"], range(4)
+    ):
+        transform = Multitaper(
+            _rank_deficient_series(n_trials, n_signals, layout, seed),
+            sampling_frequency=100,
+            time_halfbandwidth_product=max(1.0, (n_tapers + 1) / 2),
+            n_tapers=n_tapers,
+        )
+        connectivities.append(Connectivity.from_transform(transform))
+    return connectivities
+
+
+@pytest.mark.parametrize("measure", _UNIT_INTERVAL_MEASURES, ids=lambda measure: measure.name)
+def test_unit_interval_measures_stay_in_range(measure, rank_deficient_connectivities):
+    """A measure whose range is [0, 1] never leaves it, even where it reaches
+    an end with few observations or collinear channels (canonical coherence
+    and global coherence were up to 4e-15 above 1 there). A complex measure's
+    magnitude may exceed 1 by a few ulps, the rounding of ``abs`` itself."""
+    tolerance = 4 * np.finfo(float).eps if measure.is_complex else 0.0
+    takes_groups = "group_labels" in _MEASURE_KWARGS.get(measure.name, {})
+    n_finite = 0
+    for connectivity in rank_deficient_connectivities:
+        kwargs = (
+            {"group_labels": np.arange(connectivity.n_signals) % 2} if takes_groups else {}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = getattr(connectivity, measure.name)(**kwargs)
+        if hasattr(result, "scores"):
+            result = result.scores
+        elif isinstance(result, tuple):
+            result = result[0]
+        values = np.abs(result) if np.iscomplexobj(result) else np.asarray(result)
+        # Undefined entries (the masked diagonal, an unconverged factorization)
+        # are NaN, which says so; only finite values must lie in the range.
+        values = values[np.isfinite(values)]
+        n_finite += values.size
+        if values.size:
+            assert values.min() >= 0.0
+            assert values.max() <= 1.0 + tolerance, values.max() - 1
+    assert n_finite > 0
+
+
+def test_only_rounding_above_one_is_clipped():
+    """Values within 1e-10 above 1 become 1; larger ones, which would be an
+    error rather than rounding, and NaN are left as they are."""
+    values = np.array([0.5, 1.0, 1 + 4e-15, 1 + 1e-10, 1 + 1e-9, 1.5, np.nan])
+    np.testing.assert_array_equal(
+        to_host(_clip_rounding_above_one(to_device(values))),
+        [0.5, 1.0, 1.0, 1.0, 1 + 1e-9, 1.5, np.nan],
+    )
+
+
+@pytest.mark.parametrize(("scale", "clipped"), [(1 + 1e-12, True), (1.2, False)])
+def test_canonical_coherence_clips_only_rounding(monkeypatch, scale, clipped):
+    """A canonical correlation pushed just above 1 is clipped to 1; one pushed
+    well above it (as a normalization error would) stays visible."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    estimate = connectivity_module._estimate_canonical_coherence
+    monkeypatch.setattr(
+        connectivity_module,
+        "_estimate_canonical_coherence",
+        lambda first, second: estimate(first, second) * scale,
+    )
+    # Fewer observations than signals in a group: the canonical correlation is 1.
+    series = np.random.default_rng(12).standard_normal((128, 2, 6))
+    connectivity = Connectivity.from_transform(
+        Multitaper(series, 100, time_halfbandwidth_product=1, n_tapers=1)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        coherence, _ = connectivity.canonical_coherence(np.array([0, 0, 0, 1, 1, 1]))
+    largest = np.nanmax(coherence)
+    if clipped:
+        assert largest == 1.0
+    else:
+        assert largest > 1.2

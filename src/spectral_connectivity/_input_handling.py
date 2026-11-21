@@ -14,8 +14,10 @@ import xarray as xr
 from numpy.typing import NDArray
 
 from spectral_connectivity.utils import (
+    TIME_SERIES_RAGGED_FIX,
     BackendArray,
     _validate_sampling_frequency,
+    numeric_array,
     stacklevel_outside_package,
     to_numpy,
 )
@@ -720,39 +722,17 @@ def _reject_unmaterialized_backing(data: Any, caller: str) -> None:
 
 
 _TIME_SERIES_LAYOUTS = "(n_time, n_signals) or (n_time, n_trials, n_signals)"
+_FOURIER_LAYOUTS = (
+    "(observation, frequency, signal), (trial, taper, frequency, signal), "
+    "or (time, trial, taper, frequency, signal)"
+)
 
 
 def _numeric_time_series(time_series: Any) -> BackendArray:
-    """Convert array-like time-series input (a nested list, say) to an array.
-
-    Converting first lets the wrapper's shape checks read the shape a list
-    describes. A ragged list, or values that are not numbers, raise naming the
-    expected array rather than with NumPy's message. An array (NumPy or CuPy)
-    is returned as it is: ``Multitaper`` makes the one device copy. An
-    array-like whose ``dtype`` NumPy cannot read is converted like a list.
-    """
-    data: BackendArray = time_series
-    try:
-        np.dtype(time_series.dtype)
-    except (AttributeError, TypeError):
-        try:
-            data = np.asarray(time_series)
-        except ValueError as error:
-            msg = (
-                f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
-                "but NumPy cannot make it one array: its nested lists have rows of "
-                "different lengths. Give every signal (and trial) the same number of "
-                "samples, trimming or padding them, then pass the result."
-            )
-            raise ValueError(msg) from error
-    if data.dtype.kind not in "biufc":
-        msg = (
-            f"time_series must be a numeric array of shape {_TIME_SERIES_LAYOUTS}, "
-            f"got values of dtype {data.dtype}, which are not numbers. Convert "
-            "them first, e.g. np.asarray(time_series, dtype=float)."
-        )
-        raise TypeError(msg)
-    return data
+    """The wrapper's time series as an array of numbers (see :func:`numeric_array`)."""
+    return numeric_array(
+        time_series, "time_series", _TIME_SERIES_LAYOUTS, TIME_SERIES_RAGGED_FIX
+    )
 
 
 def _unwrap_xarray_input(
@@ -879,10 +859,13 @@ def _unwrap_fourier_input(
             raise TypeError(msg)
         # Convert array-likes (a nested list, say) before reading the layout;
         # an array is left for Connectivity to make the one device copy.
-        data = (
-            fourier_coefficients
-            if hasattr(fourier_coefficients, "ndim")
-            else np.asarray(fourier_coefficients)
+        data = numeric_array(
+            fourier_coefficients,
+            "fourier_coefficients",
+            _FOURIER_LAYOUTS,
+            "Give every observation and signal the same number of frequency bins, "
+            "then pass the result.",
+            dtype_example="complex",
         )
         ndim = data.ndim
         if ndim == 3:
@@ -892,11 +875,7 @@ def _unwrap_fourier_input(
             # (trial, taper, frequency, signal)
             data = data[np.newaxis, :, :, :, :]
         elif ndim != 5:
-            msg = (
-                "fourier_coefficients must have 3, 4, or 5 dimensions: "
-                "(observation, frequency, signal), (trial, taper, frequency, "
-                "signal), or (time, trial, taper, frequency, signal)."
-            )
+            msg = f"fourier_coefficients must have 3, 4, or 5 dimensions: {_FOURIER_LAYOUTS}."
             raise ValueError(msg)
         # The 4-D and 5-D layouts name their second-to-last observation axis
         # as trials; the 3-D layout's observation axis is not known to be one.

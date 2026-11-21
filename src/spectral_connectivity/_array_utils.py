@@ -8,6 +8,21 @@ from numpy.typing import DTypeLike, NDArray
 from spectral_connectivity._backend import xp
 from spectral_connectivity.utils import BackendArray
 
+# How far above 1 rounding has been seen to carry a quantity bounded by 1
+# (1.2e-14 for canonical coherency), with a wide margin.
+ROUNDING_ABOVE_ONE = 1e-10
+
+
+def _clip_rounding_above_one(values: BackendArray) -> BackendArray:
+    """``values`` with those within :data:`ROUNDING_ABOVE_ONE` above 1 set to 1.
+
+    For a quantity bounded by 1 that rounding can leave just above it. A value
+    further above 1 is left as it is, so a real error stays visible; NaN stays
+    NaN.
+    """
+    rounded_up = (values > 1) & (values <= 1 + ROUNDING_ABOVE_ONE)
+    return xp.where(rounded_up, values.dtype.type(1), values)
+
 
 def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfloating]:
     """Compute conjugate transpose of the last two dimensions.

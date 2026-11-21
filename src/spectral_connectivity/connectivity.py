@@ -1,8 +1,10 @@
 """Compute metrics for relating signals in the frequency domain."""
 
+import contextlib
 import inspect
+import re
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property, wraps
@@ -16,6 +18,7 @@ from numpy.typing import DTypeLike, NDArray
 from spectral_connectivity._array_utils import (
     TIKHONOV_REGULARIZATION_FACTOR,
     _batched_inverse_square_root,
+    _clip_rounding_above_one,
     _complex_inner_product,
     _conjugate_transpose,
     _divide_where,
@@ -26,6 +29,9 @@ from spectral_connectivity._array_utils import (
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
+    BLOCK_DEGENERATE_WARNING_START,
+    CONDITIONAL_DEGENERATE_WARNING_START,
+    NAN_PAIRS_WARNING_AFTER_MEASURE,
     _estimate_all_conditional_spectral_granger,
     _estimate_blockwise_spectral_granger,
     _estimate_spectral_granger_prediction,
@@ -42,8 +48,14 @@ from spectral_connectivity._multivariate import (
     _mic_components,
     _normalize_fourier_coefficients,
 )
+from spectral_connectivity.minimum_phase_decomposition import (
+    CHOLESKY_FALLBACK_WARNING_START,
+    NONCONVERGENCE_WARNING_START,
+)
 from spectral_connectivity.statistics import (
     JackknifeResult,
+    _validate_alpha,
+    _validate_confidence_level,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
     jackknife_confidence_interval,
@@ -51,6 +63,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.utils import (
     BackendArray,
     _validated_flag,
+    did_you_mean,
     is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
@@ -63,6 +76,10 @@ if TYPE_CHECKING:
     from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
+
+# The first sentence of the warning for NaN or Inf coefficients, which
+# from_transform matches to drop it after the transform's own warning.
+_NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf values."
 
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
@@ -508,6 +525,79 @@ def _ignore_nan_propagation_warnings(
     return wrapper
 
 
+# The starts of the warnings a spectral factorization gives when it fails.
+# Computed from NaN or Inf coefficients it always fails, and these warnings
+# then blame duplicated or collinear channels for what the NaN warning
+# already explained.
+# (warnings.filterwarnings patterns; the starts are defined where each
+# warning is raised.)
+_FACTORIZATION_FAILURE_WARNINGS = (
+    re.escape(CHOLESKY_FALLBACK_WARNING_START),
+    re.escape(NONCONVERGENCE_WARNING_START),
+    r"\w+" + re.escape(NAN_PAIRS_WARNING_AFTER_MEASURE),
+    re.escape(CONDITIONAL_DEGENERATE_WARNING_START),
+    re.escape(BLOCK_DEGENERATE_WARNING_START),
+)
+
+
+def _nonfinite_decomposition_message(measure: str, error: Exception | None = None) -> str:
+    """Why ``measure`` cannot be computed from NaN or Inf coefficients; the
+    backend's ``error``, when it raised one, is quoted."""
+    detail = f" ({error})" if error is not None else ""
+    return (
+        f"{measure} cannot be computed: the Fourier coefficients contain "
+        "NaN or Inf (from NaN or Inf in the time series, if it was "
+        "transformed here; see the earlier warning), on which its matrix "
+        f"decomposition does not converge{detail}. Interpolate or remove "
+        "the NaN or Inf samples, or drop the affected trials or signals, "
+        "and compute it again."
+    )
+
+
+def _factorization_explained_by_nonfinite_input(
+    directed_measure: Callable[_P, _R],
+) -> Callable[_P, _R]:
+    """Drop the factorization-failure warnings of a directed measure computed
+    from NaN or Inf coefficients, which were already warned about (by the
+    transform for its time series, or by ``Connectivity`` for coefficients
+    passed directly). Finite coefficients keep every warning."""
+
+    @wraps(directed_measure)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        connectivity = cast("Connectivity", args[0])
+        with _user_warnings_ignored(
+            _FACTORIZATION_FAILURE_WARNINGS, not connectivity._coefficients_are_finite
+        ):
+            return directed_measure(*args, **kwargs)
+
+    return wrapper
+
+
+@contextlib.contextmanager
+def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[None]:
+    """Ignore the ``UserWarning``\\ s whose messages match ``messages`` (regular
+    expressions) inside the block, if ``ignore``; otherwise change nothing.
+
+    It uses :class:`warnings.catch_warnings`, which changes the process-wide
+    warning filters while the block runs and restores them after: it is not
+    thread-safe (another thread's matching warnings are dropped meanwhile, and
+    one thread restoring the filters can undo another's), and changing the
+    filters invalidates each module's record of warnings already shown, so a
+    warning shown once under the "default" action can be shown again. Only
+    NaN or Inf coefficients (``ignore``) take this path;
+    finite input never touches the filters. Recording the warnings and
+    re-emitting the others would need ``catch_warnings`` as well, so it would
+    not be safer.
+    """
+    if not ignore:
+        yield
+        return
+    with warnings.catch_warnings():
+        for message in messages:
+            warnings.filterwarnings("ignore", message=message, category=UserWarning)
+        yield
+
+
 _ABSENT = object()
 
 
@@ -776,8 +866,12 @@ class Connectivity:
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
-        **Validation**: Must be 5-dimensional with at least 2 signals and
-        contain only finite values (no NaN/Inf).
+        **Validation**: Must be 5-dimensional and complex. The measures relating
+        signals need at least 2 signals (``power()`` and
+        ``cross_spectral_density()`` take one). NaN or Inf values are accepted
+        with a ``UserWarning`` and propagate to the estimates computed from
+        them, except that ``canonical_coherence`` and ``global_coherence``,
+        whose decompositions do not converge on them, raise ``ValueError``.
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
@@ -1151,9 +1245,13 @@ class Connectivity:
         # Power spectral density can be computed on single signals, but
         # connectivity metrics require >= 2 signals; that is validated per-method
         # in _validate_multiple_signals.
-        if not xp.all(xp.isfinite(value)):
+        # Read by the directed measures and the multivariate kernels, whose
+        # failures on NaN or Inf are explained by the warning below (or the
+        # transform's).
+        self._coefficients_are_finite = bool(xp.all(xp.isfinite(value)))
+        if not self._coefficients_are_finite:
             warnings.warn(
-                "fourier_coefficients contains NaN or Inf values. This may indicate:\n"
+                f"{_NONFINITE_COEFFICIENTS_WARNING} This may indicate:\n"
                 "  - NaN/Inf in your input time series data\n"
                 "  - Issues with windowing parameters (e.g., window too short)\n"
                 "  - Numerical instability in preprocessing\n\n"
@@ -1428,7 +1526,40 @@ class Connectivity:
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
+        # A transform of this package that warned about NaN or Inf in its time
+        # series records it, and the coefficients' warning would repeat it in
+        # other words. Coefficients from any other transform, or that are not
+        # finite although the time series was, still warn.
+        with _user_warnings_ignored(
+            [re.escape(_NONFINITE_COEFFICIENTS_WARNING)],
+            not _optional_transform_attribute(transform, "_time_series_is_finite", True),
+        ):
+            return cls(**init_kwargs)
+
+    @contextlib.contextmanager
+    def _decomposition_of_nonfinite_coefficients(self, measure: str) -> Iterator[None]:
+        """Report a matrix decomposition that fails on NaN or Inf coefficients
+        as that, in the user's terms, rather than as LAPACK's ``LinAlgError``.
+
+        A failure on finite coefficients is re-raised unchanged. CuPy's
+        decompositions return NaN rather than raise, so the caller also checks
+        the result with :meth:`_require_finite_decomposition`.
+        """
+        try:
+            yield
+        except np.linalg.LinAlgError as error:
+            if self._coefficients_are_finite:
+                raise
+            raise ValueError(_nonfinite_decomposition_message(measure, error)) from error
+
+    def _require_finite_decomposition(self, measure: str, values: BackendArray) -> None:
+        """Raise, as :meth:`_decomposition_of_nonfinite_coefficients` does,
+        when NaN or Inf coefficients left ``values`` (a decomposition's output,
+        before any deliberate NaN) not finite: the backend returned NaN rather
+        than raising. Coefficients that are not finite only where zero weights
+        omit them give finite values and pass."""
+        if not self._coefficients_are_finite and not bool(xp.all(xp.isfinite(values))):
+            raise ValueError(_nonfinite_decomposition_message(measure))
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -2222,11 +2353,15 @@ class Connectivity:
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
-                "jackknife supports expectation_type 'trials', 'tapers', or "
-                "'trials_tapers'; expectations involving time or retaining both "
-                "trial and taper axes have no single leave-one-out layout."
+                "jackknife leaves out one trial or taper at a time, so it needs a "
+                "Connectivity built with expectation_type='trials_tapers' (the "
+                "default), 'trials', or 'tapers'; this one has "
+                f"expectation_type={self.expectation_type!r}. Build one for the "
+                "interval, e.g. Connectivity.from_transform(transform) or "
+                "Connectivity(fourier_coefficients, expectation_type='trials_tapers')."
             )
             raise ValueError(msg)
+        _validate_confidence_level(confidence_level)
         if not self._observations_are_independent and self.expectation_type in {
             "tapers",
             "trials_tapers",
@@ -2247,6 +2382,18 @@ class Connectivity:
                 "something else."
             )
             raise ValueError(msg)
+        # The registry imports this module, so its helpers are imported here.
+        from spectral_connectivity._measure_registry import (
+            _method_type_message,
+            _suggest_measure_names,
+        )
+
+        if not isinstance(method, str):
+            raise TypeError(
+                _method_type_message(
+                    "a measure name (str)", f"{type(method).__name__} {method!r}"
+                )
+            )
         method = _resolve_deprecated_measure_name(method, "jackknife({!r})")
         method_attribute = inspect.getattr_static(type(self), method, None)
         if (
@@ -2254,7 +2401,11 @@ class Connectivity:
             or method in _NON_MEASURE_METHODS
             or not inspect.isfunction(method_attribute)
         ):
-            msg = "method must name a public connectivity measure."
+            msg = (
+                f"{method!r} is not a connectivity measure jackknife can "
+                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
+                "spectral_connectivity.list_measures() to see the measure names."
+            )
             raise ValueError(msg)
         # The static check above guarantees ``method`` names a public function
         # on the class, so the bound attribute is always callable here.
@@ -3147,18 +3298,17 @@ class Connectivity:
         # (one ascending index array per sorted label); index the device
         # coefficients with device index arrays, as ``xp.isin`` over host labels
         # fails on CuPy.
-        normalized_fourier_coefficients, ranks = zip(
-            *(
-                _normalize_fourier_coefficients(fourier_coefficients[..., xp.asarray(indices)])
-                for indices in group_indices
-            ),
-            strict=True,
-        )
-
-        n_groups = len(labels)
-        new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
-        magnitude = _squared_magnitude(
-            xp.stack(
+        with self._decomposition_of_nonfinite_coefficients("canonical_coherence"):
+            normalized_fourier_coefficients, ranks = zip(
+                *(
+                    _normalize_fourier_coefficients(
+                        fourier_coefficients[..., xp.asarray(indices)]
+                    )
+                    for indices in group_indices
+                ),
+                strict=True,
+            )
+            canonical_coherency = xp.stack(
                 [
                     _estimate_canonical_coherence(fourier_coefficients1, fourier_coefficients2)
                     for fourier_coefficients1, fourier_coefficients2 in combinations(
@@ -3167,7 +3317,14 @@ class Connectivity:
                 ],
                 axis=-1,
             )
-        )
+        # Before the no-power and diagonal NaN are written in.
+        self._require_finite_decomposition("canonical_coherence", canonical_coherency)
+
+        n_groups = len(labels)
+        new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
+        # A canonical correlation is at most 1; with fewer observations than
+        # signals it reaches 1, where rounding left it up to 4e-15 above.
+        magnitude = _clip_rounding_above_one(_squared_magnitude(canonical_coherency))
         # (n_time_windows, n_frequencies) bins already reported as undefined.
         no_valid_observations = xp.zeros(ranks[0].shape, dtype=bool)
         if observation_weights is not None:
@@ -3947,12 +4104,23 @@ class Connectivity:
                 f"decomposition; lower it to reduce peak memory."
             )
             raise ValueError(msg)
-        global_coherence, unnormalized_global_coherence = _global_coherence(
-            self._fourier_coefficients,
-            self._observation_weights,
-            max_rank,
-            max_workspace_elements,
-        )
+        # NaN or Inf coefficients (unless zero weights omit them) make the
+        # decomposition fail, which is reported in the user's terms; NumPy's
+        # "invalid value" RuntimeWarning from the scaling before it would only
+        # repeat that, so it is silenced for such coefficients.
+        with (
+            self._decomposition_of_nonfinite_coefficients("global_coherence"),
+            contextlib.nullcontext()
+            if self._coefficients_are_finite
+            else np.errstate(invalid="ignore", divide="ignore"),
+        ):
+            global_coherence, unnormalized_global_coherence = _global_coherence(
+                self._fourier_coefficients,
+                self._observation_weights,
+                max_rank,
+                max_workspace_elements,
+            )
+        self._require_finite_decomposition("global_coherence", global_coherence)
 
         if xp.any(xp.isnan(global_coherence)):
             warnings.warn(
@@ -4793,6 +4961,7 @@ class Connectivity:
     @_orientation_changed
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def pairwise_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return amount of power at a node explained by other nodes.
 
@@ -4882,6 +5051,7 @@ class Connectivity:
     @_orientation_changed
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def subset_pairwise_spectral_granger_prediction(
         self, pairs: Sequence[Sequence[int]] | NDArray[np.integer]
     ) -> NDArray[np.floating]:
@@ -4951,6 +5121,7 @@ class Connectivity:
 
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def time_reversed_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction after time reversal.
 
@@ -5011,6 +5182,7 @@ class Connectivity:
 
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def conditional_spectral_granger_prediction(self) -> NDArray[np.floating]:
         """Return pairwise spectral Granger prediction conditioned on all others.
 
@@ -5116,6 +5288,7 @@ class Connectivity:
         _warn_nan_granger_pairs(result, "conditional_spectral_granger_prediction")
         return result
 
+    @_factorization_explained_by_nonfinite_input
     def blockwise_spectral_granger_prediction(
         self, group_labels: NDArray[np.integer]
     ) -> tuple[NDArray[np.floating], NDArray[np.integer]]:
@@ -5188,6 +5361,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def directed_transfer_function(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by inflow.
 
@@ -5253,6 +5427,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def directed_coherence(self) -> NDArray[np.floating]:
         """Return the squared directed coherence (noise-weighted DTF).
 
@@ -5362,6 +5537,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return transfer function coupling strength normalized by outflow.
 
@@ -5426,6 +5602,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def generalized_partial_directed_coherence(self) -> NDArray[np.floating]:
         """Return generalized partial directed coherence.
 
@@ -5499,6 +5676,7 @@ class Connectivity:
     @_ignore_nan_propagation_warnings
     @_source_first
     @_asnumpy
+    @_factorization_explained_by_nonfinite_input
     def direct_directed_transfer_function(self) -> NDArray[np.floating]:
         """Return the direct directed transfer function (dDTF).
 
@@ -5845,6 +6023,7 @@ class Connectivity:
         >>> bool(r_value[0, 0, 1] > 0.9)  # phase is linear in frequency
         True
         """
+        _validate_alpha(significance_threshold, "significance_threshold")
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
                 "group_delay",
@@ -5987,6 +6166,7 @@ class Connectivity:
         >>> round(float(np.nanmedian(delays[0, :, 3, 0, 1])), 3)
         0.006
         """
+        _validate_alpha(significance_threshold, "significance_threshold")
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
                 "delay",

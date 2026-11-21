@@ -1,5 +1,6 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import contextlib
 import inspect
 import warnings
 from collections.abc import Hashable, Mapping, Sequence
@@ -31,6 +32,7 @@ from spectral_connectivity._input_handling import (
 )
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
+    _SINGLE_SIGNAL_MEASURES,
     _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
@@ -56,11 +58,17 @@ from spectral_connectivity.connectivity import (
     DirectedOrientationWarning,
     _select_measure_frequencies,
 )
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import (
+    Multitaper,
+    _is_recording_too_short,
+    _transposed_layout_error,
+)
 from spectral_connectivity.utils import (
+    SAMPLING_FREQUENCY_ALIASES,
     _validated_flag,
     close_names,
     did_you_mean,
+    sampling_frequency_hint,
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
@@ -440,7 +448,9 @@ def _setting_mapping(name: str, value: Mapping[str, Any] | None) -> dict[str, An
     return dict(value)
 
 
-def _unknown_setting_message(problem: str, key: Any) -> str:
+def _unknown_setting_message(
+    problem: str, key: Any, *, sampling_frequency_given: bool = False
+) -> str:
     """``"<problem> '<key>'."`` and the ``Multitaper`` settings ``key`` most
     likely misspells.
 
@@ -448,6 +458,8 @@ def _unknown_setting_message(problem: str, key: Any) -> str:
     says so, since it goes outside ``transform_kwargs``.
     """
     message = f"{problem} {key!r}."
+    if key in SAMPLING_FREQUENCY_ALIASES:
+        return message + sampling_frequency_hint(sampling_frequency_given)
     close = close_names(str(key), _MULTITAPER_SETTINGS)
     message += did_you_mean(close)
     named = [name for name in close if name in _NAMED_TRANSFORM_SETTINGS]
@@ -500,7 +512,10 @@ def _warn_legacy_settings(function: str, mapping_name: str, legacy: Mapping[str,
 
 
 def _transform_settings(
-    transform_kwargs: Mapping[str, Any] | None, legacy: Mapping[str, Any]
+    transform_kwargs: Mapping[str, Any] | None,
+    legacy: Mapping[str, Any],
+    *,
+    sampling_frequency_given: bool = False,
 ) -> dict[str, Any]:
     """The advanced ``Multitaper`` settings of a ``multitaper_connectivity`` call.
 
@@ -524,13 +539,19 @@ def _transform_settings(
             )
             raise ValueError(msg)
         if in_mapping:
-            msg = _unknown_setting_message("transform_kwargs got an unexpected key", key)
+            msg = _unknown_setting_message(
+                "transform_kwargs got an unexpected key",
+                key,
+                sampling_frequency_given=sampling_frequency_given,
+            )
             msg += (
                 f" It accepts the Multitaper settings {', '.join(_TRANSFORM_KWARGS_SETTINGS)}."
             )
         else:
             msg = _unknown_setting_message(
-                "multitaper_connectivity() got an unexpected keyword argument", key
+                "multitaper_connectivity() got an unexpected keyword argument",
+                key,
+                sampling_frequency_given=sampling_frequency_given,
             )
             msg += (
                 " Measure settings go in connectivity_kwargs and advanced Multitaper "
@@ -707,8 +728,15 @@ def connectivity_to_xarray(
         [method], measure_settings, group_labels
     )
     connectivity = Connectivity.from_transform(m)
-    # Only the missing-labels message needs the signal count, which a custom
-    # transform may expose only through its coefficients, so it follows the FFT.
+    # The signal-count and missing-labels messages need the signal count,
+    # which a custom transform may expose only through its coefficients, so
+    # they follow the FFT.
+    _require_two_signals(
+        [method],
+        connectivity.n_signals,
+        subject="The transform",
+        keep_signal_axis=_KEEP_TRANSFORM_SIGNAL_AXIS,
+    )
     _require_group_labels([method], group_labels, connectivity.n_signals)
     if group_methods:
         measure_settings["group_labels"] = group_labels
@@ -863,6 +891,57 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     return group_labels, label_free_kwargs, frozenset(group_methods)
+
+
+# How to keep the signal axis when selecting one channel, for the layouts
+# multitaper_connectivity takes, and for a transform's 3-D one.
+_KEEP_SIGNAL_AXIS = (
+    "When selecting one channel, keep the signal axis: x[:, [i]] rather "
+    "than x[:, i] for (n_time_samples, n_signals) input, and x[:, :, [i]] "
+    "rather than x[:, :, i] for (n_time_samples, n_trials, n_signals) input."
+)
+_KEEP_TRANSFORM_SIGNAL_AXIS = (
+    "When selecting one channel of the time series for the transform, keep "
+    "the signal axis: x[:, :, [i]] rather than x[:, :, i]."
+)
+
+
+def _require_two_signals(
+    methods: Sequence[str],
+    n_signals: int,
+    *,
+    subject: str = "The time series",
+    keep_signal_axis: str = _KEEP_SIGNAL_AXIS,
+) -> None:
+    """Raise, in the wrapper's terms, if a measure relating signals gets one.
+
+    ``Connectivity`` raises too, but names its ``fourier_coefficients``, which a
+    caller of a wrapper never sees. ``subject`` is what has the one signal,
+    and ``keep_signal_axis`` how to select a channel without dropping its
+    axis, for the input the wrapper was given. Unregistered extension
+    measures are left to their own checks.
+    """
+    pairwise = [
+        name
+        for name in methods
+        if name in _MEASURE_SPECS and name not in _SINGLE_SIGNAL_MEASURES
+    ]
+    if n_signals >= 2 or not pairwise:
+        return
+    shown = 3
+    named = ", ".join(pairwise[:shown])
+    if len(pairwise) > shown:
+        named += f", and {len(pairwise) - shown} more measures"
+    verbs = (
+        "relates pairs of signals and needs"
+        if len(pairwise) == 1
+        else "relate pairs of signals and need"
+    )
+    msg = (
+        f"{subject} has {n_signals} signal, but {named} {verbs} at least "
+        f"2. For the spectrum of one signal use method='power'. {keep_signal_axis}"
+    )
+    raise ValueError(msg)
 
 
 def _require_group_labels(
@@ -1091,8 +1170,14 @@ def multitaper_connectivity(
     Parameters
     ----------
     time_series : NDArray[floating] or xarray.DataArray,
-        shape (n_times, n_trials, n_channels) or (n_times, n_channels)
-        Time series data. For multiple trials, trials are averaged in spectral
+        shape (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)
+        Time series data, time first. In a 3-D array **trials are the middle
+        axis and signals the last**: ``x[:, k, :]`` is trial ``k``. An array of
+        shape ``(500, 3, 40)`` is read as 500 time samples of 3 trials of 40
+        signals; if it holds 3 signals and 40 trials, pass
+        ``np.swapaxes(x, 1, 2)``. Array input cannot be checked for this (a
+        DataArray's dimension names can). A 2-D array is one trial. For
+        multiple trials, trials are averaged in spectral
         domain. For a DataArray, common time/trial/signal dimension names are
         inferred and transposed automatically; use ``time_dim``, ``trial_dim``,
         and ``signal_dim`` for domain-specific names. Ambiguous names raise rather
@@ -1413,7 +1498,9 @@ def multitaper_connectivity(
     .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for Physical
            Applications: Multitaper and Conventional Univariate Techniques.
     """
-    transform_settings = _transform_settings(transform_kwargs, kwargs)
+    transform_settings = _transform_settings(
+        transform_kwargs, kwargs, sampling_frequency_given=sampling_frequency is not None
+    )
     explicit_start_time = transform_settings.get("start_time", _UNSET)
     (
         time_series_data,
@@ -1460,24 +1547,50 @@ def multitaper_connectivity(
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         method, connectivity_kwargs, group_labels
     )
+    if time_series_data.ndim not in (2, 3):
+        # Said here, in this function's layouts: Multitaper's message speaks
+        # of its own 3-D input and prepare_time_series.
+        n_dimensions = time_series_data.ndim
+        msg = (
+            f"time_series has {n_dimensions} dimension{'' if n_dimensions == 1 else 's'}, "
+            f"shape {tuple(time_series_data.shape)}. multitaper_connectivity needs "
+            "(n_time_samples, n_signals) or (n_time_samples, n_trials, n_signals)."
+        )
+        if n_dimensions == 1:
+            msg += " For one signal use x[:, np.newaxis] with method='power'."
+        raise ValueError(msg)
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
     if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
-    m = Multitaper(
-        time_series=time_series_data,
-        sampling_frequency=sampling_frequency,
-        time_window_duration=time_window_duration,
-        time_window_step=time_window_step,
-        time_halfbandwidth_product=time_halfbandwidth_product,
-        n_tapers=n_tapers,
-        detrend_type=detrend_type,
-        **transform_settings,
-    )
-    # Check for missing labels before Connectivity.from_transform runs the FFT.
-    # The constructor has validated the input shape, so m.n_signals is the true
-    # signal count.
+    try:
+        m = Multitaper(
+            time_series=time_series_data,
+            sampling_frequency=sampling_frequency,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
+            time_halfbandwidth_product=time_halfbandwidth_product,
+            n_tapers=n_tapers,
+            detrend_type=detrend_type,
+            **transform_settings,
+        )
+    except ValueError as error:
+        # Multitaper's layout error is the one caused by a recording too short
+        # for its window; it names only its own 3-D layout, and this function
+        # takes 2-D too.
+        if not _is_recording_too_short(error.__cause__):
+            raise
+        n_time, _, n_signals = time_series_data.shape
+        raise _transposed_layout_error(
+            n_time,
+            n_signals,
+            "(n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)",
+        ) from error.__cause__
+    # Check the signal count and missing labels before Connectivity.from_transform
+    # runs the FFT. The constructor has validated the input shape, so m.n_signals
+    # is the true signal count.
+    _require_two_signals(method, m.n_signals)
     _require_group_labels(method, group_labels, m.n_signals)
     # Capture metadata and build the shared calculation object from the same
     # immutable transform. The private formatter below never accepts a separate
@@ -1490,23 +1603,32 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    result = _format_and_reduce_measures(
-        shared_connectivity,
-        method,
-        return_dataarray=return_dataarray,
-        signal_labels=signal_labels,
-        squeeze=squeeze,
-        shared_attrs=shared_attrs,
-        connectivity_kwargs=connectivity_kwargs,
-        group_labels=group_labels,
-        group_methods=group_methods,
-        frequency_range=frequency_range,
-        frequency_decimation=frequency_decimation,
-        frequency_bands=frequency_bands,
-        frequency_reduction=frequency_reduction,
-        output_names=output_names,
-        signal_metadata=signal_metadata,
-    )
+    # NaN or Inf in the time series was reported once, by Multitaper; the
+    # measures' arithmetic on the values it propagates would add NumPy
+    # RuntimeWarnings ("invalid value encountered in divide") about the same
+    # values.
+    with (
+        contextlib.nullcontext()
+        if m._time_series_is_finite
+        else np.errstate(invalid="ignore", divide="ignore")
+    ):
+        result = _format_and_reduce_measures(
+            shared_connectivity,
+            method,
+            return_dataarray=return_dataarray,
+            signal_labels=signal_labels,
+            squeeze=squeeze,
+            shared_attrs=shared_attrs,
+            connectivity_kwargs=connectivity_kwargs,
+            group_labels=group_labels,
+            group_methods=group_methods,
+            frequency_range=frequency_range,
+            frequency_decimation=frequency_decimation,
+            frequency_bands=frequency_bands,
+            frequency_reduction=frequency_reduction,
+            output_names=output_names,
+            signal_metadata=signal_metadata,
+        )
     _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)

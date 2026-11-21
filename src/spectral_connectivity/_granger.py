@@ -31,6 +31,17 @@ from spectral_connectivity._backend import ON_GPU, xp
 from spectral_connectivity.minimum_phase_decomposition import minimum_phase_decomposition
 from spectral_connectivity.utils import stacklevel_outside_package, to_numpy
 
+# Where the warnings of a failed factorization begin (or, for the pair list,
+# what follows the measure's name), which Connectivity matches to drop them
+# for NaN or Inf coefficients.
+NAN_PAIRS_WARNING_AFTER_MEASURE = ": NaN at every frequency"
+CONDITIONAL_DEGENERATE_WARNING_START = (
+    "Conditional spectral Granger: the total or intrinsic innovation"
+)
+BLOCK_DEGENERATE_WARNING_START = (
+    "Block spectral Granger: the intrinsic or total target spectrum"
+)
+
 
 def _estimate_noise_covariance(
     minimum_phase: NDArray[np.complexfloating],
@@ -439,7 +450,7 @@ def _warn_nan_granger_pairs(
         unit = "group"
         indexing = ""
     warnings.warn(
-        f"{measure}: NaN at every frequency for {len(targets)} source -> target "
+        f"{measure}{NAN_PAIRS_WARNING_AFTER_MEASURE} for {len(targets)} source -> target "
         f"{unit} pair(s): {listing} ({indexing}in at least one time window). The "
         "spectral factorization for those pairs was singular or did not "
         "converge, or the target has no power; this usually means duplicated, "
@@ -684,7 +695,7 @@ def _estimate_all_conditional_spectral_granger(
     # One synchronization for all pairs rather than one per pair.
     if bool(degenerate):
         warnings.warn(
-            "Conditional spectral Granger: the total or intrinsic innovation "
+            f"{CONDITIONAL_DEGENERATE_WARNING_START} "
             "spectrum of the target was not positive at some time-frequency "
             "bins (a degenerate factorization, typically from near-singular "
             "conditioning). Those bins are returned as NaN. Consider increasing "
@@ -880,7 +891,7 @@ def _block_spectral_granger_from_model(
     positive_definite = (smallest_total_eigenvalue > 0) & (smallest_intrinsic_eigenvalue > 0)
     if bool(xp.any(~positive_definite & ~xp.isnan(value))):
         warnings.warn(
-            "Block spectral Granger: the intrinsic or total target spectrum was "
+            f"{BLOCK_DEGENERATE_WARNING_START} was "
             "not positive-definite at some time-frequency bins (typically from "
             "near-singular conditioning after removing the source block). Those "
             "bins are returned as NaN. Consider increasing "

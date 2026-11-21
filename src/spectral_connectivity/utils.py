@@ -3,13 +3,14 @@
 import contextlib
 import difflib
 import functools
+import inspect
 import os
 import sys
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from types import FrameType
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 else:
     BackendArray: TypeAlias = Any
 _ArrayT = TypeVar("_ArrayT")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def is_positive_integer(value: Any, minimum: int = 1) -> bool:
@@ -164,6 +167,113 @@ def did_you_mean(names: Iterable[str]) -> str:
     return f" Did you mean {', '.join(map(repr, unique))}?" if unique else ""
 
 
+# Names other packages give the sampling rate, which no string metric relates
+# to ``sampling_frequency``.
+SAMPLING_FREQUENCY_ALIASES = frozenset(
+    {"fs", "Fs", "sfreq", "srate", "sampling_rate", "sample_rate"}
+)
+
+
+def sampling_frequency_hint(sampling_frequency_given: bool) -> str:
+    """What to say after rejecting a sampling-rate alias such as ``fs``: its
+    name, or, when ``sampling_frequency`` was passed as well, to drop the alias."""
+    if sampling_frequency_given:
+        return " sampling_frequency was given too; pass only sampling_frequency (in Hz)."
+    return " Did you mean sampling_frequency (in Hz)?"
+
+
+def reject_sampling_frequency_aliases(
+    function: Callable[_P, _R],
+) -> Callable[_P, _R]:
+    """Make a function, or a transform's ``__init__``, that takes
+    ``sampling_frequency`` answer ``fs=...`` with the parameter's name.
+
+    Python's own ``TypeError`` for an unexpected keyword names no alternative;
+    this one adds :func:`sampling_frequency_hint`, and names the class for an
+    ``__init__``. Other calls pass through, and the signature is unchanged for
+    ``inspect``.
+    """
+    parameters = list(inspect.signature(function).parameters)
+    is_method = parameters[0] == "self"
+    # sampling_frequency was given if passed by name or reached by position.
+    position = parameters.index("sampling_frequency")
+
+    @functools.wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        alias = next((name for name in kwargs if name in SAMPLING_FREQUENCY_ALIASES), None)
+        if alias is not None:
+            given = "sampling_frequency" in kwargs or len(args) > position
+            name = type(args[0]).__name__ if is_method else function.__name__
+            msg = (
+                f"{name}() got an unexpected keyword "
+                f"argument {alias!r}.{sampling_frequency_hint(given)}"
+            )
+            raise TypeError(msg)
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
+# How to even out a ragged nested-list time series (see numeric_array).
+TIME_SERIES_RAGGED_FIX = (
+    "Give every signal (and trial) the same number of samples, trimming or "
+    "padding them, then pass the result."
+)
+
+
+def numeric_array(
+    value: Any,
+    name: str,
+    layout: str,
+    ragged_fix: str,
+    dtype_example: str = "float",
+) -> BackendArray:
+    """Convert array-like input (a nested list, say) to an array of numbers.
+
+    Converting first lets the caller's shape checks read the shape a list
+    describes. A ragged list, or values that are not numbers, raise naming
+    ``name`` and the ``layout`` it must have rather than with NumPy's message;
+    ``ragged_fix`` says how to even out the rows. An array (NumPy, CuPy, or an
+    ``xarray.DataArray``) is returned as it is, so the caller makes the one
+    device copy and can still read a DataArray's dimension names. An
+    array-like whose ``dtype`` NumPy cannot read is converted like a list, and
+    an object array holding numbers to an array of those numbers.
+    """
+    data: BackendArray = value
+    try:
+        np.dtype(value.dtype)
+    except (AttributeError, TypeError):
+        try:
+            data = np.asarray(value)
+        except ValueError as error:
+            msg = (
+                f"{name} must be a numeric array of shape {layout}, but NumPy "
+                "cannot make it one array: its nested lists have rows of "
+                f"different lengths. {ragged_fix}"
+            )
+            raise ValueError(msg) from error
+    if data.dtype.kind == "O":
+        # An object array of numbers is read as the numbers it holds, with the
+        # dtype NumPy infers for them (float, or complex for coefficients).
+        with contextlib.suppress(ValueError):
+            converted = np.asarray(np.asarray(data).tolist())
+            if converted.dtype.kind in "biufc":
+                data = converted
+    if data.dtype.kind not in "biufc":
+        received = (
+            f"{type(value).__name__} {value!r}"
+            if data.ndim == 0
+            else f"values of dtype {data.dtype}"
+        )
+        msg = (
+            f"{name} must be a numeric array of shape {layout}, got {received}, "
+            f"not numbers. Convert them first, e.g. np.asarray({name}, "
+            f"dtype={dtype_example})."
+        )
+        raise TypeError(msg)
+    return data
+
+
 def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") -> None:
     """Warn that ``old`` is deprecated, at the first caller outside the package.
 
@@ -211,12 +321,20 @@ def mark_readonly_chain_if_supported(array: _ArrayT) -> _ArrayT:
     return array
 
 
+# How to install the GPU dependencies: the package's gpu extra pins the CuPy
+# build for CUDA 12 (cupy-cuda12x), where `pip install cupy` builds from source.
+GPU_INSTALL_HINT = (
+    'pip install "spectral-connectivity[gpu]" (or with conda: '
+    "conda install -c conda-forge cupy)"
+)
+
+
 def gpu_request_error_message() -> str:
     """Error text for a GPU request (see ``GPU_ENV_VAR``) without CuPy installed."""
     return (
         f"GPU support was explicitly requested via "
         f"{GPU_ENV_VAR}={os.environ.get(GPU_ENV_VAR, '')!r}, but CuPy is not installed. "
-        "Please install CuPy with: 'pip install cupy' or 'conda install cupy'"
+        f"Install it with: {GPU_INSTALL_HINT}. Or unset {GPU_ENV_VAR} to use the CPU."
     )
 
 
@@ -381,9 +499,21 @@ def get_compute_backend() -> dict[str, Any]:
     elif gpu_enabled and not cupy_available:
         message = (
             "GPU acceleration was requested (SPECTRAL_CONNECTIVITY_ENABLE_GPU='true') "
-            "but CuPy is not installed. Install CuPy with: "
-            "'pip install cupy' or 'conda install cupy'. "
+            f"but CuPy is not installed. Install it with: {GPU_INSTALL_HINT}, then "
+            "restart the Python interpreter (the variable is read when "
+            "spectral_connectivity is imported). "
             "Currently using CPU backend with NumPy."
+        )
+    elif gpu_enabled and cupy_available:
+        # Requested and installed, yet the CPU backend was imported: the
+        # variable was set after spectral_connectivity was imported.
+        message = (
+            "Using CPU backend with NumPy. GPU acceleration was requested "
+            "(SPECTRAL_CONNECTIVITY_ENABLE_GPU='true') and CuPy is installed, but "
+            "the variable was set after spectral_connectivity was imported, and "
+            "the backend is chosen at import. Restart the Python interpreter (in "
+            "a notebook, restart the kernel) and set the variable before "
+            "`import spectral_connectivity`."
         )
     elif not gpu_enabled and cupy_available:
         message = (
@@ -395,7 +525,7 @@ def get_compute_backend() -> dict[str, Any]:
     else:  # CPU mode, cupy not available
         message = (
             "Using CPU backend with NumPy. To enable GPU acceleration:\n"
-            "  1. Install CuPy: 'conda install -c conda-forge cupy' or 'pip install cupy'\n"
+            f"  1. Install CuPy: {GPU_INSTALL_HINT}\n"
             "  2. Set environment variable SPECTRAL_CONNECTIVITY_ENABLE_GPU='true' before importing\n"
             "See documentation for detailed setup instructions."
         )

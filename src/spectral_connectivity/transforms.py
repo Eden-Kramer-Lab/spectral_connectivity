@@ -1,6 +1,8 @@
 """Transforms time domain signals to the frequency domain."""
 
+import contextlib
 import warnings
+from collections.abc import Iterator
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -30,10 +32,13 @@ from spectral_connectivity._backend import (
 )
 from spectral_connectivity._backend import detrend as _backend_detrend
 from spectral_connectivity.utils import (
+    TIME_SERIES_RAGGED_FIX,
     BackendArray,
     _validate_sampling_frequency,
     is_positive_integer,
     mark_readonly_if_supported,
+    numeric_array,
+    reject_sampling_frequency_aliases,
     stacklevel_outside_package,
     to_numpy,
 )
@@ -129,6 +134,7 @@ class MultitaperParameters(TypedDict):
     nyquist_frequency: float
 
 
+@reject_sampling_frequency_aliases
 def estimate_frequency_resolution(
     sampling_frequency: float,  # noqa: ARG001 -- public API; resolution does not use it
     time_window_duration: float,
@@ -272,6 +278,7 @@ def _ceil_hundredths(value: float) -> float:
     return float(np.ceil(round(value * 100, 6)) / 100)
 
 
+@reject_sampling_frequency_aliases
 def suggest_parameters(
     sampling_frequency: float,
     signal_duration: float,
@@ -677,6 +684,8 @@ class SpectralTransform(Protocol):
 
 # The axis each role is on in a transform's input.
 _INPUT_AXIS_ROLES = ("time", "trial", "signal")
+# The shape every transform takes its time series in.
+_TRANSFORM_LAYOUT = "(n_time_samples, n_trials, n_signals)"
 
 
 def _check_labeled_axis_order(time_series: Any, transform: str) -> None:
@@ -741,11 +750,8 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
     array's dtype without converting it (CuPy and xarray included).
     """
     if np.iscomplexobj(time_series):
-        dtype = getattr(time_series, "dtype", None)
-        if dtype is None:
-            dtype = np.asarray(time_series).dtype
         msg = (
-            f"{transform} got a complex-valued time series (dtype {dtype}). "
+            f"{transform} got a complex-valued time series (dtype {time_series.dtype}). "
             "Its outputs cover only the "
             "non-negative frequencies and assume the negative ones mirror them, "
             "which holds only for a real signal: the negative-frequency content "
@@ -756,6 +762,16 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
             "the Fourier coefficients yourself and pass them to Connectivity."
         )
         raise TypeError(msg)
+
+
+def _validated_time_series(time_series: Any, transform: str) -> BackendArray:
+    """A transform's input checked as every transform checks it: the axis order
+    of a labeled input, then numbers in an array (a nested list converted),
+    then real values."""
+    _check_labeled_axis_order(time_series, transform)
+    data = numeric_array(time_series, "time_series", _TRANSFORM_LAYOUT, TIME_SERIES_RAGGED_FIX)
+    _reject_complex_time_series(data, transform)
+    return data
 
 
 def _check_time_series_is_3d(time_series: BackendArray) -> None:
@@ -826,6 +842,22 @@ def _validate_fft_workers(fft_workers: int | None) -> None:
         raise ValueError(msg)
 
 
+# The trend types :func:`detrend` accepts, with SciPy's one-letter spellings.
+_DETREND_TYPES = ("constant", "c", "linear", "l")
+
+
+def _validate_detrend_type(detrend_type: str | None) -> None:
+    """Reject a ``detrend_type`` that :func:`detrend` would reject at ``fft()``."""
+    if detrend_type is not None and detrend_type not in _DETREND_TYPES:
+        msg = (
+            f"detrend_type must be 'constant', 'linear', or None, got "
+            f"{detrend_type!r}. 'constant' (the default) removes each window's "
+            "mean, 'linear' its best-fit line, and None leaves the windows as "
+            "they are."
+        )
+        raise ValueError(msg)
+
+
 def _validate_window_step(
     time_window_duration: float | None,
     time_window_step: float | None,
@@ -870,8 +902,70 @@ def _validate_window_step(
         )
 
 
-def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
-    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite."""
+def _recording_too_short(msg: str) -> ValueError:
+    """The ``ValueError`` for a recording too short for its window: the window
+    is longer than it, or, spanning it, too short for the DPSS tapers.
+
+    Marked so :func:`_transposed_layout_hint` (see
+    :func:`_is_recording_too_short`) can tell it from every other
+    ``ValueError``. A plain ``ValueError`` with an attribute, rather than a
+    subclass, prints and pickles as the ``ValueError`` it was; pickling keeps
+    the attribute.
+    """
+    error = ValueError(msg)
+    error._recording_too_short = True  # type: ignore[attr-defined]
+    return error
+
+
+def _is_recording_too_short(error: BaseException | None) -> bool:
+    """Whether ``error`` was made by :func:`_recording_too_short`."""
+    return getattr(error, "_recording_too_short", False)
+
+
+def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> ValueError:
+    """The error for a recording too short for its window when it has more
+    signals than time samples, so is most likely transposed.
+
+    It says so instead of advising a longer window; raised from the window
+    error (see :func:`_recording_too_short`), by which a caller accepting
+    other layouts (``expected``) recognizes it and rebuilds the message.
+    """
+    return ValueError(
+        f"Your array has {n_time} time sample{'' if n_time == 1 else 's'} and "
+        f"{n_signals} signals; expected {expected}. It looks transposed: put "
+        "time on the first axis, e.g. x.T. Read as given, its recording is too "
+        "short to analyze."
+    )
+
+
+@contextlib.contextmanager
+def _transposed_layout_hint(time_series: BackendArray) -> Iterator[None]:
+    """Re-raise a recording too short for its window as a layout error when
+    the ``(n_time_samples, n_trials, n_signals)`` series looks transposed;
+    every other ``ValueError`` passes unchanged."""
+    try:
+        yield
+    except ValueError as error:
+        n_time, _, n_signals = time_series.shape
+        if _is_recording_too_short(error) and n_time < n_signals:
+            raise _transposed_layout_error(n_time, n_signals, _TRANSFORM_LAYOUT) from error
+        raise
+
+
+def _listed_indices(flags: BackendArray, limit: int = 10) -> str:
+    """The indices where the 1-D boolean ``flags`` is true, as ``[0, 3, ...]``."""
+    indices = np.flatnonzero(to_numpy(flags)).tolist()
+    shown = ", ".join(map(str, indices[:limit]))
+    return f"[{shown}, ...]" if len(indices) > limit else f"[{shown}]"
+
+
+def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
+    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite.
+
+    Returns whether every value is finite, so a transform can record that it
+    already warned about NaN or Inf in its input (see
+    :meth:`Connectivity.from_transform`).
+    """
     # Warn if data appears to be transposed (very few time points, many signals)
     n_time, _, n_signals = time_series.shape
     if n_time < n_signals:
@@ -890,26 +984,31 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
             stacklevel=stacklevel_outside_package(),
         )
 
-    # Warn if data contains NaN or Inf
-    if not xp.all(xp.isfinite(time_series)):
-        warnings.warn(
-            "Input time_series contains NaN or infinite values.\n"
-            "\n"
-            "This will produce invalid spectral estimates. Common causes:\n"
-            "  - Missing data or recording artifacts\n"
-            "  - Incorrect preprocessing (division by zero, log of negative)\n"
-            "  - Corrupted data files\n"
-            "\n"
-            "Suggestions:\n"
-            "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
-            "  - Remove bad segments or trials\n"
-            "  - Check your preprocessing pipeline\n"
-            "  - Verify data integrity\n"
-            "\n"
-            "For artifact removal, consider using MNE-Python or similar tools.",
-            UserWarning,
-            stacklevel=stacklevel_outside_package(),
-        )
+    is_finite = xp.isfinite(time_series)
+    # One pass and one device synchronization for the common, finite input;
+    # the counts and locations are computed only for a warning.
+    if bool(xp.all(is_finite)):
+        return True
+    is_nonfinite = ~is_finite
+    n_nonfinite = int(xp.sum(is_nonfinite))
+    where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
+    if time_series.shape[1] > 1:
+        where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
+    warnings.warn(
+        f"time_series contains {n_nonfinite} NaN or infinite "
+        f"value{'' if n_nonfinite == 1 else 's'} (0-based indices: {where}). They "
+        "propagate to the outputs: the power of an affected signal is NaN in every "
+        "time window containing one, as is every connectivity value involving that "
+        "signal there (every value, for measures that model all signals "
+        "jointly, such as partial coherence and Granger prediction; "
+        "canonical_coherence and global_coherence raise a ValueError instead). "
+        "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
+        "affected trials or signals before the analysis; "
+        "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
+        UserWarning,
+        stacklevel=stacklevel_outside_package(),
+    )
+    return False
 
 
 class _WindowedFourierTransform:
@@ -923,7 +1022,10 @@ class _WindowedFourierTransform:
     A subclass constructor validates its own arguments in its own order, using
     :func:`_validate_fft_workers`, :func:`_validate_window_step`, and
     :func:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
-    read-only snapshot of the input (``_immutable_array_snapshot``), and calls
+    read-only snapshot of the input (``_immutable_array_snapshot``), and
+    ``_time_series_is_finite``, what :func:`_warn_about_unusual_time_series`
+    returns for it (:meth:`fft` and ``Connectivity.from_transform`` read it so
+    NaN or Inf input is reported once), and calls
     :meth:`_set_window_state`, which validates the start time and sets the
     other private fields annotated below. The subclass must also supply:
 
@@ -980,6 +1082,8 @@ class _WindowedFourierTransform:
         def fft_workers(self) -> int | None: ...
 
     _time_series: BackendArray
+    # A subclass from outside the package may not record it; then assume finite.
+    _time_series_is_finite: bool = True
     _start_time: BackendArray
     _time_window_duration: float | None
     _time_window_step: float | None
@@ -1213,7 +1317,7 @@ Frequency Analysis
                 f"(time_window_duration <= "
                 f"{n_time_samples / self.sampling_frequency} s)."
             )
-            raise ValueError(msg)
+            raise _recording_too_short(msg)
         return self._n_time_samples_per_window
 
     @property
@@ -1415,17 +1519,25 @@ Frequency Analysis
             step_size=self.n_time_samples_per_step,
             axis=0,
         )
-        if self.detrend_type is not None:
-            time_series = detrend(time_series, type=self.detrend_type)
+        # NaN or Inf input was reported at construction; detrending and
+        # tapering it (Inf times a taper's zero end) would add NumPy "invalid value"
+        # RuntimeWarnings about the same values.
+        with (
+            contextlib.nullcontext()
+            if self._time_series_is_finite
+            else np.errstate(invalid="ignore")
+        ):
+            if self.detrend_type is not None:
+                time_series = detrend(time_series, type=self.detrend_type)
 
-        coefficients = _multitaper_fft(
-            self._tapers_for_fft(),
-            time_series,
-            self.n_fft_samples,
-            self.sampling_frequency,
-            workers=self.fft_workers,
-        ).swapaxes(2, -1)
-        return self._weight_taper_coefficients(coefficients, time_series)
+            coefficients = _multitaper_fft(
+                self._tapers_for_fft(),
+                time_series,
+                self.n_fft_samples,
+                self.sampling_frequency,
+                workers=self.fft_workers,
+            ).swapaxes(2, -1)
+            return self._weight_taper_coefficients(coefficients, time_series)
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
@@ -1460,10 +1572,16 @@ class Multitaper(_WindowedFourierTransform):
     ----------
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
         Input time series data. **Must be a real-valued 3D array**; a complex
-        one raises ``TypeError``.
+        one raises ``TypeError``. **Trials are the middle axis and signals the
+        last**: ``x[:, k, :]`` is trial ``k``.
+
         - n_time_samples: number of time points
         - n_trials: number of trials (use 1 for single trial)
         - n_signals: number of signals/channels
+
+        An array of shape ``(500, 3, 40)`` is read as 500 time samples of 3
+        trials of 40 signals; if it holds 3 signals and 40 trials, pass
+        ``np.swapaxes(x, 1, 2)``. The order cannot be checked from the values.
         Multiple trials are averaged in the spectral domain.
 
         **Important:** If your data is 1D or 2D, use `prepare_time_series()`
@@ -1696,6 +1814,7 @@ class Multitaper(_WindowedFourierTransform):
             raise AttributeError(msg)
         object.__setattr__(self, name, value)
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -1717,10 +1836,10 @@ class Multitaper(_WindowedFourierTransform):
         adaptive_tolerance: float = 1e-8,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _validate_fft_workers(fft_workers)
+        _validate_detrend_type(detrend_type)
         self.fft_workers = fft_workers
         if taper_weighting not in {"uniform", "eigen", "adaptive"}:
             msg = (
@@ -1806,23 +1925,37 @@ class Multitaper(_WindowedFourierTransform):
             )
             raise ValueError(msg)
         _validate_window_step(time_window_duration, time_window_step)
-        _warn_about_unusual_time_series(self._time_series)
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
         self.is_low_bias = is_low_bias
-        self._set_window_state(
-            start_time,
-            time_window_duration=time_window_duration,
-            time_window_step=time_window_step,
-            n_fft_samples=n_fft_samples,
-            n_time_samples_per_window=n_time_samples_per_window,
-            n_time_samples_per_step=n_time_samples_per_step,
-        )
+        with _transposed_layout_hint(self._time_series):
+            self._set_window_state(
+                start_time,
+                time_window_duration=time_window_duration,
+                time_window_step=time_window_step,
+                n_fft_samples=n_fft_samples,
+                n_time_samples_per_window=n_time_samples_per_window,
+                n_time_samples_per_step=n_time_samples_per_step,
+            )
+            # Resolve the window now, so one longer than the recording or of no
+            # samples fails here.
+            window = self.n_time_samples_per_window
         custom_tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         # Reject a fractional (or boolean) n_tapers: a taper count is a whole
         # number, and dpss_windows would otherwise see a float.
+        # Any real scalar (a 0-d array too) goes on to the checks below; a
+        # boolean is a number to NumPy and gets their ValueError.
+        if n_tapers is not None and (
+            np.ndim(n_tapers) != 0 or np.asarray(n_tapers).dtype.kind not in "biuf"
+        ):
+            msg = (
+                f"n_tapers must be an integer (a count of tapers), got "
+                f"{type(n_tapers).__name__} {n_tapers!r}. Pass e.g. n_tapers=5, or "
+                "None for the default floor(2 * time_halfbandwidth_product) - 1."
+            )
+            raise TypeError(msg)
         if n_tapers is not None and (
             isinstance(n_tapers, (bool, np.bool_))
             or not np.isfinite(n_tapers)
@@ -1858,20 +1991,19 @@ class Multitaper(_WindowedFourierTransform):
                         f"of them, or values that resolve to the same sample count."
                     )
                     raise ValueError(msg)
-        if custom_tapers is not None:
-            # Validate custom tapers now; a mismatch would otherwise surface as
-            # an opaque broadcasting error inside fft().
-            window = self.n_time_samples_per_window
-            if custom_tapers.ndim != 2 or custom_tapers.shape[0] != window:
-                msg = (
-                    f"tapers must have shape ({window}, n_tapers) -- one column per "
-                    f"taper, n_time_samples_per_window rows -- got {custom_tapers.shape}."
-                )
-                raise ValueError(msg)
+        # Validate custom tapers now; a mismatch would otherwise surface as an
+        # opaque broadcasting error inside fft().
+        if custom_tapers is not None and (
+            custom_tapers.ndim != 2 or custom_tapers.shape[0] != window
+        ):
+            msg = (
+                f"tapers must have shape ({window}, n_tapers) -- one column per "
+                f"taper, n_time_samples_per_window rows -- got {custom_tapers.shape}."
+            )
+            raise ValueError(msg)
         if n_tapers is not None:
             # Check the count against the window, for custom tapers as for the
             # DPSS tapers generated below.
-            window = self.n_time_samples_per_window
             if not 1 <= n_tapers <= window:
                 msg = (
                     f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
@@ -1892,7 +2024,11 @@ class Multitaper(_WindowedFourierTransform):
             # Generate the DPSS tapers now, so every reported count is the
             # number used and a request low-bias filtering cuts short is
             # announced where it was made.
-            self._tapers, self._taper_eigenvalues = self._dpss_tapers()
+            with _transposed_layout_hint(self._time_series):
+                self._tapers, self._taper_eigenvalues = self._dpss_tapers()
+        # Warned only once every check has passed, so an invalid Multitaper
+        # (a transposed array among them) only raises.
+        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
         object.__setattr__(self, "_initialized", True)
 
     @property
@@ -2251,6 +2387,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
     # A 1-sample "Hann" window is the rectangular window [1.0], not a taper.
     _MIN_WINDOW_SAMPLES = 2
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2286,8 +2423,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         ):
             msg = "n_time_samples_per_step must be a positive integer."
             raise ValueError(msg)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         self._time_series = _immutable_array_snapshot(time_series)
         _check_time_series_is_3d(self._time_series)
         for duration, count, mismatch_message in (
@@ -2312,6 +2448,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             ):
                 raise ValueError(mismatch_message)
         _validate_fft_workers(fft_workers)
+        _validate_detrend_type(detrend_type)
         self._sampling_frequency = sampling_frequency
         self._detrend_type = detrend_type
         self._fft_workers = fft_workers
@@ -2331,13 +2468,14 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         # Resolve the window and step now, so a window that is too short or does
         # not fit the signal, or a step shorter than one sample, fails here
         # rather than in fft().
-        window_samples = self.n_time_samples_per_window
+        with _transposed_layout_hint(self._time_series):
+            window_samples = self.n_time_samples_per_window
         window = scipy_hann(window_samples, sym=False)
         self._window = _immutable_array_snapshot(
             (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]
         )
         _validate_window_step(self.time_window_duration, self.time_window_step)
-        _warn_about_unusual_time_series(self._time_series)
+        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
 
     @property
     def sampling_frequency(self) -> float:
@@ -2499,6 +2637,7 @@ class Welch:
     _transform_name = "welch"
     is_one_sided = False
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2523,9 +2662,8 @@ class Welch:
         ):
             msg = "n_time_samples_per_segment must be an integer of at least 2."
             raise ValueError(msg)
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        _reject_complex_time_series(time_series, type(self).__name__)
-        # np.shape reads arrays' own shape (no copy) and also measures nested lists.
+        time_series = _validated_time_series(time_series, type(self).__name__)
+        # np.shape reads the array's own shape, without a copy.
         data_shape = np.shape(time_series)
         n_time_samples = int(data_shape[0]) if data_shape else 0
         segment_samples = _resolve_sample_count(
@@ -2591,6 +2729,10 @@ class Welch:
 
     # The settings below are read from the internal STFT that does the
     # computation, so they cannot be reassigned out of step with it.
+    @property
+    def _time_series_is_finite(self) -> bool:
+        return self._stft._time_series_is_finite
+
     @property
     def sampling_frequency(self) -> float:
         """Samples per second, in Hz."""
@@ -2833,6 +2975,7 @@ class MorletWavelet:
     # Connectivity must not double them again.
     is_one_sided = True
 
+    @reject_sampling_frequency_aliases
     def __init__(
         self,
         time_series: NDArray[np.floating],
@@ -2850,8 +2993,7 @@ class MorletWavelet:
         zero_mean: bool = True,
         start_time: float = 0.0,
     ) -> None:
-        _check_labeled_axis_order(time_series, type(self).__name__)
-        _reject_complex_time_series(time_series, type(self).__name__)
+        time_series = _validated_time_series(time_series, type(self).__name__)
         data = xp.asarray(time_series)
         if data.ndim != 3:
             msg = "time_series must have shape (n_time_samples, n_trials, n_signals)."
@@ -3729,8 +3871,10 @@ def dpss_windows(
             f"decomposition, got {n_time_samples_per_window}. A single-sample "
             f"window carries no spectral information."
         )
-        raise ValueError(msg)
+        raise _recording_too_short(msg)
     if not 0 < time_halfbandwidth_product < n_time_samples_per_window / 2:
+        # NW <= 0 is a bad NW; NW >= n / 2, a window too short for it.
+        too_short = time_halfbandwidth_product > 0
         msg = (
             f"time_halfbandwidth_product (NW={time_halfbandwidth_product}) must "
             f"satisfy 0 < NW < n_time_samples_per_window / 2 "
@@ -3739,7 +3883,7 @@ def dpss_windows(
             f"set of DPSS tapers (their concentration ratios can exceed 1). Use a "
             f"longer window or a smaller time_halfbandwidth_product."
         )
-        raise ValueError(msg)
+        raise _recording_too_short(msg) if too_short else ValueError(msg)
     if not 1 <= n_tapers <= n_time_samples_per_window:
         msg = (
             f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
@@ -3842,7 +3986,7 @@ def detrend(
     >>> bool(np.abs(signal.detrend(x) - noise).max() < 0.2)
     True
     """
-    if type not in ["linear", "l", "constant", "c"]:
+    if type not in _DETREND_TYPES:
         msg = (
             f"Invalid trend type '{type}' is not supported.\n"
             f"The detrend function only supports linear and constant detrending.\n"

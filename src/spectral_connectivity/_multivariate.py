@@ -13,6 +13,7 @@ from numpy.typing import NDArray
 from spectral_connectivity._array_utils import (
     _batched_eigh,
     _batched_inverse_square_root,
+    _clip_rounding_above_one,
     _complex_inner_product,
     _conjugate_transpose,
     _divide_where,
@@ -198,6 +199,9 @@ def _canonical_coherency_components(
     for component in range(n_components):
         restricted = basis_a.swapaxes(-1, -2) @ whitened @ basis_b
         magnitude, phase, left, right = _optimize_canonical_coherency_phase(restricted)
+        # The top singular value of a whitened (coherency) matrix is at most 1;
+        # where it reaches 1, rounding left it up to 1.2e-14 above.
+        magnitude = _clip_rounding_above_one(magnitude)
         filter_a = (transform_aa @ basis_a @ left[..., :, :1])[..., 0]
         filter_b = (transform_bb @ basis_b @ right[..., :, :1])[..., 0]
         pattern_a = (real_aa @ filter_a[..., xp.newaxis])[..., 0]
@@ -738,14 +742,17 @@ def _global_coherence(
     # observation column by sqrt(weight) produces the weighted cross-spectrum. The
     # scalar division by sum(weight) cancels when component power is normalized
     # by total power.
+    # A component holding all the power is a fraction of 1, which rounding left
+    # up to 7e-16 above; either path's fractions are clipped once, at the end.
     if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
         if observation_weights is not None:
             fourier_coefficients = _weight_observations(
                 fourier_coefficients, xp.sqrt(observation_weights)
             )
-        return _batched_global_coherence(
+        fractions, vectors = _batched_global_coherence(
             fourier_coefficients, max_rank, max_workspace_elements
         )
+        return _clip_rounding_above_one(fractions), vectors
 
     # A user who tuned max_workspace_elements for memory gets no effect here (the
     # per-bin path decomposes one bin at a time); note it so the setting having
@@ -785,4 +792,4 @@ def _global_coherence(
                 global_coherence[time_ind, freq_ind],
                 unnormalized_global_coherence[time_ind, freq_ind],
             ) = _estimate_global_coherence(bin_coefficients, max_rank=max_rank)
-    return global_coherence, unnormalized_global_coherence
+    return _clip_rounding_above_one(global_coherence), unnormalized_global_coherence

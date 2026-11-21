@@ -108,7 +108,11 @@ class TestGetComputeBackend:
         assert result["device_name"] == "CPU"
         assert "GPU acceleration was requested" in result["message"]
         assert "CuPy is not installed" in result["message"]
-        assert "pip install cupy" in result["message"]
+        assert (
+            'Install it with: pip install "spectral-connectivity[gpu]" (or with conda: '
+            "conda install -c conda-forge cupy), then restart"
+        ) in result["message"]
+        assert "restart the Python interpreter" in result["message"]
 
     def test_cupy_installed_but_not_requested_message(
         self, monkeypatch, cpu_backend, cupy_installed_not_imported
@@ -134,6 +138,24 @@ class TestGetComputeBackend:
         assert result["device_name"] == "CPU"
         assert result["message"].startswith("Using CPU backend with NumPy.")
         assert "Install CuPy" in result["message"]
+        assert 'pip install "spectral-connectivity[gpu]"' in result["message"]
+
+    def test_requested_after_import_with_cupy_installed_message(
+        self, cpu_backend, cupy_installed_not_imported
+    ):
+        """Requested and installed, but the CPU backend was imported: the
+        variable was set too late, so say to restart, not to install CuPy."""
+        with patch.dict(os.environ, {GPU_ENV_VAR: "true"}):
+            result = get_compute_backend()
+
+        assert result["gpu_enabled"] is True
+        assert result["gpu_available"] is True
+        assert result["backend"] == "cpu"
+        message = result["message"]
+        assert "set after spectral_connectivity was imported" in message
+        assert "Restart the Python interpreter" in message
+        assert "before `import spectral_connectivity`" in message
+        assert "Install" not in message
 
     def test_already_imported_cupy_counts_as_available(self, monkeypatch):
         """A CuPy already in ``sys.modules`` is reported as available.
@@ -181,7 +203,7 @@ def test_gpu_request_without_cupy_fails_import(value):
     assert "RuntimeError: GPU support was explicitly requested" in result.stderr
     assert f"{GPU_ENV_VAR}={value!r}" in result.stderr
     assert "CuPy is not installed" in result.stderr
-    assert "pip install cupy" in result.stderr
+    assert 'Install it with: pip install "spectral-connectivity[gpu]"' in result.stderr
 
 
 class TestIsGpuEnabled:
@@ -276,7 +298,10 @@ def test_backend_takes_cupy_routines_when_the_gpu_is_requested(monkeypatch):
         ({"cupy": None}, "CuPy is not installed"),
         (
             _fake_cupy_modules("12.3.0", with_signal=False),
-            r"requires cupy-cuda12x>=13\.0, but CuPy 12\.3\.0 is installed",
+            (
+                r"requires cupy-cuda12x>=13\.0, but CuPy 12\.3\.0 is installed.*"
+                r'pip install -U "spectral-connectivity\[gpu\]"'
+            ),
         ),
     ],
     ids=["cupy_missing", "cupy_12"],
