@@ -240,7 +240,8 @@ def estimate_n_tapers(time_halfbandwidth_product: float) -> int:
     where NW is the time-halfbandwidth product.
 
     **Note:** The actual number of tapers used by Multitaper may be lower
-    if `is_low_bias=True` (default), which excludes tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9).
+    if `is_low_bias=True` (default), which excludes tapers with eigenvalues at or
+    below MIN_EIGENVALUE_THRESHOLD (0.9), with a warning.
 
     **Typical values:**
     - NW=2 → 3 tapers (minimal averaging)
