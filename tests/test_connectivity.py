@@ -519,6 +519,27 @@ def test_corrected_imaginary_phase_locking_value():
     assert quadrature_result[1, 0] == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("lag", [1e-4, 1e-3, 0.3])
+def test_corrected_imaginary_phase_locking_value_of_a_small_consistent_lag(dtype, lag):
+    """A perfectly consistent lag ``phi`` gives ``|sin phi| / sqrt(1 - cos**2
+    phi) = 1`` for any ``phi`` in (0, pi). A complex64 PLV rounds ``cos(1e-4)``
+    to 1, which made the denominator 0 and the result 0; the coefficients hold
+    the lag to float32 precision, so the result is 1 at either precision, and
+    it is reported at the precision of ``dtype``."""
+    rng = np.random.default_rng(3)
+    common = np.exp(1j * rng.uniform(0, 2 * np.pi, 10))
+    coefficients = np.zeros((1, 1, 10, 4, 2), dtype=np.complex64)
+    coefficients[..., 0] = common[None, None, :, None]
+    coefficients[..., 1] = (common * np.exp(-1j * lag))[None, None, :, None]
+
+    result = Connectivity(coefficients, dtype=dtype).corrected_imaginary_phase_locking_value()
+
+    assert result.dtype == np.finfo(dtype).dtype
+    np.testing.assert_allclose(result[..., 0, 1], 1.0, rtol=0, atol=1e-6)
+    np.testing.assert_allclose(result[..., 1, 0], 1.0, rtol=0, atol=1e-6)
+
+
 def test_phase_lag_index_sets_zero_phase_signals_to_zero():
     n_time_samples, n_trials, n_tapers, n_fft_samples, n_signals = (1, 30, 1, 1, 2)
     fourier_coefficients = np.zeros(
@@ -585,6 +606,41 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert mic.squeeze()[0, 1] == pytest.approx(1.0)
     assert mim.squeeze()[0, 1] == pytest.approx(1.0)
     assert np.isnan(mic.squeeze()[0, 0])
+
+
+def test_mim_sums_both_modes_of_a_rank_two_imaginary_coupling():
+    """With two groups of two signals, real within-group spectra W_a and W_b,
+    and cross-spectrum ``i W_a^(1/2) Q_a diag(0.9, 0.8) Q_b^T W_b^(1/2)`` for
+    rotations Q_a and Q_b, the whitened imaginary cross-spectrum has singular
+    values 0.9 and 0.8. MIM is the sum of their squares, 1.45, which exceeds 1
+    and differs from the 0.81 of the strongest mode alone; MIC is 0.9. (A
+    scalar or rank-one coupling cannot tell MIM from MIC squared.)"""
+
+    def rotation(angle):
+        return np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+
+    def symmetric_root(matrix):
+        values, vectors = np.linalg.eigh(matrix)
+        return vectors @ np.diag(np.sqrt(values)) @ vectors.T
+
+    within_a = np.array([[2.0, 0.5], [0.5, 1.0]])
+    within_b = np.array([[1.5, -0.3], [-0.3, 0.8]])
+    coupling = rotation(0.4) @ np.diag([0.9, 0.8]) @ rotation(-1.1).T
+    cross = 1j * symmetric_root(within_a) @ coupling @ symmetric_root(within_b)
+    spectrum = np.block([[within_a, cross], [cross.conj().T, within_b]])
+    assert np.linalg.eigvalsh(spectrum).min() > 0
+    n_fft = 4
+    connectivity = Connectivity(
+        _fourier_coefficients_with_cross_spectrum(np.broadcast_to(spectrum, (n_fft, 4, 4)))
+    )
+    labels = [0, 0, 1, 1]
+
+    mim, _ = connectivity.multivariate_interaction_measure(labels)
+    mic, _ = connectivity.maximized_imaginary_coherency(labels)
+
+    np.testing.assert_allclose(mim[0, :, 0, 1], 0.9**2 + 0.8**2, rtol=1e-10)
+    np.testing.assert_allclose(mim[0, :, 1, 0], 0.9**2 + 0.8**2, rtol=1e-10)
+    np.testing.assert_allclose(mic[0, :, 0, 1], 0.9, rtol=1e-10)
 
 
 def test_scalar_mic_mim_handle_edge_masked_morlet_data():
@@ -2011,7 +2067,7 @@ def test_phase_lag_index_family_matches_per_fcn_reference(expectation_type):
     np.testing.assert_array_equal(warm.debiased_squared_weighted_phase_lag_index(), cold_dwpli)
 
 
-PHASE_LAG_MOMENTS = ("sign", "imaginary", "absolute", "squared")
+PHASE_LAG_MOMENTS = ("sign", "nonzero", "imaginary", "absolute", "squared")
 
 
 def _many_observation_coefficients(rng, n_signals=4):
@@ -2049,7 +2105,7 @@ def test_lone_phase_lag_index_computes_all_moments_only_with_many_observations(
 
 @pytest.mark.parametrize("offset", [-1, 0], ids=["just_below", "at"])
 def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
-    """A lone PLI reduces all four moments from exactly
+    """A lone PLI reduces all five moments from exactly
     ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` observations, not one fewer."""
     n_observations = PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS + offset
     shape = (1, n_observations, 1, 16, 3)
@@ -2064,7 +2120,7 @@ def test_phase_lag_moment_regime_switches_at_the_threshold(offset):
 
 def test_reassigning_observation_weights_recomputes_phase_lag_moments():
     """Weights assigned after a measure has run replace the unweighted moments
-    it cached (all four, with this many observations)."""
+    it cached (all five, with this many observations)."""
     rng = np.random.default_rng(6)
     fc = _many_observation_coefficients(rng)
     weights = rng.uniform(0.2, 1.8, size=(*fc.shape[:-1], 1))
@@ -2081,7 +2137,7 @@ def test_reassigning_observation_weights_recomputes_phase_lag_moments():
 
 @pytest.mark.parametrize("first_measure", PHASE_LAG_MEASURES)
 def test_phase_lag_moments_are_computed_together_once(first_measure):
-    """With many observations, any one phase-lag measure caches all four
+    """With many observations, any one phase-lag measure caches all five
     moments from one pass over the tiles, so every later measure of the family
     reads them without re-forming a tile."""
     conn = Connectivity(_many_observation_coefficients(np.random.default_rng(1)))
@@ -2092,7 +2148,7 @@ def test_phase_lag_moments_are_computed_together_once(first_measure):
         getattr(conn, first_measure)()
         assert reduce_tile.call_count == 1  # 4 signals fit in one tile
         cached = dict(conn.__dict__["_imaginary_moment_cache"])
-        assert set(cached) == {"sign", "imaginary", "absolute", "squared"}
+        assert set(cached) == set(PHASE_LAG_MOMENTS)
 
         for measure in PHASE_LAG_MEASURES:
             getattr(conn, measure)()
@@ -2161,7 +2217,7 @@ def hann_morlet_coefficients():
     coefficients : ndarray, shape (30, 4, 20, 2, 3)
         One-sided (time, trial, smoothing sample, frequency, signal): 80
         observations, enough that without weights a lone measure would reduce
-        all four phase-lag moments.
+        all five phase-lag moments.
     weights : ndarray, shape (30, 4, 20, 2, 1)
     """
     rng = np.random.default_rng(11)
@@ -3546,6 +3602,42 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
     )
 
 
+_ZERO_WEIGHT_MEASURES = {
+    "power": lambda c: c.power(),
+    "cross_spectral_density": lambda c: c.cross_spectral_density(),
+    "coherency": lambda c: c.coherency(),
+    "phase_locking_value": lambda c: c.phase_locking_value(),
+    "phase_lag_index": lambda c: c.phase_lag_index(),
+    "weighted_phase_lag_index": lambda c: c.weighted_phase_lag_index(),
+    "canonical_coherence": lambda c: c.canonical_coherence([0, 0, 1, 1])[0],
+    "global_coherence": lambda c: c.global_coherence()[0],
+}
+
+
+@pytest.mark.parametrize("measure", list(_ZERO_WEIGHT_MEASURES))
+def test_zero_weight_observation_is_omitted_even_when_not_finite(measure):
+    """A zero weight omits its observation, so a NaN there (an invalid edge
+    estimate) must give what physically removing the observation gives;
+    ``0 * NaN`` made power and the cross-spectrum NaN even with four finite,
+    positively weighted observations."""
+    rng = np.random.default_rng(31)
+    shape = (1, 1, 5, 8, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.5, 1.5, size=(*shape[:-1], 1))
+    coefficients[:, :, -1] = np.nan
+    weights[:, :, -1] = 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # NaN coefficients
+        masked = Connectivity(coefficients, observation_weights=weights)
+        result = _ZERO_WEIGHT_MEASURES[measure](masked)
+    omitted = Connectivity(coefficients[:, :, :-1], observation_weights=weights[:, :, :-1])
+    expected = _ZERO_WEIGHT_MEASURES[measure](omitted)
+
+    # Some measures are NaN on the diagonal by design; the rest is finite.
+    assert np.isfinite(expected).mean() >= 0.5
+    np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-14, equal_nan=True)
+
+
 def _weighted_two_sided_spectrum(n_fft_samples, seed):
     """Random two-sided coefficients (1, 3, 2, n_fft_samples, 3), positive
     observation weights, and the non-negative bin count."""
@@ -3867,6 +3959,146 @@ def test_power_one_sided_must_be_a_bool(not_a_flag):
         Connectivity(coefficients).power(one_sided=not_a_flag)
 
 
+def test_real_valued_frequencies_ignore_nan_coefficients():
+    """A NaN trial does not make a real signal's 0 Hz and Nyquist bins count
+    as complex, which would switch them back to the complex null."""
+    rng = np.random.default_rng(10)
+    time_series = rng.standard_normal((64, 3, 2))
+    time_series[:, 1] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        multitaper = Multitaper(time_series, sampling_frequency=100, n_fft_samples=64)
+        real_bins = Connectivity.from_transform(multitaper).real_valued_frequencies
+    np.testing.assert_array_equal(np.flatnonzero(real_bins), [0, 32])
+    # A bin with no finite coefficient gives no evidence that it is real.
+    coefficients = rng.standard_normal((1, 2, 2, 8, 2)) + 0j  # real everywhere
+    coefficients[..., 2, :] = np.nan  # nan + 0j: only the real part is NaN
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        real_bins = Connectivity(coefficients).real_valued_frequencies
+    np.testing.assert_array_equal(real_bins, [True, True, False, True, True])
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_real_valued_frequencies_are_zero_and_nyquist_of_a_real_signal(n_fft):
+    """A real signal's Fourier coefficients are real at 0 Hz and, for an even
+    FFT length, at Nyquist; those of a complex one are real nowhere."""
+    rng = np.random.default_rng(8)
+    multitaper = Multitaper(
+        rng.standard_normal((n_fft, 2, 2)), sampling_frequency=100, n_fft_samples=n_fft
+    )
+    expected = np.zeros(n_fft // 2 + 1, dtype=bool)
+    expected[0] = True
+    if n_fft % 2 == 0:
+        expected[-1] = True
+    real_bins = Connectivity.from_transform(multitaper).real_valued_frequencies
+    np.testing.assert_array_equal(real_bins, expected)
+    complex_coefficients = rng.standard_normal((1, 2, 3, n_fft, 2)) + 1j
+    assert not Connectivity(complex_coefficients).real_valued_frequencies.any()
+
+
+def _pair_with_squared_coherence(rng, n_observations, squared_coherence, real):
+    """Two signals' coefficients over ``n_observations`` with exactly
+    ``squared_coherence``: ``y = a x + b z`` for ``z`` orthogonal to ``x`` of
+    the same norm, ``a**2 = squared_coherence`` and ``a**2 + b**2 = 1``."""
+
+    def draw():
+        values = rng.standard_normal(n_observations)
+        return values if real else values + 1j * rng.standard_normal(n_observations)
+
+    x, z = draw(), draw()
+    z = z - np.vdot(x, z) / np.vdot(x, x) * x
+    z *= np.linalg.norm(x) / np.linalg.norm(z)
+    y = np.sqrt(squared_coherence) * x + np.sqrt(1 - squared_coherence) * z
+    return np.stack([x, y], axis=-1)
+
+
+def test_group_delay_tests_a_real_valued_bin_against_the_real_null():
+    """The significance filter of ``group_delay`` and ``delay`` takes the
+    zero-coherence null of real coefficients at a real-valued bin. Here three
+    bins at the top of the spectrum have squared coherence 0.6 over five
+    observations: p = 0.026 under the complex null at the two complex bins,
+    but 0.071 under the real null at Nyquist. With Benjamini-Hochberg at 0.05
+    only the two complex bins are significant, which is fewer than the
+    three-bin cluster the delay fit needs, so the delay is undefined; the
+    complex null at Nyquist made all three significant and gave a delay."""
+    rng = np.random.default_rng(9)
+    n_observations, n_fft = 5, 8
+    coefficients = np.empty((1, 1, n_observations, n_fft, 2), dtype=complex)
+    for bin_index in range(n_fft):
+        is_real = bin_index in (0, n_fft // 2)
+        coherence = 0.6 if bin_index in (2, 3, 4) else 0.0
+        coefficients[0, 0, :, bin_index] = _pair_with_squared_coherence(
+            rng, n_observations, coherence, real=is_real
+        )
+    connectivity = Connectivity(coefficients)
+    np.testing.assert_allclose(
+        connectivity.magnitude_squared_coherence()[0, 2:, 0, 1], 0.6, rtol=1e-12
+    )
+
+    delay, _, _ = connectivity.group_delay(frequency_range=(0.25, 0.5))
+
+    assert np.isnan(delay[0, 0, 1])
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+@pytest.mark.parametrize("tone_bin", [13, -13])
+def test_power_of_complex_coefficients_folds_both_signs_of_frequency(n_fft, tone_bin):
+    """A complex tone at -f carries its power at -f only, so doubling P(f)
+    counted a tone at +13 bins twice (one-sided total 2) and one at -13 bins
+    not at all (about 0). P(f) + P(-f) gives each its full power, 1."""
+    time = np.arange(n_fft)
+    tone = np.exp(2j * np.pi * tone_bin * time / n_fft)
+    # A unit-power tone's DFT, scaled so that the mean |X|**2 over bins is 1.
+    coefficients = np.fft.fft(tone) / np.sqrt(n_fft)
+    coefficients = np.broadcast_to(
+        coefficients[None, None, None, :, None], (1, 1, 1, n_fft, 2)
+    )
+
+    power = Connectivity(coefficients.copy()).power(one_sided=True)[0, :, 0]
+
+    assert power[abs(tone_bin)] == pytest.approx(n_fft, rel=1e-12)
+    assert power.sum() == pytest.approx(n_fft, rel=1e-12)
+
+
+@pytest.mark.parametrize("n_fft", [64, 65])
+def test_power_of_a_real_signal_is_exactly_twice_its_positive_frequencies(n_fft):
+    """Folding S(f) + conj(S(-f)) doubles the interior bins of a real
+    signal's exactly conjugate-symmetric spectrum bit for bit, for power and
+    the cross-spectral density alike."""
+    rng = np.random.default_rng(5)
+    multitaper = Multitaper(
+        rng.standard_normal((n_fft, 3, 2)), sampling_frequency=100, n_fft_samples=n_fft
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    interior = slice(1, (n_fft + 1) // 2)
+    power = to_host(connectivity._power)[..., : n_fft // 2 + 1, :].copy()
+    power[..., interior, :] *= 2
+    np.testing.assert_array_equal(connectivity.power(one_sided=True), power)
+    cross_spectrum = to_host(connectivity._expectation_cross_spectral_matrix())
+    cross_spectrum = cross_spectrum[..., : n_fft // 2 + 1, :, :].copy()
+    cross_spectrum[..., interior, :, :] *= 2
+    np.testing.assert_array_equal(connectivity.cross_spectral_density(), cross_spectrum)
+
+
+def test_cross_spectral_density_of_complex_coefficients_is_hermitian_with_power_diagonal():
+    """For coefficients that are not conjugate-symmetric the fold
+    S(f) + conj(S(-f)) is still Hermitian, and its diagonal is power()."""
+    rng = np.random.default_rng(6)
+    shape = (1, 3, 2, 16, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    connectivity = Connectivity(coefficients)
+    cross_spectrum = connectivity.cross_spectral_density()
+    np.testing.assert_allclose(
+        cross_spectrum, np.conj(np.swapaxes(cross_spectrum, -1, -2)), rtol=0, atol=1e-14
+    )
+    np.testing.assert_allclose(
+        np.diagonal(cross_spectrum, axis1=-2, axis2=-1).real,
+        connectivity.power(one_sided=True),
+        rtol=1e-14,
+    )
+
+
 def test_power_one_sided_integrates_to_signal_power():
     """Parseval oracle for the one-sided PSD convention.
 
@@ -4096,6 +4328,61 @@ def test_phase_lag_family_is_scale_invariant(measure, scale):
     reference = getattr(Connectivity(coefficients), measure)()
     scaled = getattr(Connectivity(coefficients * scale), measure)()
     np.testing.assert_allclose(scaled, reference, rtol=1e-9, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "signs",
+    [[0, 1, 1], [0, 0, 1, -1], [1, 1, 1, -1], [0, 1, -1, 1, 1]],
+    ids=["one_zero", "two_zeros_balanced", "no_zero", "zero_among_five"],
+)
+def test_debiased_squared_phase_lag_index_averages_products_of_distinct_observations(signs):
+    """The unbiased estimator of ``E[sign(Im S_xy)]**2`` is the mean of
+    ``s_k s_l`` over ordered pairs of distinct observations,
+    ``(n**2 m**2 - sum_k s_k**2) / (n (n - 1))`` with ``m`` the mean sign.
+    Vinck's ``(n m**2 - 1) / (n - 1)`` is that form only when every sign is
+    +/-1; an observation whose imaginary cross-spectrum is exactly 0 has sign 0
+    and squared sign 0. Signs [0, +1, +1] gave 1/6 instead of 1/3."""
+    signs = np.asarray(signs)
+    n_observations = signs.size
+    # Im(X_0 conj(X_1)) = -Im(X_1) for X_0 = 1, so X_1 = 1, -1j, 1j give 0, +1, -1.
+    second = np.select([signs == 0, signs > 0], [1.0 + 0j, -1j], 1j)
+    coefficients = np.zeros((1, 1, n_observations, 4, 2), dtype=complex)
+    coefficients[..., 0] = 1.0
+    coefficients[..., 1] = second[None, None, :, None]
+    distinct = ~np.eye(n_observations, dtype=bool)
+    expected = np.outer(signs, signs)[distinct].mean()
+
+    result = Connectivity(coefficients).debiased_squared_phase_lag_index()
+
+    np.testing.assert_allclose(result[0, :, 0, 1], expected, rtol=0, atol=1e-15)
+    np.testing.assert_allclose(result[0, :, 1, 0], expected, rtol=0, atol=1e-15)
+
+
+def test_debiased_squared_phase_lag_index_is_unbiased_with_in_phase_observations():
+    """With in-phase observations (``Im S_xy`` exactly 0) mixed in, the mean
+    sign is ``(1 - p0) q`` and the estimator stays unbiased for its square.
+    Treating every squared sign as 1 subtracts ``p0 / (n - 1)`` too much."""
+    rng = np.random.default_rng(20261121)
+    mean_lead, concentration, n_observations, n_replicates = 0.6, 1.5, 5, 100_000
+    in_phase_probability = 0.3
+    coefficients = _von_mises_lead_coefficients(
+        rng, mean_lead, concentration, n_replicates, n_observations
+    )
+    in_phase = rng.random(coefficients.shape[:3]) < in_phase_probability
+    coefficients[..., 1] = np.where(
+        in_phase[..., np.newaxis], 0.5 * coefficients[..., 0], coefficients[..., 1]
+    )
+    probability_leading = _von_mises_expectation(
+        lambda angle: np.sin(angle) > 0, mean_lead, concentration
+    )
+    expected = ((1 - in_phase_probability) * (2 * probability_leading - 1)) ** 2
+    shortcut_bias = in_phase_probability / (n_observations - 1)
+
+    debiased = Connectivity(coefficients).debiased_squared_phase_lag_index()[:, 0, 0, 1]
+
+    mean_debiased, limit = _monte_carlo_mean_and_limit(debiased)
+    assert abs(mean_debiased - expected) < limit
+    assert shortcut_bias > 10 * limit
 
 
 def test_debiased_squared_phase_lag_index_is_zero_for_exactly_zero_imaginary_part():
@@ -4589,10 +4876,14 @@ def test_connectivity_jackknife_auto_uses_log_power_and_rejects_complex_result()
     assert power.transformation == "log"
     assert np.all(power.confidence_interval[0] > 0)
 
-    # On the log scale the (constant) one-sided power scaling cancels, so the
-    # relative standard error is the jackknife SE of log(mean |x|**2).
+    # The relative standard error is the jackknife SE of the log of the
+    # one-sided power, mean |x(f)|**2 + mean |x(-f)|**2 at the interior bins
+    # (these random coefficients are not conjugate-symmetric).
     def log_power(observations):
-        return np.log(np.mean(np.abs(observations) ** 2, axis=0))[:7]
+        two_sided = np.mean(np.abs(observations) ** 2, axis=0)
+        one_sided = two_sided[:7].copy()
+        one_sided[1:6] += two_sided[11:6:-1]
+        return np.log(one_sided)
 
     expected_relative_error = _leave_one_out_standard_error(
         log_power, _trial_taper_observations(coefficients)

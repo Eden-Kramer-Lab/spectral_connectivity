@@ -379,7 +379,7 @@ plot_directional(*ding_example1(), time_halfbandwidth_product=3)
 #     basic theory and application to neuroscience. Handbook of Time Series
 #     Analysis: Recent Theoretical Developments and Applications 437.
 #
-# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + 0.2x_2(n-2) + w_1 $$
+# $$ x_1 = 0.8x_1(n-1) - 0.5x_1(n-2) + 0.4x_3(n-1) + w_1 $$
 # $$ x_2 = 0.9x_2(n-1) - 0.8x_2(n-2) + w_2$$
 # $$ x_3 = 0.5x_3(n-1) - 0.2x_3(n-2) + 0.5x_2(n-1) + w_3$$
 # ![image.png](attachment:image.png)
@@ -481,7 +481,7 @@ plot_directional(*ding_example2b(), time_halfbandwidth_product=2)
 # $$ x_2 = 0.5x_1(n-2) + w_2 $$
 # $$ x_3 = -0.4x_1(n-3) + w_3 $$
 # $$ x_4 = -0.5x_1(n-2) + 0.25\sqrt2x_4(n-1) + 0.25\sqrt2x_5(n-1) + w_4 $$
-# $$ x_5 = 0.25\sqrt2x_4(n-1) + 0.25\sqrt2x_5(n-1) + w_5 $$
+# $$ x_5 = -0.25\sqrt2x_4(n-1) + 0.25\sqrt2x_5(n-1) + w_5 $$
 #
 # ![image.png](attachment:image.png)
 

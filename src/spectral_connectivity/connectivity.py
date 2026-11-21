@@ -22,6 +22,7 @@ from spectral_connectivity._array_utils import (
     _NumberT,
     _regularized_inverse,
     _squared_magnitude,
+    _weight_observations,
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
@@ -172,13 +173,20 @@ EXPECTATION_AXES = {
 # called, not at import, so a swapped backend (the device-emulation tests) applies.
 _IMAGINARY_MOMENTS: dict[str, Callable[[BackendArray], BackendArray]] = {
     "sign": lambda imaginary: xp.sign(imaginary),
+    "nonzero": lambda imaginary: xp.abs(xp.sign(imaginary)),
     "imaginary": lambda imaginary: imaginary,
     "absolute": lambda imaginary: xp.abs(imaginary),
     "squared": lambda imaginary: imaginary**2,
 }
 # Im(X_j conj(X_i)) = -Im(X_i conj(X_j)), exactly in floating point too, so each
 # moment is exactly antisymmetric (-1) or symmetric (+1) across the signal pair.
-_IMAGINARY_MOMENT_PAIR_SYMMETRY = {"sign": -1, "imaginary": -1, "absolute": 1, "squared": 1}
+_IMAGINARY_MOMENT_PAIR_SYMMETRY = {
+    "sign": -1,
+    "nonzero": 1,
+    "imaginary": -1,
+    "absolute": 1,
+    "squared": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -254,7 +262,7 @@ def _validated_rank(rank: int | None) -> int | None:
 # is never materialized in full.
 PHASE_LAG_INDEX_MAX_WORKSPACE_ELEMENTS = 16_000_000
 # Fewest averaged observations (``Connectivity.n_observations``) at which, without
-# observation weights, the first phase-lag measure reduces all four moments from
+# observation weights, the first phase-lag measure reduces all the moments from
 # one tile pass instead of only the requested ones. A tile holds n_observations
 # times as many values as each reduced moment, so with many observations the
 # tile formation dominates and two extra reductions are nearly free, while with
@@ -858,6 +866,15 @@ class Connectivity:
     and :func:`~spectral_connectivity.fourier_connectivity` use the same order:
     ``result.sel(source=a, target=b)`` is ``a -> b`` (or "``a`` leads ``b``").
     Prefer them unless you need this lower-level API.
+
+    **Coefficients of a complex signal**: the transforms take only real time
+    series, whose negative frequencies mirror the positive ones. Two-sided
+    coefficients passed here directly may come from a complex signal, whose
+    spectrum is not conjugate-symmetric. Then :meth:`power` and
+    :meth:`cross_spectral_density` add each negative frequency to its positive
+    one (``S(f) + conj(S(-f))``), while every other measure, coherency
+    included, describes the non-negative frequencies ``f`` only; the directed
+    measures factor the full two-sided spectrum.
 
     Intermediates shared across measures (the expected cross-spectral matrix,
     power, phase-lag moments, and the minimum-phase factor with the transfer
@@ -1638,14 +1655,17 @@ class Connectivity:
     def _one_sided_density(self, spectrum: BackendArray, frequency_axis: int) -> BackendArray:
         """Fold a cached (cross-)spectral density onto non-negative frequencies.
 
-        Two-sided input is trimmed to its non-negative bins and the interior
-        positive-frequency bins are doubled, so the one-sided density integrates
-        to the same total power as the two-sided spectrum. DC (bin 0) is unique;
-        the Nyquist bin (present only for an even FFT length) is also unique, so
-        neither is doubled. The scale matches the spectrum's real dtype so a
-        float32 (complex64) request is not silently upcast to float64.
-        One-sided input is returned as a copy, detached from the cache so a
-        caller mutating the result cannot corrupt measures that reuse it.
+        Two-sided input is trimmed to its non-negative bins and each interior
+        bin ``S(f)`` gains its negative-frequency partner as ``conj(S(-f))``,
+        so the one-sided density integrates to the same total power as the
+        two-sided spectrum. For a real signal ``S(-f) = conj(S(f))``, so the
+        bin is doubled (exactly, for an exactly conjugate-symmetric FFT); for
+        the coefficients of a complex signal the power on the diagonal is
+        ``P(f) + P(-f)`` rather than twice one side. The fold keeps the matrix
+        Hermitian. DC (bin 0) and the Nyquist bin (present only for an even FFT
+        length) have no partner and are kept as they are. One-sided input is
+        returned as a copy, detached from the cache so a caller mutating the
+        result cannot corrupt measures that reuse it.
 
         Parameters
         ----------
@@ -1667,12 +1687,25 @@ class Connectivity:
             slice(self._nonnegative_frequency_count(n_fft_samples)),
             *trailing,
         )
-        one_sided = spectrum[index]
-        scale = xp.full((one_sided.shape[frequency_axis],), 2.0, dtype=one_sided.real.dtype)
-        scale[0] = 1.0
-        if n_fft_samples % 2 == 0:
-            scale[-1] = 1.0
-        density: BackendArray = one_sided * scale.reshape((-1,) + (1,) * (-frequency_axis - 1))
+        nonnegative = spectrum[index]
+        n_interior = (n_fft_samples - 1) // 2
+        interior: tuple[Any, ...] = (..., slice(1, n_interior + 1), *trailing)
+        partners: tuple[Any, ...] = (
+            ...,
+            slice(n_fft_samples - 1, n_fft_samples - 1 - n_interior, -1),
+            *trailing,
+        )
+        # One output buffer: the partners' conjugate is written into it and the
+        # positive bins added in place; 0 Hz and Nyquist are copied as they are.
+        density: BackendArray = xp.empty_like(nonnegative)
+        xp.conj(spectrum[partners], out=density[interior])
+        density[interior] += nonnegative[interior]
+        unpaired_bins: tuple[tuple[Any, ...], ...] = (
+            (..., slice(0, 1), *trailing),
+            (..., slice(n_interior + 1, None), *trailing),
+        )
+        for unpaired in unpaired_bins:
+            density[unpaired] = nonnegative[unpaired]
         return density
 
     @property
@@ -1728,15 +1761,17 @@ class Connectivity:
         root_power = xp.sqrt(self._power[..., :n_nonnegative, :])
         return root_power[..., :, xp.newaxis] * root_power[..., xp.newaxis, :]
 
-    def _nonnegative_fourier_coefficients(self) -> NDArray[np.complexfloating]:
+    def _nonnegative_fourier_coefficients(
+        self, dtype: DTypeLike | None = None
+    ) -> NDArray[np.complexfloating]:
         """Fourier coefficients at the non-negative frequencies, at ``self._dtype``.
 
-        A view when the dtype already matches.
+        ``dtype`` overrides the precision. A view when the dtype already matches.
         """
         n_nonnegative = self._nonnegative_frequency_count(self._fourier_coefficients.shape[-2])
         coefficients: NDArray[np.complexfloating] = self._fourier_coefficients[
             ..., :n_nonnegative, :
-        ].astype(self._dtype, copy=False)
+        ].astype(self._dtype if dtype is None else dtype, copy=False)
         return coefficients
 
     def _nonnegative_cross_spectral_matrix(self) -> NDArray[np.complexfloating]:
@@ -1778,7 +1813,10 @@ class Connectivity:
         return self._cached_reduced_cross_spectral_matrix
 
     def _reduced_cross_spectral_matrix(
-        self, fourier_coefficients: NDArray[np.complexfloating] | None = None
+        self,
+        fourier_coefficients: NDArray[np.complexfloating] | None = None,
+        *,
+        dtype: DTypeLike | None = None,
     ) -> NDArray[np.complexfloating]:
         """Expected cross-spectral matrix via a single batched matmul.
 
@@ -1801,6 +1839,8 @@ class Connectivity:
             ``_subset_cross_spectral_matrix`` passes a pair axis as ``batch``.
             The frequency axis may hold only the leading bins (e.g. the
             non-negative frequencies); observation weights are sliced to match.
+        dtype : complex dtype, optional
+            Precision of the product; ``self._dtype`` by default.
 
         Returns
         -------
@@ -1851,11 +1891,13 @@ class Connectivity:
                     n_observations,
                 )
             )
-            observations = observations * xp.sqrt(weights)[..., xp.newaxis]
+            observations = _weight_observations(
+                observations, xp.sqrt(weights)[..., xp.newaxis]
+            )
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
         # Cast before multiplying (see _complex_inner_product).
-        observations = observations.astype(self._dtype, copy=False)
+        observations = observations.astype(self._dtype if dtype is None else dtype, copy=False)
         cross_spectral_matrix: NDArray[np.complexfloating] = xp.matmul(
             xp.swapaxes(observations, -1, -2), xp.conj(observations)
         )
@@ -1948,7 +1990,7 @@ class Connectivity:
         )
 
     @cached_property
-    def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+    def _var_model(self) -> tuple[NDArray[np.complexfloating], NDArray[np.complexfloating]]:
         return _var_model_from_factor(self._minimum_phase_factor)
 
     @property
@@ -1956,7 +1998,7 @@ class Connectivity:
         return self._var_model[0]
 
     @property
-    def _noise_covariance(self) -> NDArray[np.floating]:
+    def _noise_covariance(self) -> NDArray[np.complexfloating]:
         return self._var_model[1]
 
     @cached_property
@@ -1983,7 +2025,7 @@ class Connectivity:
         weight_shape[0:3] = self._observation_weights.shape[0:3]
         weight_shape[frequency_axis] = n_frequencies
         weights = self._observation_weights[..., :n_frequencies, 0].reshape(weight_shape)
-        numerator = xp.sum(values * weights, axis=self._expectation_axes)
+        numerator = xp.sum(_weight_observations(values, weights), axis=self._expectation_axes)
         denominator = xp.sum(weights, axis=self._expectation_axes)
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
@@ -2350,11 +2392,15 @@ class Connectivity:
     def power(self, *, one_sided: bool | None = None) -> NDArray[np.floating]:
         """Return the power spectral density of the signal (one-sided by default).
 
-        Only the non-negative frequencies are returned, with the interior
-        positive-frequency bins doubled so that integrating the returned
-        spectrum over frequency recovers the full signal power (the negative
-        frequencies of a real signal carry equal power). The DC bin, and the
-        Nyquist bin for an even FFT length, are not doubled.
+        Only the non-negative frequencies are returned. Each interior
+        positive-frequency bin holds its own power plus that of the matching
+        negative frequency, ``P(f) + P(-f)``, so integrating the returned
+        spectrum over frequency recovers the full signal power. For a real
+        signal the two are equal, so the bin is doubled; for the coefficients
+        of a complex signal (which the transforms refuse, but which can be
+        passed to ``Connectivity`` directly) the sum keeps a tone at ``-f``,
+        though not which side it was on. The DC bin, and the Nyquist bin for an
+        even FFT length, have no partner and are returned as they are.
 
         For one-sided input (``is_one_sided=True``) the coefficients are
         returned as provided: a one-sided transform such as
@@ -2463,10 +2509,12 @@ class Connectivity:
 
         The diagonal contains the one-sided power spectral densities returned
         by :meth:`power`; off-diagonal entries retain both the amplitude and
-        relative-phase information between signal pairs.  Interior positive
-        frequency bins are doubled so that the one-sided result has the same
-        total power as the two-sided spectrum.  DC and, for an even FFT length,
-        Nyquist are not doubled.
+        relative-phase information between signal pairs.  Each interior
+        positive-frequency bin ``S(f)`` adds ``conj(S(-f))``, so that the
+        one-sided result has the same total power as the two-sided spectrum;
+        for a real signal ``S(-f) = conj(S(f))`` and the bin is doubled.  DC
+        and, for an even FFT length, Nyquist have no partner and are kept as
+        they are.
 
         Returns
         -------
@@ -3092,7 +3140,9 @@ class Connectivity:
             # weighted covariance while retaining the existing whitening
             # implementation. A shared normalization by sum(weight) cancels
             # from the canonical correlation and is therefore unnecessary.
-            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+            fourier_coefficients = _weight_observations(
+                fourier_coefficients, xp.sqrt(observation_weights)
+            )
         # Group membership was resolved on the host by _validated_group_indices
         # (one ascending index array per sorted label); index the device
         # coefficients with device index arrays, as ``xp.isin`` over host labels
@@ -3915,7 +3965,9 @@ class Connectivity:
 
         return to_numpy(global_coherence), to_numpy(unnormalized_global_coherence)
 
-    def _phase_locking_value(self) -> NDArray[np.complexfloating]:
+    def _phase_locking_value(
+        self, dtype: DTypeLike | None = None
+    ) -> NDArray[np.complexfloating]:
         # Normalize each Fourier coefficient to unit magnitude, then reuse the
         # batched reduced cross-spectral matmul: because
         #   (z_i conj(z_j)) / |z_i conj(z_j)| = (z_i / |z_i|) conj(z_j / |z_j|),
@@ -3935,7 +3987,7 @@ class Connectivity:
         # dtype already matches (the division below allocates a fresh array).
         # Only the non-negative frequencies are reported, so only those are
         # normalized and reduced.
-        coefficients = self._nonnegative_fourier_coefficients()
+        coefficients = self._nonnegative_fourier_coefficients(dtype)
         magnitude = xp.abs(coefficients)
         zero_magnitude = magnitude == 0
         if bool(xp.any(zero_magnitude)):
@@ -3953,9 +4005,9 @@ class Connectivity:
         # previous per-observation path where a zero-magnitude cross-spectrum
         # entry became NaN before averaging.
         normalized: NDArray[np.complexfloating] = _divide_where(
-            coefficients, magnitude, ~zero_magnitude, xp.nan
+            coefficients, magnitude, magnitude > 0, xp.nan
         )
-        return self._reduced_cross_spectral_matrix(normalized)
+        return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 
     @_asnumpy
     def phase_locking_value(self) -> NDArray[np.floating]:
@@ -4026,8 +4078,11 @@ class Connectivity:
         real part just below 1 and its imaginary part of rounding size, and
         the square root in the denominator amplifies that by about
         ``1 / sqrt(eps)``. The diagonal is therefore rounding noise below about
-        ``sqrt(eps)`` of the computation precision (1.5e-8 in float64,
-        3.5e-4 in float32), and exactly 0 only where the rounding cancels.
+        ``sqrt(eps)`` of the computation precision, and exactly 0 only where
+        the rounding cancels. The PLV behind this measure is formed in at least
+        complex128 whatever ``dtype`` is, so that noise is below about 1.5e-8,
+        and a small consistent lag (1e-4 rad, say) of complex64 coefficients
+        still gives 1; the result is returned at the precision of ``dtype``.
         A zero-power signal's PLV is NaN, and so is its diagonal entry here.
 
         References
@@ -4054,7 +4109,11 @@ class Connectivity:
         >>> bool(ciplv[0, 20, 0, 1] > 0.2)
         True
         """
-        complex_plv = self._phase_locking_value()
+        # ``1 - Re(PLV)**2`` cancels for a small consistent lag, which a
+        # complex64 PLV cannot represent: a lag of 1e-4 rad rounds Re(PLV) to
+        # 1, and the ratio to 0 instead of 1. The coefficients carry the lag
+        # to their own precision, so the PLV is formed in at least complex128.
+        complex_plv = self._phase_locking_value(xp.promote_types(self._dtype, xp.complex128))
         numerator = xp.abs(complex_plv.imag)
         denominator_squared = xp.maximum(0.0, 1.0 - complex_plv.real**2)
         denominator = xp.sqrt(denominator_squared)
@@ -4065,7 +4124,8 @@ class Connectivity:
         nonzero = denominator > xp.finfo(denominator.dtype).tiny
         result = _divide_where(numerator, denominator, nonzero, 0.0)
         result[xp.isnan(complex_plv)] = xp.nan
-        return xp.clip(result, 0.0, 1.0)
+        # Reported at the precision of ``dtype``, like the other measures.
+        return xp.clip(result, 0.0, 1.0).astype(xp.finfo(self._dtype).dtype, copy=False)
 
     @cached_property
     def _imaginary_moment_cache(self) -> dict[str, BackendArray]:
@@ -4104,7 +4164,7 @@ class Connectivity:
         The phase-lag-index family (``phase_lag_index``,
         ``weighted_phase_lag_index``, ``debiased_squared_phase_lag_index``, and
         ``debiased_squared_weighted_phase_lag_index``) each average a function --
-        ``sign``, identity, ``abs`` or square -- of the imaginary part of the
+        ``sign``, its square, identity, ``abs`` or square -- of the imaginary part of the
         per-observation cross-spectral matrix, with the diagonal zeroed. This
         returns the requested reduced moments from a cache, computing any that
         are missing from signal-row tiles of the observation-level
@@ -4117,15 +4177,17 @@ class Connectivity:
         ``PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS`` averaged observations,
         forming the tiles (memory traffic over every observation) dominates the
         cost and each reduction is a single further pass over a tile, so the
-        first request reduces all four moments from one formation; that costs
+        first request reduces all five moments from one formation; that costs
         less than forming the tiles again for a later measure that needs
-        different moments. The four reduced moments (each ``(n_time_windows,
+        different moments. The five reduced moments (each ``(n_time_windows,
         n_frequencies, n_signals, n_signals)`` for the default expectation) are
         then retained until :meth:`clear_cache`. In this regime a single
         measure is also faster and has a lower peak than before (741 -> 536 MB
         of traced allocation for one measure on a 100-trial, 5-taper,
-        1001-bin, 32-signal spectrum), because the tiles reuse two buffers
-        instead of fresh temporaries.
+        1001-bin, 32-signal spectrum, with the four moments other than
+        ``nonzero``), because the tiles reuse two buffers instead of fresh
+        temporaries. Adding ``nonzero`` added one reduced moment, 8 MB, to that
+        peak and no measurable time.
 
         Otherwise only the missing requested moments are computed. With few
         observations (e.g. a time-resolved single-trial spectrum with 3
@@ -4149,8 +4211,10 @@ class Connectivity:
         Parameters
         ----------
         *keys : str
-            Any of ``"sign"``, ``"imaginary"``, ``"absolute"``, ``"squared"`` for
-            ``E[sign(Im)]``, ``E[Im]``, ``E[|Im|]`` and ``E[Im**2]``.
+            Any of ``"sign"``, ``"nonzero"``, ``"imaginary"``, ``"absolute"``,
+            ``"squared"`` for ``E[sign(Im)]``, ``E[sign(Im)**2]`` (the fraction
+            of observations whose ``Im`` is not 0), ``E[Im]``, ``E[|Im|]`` and
+            ``E[Im**2]``.
 
         Returns
         -------
@@ -4173,7 +4237,7 @@ class Connectivity:
                 n_signals,
             )
             real_dtype = coefficients.real.dtype
-            # Without weights and with many observations all four moments are
+            # Without weights and with many observations all the moments are
             # cheap single-pass reductions of the tile, so they are computed
             # together (see PHASE_LAG_ALL_MOMENTS_MIN_OBSERVATIONS). Otherwise
             # only the missing requested ones are: with weights each is a full
@@ -4271,7 +4335,7 @@ class Connectivity:
         stop: int,
         squared_subscripts: str,
     ) -> None:
-        """Average the four phase-lag moments of one tile into ``moments``.
+        """Average the phase-lag moments of one tile into ``moments``.
 
         Parameters
         ----------
@@ -4281,9 +4345,9 @@ class Connectivity:
         scratch : array, same shape as ``imaginary``
             Workspace; overwritten.
         moments : dict of str to array, each shape (..., n_nonnegative_frequencies, n_signals, n_signals)
-            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all four
-            or the requested subset (see :meth:`_imaginary_cross_spectrum_moments`).
-            The block
+            Reduced moments to fill, keyed as ``_IMAGINARY_MOMENTS``: all of
+            them or the requested subset (see
+            :meth:`_imaginary_cross_spectrum_moments`). The block
             ``[..., start:stop, start:]`` of each is written.
         start, stop : int
             The tile's source rows.
@@ -4307,19 +4371,33 @@ class Connectivity:
         """
         block = (..., slice(start, stop), slice(start, None))
         if self._observation_weights is not None:
+            if "sign" in moments or "nonzero" in moments:
+                # One sign pass into the scratch buffer serves both moments.
+                xp.sign(imaginary, out=scratch)
+                if "sign" in moments:
+                    moments["sign"][block] = self._expectation(scratch)
+                if "nonzero" in moments:
+                    xp.abs(scratch, out=scratch)
+                    moments["nonzero"][block] = self._expectation(scratch)
             for key, reduced in moments.items():
-                reduced[block] = self._expectation(_IMAGINARY_MOMENTS[key](imaginary))
+                if key not in ("sign", "nonzero"):
+                    reduced[block] = self._expectation(_IMAGINARY_MOMENTS[key](imaginary))
             return
 
         observation_axes = self._expectation_axes
         n_observations = self.n_observations
-        if "sign" in moments:
+        if "sign" in moments or "nonzero" in moments:
             positive = xp.count_nonzero(imaginary > 0, axis=observation_axes)
             negative = xp.count_nonzero(imaginary < 0, axis=observation_axes)
             invalid = xp.any(xp.isnan(imaginary), axis=observation_axes)
-            moments["sign"][block] = xp.where(
-                invalid, xp.nan, (positive - negative) / n_observations
-            )
+            if "sign" in moments:
+                moments["sign"][block] = xp.where(
+                    invalid, xp.nan, (positive - negative) / n_observations
+                )
+            if "nonzero" in moments:
+                moments["nonzero"][block] = xp.where(
+                    invalid, xp.nan, (positive + negative) / n_observations
+                )
         if "imaginary" in moments:
             moments["imaginary"][block] = xp.mean(imaginary, axis=observation_axes)
         if "squared" in moments:
@@ -4577,13 +4655,16 @@ class Connectivity:
         """
         self._validate_debiasing_observations("debiased_squared_phase_lag_index")
         n_observations = self.n_observations
-        mean_sign, mean_absolute = self._imaginary_cross_spectrum_moments("sign", "absolute")
-        # Vinck's closed form assumes sign(Im) is +/-1 for every observation.
+        mean_sign, mean_nonzero, mean_absolute = self._imaginary_cross_spectrum_moments(
+            "sign", "nonzero", "absolute"
+        )
+        # The mean of s_k s_l over ordered pairs of distinct observations,
+        # (n**2 m**2 - sum_k s_k**2) / (n (n - 1)), is unbiased for E[s]**2.
+        # sum_k s_k**2 / n is the fraction of observations whose Im is not 0;
+        # Vinck's closed form (n m**2 - 1) / (n - 1) takes it as 1.
+        debiased = (n_observations * mean_sign**2 - mean_nonzero) / (n_observations - 1.0)
         # Where there is no phase lag (in-phase signals, the zeroed diagonal)
-        # the signs are 0 or rounding noise and the form would report the
-        # spurious lower bound -1 / (n - 1) or a noise value; there is no lag
-        # to estimate, so 0.
-        debiased = (n_observations * mean_sign.real**2 - 1.0) / (n_observations - 1.0)
+        # the signs are rounding noise; there is no lag to estimate, so 0.
         return xp.where(self._has_no_phase_lag(mean_absolute), 0.0, debiased)
 
     @_asnumpy
@@ -5424,8 +5505,16 @@ class Connectivity:
         The squared dDTF of Korzeniewska et al. (2003) multiplies the
         full-frequency DTF, which keeps direct and indirect (cascade) influence,
         by the squared partial coherence, which is zero between two signals
-        whose relation is fully explained by the others. The product therefore
-        keeps only direct influence:
+        whose relation is fully explained by the others. The product is
+        therefore zero for an influence relayed through observed signals, but a
+        positive value does not establish a direct one: partial coherence is
+        also nonzero between two signals that drive a common observed signal.
+        In the VAR ``0 -> 1 -> 2`` with ``0 -> 3 <- 2`` (unit lag-one couplings,
+        identity innovations) there is no ``0 -> 2`` coefficient, and
+        :meth:`partial_directed_coherence` and
+        :meth:`conditional_spectral_granger_prediction` are zero for it, yet
+        the dDTF ``0 -> 2`` is positive at every frequency and sums to 1/18. Use
+        those measures to test for a direct link:
 
         ``chi^2_ij(f) = ffDTF^2_ij(f) * kappa^2_ij(f)``, with
         ``ffDTF^2_ij(f) = |H_ij(f)|^2 / sum_f' sum_k |H_ik(f')|^2`` (summed over
@@ -5444,8 +5533,9 @@ class Connectivity:
         -------
         direct_directed_transfer_function : array
             Shape ``(..., n_nonnegative_frequencies, n_signals, n_signals)``.
-            Output ``[..., i, j]`` is the direct influence of signal ``i`` on
-            signal ``j`` (``i -> j``).
+            Output ``[..., i, j]`` is the dDTF ``i -> j``: zero for influence
+            relayed through observed signals, and positive for direct
+            influence or for two signals with a common observed child.
 
         Notes
         -----
@@ -5546,6 +5636,58 @@ class Connectivity:
             )
         return selection.mask
 
+    @property
+    def real_valued_frequencies(self) -> NDArray[np.bool_]:
+        """Which of :attr:`frequencies` hold only real Fourier coefficients.
+
+        For a real signal these are 0 Hz and, for an even FFT length, Nyquist;
+        an odd FFT length has no Nyquist bin. Each observation there carries
+        one real degree of freedom rather than two, so the zero-coherence null
+        and the chi-squared degrees of freedom of power differ: pass this mask
+        as ``real_valued`` to
+        :func:`~spectral_connectivity.statistics.coherence_significance_pvalue`,
+        :func:`~spectral_connectivity.statistics.power_confidence_intervals`,
+        and the log-power statistics. :meth:`group_delay` and :meth:`delay`
+        apply it themselves.
+
+        A bin counts as real when every coefficient's imaginary part is exactly
+        0, ignoring NaN coefficients (a bin with no finite coefficient does not
+        count). The package's transforms give exactly
+        real coefficients there on the CPU and the GPU alike; coefficients
+        computed elsewhere may carry rounding in those bins and then do not
+        count.
+
+        Returns
+        -------
+        NDArray[bool], shape (n_frequencies,)
+            Host array aligned with :attr:`frequencies`.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> multitaper = Multitaper(rng.standard_normal((200, 3, 2)), sampling_frequency=100)
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.frequencies[connectivity.real_valued_frequencies].tolist()
+        [0.0, 50.0]
+        """
+        return self._real_valued_frequency_mask.copy()
+
+    @cached_property
+    def _real_valued_frequency_mask(self) -> NDArray[np.bool_]:
+        """:attr:`real_valued_frequencies`, scanned once per set of coefficients."""
+        coefficients = self._nonnegative_fourier_coefficients(self._fourier_coefficients.dtype)
+        imaginary = coefficients.imag
+        # NaN in either part: np.nan assigned to a complex array is nan + 0j.
+        is_nan = xp.isnan(coefficients)
+        axes = (0, 1, 2, 4)
+        # A bin with no finite coefficient gives no evidence either way: not real.
+        real: NDArray[np.bool_] = to_numpy(
+            xp.all((imaginary == 0) | is_nan, axis=axes) & ~xp.all(is_nan, axis=axes)
+        )
+        return real
+
     def _significant_pair_phase(
         self,
         measure: str,
@@ -5607,6 +5749,7 @@ class Connectivity:
             self.n_observations,
             independent_frequency_step,
             significance_threshold=significance_threshold,
+            real_valued=self._real_valued_frequency_mask[frequency_mask][:, np.newaxis],
         )
         coherence_phase = np.ma.masked_array(
             _unwrap_across_undefined(np.angle(bandpassed_coherency), axis=-2),
@@ -6046,7 +6189,7 @@ def _total_inflow(
 
 
 def _get_noise_variance(
-    noise_covariance: NDArray[np.floating],
+    noise_covariance: NDArray[np.complexfloating],
     axis: int = -2,
 ) -> NDArray[np.floating]:
     """Extract noise variance and broadcast it along the requested signal axis.
@@ -6061,7 +6204,7 @@ def _get_noise_variance(
     Parameters
     ----------
     noise_covariance : array, shape (..., n_signals, n_signals)
-        Noise covariance matrix.
+        Hermitian noise covariance matrix; its diagonal is real.
     axis : int, default=-2
         Signal axis the noise variance should vary along, either -2 (target) or
         -1 (source). A leading ``newaxis`` is always inserted for the frequency
@@ -6074,7 +6217,7 @@ def _get_noise_variance(
         transfer function along `axis`.
 
     """
-    noise_variance = xp.diagonal(noise_covariance, axis1=-1, axis2=-2)
+    noise_variance = xp.real(xp.diagonal(noise_covariance, axis1=-1, axis2=-2))
     if axis == -2:
         return noise_variance[..., xp.newaxis, :, xp.newaxis]
     if axis == -1:
@@ -6085,7 +6228,7 @@ def _get_noise_variance(
 
 def _max_psd_discrepancy(
     transfer_function: NDArray[np.complexfloating],
-    noise_covariance: NDArray[np.floating],
+    noise_covariance: NDArray[np.complexfloating],
 ) -> float:
     """Return the largest relative gap between the diagonal-noise PSD and the true PSD.
 
@@ -6512,6 +6655,7 @@ def _find_significant_frequencies(
     multiple_comparisons_method: Literal[
         "Benjamini_Hochberg_procedure", "Bonferroni_correction"
     ] = "Benjamini_Hochberg_procedure",
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.bool_]:
     """Determine the largest significant cluster along the frequency axis.
 
@@ -6537,6 +6681,8 @@ def _find_significant_frequencies(
     multiple_comparisons_method : 'Benjamini_Hochberg_procedure' |
         'Bonferroni_correction'
         Procedure used to correct for multiple comparisons.
+    real_valued : bool or bool array, broadcastable to ``coherency``
+        Estimates from real-valued coefficients, tested against the real null.
 
     Returns
     -------
@@ -6547,7 +6693,7 @@ def _find_significant_frequencies(
     # Test each frequency's coherence against zero using the exact
     # magnitude-squared-coherence null distribution. The Fisher z-transform is
     # miscalibrated at the zero boundary and over-rejects the null ~3-4x.
-    p_values = coherence_significance_pvalue(coherency, n_obs)
+    p_values = coherence_significance_pvalue(coherency, n_obs, real_valued=real_valued)
     is_significant = adjust_for_multiple_comparisons(
         p_values, alpha=significance_threshold, method=multiple_comparisons_method
     )

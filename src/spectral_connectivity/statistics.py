@@ -622,6 +622,14 @@ def coherence_fisher_z_transform(
     :func:`coherence_significance_pvalue`, which uses the exact null
     distribution; the Fisher one-sample form (the ``coherency2=0, n_obs2=0``
     default) is miscalibrated at that boundary and over-rejects the null.
+
+    The bias and variance terms assume complex Fourier coefficients. At the
+    0 Hz bin and, for an even FFT length, the Nyquist bin of a real signal the
+    coefficients are real, ``arctanh(|C|)`` has about twice the variance, and
+    this test is not calibrated: comparing two equal coherences it rejected
+    9-18% at a nominal 5% in simulation (8-40 observations). Leave those bins
+    out, or test each against zero with
+    ``coherence_significance_pvalue(..., real_valued=True)``.
     """
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
     # and non-finite/fractional counts give NaN with a runtime warning.
@@ -702,16 +710,60 @@ def get_normal_distribution_p_values(
     )
 
 
+def _validated_real_valued(
+    real_valued: bool | NDArray[np.bool_],
+    estimates_shape: tuple[int, ...] | None = None,
+    estimates_name: str = "the estimates",
+) -> NDArray[np.bool_]:
+    """``real_valued`` as a boolean array that broadcasts against the estimates.
+
+    A non-boolean value (an integer mask, a string) and a mask of the wrong
+    shape raise rather than being read as truthy or failing inside NumPy.
+    """
+    mask = np.asarray(real_valued)
+    if mask.dtype != np.bool_:
+        msg = (
+            f"real_valued must be a bool or a boolean array, got dtype {mask.dtype}. "
+            "It marks the estimates from real-valued Fourier coefficients: use "
+            "Connectivity.real_valued_frequencies, which is True at 0 Hz and, for "
+            "an even FFT length, Nyquist for a real signal."
+        )
+        raise TypeError(msg)
+    if estimates_shape is not None:
+        try:
+            np.broadcast_shapes(mask.shape, estimates_shape)
+        except ValueError:
+            msg = (
+                f"real_valued has shape {mask.shape}, which does not broadcast "
+                f"against {estimates_name} of shape {estimates_shape}. Align it "
+                "with their frequency axis: pass "
+                "Connectivity.real_valued_frequencies[:, np.newaxis] for power "
+                "shaped (..., n_frequencies, n_signals), or [:, np.newaxis, "
+                "np.newaxis] for coherency shaped (..., n_frequencies, "
+                "n_signals, n_signals)."
+            )
+            raise ValueError(msg) from None
+    return mask
+
+
 def coherence_significance_pvalue(
     coherency: NDArray[np.complexfloating],
     n_observations: int,
+    *,
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.floating]:
     """P-value for testing squared coherence magnitude against zero.
 
     Tests the null hypothesis that the true coherence is zero. Under this null,
     for ``n`` independent complex-Gaussian observations the magnitude-squared
     coherence estimate follows a Beta(1, n - 1) distribution, so the upper-tail
-    probability is ``P(|C|^2 >= c) = (1 - c)^(n - 1)``.
+    probability is ``P(|C|^2 >= c) = (1 - c)^(n - 1)``. Where the Fourier
+    coefficients are real -- the 0 Hz bin and, for an even FFT length, the
+    Nyquist bin of a real signal -- each observation carries one real degree
+    of freedom rather than two. The estimate is then the squared cosine of the
+    angle between two independent isotropic vectors in R^n rather than C^n,
+    which follows Beta(1/2, (n - 1) / 2); the complex null there rejects about
+    twice as often as its level (10% at a nominal 5% with five observations).
 
     This exact boundary distribution should be used instead of the Fisher
     z-transform (:func:`coherence_fisher_z_transform`) when testing against zero
@@ -726,6 +778,13 @@ def coherence_significance_pvalue(
     n_observations : int
         Number of independent observations used to estimate the coherency
         (n_tapers * n_trials).
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, a boolean
+        array broadcast against ``coherency``; see
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies` for
+        which bins and why. For coherency shaped ``(..., n_frequencies,
+        n_signals, n_signals)`` pass
+        ``real_valued_frequencies[:, np.newaxis, np.newaxis]``.
 
     Returns
     -------
@@ -739,6 +798,16 @@ def coherence_significance_pvalue(
     .. [2] Thomson, D. J., & Chave, A. D. (1991). Jackknifed error estimates
            for spectra, coherences, and transfer functions. In Advances in
            Spectrum Analysis and Array Processing.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> coherency = np.array([0.6, 0.6])
+    >>> p_values = coherence_significance_pvalue(
+    ...     coherency, n_observations=5, real_valued=np.array([False, True])
+    ... )
+    >>> np.round(p_values, 3).tolist()  # (1 - 0.36)**4, and the real null
+    [0.168, 0.208]
     """
     if (
         not np.isfinite(n_observations)
@@ -756,7 +825,24 @@ def coherence_significance_pvalue(
     magnitude_squared_coherence: NDArray[np.floating] = np.clip(
         np.abs(coherency) ** 2, 0.0, 1.0
     )
-    return (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    real_valued = _validated_real_valued(
+        real_valued, magnitude_squared_coherence.shape, "coherency"
+    )
+    complex_null = (1.0 - magnitude_squared_coherence) ** (n_observations - 1)
+    if not np.any(real_valued):
+        return complex_null
+    # Only the real-valued entries (typically two bins) need the beta tail.
+    shape = np.broadcast_shapes(real_valued.shape, np.shape(complex_null))
+    is_real = np.broadcast_to(real_valued, shape)
+    p_values: NDArray[np.floating] = np.array(
+        np.broadcast_to(complex_null, shape), dtype=float, copy=True
+    )
+    p_values[is_real] = scipy.stats.beta.sf(
+        np.broadcast_to(magnitude_squared_coherence, is_real.shape)[is_real],
+        0.5,
+        (n_observations - 1) / 2,
+    )
+    return p_values
 
 
 def coherence_bias(n_observations: int) -> float:
@@ -764,7 +850,10 @@ def coherence_bias(n_observations: int) -> float:
 
     Coherence estimates are biased by finite sample size. This function
     computes the bias correction factor that can be subtracted from
-    Fisher z-transformed coherence estimates.
+    Fisher z-transformed coherence estimates. It assumes complex Fourier
+    coefficients and does not hold at the 0 Hz and Nyquist bins of a real
+    signal, whose coefficients are real (see
+    :func:`coherence_fisher_z_transform`).
 
     Parameters
     ----------
@@ -1007,6 +1096,7 @@ def power_confidence_intervals(
     ci: float = 0.95,
     *,
     n_tapers: int | None = None,
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
 
@@ -1036,6 +1126,15 @@ def power_confidence_intervals(
     n_tapers : int, optional
         Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
         Giving both raises ``ValueError``.
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, a boolean
+        array broadcast against ``power``; see
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies` for
+        which bins and why. For ``Connectivity.power()``, shaped ``(...,
+        n_frequencies, n_signals)``, pass ``real_valued_frequencies[:,
+        np.newaxis]``. Those bins use ``n_observations`` degrees of freedom; with
+        ``2 * n_observations`` there a nominal 95% interval from five
+        observations covers 83%.
 
     Returns
     -------
@@ -1060,6 +1159,10 @@ def power_confidence_intervals(
     >>> lower, upper = power_confidence_intervals(5, power_vals, 0.95)
     >>> np.round(lower, 3).tolist()
     [0.244, 0.488, 0.976, 2.441]
+    >>> # The 0 Hz bin of a real signal: half the degrees of freedom, a wider interval
+    >>> lower, upper = power_confidence_intervals(5, 1.0, 0.95, real_valued=True)
+    >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
+    95% CI: [0.390, 6.015]
 
     References
     ----------
@@ -1120,7 +1223,8 @@ def power_confidence_intervals(
     # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
     # previous behavior) produces an interval with coverage 2 * ci - 1 (a
     # requested 95% interval only covered ~90%).
-    degrees_of_freedom = 2 * n_observations
+    real_valued = _validated_real_valued(real_valued, power_values.shape, "power")
+    degrees_of_freedom = 2 * _chi_squared_shape(n_observations, real_valued)
     alpha = 1 - ci
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
@@ -1132,23 +1236,53 @@ def power_confidence_intervals(
     return lower_bound, upper_bound
 
 
-def power_bias(n_observations: int) -> float:
+def _chi_squared_shape(
+    n_observations: int, real_valued: bool | NDArray[np.bool_]
+) -> NDArray[np.floating]:
+    """Shape ``nu / 2`` of a power estimate's chi-squared distribution.
+
+    Each complex coefficient carries two degrees of freedom and each real one
+    (the 0 Hz and Nyquist bins of a real signal) one, so ``nu`` is
+    ``2 * n_observations``, or ``n_observations`` where ``real_valued``.
+    """
+    mask = _validated_real_valued(real_valued)
+    shape: NDArray[np.floating] = np.where(mask, n_observations / 2, n_observations)
+    return shape
+
+
+def _float_unless_masked(
+    value: NDArray[np.floating], real_valued: bool | NDArray[np.bool_]
+) -> float | NDArray[np.floating]:
+    """A float for a scalar ``real_valued``, the array for a mask."""
+    return float(value) if np.ndim(real_valued) == 0 else value
+
+
+def power_bias(
+    n_observations: int, *, real_valued: bool | NDArray[np.bool_] = False
+) -> float | NDArray[np.floating]:
     """Bias of the log power spectrum.
 
     A multitaper power estimate satisfies ``S_hat / S ~ chi2_nu / nu`` with
     ``nu = 2 * n_observations`` degrees of freedom. Writing ``chi2_nu`` as
     ``2 * Gamma(nu / 2)`` gives ``E[log(S_hat / S)] = psi(nu / 2) - log(nu / 2)``,
     i.e. the digamma/log are evaluated at the chi-squared shape parameter
-    ``nu / 2 = n_observations`` (not at ``nu``).
+    ``nu / 2 = n_observations`` (not at ``nu``). Where the Fourier
+    coefficients are real (the 0 Hz bin and, for an even FFT length, the
+    Nyquist bin of a real signal) ``nu = n_observations``.
 
     Parameters
     ----------
     n_observations : int
         n_observations is n_tapers * n_trials
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, a boolean
+        mask such as
+        :attr:`~spectral_connectivity.Connectivity.real_valued_frequencies`.
 
     Returns
     -------
-    bias : float
+    bias : float or NDArray[floating]
+        A float, or an array shaped like ``real_valued`` when that is an array.
 
     Examples
     --------
@@ -1156,11 +1290,16 @@ def power_bias(n_observations: int) -> float:
     Bias with 100 obs: -0.005008
     >>> print(f"Bias with 1000 obs: {power_bias(1000):.6f}")
     Bias with 1000 obs: -0.000500
+    >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
+    At a real-valued bin: -0.010033
     """
-    return float(scipy.special.psi(n_observations) - np.log(n_observations))
+    shape = _chi_squared_shape(n_observations, real_valued)
+    return _float_unless_masked(scipy.special.psi(shape) - np.log(shape), real_valued)
 
 
-def power_variance(n_observations: int) -> float:
+def power_variance(
+    n_observations: int, *, real_valued: bool | NDArray[np.bool_] = False
+) -> float | NDArray[np.floating]:
     """Compute variance of log-power spectrum estimates.
 
     Calculates the variance of log-transformed power spectrum estimates
@@ -1170,11 +1309,15 @@ def power_variance(n_observations: int) -> float:
     ----------
     n_observations : int
         Number of observations used in power estimation (n_tapers * n_trials).
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, as in
+        :func:`power_bias`.
 
     Returns
     -------
-    variance : float
-        Variance of log-power estimates.
+    variance : float or NDArray[floating]
+        Variance of log-power estimates: a float, or an array shaped like
+        ``real_valued`` when that is an array.
 
     Examples
     --------
@@ -1189,9 +1332,11 @@ def power_variance(n_observations: int) -> float:
     -----
     With ``S_hat / S ~ chi2_nu / nu`` and ``nu = 2 * n_observations``, the
     variance of ``log(S_hat)`` is the trigamma function evaluated at the
-    chi-squared shape parameter ``nu / 2 = n_observations``.
+    chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
+    bin ``nu = n_observations``, which about doubles it.
     """
-    return float(scipy.special.polygamma(1, n_observations))
+    shape = _chi_squared_shape(n_observations, real_valued)
+    return _float_unless_masked(scipy.special.polygamma(1, shape), real_valued)
 
 
 def power_fisher_z_transform(
@@ -1199,6 +1344,8 @@ def power_fisher_z_transform(
     n_obs1: int,
     spectrum2: NDArray[np.floating] | float = 1.0,
     n_obs2: int = 0,
+    *,
+    real_valued: bool | NDArray[np.bool_] = False,
 ) -> NDArray[np.floating]:
     """Transform power spectrum estimates for statistical testing.
 
@@ -1222,6 +1369,10 @@ def power_fisher_z_transform(
         Number of observations for spectrum2 (n_tapers * n_trials). If 0,
         performs a one-sample test of ``spectrum1`` against the fixed baseline
         ``spectrum2``.
+    real_valued : bool or NDArray[bool], default=False
+        Which estimates average real-valued Fourier coefficients, broadcast
+        against the spectra (see :func:`power_bias`); there the log power has
+        about twice the variance, so treating them as complex overstates z.
 
     Returns
     -------
@@ -1271,15 +1422,20 @@ def power_fisher_z_transform(
         )
         raise ValueError(msg)
 
-    bias1 = power_bias(n_obs1)
-    variance1 = power_variance(n_obs1)
+    real_valued = _validated_real_valued(
+        real_valued,
+        np.broadcast_shapes(spectrum1_values.shape, spectrum2_values.shape),
+        "the spectra",
+    )
+    bias1 = power_bias(n_obs1, real_valued=real_valued)
+    variance1 = power_variance(n_obs1, real_valued=real_valued)
     # When there is no second sample (n_obs2 == 0) spectrum2 is a fixed
     # baseline that carries no estimation bias or sampling variance. Evaluating
     # power_bias(0)/power_variance(0) would instead hit the digamma/trigamma
     # poles and return NaN.
     if n_obs2:
-        bias2 = power_bias(n_obs2)
-        variance2 = power_variance(n_obs2)
+        bias2 = power_bias(n_obs2, real_valued=real_valued)
+        variance2 = power_variance(n_obs2, real_valued=real_valued)
     else:
         bias2 = 0.0
         variance2 = 0.0
@@ -1288,5 +1444,6 @@ def power_fisher_z_transform(
     z1: NDArray[np.floating] = np.log(spectrum1) - bias1
     z2: NDArray[np.floating] = np.log(spectrum2) - bias2
 
-    scale: float = np.sqrt(variance1 + variance2)
-    return (z1 - z2) / scale
+    scale = np.sqrt(variance1 + variance2)
+    z: NDArray[np.floating] = (z1 - z2) / scale
+    return z

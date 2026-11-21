@@ -295,3 +295,52 @@ def test_welch_overlap_above_half_marks_observations_correlated_end_to_end():
     assert conn.observations_are_independent is False
     with pytest.warns(UserWarning, match="pairwise_phase_consistency .*correlated"):
         conn.pairwise_phase_consistency()
+
+
+def _sine_tapers(n_samples, n_tapers):
+    """Riedel & Sidorenko sine tapers, mutually orthogonal: (n_samples, n_tapers)."""
+    samples = np.arange(1, n_samples + 1)[:, np.newaxis]
+    orders = np.arange(1, n_tapers + 1)
+    return np.sqrt(2 / (n_samples + 1)) * np.sin(np.pi * orders * samples / (n_samples + 1))
+
+
+@pytest.mark.parametrize(
+    ("tapers", "independent"),
+    [
+        (None, True),
+        (_sine_tapers(200, 3), True),
+        (np.hanning(200)[:, np.newaxis], True),
+        (np.repeat(_sine_tapers(200, 1), 4, axis=1), False),
+        (_sine_tapers(200, 3) + 0.05 * _sine_tapers(200, 1), False),
+        (np.ones((200, 1), dtype=int), True),
+        (np.ones((200, 2), dtype=int), False),
+    ],
+    ids=[
+        "dpss",
+        "orthogonal_sine",
+        "single_hann",
+        "duplicated",
+        "overlapping",
+        "integer_boxcar",
+        "integer_duplicated",
+    ],
+)
+def test_multitaper_counts_custom_tapers_as_independent_only_when_orthogonal(
+    tapers, independent
+):
+    """Eigencoefficients of orthogonal tapers are uncorrelated for white noise;
+    those of tapers that overlap are not, and copies of one taper are
+    identical. Four copies of one taper made n_observations 4 and pairwise
+    phase consistency of independent channels 1, with no warning."""
+    series = _two_channel_series(np.random.default_rng(12), n_time=200, n_trials=2)
+    multitaper = Multitaper(
+        series, sampling_frequency=100, time_halfbandwidth_product=2, tapers=tapers
+    )
+    assert multitaper.observations_are_independent is independent
+    connectivity = Connectivity.from_transform(multitaper)
+    assert connectivity.observations_are_independent is independent
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.pairwise_phase_consistency()
+    warned = any("correlated" in str(warning.message) for warning in record)
+    assert warned is not independent

@@ -16,6 +16,7 @@ from spectral_connectivity._array_utils import (
     _complex_inner_product,
     _conjugate_transpose,
     _divide_where,
+    _weight_observations,
 )
 from spectral_connectivity._backend import ON_GPU, svds, xp
 
@@ -739,7 +740,9 @@ def _global_coherence(
     # by total power.
     if min(n_signals, n_estimates) <= GLOBAL_COHERENCE_MAX_DENSE_COMPONENTS:
         if observation_weights is not None:
-            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+            fourier_coefficients = _weight_observations(
+                fourier_coefficients, xp.sqrt(observation_weights)
+            )
         return _batched_global_coherence(
             fourier_coefficients, max_rank, max_workspace_elements
         )
@@ -775,7 +778,9 @@ def _global_coherence(
             # it never holds a weighted copy of every coefficient.
             if observation_weights is not None:
                 weights = observation_weights[time_ind, :, :, freq_ind, 0].reshape(n_estimates)
-                bin_coefficients = bin_coefficients * xp.sqrt(weights)[xp.newaxis, :]
+                bin_coefficients = _weight_observations(
+                    bin_coefficients, xp.sqrt(weights)[xp.newaxis, :]
+                )
             (
                 global_coherence[time_ind, freq_ind],
                 unnormalized_global_coherence[time_ind, freq_ind],

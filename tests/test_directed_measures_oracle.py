@@ -31,6 +31,7 @@ but not PDC, and the unequal variances make the noise-weighted DC and gPDC
 differ from DTF and PDC.
 """
 
+import itertools
 import warnings
 
 import numpy as np
@@ -46,11 +47,13 @@ from tests._var_oracle import (
     _analytic_directed_measures,
     _analytic_var,
     _block_granger_from_state_space,
-    _companion_matrix,
     _companion_spectral_radius,
     _dense_stable_var,
     _fourier_coefficients_with_cross_spectrum,
+    _observed_subsystem,
     _pairwise_granger_from_state_space,
+    _prediction_error_covariance,
+    _state_space_form,
     _time_reversed_var,
     _var_autocovariance,
 )
@@ -68,6 +71,25 @@ _N_FFT = 128
 _BOTH_FACTORIZATION_PATHS = pytest.mark.parametrize(
     "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
 )
+
+
+# The measures read off the factor's transfer function and noise covariance,
+# which ``_analytic_directed_measures`` gives in closed form.
+_TRANSFER_FUNCTION_MEASURES = [
+    "directed_transfer_function",
+    "partial_directed_coherence",
+    "directed_coherence",
+    "generalized_partial_directed_coherence",
+    "direct_directed_transfer_function",
+]
+
+
+def _blocks(group_labels, labels):
+    """Signal indices of each group, in the order of ``labels``."""
+    return [
+        [signal for signal, label in enumerate(group_labels) if label == group]
+        for group in labels
+    ]
 
 
 def _tightly_factored_connectivity(spectrum, conjugate_symmetric=False):
@@ -118,15 +140,7 @@ def test_injected_cross_spectrum_matches_analytic(var_oracle):
 
 
 @pytest.mark.parametrize(
-    "measure",
-    [
-        "directed_transfer_function",
-        "partial_directed_coherence",
-        "directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-        "pairwise_spectral_granger_prediction",
-    ],
+    "measure", [*_TRANSFER_FUNCTION_MEASURES, "pairwise_spectral_granger_prediction"]
 )
 def test_non_causal_direction_is_zero(var_oracle, measure):
     """The non-causal [1, 0] entry (1 -> 0) must be ~0 for a unidirectional VAR.
@@ -196,16 +210,7 @@ def test_chain_oracle_distinguishes_the_measures(chain_oracle):
     assert ddtf[:, 2, 1].max() > 0
 
 
-@pytest.mark.parametrize(
-    "measure",
-    [
-        "directed_transfer_function",
-        "partial_directed_coherence",
-        "directed_coherence",
-        "generalized_partial_directed_coherence",
-        "direct_directed_transfer_function",
-    ],
-)
+@pytest.mark.parametrize("measure", _TRANSFER_FUNCTION_MEASURES)
 def test_directed_measure_matches_analytic_closed_form(chain_oracle, measure):
     """Every entry (diagonal included) equals the closed form of the known VAR,
     transposed from its native layout (see the module docstring)."""
@@ -422,17 +427,13 @@ def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, targ
     non-negative FFT grid.
     """
     n_lags, n_signals, _ = coefficients.shape
-    C = np.concatenate(list(coefficients), axis=1)
-    A = _companion_matrix(coefficients)
-    K = np.zeros((n_signals * n_lags, n_signals))
-    K[:n_signals] = np.eye(n_signals)
+    A, C, K, Q = _state_space_form(coefficients, noise_covariance)
     V = noise_covariance
     reduced = [i for i in range(n_signals) if i != source]
-    C_r = C[reduced]
-    Q, R, S = K @ V @ K.T, V[np.ix_(reduced, reduced)], K @ V[:, reduced]
-    P = solve_discrete_are(A.T, C_r.T, Q, R, s=S)
-    V_r = C_r @ P @ C_r.T + R
-    K_r = (A @ P @ C_r.T + S) @ np.linalg.inv(V_r)
+    C_r, R, S = _observed_subsystem(C, K, V, reduced)
+    P = _prediction_error_covariance(A, C_r, Q, R, S)
+    V_r = C_r @ P @ C_r.conj().T + R
+    K_r = (A @ P @ C_r.conj().T + S) @ np.linalg.inv(V_r)
     target_r = reduced.index(target)
     others = [i for i in range(n_signals) if i != target]
     partial = (
@@ -448,8 +449,9 @@ def _state_space_conditional_granger(coefficients, noise_covariance, n_fft, targ
         H = np.eye(n_signals) + C @ np.linalg.solve(z * identity - A, K)
         B_r = np.eye(len(reduced)) - C_r @ np.linalg.solve(z * identity - (A - K_r @ C_r), K_r)
         H_r = B_r[target_r] @ H[np.ix_(reduced, others)] @ L
-        values[k] = np.log(V_r[target_r, target_r]) - np.log(
-            V_r[target_r, target_r] - np.real(H_r @ H_r.conj())
+        reduced_variance = np.real(V_r[target_r, target_r])
+        values[k] = np.log(reduced_variance) - np.log(
+            reduced_variance - np.real(H_r @ H_r.conj())
         )
     return values
 
@@ -472,6 +474,38 @@ _CHAIN_AND_DENSE_MODELS = pytest.mark.parametrize(
     [(_CHAIN_COEFFICIENTS, np.eye(3)), (_DENSE_COEFFICIENTS, _CORRELATED_NOISE)],
     ids=["chain", "dense_correlated"],
 )
+
+
+@pytest.mark.parametrize(
+    ("coefficients", "noise_covariance"),
+    [
+        (_CHAIN_COEFFICIENTS, np.eye(3)),
+        (_DENSE_COEFFICIENTS, _CORRELATED_NOISE),
+        _dense_stable_var(n_signals=5, n_lags=2, spectral_radius=0.8, seed=0),
+    ],
+    ids=["chain", "dense_correlated", "dense_5_signals"],
+)
+def test_riccati_iteration_matches_scipy_on_real_models(coefficients, noise_covariance):
+    """The state-space oracles solve their Riccati equations by iteration,
+    which also covers complex models; for real ones it must give SciPy's
+    ``solve_discrete_are`` solution, for every observed sub-system the oracles
+    use (each signal pair, and every signal but one)."""
+    n_signals = coefficients.shape[-1]
+    A, C, K, Q = _state_space_form(coefficients, noise_covariance)
+    subsets = [
+        *itertools.combinations(range(n_signals), 2),
+        *itertools.combinations(range(n_signals), n_signals - 1),
+    ]
+    for members in map(list, subsets):
+        C_sub, R, S = _observed_subsystem(C, K, noise_covariance, members)
+        expected = solve_discrete_are(A.T, C_sub.T, Q, R, s=S)
+        np.testing.assert_allclose(
+            _prediction_error_covariance(A, C_sub, Q, R, S),
+            expected,
+            rtol=0,
+            atol=1e-12 * (np.abs(Q).max() + np.abs(expected).max()),
+            err_msg=str(members),
+        )
 
 
 @_CHAIN_AND_DENSE_MODELS
@@ -553,10 +587,7 @@ def test_blockwise_granger_among_three_groups_matches_state_space_oracle(
         warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
         blockwise, labels = connectivity.blockwise_spectral_granger_prediction(group_labels)
 
-    blocks = [
-        [signal for signal, label in enumerate(group_labels) if label == group]
-        for group in labels
-    ]
+    blocks = _blocks(group_labels, labels)
     oracle = _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
     off_diagonal = ~np.eye(3, dtype=bool)
     # Premise: an influence in every direction, at its peak far above the tolerance.
@@ -564,6 +595,152 @@ def test_blockwise_granger_among_three_groups_matches_state_space_oracle(
     np.testing.assert_allclose(
         blockwise[0][:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
     )
+
+
+_DIRECTED_MEASURES = [
+    "pairwise_spectral_granger_prediction",
+    "conditional_spectral_granger_prediction",
+    *_TRANSFER_FUNCTION_MEASURES,
+]
+
+
+@pytest.mark.parametrize(
+    "measure", [*_DIRECTED_MEASURES, "blockwise_spectral_granger_prediction"]
+)
+def test_complex_white_noise_has_no_direction(measure):
+    """Complex white noise with correlated innovations has no lagged dependence.
+
+    Its spectrum is the same Hermitian matrix at every frequency, with
+    imaginary off-diagonal entries, so the minimum-phase factor is that
+    matrix's constant square root: the transfer function is the identity and
+    every directed measure is exactly zero off the diagonal. Discarding the
+    imaginary part of the factor's lag-0 coefficient left ``H(0) != I`` and
+    reported a direction (pairwise Granger 0.45, DTF 0.26 for a coupling of
+    0.6j).
+    """
+    covariance = np.array([[1.0, 0.6j, 0.2], [-0.6j, 1.0, -0.3j], [0.2, 0.3j, 1.0]])
+    spectrum = np.broadcast_to(covariance, (_N_FFT, 3, 3))
+    connectivity = Connectivity(_fourier_coefficients_with_cross_spectrum(spectrum))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if measure == "blockwise_spectral_granger_prediction":
+            result, _ = connectivity.blockwise_spectral_granger_prediction([0, 1, 1])
+        else:
+            result = getattr(connectivity, measure)()
+    off_diagonal = ~np.eye(result.shape[-1], dtype=bool)
+    values = np.asarray(result)[..., off_diagonal]
+    assert np.isfinite(values).all(), measure
+    np.testing.assert_allclose(values, 0.0, atol=1e-12, rtol=0, err_msg=measure)
+
+
+@pytest.fixture(scope="module")
+def complex_var():
+    """A dense complex VAR: every signal drives every other, the innovations
+    are correlated with imaginary covariances, and the spectrum is not
+    conjugate-symmetric. Its exact spectrum is fed to a ``Connectivity``."""
+    n_fft = 1024
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=3, n_lags=2, spectral_radius=0.8, seed=1, complex_valued=True
+    )
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = _tightly_factored_connectivity(spectrum)
+    assert not _is_conjugate_symmetric(connectivity._expectation_cross_spectral_matrix())
+    return coefficients, noise_covariance, n_fft, connectivity
+
+
+def test_pairwise_and_blockwise_granger_of_a_complex_var_match_state_space_oracle(
+    complex_var,
+):
+    """The Riccati oracle needs no spectral factorization and holds for a
+    complex VAR, so it checks that the Wilson-based measures keep the
+    imaginary parts of the lag-0 coefficient and the innovation covariance."""
+    coefficients, noise_covariance, n_fft, connectivity = complex_var
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DirectedOrientationWarning)
+        pairwise = connectivity.pairwise_spectral_granger_prediction()[0]
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction([0, 1, 1])
+    off_diagonal = ~np.eye(3, dtype=bool)
+    oracle = _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft)
+    assert oracle[:, off_diagonal].max(axis=0).min() > 0.01
+    np.testing.assert_allclose(
+        pairwise[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+    blocks = _blocks([0, 1, 1], labels)
+    block_oracle = _block_granger_from_state_space(
+        coefficients, noise_covariance, n_fft, blocks
+    )
+    block_off_diagonal = ~np.eye(2, dtype=bool)
+    np.testing.assert_allclose(
+        blockwise[0][:, block_off_diagonal],
+        block_oracle[:, block_off_diagonal],
+        atol=1e-9,
+        rtol=0,
+    )
+
+
+@pytest.mark.parametrize("measure", _TRANSFER_FUNCTION_MEASURES)
+def test_transfer_function_measures_of_a_complex_var_match_closed_form(complex_var, measure):
+    """For a complex VAR the factor's transfer function and Hermitian
+    innovation covariance give the closed forms of the model, every entry
+    included; complex white noise checks these measures only where H = I."""
+    coefficients, noise_covariance, n_fft, connectivity = complex_var
+    A, H, _ = _analytic_var(coefficients, noise_covariance, n_fft)
+    expected = np.swapaxes(
+        _analytic_directed_measures(A, H, noise_covariance)[measure].real, -1, -2
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = np.asarray(getattr(connectivity, measure)())[0]
+    assert result.dtype == np.float64
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-9)
+
+
+def test_conditional_granger_of_a_complex_var_matches_state_space_oracle(complex_var):
+    """Geweke's normalization of the full model's innovations takes the
+    conjugate transpose, ``P Sigma P^H``, for a Hermitian covariance."""
+    coefficients, noise_covariance, n_fft, connectivity = complex_var
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        conditional = connectivity.conditional_spectral_granger_prediction()[0]
+    for target in range(3):
+        for source in range(3):
+            if target == source:
+                continue
+            oracle = _state_space_conditional_granger(
+                coefficients, noise_covariance, n_fft, target, source
+            )
+            assert oracle.max() > 0.01
+            np.testing.assert_allclose(
+                conditional[:, source, target], oracle, atol=1e-9, rtol=0
+            )
+
+
+def test_ddtf_is_positive_between_parents_of_a_common_child():
+    """dDTF is zero for a relayed influence, not only for an absent one: in
+    ``0 -> 1 -> 2`` with ``0 -> 3 <- 2`` there is no ``0 -> 2`` coefficient,
+    so PDC and conditional Granger are zero, but 0 and 2 drive the common child
+    3 and their partial coherence is not, so dDTF ``0 -> 2`` is positive at
+    every frequency. Its closed form sums to exactly 1/18 for unit couplings
+    and identity innovations."""
+    coefficients = np.zeros((1, 4, 4))  # native [target, source]
+    for source, target in [(0, 1), (1, 2), (0, 3), (2, 3)]:
+        coefficients[0, target, source] = 1.0
+    A, H, spectrum = _analytic_var(coefficients, np.eye(4), 256)
+    connectivity = _tightly_factored_connectivity(spectrum)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ddtf = connectivity.direct_directed_transfer_function()[0]
+        pdc = connectivity.partial_directed_coherence()[0]
+        conditional = connectivity.conditional_spectral_granger_prediction()[0]
+
+    analytic = _analytic_directed_measures(A, H, np.eye(4))[
+        "direct_directed_transfer_function"
+    ]
+    np.testing.assert_allclose(ddtf[:, 0, 2], analytic[:, 2, 0], rtol=1e-9)
+    assert ddtf[:, 0, 2].min() > 1e-4
+    assert ddtf[:, 0, 2].sum() == pytest.approx(1 / 18, rel=1e-9)
+    np.testing.assert_allclose(pdc[:, 0, 2], 0.0, atol=1e-12)
+    np.testing.assert_allclose(conditional[:, 0, 2], 0.0, atol=1e-10)
 
 
 def test_conditional_granger_removes_mediated_influence():

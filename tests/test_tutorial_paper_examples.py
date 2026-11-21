@@ -43,6 +43,7 @@ time-varying one. They fail for different reasons.
 import ast
 import dataclasses
 import itertools
+import re
 from pathlib import Path
 
 import numpy as np
@@ -263,6 +264,19 @@ _ESTIMATE_BUDGET = (0.3, 0.05)
 # has now. Wen example 2 with 5 s trials, as it once was, averaged to a partial
 # directed coherence of 0.16 between two signals its model does not connect.
 _BIAS_BUDGET = (0.25, 0.01)
+# Direct DTF is normalized over every frequency, so a bin holds about
+# 1 / n_frequencies of its target's inflow and the absolute parts above exceed
+# it: an all-zero dDTF passed the estimate budget for 12 of the 14 plotted
+# examples. Its sum over frequency, the share of the target's inflow it
+# attributes to the source, is held to a budget relative to each influence's
+# own share, (relative, absolute) as above. The absolute part is about twice
+# the largest share estimated where a model has no direct influence (0.0027).
+# With the tutorial's seed the furthest estimate uses 0.53 of its budget, and
+# 0.82 over 31 seeds of every plotted example (434 simulations, none over
+# budget); the furthest expected spectrum, which no seed changes, uses 0.55 of
+# its. An all-zero dDTF uses 2.3 or more of both in every example.
+_SUMMED_DDTF_ESTIMATE_BUDGET = (0.3, 0.005)
+_SUMMED_DDTF_BIAS_BUDGET = (0.25, 0.005)
 
 
 def _explained_fraction(measure, values):
@@ -312,6 +326,25 @@ def _assert_near_model(measure, model, budget, label):
     assert departure[frequency, influence] < limit[influence], (
         f"{label}, x{source + 1} -> x{target + 1}: {departure[frequency, influence]:.3g} "
         f"from the model at frequency bin {frequency + 1} (limit {limit[influence]:.3g})"
+    )
+
+
+def _assert_summed_ddtf_near_model(measure, model, budget, label):
+    """Direct DTF, ``[frequency, source, target]``, summed over the
+    frequencies above 0 Hz, is within ``budget`` of the model's for every
+    influence of one signal on another, relative to that influence's own sum."""
+    relative, absolute = budget
+    off_diagonal = ~np.eye(model.shape[-1], dtype=bool)
+    measure_share = measure[1:, off_diagonal].sum(axis=0)
+    model_share = model[1:, off_diagonal].sum(axis=0)
+    departure = np.abs(measure_share - model_share)
+    limit = relative * model_share + absolute
+    influence = np.argmax(departure / limit)
+    source, target = np.argwhere(off_diagonal)[influence]
+    assert departure[influence] < limit[influence], (
+        f"{label}, x{source + 1} -> x{target + 1}: summed direct DTF "
+        f"{measure_share[influence]:.3g}, model {model_share[influence]:.3g} "
+        f"(limit {limit[influence]:.3g})"
     )
 
 
@@ -382,12 +415,13 @@ def test_window_and_tapers_of_example_suit_its_model(analysis):
     )
     true = analysis.true_measures()
     for measure in analysis.measures:
-        _assert_near_model(
-            getattr(expected, measure)()[0],
-            true[measure],
-            _BIAS_BUDGET,
-            f"{analysis.label} {measure}",
-        )
+        values = getattr(expected, measure)()[0]
+        label = f"{analysis.label} {measure}"
+        _assert_near_model(values, true[measure], _BIAS_BUDGET, label)
+        if measure == "direct_directed_transfer_function":
+            _assert_summed_ddtf_near_model(
+                values, true[measure], _SUMMED_DDTF_BIAS_BUDGET, label
+            )
 
 
 def test_example_agrees_with_its_model(analysis):
@@ -396,9 +430,137 @@ def test_example_agrees_with_its_model(analysis):
     windows of each half)."""
     true = analysis.true_measures()
     for measure in analysis.measures:
+        estimate = analysis.estimate(measure)
+        label = f"{analysis.label} {measure}"
         _assert_near_model(
-            _explained_fraction(measure, analysis.estimate(measure)),
+            _explained_fraction(measure, estimate),
             _explained_fraction(measure, true[measure]),
             _ESTIMATE_BUDGET,
-            f"{analysis.label} {measure}",
+            label,
         )
+        if measure == "direct_directed_transfer_function":
+            _assert_summed_ddtf_near_model(
+                estimate, true[measure], _SUMMED_DDTF_ESTIMATE_BUDGET, label
+            )
+
+
+def _published_model(n_lags, n_signals, terms, noise_covariance):
+    """``(coefficients, noise_covariance)`` from ``(target, source, lag,
+    value)`` terms, 1-based as printed; coefficients are ``[lag - 1, target,
+    source]`` as ``simulate_MVAR`` takes them."""
+    coefficients = np.zeros((n_lags, n_signals, n_signals))
+    for target, source, lag, value in terms:
+        coefficients[lag - 1, target - 1, source - 1] = value
+    return coefficients, np.asarray(noise_covariance, dtype=float)
+
+
+# The models of Ding, Chen & Bressler (2006), "Granger causality: basic theory
+# and application to neuroscience" (arXiv:q-bio/0608035, Eqs. 55-58; Handbook
+# of Time Series Analysis, ch. 17), transcribed from the paper rather than the
+# tutorial, so a transcription error in the tutorial is not also in its tests.
+# x1, x2, x3 of Example 2 are the paper's X, Y, Z.
+_ROOT2 = np.sqrt(2)
+_EXAMPLE2_TERMS = [
+    (1, 1, 1, 0.8),
+    (1, 1, 2, -0.5),
+    (1, 3, 1, 0.4),
+    (2, 2, 1, 0.9),
+    (2, 2, 2, -0.8),
+    (3, 3, 1, 0.5),
+    (3, 3, 2, -0.2),
+    (3, 2, 1, 0.5),
+]
+_PUBLISHED_MODELS = {
+    "ding_example1": _published_model(
+        2,
+        2,
+        [
+            (1, 1, 1, 0.9),
+            (1, 1, 2, -0.5),
+            (2, 2, 1, 0.8),
+            (2, 2, 2, -0.5),
+            (2, 1, 1, 0.16),
+            (2, 1, 2, -0.2),
+        ],
+        [[1.0, 0.4], [0.4, 0.7]],
+    ),
+    "ding_example2a": _published_model(2, 3, _EXAMPLE2_TERMS, np.diag([0.3, 1.0, 0.2])),
+    "ding_example2b": _published_model(
+        2, 3, [*_EXAMPLE2_TERMS, (1, 2, 2, 0.2)], np.diag([0.3, 1.0, 0.2])
+    ),
+    "ding_example3": _published_model(
+        3,
+        5,
+        [
+            (1, 1, 1, 0.95 * _ROOT2),
+            (1, 1, 2, -0.9025),
+            (2, 1, 2, 0.5),
+            (3, 1, 3, -0.4),
+            (4, 1, 2, -0.5),
+            (4, 4, 1, 0.25 * _ROOT2),
+            (4, 5, 1, 0.25 * _ROOT2),
+            (5, 4, 1, -0.25 * _ROOT2),
+            (5, 5, 1, 0.25 * _ROOT2),
+        ],
+        np.diag([0.6, 0.5, 0.3, 0.3, 0.6]),
+    ),
+    # Dhamala, Rangarajan & Ding (2008), "Analyzing information flow in brain
+    # networks with nonparametric Granger causality", NeuroImage 41, 354-362
+    # (author manuscript PMC2685256): the three-node model of "The simulation
+    # models", with var(eta) = 0.25, var(xi) = 1, var(epsilon) = 0.25 from its
+    # Fourier analysis. x1, x2, x3 are its X, Y, Z.
+    "Dhamala_example1": _published_model(
+        2,
+        3,
+        [
+            (1, 1, 1, 0.8),
+            (1, 1, 2, -0.5),
+            (1, 3, 1, 0.4),
+            (2, 2, 1, 0.53),
+            (2, 2, 2, -0.8),
+            (3, 3, 1, 0.5),
+            (3, 3, 2, -0.2),
+            (3, 2, 1, 0.5),
+        ],
+        np.diag([0.25, 1.0, 0.25]),
+    ),
+}
+# Examples whose markdown displays their equations.
+_DISPLAYED_EXAMPLES = [name for name in _PUBLISHED_MODELS if name.startswith("ding_")]
+
+
+@pytest.mark.parametrize("example", list(_PUBLISHED_MODELS))
+def test_example_simulates_the_published_model(tutorial, example):
+    """The model an example simulates is the published one; every other test
+    here takes the model from the tutorial itself."""
+    _, _, coefficients, noise_covariance = tutorial.simulate(example)
+    published_coefficients, published_noise = _PUBLISHED_MODELS[example]
+    np.testing.assert_allclose(coefficients, published_coefficients, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(noise_covariance, published_noise, rtol=0, atol=1e-12)
+
+
+def _displayed_coefficients(example, n_lags, n_signals):
+    """Coefficients of the equations the tutorial displays above an example,
+    such as ``$$ x_1 = 0.95\\sqrt2x_1(n-1) - 0.9025x_1(n-2) + w_1 $$``."""
+    name = example.replace("_example", " Example ")
+    heading = f"## {name[0].upper()}{name[1:]}"
+    text = _TUTORIAL.read_text()
+    cell = text[text.index(heading) :].split("# %%", 1)[0]
+    coefficients = np.zeros((n_lags, n_signals, n_signals))
+    for target, right_side in re.findall(r"\$\$\s*x_(\d)\s*=(.*?)\$\$", cell):
+        for sign, value, root, source, lag in re.findall(
+            r"([+-]?)\s*([0-9.]+)(\\sqrt2)?\s*x_(\d)\(n-(\d)\)", right_side
+        ):
+            coefficient = float(value) * (_ROOT2 if root else 1.0) * (-1 if sign == "-" else 1)
+            coefficients[int(lag) - 1, int(target) - 1, int(source) - 1] = coefficient
+    return coefficients
+
+
+@pytest.mark.parametrize("example", _DISPLAYED_EXAMPLES)
+def test_example_displays_the_published_equations(example):
+    """The equations the tutorial shows for an example are the published ones.
+    Example 2a showed the lag-two x2 term that only 2b has, and Example 3 the
+    x4 -> x5 coefficient with the wrong sign."""
+    published_coefficients, _ = _PUBLISHED_MODELS[example]
+    displayed = _displayed_coefficients(example, *published_coefficients.shape[:2])
+    np.testing.assert_allclose(displayed, published_coefficients, rtol=0, atol=1e-12)

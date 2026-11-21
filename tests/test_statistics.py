@@ -423,6 +423,132 @@ def test_coherence_significance_pvalue_is_well_calibrated():
         assert np.isclose(rejection_rate, alpha, atol=0.01)
 
 
+def _rate_and_limit(hits, expected_rate):
+    """Observed rate of ``hits`` and five standard errors of it under ``expected_rate``."""
+    return hits.mean(), 5 * np.sqrt(expected_rate * (1 - expected_rate) / hits.size)
+
+
+def test_coherence_significance_pvalue_is_calibrated_for_real_valued_coefficients():
+    """At a real signal's 0 Hz and Nyquist bins the coefficients are real, and
+    the squared coherence of five real observations follows Beta(1/2, 2), not
+    Beta(1, 4). The complex null rejected 10% of independent pairs there at a
+    nominal 5%."""
+    import scipy.stats
+
+    rng = np.random.default_rng(20261121)
+    alpha, n_obs, n_rep = 0.05, 5, 200_000
+    x = rng.standard_normal((n_rep, n_obs))
+    y = rng.standard_normal((n_rep, n_obs))
+    coherency = (x * y).mean(axis=1) / np.sqrt((x**2).mean(axis=1) * (y**2).mean(axis=1))
+
+    real_null = coherence_significance_pvalue(coherency, n_obs, real_valued=True) <= alpha
+    complex_null = coherence_significance_pvalue(coherency, n_obs) <= alpha
+
+    rate, limit = _rate_and_limit(real_null, alpha)
+    assert abs(rate - alpha) < limit
+    # The complex null rejects when (1 - c)**4 <= alpha, which under the real
+    # null Beta(1/2, 2) has probability 0.102: about twice the level.
+    complex_rate_exact = scipy.stats.beta.sf(
+        1 - alpha ** (1 / (n_obs - 1)), 0.5, (n_obs - 1) / 2
+    )
+    complex_rate, complex_limit = _rate_and_limit(complex_null, complex_rate_exact)
+    assert abs(complex_rate - complex_rate_exact) < complex_limit
+    assert complex_rate_exact - alpha > 10 * limit
+    # A mask applies the real null only where it is set.
+    mixed = coherence_significance_pvalue(
+        coherency[:4], n_obs, real_valued=np.array([True, False, True, False])
+    )
+    np.testing.assert_array_equal(
+        mixed,
+        np.where(
+            [True, False, True, False],
+            coherence_significance_pvalue(coherency[:4], n_obs, real_valued=True),
+            coherence_significance_pvalue(coherency[:4], n_obs),
+        ),
+    )
+
+
+def test_log_power_statistics_hold_at_real_valued_bins():
+    """At a real-valued bin the mean of five squared real Gaussians is
+    chi-squared with 5 degrees of freedom over 5, so the log power's bias and
+    variance are digamma and trigamma at 5/2, and the one-sample z of
+    ``power_fisher_z_transform`` against the true power is standard normal.
+    With the complex terms its variance is 2.2 instead of 1."""
+    rng = np.random.default_rng(20261123)
+    n_observations, true_power, n_rep = 5, 2.0, 200_000
+    estimates = true_power * (rng.standard_normal((n_rep, n_observations)) ** 2).mean(axis=1)
+    log_ratio = np.log(estimates / true_power)
+
+    bias = power_bias(n_observations, real_valued=True)
+    variance = power_variance(n_observations, real_valued=True)
+    z = power_fisher_z_transform(estimates, n_observations, true_power, real_valued=True)
+    complex_z = power_fisher_z_transform(estimates, n_observations, true_power)
+
+    mean_limit = 5 * log_ratio.std(ddof=1) / np.sqrt(n_rep)
+    assert abs(log_ratio.mean() - bias) < mean_limit
+    # Variance of a sample variance: 5 SE from the fourth central moment.
+    centered = log_ratio - log_ratio.mean()
+    variance_limit = 5 * np.sqrt((np.mean(centered**4) - log_ratio.var() ** 2) / n_rep)
+    assert abs(log_ratio.var() - variance) < variance_limit
+    assert abs(z.mean()) < 5 / np.sqrt(n_rep)
+    assert abs(z.var() - 1) < variance_limit / variance
+    assert complex_z.var() - 1 > 0.5
+    # A mask gives the real terms where it is set and the complex ones elsewhere.
+    mask = np.array([True, False])
+    np.testing.assert_array_equal(
+        power_bias(n_observations, real_valued=mask),
+        [bias, power_bias(n_observations)],
+    )
+    np.testing.assert_array_equal(
+        power_variance(n_observations, real_valued=mask),
+        [variance, power_variance(n_observations)],
+    )
+
+
+@pytest.mark.parametrize(
+    ("real_valued", "error", "match"),
+    [
+        ("yes", TypeError, "boolean"),
+        (np.array([1, 0]), TypeError, "boolean"),
+        (np.array([True, False, True]), ValueError, "does not broadcast"),
+    ],
+    ids=["string", "integer_mask", "wrong_shape"],
+)
+def test_real_valued_must_be_a_boolean_mask_that_fits_the_estimates(real_valued, error, match):
+    """A truthy non-boolean would be read as "all real", and a misaligned mask
+    failed inside NumPy without naming the argument."""
+    estimates = np.array([0.5, 0.5])
+    calls = [
+        lambda: coherence_significance_pvalue(estimates, 5, real_valued=real_valued),
+        lambda: power_confidence_intervals(5, estimates, 0.95, real_valued=real_valued),
+        lambda: power_fisher_z_transform(estimates, 5, real_valued=real_valued),
+    ]
+    for call in calls:
+        with pytest.raises(error, match=match):
+            call()
+
+
+def test_power_confidence_intervals_cover_real_valued_bins():
+    """A real coefficient's squared magnitude is chi-squared with one degree
+    of freedom, so the mean of five has n, not 2 n, degrees of freedom; the
+    2 n interval covered 83% at a nominal 95%."""
+    rng = np.random.default_rng(20261122)
+    n_observations, true_power = 5, 2.0
+    estimates = true_power * (rng.standard_normal((200_000, n_observations)) ** 2).mean(axis=1)
+
+    lower, upper = power_confidence_intervals(
+        n_observations, estimates, ci=0.95, real_valued=True
+    )
+    complex_lower, complex_upper = power_confidence_intervals(
+        n_observations, estimates, ci=0.95
+    )
+
+    rate, limit = _rate_and_limit((lower <= true_power) & (true_power <= upper), 0.95)
+    assert abs(rate - 0.95) < limit
+    complex_coverage = np.mean((complex_lower <= true_power) & (true_power <= complex_upper))
+    assert 0.95 - complex_coverage > 20 * limit
+
+
 def test_coherence_significance_pvalue_matches_beta_null():
     """p-value equals (1 - |C|^2)^(n-1)."""
     coherency = np.array([0.0 + 0j, 0.3 + 0.1j, 0.9 + 0j])

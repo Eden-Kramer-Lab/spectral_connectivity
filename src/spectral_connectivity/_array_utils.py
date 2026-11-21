@@ -25,6 +25,23 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
     return x.swapaxes(-1, -2).conjugate()
 
 
+def _weight_observations(values: BackendArray, weights: BackendArray) -> BackendArray:
+    """``values * weights``, exactly 0 wherever a weight is 0.
+
+    A zero weight omits its observation, so a non-finite value there (a NaN
+    edge estimate, say) must not reach a weighted sum as ``0 * NaN``. The
+    weights may be scaled first (``sqrt`` of the observation weights, for a
+    product of two weighted coefficients); they broadcast against ``values``.
+    The product is zeroed in place, so no second ``values``-sized array is made.
+    """
+    # 0 * inf is NaN with an invalid-value flag; those entries are zeroed below.
+    # asarray keeps a 0-d product an array, which copyto can write into.
+    with np.errstate(invalid="ignore"):
+        weighted = xp.asarray(values * weights)
+    xp.copyto(weighted, 0, where=xp.broadcast_to(weights == 0, weighted.shape))
+    return weighted
+
+
 def _divide_where(
     numerator: BackendArray | float,
     denominator: BackendArray,

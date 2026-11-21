@@ -249,9 +249,10 @@ def test_connectivity_to_xarray_keeps_its_released_positional_order():
 
 def test_power_confidence_intervals_keeps_its_released_argument_order():
     """The released positional order (count, power, ci) is unchanged; only the
-    count's name changed, and the old name is a keyword-only alias."""
+    count's name changed, and the old name is a keyword-only alias. The
+    real-valued-bin mask is new and keyword-only."""
     assert _positional_names(power_confidence_intervals) == ["n_observations", "power", "ci"]
-    assert _keyword_only_names(power_confidence_intervals) == ["n_tapers"]
+    assert _keyword_only_names(power_confidence_intervals) == ["n_tapers", "real_valued"]
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         by_position = power_confidence_intervals(25, np.array([0.5, 2.0]), 0.9)
