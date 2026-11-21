@@ -22,7 +22,19 @@ Code contributions are always welcome, from simple bug fixes to new features. To
    For GPU-specific changes, also run `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv
    run --extra gpu pytest -m gpu` on a CUDA machine.
 4. Add docstrings for each function in the [numpy style](https://numpydoc.readthedocs.io/en/latest/format.html).
-5. Add references if you are adding a connectivity measure.
+5. Add references if you are adding a connectivity measure. A new measure also
+   needs:
+   - a record in `src/spectral_connectivity/_measure_registry.py`, after which
+     `python docs/generate_measure_table.py` regenerates the tables in
+     `docs/CONNECTIVITY_METRIC_RANGES.md` (`tests/test_docs.py` fails while
+     they are stale);
+   - for a measure theoretically bounded in [0, 1], a clamp to that interval
+     after computation, so rounding cannot leave values like 1 + 1e-12.
+     Unbiased estimators such as the pairwise phase consistency and the
+     debiased phase-lag indices must keep their legitimate negative
+     finite-sample values;
+   - for a phase-based measure, aggregation over the expectation (observation)
+     axes only: trials, tapers, or segments.
 6. Update [CHANGELOG.md](CHANGELOG.md) with your changes under the "Unreleased" section.
 7. Submit a pull request.
 
