@@ -494,7 +494,7 @@ density: say so with `is_one_sided=True`.
 >>> factor = coherence_rate_adjustment(
 ...     spikes.mean() * sampling_frequency,  # spikes per second
 ...     fewer_spikes.mean() * sampling_frequency,
-...     connectivity.power()[0, :, 1],
+...     connectivity.power(one_sided=True)[0, :, 1],
 ...     dt=1 / sampling_frequency,
 ...     is_one_sided=True,
 ... )
