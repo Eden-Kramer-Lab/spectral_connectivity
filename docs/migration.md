@@ -35,9 +35,12 @@ for 2.x has to change.
    `multitaper_connectivity` and `connectivity_to_xarray` results changed the
    same way without a warning: halve its interior bins to compare with 2.x.
 3. **Recompute results whose values changed without an error.** Besides
-   direction and power, these changes give code written for 2.x different
-   numbers without an error (the tables below give the details):
-   - windows are labeled by their center time, not their first sample;
+   direction and power, other changes give code written for 2.x different
+   numbers without an error. Among them (the tables below list them all):
+   - windows are labeled by their center time, not their first sample, and a
+     window step given in seconds is rounded to the nearest sample rather
+     than truncated, which can change the number of windows, their `time`
+     coordinates, and averaged values;
    - `phase_slope_index` sums adjacent frequency bins only, so its values are
      much smaller: re-derive any threshold;
    - `delay` returns seconds, not cycles;
@@ -45,9 +48,10 @@ for 2.x has to change.
      from its dimension names, not their positions;
    - several measures' values were corrected, among them every spectral
      Granger and transfer-function measure on an even FFT length,
-     `directed_coherence`,
-     `direct_directed_transfer_function`, `global_coherence`, and
-     `canonical_coherence` for groups with a dead or duplicated channel
+     `directed_coherence`, `direct_directed_transfer_function`,
+     `global_coherence` (whose components also now come strongest first for
+     every `max_rank`), `canonical_coherence` for groups with a dead or
+     duplicated channel, and `power_confidence_intervals`
      ([Directed measures](#directed-measures) and
      [Other measures, power, and statistics](#other-measures-power-and-statistics)).
 4. **Read `magnitude_squared_coherence`, not `coherence_magnitude`.** The
