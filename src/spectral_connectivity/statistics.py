@@ -882,7 +882,7 @@ def coherence_significance_pvalue(
     >>> p_values = coherence_significance_pvalue(
     ...     coherency,
     ...     connectivity.n_observations,
-    ...     # (n_frequencies,) -> (n_frequencies, 1, 1), to broadcast over pairs
+    ...     # (n_frequencies,) -> (n_frequencies, 1, 1): broadcasts over time windows and pairs
     ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis],
     ... )
     >>> p_values.shape
@@ -1347,7 +1347,7 @@ def power_confidence_intervals(
     ...     connectivity.n_observations,  # 10 trials x 5 tapers = 50
     ...     power,
     ...     confidence_level=0.95,
-    ...     # (n_frequencies,) -> (n_frequencies, 1), to broadcast over signals
+    ...     # (n_frequencies,) -> (n_frequencies, 1): broadcasts over time windows and signals
     ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis],
     ... )
     >>> lower.shape
