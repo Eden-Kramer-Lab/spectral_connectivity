@@ -348,6 +348,31 @@ def no_fft(monkeypatch):
     monkeypatch.setattr(Multitaper, "fft", fail)
 
 
+def test_two_sided_power_is_refused_for_a_labelled_result(time_series, no_fft):
+    """A labelled power result is one-sided: its attributes say so and its
+    band integrals rely on it. The two-sided density is ``Connectivity.power``'s
+    to give, and the call is refused before the FFT."""
+    with pytest.raises(ValueError, match=r"Connectivity\.power\(one_sided=False\)"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": False},
+        )
+
+
+def test_one_sided_power_can_be_asked_for_by_name(time_series):
+    """``one_sided=True`` is the labelled result as it always is."""
+    explicit = multitaper_connectivity(
+        time_series,
+        sampling_frequency=500,
+        method="power",
+        connectivity_kwargs={"one_sided": True},
+    )
+    default = multitaper_connectivity(time_series, sampling_frequency=500, method="power")
+    np.testing.assert_array_equal(explicit.values, default.values)
+
+
 @pytest.mark.parametrize(
     ("connectivity_kwargs", "error", "match"),
     [

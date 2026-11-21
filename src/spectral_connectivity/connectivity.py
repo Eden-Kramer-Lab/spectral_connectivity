@@ -2354,7 +2354,7 @@ class Connectivity:
         return result
 
     @_asnumpy
-    def power(self) -> NDArray[np.floating]:
+    def power(self, *, one_sided: bool = True) -> NDArray[np.floating]:
         """Return the one-sided power spectral density of the signal.
 
         Only the non-negative frequencies are returned, with the interior
@@ -2369,11 +2369,29 @@ class Connectivity:
         scales its coefficients to the one-sided density, and externally
         supplied one-sided coefficients keep whatever scale they were given.
 
+        Parameters
+        ----------
+        one_sided : bool, default=True
+            ``False`` returns the two-sided density instead, still at the
+            non-negative frequencies only: no bin is doubled, as for a
+            spectrum laid out over negative and positive frequencies. For a
+            real signal the negative frequencies mirror the interior positive
+            ones, so integrating this density over the returned frequencies
+            gives about half the signal power. It is the density that
+            formulas written for a two-sided spectrum take, and what
+            ``power()`` returned in 2.x. Not available for one-sided input,
+            whose two-sided scale is not known.
+
         Returns
         -------
         NDArray[floating]
-            One-sided power spectral density for non-negative frequencies, shape
+            Power spectral density for non-negative frequencies, shape
             ``(..., n_nonnegative_frequencies, n_signals)``.
+
+        Raises
+        ------
+        ValueError
+            If ``one_sided=False`` and the coefficients are one-sided.
 
         Notes
         -----
@@ -2397,7 +2415,21 @@ class Connectivity:
         >>> connectivity.frequencies[[0, -1]]  # 0 Hz up to Nyquist in 0.5 Hz steps
         array([  0., 250.])
         """
-        return self._one_sided_density(self._power, frequency_axis=-2)
+        if _validated_flag("one_sided", one_sided):
+            return self._one_sided_density(self._power, frequency_axis=-2)
+        if self._is_one_sided:
+            msg = (
+                "power(one_sided=False) needs two-sided Fourier coefficients. "
+                "These are one-sided coefficients (is_one_sided=True, or a "
+                "one-sided transform such as MorletWavelet), which carry a "
+                "one-sided scale of their own, so no two-sided density follows "
+                "from them. Use power(), or build the Connectivity from "
+                "two-sided coefficients."
+            )
+            raise ValueError(msg)
+        n_nonnegative = self._nonnegative_frequency_count(self._power.shape[-2])
+        two_sided: BackendArray = self._power[..., :n_nonnegative, :].copy()
+        return two_sided
 
     @_asnumpy
     def cross_spectral_density(self) -> NDArray[np.complexfloating]:

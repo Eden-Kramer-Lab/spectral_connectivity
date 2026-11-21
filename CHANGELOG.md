@@ -49,7 +49,7 @@ their rows).
 | The spectral Granger and transfer-function measures (DTF, PDC, directed coherence) depended on the data's units, through an absolute convergence threshold: values changed by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored in volts), and by more below that | Invariant to the data's scale. Recompute directed results obtained from small-amplitude data |
 | A zero-lag pair (a channel and a scaled copy of it) gave a `phase_lag_index` up to +-1, a `debiased_squared_phase_lag_index` up to 1, and a `debiased_squared_weighted_phase_lag_index` anywhere in [-1, 1], read from the sign of rounding noise (largest with few observations) | 0 for all three, and 0.5 for `directed_phase_lag_index`: "no phase lag" is judged relative to the pair's power |
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
-| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008). The sign is unchanged, but the sum has far fewer terms, so values are smaller by one to several orders of magnitude: recompute, and re-derive any threshold |
 | `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time, the midpoint of the window's first and last samples: the 2.x label plus `(n_time_samples_per_window - 1) / (2 * sampling_frequency)` (0.245 s, not 0.25 s, for the first 50-sample window at 100 Hz) |
@@ -92,6 +92,13 @@ their rows).
 
 ### Added
 
+- `Connectivity.power(one_sided=False)` returns the two-sided power spectral
+  density at the non-negative frequencies (no bin doubled), which is what
+  `power()` returned in 2.x and what formulas written for a two-sided
+  spectrum take. The default is the one-sided density, as before in 3.0. It
+  raises for one-sided coefficients, whose two-sided scale is not known, and
+  the labelled results of the wrappers stay one-sided: they refuse
+  `connectivity_kwargs={"one_sided": False}` and point to the method.
 - `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
   3.2) emitted by the seven `Connectivity` methods whose arrays were target
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
