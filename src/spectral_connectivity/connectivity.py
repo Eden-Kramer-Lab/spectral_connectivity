@@ -4159,6 +4159,10 @@ class Connectivity:
             (``n_observations < n_signals``): the value is then at least
             ``1 / n_observations`` whatever the data (1 for a single
             observation), above the ``1 / n_signals`` of independent signals.
+            Also if the expectation pools time windows the transform reports
+            as correlated (``time_bins_are_independent`` is ``False``, e.g.
+            windows overlapping by more than half), which add fewer effective
+            observations than their count.
 
         Notes
         -----
@@ -4262,6 +4266,15 @@ class Connectivity:
         n_signals = self.n_signals
         n_observations = self.n_observations
         self._warn_few_global_coherence_observations()
+        if 0 in pooled_axes:
+            # Overlapping windows share data, so pooling them adds fewer
+            # effective observations than their count.
+            self._warn_correlated_observations(
+                "global_coherence",
+                "Its bias above the 1/n_signals of independent signals, and its "
+                "floor of 1/min(n_observations, n_signals), are set by the number "
+                "of independent observations pooled",
+            )
 
         # A rank-r decomposition of the (n_signals, n_observations) coefficient
         # matrix has at most min(n_signals, n_observations) non-trivial

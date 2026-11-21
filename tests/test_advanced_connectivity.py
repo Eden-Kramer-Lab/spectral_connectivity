@@ -978,6 +978,44 @@ def test_global_coherence_with_as_many_observations_as_signals_does_not_warn():
             Connectivity(coefficients).global_coherence()
 
 
+@pytest.mark.parametrize("expectation_type", ["time_trials_tapers", "time_tapers"])
+def test_global_coherence_warns_when_it_pools_overlapping_windows(expectation_type):
+    """Windows overlapping by more than half share data, so pooling them adds
+    fewer effective observations than their count; that warns as the other
+    measures that count observations do. Keeping the windows, or pooling
+    windows that do not overlap, is silent."""
+    time_series = np.random.default_rng(36).standard_normal((1000, 3, 3))
+
+    def connectivity(time_window_step, expectation):
+        multitaper = Multitaper(
+            time_series,
+            sampling_frequency=500,
+            time_halfbandwidth_product=3,
+            time_window_duration=0.4,
+            time_window_step=time_window_step,
+        )
+        return Connectivity.from_transform(multitaper, expectation_type=expectation)
+
+    overlapping = connectivity(0.1, expectation_type)
+    assert not overlapping.time_bins_are_independent
+    with pytest.warns(UserWarning, match="global_coherence assumes independent") as record:
+        overlapping.global_coherence()
+    (message,) = [
+        str(warning.message)
+        for warning in record
+        if "assumes independent" in str(warning.message)
+    ]
+    assert f"expectation_type={expectation_type!r} averages over time bins" in message
+    assert "time_bins_are_independent is False" in message
+    assert f"n_observations == {overlapping.n_observations} overstates" in message
+
+    for silent in (connectivity(0.1, "trials_tapers"), connectivity(0.4, expectation_type)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+            silent.global_coherence()
+
+
 class TestGroupDelay:
     """Test group_delay() method."""
 

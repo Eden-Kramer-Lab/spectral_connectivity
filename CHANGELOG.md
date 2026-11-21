@@ -470,7 +470,11 @@ The migration guide for code written against 2.x is
   `1 / n_signals` of independent signals. The message keeps the
   single-observation case (forced to 1), says to compare values only at
   matched numbers of observations and signals, and offers only what raises
-  the count.
+  the count. When it pools time windows the transform reports as correlated
+  (`time_bins_are_independent=False`, such as `Multitaper` windows
+  overlapping by more than half), it warns, as the other measures that count
+  observations do, that they add fewer effective observations than their
+  count.
 - `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
   defaulted to 60. Near-singular cross-spectra (highly correlated channels)
   can need several hundred Wilson iterations, and the loop still stops as soon
