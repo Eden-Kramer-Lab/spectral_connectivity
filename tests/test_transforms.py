@@ -1509,10 +1509,17 @@ def test_multitaper_warns_and_reports_the_tapers_it_uses_when_low_bias_drops_som
     so, and every reported count is the 5 used; the provenance keeps the 50
     requested."""
     data = np.random.default_rng(0).standard_normal((1000, 1, 3))
-    with pytest.warns(UserWarning, match="uses 5 of the 50 DPSS tapers requested") as record:
+    with pytest.warns(
+        UserWarning, match=r"using 5 of the 50 DPSS tapers you requested \(n_tapers=50\)"
+    ) as record:
         mt = Multitaper(data, sampling_frequency=500, n_tapers=50)
     message = str(record[0].message)
-    for remedy in ("0.9", "time_halfbandwidth_product", "is_low_bias=False", "n_tapers=5"):
+    for remedy in (
+        "concentration > 0.9",
+        "is_low_bias=False",
+        "raise time_halfbandwidth_product to about 25.5",
+        "pass n_tapers=5",
+    ):
         assert remedy in message
     assert mt.n_tapers == 5
     assert mt.fft().shape[2] == 5

@@ -1912,26 +1912,34 @@ class Multitaper(_WindowedFourierTransform):
         self._taper_eigenvalues = _immutable_array_snapshot(eigenvalues)
         n_used = int(self._tapers.shape[1])
         if n_used < requested:
-            requested_by = (
-                f"n_tapers={requested}"
-                if self._n_tapers is not None
-                else f"floor(2 * time_halfbandwidth_product) - 1 = {requested}"
+            keep_all = (
+                "To keep them anyway pass is_low_bias=False (transform_kwargs="
+                "{'is_low_bias': False} in multitaper_connectivity)"
             )
+            if self._n_tapers is not None:
+                using = (
+                    f"{n_used} of the {requested} DPSS tapers you requested "
+                    f"(n_tapers={requested})"
+                )
+                remedies = (
+                    f"{keep_all}; for more well-concentrated tapers raise "
+                    f"time_halfbandwidth_product to about {(requested + 1) / 2:g}; to "
+                    f"silence this and keep the result, pass n_tapers={n_used}."
+                )
+            else:
+                using = (
+                    f"{n_used} of the default floor(2 * time_halfbandwidth_product) - 1 "
+                    f"= {requested} DPSS tapers"
+                )
+                remedies = (
+                    f"{keep_all}; to silence this and keep the result, pass n_tapers={n_used}."
+                )
             warnings.warn(
-                f"Multitaper uses {n_used} of the {requested} DPSS tapers requested "
-                f"({requested_by}): with time_halfbandwidth_product="
+                f"Multitaper is using {using}. With time_halfbandwidth_product="
                 f"{self.time_halfbandwidth_product} and a {window}-sample window only "
-                f"{n_used} have a spectral concentration above "
-                f"{MIN_EIGENVALUE_THRESHOLD}, and is_low_bias=True drops the others, "
-                "whose leakage from outside the taper bandwidth would bias the "
-                f"estimate. n_tapers, n_observations, and the result attributes count "
-                f"the {n_used} used. For more tapers, raise time_halfbandwidth_product "
-                "(about 2 * time_halfbandwidth_product - 1 tapers are well "
-                f"concentrated, so {requested} need about {(requested + 1) / 2:g}), "
-                "which widens the frequency smoothing; or pass is_low_bias=False "
-                "(through transform_kwargs in multitaper_connectivity) to keep all "
-                f"{requested}, leakage included. Pass n_tapers={n_used} to use these "
-                "without this warning.",
+                f"{n_used} are well concentrated (concentration > "
+                f"{MIN_EIGENVALUE_THRESHOLD}); is_low_bias=True drops the rest because "
+                f"their leakage would bias the estimate. {remedies}",
                 UserWarning,
                 stacklevel=stacklevel_outside_package(),
             )

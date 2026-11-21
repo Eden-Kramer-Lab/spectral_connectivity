@@ -2294,9 +2294,14 @@ def test_low_bias_taper_filtering_reports_the_used_count_and_keeps_provenance(n_
     number used, the provenance records the request, and repeated computations
     with the same transform record the same provenance."""
     data = np.random.default_rng(123).standard_normal((1000, 2, 2))
+    requested = (
+        r"of the 31 DPSS tapers you requested \(n_tapers=31\)"
+        if n_tapers
+        else r"of the default floor\(2 \* time_halfbandwidth_product\) - 1 = 31 DPSS"
+    )
     with (
         pytest.warns(UserWarning, match="unusually large"),
-        pytest.warns(UserWarning, match="of the 31 DPSS tapers requested"),
+        pytest.warns(UserWarning, match=requested) as record,
     ):
         mt = Multitaper(
             data,
@@ -2304,6 +2309,11 @@ def test_low_bias_taper_filtering_reports_the_used_count_and_keeps_provenance(n_
             time_halfbandwidth_product=16,
             n_tapers=n_tapers,
         )
+    if n_tapers is None:
+        # NW already sets the default count: raising it is not the remedy.
+        message = next(str(w.message) for w in record if "DPSS" in str(w.message))
+        assert "raise time_halfbandwidth_product" not in message
+        assert "is_low_bias=False" in message
     n_used = mt.tapers.shape[1]
     assert n_used < 31  # Low-bias filtering actually removed tapers.
     assert mt.n_tapers == n_used
@@ -2321,7 +2331,7 @@ def test_low_bias_taper_filtering_reports_the_used_count_and_keeps_provenance(n_
 def test_multitaper_connectivity_reports_the_tapers_low_bias_filtering_kept():
     """The wrapper's result counts the 5 tapers used, not the 50 requested."""
     data = np.random.default_rng(0).standard_normal((1000, 3))
-    with pytest.warns(UserWarning, match="uses 5 of the 50 DPSS tapers requested"):
+    with pytest.warns(UserWarning, match="using 5 of the 50 DPSS tapers you requested"):
         result = multitaper_connectivity(
             data, sampling_frequency=500, n_tapers=50, method="power"
         )
