@@ -898,8 +898,14 @@ class _RecordingTooShortError(ValueError):
     it, or, spanning it, too short for the DPSS tapers.
 
     Raised where those two checks fail, so :func:`_transposed_layout_hint`
-    can tell them from every other ``ValueError``.
+    can tell them from every other ``ValueError``. It is a detail of this
+    module, so a traceback names it ``ValueError``, as before it existed,
+    rather than by its private name.
     """
+
+
+_RecordingTooShortError.__module__ = "builtins"
+_RecordingTooShortError.__name__ = _RecordingTooShortError.__qualname__ = "ValueError"
 
 
 def _transposed_layout_error(n_time: int, n_signals: int, expected: str) -> ValueError:

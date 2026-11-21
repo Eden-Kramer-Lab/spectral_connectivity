@@ -8,6 +8,7 @@ This module tests that error messages follow the WHAT/WHY/HOW pattern:
 
 import functools
 import re
+import traceback
 import warnings
 
 import numpy as np
@@ -25,6 +26,7 @@ from spectral_connectivity.transforms import (
     ShortTimeFourierTransform,
     Welch,
     detrend,
+    dpss_windows,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray, fourier_connectivity
 from tests._backend_helpers import to_host
@@ -419,6 +421,28 @@ def test_short_window_without_transposed_layout_keeps_its_message():
     """An array with more time samples than signals keeps the window advice."""
     with pytest.raises(ValueError, match=r"^time_halfbandwidth_product \(NW=3\)"):
         Multitaper(np.ones((4, 1, 2)), sampling_frequency=500)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: Multitaper(np.zeros((100, 1, 2)), 100, time_window_duration=5),
+            id="window_longer_than_recording",
+        ),
+        pytest.param(
+            lambda: Multitaper(np.ones((4, 1, 2)), 500), id="window_too_short_for_NW"
+        ),
+        pytest.param(lambda: dpss_windows(4, 3, 1), id="dpss_windows"),
+    ],
+)
+def test_window_errors_print_as_value_error(call):
+    """The window errors the transposed-layout hint recognizes print as the
+    ValueError they were, not under a private class name."""
+    with pytest.raises(ValueError) as excinfo:  # noqa: PT011 -- the type is the point
+        call()
+    printed = "".join(traceback.format_exception_only(excinfo.type, excinfo.value))
+    assert printed.startswith("ValueError: ")
 
 
 @pytest.mark.parametrize(
