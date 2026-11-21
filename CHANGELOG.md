@@ -1318,7 +1318,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   number of such values and the trials and signals holding them, says that
   they propagate to the outputs (NaN power for the affected signals in the
   windows containing them, NaN connectivity for every pair involving those
-  signals, or for every pair with measures that model all signals jointly),
+  signals, or for every pair with measures that model all signals jointly,
+  while `canonical_coherence` and `global_coherence` raise a `ValueError`),
   and says to interpolate the samples or drop the trials or signals, with
   `np.argwhere(~np.isfinite(x))` to find them (the indices it gives are
   0-based). The input is still

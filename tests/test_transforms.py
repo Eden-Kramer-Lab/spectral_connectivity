@@ -1299,6 +1299,7 @@ def test_multitaper_warns_on_nan_input(bad_value):
         Multitaper(time_series=time_series, sampling_frequency=1000)
     message = str(record[0].message)
     assert "propagate to the outputs" in message
+    assert "canonical_coherence and global_coherence raise a ValueError instead" in message
     assert "np.argwhere(~np.isfinite(x))" in message
 
 

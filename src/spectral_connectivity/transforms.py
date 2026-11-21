@@ -998,7 +998,8 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
         "propagate to the outputs: the power of an affected signal is NaN in every "
         "time window containing one, as is every connectivity value involving that "
         "signal there (every value, for measures that model all signals "
-        "jointly, such as partial coherence and Granger prediction). "
+        "jointly, such as partial coherence and Granger prediction; "
+        "canonical_coherence and global_coherence raise a ValueError instead). "
         "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
         "affected trials or signals before the analysis; "
         "for your array x, np.argwhere(~np.isfinite(x)) lists their indices.",
