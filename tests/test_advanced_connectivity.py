@@ -1,9 +1,11 @@
 """Tests for advanced connectivity measures: canonical_coherence, global_coherence, group_delay."""
 
+import warnings
+
 import numpy as np
 import pytest
 
-from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity import Connectivity, Multitaper, PowerSidednessWarning
 from spectral_connectivity.simulate import (
     simulate_lagged_broadband,
     simulate_shared_oscillation,
@@ -923,6 +925,59 @@ def test_global_coherence_rejects_an_expectation_that_keeps_the_tapers(expectati
     assert fractions.shape == (2, 5, 1)
 
 
+@pytest.mark.parametrize(
+    ("expectation_type", "shape", "pooled"),
+    [
+        ("trials_tapers", (2, 3, 2, 8, 8), "trials x tapers"),
+        ("tapers", (2, 3, 5, 8, 8), "tapers"),
+        ("time_tapers", (1, 3, 5, 8, 8), "time x tapers"),
+    ],
+)
+def test_global_coherence_warns_when_fewer_observations_than_signals(
+    expectation_type, shape, pooled
+):
+    """With n pooled observations for p > n signals the matrix has rank at
+    most n, so global coherence is at least 1/n whatever the data and cannot
+    reach the 1/p of independent signals. That warns, naming n, p and the
+    floor, and offers only what raises n."""
+    rng = np.random.default_rng(34)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    conn = Connectivity(coefficients, expectation_type=expectation_type)
+    n_observations, n_signals = conn.n_observations, conn.n_signals
+    assert 1 < n_observations < n_signals
+    with pytest.warns(UserWarning, match="fewer observations than signals") as record:
+        fractions, _ = conn.global_coherence(max_rank=1)
+    (message,) = [
+        str(warning.message)
+        for warning in record
+        if "fewer observations than signals" in str(warning.message)
+    ]
+    assert (
+        f"pools n_observations == {n_observations} observations (the averaged {pooled}) "
+        f"for {n_signals} signals"
+    ) in message
+    assert f"at least 1/{n_observations} = {1 / n_observations:.3g}" in message
+    assert f"1/n_signals = {1 / n_signals:.3g}" in message
+    assert "compare values only at matched numbers of observations and signals" in message
+    assert "fewer signals" in message
+    assert ("more trials" in message) == ("trials" in expectation_type)
+    assert ("more time windows" in message) == ("time" in expectation_type)
+    # The floor the message states holds for independent noise.
+    assert np.all(fractions >= 1 / n_observations - 1e-12)
+
+
+def test_global_coherence_with_as_many_observations_as_signals_does_not_warn():
+    """n = p no longer bounds the value away from 1/p, and the default use,
+    many trials of few signals, stays silent."""
+    rng = np.random.default_rng(35)
+    for shape in [(1, 4, 2, 8, 8), (1, 50, 3, 8, 4)]:
+        coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+            Connectivity(coefficients).global_coherence()
+
+
 class TestGroupDelay:
     """Test group_delay() method."""
 
@@ -1563,7 +1618,8 @@ def test_global_coherence_thin_rank_deficient_bin_has_zero_power_component():
     shape = (1, 3, 1, 6, 8)  # 3 estimates for 8 signals
     coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
     coefficients = np.concatenate([coefficients, coefficients[:, :1]], axis=1)  # 4 estimates
-    fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
+    with pytest.warns(UserWarning, match="fewer observations than signals"):
+        fractions, vectors = Connectivity(coefficients).global_coherence(max_rank=4)
 
     observations = _observations(_nonnegative_bins(coefficients))
     singular_values = np.linalg.svd(observations, compute_uv=False)

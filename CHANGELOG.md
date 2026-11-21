@@ -463,6 +463,14 @@ The migration guide for code written against 2.x is
   raise `ValueError` naming the supported settings. 2.x ignored
   `expectation_type` and pooled each window's trials and tapers for every
   setting.
+- `Connectivity.global_coherence` warns when it pools fewer observations than
+  signals (`n_observations < n_signals`), not only for a single observation:
+  the pooled matrix then has rank at most `n_observations`, so the value is at
+  least `1 / n_observations` whatever the data and cannot reach the
+  `1 / n_signals` of independent signals. The message keeps the
+  single-observation case (forced to 1), says to compare values only at
+  matched numbers of observations and signals, and offers only what raises
+  the count.
 - `minimum_phase_decomposition`'s `max_iterations` defaults to 500; 2.0.1
   defaulted to 60. Near-singular cross-spectra (highly correlated channels)
   can need several hundred Wilson iterations, and the loop still stops as soon

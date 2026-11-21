@@ -1831,6 +1831,56 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
 
+    def _warn_few_global_coherence_observations(self) -> None:
+        """Warn when global coherence pools fewer observations than signals.
+
+        The pooled cross-spectral matrix has rank at most ``n = n_observations``,
+        and the largest of its at most ``min(n, p)`` nonzero eigenvalues is at
+        least their mean, so global coherence is at least ``1 / min(n, p)``
+        whatever the data (exactly 1 for one observation). Independent signals
+        of equal power have the value ``1 / p``, which ``n < p`` cannot give.
+        With ``n >= p`` the estimate is still biased above ``1 / p`` (by about
+        3x at ``n = p``, under the Marchenko-Pastur law) but no longer bounded
+        away from it, so ``n < p`` is where the value stops depending on the
+        data alone and the warning starts.
+        """
+        n_observations, n_signals = self.n_observations, self.n_signals
+        if n_observations >= n_signals:
+            return
+        averaged = self.expectation_type.split("_")
+        # Offer only what raises the count: the axes it is taken over.
+        remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
+        if len(averaged) < len(_MORE_OBSERVATIONS):
+            remedies.append(
+                f"an expectation_type that averages more axes than {self.expectation_type!r}"
+            )
+        remedies.append("fewer signals")
+        if n_observations == 1:
+            floor = (
+                "is computed from a single observation (n_observations == 1), so "
+                "the cross-spectral matrix has rank one: its first component holds "
+                "all of the power, and global coherence is forced to 1 regardless "
+                "of the data, and the result carries no information"
+            )
+        else:
+            floor = (
+                f"pools n_observations == {n_observations} observations (the "
+                f"averaged {' x '.join(averaged)}) for {n_signals} signals, so the "
+                f"cross-spectral matrix has rank at most {n_observations} and "
+                f"global coherence is at least 1/{n_observations} = "
+                f"{1 / n_observations:.3g} regardless of the data"
+            )
+        warnings.warn(
+            f"global_coherence {floor}. Independent signals of equal power have a "
+            f"global coherence of 1/n_signals = {1 / n_signals:.3g}, which fewer "
+            "observations than signals cannot give, and even with more the "
+            "estimate is biased above it unless the observations far outnumber "
+            "the signals, so compare values only at matched numbers of "
+            f"observations and signals. Use {', or '.join(remedies)}.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+
     def _require_multiple_frequencies(self, measure: str) -> None:
         """Raise if fewer than two frequency bins are available.
 
@@ -4102,6 +4152,14 @@ class Connectivity:
             (``"time"``, ``"trials"``, ``"time_trials"``), or if the Fourier
             coefficients contain NaN or Inf (where weights do not omit them).
 
+        Warns
+        -----
+        UserWarning
+            If the pooled observations are fewer than the signals
+            (``n_observations < n_signals``): the value is then at least
+            ``1 / n_observations`` whatever the data (1 for a single
+            observation), above the ``1 / n_signals`` of independent signals.
+
         Notes
         -----
         **Frequency axis**: the non-negative frequencies, labelled by
@@ -4203,11 +4261,7 @@ class Connectivity:
             raise ValueError(msg)
         n_signals = self.n_signals
         n_observations = self.n_observations
-        self._warn_single_observation_degenerate(
-            "global_coherence",
-            "the cross-spectral matrix has rank one: its first component holds "
-            "all of the power, and global coherence is forced to 1",
-        )
+        self._warn_few_global_coherence_observations()
 
         # A rank-r decomposition of the (n_signals, n_observations) coefficient
         # matrix has at most min(n_signals, n_observations) non-trivial
