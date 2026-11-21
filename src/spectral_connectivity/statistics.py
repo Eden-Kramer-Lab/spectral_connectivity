@@ -874,8 +874,7 @@ def _check_n_observations(
             f"{type(n_observations).__name__} {n_observations!r}. {how}"
         )
         raise TypeError(msg)
-    finite = np.isfinite(counts)
-    whole = finite & (counts == np.round(np.where(finite, counts, 0)))
+    whole = np.isfinite(counts) & (counts == np.round(counts))
     invalid = ~whole | (counts < minimum)
     if np.any(invalid):
         offending = ", ".join(repr(value) for value in counts[invalid].ravel().tolist()[:5])

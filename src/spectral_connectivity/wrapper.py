@@ -1463,7 +1463,7 @@ def multitaper_connectivity(
     # Accept the documented (n_times, n_channels) 2-D form by inserting a
     # singleton trial axis; Multitaper requires 3-D (n_times, n_trials,
     # n_signals).
-    if getattr(time_series_data, "ndim", None) == 2:
+    if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
     m = Multitaper(
         time_series=time_series_data,
