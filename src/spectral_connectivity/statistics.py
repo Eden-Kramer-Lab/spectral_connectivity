@@ -860,6 +860,42 @@ def coherence_significance_pvalue(
     ... )
     >>> np.round(p_values, 3).tolist()  # (1 - 0.36)**4, and the real null
     [0.168, 0.208]
+
+    The whole path from a ``Connectivity``: test every time window and
+    frequency of a pair, giving the 0 Hz and Nyquist bins their own null and
+    the count of trials times tapers, then correct across the tests:
+
+    >>> from spectral_connectivity import Connectivity, Multitaper
+    >>> from spectral_connectivity.simulate import simulate_shared_oscillation
+    >>> from spectral_connectivity.statistics import adjust_for_multiple_comparisons
+    >>> time_series = simulate_shared_oscillation(  # a 20 Hz rhythm in noise
+    ...     20.0, 500, 1000, n_trials=10, amplitudes=[1.0, 1.0],
+    ...     noise_levels=[2.0, 2.0], random_state=0,
+    ... )  # (n_time_samples, n_trials, n_signals) = (1000, 10, 2)
+    >>> multitaper = Multitaper(time_series, sampling_frequency=500, time_window_duration=0.5)
+    >>> connectivity = Connectivity.from_transform(multitaper)
+    >>> coherency = connectivity.coherency()
+    >>> coherency.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+    (4, 126, 2, 2)
+    >>> connectivity.n_observations  # 10 trials x 5 tapers
+    50
+    >>> p_values = coherence_significance_pvalue(
+    ...     coherency,
+    ...     connectivity.n_observations,
+    ...     # (n_frequencies,) -> (n_frequencies, 1, 1), to broadcast over pairs
+    ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis],
+    ... )
+    >>> p_values.shape
+    (4, 126, 2, 2)
+    >>> # Select the pair first: a signal's coherence with itself is 1 (p = 0)
+    >>> # and does not belong in the family. One family: every window and bin.
+    >>> significant = adjust_for_multiple_comparisons(p_values[..., 0, 1], alpha=0.05)
+    >>> significant.shape  # (n_time_windows, n_frequencies)
+    (4, 126)
+    >>> # Significant in every window: 20 Hz and neighbors inside its 6 Hz
+    >>> # half-bandwidth (NW = 3 over 0.5 s) that the tapers spread it into
+    >>> connectivity.frequencies[significant.all(axis=0)].tolist()
+    [16.0, 18.0, 20.0, 22.0, 24.0]
     """
     counts = _validated_n_observations(
         n_observations,
@@ -1284,6 +1320,32 @@ def power_confidence_intervals(
     >>> lower, upper = power_confidence_intervals(5, 1.0, 0.95, real_valued=True)
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.390, 6.015]
+
+    From a ``Connectivity``: pass its ``n_observations`` and mark its real
+    0 Hz and Nyquist bins:
+
+    >>> from spectral_connectivity import Connectivity, Multitaper
+    >>> rng = np.random.default_rng(0)
+    >>> time_series = rng.standard_normal((1000, 10, 2))  # (time, trials, signals)
+    >>> multitaper = Multitaper(time_series, sampling_frequency=500, time_window_duration=0.5)
+    >>> connectivity = Connectivity.from_transform(multitaper)
+    >>> power = connectivity.power(one_sided=True)
+    >>> power.shape  # (n_time_windows, n_frequencies, n_signals)
+    (4, 126, 2)
+    >>> lower, upper = power_confidence_intervals(
+    ...     connectivity.n_observations,  # 10 trials x 5 tapers = 50
+    ...     power,
+    ...     confidence_level=0.95,
+    ...     # (n_frequencies,) -> (n_frequencies, 1), to broadcast over signals
+    ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis],
+    ... )
+    >>> lower.shape
+    (4, 126, 2)
+    >>> connectivity.frequencies[[0, 10]].tolist()
+    [0.0, 20.0]
+    >>> # Upper bound over the estimate: wider at the real 0 Hz bin
+    >>> np.round(upper[0, [0, 10], 0] / power[0, [0, 10], 0], 2).tolist()
+    [1.55, 1.35]
 
     References
     ----------

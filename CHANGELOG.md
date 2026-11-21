@@ -341,6 +341,12 @@ their rows).
 - The docstring of each of the 35 `Connectivity` measures has a runnable
   example (the deprecated `coherence_magnitude` alias has none), and every
   directed measure states its array orientation.
+- The examples of `coherence_significance_pvalue` and
+  `power_confidence_intervals` start from a time-resolved `Connectivity`:
+  they pass its `n_observations`, reshape `real_valued_frequencies` to
+  broadcast against the coherency or power (so 0 Hz and Nyquist get their own
+  null), and, for the p-values, select one pair before
+  `adjust_for_multiple_comparisons`.
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring
