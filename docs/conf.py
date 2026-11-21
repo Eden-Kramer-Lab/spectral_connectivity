@@ -129,6 +129,7 @@ intersphinx_mapping = {
 
 # MyST
 myst_enable_extensions = [
+    "alert",  # GitHub's > [!WARNING] blocks, which the included README uses
     "dollarmath",
     "amsmath",
     "deflist",

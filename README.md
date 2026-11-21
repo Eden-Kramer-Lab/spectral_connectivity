@@ -384,12 +384,19 @@ spectral dynamic range or line noise makes some tapers systematically leakier).
 Already have full two-sided FFT coefficients? `fourier_connectivity` accepts
 NumPy arrays or labeled DataArrays in the core
 `(time, trial, taper, frequency, signal)` layout (with documented shorter
-forms), preserving frequency, time, and signal coordinates.
+forms), preserving frequency, time, and signal coordinates, and returns the
+same labeled results as `multitaper_connectivity`.
 
-Uncertainty for real-valued measures is available through
-`Connectivity.jackknife(...)`, with automatic variance-stabilizing
-transformations (log for power, `atanh(sqrt(.))` for magnitude-squared
-coherence, and circular for phase).
+The labeled results share one schema, `output_schema_version=1`: common
+transform and observation attributes, the estimator's qualified bandwidth, and
+one `transform_parameters_json` record of the settings. See the
+[result-schema reference and migration examples](docs/cookbook.md#result-schema-and-transform-bandwidth).
+
+For uncertainty, `Connectivity.jackknife(method)` recomputes a real-valued
+measure leaving out each trial/taper observation in turn and returns a
+bias-corrected estimate, standard error, and confidence interval, applying an
+automatic variance-stabilizing transformation (log for power, `atanh(sqrt(.))`
+for magnitude-squared coherence, and circular for phase).
 
 ### Documentation
 
@@ -435,7 +442,7 @@ diagonal, and interpretation, is generated from the code into
 + scipy
 + xarray
 
-See [pyproject.toml](pyproject.toml) for the authoritative list of dependencies and their minimum versions.
+See [pyproject.toml](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/pyproject.toml) for the authoritative list of dependencies and their minimum versions.
 
 ### GPU Acceleration
 
@@ -530,6 +537,41 @@ pip install -e .[dev]
 `uv.lock` pins the development environment; `uv lock` refreshes it after a
 dependency change, and CI checks that it is current.
 
+## Contributing
+
+We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md) for details on:
+
++ How to report bugs and request features
++ Development workflow and coding standards
++ Testing requirements
++ Code review process
+
+For questions or discussions, please open an issue on GitHub.
+
+## License
+
+This project is licensed under the **GPL-3.0** License - see the [LICENSE](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/LICENSE) file for details.
+
+## Citation
+
+For citation, please use the following:
+
+> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
+
+### Recent publications and pre-prints that used this software
+
++ Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
++ Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
++ Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
+<https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
++ Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
++ Phencyclidine-induced psychosis causes hypersynchronization and
+disruption of connectivity within prefrontal-hippocampal circuits
+that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
++ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
+
+<!-- docs/index.md includes this file up to this line. -->
+
 ## Releases
 
 This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based on git tags. The version is automatically determined from the repository state:
@@ -543,7 +585,7 @@ Releases are published **automatically by CI**: pushing a `v*` tag runs the
 *Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
 to PyPI via trusted publishing (after approval in the protected `pypi`
 environment). Do **not** run `twine upload` by hand — that bypasses the tests,
-attestations, and approval gate. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+attestations, and approval gate. See [CONTRIBUTING.md](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md) for the
 full process and the required one-time setup.
 
 ```bash
@@ -572,36 +614,3 @@ conda install -c edeno spectral_connectivity
 **Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
 - 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
 - Or volunteer to help maintain the conda-forge feedstock
-
-## Contributing
-
-We welcome contributions to `spectral_connectivity`! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
-
-+ How to report bugs and request features
-+ Development workflow and coding standards
-+ Testing requirements
-+ Code review process
-
-For questions or discussions, please open an issue on GitHub.
-
-## License
-
-This project is licensed under the **GPL-3.0** License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-For citation, please use the following:
-
-> Denovellis, E.L., Myroshnychenko, M., Sarmashghi, M., and Stephen, E.P. (2022). Spectral Connectivity: a python package for computing multitaper spectral estimates and frequency-domain brain connectivity measures on the CPU and GPU. JOSS 7, 4840. [10.21105/joss.04840](https://doi.org/10.21105/joss.04840).
-
-### Recent publications and pre-prints that used this software
-
-+ Detection of Directed Connectivities in Dynamic Systems for Different Excitation Signals using Spectral Granger Causality <https://doi.org/10.1007/978-3-662-58485-9_11>
-+ Network Path Convergence Shapes Low-Level Processing in the Visual Cortex <https://doi.org/10.3389/fnsys.2021.645709>
-+ Subthalamic–Cortical Network Reorganization during Parkinson's Tremor
-<https://doi.org/10.1523/JNEUROSCI.0854-21.2021>
-+ Unifying Pairwise Interactions in Complex Dynamics <https://doi.org/10.48550/arXiv.2201.11941>
-+ Phencyclidine-induced psychosis causes hypersynchronization and
-disruption of connectivity within prefrontal-hippocampal circuits
-that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
-+ The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
