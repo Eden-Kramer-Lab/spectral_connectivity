@@ -391,7 +391,9 @@ for magnitude-squared coherence, and circular for phase).
 
 ## Documentation
 
+<!-- docs/index.md skips from here: a link to the docs site itself. -->
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
+<!-- docs/index.md resumes here. -->
 
 + [Cookbook](docs/cookbook.md): short recipes for common tasks.
 + [Choosing a measure](docs/choosing_a_measure.md): which measure answers

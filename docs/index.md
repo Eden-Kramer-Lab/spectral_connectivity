@@ -1,6 +1,13 @@
 ```{include} ../README.md
 :relative-docs: docs/
 :relative-images:
+:end-before: <!-- docs/index.md skips from here: a link to the docs site itself. -->
+```
+
+```{include} ../README.md
+:relative-docs: docs/
+:relative-images:
+:start-after: <!-- docs/index.md resumes here. -->
 :end-before: <!-- docs/index.md includes this file up to this line. -->
 ```
 
