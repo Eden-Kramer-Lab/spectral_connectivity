@@ -695,6 +695,32 @@ def test_pairwise_and_blockwise_granger_of_a_complex_var_match_state_space_oracl
     )
 
 
+@pytest.mark.parametrize(
+    "measure",
+    [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "directed_coherence",
+        "generalized_partial_directed_coherence",
+        "direct_directed_transfer_function",
+    ],
+)
+def test_transfer_function_measures_of_a_complex_var_match_closed_form(complex_var, measure):
+    """For a complex VAR the factor's transfer function and Hermitian
+    innovation covariance give the closed forms of the model, every entry
+    included; complex white noise checks these measures only where H = I."""
+    coefficients, noise_covariance, n_fft, connectivity = complex_var
+    A, H, _ = _analytic_var(coefficients, noise_covariance, n_fft)
+    expected = np.swapaxes(
+        _analytic_directed_measures(A, H, noise_covariance)[measure].real, -1, -2
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = np.asarray(getattr(connectivity, measure)())[0]
+    assert result.dtype == np.float64
+    np.testing.assert_allclose(result, expected, rtol=0, atol=1e-9)
+
+
 def test_conditional_granger_of_a_complex_var_matches_state_space_oracle(complex_var):
     """Geweke's normalization of the full model's innovations takes the
     conjugate transpose, ``P Sigma P^H``, for a Hermitian covariance."""
