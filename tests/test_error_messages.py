@@ -760,8 +760,9 @@ def test_constructors_keep_their_signatures():
     assert list(inspect.signature(suggest_parameters).parameters) == [
         "sampling_frequency",
         "signal_duration",
-        "desired_freq_resolution",
+        "frequency_resolution",
         "desired_n_tapers",
+        "desired_freq_resolution",
     ]
     assert list(inspect.signature(estimate_frequency_resolution).parameters) == [
         "sampling_frequency",
