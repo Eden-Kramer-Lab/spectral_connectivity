@@ -6,6 +6,7 @@ from spectral_connectivity.simulate import (
     simulate_MVAR,
     simulate_shared_oscillation,
 )
+from tests._var_oracle import _dense_stable_var, _var_autocovariance
 
 
 def test_simulate_MVAR_deterministic_with_seed():
@@ -92,6 +93,52 @@ def test_simulate_MVAR_recursion_matches_explicit_per_trial():
         for trial in range(n_trials):
             reference[t, trial] += coefficients[0] @ reference[t - 1, trial]
     np.testing.assert_allclose(library, reference)
+
+
+# Unequal variances and strong correlations of both signs, so that a
+# covariance mixed the wrong way round (L^T L for L L^T) is a different matrix.
+_CORRELATED_INNOVATIONS = np.array([[1.0, 0.99, -0.35], [0.99, 2.0, -0.2], [-0.35, -0.2, 0.5]])
+
+
+def test_simulate_MVAR_has_the_stationary_covariance_of_its_model():
+    """Across trials, samples have the model's covariance and consecutive
+    samples its lag-one covariance ``E[x(t + 1) x(t)^T]``, for the first two
+    returned samples and for the last two, within five standard errors (about
+    5% of the variances). That is what a missing burn-in, innovations with another
+    covariance, lags given each other's coefficients, or time run backwards
+    would change. The model has two lags, coupling in every direction, and
+    strongly correlated innovations of unequal variance, so none of those is
+    hidden by a symmetry. Its memory is far shorter than the default burn-in
+    of 100 samples (the spectral radius is 0.8, and ``0.8**100`` is 2e-10).
+    """
+    coefficients, _ = _dense_stable_var(n_signals=3, n_lags=2, spectral_radius=0.8, seed=0)
+    noise_covariance = _CORRELATED_INNOVATIONS
+    n_trials = 20_000
+    time_series = simulate_MVAR(
+        coefficients,
+        noise_covariance=noise_covariance,
+        n_time_samples=20,
+        n_trials=n_trials,
+        random_state=0,
+    )
+    covariance, lag_one_covariance = _var_autocovariance(coefficients, noise_covariance, 1)
+    # A sample covariance of Gaussian pairs has a standard error of at most
+    # sqrt(2 var_i var_j / n_trials); allow five of them.
+    variance = np.diag(covariance)
+    tolerance = 5 * np.sqrt(2 * np.outer(variance, variance) / n_trials)
+    # Premise: the innovations' covariance (what a sample has without the
+    # burn-in) and a transposed lag-one covariance are far outside the tolerance.
+    assert np.any(np.abs(covariance - noise_covariance) > 2 * tolerance)
+    assert np.any(np.abs(lag_one_covariance - lag_one_covariance.T) > 2 * tolerance)
+
+    for sample in (0, time_series.shape[0] - 2):
+        now, following = time_series[sample], time_series[sample + 1]
+        assert np.all(np.abs(now.T @ now / n_trials - covariance) < tolerance), (
+            f"covariance of sample {sample}"
+        )
+        assert np.all(np.abs(following.T @ now / n_trials - lag_one_covariance) < tolerance), (
+            f"covariance of sample {sample + 1} with sample {sample}"
+        )
 
 
 @pytest.mark.parametrize(
