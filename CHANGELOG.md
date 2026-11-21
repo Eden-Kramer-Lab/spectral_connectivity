@@ -35,8 +35,7 @@ directly with results from 2.x.
 
 ### Migration guide
 
-The migration guide for code written against 2.x, a checklist of the five
-changes most code needs followed by a table of every change, is
+The migration guide for code written against 2.x is
 [its own page in the documentation](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)
 (`docs/migration.md` in the repository).
 

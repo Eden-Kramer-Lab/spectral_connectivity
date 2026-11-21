@@ -36,15 +36,9 @@
 >   2.x values between 0 Hz and Nyquist; `power(one_sided=False)` returns the
 >   2.x values.
 >
-> Until 3.2, as reminders, the `Connectivity` methods that existed in 2.x
-> (pairwise and subset spectral Granger, directed transfer function, directed
-> coherence, (generalized) partial directed coherence, and direct directed
-> transfer function) emit a `DirectedOrientationWarning`, as do
-> `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and
-> subset spectral Granger prediction only; `Connectivity.power()` called
-> without `one_sided` emits a `PowerSidednessWarning`, and the wrappers' power
-> does not warn. The [migration guide](docs/migration.md) covers these and every other
-> change.
+> Until 3.2 some of these calls emit a `DirectedOrientationWarning` or a
+> `PowerSidednessWarning` as a reminder. The [migration guide](docs/migration.md)
+> lists which ones, how to silence them, and every other change.
 
 ## What is spectral_connectivity?
 
