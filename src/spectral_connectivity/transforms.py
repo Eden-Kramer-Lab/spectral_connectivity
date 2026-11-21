@@ -2,6 +2,7 @@
 
 import contextlib
 import warnings
+from collections.abc import Iterator
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -885,6 +886,41 @@ def _validate_window_step(
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
+
+
+def _transposed_layout_error(
+    n_time: int, n_signals: int, cause: str, expected: str
+) -> ValueError:
+    """The error for a window too short for a series with more signals than
+    time samples, which is most likely transposed.
+
+    It says so instead of advising a longer window. ``cause`` is the window
+    error, kept in the message and, with the counts, as the
+    ``_transposed_layout`` attribute, from which a caller accepting other
+    layouts (``expected``) rebuilds the message.
+    """
+    error = ValueError(
+        f"Your array has {n_time} time sample{'' if n_time == 1 else 's'} and "
+        f"{n_signals} signals; expected {expected}. Did you mean x.T? Read as "
+        f"given, its window is too short: {cause}"
+    )
+    error._transposed_layout = (n_time, n_signals, cause)  # type: ignore[attr-defined]
+    return error
+
+
+@contextlib.contextmanager
+def _transposed_layout_hint(time_series: BackendArray) -> Iterator[None]:
+    """Re-raise a window ``ValueError`` as a layout error when the
+    ``(n_time_samples, n_trials, n_signals)`` series looks transposed."""
+    try:
+        yield
+    except ValueError as error:
+        n_time, _, n_signals = time_series.shape
+        if n_time < n_signals:
+            raise _transposed_layout_error(
+                n_time, n_signals, str(error), "(n_time_samples, n_trials, n_signals)"
+            ) from error
+        raise
 
 
 def _listed_indices(flags: BackendArray, limit: int = 10) -> str:
@@ -1848,20 +1884,23 @@ class Multitaper(_WindowedFourierTransform):
             )
             raise ValueError(msg)
         _validate_window_step(time_window_duration, time_window_step)
-        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
         self.detrend_type = detrend_type
         self.is_low_bias = is_low_bias
-        self._set_window_state(
-            start_time,
-            time_window_duration=time_window_duration,
-            time_window_step=time_window_step,
-            n_fft_samples=n_fft_samples,
-            n_time_samples_per_window=n_time_samples_per_window,
-            n_time_samples_per_step=n_time_samples_per_step,
-        )
+        with _transposed_layout_hint(self._time_series):
+            self._set_window_state(
+                start_time,
+                time_window_duration=time_window_duration,
+                time_window_step=time_window_step,
+                n_fft_samples=n_fft_samples,
+                n_time_samples_per_window=n_time_samples_per_window,
+                n_time_samples_per_step=n_time_samples_per_step,
+            )
+            # Resolve the window now, so one longer than the recording or of no
+            # samples fails here.
+            window = self.n_time_samples_per_window
         custom_tapers = None if tapers is None else _immutable_array_snapshot(tapers)
         # Reject a fractional (or boolean) n_tapers: a taper count is a whole
         # number, and dpss_windows would otherwise see a float.
@@ -1900,20 +1939,19 @@ class Multitaper(_WindowedFourierTransform):
                         f"of them, or values that resolve to the same sample count."
                     )
                     raise ValueError(msg)
-        if custom_tapers is not None:
-            # Validate custom tapers now; a mismatch would otherwise surface as
-            # an opaque broadcasting error inside fft().
-            window = self.n_time_samples_per_window
-            if custom_tapers.ndim != 2 or custom_tapers.shape[0] != window:
-                msg = (
-                    f"tapers must have shape ({window}, n_tapers) -- one column per "
-                    f"taper, n_time_samples_per_window rows -- got {custom_tapers.shape}."
-                )
-                raise ValueError(msg)
+        # Validate custom tapers now; a mismatch would otherwise surface as an
+        # opaque broadcasting error inside fft().
+        if custom_tapers is not None and (
+            custom_tapers.ndim != 2 or custom_tapers.shape[0] != window
+        ):
+            msg = (
+                f"tapers must have shape ({window}, n_tapers) -- one column per "
+                f"taper, n_time_samples_per_window rows -- got {custom_tapers.shape}."
+            )
+            raise ValueError(msg)
         if n_tapers is not None:
             # Check the count against the window, for custom tapers as for the
             # DPSS tapers generated below.
-            window = self.n_time_samples_per_window
             if not 1 <= n_tapers <= window:
                 msg = (
                     f"n_tapers must satisfy 1 <= n_tapers <= n_time_samples_per_window "
@@ -1934,7 +1972,11 @@ class Multitaper(_WindowedFourierTransform):
             # Generate the DPSS tapers now, so every reported count is the
             # number used and a request low-bias filtering cuts short is
             # announced where it was made.
-            self._tapers, self._taper_eigenvalues = self._dpss_tapers()
+            with _transposed_layout_hint(self._time_series):
+                self._tapers, self._taper_eigenvalues = self._dpss_tapers()
+        # Warned only once every check has passed, so an invalid Multitaper
+        # (a transposed array among them) only raises.
+        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
         object.__setattr__(self, "_initialized", True)
 
     @property
@@ -2374,7 +2416,8 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
         # Resolve the window and step now, so a window that is too short or does
         # not fit the signal, or a step shorter than one sample, fails here
         # rather than in fft().
-        window_samples = self.n_time_samples_per_window
+        with _transposed_layout_hint(self._time_series):
+            window_samples = self.n_time_samples_per_window
         window = scipy_hann(window_samples, sym=False)
         self._window = _immutable_array_snapshot(
             (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]

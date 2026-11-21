@@ -7,6 +7,7 @@ This module tests that error messages follow the WHAT/WHY/HOW pattern:
 """
 
 import re
+import warnings
 
 import numpy as np
 import pytest
@@ -340,3 +341,68 @@ def test_valid_detrend_types_are_accepted(make, detrend_type):
     result = make(ts, detrend_type=detrend_type)
     if hasattr(result, "fft"):
         assert np.all(np.isfinite(to_host(result.fft())))
+
+
+_SIGNALS_BY_TIME = np.random.default_rng(1).standard_normal((3, 1000))
+_WRAPPER_LAYOUTS = "(n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)"
+_TRANSFORM_LAYOUT = "(n_time_samples, n_trials, n_signals)"
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        pytest.param(
+            lambda: multitaper_connectivity(_SIGNALS_BY_TIME, sampling_frequency=500),
+            _WRAPPER_LAYOUTS,
+            id="wrapper-2d",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _SIGNALS_BY_TIME[:, None, :], sampling_frequency=500
+            ),
+            _WRAPPER_LAYOUTS,
+            id="wrapper-3d",
+        ),
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _SIGNALS_BY_TIME, sampling_frequency=500, time_window_duration=0.5
+            ),
+            _WRAPPER_LAYOUTS,
+            id="wrapper-window_longer_than_recording",
+        ),
+        pytest.param(
+            lambda: Multitaper(_SIGNALS_BY_TIME[:, None, :], sampling_frequency=500),
+            _TRANSFORM_LAYOUT,
+            id="Multitaper",
+        ),
+        pytest.param(
+            lambda: ShortTimeFourierTransform(
+                _SIGNALS_BY_TIME[:, None, :], 500, time_window_duration=0.5
+            ),
+            _TRANSFORM_LAYOUT,
+            id="STFT",
+        ),
+    ],
+)
+def test_transposed_input_names_its_layout(call, expected):
+    """A window too short for an array with more signals than time samples is
+    reported as a layout problem, with the layout expected and x.T, instead
+    of advice to lengthen the window; it raises without warning first."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(
+            ValueError,
+            match="^"
+            + re.escape(
+                f"Your array has 3 time samples and 1000 signals; expected {expected}. "
+                "Did you mean x.T? Read as given, its window is too short: "
+            ),
+        ):
+            call()
+    assert record == []
+
+
+def test_short_window_without_transposed_layout_keeps_its_message():
+    """An array with more time samples than signals keeps the window advice."""
+    with pytest.raises(ValueError, match=r"^time_halfbandwidth_product \(NW=3\)"):
+        Multitaper(np.ones((4, 1, 2)), sampling_frequency=500)

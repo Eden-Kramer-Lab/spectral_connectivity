@@ -58,7 +58,7 @@ from spectral_connectivity.connectivity import (
     DirectedOrientationWarning,
     _select_measure_frequencies,
 )
-from spectral_connectivity.transforms import Multitaper
+from spectral_connectivity.transforms import Multitaper, _transposed_layout_error
 from spectral_connectivity.utils import (
     _validated_flag,
     close_names,
@@ -1492,16 +1492,29 @@ def multitaper_connectivity(
     # n_signals).
     if time_series_data.ndim == 2:
         time_series_data = time_series_data[:, np.newaxis, :]
-    m = Multitaper(
-        time_series=time_series_data,
-        sampling_frequency=sampling_frequency,
-        time_window_duration=time_window_duration,
-        time_window_step=time_window_step,
-        time_halfbandwidth_product=time_halfbandwidth_product,
-        n_tapers=n_tapers,
-        detrend_type=detrend_type,
-        **transform_settings,
-    )
+    try:
+        m = Multitaper(
+            time_series=time_series_data,
+            sampling_frequency=sampling_frequency,
+            time_window_duration=time_window_duration,
+            time_window_step=time_window_step,
+            time_halfbandwidth_product=time_halfbandwidth_product,
+            n_tapers=n_tapers,
+            detrend_type=detrend_type,
+            **transform_settings,
+        )
+    except ValueError as error:
+        layout = getattr(error, "_transposed_layout", None)
+        if layout is None:
+            raise
+        n_time, n_signals, cause = layout
+        # Multitaper names only its own 3-D layout; this function takes 2-D too.
+        raise _transposed_layout_error(
+            n_time,
+            n_signals,
+            cause,
+            "(n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals)",
+        ) from error.__cause__
     # Check the signal count and missing labels before Connectivity.from_transform
     # runs the FFT. The constructor has validated the input shape, so m.n_signals
     # is the true signal count.

@@ -1335,6 +1335,20 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   at the first `fft()` with `detrend`'s message about its `type` argument
   (`Example: detrend(data, type='linear')`). Code that catches this error
   should wrap the constructor.
+- A transposed time series, e.g. `multitaper_connectivity(x.T,
+  sampling_frequency=500)` for a `(1000, 3)` recording, raises a `ValueError`
+  that says so: "Your array has 3 time samples and 1000 signals; expected
+  (n_time_samples, n_trials, n_signals) or (n_time_samples, n_signals). Did
+  you mean x.T?", followed by the window error it replaces. It raised that
+  window error alone, advising a longer window or a smaller
+  `time_halfbandwidth_product`, while the transposition hint was a separate
+  `UserWarning`. This applies to `Multitaper` (which names only its 3-D
+  layout) and `ShortTimeFourierTransform` too, whenever the window does not
+  fit an array with more signals than time samples; such an array whose
+  window fits still only warns. `Multitaper` now emits its warnings about the
+  time series (transposed, NaN or Inf) after every check has passed, so a
+  call that raises does not warn first, as `ShortTimeFourierTransform`
+  already did.
 
 ### Performance
 
