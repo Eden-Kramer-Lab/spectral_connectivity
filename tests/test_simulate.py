@@ -142,6 +142,54 @@ def test_simulate_MVAR_has_the_stationary_covariance_of_its_model():
 
 
 @pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"coefficients": np.array([[0.5, 0.1], [0.0, 0.5]])},
+            r"shape \(n_lags, n_signals, n_signals\).*got shape \(2, 2\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 3))},
+            r"shape \(n_lags, n_signals, n_signals\).*got shape \(1, 2, 3\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "noise_covariance": np.eye(3)},
+            r"noise_covariance must have shape \(2, 2\).*got shape \(3, 3\)",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "n_trials": 2.5},
+            "n_trials must be a positive integer; got 2.5",
+        ),
+        (
+            {"coefficients": np.zeros((1, 2, 2)), "n_burnin_samples": -1},
+            "n_burnin_samples must be a non-negative integer; got -1",
+        ),
+    ],
+    ids=["2d_coefficients", "non_square", "covariance_size", "fractional_trials", "burnin"],
+)
+def test_simulate_MVAR_rejects_malformed_input_with_the_expected_shape(kwargs, match):
+    """Malformed input names the argument, the expected shape, and the one
+    received, instead of failing inside NumPy."""
+    with pytest.raises(ValueError, match=match):
+        simulate_MVAR(**kwargs)
+
+
+def test_simulate_MVAR_warns_for_unstable_coefficients():
+    """A spectral radius of 1.5 diverged to |x| ~ 1e52 in 200 samples without a
+    sign; the warning gives the radius. Two lags are folded into the companion
+    matrix: x(t) = 0.5 x(t - 1) + 0.6 x(t - 2) has roots 1.06 and -0.56."""
+    with pytest.warns(UserWarning, match=r"spectral radius of their companion matrix is 1\.5"):
+        diverged = simulate_MVAR(
+            np.array([[[1.5, 0.0], [0.0, 1.5]]]), n_time_samples=200, random_state=0
+        )
+    assert np.abs(diverged).max() > 1e30
+    with pytest.warns(UserWarning, match=r"is 1\.06.*below 1"):
+        simulate_MVAR(np.array([[[0.5]], [[0.6]]]), random_state=0)
+    # A stable model (radius 0.6 and 0.5) is silent.
+    simulate_MVAR(np.array([[[0.5, 0.3], [0.0, 0.6]]]), random_state=0)
+
+
+@pytest.mark.parametrize(
     "lags_samples",
     [(-3, 0), (0, 1.5), (0, 3.0), [[0, 3]], 3],
     ids=["negative", "fractional", "whole_float", "2d", "scalar"],
@@ -493,8 +541,9 @@ def test_lagged_broadband_rejects_negative_noise_levels():
                 "amplitudes": [1.0],
             },
         ),
+        (simulate_MVAR, {"coefficients": np.array([[[0.5]]])}),
     ],
-    ids=["lagged_broadband", "shared_oscillation"],
+    ids=["lagged_broadband", "shared_oscillation", "MVAR"],
 )
 @pytest.mark.parametrize("name", ["n_trials", "n_time_samples"])
 @pytest.mark.parametrize(

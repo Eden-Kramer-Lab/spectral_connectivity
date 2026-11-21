@@ -9,10 +9,12 @@ arrays of shape ``(n_time_samples, n_trials, n_signals)``, one trial by
 default; ``simulate_lagged_broadband(..., n_trials=None)`` omits the trial axis.
 """
 
+import warnings
+
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from spectral_connectivity.utils import is_positive_integer
+from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
 
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
@@ -104,6 +106,21 @@ def simulate_MVAR(
     time_series : NDArray[floating], shape (n_time_samples, n_trials, n_signals)
         Simulated time series data with specified MVAR dynamics.
 
+    Raises
+    ------
+    ValueError
+        If ``coefficients`` is not of shape ``(n_lags, n_signals, n_signals)``,
+        ``noise_covariance`` not of shape ``(n_signals, n_signals)``,
+        ``n_time_samples`` or ``n_trials`` not a positive integer, or
+        ``n_burnin_samples`` not a non-negative integer.
+
+    Warns
+    -----
+    UserWarning
+        If the coefficients are not stable: the spectral radius of their
+        companion matrix is at least 1, so the process has no stationary state
+        and the simulated series grows without bound.
+
     Examples
     --------
     >>> import numpy as np
@@ -119,9 +136,53 @@ def simulate_MVAR(
     before collecting the requested samples.
 
     """
+    coefficients = np.asarray(coefficients)
+    if coefficients.ndim != 3 or coefficients.shape[1] != coefficients.shape[2]:
+        hint = (
+            "; for a single lag, pass coefficients[np.newaxis]"
+            if coefficients.ndim == 2
+            else ""
+        )
+        msg = (
+            "coefficients must have shape (n_lags, n_signals, n_signals), one "
+            "square matrix A_k per lag; got shape "
+            f"{coefficients.shape}{hint}"
+        )
+        raise ValueError(msg)
     n_lags, n_signals, _ = coefficients.shape
     if noise_covariance is None:
         noise_covariance = np.eye(n_signals)
+    noise_covariance = np.asarray(noise_covariance)
+    if noise_covariance.shape != (n_signals, n_signals):
+        msg = (
+            f"noise_covariance must have shape ({n_signals}, {n_signals}), one "
+            f"row and column per signal of the coefficients; got shape "
+            f"{noise_covariance.shape}"
+        )
+        raise ValueError(msg)
+    _check_count(n_time_samples, "n_time_samples")
+    _check_count(n_trials, "n_trials")
+    if not is_positive_integer(n_burnin_samples, minimum=0):
+        msg = f"n_burnin_samples must be a non-negative integer; got {n_burnin_samples!r}"
+        raise ValueError(msg)
+    if n_lags > 0:
+        # x(t) = sum_k A_k x(t - k) is stable when every eigenvalue of its
+        # companion matrix [[A_1 ... A_p], [I 0]] lies inside the unit circle.
+        companion = np.eye(n_lags * n_signals, k=-n_signals)
+        companion[:n_signals] = np.concatenate(coefficients, axis=1)
+        spectral_radius = float(np.max(np.abs(np.linalg.eigvals(companion))))
+        if spectral_radius >= 1:
+            warnings.warn(
+                "The MVAR coefficients are unstable: the spectral radius of their "
+                f"companion matrix is {spectral_radius:.4g}, at least 1, so the "
+                "process has no stationary state and the simulated series grows "
+                "without bound (or, at exactly 1, wanders). Its spectrum and "
+                "connectivity are undefined. Scale the coefficients down until "
+                "the radius is below 1 (for one lag, divide them by more than "
+                f"{spectral_radius:.4g}).",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
 
     rng = _generator(random_state)
 

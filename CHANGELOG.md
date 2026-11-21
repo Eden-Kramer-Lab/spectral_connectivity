@@ -744,6 +744,16 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- `simulate_MVAR` warns when its coefficients are unstable (the spectral
+  radius of their companion matrix is at least 1), giving the radius and
+  saying to scale the coefficients down until it is below 1:
+  `simulate_MVAR(np.array([[[1.5, 0], [0, 1.5]]]), n_time_samples=200)`
+  returned values near 1e52 without a sign. Malformed input raises a
+  `ValueError` naming the expected shape and the one received, where NumPy
+  failed with an unrelated message: coefficients that are not
+  `(n_lags, n_signals, n_signals)` (2-D, or non-square), a `noise_covariance`
+  of another size than the signals, a count that is not a positive integer
+  (`n_trials=2.5`), or a negative `n_burnin_samples`.
 - `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
   they take coherency (`Connectivity.coherency()`) or its magnitude, not
   `magnitude_squared_coherence()`. Both square or read the absolute value of
