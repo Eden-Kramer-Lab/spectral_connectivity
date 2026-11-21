@@ -4,8 +4,12 @@ For a stable VAR ``x(t) = sum_k A_k x(t - k) + e(t)`` with innovation
 covariance ``Sigma``, the transfer function and cross-spectrum are known
 exactly; these helpers build them and Fourier coefficients that reproduce
 them, so a ``Connectivity`` can be fed an exact spectrum (see
-``tests/test_directed_measures_oracle.py``).
+``tests/test_directed_measures_oracle.py``). The VAR's state-space form gives
+the spectral Granger measure between sub-processes without factoring a
+spectrum.
 """
+
+import itertools
 
 import numpy as np
 from scipy.linalg import solve_discrete_are
@@ -96,56 +100,94 @@ def _analytic_directed_measures(A, H, noise_covariance):
     }
 
 
-def _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft):
-    """Pairwise spectral Granger of a VAR, ``[frequency, source, target]``.
-
-    An oracle that involves no spectral factorization. Each pair of signals is
-    a sub-process of the VAR; its innovations form (transfer function ``H``
-    and innovation covariance ``V``) comes from the discrete algebraic Riccati
-    equation of the VAR's state-space form (Barnett & Seth, 2015), and Geweke's
-    formula gives the influence of each member of the pair on the other,
-    ``log(S_tt / (S_tt - (V_ss - V_ts^2 / V_tt) |H_ts|^2))``. Values are on the
-    non-negative FFT grid; the diagonal is NaN.
-    """
-    n_lags, n_signals, _ = coefficients.shape
-    C = np.concatenate(list(coefficients), axis=1)
-    A = np.zeros((n_signals * n_lags, n_signals * n_lags))
-    A[:n_signals] = C
-    if n_lags > 1:
-        A[n_signals:, :-n_signals] = np.eye(n_signals * (n_lags - 1))
-    K = np.zeros((n_signals * n_lags, n_signals))
-    K[:n_signals] = np.eye(n_signals)
-    z = np.exp(2j * np.pi * np.arange(n_fft // 2 + 1) / n_fft)
-    resolvent = np.linalg.inv(z[:, None, None] * np.eye(A.shape[0]) - A)
-    granger = np.full((z.size, n_signals, n_signals), np.nan)
-    for first in range(n_signals):
-        for second in range(first + 1, n_signals):
-            pair = [first, second]
-            C_pair = C[pair]
-            Q = K @ noise_covariance @ K.T
-            R = noise_covariance[np.ix_(pair, pair)]
-            S = K @ noise_covariance[:, pair]
-            P = solve_discrete_are(A.T, C_pair.T, Q, R, s=S)
-            V = C_pair @ P @ C_pair.T + R
-            gain = (A @ P @ C_pair.T + S) @ np.linalg.inv(V)
-            H = np.eye(2) + C_pair @ resolvent @ gain  # (frequency, 2, 2)
-            spectrum = H @ V @ H.conj().swapaxes(-1, -2)
-            for target, source in ((0, 1), (1, 0)):
-                intrinsic = V[source, source] - V[target, source] ** 2 / V[target, target]
-                total = spectrum[:, target, target].real
-                granger[:, pair[source], pair[target]] = np.log(
-                    total / (total - intrinsic * np.abs(H[:, target, source]) ** 2)
-                )
-    return granger
-
-
-def _companion_spectral_radius(coefficients):
-    """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
+def _companion_matrix(coefficients):
+    """Transition matrix of a VAR's state ``[x(t - 1), ..., x(t - n_lags)]``."""
     n_lags, n_signals, _ = coefficients.shape
     companion = np.zeros((n_lags * n_signals, n_lags * n_signals))
     companion[:n_signals] = np.concatenate(list(coefficients), axis=1)
     companion[n_signals:, :-n_signals] = np.eye((n_lags - 1) * n_signals)
-    return np.max(np.abs(np.linalg.eigvals(companion)))
+    return companion
+
+
+def _companion_spectral_radius(coefficients):
+    """Largest eigenvalue modulus of a VAR's companion matrix (< 1 is stable)."""
+    return np.max(np.abs(np.linalg.eigvals(_companion_matrix(coefficients))))
+
+
+def _dense_stable_var(n_signals, n_lags, spectral_radius, seed):
+    """A VAR in which every signal drives every other and the innovations are
+    correlated: ``(coefficients, noise_covariance)``.
+
+    Coefficients are drawn at random and lag ``k`` is scaled by ``c**k``,
+    which scales every eigenvalue of the companion matrix by ``c``, so the
+    companion matrix has exactly the requested spectral radius.
+    """
+    rng = np.random.default_rng(seed)
+    coefficients = rng.normal(size=(n_lags, n_signals, n_signals))
+    scale = spectral_radius / _companion_spectral_radius(coefficients)
+    coefficients *= (scale ** np.arange(1, n_lags + 1))[:, np.newaxis, np.newaxis]
+    mixing = rng.normal(size=(n_signals, n_signals))
+    noise_covariance = mixing @ mixing.T / n_signals + np.eye(n_signals)
+    return coefficients, noise_covariance
+
+
+def _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks):
+    """Spectral Granger between blocks of a VAR's signals, ``[frequency, source, target]``.
+
+    An oracle that involves no spectral factorization. The signals of two
+    blocks are a sub-process of the VAR; its innovations form (transfer
+    function ``H`` and innovation covariance ``V``) comes from the discrete
+    algebraic Riccati equation of the VAR's state-space form (Barnett & Seth,
+    2015), and Geweke's formula gives the influence of each block on the
+    other: for a source block ``s`` and a target block ``t``,
+    ``log det S_tt - log det(S_tt - H_ts (V_ss - V_st V_tt^-1 V_ts) H_ts^H)``.
+    ``blocks`` lists the signal indices of each block. Values are on the
+    non-negative FFT grid; the diagonal is NaN.
+    """
+    n_signals = coefficients.shape[-1]
+    C = np.concatenate(list(coefficients), axis=1)
+    A = _companion_matrix(coefficients)
+    K = np.zeros((A.shape[0], n_signals))
+    K[:n_signals] = np.eye(n_signals)
+    Q = K @ noise_covariance @ K.T
+    z = np.exp(2j * np.pi * np.arange(n_fft // 2 + 1) / n_fft)
+    resolvent = np.linalg.inv(z[:, None, None] * np.eye(A.shape[0]) - A)
+    granger = np.full((z.size, len(blocks), len(blocks)), np.nan)
+    for first, second in itertools.combinations(range(len(blocks)), 2):
+        members = [*blocks[first], *blocks[second]]
+        C_sub = C[members]
+        R = noise_covariance[np.ix_(members, members)]
+        S = K @ noise_covariance[:, members]
+        P = solve_discrete_are(A.T, C_sub.T, Q, R, s=S)
+        V = C_sub @ P @ C_sub.T + R
+        gain = (A @ P @ C_sub.T + S) @ np.linalg.inv(V)
+        H = np.eye(len(members)) + C_sub @ resolvent @ gain  # (frequency, member, member)
+        spectrum = H @ V @ H.conj().swapaxes(-1, -2)
+        in_first = np.arange(len(members)) < len(blocks[first])
+        for source, target, source_block, target_block in (
+            (in_first, ~in_first, first, second),
+            (~in_first, in_first, second, first),
+        ):
+            intrinsic = V[np.ix_(source, source)] - V[
+                np.ix_(source, target)
+            ] @ np.linalg.solve(V[np.ix_(target, target)], V[np.ix_(target, source)])
+            H_ts = H[:, target][:, :, source]
+            total = spectrum[:, target][:, :, target]
+            explained = H_ts @ intrinsic @ H_ts.conj().swapaxes(-1, -2)
+            # NumPy 1.24's complex slogdet warns of a division by zero on
+            # well-conditioned input on some platforms.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                granger[:, source_block, target_block] = (
+                    np.linalg.slogdet(total)[1] - np.linalg.slogdet(total - explained)[1]
+                )
+    return granger
+
+
+def _pairwise_granger_from_state_space(coefficients, noise_covariance, n_fft):
+    """Pairwise spectral Granger of a VAR, ``[frequency, source, target]``: the
+    block measure with every signal a block of its own."""
+    blocks = [[signal] for signal in range(coefficients.shape[-1])]
+    return _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
 
 
 # A 3-node chain 0 -> 1 -> 2 (no direct 0 -> 2 link) with 0.8 couplings, strong

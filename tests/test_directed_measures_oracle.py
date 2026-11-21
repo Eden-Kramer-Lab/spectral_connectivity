@@ -45,7 +45,9 @@ from tests._backend_helpers import to_host
 from tests._var_oracle import (
     _analytic_directed_measures,
     _analytic_var,
+    _block_granger_from_state_space,
     _companion_spectral_radius,
+    _dense_stable_var,
     _fourier_coefficients_with_cross_spectrum,
     _pairwise_granger_from_state_space,
 )
@@ -323,7 +325,10 @@ def test_blockwise_granger_matches_geweke_block_closed_form(
         np.ix_(source, target)
     ] @ np.linalg.solve(sigma[np.ix_(target, target)], sigma[np.ix_(target, source)])
     intrinsic = S_yy - H_yx @ sigma_x_given_y @ H_yx.conj().swapaxes(-1, -2)
-    geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
+    # NumPy 1.24's complex slogdet warns of a division by zero on
+    # well-conditioned input on some platforms.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        geweke = np.linalg.slogdet(S_yy)[1] - np.linalg.slogdet(intrinsic)[1]
 
     np.testing.assert_array_equal(labels, [0, 1])
     assert geweke.max() > 1.0  # premise: a strong planted block influence
@@ -526,6 +531,53 @@ def test_pairwise_granger_matches_state_space_oracle(
     assert oracle[:, off_diagonal].max() > 0.1
     np.testing.assert_allclose(
         pairwise[:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "group_labels",
+    [["a", "b", "b", "c", "c"], ["b", "a", "b", "c", "a"], [0, 0, 0, 1, 2]],
+    ids=["sizes_1_2_2", "interleaved", "sizes_3_1_1"],
+)
+@pytest.mark.parametrize(
+    "conjugate_symmetric", [False, True], ids=["two_sided", "half_spectrum"]
+)
+def test_blockwise_granger_among_three_groups_matches_state_space_oracle(
+    group_labels, conjugate_symmetric
+):
+    """With more than two groups, the measure between two of them is that of
+    the sub-process they form, for which the remaining signals are unobserved.
+    The full model's transfer function does not give it; the innovations form
+    of each sub-process, from a Riccati equation, does. Every signal drives
+    every other here and the innovations are correlated, so no direction is
+    zero, and the groups differ in size and need not be adjacent signals."""
+    n_fft = 1024
+    coefficients, noise_covariance = _dense_stable_var(
+        n_signals=5, n_lags=2, spectral_radius=0.8, seed=0
+    )
+    _, _, spectrum = _analytic_var(coefficients, noise_covariance, n_fft)
+    connectivity = Connectivity(
+        fourier_coefficients=_fourier_coefficients_with_cross_spectrum(
+            spectrum, conjugate_symmetric=conjugate_symmetric
+        ),
+        minimum_phase_tolerance=1e-12,
+        minimum_phase_max_iterations=5000,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        warnings.filterwarnings("ignore", category=DirectedOrientationWarning)
+        blockwise, labels = connectivity.blockwise_spectral_granger_prediction(group_labels)
+
+    blocks = [
+        [signal for signal, label in enumerate(group_labels) if label == group]
+        for group in labels
+    ]
+    oracle = _block_granger_from_state_space(coefficients, noise_covariance, n_fft, blocks)
+    off_diagonal = ~np.eye(3, dtype=bool)
+    # Premise: an influence in every direction, at its peak far above the tolerance.
+    assert oracle[:, off_diagonal].max(axis=0).min() > 0.01
+    np.testing.assert_allclose(
+        blockwise[0][:, off_diagonal], oracle[:, off_diagonal], atol=1e-9, rtol=0
     )
 
 
