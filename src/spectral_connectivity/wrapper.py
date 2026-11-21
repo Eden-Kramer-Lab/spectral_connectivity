@@ -34,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
     _SINGLE_SIGNAL_MEASURES,
     _consumes_frequency_range,
+    _format_value_range,
     _is_group_measure,
     _measure_description,
     _reduces_frequency,
@@ -72,6 +73,7 @@ from spectral_connectivity.utils import (
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
+    warn_migration,
 )
 
 # The public API. UnsupportedMeasureError is defined in _result_formatting
@@ -100,6 +102,12 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 @dataclass(frozen=True)
 class MeasureInfo:
     """A single connectivity measure the high-level wrapper can compute.
+
+    Its repr shows only ``name``, ``category``, ``value_range``,
+    ``is_directed`` (when true), and ``description``, so ``list_measures()``
+    prints one line per measure. ``description`` is the one-line summary of
+    the measure; ``interpretation`` says how to read its values. Read any
+    field below as an attribute, or all of them with ``dataclasses.asdict``.
 
     Attributes
     ----------
@@ -184,6 +192,15 @@ class MeasureInfo:
     quantity: str | None
     formula: str | None
 
+    def __repr__(self) -> str:
+        """One line, as the class docstring describes; ``...`` marks the other fields."""
+        directed = ", is_directed=True" if self.is_directed else ""
+        return (
+            f"MeasureInfo(name={self.name!r}, category={self.category!r}, "
+            f"value_range={_format_value_range(*self.value_range)}{directed}, "
+            f"description={self.description!r}, ...)"
+        )
+
 
 def list_measures(
     *,
@@ -219,7 +236,9 @@ def list_measures(
     Returns
     -------
     measures : list of MeasureInfo
-        One record per measure, in the wrapper's canonical order.
+        One record per measure, in the wrapper's canonical order. Each
+        prints as one line; ``m.description`` is the one-line summary and
+        ``m.interpretation`` says how to read the values.
 
     Examples
     --------
@@ -416,15 +435,14 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
 
     Remove with :class:`DirectedOrientationWarning` in 3.2.
     """
-    changed = sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods))
-    if changed:
-        warnings.warn(
+    # One message per measure, so each measure's is shown once per session.
+    for changed in sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods)):
+        warn_migration(
             f"{_ORIENTATION_WARNING_PREFIX}sel(source=a, target=b) of "
-            f"{', '.join(changed)} is a -> b; 2.x returned b -> a. Review code written "
-            "for 2.x that selects these results. See the migration guide: "
+            f"{changed} is a -> b; 2.x returned b -> a. Review code written "
+            "for 2.x that selects its results. See the migration guide: "
             f"{_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
             DirectedOrientationWarning,
-            stacklevel=stacklevel_outside_package(),
         )
 
 
@@ -1352,6 +1370,14 @@ def multitaper_connectivity(
         multiple methods are merged into one Dataset without flattening their
         semantic dimensions.
 
+        Tip: ``method="magnitude_squared_coherence"`` returns a single
+        DataArray, while the default ``method=None`` returns a Dataset of
+        every measure in ``DEFAULT_METHODS``: select one with
+        ``result["magnitude_squared_coherence"]``. Without
+        ``time_window_duration`` the whole recording is one window, so
+        ``time`` is a dimension of length 1: drop it for plotting with
+        ``result.isel(time=0)`` or ``result.squeeze("time")``.
+
     Examples
     --------
     >>> import numpy as np
@@ -1372,6 +1398,10 @@ def multitaper_connectivity(
     ... )
     >>> coherence.dims
     ('time', 'frequency', 'source', 'target')
+    >>> coherence.sizes["time"]  # one window: the whole recording
+    1
+    >>> coherence.squeeze("time").dims  # e.g. for plotting against frequency
+    ('frequency', 'source', 'target')
 
     >>> # Compute multiple measures
     >>> measures = multitaper_connectivity(

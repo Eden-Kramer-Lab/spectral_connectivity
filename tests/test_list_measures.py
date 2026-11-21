@@ -1,5 +1,6 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
+import dataclasses
 import itertools
 import re
 import warnings
@@ -29,6 +30,31 @@ from spectral_connectivity.wrapper import (
     frequency_band_reduce,
 )
 from tests._backend_helpers import to_device, to_host
+
+
+def test_repr_is_one_line_with_the_description_and_every_field_stays_readable():
+    """A notebook shows ``list_measures()`` as its elements' reprs; with all
+    18 fields each, the 35 records printed about 24,000 characters. The
+    repr gives the name, category, range (written as the measure table
+    writes it), the one-line description, and ``is_directed`` when true,
+    and marks the rest as elided; every field is still an attribute."""
+    measures = list_measures()
+    by_name = {m.name: m for m in measures}
+    coherence = by_name["magnitude_squared_coherence"]
+    assert repr(coherence) == (
+        "MeasureInfo(name='magnitude_squared_coherence', category='pairwise', "
+        "value_range=[0, 1], description='Return the magnitude squared of the "
+        "complex coherency.', ...)"
+    )
+    assert "value_range=[-π, π]," in repr(by_name["coherence_phase"])
+    assert "value_range=(-∞, ∞)," in repr(by_name["group_delay"])
+    granger = repr(by_name["pairwise_spectral_granger_prediction"])
+    assert "value_range=[0, ∞), is_directed=True, description=" in granger
+    assert all(("is_directed=True" in repr(m)) == m.is_directed for m in measures)
+    assert all("\n" not in repr(m) and len(repr(m)) <= 220 for m in measures)
+    assert len(repr(measures)) < 7000
+    for field in dataclasses.fields(MeasureInfo):
+        assert dataclasses.asdict(coherence)[field.name] == getattr(coherence, field.name)
 
 
 def test_lists_every_registered_measure():

@@ -27,15 +27,20 @@ partial directed coherence, and direct directed transfer function) emit a
 `DirectedOrientationWarning` as a reminder, as do `multitaper_connectivity` and
 `connectivity_to_xarray` for pairwise and subset spectral Granger prediction;
 silence it with `warnings.filterwarnings("ignore",
-category=spectral_connectivity.DirectedOrientationWarning)`. See the [migration
+category=spectral_connectivity.DirectedOrientationWarning)`. It is shown once
+per session for each measure; to see it at every call, use
+`warnings.simplefilter("always",
+spectral_connectivity.DirectedOrientationWarning)`. See the [migration
 guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide).
 
 `Connectivity.power()` is one-sided since 3.0: the bins between 0 Hz and Nyquist
 are twice the 2.x values, so integrating over the non-negative frequencies gives
 the signal's power. `power(one_sided=False)` returns the 2.x values. Until 3.2,
 calling `Connectivity.power()` without `one_sided` on two-sided coefficients
-emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power
-that `multitaper_connectivity` and `connectivity_to_xarray` return (including by
+emits a `PowerSidednessWarning` (once per session;
+`warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning)`
+shows it at every call); pass `one_sided=True` to silence it. The power that
+`multitaper_connectivity` and `connectivity_to_xarray` return (including by
 default) is the one-sided density too, and they do not warn: halve its interior
 bins to compare with a 2.x result.
 :::
@@ -105,7 +110,7 @@ from spectral_connectivity import suggest_parameters
 params = suggest_parameters(
     sampling_frequency=sampling_frequency,
     signal_duration=10.0,  # seconds
-    desired_freq_resolution=2.0,  # Hz
+    frequency_resolution=2.0,  # Hz
 )
 # -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
 coherence = multitaper_connectivity(

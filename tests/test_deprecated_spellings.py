@@ -9,7 +9,12 @@ import warnings
 
 import numpy as np
 
-from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity import (
+    Connectivity,
+    Multitaper,
+    multitaper_connectivity,
+    suggest_parameters,
+)
 from spectral_connectivity.statistics import power_confidence_intervals
 from spectral_connectivity.wrapper import connectivity_to_xarray, fourier_connectivity
 
@@ -63,6 +68,14 @@ def test_every_deprecated_spelling_warns_once_at_its_own_line():
         (
             lambda: power_confidence_intervals(n_tapers=25, power=2.0),
             ["power_confidence_intervals(n_tapers=...)"],
+        ),
+        (
+            lambda: power_confidence_intervals(25, 2.0, ci=0.9),
+            ["power_confidence_intervals(ci=...)"],
+        ),
+        (
+            lambda: suggest_parameters(500, 10.0, desired_freq_resolution=2.0),
+            ["suggest_parameters(desired_freq_resolution=...)"],
         ),
     ]
     with warnings.catch_warnings(record=True) as record:

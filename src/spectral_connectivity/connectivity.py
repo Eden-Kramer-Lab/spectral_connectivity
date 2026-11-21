@@ -70,6 +70,7 @@ from spectral_connectivity.utils import (
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
+    warn_migration,
 )
 
 if TYPE_CHECKING:
@@ -414,8 +415,18 @@ class DirectedOrientationWarning(UserWarning):
     ``sel(source=a, target=b)`` was ``b -> a`` in 2.x (the 2.x wrapper rejected
     the transfer-function measures).
     Code written for 2.x keeps running but reads the opposite direction. This
-    warning is temporary; silence it, without hiding other warnings, with
+    warning is temporary. It appears once per Python session for each measure:
+    once for calls through the wrappers (about ``sel(source, target)``) and
+    once for calls to the ``Connectivity`` method (about the array's axes).
+    ``warnings.simplefilter("always", DirectedOrientationWarning)`` shows it at
+    every call; a call made while it is ignored does not count as shown.
+    Silence it, without hiding other warnings, with
     ``warnings.filterwarnings("ignore", category=DirectedOrientationWarning)``.
+
+    By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
+    records nothing once the notice has been shown; add
+    ``warnings.simplefilter("always", DirectedOrientationWarning)`` inside it
+    (``pytest.warns`` does the equivalent).
     """
 
 
@@ -426,9 +437,17 @@ class PowerSidednessWarning(UserWarning):
     ``one_sided`` on two-sided coefficients. Since 3.0 it returns the one-sided
     density, with the interior frequency bins doubled, where 2.x returned the
     two-sided density, so code written for 2.x keeps running and gets values
-    twice as large away from 0 Hz and Nyquist. This warning is temporary; pass
+    twice as large away from 0 Hz and Nyquist. This warning is temporary. It
+    appears once per Python session;
+    ``warnings.simplefilter("always", PowerSidednessWarning)`` shows it at every
+    call, and a call made while it is ignored does not count as shown. Pass
     ``one_sided=True`` or ``one_sided=False`` to the call, or silence it with
     ``warnings.filterwarnings("ignore", category=PowerSidednessWarning)``.
+
+    By design, a bare ``warnings.catch_warnings(record=True)`` with no filter
+    records nothing once the notice has been shown; add
+    ``warnings.simplefilter("always", PowerSidednessWarning)`` inside it
+    (``pytest.warns`` does the equivalent).
     """
 
 
@@ -440,10 +459,19 @@ _MIGRATION_GUIDE_URL = (
 # this, so pyproject.toml can filter them by message: a category filter would
 # import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
-_SILENCE_ORIENTATION_WARNING = (
-    'Silence with warnings.filterwarnings("ignore", '
-    "category=spectral_connectivity.DirectedOrientationWarning)."
-)
+
+
+def _silence_hint(category: type[UserWarning]) -> str:
+    """How to silence a migration notice, and to see it at every call."""
+    name = f"spectral_connectivity.{category.__name__}"
+    return (
+        f'Silence this warning with warnings.filterwarnings("ignore", category={name}). '
+        "Shown once per Python session; to see it at every call: "
+        f'warnings.simplefilter("always", {name}).'
+    )
+
+
+_SILENCE_ORIENTATION_WARNING = _silence_hint(DirectedOrientationWarning)
 
 # The methods that returned [..., target, source] arrays in 2.x. The Granger
 # measures added in 3.0 and the lead/lag measures were never target first.
@@ -479,14 +507,13 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         result = connectivity_measure(*args, **kwargs)
         if _warn_orientation_change.get():
-            warnings.warn(
+            warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
                 "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
                 "returned [..., target, source]; review the indexing and "
                 "normalization axes of code written for 2.x. See the migration "
                 f"guide: {_MIGRATION_GUIDE_URL}. {_SILENCE_ORIENTATION_WARNING}",
                 DirectedOrientationWarning,
-                stacklevel=stacklevel_outside_package(),
             )
         return result
 
@@ -875,12 +902,17 @@ class Connectivity:
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
-        Specifies how to average the cross-spectral matrix:
-        - "trials_tapers": average over trials and tapers (most common)
-        - "trials": average over trials only (keep taper dimension)
-        - "tapers": average over tapers only (keep trial dimension)
-        - "time": average over time windows
-        - combinations: average over multiple dimensions
+        Which axes of the coefficients to average over. The others are kept,
+        ahead of the measure's own axes (see "Result shape by
+        expectation_type" in Notes):
+
+        - "trials_tapers": average over trials and tapers (most common); keep
+          the time-window axis
+        - "trials": average over trials; keep the time-window and taper axes
+        - "tapers": average over tapers; keep the time-window and trial axes
+        - "time": average over time windows; keep the trial and taper axes
+        - "time_trials", "time_tapers", "time_trials_tapers": average over
+          every named axis; keep the rest
     frequencies : NDArray[floating], shape (n_frequencies,), optional
         Frequency values in Hz corresponding to FFT bins. If None, uses
         normalized frequencies.
@@ -960,6 +992,65 @@ class Connectivity:
     and :func:`~spectral_connectivity.fourier_connectivity` use the same order:
     ``result.sel(source=a, target=b)`` is ``a -> b`` (or "``a`` leads ``b``").
     Prefer them unless you need this lower-level API.
+
+    **Result shape by expectation_type**: the averaged axes are dropped and
+    the others kept, in the order (time windows, trials, tapers), ahead of the
+    measure's own axes. For ``magnitude_squared_coherence`` of coefficients
+    with 4 time windows, 3 trials, 5 tapers, 126 non-negative frequencies, and
+    2 signals:
+
+    ========================  ==============================  =================
+    expectation_type          leading axes kept               result shape
+    ========================  ==============================  =================
+    ``"trials_tapers"``       (n_time_windows)                (4, 126, 2, 2)
+    ``"trials"``              (n_time_windows, n_tapers)      (4, 5, 126, 2, 2)
+    ``"tapers"``              (n_time_windows, n_trials)      (4, 3, 126, 2, 2)
+    ``"time"``                (n_trials, n_tapers)            (3, 5, 126, 2, 2)
+    ``"time_trials"``         (n_tapers)                      (5, 126, 2, 2)
+    ``"time_tapers"``         (n_trials)                      (3, 126, 2, 2)
+    ``"time_trials_tapers"``  ()                              (126, 2, 2)
+    ========================  ==============================  =================
+
+    **Return types**: most measures return one array. The group measures,
+    which take ``group_labels``, return more:
+
+    - ``canonical_coherence``, ``blockwise_spectral_granger_prediction``,
+      ``maximized_imaginary_coherency``, and
+      ``multivariate_interaction_measure`` return a tuple ``(values,
+      labels)``: ``values`` ends in ``(n_groups, n_groups)``, ordered as
+      ``labels``, the sorted unique group labels. Unpack it:
+      ``values, labels = conn.canonical_coherence(group_labels)``.
+    - ``canonical_coherency`` and ``maximized_imaginary_coherency_components``
+      return a :class:`MultivariateConnectivityResult`; read its attributes
+      (``result.scores``, ``result.connections``, ``result.filters``, ...)
+      rather than unpacking it.
+    - ``global_coherence`` (which takes no groups) returns two arrays,
+      ``fractions, vectors = conn.global_coherence()``. Unlike every other
+      measure, its frequency axis holds all ``n_fft_samples`` FFT bins; see
+      its Notes for how to line it up with :attr:`frequencies`.
+
+    ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
+    :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
+    wrappers return an ``xarray.Dataset`` for each of these instead.
+
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> conn = Connectivity(
+    ...     rng.standard_normal((1, 6, 3, 64, 4)) + 1j * rng.standard_normal((1, 6, 3, 64, 4))
+    ... )
+    >>> group_labels = np.array(["CA1", "CA1", "PFC", "PFC"])
+    >>> values, labels = conn.canonical_coherence(group_labels)
+    >>> values.shape, labels.tolist()  # (n_time_windows, n_frequencies, n_groups, n_groups)
+    ((1, 33, 2, 2), ['CA1', 'PFC'])
+    >>> result = conn.canonical_coherency(group_labels)
+    >>> result.scores.shape  # (n_time_windows, n_frequencies, n_connections, n_components)
+    (1, 33, 1, 1)
+    >>> fractions, vectors = conn.global_coherence()
+    >>> fractions.shape, vectors.shape  # 64 FFT bins: all of them, not 33
+    ((1, 64, 1), (1, 64, 4, 1))
+    >>> n_frequencies = len(conn.frequencies)
+    >>> fractions[..., :n_frequencies, :].shape  # aligned with conn.frequencies
+    (1, 33, 1)
 
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
@@ -2566,8 +2657,8 @@ class Connectivity:
             also what an omitted ``one_sided`` gives. Called without it on
             two-sided coefficients, ``power`` warns that 2.x returned the
             two-sided density
-            (:class:`~spectral_connectivity.PowerSidednessWarning`, until
-            3.2); pass ``True`` to confirm and silence it.
+            (:class:`~spectral_connectivity.PowerSidednessWarning`, once per
+            session, until 3.2); pass ``True`` to confirm and silence it.
             ``False`` returns the two-sided density instead, still at the
             non-negative frequencies only: no bin is doubled, as for a
             spectrum laid out over negative and positive frequencies. For a
@@ -2624,7 +2715,7 @@ class Connectivity:
         if one_sided is None:
             if not self._is_one_sided and _warn_orientation_change.get():
                 # Remove in 3.2, with DirectedOrientationWarning (issue #98).
-                warnings.warn(
+                warn_migration(
                     f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
                     "one-sided power spectral density: the bins between 0 Hz and "
                     "Nyquist are doubled, so integrating over the non-negative "
@@ -2632,10 +2723,8 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    'Silence all of these with warnings.filterwarnings("ignore", '
-                    "category=spectral_connectivity.PowerSidednessWarning).",
+                    + _silence_hint(PowerSidednessWarning),
                     PowerSidednessWarning,
-                    stacklevel=stacklevel_outside_package(),
                 )
             one_sided = True
         if _validated_flag("one_sided", one_sided):
@@ -4004,16 +4093,26 @@ class Connectivity:
             The fraction of total coherent power captured by each component
             (eigenvalue of the cross-spectral matrix divided by the sum of all
             eigenvalues), ordered strongest component first.
-        unnormalized_global_coherence : ndarray
+        vectors : ndarray
             Shape (n_time_windows, n_fft_samples, n_signals, n_components).
-            The global coherence vectors (left singular vectors).
+            Each component's unit-norm weights over the signals (the left
+            singular vectors of the coefficient matrix), in the same order;
+            the wrappers call them ``global_coherence_vectors``.
 
         Notes
         -----
         **Frequency axis**: unlike every other public measure, which returns
         only the non-negative frequencies, this method returns all
-        ``n_fft_samples`` bins of the (two-sided) transform in FFT order;
-        index it with ``all_frequencies`` rather than ``frequencies``.
+        ``n_fft_samples`` bins of the (two-sided) transform in FFT order,
+        labelled by :attr:`all_frequencies`. The first ``len(frequencies)``
+        of them are the non-negative bins, so
+        ``global_coherence[..., :len(conn.frequencies), :]`` and
+        ``vectors[..., :len(conn.frequencies), :, :]`` line up with
+        :attr:`frequencies`; the wrappers return them trimmed so.
+
+        **Observations**: it does not follow ``expectation_type``. Each time
+        window is decomposed from all of its trials and tapers, so the
+        leading axis is always ``n_time_windows``.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
         in that component, so the components sum to at most 1 and rescaling

@@ -4,7 +4,6 @@ Run ``python docs/generate_measure_table.py`` after changing a measure's
 metadata; ``tests/test_docs.py`` fails while the committed table is stale.
 """
 
-import math
 from pathlib import Path
 
 from spectral_connectivity import list_measures
@@ -12,6 +11,7 @@ from spectral_connectivity._measure_registry import (
     _DIAGONAL_POLICIES,
     _MEASURE_SPECS,
     _NAN_FOR_ZERO_POWER_SIGNAL,
+    _format_value_range,
 )
 
 DOCUMENT = Path(__file__).with_name("CONNECTIVITY_METRIC_RANGES.md")
@@ -29,18 +29,8 @@ _DIAGONALS = {
 }
 
 
-def _bound(value: float) -> str:
-    if math.isinf(value):
-        return "∞" if value > 0 else "-∞"
-    if math.isclose(abs(value), math.pi):
-        return "π" if value > 0 else "-π"
-    return f"{value:g}"
-
-
 def _range(lower: float, upper: float, is_complex: bool) -> str:
-    opening = "(" if math.isinf(lower) else "["
-    closing = ")" if math.isinf(upper) else "]"
-    interval = f"{opening}{_bound(lower)}, {_bound(upper)}{closing}"
+    interval = _format_value_range(lower, upper)
     return f"\\|z\\| in {interval}" if is_complex else interval
 
 

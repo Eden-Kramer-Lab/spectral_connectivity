@@ -20,6 +20,7 @@ from spectral_connectivity import (
 )
 from spectral_connectivity.connectivity import _ORIENTATION_CHANGED_MEASURES
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._fresh_session import run_fresh_session
 
 _KWARGS = {
     "blockwise_spectral_granger_prediction": {"group_labels": np.array([0, 1])},
@@ -35,6 +36,12 @@ _UNCHANGED = [
     ),
     "magnitude_squared_coherence",
 ]
+
+# Each message says it will not repeat, and how to see it at every call.
+_ONCE_PER_SESSION = (
+    "Shown once per Python session; to see it at every call: "
+    'warnings.simplefilter("always", spectral_connectivity.DirectedOrientationWarning).'
+)
 
 
 @pytest.fixture(scope="module")
@@ -74,6 +81,7 @@ def test_changed_measure_warns_at_the_callers_line(connectivity, method):
     assert method in message
     assert "[..., source, target]" in message
     assert "migration-guide" in message
+    assert _ONCE_PER_SESSION in message
     assert warning.filename == __file__
 
 
@@ -91,6 +99,73 @@ def test_repeated_calls_warn_once_under_the_default_filter(connectivity):
         for _ in range(3):
             connectivity.directed_transfer_function()
     assert len(_orientation_warnings(record)) == 1
+
+
+_SESSION_SCRIPT = """
+granger = "pairwise_spectral_granger_prediction"
+connectivity.directed_transfer_function()
+connectivity.directed_transfer_function()  # another line
+connectivity.jackknife("directed_transfer_function")
+connectivity.partial_directed_coherence()
+multitaper_connectivity(time_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(time_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(
+    time_series,
+    sampling_frequency=100,
+    method="subset_pairwise_spectral_granger_prediction",
+    connectivity_kwargs={"pairs": [(0, 1)]},
+)
+first = list(shown)
+warnings.simplefilter("always", DirectedOrientationWarning)
+connectivity.directed_transfer_function()
+print(json.dumps([first, shown[len(first):]]))
+"""
+
+
+def test_warning_appears_once_per_session_for_each_measure():
+    """Under Python's default filters each measure's notice appears once per
+    session, whichever line calls it; the wrappers' label notice is separate,
+    and also once per measure. A filter set after import shows it again."""
+    first, after_always = run_fresh_session(_SESSION_SCRIPT)
+    # Each message's fourth word: the measure, or "sel(source=a," for the labels.
+    assert [message.split()[3] for message in first] == [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "sel(source=a,",
+        "sel(source=a,",
+    ]
+    assert [message.split()[3] for message in after_always] == ["directed_transfer_function"]
+
+
+_NONFINITE_SCRIPT = """
+nan_series = time_series.copy()
+nan_series[10, 0, 0] = np.nan
+nan_connectivity = Connectivity.from_transform(
+    Multitaper(nan_series, sampling_frequency=100)
+)
+granger = "pairwise_spectral_granger_prediction"
+nan_connectivity.directed_transfer_function()
+nan_connectivity.directed_transfer_function()  # another line
+nan_connectivity.partial_directed_coherence()
+multitaper_connectivity(nan_series, sampling_frequency=100, method=granger)
+multitaper_connectivity(nan_series, sampling_frequency=100, method=granger)
+print(json.dumps(shown))
+"""
+
+
+def test_nonfinite_input_still_shows_each_notice_once_per_session():
+    """A directed measure of NaN coefficients drops its factorization
+    warnings inside ``catch_warnings``; the orientation notice, issued
+    outside that block, still appears once per measure, and so does the
+    wrappers' label notice."""
+    shown = run_fresh_session(_NONFINITE_SCRIPT)
+    notices = [message.split()[3] for message in shown if message.startswith("Since ")]
+    assert notices == [
+        "directed_transfer_function",
+        "partial_directed_coherence",
+        "sel(source=a,",
+    ]
+    assert any("NaN or infinite value" in message for message in shown)
 
 
 def test_filtering_the_category_silences_it(connectivity):
@@ -126,6 +201,7 @@ def test_wrapper_warns_once_about_its_labels(time_series):
         "sel(source=a, target=b) of pairwise_spectral_granger_prediction is a -> b" in message
     )
     assert "[..., source, target]" not in message
+    assert _ONCE_PER_SESSION in message
     assert warning.filename == __file__
 
 

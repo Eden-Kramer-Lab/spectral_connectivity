@@ -20,13 +20,13 @@ that existed in 2.x (pairwise and subset spectral Granger, directed transfer
 function, directed coherence, (generalized) partial directed coherence, and
 direct directed transfer function) emit a `DirectedOrientationWarning` as a
 reminder, as do `multitaper_connectivity` and `connectivity_to_xarray` for
-pairwise and subset spectral Granger prediction; silence it with
-`warnings.filterwarnings("ignore",
+pairwise and subset spectral Granger prediction, once per session for each
+measure; silence it with `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`.
 `Connectivity.power()` is one-sided: its bins between 0 Hz and Nyquist are twice
-the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` when called without
-`one_sided` on two-sided coefficients; the wrappers' power results changed the
-same way without a warning (see the migration row).
+the 2.x values. Until 3.2 it emits a `PowerSidednessWarning` (once per session)
+when called without `one_sided` on two-sided coefficients; the wrappers' power
+results changed the same way without a warning (see the migration row).
 
 This release includes corrected numerical definitions and therefore requires a
 major version bump. Recompute affected results rather than comparing them
@@ -76,7 +76,9 @@ their rows).
 | SciPy 1.10 / CuPy 12 GPU extra | Upgrade to `scipy>=1.11.1` and, for GPU use, `cupy-cuda12x>=13.0` |
 | `multitaper_connectivity(x, fs).coherence_magnitude` or `result["coherence_magnitude"]` on a default result | Use `.magnitude_squared_coherence` or `result["magnitude_squared_coherence"]`. The old variable is absent from the new default Dataset, so old indexing fails loudly (`KeyError`/`AttributeError`). During 3.x, explicitly requesting `method="coherence_magnitude"` (or calling `Connectivity.coherence_magnitude()`) keeps the old variable name, returns the same values, and emits a `DeprecationWarning`; the alias is removed in 4.0. `connectivity_to_xarray`'s default `method` is now `"magnitude_squared_coherence"` too. (`fs` is a local variable passed as `sampling_frequency`.) |
 | `delay`, `group_delay`, and `phase_slope_index` took `frequencies_of_interest=(low, high)` (also as their first positional argument), which excludes a bin lying on either edge | Pass `frequency_range=(low, high)`, which includes both endpoints. The old keyword still works through 3.x with its exclusive selection and a `DeprecationWarning` whose message gives the `frequency_range` that keeps the same bins (the lowest and highest bins it selected); it is removed in 4.0 |
-| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls do not warn; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0. Both forms return the corrected interval (the `power_confidence_intervals` row above), not 2.x's numbers: the interval 2.0.1 returned for `ci=c` is 3.0's `ci=2c-1` (2.0.1's `ci=0.95` is 3.0's `ci=0.9`), for 2.0.1 levels `c >= 0.75`, since 3.0 accepts `ci` in `[0.5, 1)` |
+| `power_confidence_intervals(n_tapers=n, ...)` | Pass the same count as `n_observations=n` (or positionally): it is the number of averaged observations, tapers x trials. Positional calls do not warn; `n_tapers=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0. Both forms return the corrected interval (the `power_confidence_intervals` row above), not 2.x's numbers: the interval 2.0.1 returned for `ci=c` is 3.0's `confidence_level=2c-1` (2.0.1's `ci=0.95` is 3.0's `confidence_level=0.9`), for 2.0.1 levels `c >= 0.75`, since 3.0 accepts levels in `[0.5, 1)` |
+| `power_confidence_intervals(n, power, ci=c)` | Pass `confidence_level=c` (or the level third, positionally), the name `Connectivity.jackknife` and `jackknife_confidence_interval` use. Positional calls do not warn; `ci=` still works through 3.x with a `DeprecationWarning` and is removed in 4.0. Both return 3.0's corrected interval, not 2.0.1's (previous row). Before: `power_confidence_intervals(25, power, ci=0.95)`; after: `power_confidence_intervals(25, power, confidence_level=0.95)` |
+| `suggest_parameters(fs, duration, desired_freq_resolution=r)` | Pass `frequency_resolution=r` (or the resolution third, positionally), the name `Multitaper` and `estimate_frequency_resolution` use. Positional calls do not warn; `desired_freq_resolution=` still works through 3.x with a `DeprecationWarning`, gives the same suggestion, and is removed in 4.0. Before: `suggest_parameters(500, 10.0, desired_freq_resolution=2.0)`; after: `suggest_parameters(500, 10.0, frequency_resolution=2.0)` |
 | `multitaper_connectivity(x, fs, n_fft_samples=1024, start_time=0.5)` or `connectivity_to_xarray(m, "subset_pairwise_spectral_granger_prediction", pairs=[(0, 1)])`: advanced settings as plain keyword arguments | Pass them as `transform_kwargs={"n_fft_samples": 1024, "start_time": 0.5}` or `connectivity_kwargs={"pairs": [(0, 1)]}`, which give the same result. The common settings (`sampling_frequency`, `time_window_duration`, `time_window_step`, `time_halfbandwidth_product`, `n_tapers`, `detrend_type`, `group_labels`, and `frequency_range`) stay named arguments of every wrapper that takes them and do not warn. The plain-keyword route still works through 3.x with a `DeprecationWarning` and is removed in 4.0. `n_fft_samples` must be at least the window length in samples: 2.x accepted a shorter one (the call above on a recording longer than 1024 samples with no `time_window_duration`), and 3.0 raises `ValueError` in either spelling, so give a window no longer than `n_fft_samples` or drop it |
 | `Connectivity.from_multitaper(m)`, or a `Connectivity` subclass overriding `from_multitaper` | Use `Connectivity.from_transform(m)`, which takes the same arguments (the first is named `transform`, not `multitaper_instance`) and builds the same instance from any spectral transform. Neither name calls the other, so move a subclass's override to `from_transform` and change its `super().from_multitaper(...)` to `super().from_transform(...)` (an override still calling `super().from_multitaper` works but warns). `from_multitaper` still works through 3.x with a `DeprecationWarning` and is removed in 4.0 |
 | `minimum_phase_decomposition(S)` stopped after 60 Wilson iterations by default, logged "Maximum iterations reached", and returned the unconverged factor | The default `max_iterations` is 500, so spectra that need more iterations converge. A sub-spectrum still unconverged at the cap is returned as `NaN` with a `UserWarning`, not as the unconverged factor, so `max_iterations=60` restores the 2.x cap but not 2.x's output. `tolerance` and `max_iterations` keep their positions and still work positionally or by keyword |
@@ -111,15 +113,27 @@ their rows).
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
   when they compute pairwise or subset spectral Granger prediction (the 2.x
   wrapper rejected the transfer-function measures). It points at the calling
-  line, so Python's default filter shows it once per call site.
+  line and appears once per Python session for each measure, and for each
+  way of computing it: once for calls through `multitaper_connectivity` or
+  `connectivity_to_xarray` (about `sel(source, target)`) and once for calls
+  to the `Connectivity` method (about the array's axes), so a script that
+  uses both sees both, once each. `warnings.simplefilter("always",
+  spectral_connectivity.DirectedOrientationWarning)` shows it at every call,
+  and any other filter on it (such as `"error"`) applies as usual. A call
+  made while it is ignored does not count as shown, so removing the filter
+  shows it once; a call turned into an error counts, since the exception
+  carried the message.
 - `PowerSidednessWarning`, a temporary `UserWarning` (planned removal in 3.2)
   emitted by `Connectivity.power()` called without `one_sided` on two-sided
   coefficients, and once by `jackknife("power")` for its full estimate: since
-  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. Pass
+  3.0 the bins between 0 Hz and Nyquist are twice the 2.x values. It appears
+  once per Python session, like `DirectedOrientationWarning`. Pass
   `one_sided=True` (or `False` for the 2.x values) or silence it with
   `warnings.filterwarnings("ignore",
   category=spectral_connectivity.PowerSidednessWarning)`. The wrappers' power
-  results do not emit it.
+  results do not emit it. Both warnings' messages say that they are shown
+  once per session and give the `simplefilter("always", ...)` call that shows
+  them at every call.
 - Public simulators with planted, known structure in
   `spectral_connectivity.simulate`: `simulate_lagged_broadband` (noisy copies of
   one white-noise source, each delayed by a whole number of samples given as
@@ -312,7 +326,11 @@ their rows).
   for the coherency family, a `quantity` (`magnitude`, `squared_magnitude`,
   `signed`, `phase`, or `complex`) and `formula`. The measure table in
   `docs/CONNECTIVITY_METRIC_RANGES.md`, with its Diagonal column and a formula
-  table, is generated from it.
+  table, is generated from it. Its repr shows `name`, `category`,
+  `value_range` (written as in the table), `is_directed` when true, and the
+  one-line `description`, so `list_measures()` prints one line per measure;
+  every field is still an attribute, and `interpretation` says how to read
+  the values.
 - Each measure variable of a wrapper result records how to read it in
   NetCDF-safe attributes from the same registry: `interpretation`,
   `sign_convention`, `value_range_lower`/`value_range_upper` (an unbounded side
@@ -635,6 +653,61 @@ their rows).
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
+- `Connectivity.group_delay` and `Connectivity.delay` document that a pair
+  without significant coherence is NaN (for independent signals,
+  `group_delay()` returns NaN delay, slope, and r), which means no delay was
+  estimated rather than a delay of zero, and how `significance_threshold`
+  selects the frequencies: an exact zero-coherence test at each bin,
+  Benjamini-Hochberg corrected at that false discovery rate over every bin,
+  pair, and window of the call, keeping each pair's largest contiguous run of
+  at least 3 independent significant bins. The values are unchanged.
+- `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
+  they take coherency (`Connectivity.coherency()`) or its magnitude, not
+  `magnitude_squared_coherence()`. Both square or read the absolute value of
+  their input, so magnitude-squared coherence gives wrong p-values or z-scores
+  without an error: for independent noise no interior frequency had
+  `p < 0.05`, where `coherency()` gives about the nominal 5%. A real-valued input
+  is still accepted, since coherency magnitudes and coherency from real
+  coefficients are real too. The values are unchanged.
+- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
+  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
+  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
+  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
+  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
+  array in the other order cannot be detected, so it is analyzed with trials
+  and signals exchanged.
+- The examples of `coherence_significance_pvalue` and
+  `power_confidence_intervals` start from a time-resolved `Connectivity`:
+  they pass its `n_observations`, reshape `real_valued_frequencies` to
+  broadcast against the coherency or power (so 0 Hz and Nyquist get their own
+  null), and, for the p-values, select one pair before
+  `adjust_for_multiple_comparisons`.
+- The `Connectivity` docstring has a table of the leading axes each
+  `expectation_type` keeps and the shape it gives, and its descriptions of
+  `"trials"` and `"tapers"` say that they keep the time-window axis too.
+- The `Connectivity` docstring says what each group measure returns and how
+  to unpack it: `(values, labels)` from `canonical_coherence` and the other
+  scalar group measures, a `MultivariateConnectivityResult` from
+  `canonical_coherency` and `maximized_imaginary_coherency_components`, and
+  two arrays from `global_coherence`, whose frequency axis (unlike the other
+  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
+  non-negative ones. `global_coherence` documents that it ignores
+  `expectation_type` (every trial and taper of a window is decomposed) and
+  names its second return value `vectors`.
+- `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
+  says that it labels the two-sided FFT bins of `fft()` and that
+  `Connectivity.frequencies`, the non-negative bins, labels results; the
+  `Multitaper` attributes give `fft` and `frequencies` their `n_fft_samples`
+  length.
+- The Returns section of `multitaper_connectivity` says that one `method`
+  string gives a DataArray and the default a Dataset of `DEFAULT_METHODS`,
+  and that without `time_window_duration` `time` has length 1 (drop it with
+  `isel(time=0)` or `squeeze("time")` to plot).
+- `spectral_connectivity.statistics` defines `__all__`: its functions,
+  `JackknifeResult`, and the `MULTIPLE_COMPARISONS` mapping (now documented in
+  the API reference). `from spectral_connectivity.statistics import *` no
+  longer also imports the module's own imports (`np`, `scipy`, `warnings`,
+  `dataclass`, `cast`, ...); import those yourself.
 
 ### Removed
 
@@ -715,11 +788,30 @@ is removed in 4.0.
   multi-trial averages. The argument keeps its first position, so positional
   calls such as `power_confidence_intervals(25, power, 0.95)` keep working
   and do not warn; `n_tapers` is accepted by keyword only and gives the same
-  interval as `n_observations`. `power` and `ci` (the confidence level, in
-  `[0.5, 1)`) keep their names and positions. Giving both names raises
+  interval as `n_observations`. `power` keeps its name and position, and the
+  confidence level its position (next entry). Giving both names raises
   `ValueError`. Neither form reproduces 2.x's numbers: both return the
   corrected interval (see Fixed), and the interval 2.0.1 returned for `ci=c`
-  is 3.0's `ci=2c-1` (for `c >= 0.75`; 3.0 accepts `ci` in `[0.5, 1)`).
+  is 3.0's `confidence_level=2c-1` (for `c >= 0.75`; 3.0 accepts levels in
+  `[0.5, 1)`).
+- `power_confidence_intervals(ci=...)`: use `confidence_level=...`, the name
+  `Connectivity.jackknife` and `jackknife_confidence_interval` use. The level
+  keeps its third position, so positional calls such as
+  `power_confidence_intervals(25, power, 0.95)` keep working and do not warn;
+  `ci` is accepted by keyword only and gives the same interval as
+  `confidence_level`, which, like it, must lie in `[0.5, 1)` (the error
+  names the argument given). Giving both names raises `ValueError`, even
+  with `confidence_level=0.95`, and a call rejected for another reason
+  raises without the warning. The interval is the corrected one (previous
+  entry).
+- `suggest_parameters(desired_freq_resolution=...)`: use
+  `frequency_resolution=...`, the name `Multitaper` and
+  `estimate_frequency_resolution` use (and the key of the returned
+  suggestion). The argument keeps its third position, so positional calls
+  keep working and do not warn; `desired_freq_resolution` is accepted by
+  keyword only and gives the same suggestion. Giving both names raises
+  `ValueError`, and a call rejected for another reason raises without the
+  warning. `signal_duration` and `desired_n_tapers` keep their names.
 - `frequencies_of_interest` of `delay`, `group_delay`, and
   `phase_slope_index`, by keyword or as the first positional argument: use the
   keyword-only `frequency_range`. The deprecated form excludes bins on both
@@ -749,25 +841,31 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   with a scalar `real_valued` (the default), returning one value per count as
   2.0.1 did; once `real_valued` was added they raised converting the array to
   a float.
-- `Connectivity.group_delay` and `Connectivity.delay` document that a pair
-  without significant coherence is NaN (for independent signals,
-  `group_delay()` returns NaN delay, slope, and r), which means no delay was
-  estimated rather than a delay of zero, and how `significance_threshold`
-  selects the frequencies: an exact zero-coherence test at each bin,
-  Benjamini-Hochberg corrected at that false discovery rate over every bin,
-  pair, and window of the call, keeping each pair's largest contiguous run of
-  at least 3 independent significant bins. The values are unchanged.
-- `coherence_bias`, `power_bias`, and `power_variance` raise a `ValueError`
-  for an observation count their formulas cannot use, as
-  `coherence_significance_pvalue` does, and say to pass
-  `Connectivity.n_observations`: `coherence_bias` needs at least 2 (it
-  returned -0.5 for 0 and divided by zero for 1), and the power helpers at
-  least 1 (0 hit the digamma and trigamma poles). A non-finite or fractional
-  count raises too, naming the offending values of an array of counts (one
-  per estimate, still accepted, as an array or a list). A boolean, a string,
-  or None raises a `TypeError`: `power_bias(True)` read it as one observation and
-  `coherence_bias(True)` divided by zero. `coherence_fisher_z_transform`
-  checks `n_obs1` the same way.
+- Every observation count of the statistics helpers is checked the same way,
+  so the same bad count gets the same message, naming the argument, the
+  counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
+  `power_bias`, `power_variance`, `coherence_significance_pvalue`,
+  `power_confidence_intervals`, and both counts of
+  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A count the
+  formula cannot use raises a `ValueError`, as `coherence_significance_pvalue`
+  already did: `coherence_bias` needs at least 2 (it returned -0.5 for 0 and
+  divided by zero for 1), and the power helpers at least 1 (0 hit the
+  digamma and trigamma poles). A non-finite or fractional count raises too,
+  naming the offending values of an array of counts. A boolean, a string, or
+  None raises a `TypeError`: `power_bias(True)` and
+  `power_confidence_intervals(True)` read `True` as 1 observation,
+  `coherence_bias(True)` divided by zero, and
+  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
+  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
+  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
+  one-sample test, got 1."). An array of counts, one per estimate (as an
+  array or a list), is still accepted by `coherence_bias`, `power_bias`, and
+  `power_variance`, and now by both counts of the Fisher z-transforms and the
+  count of `power_confidence_intervals`, where 0 in `n_obs2` means no second
+  sample for that estimate; all but `coherence_fisher_z_transform`'s `n_obs1`
+  raised NumPy's "truth value of an array is ambiguous" for one.
+  `coherence_significance_pvalue` takes a single count, and says so for an
+  array, because its real-valued bins use one count for the call.
 - *Unreleased:* `simulate_shared_oscillation` raises a `ValueError` naming
   the frequency and the Nyquist frequency when `frequency` is negative or not
   below Nyquist, and validates `sampling_frequency` as the transforms do.
@@ -786,14 +884,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   (`n_trials=2.5`), or a negative `n_burnin_samples`. Complex coefficients,
   which it cannot simulate (NumPy failed with a casting error), raise a
   `TypeError`.
-- `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
-  they take coherency (`Connectivity.coherency()`) or its magnitude, not
-  `magnitude_squared_coherence()`. Both square or read the absolute value of
-  their input, so magnitude-squared coherence gives wrong p-values or z-scores
-  without an error: for independent noise no interior frequency had
-  `p < 0.05`, where `coherency()` gives about the nominal 5%. A real-valued input
-  is still accepted, since coherency magnitudes and coherency from real
-  coefficients are real too. The values are unchanged.
 - *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
   rate of a DataArray from a time coordinate that may be in milliseconds: when
   the inferred rate is at most 1 Hz (unless the coordinate's `units`
@@ -1348,7 +1438,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   after a transform's NaN warning, which changes the process-wide warning
   filters while the measure runs: with NaN or Inf input it is not
   thread-safe (another thread's matching warnings are dropped meanwhile),
-  and a warning already shown once may be shown again. Finite input never
+  and a warning already shown once may be shown again (not the 3.x migration
+  notices, which keep their own once-per-session record). Finite input never
   changes the filters.
 - `canonical_coherence` and `global_coherence` computed from NaN or Inf
   coefficients raise a `ValueError` saying the measure cannot be computed
@@ -1425,13 +1516,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   the same hint. Given beside `sampling_frequency`, the alias is answered
   with "pass only sampling_frequency (in Hz)". `fourier_connectivity`, which
   takes no sampling rate, keeps Python's `TypeError` for `fs=`.
-- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
-  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
-  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
-  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
-  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
-  array in the other order cannot be detected, so it is analyzed with trials
-  and signals exchanged.
 - The GPU messages of `get_compute_backend()` and of the import-time GPU
   check say to install `pip install "spectral-connectivity[gpu]"` (the extra
   that pins the CUDA 12 build, `cupy-cuda12x`), or `conda install -c
@@ -1452,24 +1536,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   [0, 1] over such inputs found no other value above 1, except the magnitude
   of the complex `coherency` by up to 3 ulps (7e-16), the precision of the
   magnitude itself.
-- Every observation count of the statistics helpers is checked the same way,
-  so the same bad count gets the same message, naming the argument, the
-  counts it takes, and `Connectivity.n_observations`:
-  `coherence_significance_pvalue`, `power_confidence_intervals`, and both
-  counts of `coherence_fisher_z_transform` and `power_fisher_z_transform`
-  now check theirs as `coherence_bias`, `power_bias`, and `power_variance`
-  do. A boolean, a string, or None raises a `TypeError` there too:
-  `power_confidence_intervals(True)` read `True` as 1 observation, and
-  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
-  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
-  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
-  one-sample test, got 1."). Both counts of the Fisher z-transforms and the
-  count of `power_confidence_intervals` take an array, one count per
-  estimate, where 0 in `n_obs2` means no second sample for that estimate;
-  all but `coherence_fisher_z_transform`'s `n_obs1` raised NumPy's "truth
-  value of an array is ambiguous" for one. `coherence_significance_pvalue`
-  takes a single count, and says so for an array, because its real-valued
-  bins use one count for the call.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
   given a ragged nested list, or values that are not numbers (strings,
   `None`), raise an error naming the `(n_time_samples, n_trials, n_signals)`

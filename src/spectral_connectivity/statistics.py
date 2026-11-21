@@ -19,10 +19,31 @@ from numpy.typing import NDArray
 
 from spectral_connectivity.utils import (
     _validated_flag,
+    both_spellings_message,
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
 )
+
+# The public API: what the API reference documents (autosummary_ignore_module_all
+# in docs/conf.py) and ``import *`` imports.
+__all__ = [
+    "MULTIPLE_COMPARISONS",
+    "Benjamini_Hochberg_procedure",
+    "Bonferroni_correction",
+    "JackknifeResult",
+    "adjust_for_multiple_comparisons",
+    "coherence_bias",
+    "coherence_fisher_z_transform",
+    "coherence_rate_adjustment",
+    "coherence_significance_pvalue",
+    "get_normal_distribution_p_values",
+    "jackknife_confidence_interval",
+    "power_bias",
+    "power_confidence_intervals",
+    "power_fisher_z_transform",
+    "power_variance",
+]
 
 
 @dataclass(frozen=True)
@@ -533,6 +554,7 @@ def Bonferroni_correction(
     return is_significant
 
 
+#: The corrections :func:`adjust_for_multiple_comparisons` applies, by its ``method`` name.
 MULTIPLE_COMPARISONS: dict[str, Callable[..., NDArray[np.bool_]]] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,
@@ -839,6 +861,42 @@ def coherence_significance_pvalue(
     ... )
     >>> np.round(p_values, 3).tolist()  # (1 - 0.36)**4, and the real null
     [0.168, 0.208]
+
+    The whole path from a ``Connectivity``: test every time window and
+    frequency of a pair, giving the 0 Hz and Nyquist bins their own null and
+    the count of trials times tapers, then correct across the tests:
+
+    >>> from spectral_connectivity import Connectivity, Multitaper
+    >>> from spectral_connectivity.simulate import simulate_shared_oscillation
+    >>> from spectral_connectivity.statistics import adjust_for_multiple_comparisons
+    >>> time_series = simulate_shared_oscillation(  # a 20 Hz rhythm in noise
+    ...     20.0, 500, 1000, n_trials=10, amplitudes=[1.0, 1.0],
+    ...     noise_levels=[2.0, 2.0], random_state=0,
+    ... )  # (n_time_samples, n_trials, n_signals) = (1000, 10, 2)
+    >>> multitaper = Multitaper(time_series, sampling_frequency=500, time_window_duration=0.5)
+    >>> connectivity = Connectivity.from_transform(multitaper)
+    >>> coherency = connectivity.coherency()
+    >>> coherency.shape  # (n_time_windows, n_frequencies, n_signals, n_signals)
+    (4, 126, 2, 2)
+    >>> connectivity.n_observations  # 10 trials x 5 tapers
+    50
+    >>> p_values = coherence_significance_pvalue(
+    ...     coherency,
+    ...     connectivity.n_observations,
+    ...     # (n_frequencies,) -> (n_frequencies, 1, 1): broadcasts over time windows and pairs
+    ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis, np.newaxis],
+    ... )
+    >>> p_values.shape
+    (4, 126, 2, 2)
+    >>> # Select the pair first: a signal's coherence with itself is 1 (p = 0)
+    >>> # and does not belong in the family. One family: every window and bin.
+    >>> significant = adjust_for_multiple_comparisons(p_values[..., 0, 1], alpha=0.05)
+    >>> significant.shape  # (n_time_windows, n_frequencies)
+    (4, 126)
+    >>> # Significant in every window: 20 Hz and neighbors inside its 6 Hz
+    >>> # half-bandwidth (NW = 3 over 0.5 s) that the tapers spread it into
+    >>> connectivity.frequencies[significant.all(axis=0)].tolist()
+    [16.0, 18.0, 20.0, 22.0, 24.0]
     """
     counts = _validated_n_observations(
         n_observations,
@@ -1179,12 +1237,24 @@ def coherence_rate_adjustment(
     return np.where(undefined, np.nan, adjustment)
 
 
+class _DefaultConfidenceLevel(float):
+    """0.95, the default level: shown as ``0.95`` in the signature, but a
+    different object from any level a caller passes (0.95 included), so
+    giving it together with the deprecated ``ci`` can be detected."""
+
+    __slots__ = ()
+
+
+_DEFAULT_CONFIDENCE_LEVEL = _DefaultConfidenceLevel(0.95)
+
+
 def power_confidence_intervals(
     n_observations: int | None = None,
     power: NDArray[np.floating] | float = 1,
-    ci: float = 0.95,
+    confidence_level: float = _DEFAULT_CONFIDENCE_LEVEL,
     *,
     n_tapers: int | None = None,
+    ci: float | None = None,
     real_valued: bool | NDArray[np.bool_] = False,
 ) -> tuple[NDArray[np.floating] | float, NDArray[np.floating] | float]:
     """Compute confidence intervals for multitaper power spectrum estimates.
@@ -1193,9 +1263,12 @@ def power_confidence_intervals(
     spectral density estimates from multitaper analysis.
 
     .. versionchanged:: 3.0
-       The count is named ``n_observations``; it keeps its position, so
-       positional calls are unchanged. ``n_tapers=`` still works through 3.x
-       with a ``DeprecationWarning`` and is removed in 4.0.
+       The count is named ``n_observations`` and the level
+       ``confidence_level``, as in
+       :meth:`~spectral_connectivity.Connectivity.jackknife`; both keep their
+       positions, so positional calls are unchanged. ``n_tapers=`` and
+       ``ci=`` still work through 3.x with a ``DeprecationWarning`` and are
+       removed in 4.0.
 
     Parameters
     ----------
@@ -1209,12 +1282,15 @@ def power_confidence_intervals(
         95% for 5 tapers x 5 trials).
     power : NDArray[floating] or float, default=1
         Power spectrum estimates. Can be array of values or scalar.
-    ci : float, default=0.95
-        Confidence level: the probability mass inside the two-sided interval
-        (0.95 for a 95% interval), in the range [0.5, 1.0).
+    confidence_level : float, default=0.95
+        The probability mass inside the two-sided interval (0.95 for a 95%
+        interval), in the range [0.5, 1.0).
     n_tapers : int, optional
         Deprecated name of ``n_observations``, by keyword only; removed in 4.0.
         Giving both raises ``ValueError``.
+    ci : float, optional
+        Deprecated name of ``confidence_level``, by keyword only; removed in
+        4.0. Giving both raises ``ValueError``.
     real_valued : bool or NDArray[bool], default=False
         Which estimates average real-valued Fourier coefficients, a boolean
         array broadcast against ``power``; see
@@ -1236,11 +1312,15 @@ def power_confidence_intervals(
     --------
     >>> import numpy as np
     >>> # Single power estimate from 5 observations (5 tapers x 1 trial)
-    >>> lower, upper = power_confidence_intervals(n_observations=5, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(
+    ...     n_observations=5, power=1.0, confidence_level=0.95
+    ... )
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.488, 3.080]
     >>> # Averaging 5 tapers x 5 trials gives 25 observations, a much tighter interval
-    >>> lower, upper = power_confidence_intervals(n_observations=25, power=1.0, ci=0.95)
+    >>> lower, upper = power_confidence_intervals(
+    ...     n_observations=25, power=1.0, confidence_level=0.95
+    ... )
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.700, 1.545]
     >>> # Multiple power estimates
@@ -1253,6 +1333,32 @@ def power_confidence_intervals(
     >>> print(f"95% CI: [{lower:.3f}, {upper:.3f}]")
     95% CI: [0.390, 6.015]
 
+    From a ``Connectivity``: pass its ``n_observations`` and mark its real
+    0 Hz and Nyquist bins:
+
+    >>> from spectral_connectivity import Connectivity, Multitaper
+    >>> rng = np.random.default_rng(0)
+    >>> time_series = rng.standard_normal((1000, 10, 2))  # (time, trials, signals)
+    >>> multitaper = Multitaper(time_series, sampling_frequency=500, time_window_duration=0.5)
+    >>> connectivity = Connectivity.from_transform(multitaper)
+    >>> power = connectivity.power(one_sided=True)
+    >>> power.shape  # (n_time_windows, n_frequencies, n_signals)
+    (4, 126, 2)
+    >>> lower, upper = power_confidence_intervals(
+    ...     connectivity.n_observations,  # 10 trials x 5 tapers = 50
+    ...     power,
+    ...     confidence_level=0.95,
+    ...     # (n_frequencies,) -> (n_frequencies, 1): broadcasts over time windows and signals
+    ...     real_valued=connectivity.real_valued_frequencies[:, np.newaxis],
+    ... )
+    >>> lower.shape
+    (4, 126, 2)
+    >>> connectivity.frequencies[[0, 10]].tolist()
+    [0.0, 20.0]
+    >>> # Upper bound over the estimate: wider at the real 0 Hz bin
+    >>> np.round(upper[0, [0, 10], 0] / power[0, [0, 10], 0], 2).tolist()
+    [1.55, 1.35]
+
     References
     ----------
     .. [1] Kramer, M.A., and Eden, U.T. (2016). Case studies in neural
@@ -1260,26 +1366,33 @@ def power_confidence_intervals(
     """
     if n_tapers is not None:
         if n_observations is not None:
-            msg = (
-                "power_confidence_intervals was given both n_observations and its "
-                "deprecated name n_tapers; pass only n_observations."
+            msg = both_spellings_message(
+                "power_confidence_intervals", "n_observations", "n_tapers"
             )
             raise ValueError(msg)
         n_observations = n_tapers
     if n_observations is None:
         msg = "power_confidence_intervals() missing required argument: 'n_observations'"
         raise TypeError(msg)
+    level_name = "confidence_level"
+    if ci is not None:
+        if confidence_level is not _DEFAULT_CONFIDENCE_LEVEL:
+            msg = both_spellings_message(
+                "power_confidence_intervals", "confidence_level", "ci"
+            )
+            raise ValueError(msg)
+        confidence_level, level_name = ci, "ci"
     counts = _validated_n_observations(
         n_observations,
         1,
         "It sets the chi-squared degrees of freedom, 2 * n_observations, which "
         "must be positive.",
     )
-    if not 0.5 <= ci < 1.0:
+    if not 0.5 <= confidence_level < 1.0:
         msg = (
-            f"Confidence level `ci` must be in the range [0.5, 1.0), got {ci}. "
-            "`ci` is the total probability mass inside the interval (e.g. 0.95 "
-            "for a 95% confidence interval)."
+            f"{level_name} must be at least 0.5 and less than 1, got "
+            f"{confidence_level!r}. It is the probability mass inside the interval, "
+            "e.g. 0.95 for a 95% interval."
         )
         raise ValueError(msg)
     # Power spectral density is non-negative; a negative value scales the bounds
@@ -1300,14 +1413,21 @@ def power_confidence_intervals(
             "gives the same interval; the count is every averaged observation, "
             "tapers x trials",
         )
-    # A two-sided (1 - alpha) interval splits the tail mass alpha = 1 - ci
-    # evenly between the two tails, so the chi-squared quantiles are taken at
-    # alpha / 2 and 1 - alpha / 2. Using the full alpha on each tail (the
-    # previous behavior) produces an interval with coverage 2 * ci - 1 (a
-    # requested 95% interval only covered ~90%).
+    if ci is not None:
+        warn_deprecated(
+            "power_confidence_intervals(ci=...)",
+            "power_confidence_intervals(confidence_level=...)",
+            "gives the same interval, under the name jackknife uses",
+        )
+    # A two-sided (1 - alpha) interval splits the tail mass
+    # alpha = 1 - confidence_level evenly between the two tails, so the
+    # chi-squared quantiles are taken at alpha / 2 and 1 - alpha / 2. Using the
+    # full alpha on each tail (the previous behavior) produces an interval with
+    # coverage 2 * confidence_level - 1 (a requested 95% interval only covered
+    # ~90%).
     real_valued = _validated_real_valued(real_valued, power_values.shape, "power")
     degrees_of_freedom = 2 * _chi_squared_shape(counts, real_valued)
-    alpha = 1 - ci
+    alpha = 1 - confidence_level
     lower_bound = (
         degrees_of_freedom / scipy.stats.chi2.ppf(1 - alpha / 2, degrees_of_freedom) * power
     )

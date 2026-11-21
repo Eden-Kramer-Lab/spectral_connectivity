@@ -35,12 +35,14 @@ from spectral_connectivity.utils import (
     TIME_SERIES_RAGGED_FIX,
     BackendArray,
     _validate_sampling_frequency,
+    both_spellings_message,
     is_positive_integer,
     mark_readonly_if_supported,
     numeric_array,
     reject_sampling_frequency_aliases,
     stacklevel_outside_package,
     to_numpy,
+    warn_deprecated,
 )
 
 logger = getLogger(__name__)
@@ -282,8 +284,10 @@ def _ceil_hundredths(value: float) -> float:
 def suggest_parameters(
     sampling_frequency: float,
     signal_duration: float,
-    desired_freq_resolution: float | None = None,
+    frequency_resolution: float | None = None,
     desired_n_tapers: int | None = None,
+    *,
+    desired_freq_resolution: float | None = None,
 ) -> MultitaperParameters:
     """
     Suggest appropriate multitaper parameters for your analysis.
@@ -292,9 +296,17 @@ def suggest_parameters(
     and analysis goals. It helps answer the common question: "What parameters
     should I use for my data?"
 
-    ``desired_freq_resolution`` and the returned ``frequency_resolution``
-    refer to full DPSS concentration bandwidth in Hz, rather than FFT bin
-    spacing.
+    ``frequency_resolution`` (the target you pass) and the returned
+    ``frequency_resolution`` (the resolution achieved) are both full DPSS
+    concentration bandwidths in Hz, ``2 * NW / time_window_duration``, not FFT
+    bin spacing.
+
+    .. versionchanged:: 3.0
+       The target resolution is named ``frequency_resolution``, as in
+       :class:`Multitaper` and :func:`estimate_frequency_resolution`; it keeps
+       its third position, so positional calls are unchanged.
+       ``desired_freq_resolution=`` still works through 3.x with a
+       ``DeprecationWarning`` and is removed in 4.0.
 
     Parameters
     ----------
@@ -302,14 +314,19 @@ def suggest_parameters(
         Sampling rate in Hz of your data.
     signal_duration : float
         Total duration in seconds of your signal.
-    desired_freq_resolution : float, optional
+    frequency_resolution : float, optional
         Target frequency resolution in Hz. If specified, parameters will be
-        chosen to achieve approximately this resolution.
-        Cannot be specified together with desired_n_tapers.
+        chosen to achieve approximately this resolution. Given with
+        ``desired_n_tapers``, it takes precedence (see Warns).
     desired_n_tapers : int, optional
         Target number of tapers for variance reduction. If specified,
         time_halfbandwidth_product will be chosen to achieve this.
-        Cannot be specified together with desired_freq_resolution.
+        ``desired_n_tapers`` is a target; the returned ``n_tapers`` is what
+        you get. Ignored, with a warning, when ``frequency_resolution`` is
+        also given.
+    desired_freq_resolution : float, optional
+        Deprecated name of ``frequency_resolution``, by keyword only; removed
+        in 4.0. Giving both raises ``ValueError``.
 
     Returns
     -------
@@ -332,11 +349,11 @@ def suggest_parameters(
     Warns
     -----
     UserWarning
-        If both desired_freq_resolution and desired_n_tapers are specified.
-        In this case, desired_freq_resolution takes precedence and
+        If both frequency_resolution and desired_n_tapers are specified.
+        In this case, frequency_resolution takes precedence and
         desired_n_tapers is ignored.
     UserWarning
-        If keeping desired_freq_resolution with at least 3 time windows leaves
+        If keeping frequency_resolution with at least 3 time windows leaves
         fewer than 2 tapers; use a longer signal or a coarser resolution.
 
     Notes
@@ -346,7 +363,7 @@ def suggest_parameters(
     - Sets window duration to capture ~5 time windows
     - Aims for reasonable frequency and time resolution
 
-    **With desired_freq_resolution:**
+    **With frequency_resolution:**
     - Calculates required window duration: T = 2*NW / Δf_target
     - Uses NW=3 by default unless this gives too few time windows
     - Ensures at least 3 time windows for temporal dynamics
@@ -377,7 +394,7 @@ def suggest_parameters(
     >>> params = suggest_parameters(
     ...     sampling_frequency=1000,
     ...     signal_duration=10.0,
-    ...     desired_freq_resolution=2.0,  # Want 2 Hz resolution
+    ...     frequency_resolution=2.0,  # Want 2 Hz resolution
     ... )
     >>> print(f"Achieved resolution: {params['frequency_resolution']:.2f} Hz")
     Achieved resolution: 2.00 Hz
@@ -398,19 +415,26 @@ def suggest_parameters(
     estimate_n_tapers : Calculate number of tapers
     Multitaper.summarize_parameters : Display parameters for existing analysis
     """
+    if desired_freq_resolution is not None:
+        if frequency_resolution is not None:
+            msg = both_spellings_message(
+                "suggest_parameters", "frequency_resolution", "desired_freq_resolution"
+            )
+            raise ValueError(msg)
+        frequency_resolution = desired_freq_resolution
     # Validate inputs
-    if desired_freq_resolution is not None and desired_n_tapers is not None:
+    if frequency_resolution is not None and desired_n_tapers is not None:
         warnings.warn(
-            "Both 'desired_freq_resolution' and 'desired_n_tapers' were specified. "
+            "Both 'frequency_resolution' and 'desired_n_tapers' were specified. "
             "This is typically not recommended as they have competing effects on the analysis. "
-            "Using 'desired_freq_resolution' and ignoring 'desired_n_tapers'.",
+            "Using 'frequency_resolution' and ignoring 'desired_n_tapers'.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
         desired_n_tapers = None
 
     # Default: balanced parameters (NW=3)
-    if desired_freq_resolution is None and desired_n_tapers is None:
+    if frequency_resolution is None and desired_n_tapers is None:
         time_halfbandwidth_product = 3.0
         # Use ~20% of signal duration as window, aim for ~5 windows
         time_window_duration = min(signal_duration / 5.0, signal_duration * 0.2)
@@ -420,19 +444,19 @@ def suggest_parameters(
         time_window_duration = min(time_window_duration, signal_duration)
 
     # User wants specific frequency resolution
-    elif desired_freq_resolution is not None:
+    elif frequency_resolution is not None:
         # Start with NW=3 (typical balanced value)
         time_halfbandwidth_product = 3.0
 
         # Calculate required window duration: T = 2*NW / Δf
         time_window_duration = (
-            TAPER_MULTIPLIER * time_halfbandwidth_product / desired_freq_resolution
+            TAPER_MULTIPLIER * time_halfbandwidth_product / frequency_resolution
         )
 
         # Check if this is achievable with the signal duration
         if time_window_duration > signal_duration:
             msg = (
-                f"Cannot achieve desired frequency resolution of {desired_freq_resolution} Hz "
+                f"Cannot achieve desired frequency resolution of {frequency_resolution} Hz "
                 f"with signal duration of {signal_duration}s.\n"
                 "\n"
                 f"Required window duration: {time_window_duration:.2f}s\n"
@@ -458,7 +482,7 @@ def suggest_parameters(
             # The taper count is floor(2 * NW) - 1, so floating-point error just
             # below a whole 2 * NW, such as 30 Hz * 0.1 s = 2.9999999999999996,
             # would cost a taper: only such a value is raised to that whole.
-            twice_nw = desired_freq_resolution * time_window_duration
+            twice_nw = frequency_resolution * time_window_duration
             whole = np.ceil(twice_nw)
             if twice_nw < whole and np.isclose(twice_nw, whole, rtol=1e-12, atol=0.0):
                 twice_nw = type(twice_nw)(whole)
@@ -484,20 +508,20 @@ def suggest_parameters(
 
     # Calculate derived parameters
     n_tapers = estimate_n_tapers(time_halfbandwidth_product)
-    if desired_freq_resolution is not None and n_tapers < 2:
+    if frequency_resolution is not None and n_tapers < 2:
         # Only the shortened-window path above can leave one taper. Two tapers
         # need resolution * window >= this bandwidth product (delta_f = 2 NW / T).
         two_taper_bandwidth = TAPER_MULTIPLIER * MIN_TIME_HALFBANDWIDTH_FOR_TWO_TAPERS
         # Round the "at least" values up so that passing them back as printed
         # meets the bound.
         min_signal_duration = _ceil_hundredths(
-            min_n_windows * two_taper_bandwidth / desired_freq_resolution
+            min_n_windows * two_taper_bandwidth / frequency_resolution
         )
         min_freq_resolution = _ceil_hundredths(
             two_taper_bandwidth * min_n_windows / signal_duration
         )
         warnings.warn(
-            f"A {desired_freq_resolution} Hz resolution with at least "
+            f"A {frequency_resolution} Hz resolution with at least "
             f"{min_n_windows} time windows of a {signal_duration} s signal "
             f"leaves {n_tapers} taper (time_halfbandwidth_product="
             f"{time_halfbandwidth_product:.2f}), so the estimate is not "
@@ -508,20 +532,27 @@ def suggest_parameters(
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
-    frequency_resolution = estimate_frequency_resolution(
+    achieved_resolution = estimate_frequency_resolution(
         sampling_frequency, time_window_duration, time_halfbandwidth_product
     )
     n_time_windows = int(
         np.floor(signal_duration / time_window_duration)
     )  # Non-overlapping estimate
     nyquist_frequency = sampling_frequency / 2.0
+    # Warned only once the call is valid, so a rejected call shows its error.
+    if desired_freq_resolution is not None:
+        warn_deprecated(
+            "suggest_parameters(desired_freq_resolution=...)",
+            "suggest_parameters(frequency_resolution=...)",
+            "gives the same suggestion, under the name Multitaper uses",
+        )
 
     return {
         "sampling_frequency": sampling_frequency,
         "time_halfbandwidth_product": time_halfbandwidth_product,
         "time_window_duration": time_window_duration,
         "n_tapers": n_tapers,
-        "frequency_resolution": frequency_resolution,
+        "frequency_resolution": achieved_resolution,
         "n_time_windows": n_time_windows,
         "nyquist_frequency": nyquist_frequency,
     }
@@ -1362,13 +1393,34 @@ Frequency Analysis
     def frequencies(self) -> NDArray[np.floating]:
         """Frequency of each FFT bin in Hz, in standard FFT order.
 
+        These label the coefficients of :meth:`fft`, negative frequencies
+        included, not the results computed from them. To label the frequency
+        axis of a power or connectivity result, use
+        :attr:`Connectivity.frequencies
+        <spectral_connectivity.Connectivity.frequencies>`: the
+        ``n_fft_samples // 2 + 1`` non-negative bins, 0 Hz up to Nyquist.
+
         Returns
         -------
         NDArray[float64], shape (n_fft_samples,)
             Frequency values in Hz corresponding to FFT bins, as
             ``numpy.fft.fftfreq`` orders them (non-negative frequencies first,
-            then negative).
+            then negative; for an even ``n_fft_samples`` the Nyquist bin is
+            listed as negative).
 
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Connectivity, Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> multitaper = Multitaper(rng.standard_normal((100, 2, 2)), sampling_frequency=100)
+        >>> multitaper.frequencies.shape, multitaper.frequencies[[0, 1, 50, -1]].tolist()
+        ((100,), [0.0, 1.0, -50.0, -1.0])
+        >>> connectivity = Connectivity.from_transform(multitaper)
+        >>> connectivity.frequencies.shape, connectivity.frequencies[[0, -1]].tolist()
+        ((51,), [0.0, 50.0])
+        >>> connectivity.power(one_sided=True).shape  # (time, frequency, signal)
+        (1, 51, 2)
         """
         return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
 
@@ -1707,9 +1759,11 @@ class Multitaper(_WindowedFourierTransform):
     ----------
     fft : NDArray[complex128]
         Complex-valued FFT coefficients with shape
-        (n_time_windows, n_trials, n_tapers, n_frequencies, n_signals).
-    frequencies : NDArray[float64], shape (n_frequencies,)
-        Frequency values in Hz corresponding to FFT bins.
+        (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals).
+    frequencies : NDArray[float64], shape (n_fft_samples,)
+        Frequency of each FFT bin in Hz, negative frequencies included, in FFT
+        order. To label the frequency axis of a power or connectivity result,
+        use ``Connectivity.frequencies`` (the non-negative bins) instead.
     time : NDArray[float64], shape (n_time_windows,)
         Time values in seconds for center of each time window.
 
@@ -2810,6 +2864,12 @@ class Welch:
     @property
     def frequencies(self) -> NDArray[np.floating]:
         """Frequency of each FFT bin in Hz, in standard FFT order.
+
+        These label the coefficients of :meth:`fft`, negative frequencies
+        included. To label the frequency axis of a power or connectivity
+        result, use :attr:`Connectivity.frequencies
+        <spectral_connectivity.Connectivity.frequencies>`, the non-negative
+        bins.
 
         Returns
         -------

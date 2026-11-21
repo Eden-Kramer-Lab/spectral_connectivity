@@ -5,6 +5,7 @@
 ``"always"`` filter.
 """
 
+import sys
 import warnings
 
 import numpy as np
@@ -20,6 +21,7 @@ from spectral_connectivity import (
     multitaper_connectivity,
 )
 from spectral_connectivity.wrapper import connectivity_to_xarray
+from tests._fresh_session import run_fresh_session
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +56,12 @@ def test_power_without_one_sided_warns_once_at_the_call(connectivity):
     assert message.startswith("Since spectral_connectivity 3.0,")
     assert "one_sided=True" in message
     assert "one_sided=False" in message
+    # It says it will not repeat, and how to see it again or silence it.
+    assert (
+        "Shown once per Python session; to see it at every call: "
+        'warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning).'
+    ) in message
+    assert "Silence this warning with" in message
     np.testing.assert_array_equal(power, connectivity.power(one_sided=True))
 
 
@@ -106,11 +114,13 @@ def test_labelled_power_is_silent(time_series):
 
 def test_jackknife_of_power_warns_once_for_its_full_estimate(connectivity):
     """The jackknife's estimate is power(), so it carries the same notice,
-    once: its leave-one-out replicates do not repeat it."""
+    once, at the jackknife call: its leave-one-out replicates do not repeat
+    it. A ``one_sided`` passed through to ``power`` is honored."""
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.jackknife("power")
-    assert len(_sidedness_warnings(record)) == 1
+    (warning,) = _sidedness_warnings(record)
+    assert warning.filename == __file__
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         connectivity.jackknife("power", one_sided=True)
@@ -123,3 +133,90 @@ def test_warning_is_silenced_by_its_category(connectivity):
         warnings.filterwarnings("ignore", category=PowerSidednessWarning)
         connectivity.power()
     assert _sidedness_warnings(record) == []
+
+
+_SESSION_SCRIPT = """
+counts = []
+connectivity.power()
+counts.append(len(shown))
+with warnings.catch_warnings():  # resets what Python's "once" action showed
+    pass
+connectivity.power()  # another line
+connectivity.jackknife("power")
+counts.append(len(shown))
+warnings.simplefilter("always", PowerSidednessWarning)
+connectivity.power()
+connectivity.power()
+counts.append(len(shown))
+warnings.simplefilter("error", PowerSidednessWarning)
+try:
+    connectivity.power()
+except PowerSidednessWarning:
+    counts.append("raised")
+print(json.dumps(counts))
+"""
+
+
+def test_warning_appears_once_per_session_unless_a_filter_says_otherwise():
+    """Under Python's default filters the notice appears once per session,
+    not at every line that calls ``power()``; a filter the user sets after
+    import still shows it every time, or turns it into an error."""
+    assert run_fresh_session(_SESSION_SCRIPT) == [1, 1, 3, "raised"]
+
+
+_SILENCED_FIRST_SCRIPT = """
+# Silenced, then un-silenced: the notice was never seen, so it is still due.
+warnings.filterwarnings("ignore", category=PowerSidednessWarning)
+connectivity.power()
+warnings.resetwarnings()
+connectivity.power()
+connectivity.power()  # another line
+print(json.dumps([len(shown)]))
+"""
+
+_ERROR_FIRST_SCRIPT = """
+counts = []
+# Raised as an error: the user read the message in the exception, so it counts.
+warnings.filterwarnings("error", category=PowerSidednessWarning)
+try:
+    connectivity.power()
+except PowerSidednessWarning:
+    counts.append("raised")
+warnings.resetwarnings()
+connectivity.power()
+counts.append(len(shown))
+print(json.dumps(counts))
+"""
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [(_SILENCED_FIRST_SCRIPT, [1]), (_ERROR_FIRST_SCRIPT, ["raised", 0])],
+    ids=["ignored-first-call-does-not-count", "raised-first-call-counts"],
+)
+def test_only_a_notice_the_user_saw_uses_up_the_session(script, expected):
+    """An ignored call does not count as shown, so the notice appears once
+    the filter is removed (a notebook that silenced it, then un-silenced it).
+    A call raised as an error does: its message was in the exception."""
+    assert run_fresh_session(script) == expected
+
+
+_CONTEXT_SCRIPT = """
+counts = []
+for _ in range(2):
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        connectivity.power()
+    counts.append(sum(issubclass(w.category, PowerSidednessWarning) for w in record))
+print(json.dumps(counts))
+"""
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 14), reason="context-aware warnings are new in Python 3.14"
+)
+def test_a_repeat_obeys_a_filter_set_in_catch_warnings_under_context_aware_warnings():
+    """Python 3.14's context-aware warnings (the default on free-threaded
+    builds) keep the filters a ``catch_warnings`` block sets, as
+    ``pytest.warns`` does, out of ``warnings.filters``."""
+    assert run_fresh_session(_CONTEXT_SCRIPT, "-X", "context_aware_warnings=1") == [1, 1]

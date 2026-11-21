@@ -12,6 +12,7 @@ from spectral_connectivity.transforms import (
     estimate_n_tapers,
     suggest_parameters,
 )
+from tests._deprecation_helpers import warns_once_at_the_call
 
 
 class TestEstimateFrequencyResolution:
@@ -164,7 +165,7 @@ class TestSuggestParameters:
         params = suggest_parameters(
             sampling_frequency=1000,
             signal_duration=2.0,
-            desired_freq_resolution=target_res,
+            frequency_resolution=target_res,
         )
         # The reported resolution is the target, and it is the resolution the
         # suggested NW and window actually give: delta_f = 2 * NW / T.
@@ -192,17 +193,42 @@ class TestSuggestParameters:
             params = suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=2.0,
-                desired_freq_resolution=5.0,
+                frequency_resolution=5.0,
                 desired_n_tapers=7,
             )
         resolution_only = suggest_parameters(
             sampling_frequency=1000,
             signal_duration=2.0,
-            desired_freq_resolution=5.0,
+            frequency_resolution=5.0,
         )
         assert params == resolution_only
         assert np.isclose(params["frequency_resolution"], 5.0)
         assert params["n_tapers"] != 7
+
+    def test_desired_freq_resolution_is_a_deprecated_alias(self):
+        """``desired_freq_resolution`` is ``frequency_resolution``, the name of
+        ``Multitaper`` and ``estimate_frequency_resolution``; the third
+        positional argument is the same under either name and does not warn."""
+        canonical = suggest_parameters(1000, 2.0, frequency_resolution=5.0)
+        deprecated, message = warns_once_at_the_call(
+            lambda: suggest_parameters(1000, 2.0, desired_freq_resolution=5.0),
+            "frequency_resolution",
+        )
+        assert deprecated == canonical
+        assert "suggest_parameters(desired_freq_resolution=...)" in message
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert suggest_parameters(1000, 2.0, 5.0) == canonical
+
+    def test_rejects_both_resolution_spellings(self):
+        with pytest.raises(ValueError, match=r"frequency_resolution.*desired_freq_resolution"):
+            suggest_parameters(1000, 2.0, 5.0, desired_freq_resolution=5.0)
+
+    def test_a_rejected_desired_freq_resolution_call_does_not_warn(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with pytest.raises(ValueError, match="Cannot achieve"):
+                suggest_parameters(1000, 2.0, desired_freq_resolution=0.5)
 
     def test_warns_when_resolution_target_leaves_one_taper(self):
         """Shortening windows for a fine resolution can leave a single taper.
@@ -214,7 +240,7 @@ class TestSuggestParameters:
             params = suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=2.0,
-                desired_freq_resolution=4.0,
+                frequency_resolution=4.0,
             )
         assert params["n_tapers"] == 1
         # The warning points at the caller, not at suggest_parameters.
@@ -228,11 +254,11 @@ class TestSuggestParameters:
         assert "a coarser frequency resolution (at least 4.50 Hz)" in message
 
     @pytest.mark.parametrize(
-        ("signal_duration", "desired_freq_resolution"),
+        ("signal_duration", "frequency_resolution"),
         [(2.0, 4.0), (0.3, 20.0), (1.1, 7.0)],
     )
     def test_taper_warning_advice_leaves_two_tapers(
-        self, signal_duration, desired_freq_resolution
+        self, signal_duration, frequency_resolution
     ):
         """Feeding back either suggested value, as printed, gives two tapers
         without a warning (pyproject's filterwarnings turns one into an error)."""
@@ -240,7 +266,7 @@ class TestSuggestParameters:
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=signal_duration,
-                desired_freq_resolution=desired_freq_resolution,
+                frequency_resolution=frequency_resolution,
             )
         message = str(record[0].message)
         longer = float(re.search(r"longer signal \(at least ([\d.]+) s\)", message)[1])
@@ -249,12 +275,12 @@ class TestSuggestParameters:
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=longer,
-                desired_freq_resolution=desired_freq_resolution,
+                frequency_resolution=frequency_resolution,
             ),
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=signal_duration,
-                desired_freq_resolution=coarser,
+                frequency_resolution=coarser,
             ),
         ):
             assert params["n_tapers"] >= 2
@@ -265,7 +291,7 @@ class TestSuggestParameters:
         params = suggest_parameters(
             sampling_frequency=1000,
             signal_duration=2.0,
-            desired_freq_resolution=5.0,
+            frequency_resolution=5.0,
         )
         assert params["n_tapers"] == 2
 
@@ -273,7 +299,7 @@ class TestSuggestParameters:
         """A window shortened to fit three in the record lowers NW to keep the
         resolution; NW is not rounded, so 4 Hz stays 4 Hz, not 4.0000000000005."""
         params = suggest_parameters(
-            sampling_frequency=500, signal_duration=4.0, desired_freq_resolution=4.0
+            sampling_frequency=500, signal_duration=4.0, frequency_resolution=4.0
         )
         assert params["time_window_duration"] == 4.0 / 3
         assert params["time_halfbandwidth_product"] == 4.0 * (4.0 / 3) / 2
@@ -283,7 +309,7 @@ class TestSuggestParameters:
         """30 Hz over a 0.3 / 3 s window is 2 * NW = 2.9999999999999996 in
         floating point, which would floor to one taper instead of two."""
         params = suggest_parameters(
-            sampling_frequency=1000, signal_duration=0.3, desired_freq_resolution=30.0
+            sampling_frequency=1000, signal_duration=0.3, frequency_resolution=30.0
         )
         assert params["time_halfbandwidth_product"] == 1.5
         assert params["n_tapers"] == 2
@@ -293,7 +319,7 @@ class TestSuggestParameters:
         Error above a whole number costs no taper, so NW and the resolution
         keep the values 2.0.1 gave."""
         params = suggest_parameters(
-            sampling_frequency=300, signal_duration=5000 / 300, desired_freq_resolution=0.9
+            sampling_frequency=300, signal_duration=5000 / 300, frequency_resolution=0.9
         )
         assert params["time_halfbandwidth_product"] == 2.5000000000000004
         assert params["frequency_resolution"] == 0.9
@@ -305,7 +331,7 @@ class TestSuggestParameters:
         params = suggest_parameters(
             sampling_frequency=np.float64(500.0),
             signal_duration=np.float64(1.5),
-            desired_freq_resolution=np.float64(8.0),
+            frequency_resolution=np.float64(8.0),
         )
         assert params["time_halfbandwidth_product"] == 2.0
         assert isinstance(params["time_halfbandwidth_product"], np.float64)
@@ -324,15 +350,15 @@ class TestSuggestParameters:
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=0.5,
-                desired_freq_resolution=0.1,
+                frequency_resolution=0.1,
             )
 
     @pytest.mark.parametrize(
-        ("signal_duration", "desired_freq_resolution"),
+        ("signal_duration", "frequency_resolution"),
         [(0.5, 0.1), (0.05, 0.122), (1.0, 2.7)],
     )
     def test_unachievable_resolution_advice_is_achievable(
-        self, signal_duration, desired_freq_resolution
+        self, signal_duration, frequency_resolution
     ):
         """Either suggested value, passed back as printed, no longer raises
         (6 / 0.122 = 49.1803 s must not print as 49.18 s)."""
@@ -340,7 +366,7 @@ class TestSuggestParameters:
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=signal_duration,
-                desired_freq_resolution=desired_freq_resolution,
+                frequency_resolution=frequency_resolution,
             )
         message = str(excinfo.value)
         longer = float(re.search(r"Longer signal \(at least ([\d.]+)s\)", message)[1])
@@ -351,12 +377,12 @@ class TestSuggestParameters:
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=longer,
-                desired_freq_resolution=desired_freq_resolution,
+                frequency_resolution=frequency_resolution,
             )
             suggest_parameters(
                 sampling_frequency=1000,
                 signal_duration=signal_duration,
-                desired_freq_resolution=coarser,
+                frequency_resolution=coarser,
             )
 
     def test_parameters_are_reasonable(self):
@@ -378,7 +404,7 @@ class TestSuggestParameters:
         params = suggest_parameters(
             sampling_frequency=250,
             signal_duration=60.0,
-            desired_freq_resolution=1.0,
+            frequency_resolution=1.0,
         )
         assert np.isclose(params["frequency_resolution"], 1.0)
         assert np.isclose(
@@ -392,7 +418,7 @@ class TestSuggestParameters:
         params = suggest_parameters(
             sampling_frequency=1000,
             signal_duration=10.0,
-            desired_freq_resolution=2.0,
+            frequency_resolution=2.0,
         )
         assert np.isclose(params["frequency_resolution"], 2.0)
         assert np.isclose(

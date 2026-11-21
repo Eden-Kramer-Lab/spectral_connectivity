@@ -538,10 +538,10 @@ def test_power_confidence_intervals_cover_real_valued_bins():
     estimates = true_power * (rng.standard_normal((200_000, n_observations)) ** 2).mean(axis=1)
 
     lower, upper = power_confidence_intervals(
-        n_observations, estimates, ci=0.95, real_valued=True
+        n_observations, estimates, confidence_level=0.95, real_valued=True
     )
     complex_lower, complex_upper = power_confidence_intervals(
-        n_observations, estimates, ci=0.95
+        n_observations, estimates, confidence_level=0.95
     )
 
     rate, limit = _rate_and_limit((lower <= true_power) & (true_power <= upper), 0.95)
@@ -713,7 +713,7 @@ def test_power_confidence_intervals_coverage():
     nu = 2 * n_observations
     true_power = 3.0
     estimates = true_power * rng.chisquare(nu, size=200_000) / nu
-    lower, upper = power_confidence_intervals(n_observations, estimates, ci=0.95)
+    lower, upper = power_confidence_intervals(n_observations, estimates, confidence_level=0.95)
     coverage = np.mean((lower <= true_power) & (true_power <= upper))
     assert np.isclose(coverage, 0.95, atol=0.01)
 
@@ -730,7 +730,7 @@ def test_power_confidence_intervals_count_every_averaged_observation():
     import scipy.stats
 
     n_observations = 25
-    lower, upper = power_confidence_intervals(n_observations, power=2.0, ci=0.95)
+    lower, upper = power_confidence_intervals(n_observations, power=2.0, confidence_level=0.95)
     dof = 2 * n_observations
     assert lower == pytest.approx(dof / scipy.stats.chi2.ppf(0.975, dof) * 2.0)
     assert upper == pytest.approx(dof / scipy.stats.chi2.ppf(0.025, dof) * 2.0)
@@ -741,9 +741,11 @@ def test_power_confidence_intervals_count_every_averaged_observation():
 
 def test_power_confidence_intervals_n_tapers_is_a_deprecated_alias():
     power = np.array([0.5, 1.0, 2.0])
-    canonical = power_confidence_intervals(n_observations=25, power=power, ci=0.99)
+    canonical = power_confidence_intervals(
+        n_observations=25, power=power, confidence_level=0.99
+    )
     deprecated, _ = warns_once_at_the_call(
-        lambda: power_confidence_intervals(n_tapers=25, power=power, ci=0.99),
+        lambda: power_confidence_intervals(n_tapers=25, power=power, confidence_level=0.99),
         "n_observations",
     )
     np.testing.assert_array_equal(deprecated, canonical)
@@ -816,13 +818,84 @@ def test_power_fisher_z_transform_rejects_nonpositive_power():
         power_fisher_z_transform(np.array([1.0, 2.0]), n_obs1=30, spectrum2=0.0)
 
 
-@pytest.mark.parametrize("bad_ci", [0.3, 1.0, 1.5, -0.1])
-def test_power_confidence_intervals_rejects_out_of_range_ci(bad_ci):
-    """ci must be in [0.5, 1.0); out-of-range values raise instead of inverting."""
-    with pytest.raises(
-        ValueError, match=r"Confidence level `ci` must be in the range \[0\.5, 1\.0\)"
-    ):
-        power_confidence_intervals(n_observations=5, power=1.0, ci=bad_ci)
+@pytest.mark.parametrize("bad_level", [0.3, 1.0, 1.5, -0.1, 95])
+def test_power_confidence_intervals_rejects_out_of_range_confidence_level(bad_level):
+    """The level must be in [0.5, 1.0). The message has the shape of
+    jackknife's for the same argument: the range, the value given, and what
+    a level is, with the same example."""
+    with pytest.raises(ValueError, match=r"at least 0\.5 and less than 1") as error:
+        power_confidence_intervals(n_observations=5, power=1.0, confidence_level=bad_level)
+    assert str(error.value) == (
+        f"confidence_level must be at least 0.5 and less than 1, got {bad_level!r}. "
+        "It is the probability mass inside the interval, e.g. 0.95 for a 95% interval."
+    )
+
+
+def test_power_confidence_intervals_ci_is_a_deprecated_alias():
+    """``ci`` is ``confidence_level``, the name ``jackknife`` and
+    ``jackknife_confidence_interval`` use."""
+    power = np.array([0.5, 1.0, 2.0])
+    canonical = power_confidence_intervals(25, power, confidence_level=0.9)
+    deprecated, message = warns_once_at_the_call(
+        lambda: power_confidence_intervals(25, power, ci=0.9), "confidence_level"
+    )
+    np.testing.assert_array_equal(deprecated, canonical)
+    assert "power_confidence_intervals(ci=...)" in message
+    # A positional level is the same argument under either name and does not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        positional = power_confidence_intervals(25, power, 0.9)
+    np.testing.assert_array_equal(positional, canonical)
+
+
+def test_power_confidence_intervals_rejects_both_level_spellings():
+    with pytest.raises(ValueError, match=r"confidence_level.*ci"):
+        power_confidence_intervals(25, 1.0, 0.9, ci=0.9)
+    with pytest.raises(ValueError, match=r"confidence_level.*ci"):
+        power_confidence_intervals(25, confidence_level=0.9, ci=0.9)
+    # A level equal to the default is still a level the caller gave.
+    with pytest.raises(ValueError, match=r"confidence_level.*ci"):
+        power_confidence_intervals(25, confidence_level=0.95, ci=0.9)
+
+
+def test_power_confidence_intervals_signature_shows_the_default_level():
+    """``help()`` shows the default the docstring states, 0.95, not ``None``."""
+    import inspect
+
+    default = (
+        inspect.signature(power_confidence_intervals).parameters["confidence_level"].default
+    )
+    assert repr(default) == "0.95"
+    lower, upper = power_confidence_intervals(25, 2.0)
+    assert (lower, upper) == power_confidence_intervals(25, 2.0, confidence_level=0.95)
+
+
+def test_a_rejected_ci_call_does_not_warn_and_names_ci():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(
+            ValueError, match=r"^ci must be at least 0\.5 and less than 1, got 1\.5\."
+        ):
+            power_confidence_intervals(5, ci=1.5)
+
+
+def test_all_lists_the_public_names_the_module_defines():
+    """``__all__`` names every public function and class defined in the
+    module, and its correction mapping, but none of its imports (``np``,
+    ``scipy``, ``cast``), so ``dir()``-style listings and ``import *`` show
+    the API only."""
+    import spectral_connectivity.statistics as statistics
+
+    defined = {
+        name
+        for name, value in vars(statistics).items()
+        if not name.startswith("_")
+        and getattr(value, "__module__", None) == statistics.__name__
+    }
+    assert sorted(statistics.__all__) == sorted([*defined, "MULTIPLE_COMPARISONS"])
+    namespace: dict[str, object] = {}
+    exec("from spectral_connectivity.statistics import *", namespace)
+    assert {"np", "scipy", "cast", "dataclass"}.isdisjoint(namespace)
 
 
 def test_import_does_not_change_numpy_error_state():
@@ -1111,7 +1184,7 @@ def test_power_fisher_z_transform_rejects_nonfinite_spectrum(bad_spectrum):
 @pytest.mark.parametrize("bad_count", [0, -3, np.nan, np.inf, 2.5])
 def test_power_confidence_intervals_rejects_invalid_n_observations(bad_count):
     with pytest.raises(ValueError, match="n_observations must be a finite integer >= 1"):
-        power_confidence_intervals(n_observations=bad_count, power=1.0, ci=0.95)
+        power_confidence_intervals(n_observations=bad_count, power=1.0, confidence_level=0.95)
 
 
 @pytest.mark.parametrize("bad_n_obs1", [1, 0, np.nan, np.inf, 2.5])
@@ -1252,7 +1325,7 @@ def test_coherence_significance_pvalue_takes_one_count():
 def test_power_confidence_intervals_rejects_invalid_power(bad_power):
     """Negative or non-finite power must raise, not return reversed/NaN bounds."""
     with pytest.raises(ValueError, match="power must be finite and non-negative"):
-        power_confidence_intervals(n_observations=5, power=bad_power, ci=0.95)
+        power_confidence_intervals(n_observations=5, power=bad_power, confidence_level=0.95)
 
 
 def test_jackknife_confidence_interval_matches_mean_example():
@@ -1543,7 +1616,7 @@ def test_jackknife_rejects_unknown_transformation():
     ("kwargs", "match"),
     [
         ({"n_tapers": 0}, "n_observations must be a finite integer >= 1"),
-        ({"n_tapers": 5, "ci": 1.5}, "Confidence level"),
+        ({"n_tapers": 5, "confidence_level": 1.5}, "confidence_level must be"),
         ({"n_tapers": 5, "power": -1.0}, "power must be finite"),
     ],
 )

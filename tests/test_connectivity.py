@@ -1,3 +1,4 @@
+import re
 import warnings
 from contextlib import nullcontext
 from unittest.mock import PropertyMock, patch
@@ -301,6 +302,28 @@ def test_n_observations(expectation_type, expected_n_observations):
         expectation_type=expectation_type,
     )
     assert this_Conn.n_observations == expected_n_observations
+
+
+def test_class_docstring_shape_table_matches_every_expectation_type():
+    """The ``expectation_type`` table in the class Notes gives the shape each
+    value returns for its stated sizes: 4 windows, 3 trials, 5 tapers, 126
+    non-negative frequencies (250 FFT bins), 2 signals. No two kept axes
+    share a size, so the table cannot swap two of them unnoticed."""
+    rows = re.findall(
+        r'^\s*``"(\w+)"``\s+\(([^)]*)\)\s+\(([^)]*)\)\s*$',
+        Connectivity.__doc__ or "",
+        flags=re.MULTILINE,
+    )
+    assert sorted(name for name, *_ in rows) == sorted(EXPECTATION_AXES)
+    sizes = {"n_time_windows": 4, "n_trials": 3, "n_tapers": 5}
+    coefficients = np.ones((4, 3, 5, 250, 2), dtype=complex)
+    for expectation_type, kept_axes, shape in rows:
+        coherence = Connectivity(coefficients, expectation_type=expectation_type)
+        documented = tuple(int(size) for size in shape.split(",") if size.strip())
+        assert coherence.magnitude_squared_coherence().shape == documented, expectation_type
+        kept = [axis.strip() for axis in kept_axes.split(",") if axis.strip()]
+        assert documented[: len(kept)] == tuple(sizes[axis] for axis in kept)
+        assert documented[len(kept) :] == (126, 2, 2)
 
 
 @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])

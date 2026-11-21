@@ -2,6 +2,7 @@
 
 import difflib
 import inspect
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass
 from typing import Literal
@@ -14,6 +15,21 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     _resolve_deprecated_measure_name,
 )
+
+
+def _format_value_range(lower: float, upper: float) -> str:
+    """``value_range`` as the measure table writes it: ``[0, 1]``, ``[-π, π]``, ``[0, ∞)``."""
+
+    def bound(value: float) -> str:
+        if math.isinf(value):
+            return "∞" if value > 0 else "-∞"
+        if math.isclose(abs(value), math.pi):
+            return "π" if value > 0 else "-π"
+        return f"{value:g}"
+
+    opening = "(" if math.isinf(lower) else "["
+    closing = ")" if math.isinf(upper) else "]"
+    return f"{opening}{bound(lower)}, {bound(upper)}{closing}"
 
 
 @dataclass(frozen=True, kw_only=True)
