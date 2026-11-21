@@ -336,6 +336,7 @@ def warn_migration(message: str, category: type[UserWarning]) -> None:
         ),
         None,
     )
+    # Unlocked check-then-add: under threads, a notice can at worst show twice.
     if message in _issued_migration_messages and action is None:
         return
     if action != "ignore":

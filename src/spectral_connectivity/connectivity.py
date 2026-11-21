@@ -2723,7 +2723,7 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    f"{_silence_hint(PowerSidednessWarning)}",
+                    + _silence_hint(PowerSidednessWarning),
                     PowerSidednessWarning,
                 )
             one_sided = True
