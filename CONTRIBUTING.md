@@ -154,8 +154,8 @@ This package is not currently on conda-forge. To add it:
 
 ### Version Numbering
 
-The version comes from the git tag through `hatch-vcs`: a tagged release is
-`1.2.0`, and a development version is `1.2.0.dev5+g1a2b3c4` (5 commits since
+The version comes from the git tag through `hatch-vcs`, without the tag's `v`
+prefix: tag `v1.2.0` gives release `1.2.0`, and a development version is `1.2.0.dev5+g1a2b3c4` (5 commits since
 the tag, plus the commit hash). This project follows
 [Semantic Versioning](https://semver.org/):
 - **MAJOR** version for incompatible API changes
