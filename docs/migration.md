@@ -34,24 +34,40 @@ for 2.x has to change.
    `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power in
    `multitaper_connectivity` and `connectivity_to_xarray` results changed the
    same way without a warning: halve its interior bins to compare with 2.x.
-3. **Read `magnitude_squared_coherence`, not `coherence_magnitude`.** The
+3. **Recompute results whose values changed without an error.** Besides
+   direction and power, code written for 2.x runs unchanged but gets
+   different numbers here (see the tables below):
+   - windows are labeled by their center time, not their first sample
+     (0.245 s, not 0 s, for a first 50-sample window at 100 Hz);
+   - `phase_slope_index` sums adjacent frequency bins only, so its values
+     are smaller by one to several orders of magnitude: re-derive any
+     threshold;
+   - `delay` returns seconds, not cycles;
+   - `multitaper_connectivity` takes the axis roles of an `xarray.DataArray`
+     from its dimension names, not their positions;
+   - several measures' values were corrected, among them every spectral
+     Granger and transfer-function measure on an even FFT length,
+     `directed_coherence`,
+     `direct_directed_transfer_function`, `global_coherence`, and
+     `canonical_coherence` for groups with a dead or duplicated channel
+     ([Directed measures](#directed-measures) and
+     [Other measures, power, and statistics](#other-measures-power-and-statistics)).
+4. **Read `magnitude_squared_coherence`, not `coherence_magnitude`.** The
    default `multitaper_connectivity` Dataset has no `coherence_magnitude`
    variable, so indexing it by the old name raises `KeyError` or
    `AttributeError`. Requesting `method="coherence_magnitude"` or calling
    `Connectivity.coherence_magnitude()` still works through 3.x, with a
    `DeprecationWarning`.
-4. **Replace the deprecated spellings.** Use `Connectivity.from_transform(m)`
+5. **Replace the deprecated spellings.** Use `Connectivity.from_transform(m)`
    instead of `Connectivity.from_multitaper(m)`, and
    `frequency_range=(low, high)` instead of `frequencies_of_interest` for
    `phase_slope_index`, `group_delay`, and `delay`. `frequency_range` includes
    both endpoints, where `frequencies_of_interest` excluded a bin on either
    edge. The old spellings still work through 3.x with a `DeprecationWarning`
    and are removed in 4.0.
-5. **Pass `sampling_frequency` to `Multitaper`.** 2.x defaulted it to 1000 Hz;
-   it is now required, and leaving it out raises `TypeError`.
 
-The tables below list every change, including the measures whose values were
-corrected.
+The tables below list every change, including that `Multitaper` now requires
+`sampling_frequency` (2.x defaulted it to 1000 Hz).
 
 ## Changes for code written against 2.0.1
 
