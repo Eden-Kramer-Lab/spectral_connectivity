@@ -1438,7 +1438,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   after a transform's NaN warning, which changes the process-wide warning
   filters while the measure runs: with NaN or Inf input it is not
   thread-safe (another thread's matching warnings are dropped meanwhile),
-  and a warning already shown once may be shown again. Finite input never
+  and a warning already shown once may be shown again (not the 3.x migration
+  notices, which keep their own once-per-session record). Finite input never
   changes the filters.
 - `canonical_coherence` and `global_coherence` computed from NaN or Inf
   coefficients raise a `ValueError` saying the measure cannot be computed
