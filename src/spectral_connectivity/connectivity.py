@@ -22,6 +22,7 @@ from spectral_connectivity._array_utils import (
     _NumberT,
     _regularized_inverse,
     _squared_magnitude,
+    _weight_observations,
 )
 from spectral_connectivity._backend import xp
 from spectral_connectivity._granger import (
@@ -1865,7 +1866,9 @@ class Connectivity:
                     n_observations,
                 )
             )
-            observations = observations * xp.sqrt(weights)[..., xp.newaxis]
+            observations = _weight_observations(
+                observations, xp.sqrt(weights)[..., xp.newaxis]
+            )
         # cross_spectral_matrix[..., i, j] = mean_obs f_i * conj(f_j), matching
         # _complex_inner_product's convention, then averaged over observations.
         # Cast before multiplying (see _complex_inner_product).
@@ -1997,7 +2000,7 @@ class Connectivity:
         weight_shape[0:3] = self._observation_weights.shape[0:3]
         weight_shape[frequency_axis] = n_frequencies
         weights = self._observation_weights[..., :n_frequencies, 0].reshape(weight_shape)
-        numerator = xp.sum(values * weights, axis=self._expectation_axes)
+        numerator = xp.sum(_weight_observations(values, weights), axis=self._expectation_axes)
         denominator = xp.sum(weights, axis=self._expectation_axes)
         return _divide_where(numerator, denominator, denominator > 0, xp.nan)
 
@@ -3106,7 +3109,9 @@ class Connectivity:
             # weighted covariance while retaining the existing whitening
             # implementation. A shared normalization by sum(weight) cancels
             # from the canonical correlation and is therefore unnecessary.
-            fourier_coefficients = fourier_coefficients * xp.sqrt(observation_weights)
+            fourier_coefficients = _weight_observations(
+                fourier_coefficients, xp.sqrt(observation_weights)
+            )
         # Group membership was resolved on the host by _validated_group_indices
         # (one ascending index array per sorted label); index the device
         # coefficients with device index arrays, as ``xp.isin`` over host labels
@@ -3969,7 +3974,7 @@ class Connectivity:
         # previous per-observation path where a zero-magnitude cross-spectrum
         # entry became NaN before averaging.
         normalized: NDArray[np.complexfloating] = _divide_where(
-            coefficients, magnitude, ~zero_magnitude, xp.nan
+            coefficients, magnitude, magnitude > 0, xp.nan
         )
         return self._reduced_cross_spectral_matrix(normalized, dtype=dtype)
 

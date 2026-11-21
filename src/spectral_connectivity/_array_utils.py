@@ -25,6 +25,17 @@ def _conjugate_transpose(x: NDArray[np.complexfloating]) -> NDArray[np.complexfl
     return x.swapaxes(-1, -2).conjugate()
 
 
+def _weight_observations(values: BackendArray, weights: BackendArray) -> BackendArray:
+    """``values * weights``, exactly 0 wherever a weight is 0.
+
+    A zero weight omits its observation, so a non-finite value there (a NaN
+    edge estimate, say) must not reach a weighted sum as ``0 * NaN``. The
+    weights may be scaled first (``sqrt`` of the observation weights, for a
+    product of two weighted coefficients); they broadcast against ``values``.
+    """
+    return xp.where(weights > 0, values, 0) * weights
+
+
 def _divide_where(
     numerator: BackendArray | float,
     denominator: BackendArray,

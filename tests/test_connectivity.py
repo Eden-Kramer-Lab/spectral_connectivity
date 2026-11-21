@@ -3567,6 +3567,42 @@ def test_weighted_expectation_matches_manual_cross_spectrum():
     )
 
 
+_ZERO_WEIGHT_MEASURES = {
+    "power": lambda c: c.power(),
+    "cross_spectral_density": lambda c: c.cross_spectral_density(),
+    "coherency": lambda c: c.coherency(),
+    "phase_locking_value": lambda c: c.phase_locking_value(),
+    "phase_lag_index": lambda c: c.phase_lag_index(),
+    "weighted_phase_lag_index": lambda c: c.weighted_phase_lag_index(),
+    "canonical_coherence": lambda c: c.canonical_coherence([0, 0, 1, 1])[0],
+    "global_coherence": lambda c: c.global_coherence()[0],
+}
+
+
+@pytest.mark.parametrize("measure", list(_ZERO_WEIGHT_MEASURES))
+def test_zero_weight_observation_is_omitted_even_when_not_finite(measure):
+    """A zero weight omits its observation, so a NaN there (an invalid edge
+    estimate) must give what physically removing the observation gives;
+    ``0 * NaN`` made power and the cross-spectrum NaN even with four finite,
+    positively weighted observations."""
+    rng = np.random.default_rng(31)
+    shape = (1, 1, 5, 8, 4)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = rng.uniform(0.5, 1.5, size=(*shape[:-1], 1))
+    coefficients[:, :, -1] = np.nan
+    weights[:, :, -1] = 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # NaN coefficients
+        masked = Connectivity(coefficients, observation_weights=weights)
+        result = _ZERO_WEIGHT_MEASURES[measure](masked)
+    omitted = Connectivity(coefficients[:, :, :-1], observation_weights=weights[:, :, :-1])
+    expected = _ZERO_WEIGHT_MEASURES[measure](omitted)
+
+    # Some measures are NaN on the diagonal by design; the rest is finite.
+    assert np.isfinite(expected).mean() >= 0.5
+    np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-14, equal_nan=True)
+
+
 def _weighted_two_sided_spectrum(n_fft_samples, seed):
     """Random two-sided coefficients (1, 3, 2, n_fft_samples, 3), positive
     observation weights, and the non-negative bin count."""

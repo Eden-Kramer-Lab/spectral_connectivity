@@ -785,6 +785,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- *Unreleased:* An observation with weight 0 contributes nothing to any
+  weighted expectation even when its coefficients are not finite: power, the
+  cross-spectrum and the measures built on them, phase locking, the phase-lag
+  family, canonical coherence and global coherence equal what omitting the
+  observation gives. `0 * NaN` made them NaN, even with every other
+  observation finite and positively weighted.
 - *Unreleased:* `corrected_imaginary_phase_locking_value` forms its PLV in at
   least complex128, so a small consistent lag of complex64 coefficients gives
   1, as the definition does; a lag of 1e-4 rad rounded `Re(PLV)` to 1 and gave
