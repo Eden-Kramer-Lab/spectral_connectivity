@@ -636,10 +636,11 @@ def coherence_fisher_z_transform(
     ``coherence_significance_pvalue(..., real_valued=True)``.
     """
     # coherence_bias evaluates 1 / (2 * (n_obs - 1)); n_obs == 1 divides by zero,
-    # and non-finite/fractional counts give NaN with a runtime warning.
-    if not np.isfinite(n_obs1) or int(n_obs1) != n_obs1 or n_obs1 < 2:
-        msg = f"n_obs1 must be a finite integer >= 2, got {n_obs1}."
-        raise ValueError(msg)
+    # and non-finite/fractional counts give NaN with a runtime warning. n_obs2
+    # keeps its own check: 0 (no second sample) is valid there.
+    _check_n_observations(
+        n_obs1, 2, "The coherence bias is undefined below 2 observations.", name="n_obs1"
+    )
     if not np.isfinite(n_obs2) or int(n_obs2) != n_obs2 or (n_obs2 != 0 and n_obs2 < 2):
         msg = (
             f"n_obs2 must be a finite integer equal to 0 (one-sample test) or "
@@ -855,17 +856,33 @@ def coherence_significance_pvalue(
     return p_values
 
 
-def _check_n_observations(n_observations: Any, minimum: int, why: str) -> None:
-    """Raise ``ValueError`` unless ``n_observations`` is a finite integer >= ``minimum``."""
-    if (
-        not np.isfinite(n_observations)
-        or int(n_observations) != n_observations
-        or n_observations < minimum
-    ):
+def _check_n_observations(
+    n_observations: Any, minimum: int, why_below_minimum: str, name: str = "n_observations"
+) -> None:
+    """Check observation counts, a scalar or one per estimate.
+
+    Raises ``TypeError`` unless every count is a real number (a boolean, a
+    string, or None is not a count), and ``ValueError`` unless every count is
+    a finite whole number of at least ``minimum``. ``why_below_minimum`` is
+    added to the message when a finite whole count lies below ``minimum``.
+    """
+    how = "Pass the number of averaged observations (trials x tapers), Connectivity.n_observations."
+    counts = np.asarray(n_observations)
+    if counts.dtype.kind not in "iuf":
         msg = (
-            f"n_observations must be a finite integer >= {minimum}, got "
-            f"{n_observations!r}. {why} Pass the number of averaged observations "
-            "(trials x tapers), Connectivity.n_observations."
+            f"{name} must be a number (a count of observations), got "
+            f"{type(n_observations).__name__} {n_observations!r}. {how}"
+        )
+        raise TypeError(msg)
+    finite = np.isfinite(counts)
+    whole = finite & (counts == np.round(np.where(finite, counts, 0)))
+    invalid = ~whole | (counts < minimum)
+    if np.any(invalid):
+        offending = ", ".join(repr(value) for value in counts[invalid].ravel().tolist()[:5])
+        below_minimum = np.any(whole & (counts < minimum))
+        msg = (
+            f"{name} must be a finite integer >= {minimum}, got {offending}. "
+            f"{why_below_minimum + ' ' if below_minimum else ''}{how}"
         )
         raise ValueError(msg)
 
@@ -915,7 +932,9 @@ def coherence_bias(n_observations: int) -> float:
            337-345. 10.1016/j.jneumeth.2006.07.011.
     """
     _check_n_observations(
-        n_observations, 2, "The bias, 1 / (2 * n_observations - 2), needs two."
+        n_observations,
+        2,
+        "The bias, 1 / (2 * n_observations - 2), is undefined below 2 observations.",
     )
     degrees_of_freedom = 2 * n_observations
     return 1.0 / (degrees_of_freedom - 2)
@@ -1333,7 +1352,9 @@ def power_bias(
     >>> print(f"At a real-valued bin: {power_bias(100, real_valued=True):.6f}")
     At a real-valued bin: -0.010033
     """
-    _check_n_observations(n_observations, 1, "The digamma function has a pole at 0.")
+    _check_n_observations(
+        n_observations, 1, "The digamma function has poles at 0 and the negative integers."
+    )
     shape = _chi_squared_shape(n_observations, real_valued)
     return _float_unless_masked(scipy.special.psi(shape) - np.log(shape), real_valued)
 
@@ -1382,7 +1403,9 @@ def power_variance(
     chi-squared shape parameter ``nu / 2 = n_observations``; at a real-valued
     bin ``nu = n_observations``, which about doubles it.
     """
-    _check_n_observations(n_observations, 1, "The trigamma function has a pole at 0.")
+    _check_n_observations(
+        n_observations, 1, "The trigamma function has poles at 0 and the negative integers."
+    )
     shape = _chi_squared_shape(n_observations, real_valued)
     return _float_unless_masked(scipy.special.polygamma(1, shape), real_valued)
 
