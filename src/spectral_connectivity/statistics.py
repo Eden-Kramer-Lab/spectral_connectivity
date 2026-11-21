@@ -783,8 +783,8 @@ def coherence_significance_pvalue(
         or their magnitudes; the function squares their absolute value. Do not
         pass ``magnitude_squared_coherence()``: its values are already squared,
         so they would be squared again and the p-values are too large with no
-        error (for independent noise with 50 observations, no frequency fell
-        below 0.05, where ``coherency()`` gave 4.8%). Take its square root
+        error (for independent noise, none fell below 0.05 where
+        ``coherency()`` gives about the nominal 5%). Take its square root
         first.
     n_observations : int
         Number of independent observations used to estimate the coherency

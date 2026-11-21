@@ -783,8 +783,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   they take coherency (`Connectivity.coherency()`) or its magnitude, not
   `magnitude_squared_coherence()`. Both square or read the absolute value of
   their input, so magnitude-squared coherence gives wrong p-values or z-scores
-  without an error: for independent noise with 50 observations no interior
-  frequency had `p < 0.05`, where `coherency()` gave 4.8%. A real-valued input
+  without an error: for independent noise no interior frequency had
+  `p < 0.05`, where `coherency()` gives about the nominal 5%. A real-valued input
   is still accepted, since coherency magnitudes and coherency from real
   coefficients are real too. The values are unchanged.
 - *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
