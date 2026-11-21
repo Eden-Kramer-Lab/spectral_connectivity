@@ -14,7 +14,10 @@ from spectral_connectivity import (
     list_measures,
     multitaper_connectivity,
 )
-from spectral_connectivity._measure_registry import _MEASURE_SPECS
+from spectral_connectivity._measure_registry import (
+    _MEASURE_SPECS,
+    _SINGLE_SIGNAL_MEASURES,
+)
 from spectral_connectivity.simulate import simulate_MVAR
 from spectral_connectivity.wrapper import (
     DEFAULT_METHODS,
@@ -277,11 +280,6 @@ def test_requires_two_sided_matches_the_one_sided_guard(one_sided_connectivity, 
             compute(**kwargs)
 
 
-# The measures that describe one signal at a time: defined for a single signal,
-# and not fixed by a single observation.
-_SINGLE_SIGNAL_MEASURES = {"power", "cross_spectral_density"}
-
-
 def _complex_noise(shape, seed):
     rng = np.random.default_rng(seed)
     return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
@@ -303,6 +301,27 @@ def test_every_measure_between_signals_refuses_a_single_signal(measure):
     }
     with pytest.raises(ValueError, match="at least 2 signals"):
         compute(**one_signal_kwargs)
+
+
+@pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)
+def test_wrapper_names_the_time_series_for_a_single_signal(measure):
+    """multitaper_connectivity says the time series has one signal, in its own
+    terms (not the Connectivity's fourier_coefficients), before any FFT."""
+    time_series = np.random.default_rng(33).standard_normal((200, 1))
+    kwargs = {"sampling_frequency": 100, "method": measure.name}
+    if "group_labels" in _MEASURE_KWARGS.get(measure.name, {}):
+        kwargs["group_labels"] = ["a"]
+    if measure.name in _SINGLE_SIGNAL_MEASURES:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            multitaper_connectivity(time_series, **kwargs)
+        return
+    with pytest.raises(ValueError, match=r"^The time series has 1 signal") as excinfo:
+        multitaper_connectivity(time_series, **kwargs)
+    message = str(excinfo.value)
+    assert "fourier_coefficients" not in message
+    assert "method='power'" in message
+    assert "x[:, [i]] rather than x[:, i]" in message
 
 
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)

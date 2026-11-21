@@ -668,6 +668,10 @@ _MEASURE_SPECS: dict[str, _MeasureSpec] = {
 }
 
 
+# The measures that describe one signal at a time, defined for a single signal;
+# every other registered measure relates signals and needs at least two.
+_SINGLE_SIGNAL_MEASURES = frozenset({"power", "cross_spectral_density"})
+
 # Output kinds whose estimator consumes a frequency interval.
 _FREQUENCY_RANGE_KINDS = frozenset({"delay", "group_delay", "phase_slope"})
 

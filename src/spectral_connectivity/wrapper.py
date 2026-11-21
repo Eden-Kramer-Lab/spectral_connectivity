@@ -31,6 +31,7 @@ from spectral_connectivity._input_handling import (
 )
 from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
+    _SINGLE_SIGNAL_MEASURES,
     _consumes_frequency_range,
     _is_group_measure,
     _measure_description,
@@ -865,6 +866,31 @@ def _resolve_group_labels(
     return group_labels, label_free_kwargs, frozenset(group_methods)
 
 
+def _require_two_signals(methods: Sequence[str], n_signals: int) -> None:
+    """Raise, in the wrapper's terms, if a measure relating signals gets one.
+
+    ``Connectivity`` raises too, but names its ``fourier_coefficients``, which a
+    caller of :func:`multitaper_connectivity` never sees. Unregistered
+    extension measures are left to their own checks.
+    """
+    pairwise = [
+        name
+        for name in methods
+        if name in _MEASURE_SPECS and name not in _SINGLE_SIGNAL_MEASURES
+    ]
+    if n_signals >= 2 or not pairwise:
+        return
+    msg = (
+        f"The time series has {n_signals} signal, but {', '.join(pairwise)} "
+        f"{'relates' if len(pairwise) == 1 else 'relate'} pairs of signals and "
+        "needs at least 2. For the spectrum of one signal use method='power'. "
+        "When selecting one channel, keep the signal axis: x[:, [i]] rather "
+        "than x[:, i] for (n_time_samples, n_signals) input, and x[:, :, [i]] "
+        "rather than x[:, :, i] for (n_time_samples, n_trials, n_signals) input."
+    )
+    raise ValueError(msg)
+
+
 def _require_group_labels(
     methods: Sequence[str],
     group_labels: Sequence[Hashable] | NDArray[Any] | None,
@@ -1475,9 +1501,10 @@ def multitaper_connectivity(
         detrend_type=detrend_type,
         **transform_settings,
     )
-    # Check for missing labels before Connectivity.from_transform runs the FFT.
-    # The constructor has validated the input shape, so m.n_signals is the true
-    # signal count.
+    # Check the signal count and missing labels before Connectivity.from_transform
+    # runs the FFT. The constructor has validated the input shape, so m.n_signals
+    # is the true signal count.
+    _require_two_signals(method, m.n_signals)
     _require_group_labels(method, group_labels, m.n_signals)
     # Capture metadata and build the shared calculation object from the same
     # immutable transform. The private formatter below never accepts a separate

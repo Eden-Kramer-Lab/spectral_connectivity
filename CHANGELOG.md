@@ -1298,6 +1298,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   x5 read 6.5 where the model has 4.3. Every example of that tutorial is now
   tested against the true values of the model it simulates
   (`tests/test_tutorial_paper_examples.py`).
+- *Unreleased:* `multitaper_connectivity` given one signal for a measure that
+  relates signals says that the time series has 1 signal and the measure needs
+  at least 2, before any FFT, where it raised `Connectivity`'s message about
+  `fourier_coefficients`, an argument the wrapper's caller never passes. It
+  points to `method='power'` for one signal and to keeping the signal axis
+  when selecting a channel (`x[:, [i]]`, not `x[:, i]`).
 
 ### Performance
 
