@@ -1351,7 +1351,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   because the coefficients contain NaN or Inf, and to interpolate or remove
   those samples or drop the affected trials or signals; they raised LAPACK's
   `LinAlgError` ("SVD did not converge", "Eigenvalues did not converge"),
-  which is kept as the cause. `canonical_coherency`,
+  which is kept as the cause. The same `ValueError` is raised when the
+  decomposition returns NaN for such coefficients rather than raising, as
+  CuPy's do (simulated here; no GPU run), unless zero observation weights
+  omit them. `canonical_coherency`,
   `maximized_imaginary_coherency` (and its components), and
   `multivariate_interaction_measure` already returned NaN there, and still
   do. `global_coherence` no longer emits NumPy's "invalid value encountered

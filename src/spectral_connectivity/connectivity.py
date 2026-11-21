@@ -540,6 +540,20 @@ _FACTORIZATION_FAILURE_WARNINGS = (
 )
 
 
+def _nonfinite_decomposition_message(measure: str, error: Exception | None = None) -> str:
+    """Why ``measure`` cannot be computed from NaN or Inf coefficients; the
+    backend's ``error``, when it raised one, is quoted."""
+    detail = f" ({error})" if error is not None else ""
+    return (
+        f"{measure} cannot be computed: the Fourier coefficients contain "
+        "NaN or Inf (from NaN or Inf in the time series, if it was "
+        "transformed here; see the earlier warning), on which its matrix "
+        f"decomposition does not converge{detail}. Interpolate or remove "
+        "the NaN or Inf samples, or drop the affected trials or signals, "
+        "and compute it again."
+    )
+
+
 def _factorization_explained_by_nonfinite_input(
     directed_measure: Callable[_P, _R],
 ) -> Callable[_P, _R]:
@@ -1527,22 +1541,25 @@ class Connectivity:
         """Report a matrix decomposition that fails on NaN or Inf coefficients
         as that, in the user's terms, rather than as LAPACK's ``LinAlgError``.
 
-        A failure on finite coefficients is re-raised unchanged.
+        A failure on finite coefficients is re-raised unchanged. CuPy's
+        decompositions return NaN rather than raise, so the caller also checks
+        the result with :meth:`_require_finite_decomposition`.
         """
         try:
             yield
         except np.linalg.LinAlgError as error:
             if self._coefficients_are_finite:
                 raise
-            msg = (
-                f"{measure} cannot be computed: the Fourier coefficients contain "
-                "NaN or Inf (from NaN or Inf in the time series, if it was "
-                "transformed here; see the earlier warning), on which its matrix "
-                f"decomposition does not converge ({error}). Interpolate or remove "
-                "the NaN or Inf samples, or drop the affected trials or signals, "
-                "and compute it again."
-            )
-            raise ValueError(msg) from error
+            raise ValueError(_nonfinite_decomposition_message(measure, error)) from error
+
+    def _require_finite_decomposition(self, measure: str, values: BackendArray) -> None:
+        """Raise, as :meth:`_decomposition_of_nonfinite_coefficients` does,
+        when NaN or Inf coefficients left ``values`` (a decomposition's output,
+        before any deliberate NaN) not finite: the backend returned NaN rather
+        than raising. Coefficients that are not finite only where zero weights
+        omit them give finite values and pass."""
+        if not self._coefficients_are_finite and not bool(xp.all(xp.isfinite(values))):
+            raise ValueError(_nonfinite_decomposition_message(measure))
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.
@@ -3300,6 +3317,8 @@ class Connectivity:
                 ],
                 axis=-1,
             )
+        # Before the no-power and diagonal NaN are written in.
+        self._require_finite_decomposition("canonical_coherence", canonical_coherency)
 
         n_groups = len(labels)
         new_shape = (self.time.size, self.frequencies.size, n_groups, n_groups)
@@ -4101,6 +4120,7 @@ class Connectivity:
                 max_rank,
                 max_workspace_elements,
             )
+        self._require_finite_decomposition("global_coherence", global_coherence)
 
         if xp.any(xp.isnan(global_coherence)):
             warnings.warn(

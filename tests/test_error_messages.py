@@ -935,3 +935,55 @@ def test_global_coherence_raises_before_numpy_warns_on_nonfinite_coefficients():
         with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
             connectivity.global_coherence()
     assert record == []
+
+
+def _nan_instead_of_raising(kernel):
+    """``kernel`` as a backend that returns NaN rather than raising on NaN or
+    Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
+
+    def returns_nan(*args, **kwargs):
+        finite_args = [
+            np.nan_to_num(arg) if isinstance(arg, np.ndarray) else arg for arg in args
+        ]
+        result = kernel(*finite_args, **kwargs)
+        if isinstance(result, tuple):
+            return (result[0] * np.nan, *result[1:])
+        return result * np.nan
+
+    return returns_nan
+
+
+@pytest.mark.cpu_only(reason="simulates CuPy's NaN on the NumPy backend")
+@pytest.mark.parametrize(
+    ("measure", "kernels", "kwargs"),
+    [
+        (
+            "canonical_coherence",
+            ["_normalize_fourier_coefficients", "_estimate_canonical_coherence"],
+            {"group_labels": np.array([0, 0, 1])},
+        ),
+        ("global_coherence", ["_global_coherence"], {}),
+    ],
+)
+def test_decompositions_that_return_nan_name_nonfinite_coefficients(
+    measure, kernels, kwargs, monkeypatch
+):
+    """A backend whose decomposition returns NaN for NaN or Inf input instead
+    of raising (CuPy) gives the same ValueError as NumPy's LinAlgError."""
+    import spectral_connectivity.connectivity as connectivity_module
+
+    for name in kernels:
+        monkeypatch.setattr(
+            connectivity_module,
+            name,
+            _nan_instead_of_raising(getattr(connectivity_module, name)),
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(_coefficients_with_nan())
+    with pytest.raises(
+        ValueError,
+        match=f"^{measure} cannot be computed: the Fourier coefficients contain "
+        "NaN or Inf .* decomposition does not converge. Interpolate",
+    ):
+        getattr(connectivity, measure)(**kwargs)
