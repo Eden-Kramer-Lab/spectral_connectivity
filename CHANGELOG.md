@@ -1349,6 +1349,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   time series (transposed, NaN or Inf) after every check has passed, so a
   call that raises does not warn first, as `ShortTimeFourierTransform`
   already did.
+- `multitaper_connectivity` and `fourier_connectivity` given a `method` that
+  is neither a measure name nor a list of names (`method=3`, or a list holding
+  a number) raise a `TypeError` saying what `method` may be, giving what was
+  received, and pointing to `list_measures()`. They raised a bare
+  `TypeError: 'int' object is not iterable`, or an `AttributeError` for a
+  list holding a non-string.
 
 ### Performance
 

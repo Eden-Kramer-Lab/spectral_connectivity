@@ -19,7 +19,7 @@ from spectral_connectivity.transforms import (
     Welch,
     detrend,
 )
-from spectral_connectivity.wrapper import connectivity_to_xarray
+from spectral_connectivity.wrapper import connectivity_to_xarray, fourier_connectivity
 from tests._backend_helpers import to_host
 
 
@@ -406,3 +406,38 @@ def test_short_window_without_transposed_layout_keeps_its_message():
     """An array with more time samples than signals keeps the window advice."""
     with pytest.raises(ValueError, match=r"^time_halfbandwidth_product \(NW=3\)"):
         Multitaper(np.ones((4, 1, 2)), sampling_frequency=500)
+
+
+_TWO_SIGNALS = np.random.default_rng(2).standard_normal((500, 2))
+_METHOD_CALLS = {
+    "multitaper_connectivity": lambda method: multitaper_connectivity(
+        _TWO_SIGNALS, sampling_frequency=500, method=method
+    ),
+    "fourier_connectivity": lambda method: fourier_connectivity(
+        np.ones((4, 8, 2), dtype=complex), frequencies=np.arange(8.0), method=method
+    ),
+}
+
+
+@pytest.mark.parametrize("call", _METHOD_CALLS.values(), ids=list(_METHOD_CALLS))
+@pytest.mark.parametrize(
+    ("method", "received"),
+    [
+        (3, "int 3"),
+        (b"power", "a bytes holding int 112"),
+        (["power", 3], "a list holding int 3"),
+        (("power", None), "a tuple holding NoneType None"),
+    ],
+)
+def test_method_of_the_wrong_type_names_the_accepted_types(call, method, received):
+    """A method that is not a name or a list of names raises a TypeError saying
+    what method may be, giving what was received, and pointing to
+    list_measures()."""
+    with pytest.raises(TypeError) as excinfo:
+        call(method)
+    assert str(excinfo.value) == (
+        "method must be a measure name (str), a list of names, or None (the "
+        f"default measures), got {received}. Call "
+        "spectral_connectivity.list_measures() to see the measure names, e.g. "
+        "method='magnitude_squared_coherence'."
+    )
