@@ -122,6 +122,12 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 ## Pitfalls
 
+- **Read the scientific pitfalls first.** [Choosing a measure](choosing_a_measure.md)
+  says which measure answers which question, and its
+  [Pitfalls](choosing_a_measure.md#pitfalls) cover single observations
+  (coherence is 1), small-sample bias, squared coherence, diagonals that
+  differ by measure, and the two-sided spectrum and long windows the
+  directed measures need.
 - **Use the shared result schema.** Common attrs include `transform`,
   `sampling_frequency` when known, `n_observations`, independence flags, and
   `output_schema_version=1`. Remaining settings are in
@@ -129,27 +135,6 @@ Prefer the wrapper's labeled results so you never index these by hand.
   released `mt_*` attributes are compatibility copies scheduled for removal
   in 4.0. Multitaper's `frequency_resolution` property and helper names remain
   supported. See the [schema reference](cookbook.md#result-schema-and-transform-bandwidth).
-- **Normalized measures need several observations.** Coherence, phase locking,
-  and similar measures average over trials × tapers. With one trial and one
-  taper, coherence is exactly 1 at every frequency whatever the data (the
-  package warns). Use several trials or `time_halfbandwidth_product >= 2`.
-- **Small samples bias the estimates.** Coherence and the phase-locking value
-  are biased upward when trials × tapers is small. The debiased measures
-  (`pairwise_phase_consistency`, `debiased_squared_*`) are unbiased, so they
-  can be slightly negative; that is noise, not negative coupling.
-- **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
-  take `abs(coherency)` for the unsquared magnitude. Its 2.x name,
-  `coherence_magnitude`, is deprecated: do not write new code with it, and
-  index default results by the new name. A measure variable's `quantity` and
-  `formula` attrs say which form a coherency-family value has.
-- **Diagonals differ by measure.** A self-connection is NaN for coherence (a
-  mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
-  `phase_locking_value`, to within rounding (NaN for a flat, zero-power
-  signal). Read a variable's
-  `diagonal_policy` attr, and before averaging over pairs mask a pairwise
-  variable `v` with
-  `v.where(v.source != v.target)` (not a whole Dataset, whose `power` has no
-  `target` axis).
 - **Rate-adjusting spike-field coherence.** Call
   `statistics.coherence_rate_adjustment` with `Connectivity.power()` of the
   spike train and `is_one_sided=True` (that spectrum is one-sided), the spikes
@@ -160,16 +145,6 @@ Prefer the wrapper's labeled results so you never index these by hand.
   For a two-sided spectrum
   (`Connectivity.power(one_sided=False)`; the wrappers do not return one) pass
   `is_one_sided=False`. Omitting the keyword warns and assumes one-sided.
-- **Directed measures need a two-sided spectrum.** The Granger and
-  directed-transfer-function families work with `multitaper_connectivity`, but
-  not with Morlet wavelets or other one-sided coefficients, which raise a
-  `ValueError`.
-- **Directed measures need long windows.** They come from a factorization of
-  the estimated spectrum. A window shorter than the slowest correlation in the
-  data gives unreliable values with no warning, and zero-padding does not
-  repair that. The values also depend slightly on the FFT length; padding
-  (`transform_kwargs={"n_fft_samples": n}`) removes that dependence but, in
-  simulation, not the error against the true values.
 - **Group measures need labels.** Pass `group_labels=...` (one label per
   signal, e.g. `["CA1", "CA1", "PFC"]`) directly to `multitaper_connectivity`
   or `fourier_connectivity` for `canonical_coherence`,

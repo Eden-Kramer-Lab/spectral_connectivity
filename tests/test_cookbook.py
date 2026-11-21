@@ -12,7 +12,7 @@ import pytest
 DOCS = Path(__file__).resolve().parent.parent / "docs"
 
 
-@pytest.mark.parametrize("page", ["cookbook.md", "llm_guide.md"])
+@pytest.mark.parametrize("page", ["cookbook.md", "llm_guide.md", "choosing_a_measure.md"])
 def test_cookbook_recipes_run(page):
     """All fenced code blocks on the page execute with expected output."""
     document = DOCS / page

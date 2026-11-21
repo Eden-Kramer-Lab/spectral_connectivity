@@ -214,6 +214,18 @@ from spectral_connectivity import list_measures
 directed = [m.name for m in list_measures(directed=True)]
 ```
 
+#### Choosing a measure
+
+| Your question | Start with | Watch out for |
+| --- | --- | --- |
+| Are two signals coupled? | `magnitude_squared_coherence`, `phase_locking_value`, `pairwise_phase_consistency` | Few trials x tapers bias coherence and phase locking upward; one gives 1 for any data. |
+| Could it be volume conduction (zero-lag mixing)? | `imaginary_coherence`, `weighted_phase_lag_index`, `debiased_squared_weighted_phase_lag_index` | They also ignore genuine zero-lag coupling. |
+| Which signal leads? | `phase_slope_index`, `pairwise_spectral_granger_prediction`, `conditional_spectral_granger_prediction` | Granger measures need long windows and a two-sided transform. |
+| How are two groups of signals coupled? | `canonical_coherence`, `blockwise_spectral_granger_prediction` | Pass `group_labels`, one label per signal. |
+
+[Choosing a measure](docs/choosing_a_measure.md) has the full table and the
+pitfalls common to every measure, such as diagonals that differ by measure.
+
 See the [**Cookbook**](docs/cookbook.md) for short, copy-pasteable recipes
 covering functional and directed connectivity, reading the labeled output,
 frequency bands, and using your own Fourier coefficients.
@@ -384,7 +396,13 @@ coherence, and circular for phase).
 
 See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs.io/en/latest/).
 
-For a canonical reference of connectivity metric value ranges, see [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md).
++ [Cookbook](docs/cookbook.md): short recipes for common tasks.
++ [Choosing a measure](docs/choosing_a_measure.md): which measure answers
+  which question, and the pitfalls (single observations, small-sample bias,
+  long windows for directed measures, diagonals).
++ [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md): the range,
+  units, diagonal, and interpretation of every measure.
++ [Migrating from 2.x to 3.0](docs/migration.md).
 
 ### Implemented Measures
 

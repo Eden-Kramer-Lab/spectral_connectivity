@@ -311,6 +311,7 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 :maxdepth: 2
 
 cookbook
+choosing_a_measure
 migration
 llm_guide
 CONNECTIVITY_METRIC_RANGES
