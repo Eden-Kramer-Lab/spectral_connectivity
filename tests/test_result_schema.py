@@ -246,6 +246,7 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
             "n_fft_samples": 32,
             "n_tapers": 3,
             "n_time_samples_per_step": 32,
+            "requested_n_tapers": None,
             "n_time_samples_per_window": 32,
             "start_time": 0.0,
             "taper_kind": "dpss",

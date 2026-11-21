@@ -1515,8 +1515,13 @@ class Multitaper(_WindowedFourierTransform):
         nearest sample (the ``time_window_step`` attribute reports the rounded
         step). If None, uses non-overlapping windows (step = window duration).
     n_tapers : int, optional
-        Number of DPSS tapers to use. If None, computed as
-        floor(2 * time_halfbandwidth_product) - 1.
+        Number of DPSS tapers to request. If None, computed as
+        floor(2 * time_halfbandwidth_product) - 1. With ``is_low_bias=True``
+        (the default) a requested taper whose spectral concentration is at or
+        below 0.9 is dropped, with a warning: only about
+        ``2 * time_halfbandwidth_product - 1`` are well concentrated, so a
+        larger request needs a larger ``time_halfbandwidth_product`` or
+        ``is_low_bias=False``. ``n_tapers`` reports the count used.
     tapers : NDArray[floating], shape (n_time_samples_per_window, n_tapers), optional
         Pre-computed tapering windows. If None, DPSS tapers are computed
         automatically.
@@ -1539,7 +1544,9 @@ class Multitaper(_WindowedFourierTransform):
         sample) from time_window_step if not provided; when both are given they
         must resolve to the same count, otherwise a ``ValueError`` is raised.
     is_low_bias : bool, default=True
-        If True, exclude tapers with eigenvalues < MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias.
+        If True, exclude tapers with eigenvalues (spectral concentrations) at or
+        below MIN_EIGENVALUE_THRESHOLD (0.9) to reduce bias, warning when that
+        leaves fewer tapers than requested.
     fft_workers : int, optional
         Number of parallel worker threads for the CPU FFT (forwarded to
         ``scipy.fft.fft``; ``-1`` uses all cores). ``None`` (the default) keeps
@@ -1877,7 +1884,57 @@ class Multitaper(_WindowedFourierTransform):
                     "columns of tapers; pass one or make them agree."
                 )
                 raise ValueError(msg)
+        if self._tapers is None:
+            # Generate the DPSS tapers now, so every reported count is the
+            # number used and a request low-bias filtering cuts short is
+            # announced where it was made.
+            self._generate_dpss_tapers()
         object.__setattr__(self, "_initialized", True)
+
+    @property
+    def _requested_n_tapers(self) -> int:
+        """DPSS tapers requested: ``n_tapers``, else the count NW implies."""
+        if self._n_tapers is not None:
+            return int(self._n_tapers)
+        return estimate_n_tapers(self.time_halfbandwidth_product)
+
+    def _generate_dpss_tapers(self) -> None:
+        """Generate the DPSS tapers, warning if low-bias filtering drops any."""
+        requested = self._requested_n_tapers
+        window = self.n_time_samples_per_window
+        tapers, eigenvalues = dpss_windows(
+            window,
+            self.time_halfbandwidth_product,
+            requested,
+            is_low_bias=self.is_low_bias,
+        )
+        self._tapers = _immutable_array_snapshot(tapers.T * xp.sqrt(self.sampling_frequency))
+        self._taper_eigenvalues = _immutable_array_snapshot(eigenvalues)
+        n_used = int(self._tapers.shape[1])
+        if n_used < requested:
+            requested_by = (
+                f"n_tapers={requested}"
+                if self._n_tapers is not None
+                else f"floor(2 * time_halfbandwidth_product) - 1 = {requested}"
+            )
+            warnings.warn(
+                f"Multitaper uses {n_used} of the {requested} DPSS tapers requested "
+                f"({requested_by}): with time_halfbandwidth_product="
+                f"{self.time_halfbandwidth_product} and a {window}-sample window only "
+                f"{n_used} have a spectral concentration above "
+                f"{MIN_EIGENVALUE_THRESHOLD}, and is_low_bias=True drops the others, "
+                "whose leakage from outside the taper bandwidth would bias the "
+                f"estimate. n_tapers, n_observations, and the result attributes count "
+                f"the {n_used} used. For more tapers, raise time_halfbandwidth_product "
+                "(about 2 * time_halfbandwidth_product - 1 tapers are well "
+                f"concentrated, so {requested} need about {(requested + 1) / 2:g}), "
+                "which widens the frequency smoothing; or pass is_low_bias=False "
+                "(through transform_kwargs in multitaper_connectivity) to keep all "
+                f"{requested}, leakage included. Pass n_tapers={n_used} to use these "
+                "without this warning.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
 
     def __repr__(self) -> str:
         """Return string representation of Multitaper object.
@@ -1902,9 +1959,8 @@ class Multitaper(_WindowedFourierTransform):
 
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:
         """Taper kind and, for generated DPSS tapers, their qualified bandwidth."""
-        # Generated DPSS tapers carry concentration ratios once cached; custom
-        # tapers never do. Inspecting provenance must not generate them.
-        if self._tapers is not None and self._taper_eigenvalues is None:
+        # Generated DPSS tapers carry concentration ratios; custom tapers never do.
+        if self._taper_eigenvalues is None:
             return {"taper_kind": "custom"}
         return {
             "taper_kind": "dpss",
@@ -1976,11 +2032,17 @@ class Multitaper(_WindowedFourierTransform):
         estimate_frequency_resolution : Estimate frequency resolution
         estimate_n_tapers : Estimate number of tapers
         """
+        n_tapers: int | str = self.n_tapers
+        if self._taper_eigenvalues is not None and self.n_tapers < self._requested_n_tapers:
+            n_tapers = (
+                f"{self.n_tapers} (of {self._requested_n_tapers} requested; low-bias "
+                "filtering dropped the rest)"
+            )
         return self._summary(
             "Multitaper Spectral Analysis Configuration",
             [
                 ("Time-halfbandwidth product", self.time_halfbandwidth_product),
-                ("Number of tapers", self.n_tapers),
+                ("Number of tapers", n_tapers),
             ],
             ("Frequency resolution", f"{self.frequency_resolution:.1f} Hz"),
         )
@@ -1997,17 +2059,7 @@ class Multitaper(_WindowedFourierTransform):
             The tapers used for windowing.
 
         """
-        if self._tapers is None:
-            tapers, eigenvalues = dpss_windows(
-                self.n_time_samples_per_window,
-                self.time_halfbandwidth_product,
-                self.n_tapers,
-                is_low_bias=self.is_low_bias,
-            )
-            self._tapers = _immutable_array_snapshot(
-                tapers.T * xp.sqrt(self.sampling_frequency)
-            )
-            self._taper_eigenvalues = _immutable_array_snapshot(eigenvalues)
+        assert self._tapers is not None
         return _readonly_array_copy(self._tapers)
 
     @property
@@ -2017,35 +2069,37 @@ class Multitaper(_WindowedFourierTransform):
         Returns ``None`` for custom tapers, whose concentration ratios are not
         known. The returned array is a detached read-only copy.
         """
-        if self._tapers is None:
-            _ = self.tapers
         if self._taper_eigenvalues is None:
             return None
         return _readonly_array_copy(self._taper_eigenvalues)
 
     @property
     def n_tapers(self) -> int:
-        """Return number of desired tapers.
+        """Return the number of tapers used.
 
-        The explicit ``n_tapers``, else the number of columns of custom
-        ``tapers``, else the count implied by ``time_halfbandwidth_product``.
-        The actual DPSS count may be lower when low-bias filtering removes
-        tapers with concentration ratios at or below 0.9. Computing the
-        transform does not change the desired count reported here.
+        The number of columns of custom ``tapers``, or of the generated DPSS
+        tapers. That is the requested ``n_tapers`` (by default
+        ``floor(2 * time_halfbandwidth_product) - 1``) less any that low-bias
+        filtering dropped, which construction announces with a warning.
 
         Returns
         -------
         int
-            Number of tapers to use.
+            Number of tapers used.
 
         """
-        if self._n_tapers is not None:
-            return self._n_tapers
-        if self._tapers is not None and self._taper_eigenvalues is None:
-            # Custom tapers have no concentration ratios. Cached DPSS tapers
-            # may have been filtered and must not override the desired count.
-            return int(self._tapers.shape[1])
-        return estimate_n_tapers(self.time_halfbandwidth_product)
+        assert self._tapers is not None
+        return int(self._tapers.shape[1])
+
+    def _provenance_metadata(self) -> dict[str, Any]:
+        """Native settings, with the ``n_tapers`` argument as given.
+
+        ``n_tapers`` is the count used; ``requested_n_tapers`` is the argument
+        (``None`` for the default), which with ``is_low_bias`` reproduces it.
+        """
+        metadata = super()._provenance_metadata()
+        metadata["requested_n_tapers"] = self._n_tapers
+        return metadata
 
     @property
     def frequency_resolution(self) -> float:
@@ -2091,8 +2145,9 @@ class Multitaper(_WindowedFourierTransform):
         -------
         bool
         """
-        if self._tapers is None or self._taper_eigenvalues is not None:
+        if self._taper_eigenvalues is not None:
             return True  # DPSS tapers, generated here
+        assert self._tapers is not None
         # For white noise the eigencoefficients of tapers k and l correlate by
         # <w_k, w_l> / (|w_k| |w_l|). Orthogonal tapers computed in floating
         # point leave that at rounding level; sqrt(eps) admits orthogonal
@@ -2143,10 +2198,6 @@ class Multitaper(_WindowedFourierTransform):
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot without an unnecessary public view."""
-        if self._tapers is None:
-            # Populate through the public property so generation and freezing have
-            # one implementation, then use the owned internal snapshot.
-            _ = self.tapers
         assert self._tapers is not None
         return self._tapers
 

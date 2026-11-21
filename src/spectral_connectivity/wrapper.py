@@ -1174,7 +1174,11 @@ def multitaper_connectivity(
         DPSS time-half-bandwidth product ``NW``; the concentration bandwidth is
         ``2 * NW / time_window_duration`` Hz.
     n_tapers : int, optional
-        Number of DPSS tapers; defaults to ``floor(2 * NW) - 1``.
+        Number of DPSS tapers to request; defaults to ``floor(2 * NW) - 1``.
+        Only about ``2 * NW - 1`` are well concentrated: a taper whose spectral
+        concentration is at or below 0.9 is dropped, with a warning, unless
+        ``transform_kwargs={"is_low_bias": False}``. The result's
+        ``mt_n_tapers`` and ``n_observations`` count the tapers used.
     detrend_type : {"constant", "linear"} or None, default="constant"
         Detrending applied to each window before the FFT; ``None`` for none.
     transform_kwargs : mapping, optional

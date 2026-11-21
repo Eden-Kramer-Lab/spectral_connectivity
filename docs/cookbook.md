@@ -699,10 +699,14 @@ whole number of samples: a 0.505 s window at 100 Hz is 50 samples, so they
 report 0.5 s and, for NW=3, 12 Hz where 2.0.1 reported the requested 0.505 s
 and 11.88 Hz. `mt_n_time_samples_per_step` is the step rounded to the nearest
 sample, where 2.0.1 truncated it (57, not 56, for a 0.57 s step at 100 Hz).
-With custom `tapers`, `mt_n_tapers` is the number supplied, where 2.0.1
-reported the DPSS count instead (`n_tapers` if given, else `floor(2 * NW - 1)`:
-5 for two tapers at the default NW=3). `estimate_frequency_resolution` uses the
-duration it is given.
+`mt_n_tapers` is the number of tapers used, where 2.0.1 reported the count
+requested (`n_tapers` if given, else `floor(2 * NW - 1)`): with custom `tapers`
+it is the number supplied (2.0.1: 5 for two tapers at the default NW=3), and
+for DPSS tapers it excludes those low-bias filtering dropped (2.0.1: 50 for
+`n_tapers=50` at NW=3, where 5 are used). The request is
+`requested_n_tapers` in the `estimator` record of `transform_parameters_json`
+(`null` when `n_tapers` was not given). `estimate_frequency_resolution` uses
+the duration it is given.
 
 ## Pass a labeled DataArray
 

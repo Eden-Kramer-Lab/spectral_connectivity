@@ -102,7 +102,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   `2 * time_halfbandwidth_product / time_window_duration` Hz. It describes
   spectral smoothing; FFT bin spacing also depends on the FFT length and
   zero-padding. There are `2 * time_halfbandwidth_product - 1` requested tapers
-  (rounded down), with fewer retained if low-bias filtering removes some.
+  (rounded down). Low-bias filtering drops any requested taper whose spectral
+  concentration is at or below 0.9, with a warning, and `n_tapers` reports the
+  count used: a larger `n_tapers` needs a larger `time_halfbandwidth_product`.
 - `suggest_parameters` picks these from the sampling rate, recording length,
   and the resolution you need:
 

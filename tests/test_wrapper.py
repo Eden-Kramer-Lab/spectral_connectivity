@@ -2202,26 +2202,47 @@ def test_result_carries_provenance_metadata():
 
 
 @pytest.mark.parametrize("n_tapers", [None, 31])
-def test_low_bias_taper_filtering_keeps_requested_count_and_provenance(n_tapers):
-    """Caching filtered DPSS tapers must not change the requested taper count
-    or the provenance of repeated computations with the same transform."""
+def test_low_bias_taper_filtering_reports_the_used_count_and_keeps_provenance(n_tapers):
+    """When low-bias filtering drops DPSS tapers, the reported taper count is the
+    number used, the provenance records the request, and repeated computations
+    with the same transform record the same provenance."""
     data = np.random.default_rng(123).standard_normal((1000, 2, 2))
-    with pytest.warns(UserWarning, match="unusually large"):
+    with (
+        pytest.warns(UserWarning, match="unusually large"),
+        pytest.warns(UserWarning, match="of the 31 DPSS tapers requested"),
+    ):
         mt = Multitaper(
             data,
             sampling_frequency=100,
             time_halfbandwidth_product=16,
             n_tapers=n_tapers,
         )
-    assert mt.n_tapers == 31
+    n_used = mt.tapers.shape[1]
+    assert n_used < 31  # Low-bias filtering actually removed tapers.
+    assert mt.n_tapers == n_used
 
     first = connectivity_to_xarray(mt, method="power")
-    assert mt.tapers.shape[1] < 31  # Low-bias filtering actually removed tapers.
-    assert mt.n_tapers == 31
     second = connectivity_to_xarray(mt, method="power")
-    assert first.attrs["mt_n_tapers"] == 31
-    assert second.attrs["mt_n_tapers"] == 31
+    assert first.attrs["mt_n_tapers"] == n_used
+    assert first.attrs["n_observations"] == 2 * n_used
+    estimator = json.loads(first.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["n_tapers"] == n_used
+    assert estimator["requested_n_tapers"] == n_tapers
     xr.testing.assert_identical(first, second)
+
+
+def test_multitaper_connectivity_reports_the_tapers_low_bias_filtering_kept():
+    """The wrapper's result counts the 5 tapers used, not the 50 requested."""
+    data = np.random.default_rng(0).standard_normal((1000, 3))
+    with pytest.warns(UserWarning, match="uses 5 of the 50 DPSS tapers requested"):
+        result = multitaper_connectivity(
+            data, sampling_frequency=500, n_tapers=50, method="power"
+        )
+    assert result.attrs["mt_n_tapers"] == 5
+    assert result.attrs["n_observations"] == 5
+    estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
+    assert estimator["n_tapers"] == 5
+    assert estimator["requested_n_tapers"] == 50
 
 
 def test_provenance_records_measure_kwargs(tmp_path, stub_measure):

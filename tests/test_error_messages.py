@@ -112,11 +112,10 @@ class TestMultitaperParameterErrorMessages:
         rng = np.random.default_rng(0)
         time_series = rng.standard_normal((1000, 1, 2))
         # 0.0004 s * 1000 Hz = 0.4 samples -> rounds to 0.
-        mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=0.0004)
         with pytest.raises(
             ValueError, match="n_time_samples_per_window resolved to 0"
         ) as excinfo:
-            mt.fft()
+            Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=0.0004)
         error_msg = str(excinfo.value)
         assert "time_window_duration" in error_msg
         assert "1 sample" in error_msg
@@ -142,9 +141,8 @@ class TestMultitaperParameterErrorMessages:
         """A window longer than the signal must raise instead of returning empty."""
         rng = np.random.default_rng(0)
         time_series = rng.standard_normal((1000, 1, 2))  # 1 s at 1000 Hz
-        mt = Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=5.0)
         with pytest.raises(ValueError, match="larger than the signal length") as excinfo:
-            mt.fft()
+            Multitaper(time_series, sampling_frequency=1000.0, time_window_duration=5.0)
         error_msg = str(excinfo.value)
         assert "time_window_duration" in error_msg
         assert "larger than the signal" in error_msg
@@ -174,16 +172,14 @@ class TestExplicitSampleCountGuards:
     def test_explicit_zero_window_is_rejected(self):
         rng = np.random.default_rng(0)
         ts = rng.standard_normal((1000, 1, 2))
-        mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=0)
         with pytest.raises(ValueError, match="at least 1 sample"):
-            mt.fft()
+            Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=0)
 
     def test_explicit_oversized_window_is_rejected(self):
         rng = np.random.default_rng(0)
         ts = rng.standard_normal((100, 1, 2))
-        mt = Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=500)
         with pytest.raises(ValueError, match="larger than the signal"):
-            mt.fft()
+            Multitaper(ts, sampling_frequency=1000.0, n_time_samples_per_window=500)
 
     def test_explicit_zero_step_is_rejected(self):
         rng = np.random.default_rng(0)
