@@ -1310,7 +1310,11 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   NumPy `RuntimeWarning`s such as "invalid value encountered in divide";
   `Connectivity.from_transform` after `Multitaper`,
   `ShortTimeFourierTransform`, or `Welch` gave the first two, and the
-  transforms' `fft()` a `RuntimeWarning` too. The remaining warning gives the
+  transforms' `fft()` a `RuntimeWarning` too. In 2.0.1,
+  `multitaper_connectivity` gave the time-series warning and the
+  `fourier_coefficients` warning (for `coherence_magnitude` in the case run),
+  each a dozen lines of generic causes and suggestions. The remaining warning
+  gives the
   number of such values and the trials and signals holding them, says that
   they propagate to the outputs (NaN power for the affected signals in the
   windows containing them, NaN connectivity for every pair involving those
@@ -1355,8 +1359,9 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `"quadratic"`) when constructed, with a `ValueError` naming `detrend_type`
   and listing `'constant'`, `'linear'`, and `None`. It was accepted and failed
   at the first `fft()` with `detrend`'s message about its `type` argument
-  (`Example: detrend(data, type='linear')`). Code that catches this error
-  should wrap the constructor.
+  (`Example: detrend(data, type='linear')`), as `Multitaper` did in 2.0.1
+  (`ShortTimeFourierTransform` and `Welch` are new in 3.0). Code that catches
+  this error should wrap the constructor.
 - A transposed time series, e.g. `multitaper_connectivity(x.T,
   sampling_frequency=500)` for a `(1000, 3)` recording, raises a `ValueError`
   that says so: "Your array has 3 time samples and 1000 signals; expected
@@ -1364,15 +1369,18 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   looks transposed: put time on the first axis, e.g. x.T." The window error
   it replaces, which advised a longer window or a smaller
   `time_halfbandwidth_product`, is its `__cause__`; the transposition hint
-  was a separate `UserWarning`. This applies to `Multitaper` (which names
-  only its 3-D layout) and `ShortTimeFourierTransform` too, when an array
-  with more signals than time samples is too short for its window (the
-  window is longer than the recording, or too short for the DPSS tapers).
-  Every other error on such an array (a bad `start_time`, say) keeps its own
-  message, and such an array whose window fits still only warns. `Multitaper` now emits its warnings about the
-  time series (transposed, NaN or Inf) after every check has passed, so a
-  call that raises does not warn first, as `ShortTimeFourierTransform`
-  already did.
+  was a separate `UserWarning`. 2.0.1, which took only 3-D input, gave that
+  warning and then SciPy's "select_range out of bounds" for
+  `multitaper_connectivity(x.T[:, np.newaxis, :], 500)`. This applies to
+  `Multitaper` (which names only its 3-D layout) and
+  `ShortTimeFourierTransform` too, when an array with more signals than time
+  samples is too short for its window (the window is longer than the
+  recording, or too short for the DPSS tapers). Every other error on such an
+  array (a bad `start_time`, say) keeps its own message, and such an array
+  whose window fits still only warns. `Multitaper` now emits its warnings
+  about the time series (transposed, NaN or Inf) after every check has
+  passed, so a call that raises does not warn first, as
+  `ShortTimeFourierTransform` already did.
 - `multitaper_connectivity` and `fourier_connectivity` given a `method` that
   is neither a measure name nor a list of names (`method=3`, or a list holding
   a number) raise a `TypeError` saying what `method` may be, giving what was
@@ -1453,6 +1461,7 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   where they raised NumPy's "inhomogeneous shape" message, a `ufunc
   'isfinite'` error for strings (`MorletWavelet` accepted an array of
   strings), or, for `Welch(None)`, one about its segment length.
+  `Welch(None)` now raises a `TypeError`, not that `ValueError`.
   `fourier_connectivity` names its coefficient layouts for a ragged list
   too. An object-dtype array holding numbers is read as those numbers by all
   four transforms and both wrappers, as `MorletWavelet` read it; `Multitaper`,
