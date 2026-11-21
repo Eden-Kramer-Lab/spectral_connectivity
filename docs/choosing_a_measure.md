@@ -5,8 +5,9 @@ measures that answer it (the `method` names of `multitaper_connectivity`) and
 the mistake most often made with them. [Pitfalls](#pitfalls) below covers the
 mistakes that apply to every measure, and
 [Connectivity Metric Ranges](CONNECTIVITY_METRIC_RANGES.md) gives each
-measure's range, units, diagonal, and interpretation. Every code block on this
-page runs as a doctest in the test suite (`tests/test_cookbook.py`).
+measure's range, units, diagonal, and interpretation.
+
+<!-- Every code block on this page runs as a doctest in tests/test_cookbook.py. -->
 
 | Question | Measures (**try first**) | Watch out for |
 | --- | --- | --- |
