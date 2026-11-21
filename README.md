@@ -83,20 +83,46 @@ The simulated-examples notebook builds every case with `spectral_connectivity.si
 
 The quickest way to get connectivity measures is the high-level
 `multitaper_connectivity` function, which runs the multitaper transform and
-returns labeled [xarray](https://docs.xarray.dev/) objects (dimensions such as
-`time`, `frequency`, `source`, `target`):
+returns labeled [xarray](https://docs.xarray.dev/) objects. This example runs
+as is: it simulates four signals, three of which share a 10 Hz rhythm, and
+plots the coherence of one pair.
 
 ```python
-from spectral_connectivity import multitaper_connectivity
+import matplotlib.pyplot as plt
 
-# time_series has shape (n_time_samples, n_trials, n_signals)
+from spectral_connectivity import multitaper_connectivity
+from spectral_connectivity.simulate import simulate_shared_oscillation
+
+sampling_frequency = 500  # samples per second, in Hz
+
+# Your data goes in an array shaped (n_time_samples, n_trials, n_signals).
+# Here: 20 trials of 10 s (5000 samples) from 4 signals. Signals a, b, and c
+# share a 10 Hz oscillation; d is noise only.
+time_series = simulate_shared_oscillation(
+    frequency=10,  # Hz
+    sampling_frequency=sampling_frequency,
+    n_time_samples=5000,
+    n_trials=20,
+    amplitudes=[1.0, 1.0, 1.0, 0.0],
+    noise_levels=1.0,
+    random_state=0,
+)
+print(time_series.shape)  # (5000, 20, 4)
+
 coherence = multitaper_connectivity(
     time_series,
     sampling_frequency=sampling_frequency,
     method="magnitude_squared_coherence",
+    signal_names=["a", "b", "c", "d"],
     time_halfbandwidth_product=3,
 )
-# -> DataArray with dims (time, frequency, source, target)
+print(coherence.dims)  # ('time', 'frequency', 'source', 'target')
+
+# Select one pair. With no time_window_duration the whole trial is one time
+# window, so take that window and plot coherence against frequency (Hz).
+coherence.sel(source="a", target="b").isel(time=0).plot()
+plt.xlim(0, 50)
+plt.show()
 
 # Ask for several measures at once (returns an xarray.Dataset)
 measures = multitaper_connectivity(
@@ -107,8 +133,9 @@ measures = multitaper_connectivity(
 ```
 
 The common multitaper settings, like `time_halfbandwidth_product` here, are
-named arguments: `time_window_duration`, `time_window_step`,
-`time_halfbandwidth_product`, `n_tapers`, and `detrend_type`. Any other
+named arguments: `time_window_duration` (seconds; default the whole trial),
+`time_window_step` (seconds), `time_halfbandwidth_product`, `n_tapers`, and
+`detrend_type`. Any other
 `Multitaper` setting goes in `transform_kwargs={...}` (e.g.
 `transform_kwargs={"n_fft_samples": 1024}`), options for the measure itself go
 in `connectivity_kwargs={...}`, and group measures take `group_labels` (see
@@ -197,16 +224,25 @@ For finer control (or if you already have Fourier coefficients from another
 method), use the `Multitaper` and `Connectivity` classes directly:
 
 ```python
-from spectral_connectivity import Multitaper, Connectivity
+from spectral_connectivity import Connectivity, Multitaper
+from spectral_connectivity.simulate import simulate_shared_oscillation
 
-# Compute multitaper spectral estimate
+sampling_frequency = 500  # Hz
+# (n_time_samples, n_trials, n_signals): 20 trials of 10 s from 4 signals
+time_series = simulate_shared_oscillation(
+    frequency=10, sampling_frequency=sampling_frequency, n_time_samples=5000,
+    n_trials=20, amplitudes=[1.0, 1.0, 1.0, 0.0], noise_levels=1.0, random_state=0,
+)
+brain_area_labels = ["CA1", "CA1", "PFC", "PFC"]  # one group label per signal
+
+# Compute multitaper spectral estimate in 1 s windows every 0.5 s
 m = Multitaper(
-    time_series=signals,
+    time_series=time_series,
     sampling_frequency=sampling_frequency,
-    time_halfbandwidth_product=time_halfbandwidth_product,
-    time_window_duration=0.060,
-    time_window_step=0.060,
-    start_time=time[0],
+    time_halfbandwidth_product=3,
+    time_window_duration=1.0,  # seconds
+    time_window_step=0.5,  # seconds
+    start_time=0.0,  # time of the first sample, in seconds
     # fft_workers=-1,  # optional: parallelize the CPU FFT across all cores
 )
 
@@ -214,11 +250,15 @@ m = Multitaper(
 # (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.)
 c = Connectivity.from_transform(m)
 
-# Here are a couple of examples
+# Here are a couple of examples. Pairwise measures return NumPy arrays shaped
+# (n_time_windows, n_frequencies, n_signals, n_signals), (19, 251, 4, 4) here;
+# power drops the last axis. c.time (window centers, s) and c.frequencies (Hz)
+# label the first two axes.
 power = c.power(one_sided=True)  # one-sided spectral power density
 coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
-canonical_coherence = c.canonical_coherence(brain_area_labels)
+# Group measures return (values, group labels)
+canonical_coherence, area_labels = c.canonical_coherence(brain_area_labels)
 # Exact Vidaurre CaCoh is complex and component-resolved. Rich MIC uses the
 # same result schema; both include filters, patterns, and group membership.
 cacoh = c.canonical_coherency(brain_area_labels, n_components=2)
