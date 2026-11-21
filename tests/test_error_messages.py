@@ -441,3 +441,56 @@ def test_method_of_the_wrong_type_names_the_accepted_types(call, method, receive
         "spectral_connectivity.list_measures() to see the measure names, e.g. "
         "method='magnitude_squared_coherence'."
     )
+
+
+def _jackknife_connectivity(expectation_type="trials_tapers"):
+    ts = np.random.default_rng(3).standard_normal((200, 4, 2))
+    return Connectivity.from_transform(
+        Multitaper(ts, sampling_frequency=100), expectation_type=expectation_type
+    )
+
+
+def test_jackknife_suggests_measure_names_for_an_unknown_one():
+    """An unknown measure name gets the wrapper's suggestions and a pointer to
+    list_measures()."""
+    with pytest.raises(ValueError, match="jackknife can compute") as excinfo:
+        _jackknife_connectivity().jackknife("coherence")
+    message = str(excinfo.value)
+    assert message.startswith(
+        "'coherence' is not a connectivity measure jackknife can compute. "
+        "Did you mean 'magnitude_squared_coherence', "
+    )
+    assert message.endswith(
+        "Call spectral_connectivity.list_measures() to see the measure names."
+    )
+
+
+@pytest.mark.parametrize("confidence_level", [95, 0, 1.0, -0.5, np.nan, True])
+def test_jackknife_echoes_an_invalid_confidence_level(confidence_level, monkeypatch):
+    """A confidence_level outside (0, 1) is echoed with an example, before any
+    measure is computed."""
+
+    def no_measure(self):
+        msg = "computed the measure before validating confidence_level"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(Connectivity, "magnitude_squared_coherence", no_measure)
+    expected = (
+        "confidence_level must be finite and strictly between 0 and 1, got "
+        f"{confidence_level!r}. It is the probability mass inside the interval, "
+        "e.g. 0.95 for a 95% interval."
+    )
+    with pytest.raises(ValueError, match="^" + re.escape(expected) + "$"):
+        _jackknife_connectivity().jackknife(
+            "magnitude_squared_coherence", confidence_level=confidence_level
+        )
+
+
+@pytest.mark.parametrize("expectation_type", ["time_trials_tapers", "time", "time_trials"])
+def test_jackknife_names_the_expectation_type_to_build_with(expectation_type):
+    """An expectation_type jackknife cannot use names the ones it can."""
+    with pytest.raises(ValueError, match="leaves out one trial or taper") as excinfo:
+        _jackknife_connectivity(expectation_type).jackknife("magnitude_squared_coherence")
+    message = str(excinfo.value)
+    assert "expectation_type='trials_tapers' (the default), 'trials', or 'tapers'" in message
+    assert f"this one has expectation_type={expectation_type!r}" in message

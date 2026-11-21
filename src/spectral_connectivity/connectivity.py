@@ -46,6 +46,7 @@ from spectral_connectivity._multivariate import (
 from spectral_connectivity.statistics import (
     JackknifeResult,
     _validate_alpha,
+    _validate_confidence_level,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
     jackknife_confidence_interval,
@@ -53,6 +54,7 @@ from spectral_connectivity.statistics import (
 from spectral_connectivity.utils import (
     BackendArray,
     _validated_flag,
+    did_you_mean,
     is_positive_integer,
     mark_readonly_chain_if_supported,
     mark_readonly_if_supported,
@@ -2243,11 +2245,15 @@ class Connectivity:
         """
         if self.expectation_type not in {"trials", "tapers", "trials_tapers"}:
             msg = (
-                "jackknife supports expectation_type 'trials', 'tapers', or "
-                "'trials_tapers'; expectations involving time or retaining both "
-                "trial and taper axes have no single leave-one-out layout."
+                "jackknife leaves out one trial or taper at a time, so it needs a "
+                "Connectivity built with expectation_type='trials_tapers' (the "
+                "default), 'trials', or 'tapers'; this one has "
+                f"expectation_type={self.expectation_type!r}. Build one for the "
+                "interval, e.g. Connectivity.from_transform(transform) or "
+                "Connectivity(fourier_coefficients, expectation_type='trials_tapers')."
             )
             raise ValueError(msg)
+        _validate_confidence_level(confidence_level)
         if not self._observations_are_independent and self.expectation_type in {
             "tapers",
             "trials_tapers",
@@ -2275,7 +2281,14 @@ class Connectivity:
             or method in _NON_MEASURE_METHODS
             or not inspect.isfunction(method_attribute)
         ):
-            msg = "method must name a public connectivity measure."
+            # The registry imports this module, so its suggester is imported here.
+            from spectral_connectivity._measure_registry import _suggest_measure_names
+
+            msg = (
+                f"{method!r} is not a connectivity measure jackknife can "
+                f"compute.{did_you_mean(_suggest_measure_names(method))} Call "
+                "spectral_connectivity.list_measures() to see the measure names."
+            )
             raise ValueError(msg)
         # The static check above guarantees ``method`` names a public function
         # on the class, so the bound attribute is always callable here.

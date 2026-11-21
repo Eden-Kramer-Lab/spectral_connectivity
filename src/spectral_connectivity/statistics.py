@@ -139,6 +139,22 @@ def _warn_fisher_boundary(at_boundary: NDArray[np.bool_]) -> None:
         )
 
 
+def _validate_confidence_level(confidence_level: float) -> None:
+    """Reject a ``confidence_level`` that is not a probability strictly inside (0, 1)."""
+    if (
+        isinstance(confidence_level, (bool, np.bool_))
+        or not isinstance(confidence_level, (int, float, np.integer, np.floating))  # type: ignore[redundant-expr]  # user input
+        or not np.isfinite(confidence_level)
+        or not 0 < confidence_level < 1
+    ):
+        msg = (
+            "confidence_level must be finite and strictly between 0 and 1, got "
+            f"{confidence_level!r}. It is the probability mass inside the "
+            "interval, e.g. 0.95 for a 95% interval."
+        )
+        raise ValueError(msg)
+
+
 def jackknife_confidence_interval(
     estimate: NDArray[np.floating],
     leave_one_out: NDArray[np.floating],
@@ -211,9 +227,7 @@ def jackknife_confidence_interval(
     .. [2] Efron, B., & Tibshirani, R. J. (1993). An Introduction to the
            Bootstrap. Chapman & Hall.
     """
-    if not np.isfinite(confidence_level) or not 0 < confidence_level < 1:
-        msg = "confidence_level must be finite and strictly between 0 and 1."
-        raise ValueError(msg)
+    _validate_confidence_level(confidence_level)
     valid_transformations = {"identity", "log", "fisher", "fisher_squared", "circular"}
     if transformation not in valid_transformations:
         msg = (

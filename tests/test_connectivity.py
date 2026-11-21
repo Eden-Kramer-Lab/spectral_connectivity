@@ -2686,7 +2686,9 @@ def test_jackknife_rejects_public_non_measure_methods(method):
     shape = (1, 3, 2, 16, 2)
     connectivity = Connectivity(rng.standard_normal(shape) + 1j * rng.standard_normal(shape))
 
-    with pytest.raises(ValueError, match="public connectivity measure"):
+    with pytest.raises(
+        ValueError, match="is not a connectivity measure jackknife can compute"
+    ):
         connectivity.jackknife(method)
 
 

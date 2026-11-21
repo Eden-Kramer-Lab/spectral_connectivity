@@ -1355,6 +1355,16 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   received, and pointing to `list_measures()`. They raised a bare
   `TypeError: 'int' object is not iterable`, or an `AttributeError` for a
   list holding a non-string.
+- *Unreleased:* `Connectivity.jackknife` errors say how to fix the call. An
+  unknown measure (`jackknife("coherence")`) gets the wrapper's suggestions
+  ("Did you mean 'magnitude_squared_coherence', ...?") and a pointer to
+  `list_measures()`, where the message said only that `method` must name a
+  public connectivity measure. An invalid `confidence_level`
+  (`confidence_level=95`) is echoed with "e.g. 0.95 for a 95% interval" and
+  rejected before the leave-one-out estimates are computed, here and in
+  `jackknife_confidence_interval`. An `expectation_type` it cannot use names
+  the ones it can (`'trials_tapers'`, the default, `'trials'`, or
+  `'tapers'`) and the one the `Connectivity` has.
 
 ### Performance
 
