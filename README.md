@@ -42,7 +42,7 @@
 > once per session for each measure; to see it at every call, use
 > `warnings.simplefilter("always",
 > spectral_connectivity.DirectedOrientationWarning)`. See the
-> [migration guide](CHANGELOG.md#migration-guide).
+> [migration guide](docs/migration.md).
 >
 > **`Connectivity.power()` is one-sided since 3.0.** The bins between 0 Hz and
 > Nyquist are twice the 2.x values, so integrating over the non-negative

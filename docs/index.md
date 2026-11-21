@@ -31,7 +31,7 @@ category=spectral_connectivity.DirectedOrientationWarning)`. It is shown once
 per session for each measure; to see it at every call, use
 `warnings.simplefilter("always",
 spectral_connectivity.DirectedOrientationWarning)`. See the [migration
-guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide).
+guide](migration.md).
 
 `Connectivity.power()` is one-sided since 3.0: the bins between 0 Hz and Nyquist
 are twice the 2.x values, so integrating over the non-negative frequencies gives
@@ -311,6 +311,7 @@ that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.42958
 :maxdepth: 2
 
 cookbook
+migration
 llm_guide
 CONNECTIVITY_METRIC_RANGES
 STYLE
