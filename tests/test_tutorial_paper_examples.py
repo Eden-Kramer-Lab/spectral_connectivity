@@ -43,6 +43,7 @@ time-varying one. They fail for different reasons.
 import ast
 import dataclasses
 import itertools
+import re
 from pathlib import Path
 
 import numpy as np
@@ -440,3 +441,103 @@ def test_example_agrees_with_its_model(analysis):
             _assert_summed_ddtf_near_model(
                 estimate, true[measure], _SUMMED_DDTF_ESTIMATE_BUDGET, label
             )
+
+
+def _published_model(n_lags, n_signals, terms, noise_covariance):
+    """``(coefficients, noise_covariance)`` from ``(target, source, lag,
+    value)`` terms, 1-based as printed; coefficients are ``[lag - 1, target,
+    source]`` as ``simulate_MVAR`` takes them."""
+    coefficients = np.zeros((n_lags, n_signals, n_signals))
+    for target, source, lag, value in terms:
+        coefficients[lag - 1, target - 1, source - 1] = value
+    return coefficients, np.asarray(noise_covariance, dtype=float)
+
+
+# The models of Ding, Chen & Bressler (2006), "Granger causality: basic theory
+# and application to neuroscience" (arXiv:q-bio/0608035, Eqs. 55-58; Handbook
+# of Time Series Analysis, ch. 17), transcribed from the paper rather than the
+# tutorial, so a transcription error in the tutorial is not also in its tests.
+# x1, x2, x3 of Example 2 are the paper's X, Y, Z.
+_ROOT2 = np.sqrt(2)
+_EXAMPLE2_TERMS = [
+    (1, 1, 1, 0.8),
+    (1, 1, 2, -0.5),
+    (1, 3, 1, 0.4),
+    (2, 2, 1, 0.9),
+    (2, 2, 2, -0.8),
+    (3, 3, 1, 0.5),
+    (3, 3, 2, -0.2),
+    (3, 2, 1, 0.5),
+]
+_PUBLISHED_MODELS = {
+    "ding_example1": _published_model(
+        2,
+        2,
+        [
+            (1, 1, 1, 0.9),
+            (1, 1, 2, -0.5),
+            (2, 2, 1, 0.8),
+            (2, 2, 2, -0.5),
+            (2, 1, 1, 0.16),
+            (2, 1, 2, -0.2),
+        ],
+        [[1.0, 0.4], [0.4, 0.7]],
+    ),
+    "ding_example2a": _published_model(2, 3, _EXAMPLE2_TERMS, np.diag([0.3, 1.0, 0.2])),
+    "ding_example2b": _published_model(
+        2, 3, [*_EXAMPLE2_TERMS, (1, 2, 2, 0.2)], np.diag([0.3, 1.0, 0.2])
+    ),
+    "ding_example3": _published_model(
+        3,
+        5,
+        [
+            (1, 1, 1, 0.95 * _ROOT2),
+            (1, 1, 2, -0.9025),
+            (2, 1, 2, 0.5),
+            (3, 1, 3, -0.4),
+            (4, 1, 2, -0.5),
+            (4, 4, 1, 0.25 * _ROOT2),
+            (4, 5, 1, 0.25 * _ROOT2),
+            (5, 4, 1, -0.25 * _ROOT2),
+            (5, 5, 1, 0.25 * _ROOT2),
+        ],
+        np.diag([0.6, 0.5, 0.3, 0.3, 0.6]),
+    ),
+}
+
+
+@pytest.mark.parametrize("example", list(_PUBLISHED_MODELS))
+def test_example_simulates_the_published_model(tutorial, example):
+    """The model an example simulates is the published one; every other test
+    here takes the model from the tutorial itself."""
+    _, _, coefficients, noise_covariance = tutorial.simulate(example)
+    published_coefficients, published_noise = _PUBLISHED_MODELS[example]
+    np.testing.assert_allclose(coefficients, published_coefficients, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(noise_covariance, published_noise, rtol=0, atol=1e-12)
+
+
+def _displayed_coefficients(example, n_lags, n_signals):
+    """Coefficients of the equations the tutorial displays above an example,
+    such as ``$$ x_1 = 0.95\\sqrt2x_1(n-1) - 0.9025x_1(n-2) + w_1 $$``."""
+    name = example.replace("_example", " Example ")
+    heading = f"## {name[0].upper()}{name[1:]}"
+    text = _TUTORIAL.read_text()
+    cell = text[text.index(heading) :].split("# %%", 1)[0]
+    coefficients = np.zeros((n_lags, n_signals, n_signals))
+    for target, right_side in re.findall(r"\$\$\s*x_(\d)\s*=(.*?)\$\$", cell):
+        for sign, value, root, source, lag in re.findall(
+            r"([+-]?)\s*([0-9.]+)(\\sqrt2)?\s*x_(\d)\(n-(\d)\)", right_side
+        ):
+            coefficient = float(value) * (_ROOT2 if root else 1.0) * (-1 if sign == "-" else 1)
+            coefficients[int(lag) - 1, int(target) - 1, int(source) - 1] = coefficient
+    return coefficients
+
+
+@pytest.mark.parametrize("example", list(_PUBLISHED_MODELS))
+def test_example_displays_the_published_equations(example):
+    """The equations the tutorial shows for an example are the published ones.
+    Example 2a showed the lag-two x2 term that only 2b has, and Example 3 the
+    x4 -> x5 coefficient with the wrong sign."""
+    published_coefficients, _ = _PUBLISHED_MODELS[example]
+    displayed = _displayed_coefficients(example, *published_coefficients.shape[:2])
+    np.testing.assert_allclose(displayed, published_coefficients, rtol=0, atol=1e-12)

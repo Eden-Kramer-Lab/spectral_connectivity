@@ -786,6 +786,11 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   0.45 and DTF 0.26 in one direction. Pairwise, conditional and blockwise
   Granger of complex processes now match an independent state-space
   calculation.
+- The paper-examples tutorial displays Ding et al.'s (2006) models as
+  published: Example 2a showed the lag-two `x2 -> x1` term that only Example
+  2b has, and Example 3 showed the `x4 -> x5` coefficient as `+0.25 sqrt(2)`
+  rather than `-0.25 sqrt(2)`. The simulated models were already the published
+  ones.
 - `direct_directed_transfer_function` and its `list_measures` entry no
   longer describe it as direct influence only. It is zero for an influence
   relayed through observed signals, but its partial-coherence factor is also
