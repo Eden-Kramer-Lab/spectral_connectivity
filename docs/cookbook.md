@@ -714,8 +714,9 @@ the duration it is given.
 define the roles, so a `time` coordinate in seconds supplies the sampling
 frequency and the signal labels become the `source`/`target` coordinates. A
 coordinate in milliseconds would give a rate 1000 times too low; inference warns
-when the rate is below 1 Hz or the coordinate's `units` attribute says
-milliseconds:
+when the rate is at most 1 Hz or the coordinate's `units` attribute says
+milliseconds. A millisecond axis of data sampled faster than 1 kHz is not
+detected without that attribute, so set `units` or pass `sampling_frequency`:
 
 ```python
 >>> import xarray as xr

@@ -1119,10 +1119,13 @@ def multitaper_connectivity(
         for a DataArray it may be omitted and inferred from a sufficiently precise
         numeric elapsed-seconds ``time`` coordinate. Pass it explicitly when a
         low-precision or large-offset coordinate cannot resolve the rate reliably.
-        An inferred rate below 1 Hz, or a coordinate whose ``units`` attribute
-        says milliseconds, warns that the coordinate may be in milliseconds
-        (read as seconds, it gives a rate 1000 times too low); passing the rate,
-        or ``units="s"`` on the coordinate for a slow recording, silences it.
+        An inferred rate of at most 1 Hz, or a coordinate whose ``units``
+        attribute says milliseconds, warns that the coordinate may be in
+        milliseconds (read as seconds, it gives a rate 1000 times too low);
+        passing the rate, or ``units="s"`` on the coordinate for a slow
+        recording, silences it. A millisecond coordinate of data sampled faster
+        than 1 kHz infers a rate above 1 Hz and is not detected unless its
+        ``units`` attribute says milliseconds: set ``units`` or pass the rate.
     time_window_duration : float, optional
         Duration of sliding window in seconds for time-resolved analysis.
         If None, analyzes entire time series (no time resolution).

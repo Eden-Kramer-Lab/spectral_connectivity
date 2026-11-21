@@ -1011,24 +1011,43 @@ def _recording(time, **coordinate_attrs):
 def test_inferred_rate_warns_for_a_millisecond_time_coordinate():
     """A coordinate in milliseconds is read as seconds, giving a rate 1000 times
     too low: inference warns, naming the rate and the conversion, when the rate
-    is below 1 Hz or the coordinate's units say milliseconds."""
+    is at most 1 Hz or the coordinate's units say milliseconds."""
     at_500_hz = _recording(np.arange(1000) / 500 * 1000)  # ms, no units
     with pytest.warns(UserWarning, match=r"inferred as 0\.5 Hz") as record:
         result = multitaper_connectivity(at_500_hz, method="power")
     message = str(record[0].message)
     assert "elapsed seconds" in message
-    assert 'da.assign_coords(time=(da.time / 1000).assign_attrs(units="s"))' in message
+    assert "fMRI" in message  # no units attribute, so the rate may be genuine
+    conversion = "da = da.assign_coords({'time': (da['time'] / 1000).assign_attrs(units='s')})"
+    assert conversion in message
     assert "sampling_frequency=0.5 " in message
     assert result.attrs["sampling_frequency"] == pytest.approx(0.5)
 
-    # Above 1 Hz, the units attribute is what gives a millisecond axis away.
+    # 1 kHz on a millisecond axis, the commonest case, steps by exactly 1.
+    with pytest.warns(UserWarning, match=r"inferred as 1 Hz"):
+        multitaper_connectivity(_recording(np.arange(1000.0)), method="power")
+
+    # Above 1 Hz, the units attribute is what gives a millisecond axis away,
+    # and the message leaves out the slow-recording aside.
     at_2_khz = _recording(np.arange(1000) / 2000 * 1000, units="ms")
-    with pytest.warns(UserWarning, match=r"inferred as 2 Hz.*units attribute is 'ms'"):
+    with pytest.warns(
+        UserWarning, match=r"inferred as 2 Hz.*units attribute is 'ms'"
+    ) as record:
         multitaper_connectivity(at_2_khz, method="power")
-    converted = at_2_khz.assign_coords(time=(at_2_khz.time / 1000).assign_attrs(units="s"))
-    assert multitaper_connectivity(converted, method="power").attrs["sampling_frequency"] == (
-        pytest.approx(2000)
-    )
+    assert "fMRI" not in str(record[0].message)
+    namespace = {"da": at_2_khz}
+    exec(conversion, namespace)  # the message's own fix
+    assert multitaper_connectivity(namespace["da"], method="power").attrs[
+        "sampling_frequency"
+    ] == pytest.approx(2000)
+
+
+def test_spacing_mismatch_asks_whether_the_coordinate_is_in_milliseconds():
+    """With the rate given, a millisecond coordinate fails the spacing check by a
+    factor of 1000; the error says so."""
+    data = _recording(np.arange(1000) / 500 * 1000)
+    with pytest.raises(ValueError, match=r"spacing does not match.*in milliseconds"):
+        multitaper_connectivity(data, sampling_frequency=500, method="power")
 
 
 def test_inferred_slow_rate_is_silent_when_confirmed():

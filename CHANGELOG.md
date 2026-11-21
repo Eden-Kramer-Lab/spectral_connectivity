@@ -788,14 +788,18 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   coefficients are real too. The values are unchanged.
 - *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
   rate of a DataArray from a time coordinate that may be in milliseconds: when
-  the inferred rate is below 1 Hz (unless the coordinate's `units` attribute
-  says seconds), or when that attribute says milliseconds. The coordinate is
-  read as elapsed seconds, so 500 Hz data on a millisecond axis gave 0.5 Hz
-  and a frequency axis ending at 0.25 Hz without a sign. The warning gives the
-  inferred rate and the conversion,
-  `da.assign_coords(time=(da.time / 1000).assign_attrs(units="s"))`; for slow
-  recordings such as fMRI, passing `sampling_frequency` silences it. A rate
-  passed explicitly never warns.
+  the inferred rate is at most 1 Hz (unless the coordinate's `units`
+  attribute says seconds), or when that attribute says milliseconds. The
+  coordinate is read as elapsed seconds, so 500 Hz data on a millisecond axis
+  gave 0.5 Hz and a frequency axis ending at 0.25 Hz without a sign, and 1 kHz
+  data gave 1 Hz. The warning gives the inferred rate and the conversion,
+  `da = da.assign_coords({'time': (da['time'] / 1000).assign_attrs(units='s')})`;
+  for slow recordings such as fMRI, passing `sampling_frequency` silences it.
+  A rate passed explicitly never warns, and a mismatch between it and a
+  coordinate 1000 times too coarse asks whether the coordinate is in
+  milliseconds. A millisecond axis of data sampled faster than 1 kHz infers a
+  rate above 1 Hz and is not detected unless the coordinate's `units`
+  attribute says milliseconds: set `units`, or pass `sampling_frequency`.
 - *Unreleased:* `multitaper_connectivity` accepts a nested list as 2-D
   `(time, signal)` input, and `fourier_connectivity` one as 3-D or 4-D
   coefficients, as they do the same array. Both read the layout before

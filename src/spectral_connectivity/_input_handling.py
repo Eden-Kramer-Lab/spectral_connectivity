@@ -539,6 +539,13 @@ def _time_axis_from_dataarray(
             f"sampling_frequency={sampling_frequency!r} Hz (expected "
             f"{expected_description}, observed median {observed_median!r})."
         )
+        if not coordinate_is_sample_index and np.isclose(
+            observed_median / expected_interval, 1000, rtol=1e-3
+        ):
+            msg += (
+                " The observed step is 1000 times the expected one: is the "
+                "coordinate in milliseconds? Divide it by 1000."
+            )
         raise ValueError(msg)
 
     if coordinate_is_sample_index:
@@ -589,24 +596,35 @@ def _warn_if_inferred_rate_looks_like_milliseconds(
 
     The coordinate is read as elapsed seconds, so one in milliseconds gives a
     rate 1000 times too low. Warn when its ``units`` attribute says
-    milliseconds, or, unless it says seconds, when the rate is below 1 Hz,
-    which slow recordings (fMRI) legitimately have too.
+    milliseconds, or, unless it says seconds, when the rate is at most 1 Hz
+    (1 kHz data on a millisecond axis steps by exactly 1), which slow
+    recordings (fMRI) legitimately have too. A millisecond axis faster than
+    1 kHz without a ``units`` attribute is not detected.
     """
     stated = units.strip().lower() if isinstance(units, str) else None
     in_milliseconds = stated in _MILLISECOND_UNITS
-    if not in_milliseconds and (stated in _SECOND_UNITS or sampling_frequency >= 1):
+    if not in_milliseconds and (stated in _SECOND_UNITS or sampling_frequency > 1):
         return
-    units_note = f", although its units attribute is {units!r}" if in_milliseconds else ""
+    rate = f"{sampling_frequency:.6g}"
+    name = repr(coordinate_name)
+    conversion = (
+        "da = da.assign_coords({" + name + ": (da[" + name + "] / 1000)"
+        ".assign_attrs(units='s')})"
+    )
+    if in_milliseconds:
+        why = f", although its units attribute is {units!r}"
+        confirm = f"Otherwise pass sampling_frequency={rate} to silence this warning."
+    else:
+        why = ""
+        confirm = (
+            f"If {rate} Hz is the true rate (fMRI at TR = 2 s is 0.5 Hz), pass "
+            f"sampling_frequency={rate} to confirm it and silence this warning."
+        )
     warnings.warn(
-        f"sampling_frequency was inferred as {sampling_frequency:.6g} Hz from the "
-        f"DataArray time coordinate {coordinate_name!r}, which is read as elapsed "
-        f"seconds{units_note}. A coordinate in milliseconds gives a sampling rate, "
-        "and frequencies, 1000 times too low: convert it to seconds with "
-        f"da.assign_coords({coordinate_name}=(da.{coordinate_name} / 1000)"
-        '.assign_attrs(units="s")). If '
-        f"{sampling_frequency:.6g} Hz is the true rate (fMRI at TR = 2 s is 0.5 Hz), "
-        f"pass sampling_frequency={sampling_frequency:.6g} to confirm it and silence "
-        "this warning.",
+        f"sampling_frequency was inferred as {rate} Hz from the DataArray time "
+        f"coordinate {name}, which is read as elapsed seconds{why}. A coordinate "
+        "in milliseconds gives a sampling rate, and frequencies, 1000 times too "
+        f"low: convert it to seconds with {conversion}. {confirm}",
         UserWarning,
         stacklevel=stacklevel_outside_package(),
     )
