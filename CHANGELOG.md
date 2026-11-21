@@ -826,17 +826,31 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   Benjamini-Hochberg corrected at that false discovery rate over every bin,
   pair, and window of the call, keeping each pair's largest contiguous run of
   at least 3 independent significant bins. The values are unchanged.
-- `coherence_bias`, `power_bias`, and `power_variance` raise a `ValueError`
-  for an observation count their formulas cannot use, as
-  `coherence_significance_pvalue` does, and say to pass
-  `Connectivity.n_observations`: `coherence_bias` needs at least 2 (it
-  returned -0.5 for 0 and divided by zero for 1), and the power helpers at
-  least 1 (0 hit the digamma and trigamma poles). A non-finite or fractional
-  count raises too, naming the offending values of an array of counts (one
-  per estimate, still accepted, as an array or a list). A boolean, a string,
-  or None raises a `TypeError`: `power_bias(True)` read it as one observation and
-  `coherence_bias(True)` divided by zero. `coherence_fisher_z_transform`
-  checks `n_obs1` the same way.
+- Every observation count of the statistics helpers is checked the same way,
+  so the same bad count gets the same message, naming the argument, the
+  counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
+  `power_bias`, `power_variance`, `coherence_significance_pvalue`,
+  `power_confidence_intervals`, and both counts of
+  `coherence_fisher_z_transform` and `power_fisher_z_transform`. A count the
+  formula cannot use raises a `ValueError`, as `coherence_significance_pvalue`
+  already did: `coherence_bias` needs at least 2 (it returned -0.5 for 0 and
+  divided by zero for 1), and the power helpers at least 1 (0 hit the
+  digamma and trigamma poles). A non-finite or fractional count raises too,
+  naming the offending values of an array of counts. A boolean, a string, or
+  None raises a `TypeError`: `power_bias(True)` and
+  `power_confidence_intervals(True)` read `True` as 1 observation,
+  `coherence_bias(True)` divided by zero, and
+  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
+  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
+  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
+  one-sample test, got 1."). An array of counts, one per estimate (as an
+  array or a list), is still accepted by `coherence_bias`, `power_bias`, and
+  `power_variance`, and now by both counts of the Fisher z-transforms and the
+  count of `power_confidence_intervals`, where 0 in `n_obs2` means no second
+  sample for that estimate; all but `coherence_fisher_z_transform`'s `n_obs1`
+  raised NumPy's "truth value of an array is ambiguous" for one.
+  `coherence_significance_pvalue` takes a single count, and says so for an
+  array, because its real-valued bins use one count for the call.
 - *Unreleased:* `simulate_shared_oscillation` raises a `ValueError` naming
   the frequency and the Nyquist frequency when `frequency` is negative or not
   below Nyquist, and validates `sampling_frequency` as the transforms do.
@@ -1521,24 +1535,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   [0, 1] over such inputs found no other value above 1, except the magnitude
   of the complex `coherency` by up to 3 ulps (7e-16), the precision of the
   magnitude itself.
-- Every observation count of the statistics helpers is checked the same way,
-  so the same bad count gets the same message, naming the argument, the
-  counts it takes, and `Connectivity.n_observations`:
-  `coherence_significance_pvalue`, `power_confidence_intervals`, and both
-  counts of `coherence_fisher_z_transform` and `power_fisher_z_transform`
-  now check theirs as `coherence_bias`, `power_bias`, and `power_variance`
-  do. A boolean, a string, or None raises a `TypeError` there too:
-  `power_confidence_intervals(True)` read `True` as 1 observation, and
-  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
-  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
-  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
-  one-sample test, got 1."). Both counts of the Fisher z-transforms and the
-  count of `power_confidence_intervals` take an array, one count per
-  estimate, where 0 in `n_obs2` means no second sample for that estimate;
-  all but `coherence_fisher_z_transform`'s `n_obs1` raised NumPy's "truth
-  value of an array is ambiguous" for one. `coherence_significance_pvalue`
-  takes a single count, and says so for an array, because its real-valued
-  bins use one count for the call.
 - `Multitaper`, `ShortTimeFourierTransform`, `Welch`, and `MorletWavelet`
   given a ragged nested list, or values that are not numbers (strings,
   `None`), raise an error naming the `(n_time_samples, n_trials, n_signals)`
