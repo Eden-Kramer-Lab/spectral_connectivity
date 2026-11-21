@@ -8,7 +8,11 @@ from spectral_connectivity.simulate import (
     simulate_MVAR,
     simulate_shared_oscillation,
 )
-from tests._var_oracle import _dense_stable_var, _var_autocovariance
+from tests._var_oracle import (
+    _companion_spectral_radius,
+    _dense_stable_var,
+    _var_autocovariance,
+)
 
 
 def test_simulate_MVAR_deterministic_with_seed():
@@ -191,21 +195,13 @@ def test_simulate_MVAR_warns_for_unstable_coefficients():
     # by c, so the c the message gives brings it to 0.9, silently.
     c = float(re.search(r"c = ([0-9.]+)", str(record[0].message)).group(1))
     scaled = np.array([[[0.5]], [[0.6]]]) * c ** np.arange(1, 3)[:, np.newaxis, np.newaxis]
-    assert _companion_radius(scaled) == pytest.approx(0.9, rel=1e-3)
+    assert _companion_spectral_radius(scaled) == pytest.approx(0.9, rel=1e-3)
     simulate_MVAR(scaled, random_state=0)
     # A unit root is named as such.
     with pytest.warns(UserWarning, match=r"is 1 \(a unit root"):
         simulate_MVAR(np.array([[[1.0]]]), random_state=0)
     # A stable model (radius 0.6 and 0.5) is silent.
     simulate_MVAR(np.array([[[0.5, 0.3], [0.0, 0.6]]]), random_state=0)
-
-
-def _companion_radius(coefficients):
-    """Largest eigenvalue magnitude of a VAR's companion matrix."""
-    n_lags, n_signals, _ = coefficients.shape
-    companion = np.eye(n_lags * n_signals, k=-n_signals)
-    companion[:n_signals] = np.concatenate(coefficients, axis=1)
-    return np.max(np.abs(np.linalg.eigvals(companion)))
 
 
 def test_simulate_MVAR_rejects_complex_coefficients():
