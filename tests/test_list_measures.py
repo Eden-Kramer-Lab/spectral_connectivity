@@ -10,6 +10,7 @@ from spectral_connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     Multitaper,
+    PowerSidednessWarning,
     list_measures,
     multitaper_connectivity,
 )
@@ -318,7 +319,9 @@ def test_every_measure_between_signals_announces_a_single_observation(measure):
             raised = True
     warned = any(
         issubclass(warning.category, UserWarning)
-        and not issubclass(warning.category, DirectedOrientationWarning)
+        and not issubclass(
+            warning.category, (DirectedOrientationWarning, PowerSidednessWarning)
+        )
         for warning in caught
     )
     assert (raised or warned) == (measure.name not in _SINGLE_SIGNAL_MEASURES)

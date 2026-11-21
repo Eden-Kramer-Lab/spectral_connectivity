@@ -29,6 +29,15 @@ partial directed coherence, and direct directed transfer function) emit a
 silence it with `warnings.filterwarnings("ignore",
 category=spectral_connectivity.DirectedOrientationWarning)`. See the [migration
 guide](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md#migration-guide).
+
+`Connectivity.power()` is one-sided since 3.0: the bins between 0 Hz and Nyquist
+are twice the 2.x values, so integrating over the non-negative frequencies gives
+the signal's power. `power(one_sided=False)` returns the 2.x values. Until 3.2,
+calling `Connectivity.power()` without `one_sided` on two-sided coefficients
+emits a `PowerSidednessWarning`; pass `one_sided=True` to silence it. The power
+that `multitaper_connectivity` and `connectivity_to_xarray` return (including by
+default) is the one-sided density too, and they do not warn: halve its interior
+bins to compare with a 2.x result.
 :::
 
 ## What is spectral_connectivity?
@@ -160,7 +169,7 @@ m = Multitaper(
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples
-power = c.power()  # spectral power
+power = c.power(one_sided=True)  # one-sided spectral power density
 coherence = c.magnitude_squared_coherence()
 weighted_phase_lag_index = c.weighted_phase_lag_index()
 canonical_coherence = c.canonical_coherence(brain_area_labels)

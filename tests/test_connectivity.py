@@ -3857,7 +3857,7 @@ def test_power_two_sided_is_refused_for_one_sided_coefficients():
         connectivity.power(one_sided=False)
 
 
-@pytest.mark.parametrize("not_a_flag", [0, 1, "False", None])
+@pytest.mark.parametrize("not_a_flag", [0, 1, "False"])
 def test_power_one_sided_must_be_a_bool(not_a_flag):
     rng = np.random.default_rng(0)
     coefficients = rng.standard_normal((1, 4, 2, 8, 2)) + 1j * rng.standard_normal(
