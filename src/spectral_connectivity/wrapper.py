@@ -99,7 +99,7 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 )
 
 
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True)
 class MeasureInfo:
     """A single connectivity measure the high-level wrapper can compute.
 
@@ -193,14 +193,7 @@ class MeasureInfo:
     formula: str | None
 
     def __repr__(self) -> str:
-        """Name, category, range, and description on one line; ``...`` marks the rest.
-
-        ``list_measures()`` in a notebook prints every record's repr, so the
-        full one of 18 fields made a wall of text. ``is_directed=True`` is
-        shown for the directed measures. Each field is still an attribute
-        (``measure.interpretation``), and ``dataclasses.asdict`` returns them
-        all.
-        """
+        """One line, as the class docstring describes; ``...`` marks the other fields."""
         directed = ", is_directed=True" if self.is_directed else ""
         return (
             f"MeasureInfo(name={self.name!r}, category={self.category!r}, "
