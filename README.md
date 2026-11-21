@@ -558,47 +558,13 @@ disruption of connectivity within prefrontal-hippocampal circuits
 that is rescued by antipsychotic drugs <https://doi.org/10.1101/2021.02.03.429582>
 + The cerebellum regulates fear extinction through thalamo-prefrontal cortex interactions in male mice <https://doi.org/10.1038/s41467-023-36943-w>
 
-<!-- docs/index.md includes this file up to this line. -->
-
 ## Releases
 
-This package uses dynamic versioning with [Hatch](https://hatch.pypa.io/) based on git tags. The version is automatically determined from the repository state:
-
-- **Tagged releases**: `1.2.0`
-- **Development versions**: `1.2.0.dev5+g1a2b3c4` (5 commits since tag + git hash)
-
-### Making a Release
-
-Releases are published **automatically by CI**: pushing a `v*` tag runs the
-*Test, Build, and Publish* workflow, which tests, builds, attests, and publishes
-to PyPI via trusted publishing (after approval in the protected `pypi`
-environment). Do **not** run `twine upload` by hand — that bypasses the tests,
-attestations, and approval gate. See [CONTRIBUTING.md](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md) for the
-full process and the required one-time setup.
-
-```bash
-# Update CHANGELOG.md, then tag and push -- CI does the rest.
-git tag -a v1.2.0 -m "v1.2.0"
-git push origin v1.2.0
-```
-
-Conda packages are published separately and manually:
-
-```bash
-conda build conda-recipe/ --output-folder ./conda-builds
-anaconda upload ./conda-builds/noarch/spectral_connectivity-*.tar.bz2
-```
-
-The version number is automatically extracted from the git tag (without the 'v' prefix).
-
-### Conda Package
-
-This package is also available on conda via the `edeno` channel:
-
-```bash
-conda install -c edeno spectral_connectivity
-```
+Releases are published by CI from version tags, and the version number comes
+from the tag. Maintainers: see
+[How to make a release](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CONTRIBUTING.md#how-to-make-a-release).
 
 **Not yet on conda-forge?** Help us get there! If you'd like this package on conda-forge for easier installation, please:
-- 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
-- Or volunteer to help maintain the conda-forge feedstock
+
++ 👍 React to [this issue](https://github.com/Eden-Kramer-Lab/spectral_connectivity/issues) requesting conda-forge support
++ Or volunteer to help maintain the conda-forge feedstock

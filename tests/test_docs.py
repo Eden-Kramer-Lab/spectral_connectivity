@@ -20,3 +20,17 @@ def test_measure_table_is_current():
     generator = _load_generator()
     document = generator.DOCUMENT.read_text(encoding="utf-8")
     assert document == generator.render(document)
+
+
+def test_include_markers_are_in_the_included_file():
+    """docs/index.md cuts README.md at markers; a reworded marker drops content."""
+    index = (DOCS / "index.md").read_text(encoding="utf-8")
+    readme = (DOCS.parent / "README.md").read_text(encoding="utf-8")
+    markers = [
+        line.split(":", 2)[2].strip()
+        for line in index.splitlines()
+        if line.startswith((":start-after:", ":end-before:"))
+    ]
+    assert markers
+    for marker in markers:
+        assert readme.count(marker) == 1, marker

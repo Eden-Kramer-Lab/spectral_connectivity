@@ -8,7 +8,6 @@
 :relative-docs: docs/
 :relative-images:
 :start-after: <!-- docs/index.md resumes here. -->
-:end-before: <!-- docs/index.md includes this file up to this line. -->
 ```
 
 ```{toctree}
