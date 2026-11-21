@@ -1339,7 +1339,13 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   passed directly) now gives the NaN warning alone, plus the
   `DirectedOrientationWarning` reminder. Finite coefficients keep every
   warning. The Cholesky fallback is no longer also logged at WARNING level,
-  which printed it to stderr a second time.
+  which printed it to stderr a second time. The warnings are dropped with
+  `warnings.catch_warnings`, here and for the `fourier_coefficients` warning
+  after a transform's NaN warning, which changes the process-wide warning
+  filters while the measure runs: with NaN or Inf input it is not
+  thread-safe (another thread's matching warnings are dropped meanwhile),
+  and a warning already shown once may be shown again. Finite input never
+  changes the filters.
 - `canonical_coherence` and `global_coherence` computed from NaN or Inf
   coefficients raise a `ValueError` saying the measure cannot be computed
   because the coefficients contain NaN or Inf, and to interpolate or remove

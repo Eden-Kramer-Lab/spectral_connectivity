@@ -562,7 +562,19 @@ def _factorization_explained_by_nonfinite_input(
 @contextlib.contextmanager
 def _user_warnings_ignored(messages: Sequence[str], ignore: bool) -> Iterator[None]:
     """Ignore the ``UserWarning``\\ s whose messages match ``messages`` (regular
-    expressions) inside the block, if ``ignore``; otherwise change nothing."""
+    expressions) inside the block, if ``ignore``; otherwise change nothing.
+
+    It uses :class:`warnings.catch_warnings`, which changes the process-wide
+    warning filters while the block runs and restores them after: it is not
+    thread-safe (another thread's matching warnings are dropped meanwhile, and
+    one thread restoring the filters can undo another's), and changing the
+    filters invalidates each module's record of warnings already shown, so a
+    warning shown once under the "default" action can be shown again. Only
+    NaN or Inf coefficients (``ignore``) take this path;
+    finite input never touches the filters. Recording the warnings and
+    re-emitting the others would need ``catch_warnings`` as well, so it would
+    not be safer.
+    """
     if not ignore:
         yield
         return
