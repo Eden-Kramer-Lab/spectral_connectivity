@@ -4,6 +4,7 @@ from unittest.mock import PropertyMock, patch
 
 import numpy as np
 import pytest
+import scipy.special
 import scipy.stats
 from scipy.integrate import trapezoid
 from scipy.ndimage import label
@@ -1287,6 +1288,199 @@ def test_pairwise_phase_consistency():
     coupled_ppc = Connectivity(coupled).pairwise_phase_consistency().squeeze()
     expected_coupled = (n_observations / 4 - 1) / (n_observations - 1)
     assert coupled_ppc[0, 1] == pytest.approx(expected_coupled, rel=1e-10)
+
+
+def _von_mises_lead_coefficients(rng, mean_lead, concentration, n_replicates, n_observations):
+    """Coefficients whose phase difference is von Mises, one replicate per time window.
+
+    Signal 0 leads signal 1 by an independent von Mises(mean_lead,
+    concentration) angle in each observation; magnitudes and the common phase
+    are random. Shape (n_replicates, n_observations, 1, 1, 2): the default
+    expectation averages the trial axis, so each measure returns one estimate
+    per replicate, at ``[:, 0, 0, 1]``.
+    """
+    shape = (n_replicates, n_observations, 1, 1)
+    lead = rng.vonmises(mean_lead, concentration, shape)
+    return _consistent_lead_coefficients(rng, lead, shape)
+
+
+def _von_mises_expectation(function, mean, concentration):
+    """E[function(angle)] for a von Mises(mean, concentration) angle.
+
+    Integrated over one period, split at pi so that a function of the sign of
+    sin(angle) is smooth on each piece.
+    """
+    return scipy.stats.vonmises(concentration, loc=mean).expect(
+        function, lb=0, ub=2 * np.pi, points=[np.pi], epsabs=1e-12
+    )
+
+
+def _monte_carlo_mean_and_limit(replicates):
+    """Mean of independent replicates and 5 standard errors of that mean.
+
+    The standard error is the replicates' sample standard deviation over
+    sqrt(n_replicates). The mean of an unbiased estimator falls outside 5
+    standard errors of its expectation with probability 6e-7.
+    """
+    standard_error = replicates.std(ddof=1) / np.sqrt(replicates.size)
+    return replicates.mean(), 5 * standard_error
+
+
+@pytest.mark.parametrize("n_observations", [4, 7])
+def test_pairwise_phase_consistency_is_unbiased_and_squared_plv_is_not(n_observations):
+    """E[PPC] = rho**2 and E[PLV**2] = rho**2 + (1 - rho**2) / n, checked at n = 4 and 7.
+
+    For n independent phase differences with population resultant length rho
+    (I1(kappa) / I0(kappa) for a von Mises phase), |sum exp(i dphi)|**2 has
+    expectation n + n (n - 1) rho**2: n unit terms and n (n - 1) cross terms.
+    Dividing by n**2 gives the squared phase locking value, biased up by
+    (1 - rho**2) / n; the pairwise phase consistency averages the cross terms
+    alone, so it is unbiased. A wrong count in either normalization moves the
+    mean by order 1 / n, which is large against the Monte Carlo error when n
+    is small.
+    """
+    rng = np.random.default_rng(20261120)
+    concentration = 1.5
+    connectivity = Connectivity(
+        _von_mises_lead_coefficients(rng, 0.6, concentration, 100_000, n_observations)
+    )
+    squared_resultant_length = (
+        scipy.special.i1e(concentration) / scipy.special.i0e(concentration)
+    ) ** 2
+    plv_bias = (1 - squared_resultant_length) / n_observations
+
+    squared_plv = connectivity.phase_locking_value()[:, 0, 0, 1] ** 2
+    ppc = connectivity.pairwise_phase_consistency()[:, 0, 0, 1]
+
+    mean_squared_plv, squared_plv_limit = _monte_carlo_mean_and_limit(squared_plv)
+    mean_ppc, ppc_limit = _monte_carlo_mean_and_limit(ppc)
+    assert abs(mean_squared_plv - (squared_resultant_length + plv_bias)) < squared_plv_limit
+    assert abs(mean_ppc - squared_resultant_length) < ppc_limit
+    # The bias that separates the two estimators is many times the limits.
+    assert plv_bias > 10 * max(squared_plv_limit, ppc_limit)
+
+
+def test_debiased_squared_phase_lag_index_is_unbiased_for_the_squared_sign_imbalance():
+    """E[debiased PLI**2] = (P(Im > 0) - P(Im < 0))**2; PLI**2 adds (1 - q**2) / n.
+
+    The sign of Im(X_0 conj(X_1)) is that of sin(dphi): +1 with probability
+    p = P(0 < dphi < pi), from the von Mises density, and -1 otherwise, so its
+    mean is q = 2 p - 1. The mean of n independent signs, squared, has
+    expectation q**2 + (1 - q**2) / n, and (n PLI**2 - 1) / (n - 1) removes
+    exactly that bias. The mean lead of 0.6 rad keeps q**2 away from 0 and 1,
+    so replacing n - 1 by n, or returning the plain square, moves the mean.
+    """
+    rng = np.random.default_rng(20261121)
+    mean_lead, concentration, n_observations = 0.6, 1.5, 5
+    connectivity = Connectivity(
+        _von_mises_lead_coefficients(rng, mean_lead, concentration, 100_000, n_observations)
+    )
+    probability_leading = _von_mises_expectation(
+        lambda angle: np.sin(angle) > 0, mean_lead, concentration
+    )
+    squared_sign_imbalance = (2 * probability_leading - 1) ** 2
+    plain_bias = (1 - squared_sign_imbalance) / n_observations
+
+    debiased = connectivity.debiased_squared_phase_lag_index()[:, 0, 0, 1]
+    squared_pli = connectivity.phase_lag_index()[:, 0, 0, 1] ** 2
+
+    mean_debiased, debiased_limit = _monte_carlo_mean_and_limit(debiased)
+    mean_squared_pli, squared_pli_limit = _monte_carlo_mean_and_limit(squared_pli)
+    assert 0.1 < squared_sign_imbalance < 0.9
+    assert abs(mean_debiased - squared_sign_imbalance) < debiased_limit
+    assert abs(mean_squared_pli - (squared_sign_imbalance + plain_bias)) < squared_pli_limit
+    assert plain_bias > 10 * max(debiased_limit, squared_pli_limit)
+
+
+def test_debiased_squared_weighted_phase_lag_index_has_zero_mean_without_a_phase_lag():
+    """With Im(X) symmetric about 0 its expectation is exactly 0; checked at n = 5.
+
+    The estimator is sum_{j != k} Im_j Im_k / sum_{j != k} |Im_j| |Im_k|. Given
+    the magnitudes |Im_k|, the signs of a symmetric Im are independent fair
+    coin flips, so every cross term of the numerator has mean 0 while the
+    denominator is fixed. The plain squared index (sum Im)**2 / (sum |Im|)**2
+    keeps the j == k terms: its expectation is E[sum Im**2 / (sum |Im|)**2],
+    at least 1 / n by the Cauchy-Schwarz inequality. Phase differences
+    concentrated about 0 (zero-lag locking) with random amplitudes give such a
+    symmetric Im.
+    """
+    rng = np.random.default_rng(20261122)
+    n_observations = 5
+    connectivity = Connectivity(
+        _von_mises_lead_coefficients(rng, 0.0, 2.0, 100_000, n_observations)
+    )
+
+    debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
+    squared_wpli = connectivity.weighted_phase_lag_index()[:, 0, 0, 1] ** 2
+
+    mean_debiased, debiased_limit = _monte_carlo_mean_and_limit(debiased)
+    mean_squared_wpli, squared_wpli_limit = _monte_carlo_mean_and_limit(squared_wpli)
+    assert abs(mean_debiased) < debiased_limit
+    assert mean_squared_wpli > 1 / n_observations - squared_wpli_limit
+    assert 1 / n_observations > 10 * max(debiased_limit, squared_wpli_limit)
+
+
+def test_debiased_squared_weighted_phase_lag_index_with_equal_weights_is_unbiased():
+    """With |Im(X)| the same in every observation its expectation is exactly q**2; checked at n = 5.
+
+    The weights then cancel, and the estimator is that of the debiased squared
+    phase lag index: the mean over pairs j != k of s_j s_k for the signs s of
+    Im(X), whose expectation is the squared sign imbalance q**2. Unit
+    amplitudes with a lead of +pi/3 in 3/4 of the observations and -pi/3 in
+    the rest give q = 1/2. The test without a phase lag cannot see the
+    estimator's denominator; this one does: with the j == k terms left in it,
+    the mean would be 0.25 (n - 1) / n = 0.20.
+    """
+    rng = np.random.default_rng(20261126)
+    n_observations = 5
+    shape = (100_000, n_observations, 1, 1)
+    lead = np.where(rng.random(shape) < 0.75, 1, -1) * np.pi / 3
+    common_phase = rng.uniform(0, 2 * np.pi, shape)
+    connectivity = Connectivity(
+        _two_signal_coefficients(np.exp(1j * (common_phase + lead)), np.exp(1j * common_phase))
+    )
+
+    debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
+
+    mean_debiased, limit = _monte_carlo_mean_and_limit(debiased)
+    assert abs(mean_debiased - 0.25) < limit
+    # The shift from a denominator with its j == k terms is many times the limit.
+    assert 0.25 / n_observations > 5 * limit
+
+
+def test_debiased_squared_weighted_phase_lag_index_converges_to_the_population_ratio():
+    """At moderate n its mean is (E[Im X])**2 / (E|Im X|)**2, up to a bias of order 1 / n.
+
+    With amplitudes independent of the phase difference, Im(X) is an amplitude
+    times sin(dphi) and the amplitude moments cancel in the ratio, leaving
+    (E[sin(dphi)])**2 / (E|sin(dphi)|)**2 for a von Mises dphi. The limit is
+    about 4% of that value, and the estimator's own bias uses part of it on
+    one side, so a small error in the normalization is not seen here: a
+    denominator 2% too large or 5% too small passes.
+    """
+    rng = np.random.default_rng(20261123)
+    mean_lead, concentration, n_observations = 0.6, 2.0, 50
+    connectivity = Connectivity(
+        _von_mises_lead_coefficients(rng, mean_lead, concentration, 20_000, n_observations)
+    )
+    population = (
+        _von_mises_expectation(np.sin, mean_lead, concentration)
+        / _von_mises_expectation(lambda angle: np.abs(np.sin(angle)), mean_lead, concentration)
+    ) ** 2
+
+    debiased = connectivity.debiased_squared_weighted_phase_lag_index()[:, 0, 0, 1]
+
+    mean_debiased, monte_carlo_limit = _monte_carlo_mean_and_limit(debiased)
+    # The numerator and denominator are unbiased for (E[Im])**2 and (E|Im|)**2,
+    # but their ratio is not: to first order (the delta method for a ratio of
+    # U-statistics) its bias is
+    #   (4 / n) (theta Var|Im| / (E|Im|)**2 - E[Im] Cov(Im, |Im|) / (E|Im|)**3),
+    # theta being the population ratio, which is -0.23 / n for this phase
+    # distribution and amplitudes uniform on [0.5, 3]. Allow 0.5 / n for it.
+    ratio_bias_allowance = 0.5 / n_observations
+    assert 0.3 < population < 0.6
+    assert monte_carlo_limit < ratio_bias_allowance
+    assert abs(mean_debiased - population) < monte_carlo_limit + ratio_bias_allowance
 
 
 def test__bandpass_keeps_the_masked_bins():
