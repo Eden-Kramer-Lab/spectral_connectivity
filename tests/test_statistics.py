@@ -856,6 +856,25 @@ def test_a_rejected_ci_call_does_not_warn():
             power_confidence_intervals(5, ci=1.5)
 
 
+def test_all_lists_the_public_names_the_module_defines():
+    """``__all__`` names every public function and class defined in the
+    module, and its correction mapping, but none of its imports (``np``,
+    ``scipy``, ``cast``), so ``dir()``-style listings and ``import *`` show
+    the API only."""
+    import spectral_connectivity.statistics as statistics
+
+    defined = {
+        name
+        for name, value in vars(statistics).items()
+        if not name.startswith("_")
+        and getattr(value, "__module__", None) == statistics.__name__
+    }
+    assert sorted(statistics.__all__) == sorted([*defined, "MULTIPLE_COMPARISONS"])
+    namespace: dict[str, object] = {}
+    exec("from spectral_connectivity.statistics import *", namespace)
+    assert {"np", "scipy", "cast", "dataclass"}.isdisjoint(namespace)
+
+
 def test_import_does_not_change_numpy_error_state():
     """Importing the package must not globally suppress NumPy warnings.
 

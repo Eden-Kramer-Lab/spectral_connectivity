@@ -24,6 +24,26 @@ from spectral_connectivity.utils import (
     warn_deprecated,
 )
 
+# The public API: what the API reference documents (autosummary_ignore_module_all
+# in docs/conf.py) and ``import *`` imports.
+__all__ = [
+    "MULTIPLE_COMPARISONS",
+    "Benjamini_Hochberg_procedure",
+    "Bonferroni_correction",
+    "JackknifeResult",
+    "adjust_for_multiple_comparisons",
+    "coherence_bias",
+    "coherence_fisher_z_transform",
+    "coherence_rate_adjustment",
+    "coherence_significance_pvalue",
+    "get_normal_distribution_p_values",
+    "jackknife_confidence_interval",
+    "power_bias",
+    "power_confidence_intervals",
+    "power_fisher_z_transform",
+    "power_variance",
+]
+
 
 @dataclass(frozen=True)
 class JackknifeResult:
@@ -533,6 +553,7 @@ def Bonferroni_correction(
     return is_significant
 
 
+#: The corrections :func:`adjust_for_multiple_comparisons` applies, by its ``method`` name.
 MULTIPLE_COMPARISONS: dict[str, Callable[..., NDArray[np.bool_]]] = {
     "Benjamini_Hochberg_procedure": Benjamini_Hochberg_procedure,
     "Bonferroni_correction": Bonferroni_correction,

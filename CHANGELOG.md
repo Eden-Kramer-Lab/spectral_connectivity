@@ -643,6 +643,11 @@ their rows).
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
+- `spectral_connectivity.statistics` defines `__all__`: its functions,
+  `JackknifeResult`, and the `MULTIPLE_COMPARISONS` mapping (now documented in
+  the API reference). `from spectral_connectivity.statistics import *` no
+  longer also imports the module's own imports (`np`, `scipy`, `warnings`,
+  `dataclass`, `cast`, ...); import those yourself.
 
 ### Removed
 
