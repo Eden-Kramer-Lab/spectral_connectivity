@@ -450,6 +450,28 @@ def test_time_series_that_is_not_a_numeric_array_is_rejected_clearly(
     assert "(n_time, n_signals) or (n_time, n_trials, n_signals)" in str(raised.value)
 
 
+class _ForeignArray:
+    """An array-like whose ``dtype`` is not a NumPy dtype (as a torch tensor's)."""
+
+    dtype = object()
+
+    def __init__(self, values):
+        self._values = values
+
+    def __array__(self, dtype=None, copy=None):
+        return np.asarray(self._values, dtype=dtype)
+
+
+def test_array_like_with_a_foreign_dtype_is_converted():
+    """An array-like whose dtype NumPy cannot read is converted like a list
+    rather than failing on ``dtype.kind``."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    xr.testing.assert_identical(
+        multitaper_connectivity(_ForeignArray(data), sampling_frequency=500, method="power"),
+        multitaper_connectivity(data, sampling_frequency=500, method="power"),
+    )
+
+
 # Channel 0 ("right") has 25x the variance of channel 1 ("left") and the labels
 # are deliberately unsorted, so per-signal power exposes a data/label
 # mispairing, a channel reversal, or a label sort (a symmetric two-signal

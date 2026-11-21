@@ -728,11 +728,13 @@ def _numeric_time_series(time_series: Any) -> BackendArray:
     Converting first lets the wrapper's shape checks read the shape a list
     describes. A ragged list, or values that are not numbers, raise naming the
     expected array rather than with NumPy's message. An array (NumPy or CuPy)
-    is returned as it is: ``Multitaper`` makes the one device copy.
+    is returned as it is: ``Multitaper`` makes the one device copy. An
+    array-like whose ``dtype`` NumPy cannot read is converted like a list.
     """
-    if hasattr(time_series, "dtype"):
-        data: BackendArray = time_series
-    else:
+    data: BackendArray = time_series
+    try:
+        np.dtype(time_series.dtype)
+    except (AttributeError, TypeError):
         try:
             data = np.asarray(time_series)
         except ValueError as error:
