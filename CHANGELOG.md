@@ -351,33 +351,6 @@ their rows).
 - The docstring of each of the 35 `Connectivity` measures has a runnable
   example (the deprecated `coherence_magnitude` alias has none), and every
   directed measure states its array orientation.
-- The examples of `coherence_significance_pvalue` and
-  `power_confidence_intervals` start from a time-resolved `Connectivity`:
-  they pass its `n_observations`, reshape `real_valued_frequencies` to
-  broadcast against the coherency or power (so 0 Hz and Nyquist get their own
-  null), and, for the p-values, select one pair before
-  `adjust_for_multiple_comparisons`.
-- The `Connectivity` docstring has a table of the leading axes each
-  `expectation_type` keeps and the shape it gives, and its descriptions of
-  `"trials"` and `"tapers"` say that they keep the time-window axis too.
-- The `Connectivity` docstring says what each group measure returns and how
-  to unpack it: `(values, labels)` from `canonical_coherence` and the other
-  scalar group measures, a `MultivariateConnectivityResult` from
-  `canonical_coherency` and `maximized_imaginary_coherency_components`, and
-  two arrays from `global_coherence`, whose frequency axis (unlike the other
-  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
-  non-negative ones. `global_coherence` documents that it ignores
-  `expectation_type` (every trial and taper of a window is decomposed) and
-  names its second return value `vectors`.
-- `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
-  says that it labels the two-sided FFT bins of `fft()` and that
-  `Connectivity.frequencies`, the non-negative bins, labels results; the
-  `Multitaper` attributes give `fft` and `frequencies` their `n_fft_samples`
-  length.
-- The Returns section of `multitaper_connectivity` says that one `method`
-  string gives a DataArray and the default a Dataset of `DEFAULT_METHODS`,
-  and that without `time_window_duration` `time` has length 1 (drop it with
-  `isel(time=0)` or `squeeze("time")` to plot).
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring
@@ -680,6 +653,56 @@ their rows).
   `docs/NOTEBOOK_SNAPSHOT_TESTS.md` plan is removed.
 - README and tutorial lead with `multitaper_connectivity`; the DataArray
   contract moved to a cookbook recipe.
+- `Connectivity.group_delay` and `Connectivity.delay` document that a pair
+  without significant coherence is NaN (for independent signals,
+  `group_delay()` returns NaN delay, slope, and r), which means no delay was
+  estimated rather than a delay of zero, and how `significance_threshold`
+  selects the frequencies: an exact zero-coherence test at each bin,
+  Benjamini-Hochberg corrected at that false discovery rate over every bin,
+  pair, and window of the call, keeping each pair's largest contiguous run of
+  at least 3 independent significant bins. The values are unchanged.
+- `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
+  they take coherency (`Connectivity.coherency()`) or its magnitude, not
+  `magnitude_squared_coherence()`. Both square or read the absolute value of
+  their input, so magnitude-squared coherence gives wrong p-values or z-scores
+  without an error: for independent noise no interior frequency had
+  `p < 0.05`, where `coherency()` gives about the nominal 5%. A real-valued input
+  is still accepted, since coherency magnitudes and coherency from real
+  coefficients are real too. The values are unchanged.
+- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
+  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
+  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
+  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
+  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
+  array in the other order cannot be detected, so it is analyzed with trials
+  and signals exchanged.
+- The examples of `coherence_significance_pvalue` and
+  `power_confidence_intervals` start from a time-resolved `Connectivity`:
+  they pass its `n_observations`, reshape `real_valued_frequencies` to
+  broadcast against the coherency or power (so 0 Hz and Nyquist get their own
+  null), and, for the p-values, select one pair before
+  `adjust_for_multiple_comparisons`.
+- The `Connectivity` docstring has a table of the leading axes each
+  `expectation_type` keeps and the shape it gives, and its descriptions of
+  `"trials"` and `"tapers"` say that they keep the time-window axis too.
+- The `Connectivity` docstring says what each group measure returns and how
+  to unpack it: `(values, labels)` from `canonical_coherence` and the other
+  scalar group measures, a `MultivariateConnectivityResult` from
+  `canonical_coherency` and `maximized_imaginary_coherency_components`, and
+  two arrays from `global_coherence`, whose frequency axis (unlike the other
+  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
+  non-negative ones. `global_coherence` documents that it ignores
+  `expectation_type` (every trial and taper of a window is decomposed) and
+  names its second return value `vectors`.
+- `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
+  says that it labels the two-sided FFT bins of `fft()` and that
+  `Connectivity.frequencies`, the non-negative bins, labels results; the
+  `Multitaper` attributes give `fft` and `frequencies` their `n_fft_samples`
+  length.
+- The Returns section of `multitaper_connectivity` says that one `method`
+  string gives a DataArray and the default a Dataset of `DEFAULT_METHODS`,
+  and that without `time_window_duration` `time` has length 1 (drop it with
+  `isel(time=0)` or `squeeze("time")` to plot).
 - `spectral_connectivity.statistics` defines `__all__`: its functions,
   `JackknifeResult`, and the `MULTIPLE_COMPARISONS` mapping (now documented in
   the API reference). `from spectral_connectivity.statistics import *` no
@@ -818,14 +841,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   with a scalar `real_valued` (the default), returning one value per count as
   2.0.1 did; once `real_valued` was added they raised converting the array to
   a float.
-- `Connectivity.group_delay` and `Connectivity.delay` document that a pair
-  without significant coherence is NaN (for independent signals,
-  `group_delay()` returns NaN delay, slope, and r), which means no delay was
-  estimated rather than a delay of zero, and how `significance_threshold`
-  selects the frequencies: an exact zero-coherence test at each bin,
-  Benjamini-Hochberg corrected at that false discovery rate over every bin,
-  pair, and window of the call, keeping each pair's largest contiguous run of
-  at least 3 independent significant bins. The values are unchanged.
 - Every observation count of the statistics helpers is checked the same way,
   so the same bad count gets the same message, naming the argument, the
   counts it takes, and `Connectivity.n_observations`: `coherence_bias`,
@@ -869,14 +884,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   (`n_trials=2.5`), or a negative `n_burnin_samples`. Complex coefficients,
   which it cannot simulate (NumPy failed with a casting error), raise a
   `TypeError`.
-- `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
-  they take coherency (`Connectivity.coherency()`) or its magnitude, not
-  `magnitude_squared_coherence()`. Both square or read the absolute value of
-  their input, so magnitude-squared coherence gives wrong p-values or z-scores
-  without an error: for independent noise no interior frequency had
-  `p < 0.05`, where `coherency()` gives about the nominal 5%. A real-valued input
-  is still accepted, since coherency magnitudes and coherency from real
-  coefficients are real too. The values are unchanged.
 - *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
   rate of a DataArray from a time coordinate that may be in milliseconds: when
   the inferred rate is at most 1 Hz (unless the coordinate's `units`
@@ -1508,13 +1515,6 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   the same hint. Given beside `sampling_frequency`, the alias is answered
   with "pass only sampling_frequency (in Hz)". `fourier_connectivity`, which
   takes no sampling rate, keeps Python's `TypeError` for `fs=`.
-- The `multitaper_connectivity` and `Multitaper` docstrings state that trials
-  are the middle axis of a 3-D time series, `(n_time_samples, n_trials,
-  n_signals)`, with an example: a `(500, 3, 40)` array is read as 3 trials of
-  40 signals, and `np.swapaxes(x, 1, 2)` reads it as 40 trials of 3. The
-  wrapper's docstring named the axes `(n_times, n_trials, n_channels)`. An
-  array in the other order cannot be detected, so it is analyzed with trials
-  and signals exchanged.
 - The GPU messages of `get_compute_backend()` and of the import-time GPU
   check say to install `pip install "spectral-connectivity[gpu]"` (the extra
   that pins the CUDA 12 build, `cupy-cuda12x`), or `conda install -c
