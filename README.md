@@ -20,40 +20,28 @@
 | [**Citation**](#citation)
 
 > [!WARNING]
-> **Upgrading from 2.x: the Granger and transfer-function measures changed
-> direction.** `result[..., i, j]` from the `Connectivity` methods of the
-> spectral Granger family, directed transfer function, directed coherence,
-> (generalized) partial directed coherence, and direct directed transfer
-> function is now `i -> j` (2.x returned `j -> i`). For pairwise and subset
-> spectral Granger prediction, the directed measures the 2.x wrapper accepted,
-> `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
-> (2.x returned `b -> a`). Indexing code written for 2.x still runs but reads
-> the opposite direction: swap its indices and recompute stored results.
-> `phase_slope_index`, `group_delay`, and `delay` were already source first; do
-> not swap them. `directed_phase_lag_index` is new in 3.0 and also source
-> first. Until 3.2 the `Connectivity` methods that existed in 2.x (pairwise and
-> subset spectral Granger, directed transfer function, directed coherence,
-> (generalized) partial directed coherence, and direct directed transfer
-> function) emit a `DirectedOrientationWarning` as a reminder, as do
-> `multitaper_connectivity` and `connectivity_to_xarray` for pairwise and
-> subset spectral Granger prediction; silence it with
-> `warnings.filterwarnings("ignore",
-> category=spectral_connectivity.DirectedOrientationWarning)`. It is shown
-> once per session for each measure; to see it at every call, use
-> `warnings.simplefilter("always",
-> spectral_connectivity.DirectedOrientationWarning)`. See the
-> [migration guide](docs/migration.md).
+> **Upgrading from 2.x? Two changes alter results without raising an error.**
 >
-> **`Connectivity.power()` is one-sided since 3.0.** The bins between 0 Hz and
-> Nyquist are twice the 2.x values, so integrating over the non-negative
-> frequencies gives the signal's power. `power(one_sided=False)` returns the
-> 2.x values. Until 3.2, calling `Connectivity.power()` without `one_sided` on
-> two-sided coefficients emits a `PowerSidednessWarning` (once per session;
-> `warnings.simplefilter("always", spectral_connectivity.PowerSidednessWarning)`
-> shows it at every call); pass `one_sided=True` to silence it. The power that
-> `multitaper_connectivity` and `connectivity_to_xarray` return (including by
-> default) is the one-sided density too, and they do not warn: halve its
-> interior bins to compare with a 2.x result.
+> + **Directed measures changed direction.** `result[..., i, j]` from the
+>   `Connectivity` methods of the spectral Granger family, directed transfer
+>   function, directed coherence, (generalized) partial directed coherence, and
+>   direct directed transfer function is now `i -> j` (2.x returned `j -> i`).
+>   For pairwise and subset spectral Granger prediction,
+>   `multitaper_connectivity(...).sel(source="a", target="b")` is now `a -> b`
+>   (2.x returned `b -> a`). Swap the indices in code written for 2.x and
+>   recompute stored results; `phase_slope_index`, `group_delay`, and `delay`
+>   were already source first.
+> + **Power is one-sided.** `Connectivity.power()` and the power that
+>   `multitaper_connectivity` and `connectivity_to_xarray` return are twice the
+>   2.x values between 0 Hz and Nyquist; `power(one_sided=False)` returns the
+>   2.x values.
+>
+> Until 3.2, as reminders, the directed `Connectivity` methods that existed in
+> 2.x (and the wrappers, for spectral Granger prediction) emit a
+> `DirectedOrientationWarning`, and `Connectivity.power()` called without
+> `one_sided` emits a `PowerSidednessWarning`; the wrappers' power does not
+> warn. The [migration guide](docs/migration.md) covers these and every other
+> change.
 
 ## What is spectral_connectivity?
 

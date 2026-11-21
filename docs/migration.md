@@ -18,8 +18,12 @@ for 2.x has to change.
    `a -> b`, where 2.x returned `b -> a`. Code written for 2.x still runs but
    reads the opposite direction, so swap its indices and recompute stored
    results. `phase_slope_index`, `group_delay`, and `delay` were already
-   source first: do not swap them. Until 3.2 the methods that existed in 2.x
-   emit a `DirectedOrientationWarning` as a reminder.
+   source first: do not swap them. Until 3.2 the `Connectivity` methods that
+   existed in 2.x, and `multitaper_connectivity` and `connectivity_to_xarray`
+   for pairwise and subset spectral Granger prediction, emit a
+   `DirectedOrientationWarning` as a reminder; silence it with
+   `warnings.filterwarnings("ignore",
+   category=spectral_connectivity.DirectedOrientationWarning)`.
 2. **Expect one-sided power.** `Connectivity.power()` returns the one-sided
    density: the bins between 0 Hz and Nyquist are twice the 2.x values.
    `power(one_sided=False)` returns the 2.x values. Until 3.2, calling
