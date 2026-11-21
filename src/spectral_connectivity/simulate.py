@@ -14,7 +14,11 @@ import warnings
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from spectral_connectivity.utils import is_positive_integer, stacklevel_outside_package
+from spectral_connectivity.utils import (
+    _validate_sampling_frequency,
+    is_positive_integer,
+    stacklevel_outside_package,
+)
 
 
 def _generator(random_state: int | np.random.Generator | None) -> np.random.Generator:
@@ -357,7 +361,8 @@ def simulate_shared_oscillation(
     Parameters
     ----------
     frequency : float
-        Frequency of the shared sinusoid, in Hz.
+        Frequency of the shared sinusoid, in Hz, from 0 up to but not including
+        the Nyquist frequency ``sampling_frequency / 2``.
     sampling_frequency : float
         Sampling rate, in Hz.
     n_time_samples : int
@@ -386,7 +391,9 @@ def simulate_shared_oscillation(
     Raises
     ------
     ValueError
-        If ``amplitudes`` is not 1-D, if ``phase_offsets`` or
+        If ``frequency`` is negative or not below the Nyquist frequency (it
+        would be sampled as an alias), if ``sampling_frequency`` is not finite
+        and positive, if ``amplitudes`` is not 1-D, if ``phase_offsets`` or
         ``noise_levels`` is neither a scalar nor one value per signal, or if
         ``n_time_samples`` or ``n_trials`` is not a positive integer (there is
         no 2-D form: ``n_trials=None`` raises).
@@ -425,6 +432,22 @@ def simulate_shared_oscillation(
         msg = (
             "amplitudes must be 1-D with at least one entry, one per signal; "
             f"got shape {amplitudes_array.shape}"
+        )
+        raise ValueError(msg)
+    sampling_frequency = _validate_sampling_frequency(sampling_frequency)
+    nyquist_frequency = sampling_frequency / 2
+    if not 0 <= frequency < nyquist_frequency:
+        remedy = (
+            f"Lower the frequency, or raise sampling_frequency above {2 * frequency!r} Hz."
+            if np.isfinite(frequency) and frequency >= nyquist_frequency
+            else "Pass a finite, non-negative frequency."
+        )
+        msg = (
+            f"frequency={frequency!r} Hz must lie from 0 up to but not including "
+            f"the Nyquist frequency ({nyquist_frequency!r} Hz at "
+            f"sampling_frequency={sampling_frequency!r} Hz). A sinusoid at or above "
+            "Nyquist is sampled as one at a lower frequency (an alias), and one at "
+            f"Nyquist has an amplitude set by its phase. {remedy}"
         )
         raise ValueError(msg)
     _check_count(n_time_samples, "n_time_samples")

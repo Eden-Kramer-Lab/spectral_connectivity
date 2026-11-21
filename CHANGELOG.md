@@ -744,6 +744,11 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `simulate_shared_oscillation` raises a `ValueError` naming
+  the frequency and the Nyquist frequency when `frequency` is negative or not
+  below Nyquist, and validates `sampling_frequency` as the transforms do.
+  `simulate_shared_oscillation(300, 500, 1000, 5, amplitudes=[1, 1])` returned
+  the 200 Hz sinusoid that 300 Hz aliases to at 500 Hz without a sign.
 - `simulate_MVAR` warns when its coefficients are unstable (the spectral
   radius of their companion matrix is at least 1), giving the radius and
   saying to scale the coefficients down until it is below 1:

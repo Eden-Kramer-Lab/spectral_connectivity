@@ -571,6 +571,24 @@ def test_simulators_accept_numpy_integer_counts():
     assert oscillation.shape == (50, 2, 1)
 
 
+@pytest.mark.parametrize(
+    "frequency", [250, 300, -10, np.inf], ids=["nyquist", "above", "negative", "inf"]
+)
+def test_shared_oscillation_rejects_a_frequency_it_cannot_sample(frequency):
+    """At 500 Hz a 300 Hz sinusoid is sampled as an aliased 200 Hz one, and
+    250 Hz (Nyquist) as a sinusoid whose amplitude depends on its phase: the
+    error names the frequency and the Nyquist frequency."""
+    with pytest.raises(
+        ValueError, match=rf"frequency={frequency!r} Hz.*Nyquist frequency \(250\.0 Hz"
+    ):
+        simulate_shared_oscillation(frequency, 500, 1000, 5, amplitudes=[1, 1])
+
+
+def test_shared_oscillation_rejects_an_invalid_sampling_frequency():
+    with pytest.raises(ValueError, match="sampling_frequency"):
+        simulate_shared_oscillation(10, 0, 1000, amplitudes=[1])
+
+
 def test_shared_oscillation_has_no_two_dimensional_form():
     """Only the lagged-broadband simulator omits the trial axis for ``n_trials=None``."""
     with pytest.raises(ValueError, match="no 2-D form, so pass n_trials=1"):
