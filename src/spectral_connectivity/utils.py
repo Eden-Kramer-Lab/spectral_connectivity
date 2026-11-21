@@ -7,7 +7,7 @@ import inspect
 import os
 import sys
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from types import FrameType
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeAlias, TypeVar
@@ -290,6 +290,52 @@ def warn_deprecated(old: str, new: str, outcome: str = "gives the same values") 
         DeprecationWarning,
         stacklevel=stacklevel_outside_package(),
     )
+
+
+_issued_migration_messages: set[str] = set()
+# The filters in effect at the call. Under Python 3.14's context-aware warnings
+# (the default on free-threaded builds) those a catch_warnings block sets, as
+# pytest.warns does, are not in warnings.filters; 3.14's _get_filters has them.
+_current_warning_filters: Callable[[], Sequence[Any]] = getattr(
+    warnings, "_get_filters", lambda: warnings.filters
+)
+
+
+def warn_migration(message: str, category: type[UserWarning]) -> None:
+    """Issue a migration notice once per session, unless a warnings filter applies.
+
+    Each message (one ``PowerSidednessWarning``, one
+    ``DirectedOrientationWarning`` per measure) is issued until the user has
+    seen it once. Later it is issued again only if a warnings filter in effect
+    could match it, so a filter the user set (``-W``, ``PYTHONWARNINGS``,
+    ``warnings.simplefilter("always")`` or ``"error"``, ``pytest.warns``)
+    still decides; Python's own default filters match no ``UserWarning``.
+    Module and line restrictions are not checked, so a filter limited to a
+    module counts as matching.
+
+    A call whose first matching filter is ``"ignore"`` does not count as
+    seen, so a notice silenced and later un-silenced still appears once. A
+    call turned into an error does count: the exception carried the message.
+
+    Python's ``"once"`` action would not do: it forgets what it showed
+    whenever any code changes the filters, as ``warnings.catch_warnings``
+    does, and a filter the package registered at import is dropped when the
+    import runs inside ``catch_warnings`` (as pytest collects test modules).
+    """
+    action = next(
+        (
+            filter_action
+            for filter_action, pattern, filter_category, _, _ in _current_warning_filters()
+            if issubclass(category, filter_category)
+            and (pattern is None or pattern.match(message))
+        ),
+        None,
+    )
+    if message in _issued_migration_messages and action is None:
+        return
+    if action != "ignore":
+        _issued_migration_messages.add(message)
+    warnings.warn(message, category, stacklevel=stacklevel_outside_package())
 
 
 def mark_readonly_if_supported(array: _ArrayT) -> _ArrayT:

@@ -70,6 +70,7 @@ from spectral_connectivity.utils import (
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
+    warn_migration,
 )
 
 if TYPE_CHECKING:
@@ -438,52 +439,6 @@ class PowerSidednessWarning(UserWarning):
     """
 
 
-_issued_migration_messages: set[str] = set()
-# The filters in effect at the call. Under Python 3.14's context-aware warnings
-# (the default on free-threaded builds) those a catch_warnings block sets, as
-# pytest.warns does, are not in warnings.filters; 3.14's _get_filters has them.
-_current_warning_filters: Callable[[], Sequence[Any]] = getattr(
-    warnings, "_get_filters", lambda: warnings.filters
-)
-
-
-def _warn_migration(message: str, category: type[UserWarning]) -> None:
-    """Issue a migration notice once per session, unless a warnings filter applies.
-
-    Each message (one ``PowerSidednessWarning``, one
-    ``DirectedOrientationWarning`` per measure) is issued until the user has
-    seen it once. Later it is issued again only if a warnings filter in effect
-    could match it, so a filter the user set (``-W``, ``PYTHONWARNINGS``,
-    ``warnings.simplefilter("always")`` or ``"error"``, ``pytest.warns``)
-    still decides; Python's own default filters match no ``UserWarning``.
-    Module and line restrictions are not checked, so a filter limited to a
-    module counts as matching.
-
-    A call whose first matching filter is ``"ignore"`` does not count as
-    seen, so a notice silenced and later un-silenced still appears once. A
-    call turned into an error does count: the exception carried the message.
-
-    Python's ``"once"`` action would not do: it forgets what it showed
-    whenever any code changes the filters, as ``warnings.catch_warnings``
-    does, and a filter the package registered at import is dropped when the
-    import runs inside ``catch_warnings`` (as pytest collects test modules).
-    """
-    action = next(
-        (
-            filter_action
-            for filter_action, pattern, filter_category, _, _ in _current_warning_filters()
-            if issubclass(category, filter_category)
-            and (pattern is None or pattern.match(message))
-        ),
-        None,
-    )
-    if message in _issued_migration_messages and action is None:
-        return
-    if action != "ignore":
-        _issued_migration_messages.add(message)
-    warnings.warn(message, category, stacklevel=stacklevel_outside_package())
-
-
 _MIGRATION_GUIDE_URL = (
     "https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/"
     "CHANGELOG.md#migration-guide"
@@ -533,7 +488,7 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         result = connectivity_measure(*args, **kwargs)
         if _warn_orientation_change.get():
-            _warn_migration(
+            warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
                 "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
                 "returned [..., target, source]; review the indexing and "
@@ -2745,7 +2700,7 @@ class Connectivity:
         if one_sided is None:
             if not self._is_one_sided and _warn_orientation_change.get():
                 # Remove in 3.2, with DirectedOrientationWarning (issue #98).
-                _warn_migration(
+                warn_migration(
                     f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
                     "one-sided power spectral density: the bins between 0 Hz and "
                     "Nyquist are doubled, so integrating over the non-negative "

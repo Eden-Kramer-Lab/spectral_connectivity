@@ -58,7 +58,6 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     _select_measure_frequencies,
-    _warn_migration,
 )
 from spectral_connectivity.transforms import (
     Multitaper,
@@ -74,6 +73,7 @@ from spectral_connectivity.utils import (
     stacklevel_outside_package,
     to_numpy,
     warn_deprecated,
+    warn_migration,
 )
 
 # The public API. UnsupportedMeasureError is defined in _result_formatting
@@ -444,7 +444,7 @@ def _warn_label_orientation_changed(methods: Sequence[str]) -> None:
     """
     # One message per measure, so each measure's is shown once per session.
     for changed in sorted(_LABEL_ORIENTATION_CHANGED_MEASURES.intersection(methods)):
-        _warn_migration(
+        warn_migration(
             f"{_ORIENTATION_WARNING_PREFIX}sel(source=a, target=b) of "
             f"{changed} is a -> b; 2.x returned b -> a. Review code written "
             "for 2.x that selects its results. See the migration guide: "
