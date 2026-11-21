@@ -450,6 +450,39 @@ def test_time_series_that_is_not_a_numeric_array_is_rejected_clearly(
     assert "(n_time, n_signals) or (n_time, n_trials, n_signals)" in str(raised.value)
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.int64, np.float64])
+def test_array_input_passes_through_and_matches_its_list(dtype):
+    """An ndarray reaches the transform as it is, and its nested list gives the
+    same result. A float32 array keeps its precision, so its list (Python
+    floats, read as float64) agrees only to float32 rounding."""
+    data = (100 * np.random.default_rng(0).standard_normal((512, 2))).astype(dtype)
+    from_array = multitaper_connectivity(data, sampling_frequency=500, method="power")
+    from_list = multitaper_connectivity(data.tolist(), sampling_frequency=500, method="power")
+    if dtype is np.float32:
+        np.testing.assert_allclose(from_array.values, from_list.values, rtol=1e-5)
+    else:
+        xr.testing.assert_identical(from_array, from_list)
+
+
+def test_fourier_array_input_matches_the_multitaper_wrapper():
+    """Coefficients passed as an ndarray give the coherency multitaper_connectivity
+    computes from the same transform."""
+    data = np.random.default_rng(0).standard_normal((512, 2))
+    multitaper = Multitaper(data[:, np.newaxis, :], sampling_frequency=500)
+    from_coefficients = fourier_connectivity(
+        multitaper.fft()[0], frequencies=multitaper.frequencies, method="coherency"
+    )
+    from_time_series = multitaper_connectivity(
+        data, sampling_frequency=500, method="coherency"
+    )
+    np.testing.assert_array_equal(
+        from_coefficients.frequency.values, from_time_series.frequency.values
+    )
+    np.testing.assert_allclose(
+        from_coefficients.values, from_time_series.values, rtol=1e-12, equal_nan=True
+    )
+
+
 class _ForeignArray:
     """An array-like whose ``dtype`` is not a NumPy dtype (as a torch tensor's)."""
 
