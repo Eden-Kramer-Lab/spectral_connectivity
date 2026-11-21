@@ -1322,6 +1322,12 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   docstring no longer says they must be finite. `Connectivity` measures
   called after `from_transform` can still emit NumPy `RuntimeWarning`s on
   such values; `multitaper_connectivity` does not.
+- `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
+  naming `significance_threshold` when it is not a number strictly between 0
+  and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0
+  counted every bin as significant and 0 none, without a sign; development
+  builds raised from deep in the statistics module about an `alpha` the
+  caller never passed.
 
 ### Performance
 

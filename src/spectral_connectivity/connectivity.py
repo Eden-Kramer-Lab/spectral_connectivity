@@ -45,6 +45,7 @@ from spectral_connectivity._multivariate import (
 )
 from spectral_connectivity.statistics import (
     JackknifeResult,
+    _validate_alpha,
     adjust_for_multiple_comparisons,
     coherence_significance_pvalue,
     jackknife_confidence_interval,
@@ -5865,6 +5866,7 @@ class Connectivity:
         >>> bool(r_value[0, 0, 1] > 0.9)  # phase is linear in frequency
         True
         """
+        _validate_alpha(significance_threshold, "significance_threshold")
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
                 "group_delay",
@@ -6007,6 +6009,7 @@ class Connectivity:
         >>> round(float(np.nanmedian(delays[0, :, 3, 0, 1])), 3)
         0.006
         """
+        _validate_alpha(significance_threshold, "significance_threshold")
         coherence_phase, bandpassed_frequencies, signal_combination_ind, n_signals = (
             self._significant_pair_phase(
                 "delay",

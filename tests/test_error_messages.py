@@ -284,3 +284,26 @@ def test_every_transform_records_a_numpy_rate_as_a_float(transform_class, extra,
     else:
         assert not any(key.startswith(prefix) for key in attrs)
     assert rate == 500.0
+
+
+@pytest.mark.parametrize("measure", ["group_delay", "delay"])
+@pytest.mark.parametrize("threshold", [1.0, 0, -0.1, 5, np.nan, True])
+def test_delay_measures_name_an_invalid_significance_threshold(
+    measure, threshold, monkeypatch
+):
+    """group_delay and delay reject a significance_threshold outside (0, 1)
+    under that name, before any coherency is computed."""
+
+    def no_coherency(self):
+        msg = "computed coherency before validating the threshold"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(Connectivity, "_coherency", no_coherency)
+    ts = np.random.default_rng(0).standard_normal((500, 5, 2))
+    connectivity = Connectivity.from_transform(Multitaper(ts, sampling_frequency=500))
+    with pytest.raises(
+        ValueError,
+        match=r"^significance_threshold must be a finite number strictly between "
+        r"0 and 1, got .*e\.g\. 0\.05\.$",
+    ):
+        getattr(connectivity, measure)(significance_threshold=threshold)

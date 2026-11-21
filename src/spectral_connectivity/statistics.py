@@ -351,15 +351,18 @@ def _require_scipy_false_discovery_control() -> None:
         raise RuntimeError(msg)
 
 
-def _validate_alpha(alpha: float) -> None:
-    """Validate a significance level shared by correction procedures."""
+def _validate_alpha(alpha: float, name: str = "alpha") -> None:
+    """Validate a significance level, named ``name`` in the caller's signature."""
     if (
         isinstance(alpha, (bool, np.bool_))
         or not isinstance(alpha, (int, float, np.integer, np.floating))  # type: ignore[redundant-expr]  # user input
         or not np.isfinite(alpha)
         or not 0 < alpha < 1
     ):
-        msg = f"alpha must be a finite number strictly between 0 and 1, got {alpha!r}."
+        msg = (
+            f"{name} must be a finite number strictly between 0 and 1, got "
+            f"{alpha!r}: it is a significance level, e.g. 0.05."
+        )
         raise ValueError(msg)
 
 
