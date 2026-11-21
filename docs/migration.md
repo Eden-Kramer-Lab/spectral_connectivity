@@ -67,13 +67,23 @@ for 2.x has to change.
    `AttributeError`. Requesting `method="coherence_magnitude"` or calling
    `Connectivity.coherence_magnitude()` still works through 3.x, with a
    `DeprecationWarning`.
-5. **Replace the deprecated spellings.** Use `Connectivity.from_transform(m)`
-   instead of `Connectivity.from_multitaper(m)`, and
-   `frequency_range=(low, high)` instead of `frequencies_of_interest` for
-   `phase_slope_index`, `group_delay`, and `delay`. `frequency_range` includes
-   both endpoints, where `frequencies_of_interest` excluded a bin on either
-   edge. The old spellings still work through 3.x with a `DeprecationWarning`
-   and are removed in 4.0.
+5. **Replace the deprecated spellings.** Each old spelling still works through
+   3.x with a `DeprecationWarning` that names its replacement, and is removed
+   in 4.0:
+   - `Connectivity.from_multitaper(m)` → `Connectivity.from_transform(m)`;
+   - `frequencies_of_interest=(low, high)` → `frequency_range=(low, high)` for
+     `phase_slope_index`, `group_delay`, and `delay`. `frequency_range`
+     includes both endpoints, where `frequencies_of_interest` excluded a bin on
+     either edge;
+   - `power_confidence_intervals(n_tapers=n, ...)` → `n_observations=n`, and
+     its `ci=` → `confidence_level=`;
+   - `suggest_parameters(desired_freq_resolution=...)` →
+     `frequency_resolution=...`;
+   - `method="coherence_magnitude"` and `Connectivity.coherence_magnitude()` →
+     `magnitude_squared_coherence` (item 4);
+   - advanced settings passed to the wrappers as plain keyword arguments
+     (`multitaper_connectivity(x, fs, n_fft_samples=1024)`) →
+     `transform_kwargs={"n_fft_samples": 1024}` or `connectivity_kwargs={...}`.
 
 The tables below list every change, including that `Multitaper` now requires
 `sampling_frequency` (2.x defaulted it to 1000 Hz).
