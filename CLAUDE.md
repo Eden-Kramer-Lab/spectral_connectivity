@@ -120,9 +120,17 @@ Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU a
   `tests/test_cookbook.py`
 - The paper-examples tutorial is tested against the models it simulates:
   `tests/test_tutorial_paper_examples.py` executes the definitions in
-  `examples/Tutorial_Using_Paper_Examples.py` (nothing is plotted) and compares
-  each example with its model's true values from `tests/_var_oracle.py`, so a
-  change to an example's model or settings there changes what is tested
+  `examples/Tutorial_Using_Paper_Examples.py` (nothing is plotted), so a change
+  to an example's model or settings there changes what is tested. Each example
+  gets four assertions that fail for different reasons: the factors behind its
+  directed measures (of the whole spectrum, and of each pair of signals for
+  pairwise Granger) reproduce its estimated spectrum; that spectrum is a draw
+  around the one its window and tapers average the model's to
+  (`tests/_expected_spectrum.py`, exact for a VAR and tested on its own in
+  `tests/test_multitaper_expected_spectrum.py`); the directed measures of that
+  expected spectrum are near the model's true values from
+  `tests/_var_oracle.py` (the bias of the example's settings, with no sampling
+  error); and its estimates are near those true values within a looser budget
 - Tests include both CPU and GPU code paths when available (GPU paths run only
   where CuPy is installed). The whole suite runs on either backend:
   `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true uv run --extra gpu pytest` (pick an idle
