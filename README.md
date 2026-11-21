@@ -480,8 +480,8 @@ the GPU. Results are NumPy arrays either way.
    ```
 
    On a GPU the message is `Using GPU backend with CuPy on <your GPU name>.`
-   On the CPU it says the NumPy backend is in use and how to enable the GPU
-   (install CuPy, set the variable before importing). The
+   On the CPU it says the NumPy backend is in use and how to enable the GPU,
+   for example by installing CuPy or setting the variable before importing. The
    dictionary also holds `backend` (`"cpu"` or `"gpu"`), `gpu_enabled`
    (whether the variable requested the GPU), `gpu_available` (whether CuPy is
    installed), and `device_name`.
