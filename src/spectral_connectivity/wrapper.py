@@ -55,10 +55,10 @@ from spectral_connectivity.connectivity import (
     Connectivity,
     DirectedOrientationWarning,
     _select_measure_frequencies,
-    _validated_flag,
 )
 from spectral_connectivity.transforms import Multitaper
 from spectral_connectivity.utils import (
+    _validated_flag,
     close_names,
     did_you_mean,
     stacklevel_outside_package,
@@ -219,7 +219,7 @@ def list_measures(
     >>> [m.name for m in list_measures(default_only=True)][:3]
     ['magnitude_squared_coherence', 'coherence_phase', 'debiased_squared_phase_lag_index']
     >>> next(m for m in list_measures() if m.name == "power").description
-    'Return the one-sided power spectral density of the signal.'
+    'Return the power spectral density of the signal (one-sided by default).'
     """
     valid_categories = {spec.output_kind for spec in _MEASURE_SPECS.values()}
     if category is not None and category not in valid_categories:
@@ -555,8 +555,9 @@ def _check_measure_settings(
     The one check of every wrapper's measure settings (``connectivity_kwargs``,
     merged with ``connectivity_to_xarray``'s plain keywords): every requested
     measure must take every key (``group_labels`` is routed to the group
-    measures separately), and the frequency options must suit the measures
-    (see :func:`_check_frequency_operations`). ``transform_settings_hint``
+    measures separately), the frequency options must suit the measures
+    (see :func:`_check_frequency_operations`), and ``power`` stays one-sided,
+    as a labelled result describes it. ``transform_settings_hint``
     says where a transform setting goes instead (see
     :func:`_check_method_accepts_kwargs`).
     """
@@ -568,6 +569,21 @@ def _check_measure_settings(
         frequency_bands=frequency_bands,
     )
     measure_settings = {key: value for key, value in settings.items() if key != "group_labels"}
+    if (
+        "power" in methods
+        and "one_sided" in measure_settings
+        and not _validated_flag("one_sided", measure_settings["one_sided"])
+    ):
+        # Checked for the whole request, so the answer does not depend on
+        # where power stands among the methods.
+        msg = (
+            f"one_sided={measure_settings['one_sided']!r} is not "
+            "supported for 'power' in a labelled result, which is always the "
+            "one-sided density: its attributes say so and its band integrals rely "
+            "on it. For the two-sided density, build the object yourself: "
+            "Connectivity.from_transform(Multitaper(...)).power(one_sided=False)."
+        )
+        raise ValueError(msg)
     for method in methods:
         _check_method_accepts_kwargs(
             method,

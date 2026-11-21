@@ -349,6 +349,59 @@ def no_fft(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "method",
+    [
+        "power",
+        ["power", "magnitude_squared_coherence"],
+        ["magnitude_squared_coherence", "power"],
+    ],
+    ids=["alone", "first", "last"],
+)
+@pytest.mark.parametrize(
+    "flag", [False, np.False_, np.array(False)], ids=["bool", "numpy_bool", "zero_d"]
+)
+def test_two_sided_power_is_refused_for_a_labelled_result(time_series, no_fft, method, flag):
+    """A labelled power result is one-sided: its attributes say so and its
+    band integrals rely on it. The two-sided density is ``Connectivity.power``'s
+    to give, and the call is refused before the FFT with the same message
+    wherever ``power`` stands among the requested methods, for any boolean
+    False."""
+    with pytest.raises(
+        ValueError, match=r"not supported for 'power'.*\.power\(one_sided=False\)"
+    ):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method=method,
+            connectivity_kwargs={"one_sided": flag},
+        )
+
+
+@pytest.mark.parametrize("not_a_flag", [0, 1, None, "False"])
+def test_power_one_sided_setting_must_be_a_bool(time_series, no_fft, not_a_flag):
+    with pytest.raises(TypeError, match="one_sided must be a bool"):
+        multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": not_a_flag},
+        )
+
+
+def test_one_sided_power_can_be_asked_for_by_name(time_series):
+    """``one_sided=True`` is the labelled result as it always is."""
+    default = multitaper_connectivity(time_series, sampling_frequency=500, method="power")
+    for flag in (True, np.True_):
+        explicit = multitaper_connectivity(
+            time_series,
+            sampling_frequency=500,
+            method="power",
+            connectivity_kwargs={"one_sided": flag},
+        )
+        np.testing.assert_array_equal(explicit.values, default.values)
+
+
+@pytest.mark.parametrize(
     ("connectivity_kwargs", "error", "match"),
     [
         pytest.param({"max_rnk": 2}, TypeError, "max_rnk", id="misspelled"),

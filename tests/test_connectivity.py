@@ -196,6 +196,15 @@ def test_one_sided_power_and_csd_return_detached_arrays():
     power *= 2.0
     np.testing.assert_allclose(connectivity.power(), power / 2.0, equal_nan=True)
 
+    two_sided_connectivity = Connectivity(coefficients)
+    coherence_before = two_sided_connectivity.magnitude_squared_coherence()
+    two_sided = two_sided_connectivity.power(one_sided=False)
+    two_sided *= 0.0
+    assert np.all(two_sided_connectivity.power(one_sided=False) > 0)
+    np.testing.assert_allclose(
+        two_sided_connectivity.magnitude_squared_coherence(), coherence_before, equal_nan=True
+    )
+
     coherence_before = connectivity.magnitude_squared_coherence()
     csd = connectivity.cross_spectral_density()
     csd *= 3.0
@@ -3789,6 +3798,73 @@ def test_power_one_sided_preserves_total_power():
         one_sided = conn.power()  # non-negative frequencies, interior doubled
         two_sided = to_host(conn._power)  # full spectrum
         np.testing.assert_allclose(one_sided.sum(axis=-2), two_sided.sum(axis=-2), rtol=1e-10)
+
+
+@pytest.mark.parametrize("n_time", [512, 511], ids=["even_fft", "odd_fft"])
+def test_power_two_sided_integrates_to_signal_power_over_both_signs(n_time):
+    """Parseval oracle for the two-sided density.
+
+    ``power(one_sided=False)`` is the density of a spectrum laid out over
+    negative and positive frequencies, returned at the non-negative ones. A
+    real signal's negative frequencies mirror the interior positive ones, so
+    summing over both signs counts those bins twice and the 0 Hz bin (and, for
+    an even FFT length, the Nyquist bin) once: that sum times the frequency
+    step is the tapered signal's mean square. ``detrend_type=None`` keeps a DC
+    offset, so the two bins that are not mirrored carry power.
+
+    The one-sided density is the same array with the mirrored bins doubled.
+    """
+    from spectral_connectivity.transforms import Multitaper
+
+    rng = np.random.default_rng(3)
+    sampling_frequency = 200.0
+    time_series = rng.standard_normal((n_time, 3, 2)) + 2.5
+    multitaper = Multitaper(
+        time_series,
+        sampling_frequency=sampling_frequency,
+        detrend_type=None,
+        n_fft_samples=n_time,  # by default 511 samples are padded to 512
+    )
+    connectivity = Connectivity.from_transform(multitaper)
+    frequency_step = connectivity.frequencies[1] - connectivity.frequencies[0]
+
+    two_sided = connectivity.power(one_sided=False)[0]  # (n_frequencies, n_signals)
+
+    is_mirrored = np.ones(two_sided.shape[0], dtype=bool)
+    is_mirrored[0] = False
+    if n_time % 2 == 0:
+        is_mirrored[-1] = False
+    both_signs = np.where(is_mirrored[:, np.newaxis], 2 * two_sided, two_sided)
+    unit_tapers = to_host(multitaper.tapers) / np.sqrt(sampling_frequency)
+    tapered = unit_tapers[:, :, np.newaxis, np.newaxis] * time_series[:, np.newaxis]
+    mean_square = (tapered**2).sum(axis=0).mean(axis=(0, 1))  # over tapers, trials
+    np.testing.assert_allclose(
+        both_signs.sum(axis=0) * frequency_step, mean_square, rtol=1e-10
+    )
+    np.testing.assert_array_equal(connectivity.power()[0], both_signs)
+    np.testing.assert_array_equal(connectivity.power(one_sided=True)[0], both_signs)
+
+
+def test_power_two_sided_is_refused_for_one_sided_coefficients():
+    """Coefficients declared one-sided carry a one-sided scale of their own, so
+    no two-sided density can be given for them."""
+    rng = np.random.default_rng(0)
+    coefficients = rng.standard_normal((1, 4, 2, 5, 2)) + 1j * rng.standard_normal(
+        (1, 4, 2, 5, 2)
+    )
+    connectivity = Connectivity(coefficients, is_one_sided=True)
+    with pytest.raises(ValueError, match="one-sided coefficients"):
+        connectivity.power(one_sided=False)
+
+
+@pytest.mark.parametrize("not_a_flag", [0, 1, "False", None])
+def test_power_one_sided_must_be_a_bool(not_a_flag):
+    rng = np.random.default_rng(0)
+    coefficients = rng.standard_normal((1, 4, 2, 8, 2)) + 1j * rng.standard_normal(
+        (1, 4, 2, 8, 2)
+    )
+    with pytest.raises(TypeError, match="one_sided"):
+        Connectivity(coefficients).power(one_sided=not_a_flag)
 
 
 def test_power_one_sided_integrates_to_signal_power():

@@ -49,7 +49,9 @@ their rows).
 | The spectral Granger and transfer-function measures (DTF, PDC, directed coherence) depended on the data's units, through an absolute convergence threshold: values changed by 1e-4 to 0.1 for data at 1e-6 of unit variance (microvolt signals stored in volts), and by more below that | Invariant to the data's scale. Recompute directed results obtained from small-amplitude data |
 | A zero-lag pair (a channel and a scaled copy of it) gave a `phase_lag_index` up to +-1, a `debiased_squared_phase_lag_index` up to 1, and a `debiased_squared_weighted_phase_lag_index` anywhere in [-1, 1], read from the sign of rounding noise (largest with few observations) | 0 for all three, and 0.5 for `directed_phase_lag_index`: "no phase lag" is judged relative to the pair's power |
 | `canonical_coherence` overstated the coherence of a group containing a dead, duplicated, or collinear channel, by more the fewer the observations (0.4-0.7 with 6, 0.25-0.35 with 20, 0.06-0.07 with 100 in the cases run) | Equals the value for the group's independent channels, with a warning naming the group. Recompute canonical coherence for groups that may contain such a channel |
-| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged |
+| One-sided `power` omitted the negative-frequency contribution | Interior positive-frequency bins are doubled; DC and Nyquist are unchanged. `Connectivity.power(one_sided=False)` returns the 2.x values, for formulas written for a two-sided density |
+| `coherence_rate_adjustment(rate1, rate2, power, ...)` was given 2.x's `power()`, a two-sided density | Say which density the spectrum is. With 3.0's one-sided `power()` pass `is_one_sided=True`: the factor is the same as in 2.x at interior frequencies (with no added Poisson spikes; see the next row) and differs at 0 Hz and Nyquist, where a one-sided density is not doubled. Leave 0 Hz out in any case; at Nyquist pass the two-sided density. With a two-sided spectrum (your own, or `power(one_sided=False)`) pass `is_one_sided=False`. Without the keyword the call warns and assumes one-sided |
+| `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero read `firing_rate_condition2` as the rate of the kept spikes only (documented as the condition's rate; given that, the factor was 30-62% too large in the case run) | Pass the second condition's measured rate, added spikes included. A call with a non-zero noise rate warns about this until 4.0. Calls with the default noise of 0 are unchanged and silent |
 | `phase_slope_index` combined every ordered frequency pair | Uses adjacent frequency bins, following Nolte et al. (2008). The sign is unchanged, but the sum has far fewer terms, so values are smaller by one to several orders of magnitude: recompute, and re-derive any threshold |
 | `delay` returned cycles (where it returned estimates at all: see the `group_delay` and `delay` row below) | Returns seconds; DC is `NaN` |
 | Multitaper windows were labeled by their first sample | Windows are labeled by their center time, the midpoint of the window's first and last samples: the 2.x label plus `(n_time_samples_per_window - 1) / (2 * sampling_frequency)` (0.245 s, not 0.25 s, for the first 50-sample window at 100 Hz) |
@@ -91,6 +93,13 @@ their rows).
 
 ### Added
 
+- `Connectivity.power(one_sided=False)` returns the two-sided power spectral
+  density at the non-negative frequencies (no bin doubled), which is what
+  `power()` returned in 2.x and what formulas written for a two-sided
+  spectrum take. The default is the one-sided density, as before in 3.0. It
+  raises for one-sided coefficients, whose two-sided scale is not known, and
+  the labelled results of the wrappers stay one-sided: they refuse
+  `connectivity_kwargs={"one_sided": False}` and point to the method.
 - `DirectedOrientationWarning`, a temporary `UserWarning` (planned removal in
   3.2) emitted by the seven `Connectivity` methods whose arrays were target
   first in 2.x, and by `multitaper_connectivity` and `connectivity_to_xarray`
@@ -722,6 +731,27 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `coherence_rate_adjustment` given `Connectivity.power()`
+  returned a factor too close to 1: 0.81 where the coherence of a thinned
+  spike train fell to 0.71 of the original. `power()` became one-sided in 3.0
+  while the function read its spectrum as the two-sided density of the
+  reference. A new keyword, `is_one_sided`, says which density is given.
+  Without it the spectrum is taken as one-sided and a warning says so, since
+  the two cannot be told apart from their values.
+- `coherence_rate_adjustment` with `homogeneous_poisson_noise` non-zero takes
+  the thinning fraction from the second condition's rate less the added
+  spikes, `(firing_rate_condition2 - homogeneous_poisson_noise) /
+  firing_rate_condition1`. In the model of Aoi et al. (2015) the second
+  condition's intensity is `alpha * lambda(t) + beta`, with mean rate
+  `alpha * mu + beta`. The function used `firing_rate_condition2 /
+  firing_rate_condition1`, which is `alpha` only when no spikes are added, so
+  for the documented argument the factor was too large: 0.90, 0.81 and 0.74
+  where the thinned process gives 0.69, 0.54 and 0.46 in the case run. A
+  noise rate that is negative, not finite, or not below the second rate raises
+  a `ValueError`. A 2.x call that passed the kept-spike rate still runs, so a
+  call with a non-zero noise rate warns that the argument's meaning changed,
+  until 4.0; `warnings.filterwarnings("ignore", message="coherence_rate_adjustment,
+  changed in")` silences it.
 - *Unreleased:* `Connectivity`, `Connectivity.from_transform`, and
   `from_multitaper` reject a `dtype` that is not complex with a `TypeError`
   before any FFT. Once `blocks` was removed, `dtype=None` (for instance 2.x's
