@@ -320,7 +320,9 @@ their rows).
   for the coherency family, a `quantity` (`magnitude`, `squared_magnitude`,
   `signed`, `phase`, or `complex`) and `formula`. The measure table in
   `docs/CONNECTIVITY_METRIC_RANGES.md`, with its Diagonal column and a formula
-  table, is generated from it.
+  table, is generated from it. Its repr shows `name`, `category`,
+  `value_range`, and `units` on one line, so `list_measures()` prints one
+  line per measure; every field is still an attribute.
 - Each measure variable of a wrapper result records how to read it in
   NetCDF-safe attributes from the same registry: `interpretation`,
   `sign_convention`, `value_range_lower`/`value_range_upper` (an unbounded side

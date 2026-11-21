@@ -98,9 +98,13 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class MeasureInfo:
     """A single connectivity measure the high-level wrapper can compute.
+
+    Its repr shows only ``name``, ``category``, ``value_range``, and
+    ``units``, so ``list_measures()`` prints one line per measure; read any
+    field below as an attribute, or all of them with ``dataclasses.asdict``.
 
     Attributes
     ----------
@@ -184,6 +188,20 @@ class MeasureInfo:
     sign_convention: str | None
     quantity: str | None
     formula: str | None
+
+    def __repr__(self) -> str:
+        """Name, category, range, and units on one line; ``...`` marks the rest.
+
+        ``list_measures()`` in a notebook prints every record's repr, so the
+        full one of 18 fields made a wall of text. Each field is still an
+        attribute (``measure.interpretation``), and ``dataclasses.asdict``
+        returns them all.
+        """
+        lower, upper = self.value_range
+        return (
+            f"MeasureInfo(name={self.name!r}, category={self.category!r}, "
+            f"value_range=({lower:g}, {upper:g}), units={self.units!r}, ...)"
+        )
 
 
 def list_measures(

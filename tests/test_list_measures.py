@@ -1,5 +1,6 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
+import dataclasses
 import itertools
 import re
 import warnings
@@ -29,6 +30,27 @@ from spectral_connectivity.wrapper import (
     frequency_band_reduce,
 )
 from tests._backend_helpers import to_device, to_host
+
+
+def test_repr_is_one_short_line_and_every_field_stays_readable():
+    """A notebook shows ``list_measures()`` as its elements' reprs; with all
+    18 fields each, the 35 records printed about 24,000 characters. The
+    repr names the measure, its category, range, and units, and marks the
+    rest as elided; every field is still an attribute."""
+    measures = list_measures()
+    coherence = next(m for m in measures if m.name == "magnitude_squared_coherence")
+    assert repr(coherence) == (
+        "MeasureInfo(name='magnitude_squared_coherence', category='pairwise', "
+        "value_range=(0, 1), units='1', ...)"
+    )
+    phase = next(m for m in measures if m.name == "coherence_phase")
+    assert "value_range=(-3.14159, 3.14159)" in repr(phase)
+    delay = next(m for m in measures if m.name == "group_delay")
+    assert "value_range=(-inf, inf)" in repr(delay)
+    assert all("\n" not in repr(m) and len(repr(m)) <= 140 for m in measures)
+    assert len(repr(measures)) < 4000
+    assert len(dataclasses.fields(MeasureInfo)) == 18
+    assert dataclasses.asdict(coherence)["interpretation"] == coherence.interpretation
 
 
 def test_lists_every_registered_measure():
