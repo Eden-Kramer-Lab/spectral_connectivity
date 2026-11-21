@@ -1281,29 +1281,89 @@ def test_multitaper_rejects_negative_time_window_step():
         Multitaper(time_series=time_series, sampling_frequency=1000, time_window_step=0)
 
 
-def test_multitaper_warns_on_nan_input():
-    """Test that Multitaper warns when input contains NaN or Inf values."""
-    rng = np.random.default_rng(42)
-    # Test NaN
-    time_series_nan = rng.standard_normal((100, 1, 1))
-    time_series_nan[50, 0, 0] = np.nan
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+def test_multitaper_warns_on_nan_input(bad_value):
+    """Multitaper warns for NaN or Inf input, naming the affected trials and
+    signals, and saying the values propagate and how to find them."""
+    time_series = np.random.default_rng(42).standard_normal((100, 3, 4))
+    time_series[50, 1, 2] = bad_value
+    time_series[60, 2, 0] = bad_value
 
-    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
-        Multitaper(time_series=time_series_nan, sampling_frequency=1000)
+    with pytest.warns(
+        UserWarning,
+        match=re.escape(
+            "time_series contains 2 NaN or infinite values (trials [1, 2], signals [0, 2])"
+        ),
+    ) as record:
+        Multitaper(time_series=time_series, sampling_frequency=1000)
+    message = str(record[0].message)
+    assert "propagate to the outputs" in message
+    assert "np.argwhere(~np.isfinite(time_series))" in message
 
-    # Test Inf
-    time_series_inf = rng.standard_normal((100, 1, 1))
-    time_series_inf[50, 0, 0] = np.inf
 
-    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
-        Multitaper(time_series=time_series_inf, sampling_frequency=1000)
+_NONFINITE = np.random.default_rng(43).standard_normal((400, 2, 3))
+_NONFINITE[10, 1, 0] = np.nan
+_NONFINITE[200, 0, 2] = np.inf
 
-    # Test -Inf
-    time_series_neginf = rng.standard_normal((100, 1, 1))
-    time_series_neginf[50, 0, 0] = -np.inf
 
-    with pytest.warns(UserWarning, match=r"contains NaN.*infinite values"):
-        Multitaper(time_series=time_series_neginf, sampling_frequency=1000)
+# The wrapper's measures include one (weighted_phase_lag_index) whose
+# arithmetic on Inf raised NumPy's "invalid value encountered in divide".
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: multitaper_connectivity(
+                _NONFINITE, 1000, method=["power", "weighted_phase_lag_index"]
+            ),
+            id="wrapper",
+        ),
+        pytest.param(
+            lambda: Connectivity.from_transform(Multitaper(_NONFINITE, 1000)),
+            id="Multitaper",
+        ),
+        pytest.param(
+            lambda: Connectivity.from_transform(
+                ShortTimeFourierTransform(_NONFINITE, 1000, n_time_samples_per_window=100)
+            ),
+            id="STFT",
+        ),
+        pytest.param(
+            lambda: Connectivity.from_transform(
+                Welch(_NONFINITE, 1000, n_time_samples_per_segment=100)
+            ),
+            id="Welch",
+        ),
+    ],
+)
+def test_nonfinite_time_series_warns_once(call):
+    """NaN or Inf in a time series gives the transform's one warning, without
+    the coefficients' restatement of it or NumPy RuntimeWarnings about the
+    values it propagates."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    assert [str(w.message).split(" (")[0] for w in record] == [
+        "time_series contains 2 NaN or infinite values"
+    ]
+
+
+def test_nonfinite_coefficients_from_another_transform_still_warn():
+    """Connectivity.from_transform drops the coefficients' warning only after
+    this package's transforms warned about their input; for any other
+    transform it is the only sign of the NaN."""
+    transform = Multitaper(np.random.default_rng(44).standard_normal((100, 1, 2)), 1000)
+    coefficients = transform.fft()
+    coefficients[0, 0, 0, 1, 0] = np.nan
+
+    class NonFiniteTransform:
+        frequencies = transform.frequencies
+        time = transform.time
+
+        def fft(self):
+            return coefficients.copy()
+
+    with pytest.warns(UserWarning, match=r"fourier_coefficients contains NaN or Inf"):
+        Connectivity.from_transform(NonFiniteTransform())
 
 
 _RNG = np.random.default_rng(42)
@@ -1335,7 +1395,7 @@ _ONE_TAPER = {
     "signal_duration": 2.0,
     "desired_freq_resolution": 4.0,
 }
-_NAN_MESSAGE = "Input time_series contains NaN"
+_NAN_MESSAGE = "NaN or infinite value"
 _TRANSPOSED_MESSAGE = "data may be transposed"
 _GAP_MESSAGE = "creates gaps"
 _LARGE_NW_MESSAGE = "unusually large"
@@ -1446,7 +1506,7 @@ _ADAPTIVE_MESSAGE = "did not converge"
 )
 def test_warnings_point_at_the_users_call(call, message):
     """Each warning is a UserWarning that names the user's line, not package internals."""
-    # Record every warning: the wrapper also warns about NaN coefficients.
+    # Record every warning: some calls warn about more than one thing.
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
         call()

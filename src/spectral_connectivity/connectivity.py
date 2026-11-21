@@ -1,6 +1,7 @@
 """Compute metrics for relating signals in the frequency domain."""
 
 import inspect
+import re
 import warnings
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
@@ -63,6 +64,10 @@ if TYPE_CHECKING:
     from spectral_connectivity.transforms import SpectralTransform
 
 logger = getLogger(__name__)
+
+# The first sentence of the warning for NaN or Inf coefficients, which
+# from_transform matches to drop it after the transform's own warning.
+_NONFINITE_COEFFICIENTS_WARNING = "fourier_coefficients contains NaN or Inf values."
 
 # Public helpers on Connectivity that are not connectivity measures. Keep this
 # definition shared with the high-level wrapper so method discovery and
@@ -776,8 +781,11 @@ class Connectivity:
         Complex-valued Fourier coefficients from spectral analysis. Must be
         two-sided (positive and negative frequencies) for Granger methods.
         Usually obtained from multitaper or other spectral estimation methods.
-        **Validation**: Must be 5-dimensional with at least 2 signals and
-        contain only finite values (no NaN/Inf).
+        **Validation**: Must be 5-dimensional and complex. The measures relating
+        signals need at least 2 signals (``power()`` and
+        ``cross_spectral_density()`` take one). NaN or Inf values are accepted
+        with a ``UserWarning`` and propagate to the estimates computed from
+        them.
     expectation_type : {"trials_tapers", "trials", "tapers", "time",
         "time_trials", "time_tapers", "time_trials_tapers"},
         default="trials_tapers"
@@ -1153,7 +1161,7 @@ class Connectivity:
         # in _validate_multiple_signals.
         if not xp.all(xp.isfinite(value)):
             warnings.warn(
-                "fourier_coefficients contains NaN or Inf values. This may indicate:\n"
+                f"{_NONFINITE_COEFFICIENTS_WARNING} This may indicate:\n"
                 "  - NaN/Inf in your input time series data\n"
                 "  - Issues with windowing parameters (e.g., window too short)\n"
                 "  - Numerical instability in preprocessing\n\n"
@@ -1428,7 +1436,19 @@ class Connectivity:
         # TypeError. Such a subclass falls back to the defensive-copy path.
         if cls.__init__ is Connectivity.__init__:
             init_kwargs["_adopt_fourier_coefficients"] = True
-        return cls(**init_kwargs)
+        # A transform of this package that warned about NaN or Inf in its time
+        # series records it, and the coefficients' warning would repeat it in
+        # other words. Coefficients from any other transform, or that are not
+        # finite although the time series was, still warn.
+        if _optional_transform_attribute(transform, "_time_series_is_finite", True):
+            return cls(**init_kwargs)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=re.escape(_NONFINITE_COEFFICIENTS_WARNING),
+                category=UserWarning,
+            )
+            return cls(**init_kwargs)
 
     def _validate_multiple_signals(self) -> None:
         """Raise if fewer than two signals are present.

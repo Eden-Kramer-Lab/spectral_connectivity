@@ -1,5 +1,6 @@
 """Transforms time domain signals to the frequency domain."""
 
+import contextlib
 import warnings
 from logging import getLogger
 from typing import (
@@ -870,8 +871,20 @@ def _validate_window_step(
         )
 
 
-def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
-    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite."""
+def _listed_indices(flags: BackendArray, limit: int = 10) -> str:
+    """The indices where the 1-D boolean ``flags`` is true, as ``[0, 3, ...]``."""
+    indices = np.flatnonzero(to_numpy(flags)).tolist()
+    shown = ", ".join(map(str, indices[:limit]))
+    return f"[{shown}, ...]" if len(indices) > limit else f"[{shown}]"
+
+
+def _warn_about_unusual_time_series(time_series: BackendArray) -> bool:
+    """Warn when a ``(n_time_samples, n_trials, n_signals)`` series looks transposed or not finite.
+
+    Returns whether every value is finite, so a transform can record that it
+    already warned about NaN or Inf in its input (see
+    :meth:`Connectivity.from_transform`).
+    """
     # Warn if data appears to be transposed (very few time points, many signals)
     n_time, _, n_signals = time_series.shape
     if n_time < n_signals:
@@ -890,26 +903,26 @@ def _warn_about_unusual_time_series(time_series: BackendArray) -> None:
             stacklevel=stacklevel_outside_package(),
         )
 
-    # Warn if data contains NaN or Inf
-    if not xp.all(xp.isfinite(time_series)):
+    is_nonfinite = ~xp.isfinite(time_series)
+    n_nonfinite = int(xp.sum(is_nonfinite))
+    if n_nonfinite:
+        where = f"signals {_listed_indices(xp.any(is_nonfinite, axis=(0, 1)))}"
+        if time_series.shape[1] > 1:
+            where = f"trials {_listed_indices(xp.any(is_nonfinite, axis=(0, 2)))}, {where}"
         warnings.warn(
-            "Input time_series contains NaN or infinite values.\n"
-            "\n"
-            "This will produce invalid spectral estimates. Common causes:\n"
-            "  - Missing data or recording artifacts\n"
-            "  - Incorrect preprocessing (division by zero, log of negative)\n"
-            "  - Corrupted data files\n"
-            "\n"
-            "Suggestions:\n"
-            "  - Interpolate missing values: scipy.interpolate.interp1d()\n"
-            "  - Remove bad segments or trials\n"
-            "  - Check your preprocessing pipeline\n"
-            "  - Verify data integrity\n"
-            "\n"
-            "For artifact removal, consider using MNE-Python or similar tools.",
+            f"time_series contains {n_nonfinite} NaN or infinite "
+            f"value{'' if n_nonfinite == 1 else 's'} ({where}). They propagate to "
+            "the outputs: the power of an affected signal is NaN in every time "
+            "window containing one, as is every connectivity value involving that "
+            "signal there (every value, for measures that model all signals "
+            "jointly, such as partial coherence and Granger prediction). "
+            "Interpolate the affected samples (e.g. with numpy.interp) or drop the "
+            "affected trials or signals before the analysis; "
+            "np.argwhere(~np.isfinite(time_series)) lists their indices.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
+    return n_nonfinite == 0
 
 
 class _WindowedFourierTransform:
@@ -923,7 +936,10 @@ class _WindowedFourierTransform:
     A subclass constructor validates its own arguments in its own order, using
     :func:`_validate_fft_workers`, :func:`_validate_window_step`, and
     :func:`_warn_about_unusual_time_series`. It sets ``_time_series``, the
-    read-only snapshot of the input (``_immutable_array_snapshot``), and calls
+    read-only snapshot of the input (``_immutable_array_snapshot``), and
+    ``_time_series_is_finite``, what :func:`_warn_about_unusual_time_series`
+    returns for it (:meth:`fft` and ``Connectivity.from_transform`` read it so
+    NaN or Inf input is reported once), and calls
     :meth:`_set_window_state`, which validates the start time and sets the
     other private fields annotated below. The subclass must also supply:
 
@@ -980,6 +996,7 @@ class _WindowedFourierTransform:
         def fft_workers(self) -> int | None: ...
 
     _time_series: BackendArray
+    _time_series_is_finite: bool
     _start_time: BackendArray
     _time_window_duration: float | None
     _time_window_step: float | None
@@ -1415,17 +1432,25 @@ Frequency Analysis
             step_size=self.n_time_samples_per_step,
             axis=0,
         )
-        if self.detrend_type is not None:
-            time_series = detrend(time_series, type=self.detrend_type)
+        # NaN or Inf input was reported at construction; detrending and tapering
+        # it (Inf times a taper's zero end) would add NumPy "invalid value"
+        # RuntimeWarnings about the same values.
+        with (
+            contextlib.nullcontext()
+            if self._time_series_is_finite
+            else np.errstate(invalid="ignore")
+        ):
+            if self.detrend_type is not None:
+                time_series = detrend(time_series, type=self.detrend_type)
 
-        coefficients = _multitaper_fft(
-            self._tapers_for_fft(),
-            time_series,
-            self.n_fft_samples,
-            self.sampling_frequency,
-            workers=self.fft_workers,
-        ).swapaxes(2, -1)
-        return self._weight_taper_coefficients(coefficients, time_series)
+            coefficients = _multitaper_fft(
+                self._tapers_for_fft(),
+                time_series,
+                self.n_fft_samples,
+                self.sampling_frequency,
+                workers=self.fft_workers,
+            ).swapaxes(2, -1)
+            return self._weight_taper_coefficients(coefficients, time_series)
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
@@ -1806,7 +1831,7 @@ class Multitaper(_WindowedFourierTransform):
             )
             raise ValueError(msg)
         _validate_window_step(time_window_duration, time_window_step)
-        _warn_about_unusual_time_series(self._time_series)
+        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
 
         self.sampling_frequency = sampling_frequency
         self.time_halfbandwidth_product = time_halfbandwidth_product
@@ -2337,7 +2362,7 @@ class ShortTimeFourierTransform(_WindowedFourierTransform):
             (window / np.linalg.norm(window) * np.sqrt(sampling_frequency))[:, np.newaxis]
         )
         _validate_window_step(self.time_window_duration, self.time_window_step)
-        _warn_about_unusual_time_series(self._time_series)
+        self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
 
     @property
     def sampling_frequency(self) -> float:
@@ -2591,6 +2616,10 @@ class Welch:
 
     # The settings below are read from the internal STFT that does the
     # computation, so they cannot be reassigned out of step with it.
+    @property
+    def _time_series_is_finite(self) -> bool:
+        return self._stft._time_series_is_finite
+
     @property
     def sampling_frequency(self) -> float:
         """Samples per second, in Hz."""

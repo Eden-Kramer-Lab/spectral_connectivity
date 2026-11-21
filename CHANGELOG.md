@@ -1304,6 +1304,24 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   `fourier_coefficients`, an argument the wrapper's caller never passes. It
   points to `method='power'` for one signal and to keeping the signal axis
   when selecting a channel (`x[:, [i]]`, not `x[:, i]`).
+- A time series containing NaN or Inf gives one warning instead of three or
+  more. `multitaper_connectivity` warned about the time series, then about
+  `fourier_coefficients` (an argument its caller never passes), then with
+  NumPy `RuntimeWarning`s such as "invalid value encountered in divide";
+  `Connectivity.from_transform` after `Multitaper`,
+  `ShortTimeFourierTransform`, or `Welch` gave the first two, and the
+  transforms' `fft()` a `RuntimeWarning` too. The remaining warning gives the
+  number of such values and the trials and signals holding them, says that
+  they propagate to the outputs (NaN power for the affected signals in the
+  windows containing them, NaN connectivity for every pair involving those
+  signals, or for every pair with measures that model all signals jointly),
+  and says to interpolate the samples or drop the trials or signals, with
+  `np.argwhere(~np.isfinite(time_series))` to find them. The input is still
+  accepted. `Connectivity` built directly from coefficients, or from another
+  transform, still warns about NaN or Inf in `fourier_coefficients`, and its
+  docstring no longer says they must be finite. `Connectivity` measures
+  called after `from_transform` can still emit NumPy `RuntimeWarning`s on
+  such values; `multitaper_connectivity` does not.
 
 ### Performance
 

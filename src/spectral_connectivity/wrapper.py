@@ -1,5 +1,6 @@
 """Functions for getting connectivity measures in a labeled array format."""
 
+import contextlib
 import inspect
 import warnings
 from collections.abc import Hashable, Mapping, Sequence
@@ -1517,23 +1518,32 @@ def multitaper_connectivity(
     shared_attrs = _shared_provenance_attrs(
         shared_connectivity, metadata, input_attrs=input_attrs
     )
-    result = _format_and_reduce_measures(
-        shared_connectivity,
-        method,
-        return_dataarray=return_dataarray,
-        signal_labels=signal_labels,
-        squeeze=squeeze,
-        shared_attrs=shared_attrs,
-        connectivity_kwargs=connectivity_kwargs,
-        group_labels=group_labels,
-        group_methods=group_methods,
-        frequency_range=frequency_range,
-        frequency_decimation=frequency_decimation,
-        frequency_bands=frequency_bands,
-        frequency_reduction=frequency_reduction,
-        output_names=output_names,
-        signal_metadata=signal_metadata,
-    )
+    # NaN or Inf in the time series was reported once, by Multitaper; the
+    # measures' arithmetic on the values it propagates would add NumPy
+    # RuntimeWarnings ("invalid value encountered in divide") about the same
+    # values.
+    with (
+        contextlib.nullcontext()
+        if m._time_series_is_finite
+        else np.errstate(invalid="ignore", divide="ignore")
+    ):
+        result = _format_and_reduce_measures(
+            shared_connectivity,
+            method,
+            return_dataarray=return_dataarray,
+            signal_labels=signal_labels,
+            squeeze=squeeze,
+            shared_attrs=shared_attrs,
+            connectivity_kwargs=connectivity_kwargs,
+            group_labels=group_labels,
+            group_methods=group_methods,
+            frequency_range=frequency_range,
+            frequency_decimation=frequency_decimation,
+            frequency_bands=frequency_bands,
+            frequency_reduction=frequency_reduction,
+            output_names=output_names,
+            signal_metadata=signal_metadata,
+        )
     _warn_deprecated_measure_names(output_names)
     _warn_label_orientation_changed(method)
     _warn_legacy_settings("multitaper_connectivity", "transform_kwargs", kwargs)
