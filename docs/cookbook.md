@@ -635,7 +635,7 @@ True
 
 Multitaper's familiar `frequency_resolution` name describes **full DPSS
 concentration bandwidth**, `2 * NW / window_duration` Hz. The property,
-`estimate_frequency_resolution`, `suggest_parameters(desired_freq_resolution=...)`,
+`estimate_frequency_resolution`, `suggest_parameters(frequency_resolution=...)`,
 and the returned `frequency_resolution` key remain supported without warnings.
 STFT and Welch use `equivalent_noise_bandwidth`: for periodic Hann windows of
 at least three samples it is `1.5 / window_duration` Hz. Their output can have

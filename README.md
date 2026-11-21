@@ -121,7 +121,7 @@ from spectral_connectivity import suggest_parameters
 params = suggest_parameters(
     sampling_frequency=sampling_frequency,
     signal_duration=10.0,  # seconds
-    desired_freq_resolution=2.0,  # Hz
+    frequency_resolution=2.0,  # Hz
 )
 # -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
 coherence = multitaper_connectivity(

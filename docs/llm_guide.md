@@ -111,7 +111,7 @@ Prefer the wrapper's labeled results so you never index these by hand.
 ```python
 >>> from spectral_connectivity import suggest_parameters
 >>> parameters = suggest_parameters(
-...     sampling_frequency=500, signal_duration=10.0, desired_freq_resolution=2.0
+...     sampling_frequency=500, signal_duration=10.0, frequency_resolution=2.0
 ... )
 >>> parameters["time_window_duration"], parameters["time_halfbandwidth_product"]
 (3.0, 3.0)

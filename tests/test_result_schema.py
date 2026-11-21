@@ -314,7 +314,7 @@ def test_familiar_multitaper_names_remain_the_single_supported_spelling(data):
     mt = _transform("multitaper", data)
     assert mt.frequency_resolution == 8
     assert estimate_frequency_resolution(64, 0.5, 2) == 8
-    parameters = suggest_parameters(64, 10, desired_freq_resolution=2)
+    parameters = suggest_parameters(64, 10, frequency_resolution=2)
     assert parameters["frequency_resolution"] == 2
     assert "concentration_bandwidth" not in parameters
     assert not hasattr(mt, "concentration_bandwidth")

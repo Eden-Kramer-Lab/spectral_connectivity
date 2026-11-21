@@ -1399,13 +1399,13 @@ _SHORT_SMOOTHING = {"frequencies": [10.0, 40.0], "n_cycles": 7, "smoothing_time"
 _BOTH_TARGETS = {
     "sampling_frequency": 1000,
     "signal_duration": 2.0,
-    "desired_freq_resolution": 5.0,
+    "frequency_resolution": 5.0,
     "desired_n_tapers": 7,
 }
 _ONE_TAPER = {
     "sampling_frequency": 1000,
     "signal_duration": 2.0,
-    "desired_freq_resolution": 4.0,
+    "frequency_resolution": 4.0,
 }
 _NAN_MESSAGE = "NaN or infinite value"
 _TRANSPOSED_MESSAGE = "data may be transposed"
