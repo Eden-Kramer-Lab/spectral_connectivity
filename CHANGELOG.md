@@ -744,6 +744,14 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- `coherence_significance_pvalue` and `coherence_fisher_z_transform` say that
+  they take coherency (`Connectivity.coherency()`) or its magnitude, not
+  `magnitude_squared_coherence()`. Both square or read the absolute value of
+  their input, so magnitude-squared coherence gives wrong p-values or z-scores
+  without an error: for independent noise with 50 observations no interior
+  frequency had `p < 0.05`, where `coherency()` gave 4.8%. A real-valued input
+  is still accepted, since coherency magnitudes and coherency from real
+  coefficients are real too. The values are unchanged.
 - *Unreleased:* `multitaper_connectivity` warns when it infers the sampling
   rate of a DataArray from a time coordinate that may be in milliseconds: when
   the inferred rate is below 1 Hz (unless the coordinate's `units` attribute

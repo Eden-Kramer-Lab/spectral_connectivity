@@ -584,12 +584,16 @@ def coherence_fisher_z_transform(
     Parameters
     ----------
     coherency1 : NDArray[complexfloating] or complex, shape (...,)
-        Complex coherency values between signals. A scalar is accepted and
-        gives a scalar (0-d) result.
+        Complex coherency values between signals, ``Connectivity.coherency()``,
+        or their magnitudes. A scalar is accepted and gives a scalar (0-d)
+        result. Do not pass ``magnitude_squared_coherence()``: its values are
+        already squared, and they are read as magnitudes, so the z-scores are
+        wrong with no error (take the square root first).
     n_obs1 : int
         Number of observations for coherency1 (n_tapers * n_trials).
     coherency2 : NDArray[complexfloating] or float, default=0
-        Second coherency for comparison. If 0, tests against null hypothesis.
+        Second coherency for comparison, in the same form as ``coherency1``. If
+        0, tests against null hypothesis.
     n_obs2 : int, default=0
         Number of observations for coherency2 (n_tapers * n_trials).
 
@@ -774,7 +778,13 @@ def coherence_significance_pvalue(
     Parameters
     ----------
     coherency : NDArray[complexfloating], shape (...,)
-        Complex coherency values between signals.
+        Complex coherency values between signals, ``Connectivity.coherency()``,
+        or their magnitudes; the function squares their absolute value. Do not
+        pass ``magnitude_squared_coherence()``: its values are already squared,
+        so they would be squared again and the p-values are too large with no
+        error (for independent noise with 50 observations, no frequency fell
+        below 0.05, where ``coherency()`` gave 4.8%). Take its square root
+        first.
     n_observations : int
         Number of independent observations used to estimate the coherency
         (n_tapers * n_trials).
