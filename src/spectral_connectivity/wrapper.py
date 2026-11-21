@@ -1352,6 +1352,14 @@ def multitaper_connectivity(
         multiple methods are merged into one Dataset without flattening their
         semantic dimensions.
 
+        Tip: ``method="magnitude_squared_coherence"`` returns a single
+        DataArray, while the default ``method=None`` returns a Dataset of
+        every measure in ``DEFAULT_METHODS``: select one with
+        ``result["magnitude_squared_coherence"]``. Without
+        ``time_window_duration`` the whole recording is one window, so
+        ``time`` is a dimension of length 1: drop it for plotting with
+        ``result.isel(time=0)`` or ``result.squeeze("time")``.
+
     Examples
     --------
     >>> import numpy as np
@@ -1372,6 +1380,10 @@ def multitaper_connectivity(
     ... )
     >>> coherence.dims
     ('time', 'frequency', 'source', 'target')
+    >>> coherence.sizes["time"]  # one window: the whole recording
+    1
+    >>> coherence.squeeze("time").dims  # e.g. for plotting against frequency
+    ('frequency', 'source', 'target')
 
     >>> # Compute multiple measures
     >>> measures = multitaper_connectivity(

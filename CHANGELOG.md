@@ -361,6 +361,10 @@ their rows).
   `Connectivity.frequencies`, the non-negative bins, labels results; the
   `Multitaper` attributes give `fft` and `frequencies` their `n_fft_samples`
   length.
+- The Returns section of `multitaper_connectivity` says that one `method`
+  string gives a DataArray and the default a Dataset of `DEFAULT_METHODS`,
+  and that without `time_window_duration` `time` has length 1 (drop it with
+  `isel(time=0)` or `squeeze("time")` to plot).
 - A doctested guide for AI coding assistants (`docs/llm_guide.md`) covers the
   workflow, direction conventions, parameter choice, and common pitfalls; the
   documentation site serves an `llms.txt` index, and the package docstring
