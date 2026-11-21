@@ -1032,6 +1032,27 @@ def test_bias_and_variance_helpers_accept_arrays_of_counts():
     )
 
 
+@pytest.mark.parametrize(
+    ("function", "kwargs"),
+    [
+        (coherence_bias, {}),
+        (power_bias, {}),
+        (power_bias, {"real_valued": True}),
+        (power_variance, {}),
+        (power_variance, {"real_valued": True}),
+    ],
+)
+def test_array_counts_broadcast_against_a_scalar_real_valued(function, kwargs):
+    """An array of counts with a scalar real_valued gives each count's scalar
+    result; power_bias and power_variance raised converting the array to a
+    float."""
+    counts = np.array([[4, 10], [25, 2]])
+    expected = [[function(int(count), **kwargs) for count in row] for row in counts]
+    result = function(counts, **kwargs)
+    assert np.shape(result) == counts.shape
+    np.testing.assert_allclose(result, expected, rtol=1e-15)
+
+
 def test_pole_is_named_only_for_a_count_at_a_pole():
     with pytest.raises(ValueError, match="poles at 0"):
         power_bias(0)

@@ -1302,11 +1302,9 @@ def _chi_squared_shape(
     return shape
 
 
-def _float_unless_masked(
-    value: NDArray[np.floating], real_valued: bool | NDArray[np.bool_]
-) -> float | NDArray[np.floating]:
-    """A float for a scalar ``real_valued``, the array for a mask."""
-    return float(value) if np.ndim(real_valued) == 0 else value
+def _float_if_scalar(value: NDArray[np.floating]) -> float | NDArray[np.floating]:
+    """A float for a 0-d result (scalar count and mask), else the array."""
+    return float(value) if np.ndim(value) == 0 else value
 
 
 def power_bias(
@@ -1335,7 +1333,8 @@ def power_bias(
     Returns
     -------
     bias : float or NDArray[floating]
-        A float, or an array shaped like ``real_valued`` when that is an array.
+        A float for a scalar count and ``real_valued``; otherwise an array
+        of their broadcast shape.
 
     Raises
     ------
@@ -1355,7 +1354,7 @@ def power_bias(
         n_observations, 1, "The digamma function has poles at 0 and the negative integers."
     )
     shape = _chi_squared_shape(n_observations, real_valued)
-    return _float_unless_masked(scipy.special.psi(shape) - np.log(shape), real_valued)
+    return _float_if_scalar(scipy.special.psi(shape) - np.log(shape))
 
 
 def power_variance(
@@ -1378,8 +1377,8 @@ def power_variance(
     Returns
     -------
     variance : float or NDArray[floating]
-        Variance of log-power estimates: a float, or an array shaped like
-        ``real_valued`` when that is an array.
+        Variance of log-power estimates: a float for a scalar count and
+        ``real_valued``; otherwise an array of their broadcast shape.
 
     Raises
     ------
@@ -1406,7 +1405,7 @@ def power_variance(
         n_observations, 1, "The trigamma function has poles at 0 and the negative integers."
     )
     shape = _chi_squared_shape(n_observations, real_valued)
-    return _float_unless_masked(scipy.special.polygamma(1, shape), real_valued)
+    return _float_if_scalar(scipy.special.polygamma(1, shape))
 
 
 def power_fisher_z_transform(

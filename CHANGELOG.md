@@ -745,6 +745,10 @@ Entries marked *Unreleased* fix defects that existed only in development
 builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
 2.x is affected by them.
 
+- *Unreleased:* `power_bias` and `power_variance` accept an array of counts
+  with a scalar `real_valued` (the default), returning one value per count as
+  2.0.1 did; once `real_valued` was added they raised converting the array to
+  a float.
 - `Connectivity.group_delay` and `Connectivity.delay` document that a pair
   without significant coherence is NaN (for independent signals,
   `group_delay()` returns NaN delay, slope, and r), which means no delay was
