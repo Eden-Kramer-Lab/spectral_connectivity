@@ -208,7 +208,7 @@ directed = [m.name for m in list_measures(directed=True)]
 | How are two groups of signals coupled? | **`canonical_coherence`**, `blockwise_spectral_granger_prediction` | Pass `group_labels`, one label per signal. |
 
 [Choosing a measure](docs/choosing_a_measure.md) has the full table and the
-pitfalls common to every measure, such as diagonals that differ by measure.
+pitfalls common to every measure.
 
 See the [**Cookbook**](docs/cookbook.md) for short, copy-pasteable recipes
 covering functional and directed connectivity, reading the labeled output,
@@ -391,8 +391,7 @@ See the documentation on [ReadTheDocs](https://spectral-connectivity.readthedocs
 
 + [Cookbook](docs/cookbook.md): short recipes for common tasks.
 + [Choosing a measure](docs/choosing_a_measure.md): which measure answers
-  which question, and the pitfalls (single observations, small-sample bias,
-  long windows for directed measures, diagonals).
+  which question, and the pitfalls common to every measure.
 + [Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md): the range,
   units, diagonal, and interpretation of every measure.
 + [Migrating from 2.x to 3.0](docs/migration.md).

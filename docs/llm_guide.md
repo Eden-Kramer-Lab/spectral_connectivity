@@ -124,10 +124,8 @@ Prefer the wrapper's labeled results so you never index these by hand.
 
 - **Read the scientific pitfalls first.** [Choosing a measure](choosing_a_measure.md)
   says which measure answers which question, and its
-  [Pitfalls](choosing_a_measure.md#pitfalls) cover single observations
-  (coherence is 1), small-sample bias, squared coherence, diagonals that
-  differ by measure, and the two-sided spectrum and long windows the
-  directed measures need.
+  [Pitfalls](choosing_a_measure.md#pitfalls) cover the mistakes common to
+  every measure.
 - **Use the shared result schema.** Common attrs include `transform`,
   `sampling_frequency` when known, `n_observations`, independence flags, and
   `output_schema_version=1`. Remaining settings are in
@@ -160,7 +158,9 @@ Prefer the wrapper's labeled results so you never index these by hand.
   those bins. Their old `frequencies_of_interest` excluded the edges and is
   deprecated; do not write new code with it.
 - **Avoid the deprecated 2.x spellings** in new code: use
-  `Connectivity.from_transform` (not `from_multitaper`),
+  `magnitude_squared_coherence` (not `coherence_magnitude`, and index default
+  results by the new name), `Connectivity.from_transform` (not
+  `from_multitaper`),
   `power_confidence_intervals(n_observations=...)` (not `n_tapers=`), and
   the `transform_kwargs`/`connectivity_kwargs` mappings for advanced
   settings. Each old form still works through 3.x with a

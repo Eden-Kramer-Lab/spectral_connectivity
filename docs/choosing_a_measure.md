@@ -18,9 +18,8 @@ measure's range, units, diagonal, and interpretation.
 | How are two groups of signals (two brain areas) coupled? | **`canonical_coherence`** and `canonical_coherency` (include zero-lag coupling), `maximized_imaginary_coherency` and `multivariate_interaction_measure` (these two ignore zero-lag coupling), `blockwise_spectral_granger_prediction` (directed) | Pass `group_labels`, one label per signal. A group pair with more signals than observations has a canonical coherence of 1 for any data (it warns). |
 | Is one coherent network shared by all the signals? | **`global_coherence`** | Rescaling one signal changes the result: put the signals on a common scale first. |
 
-For directed measures, `result.sel(source="a", target="b")` is the influence of
-`a` on `b`; for the lead/lag measures a positive value means the source leads
-(above 0.5 for `directed_phase_lag_index`).
+For how to read direction and sign, see the
+[direction convention](CONNECTIVITY_METRIC_RANGES.md#direction-convention).
 
 ## Pitfalls
 
@@ -77,10 +76,8 @@ True
 ```
 
 - **Coherence is squared.** `magnitude_squared_coherence` is `|coherency|^2`;
-  take `abs(coherency)` for the unsquared magnitude. Its 2.x name,
-  `coherence_magnitude`, is deprecated: do not write new code with it, and
-  index default results by the new name. A measure variable's `quantity` and
-  `formula` attrs say which form a coherency-family value has.
+  take `abs(coherency)` for the unsquared magnitude. A measure variable's
+  `quantity` and `formula` attrs say which form a coherency-family value has.
 - **Diagonals differ by measure.** A self-connection is NaN for coherence (a
   mask; the value would be 1) but 0 for `imaginary_coherence` and 1 for
   `phase_locking_value`, to within rounding (NaN for a flat, zero-power
