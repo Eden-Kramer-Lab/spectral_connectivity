@@ -4299,7 +4299,11 @@ class Connectivity:
         pooled_axes = list(self._expectation_axes)
         if 2 not in pooled_axes:
             supported = ", ".join(
-                repr(name) for name, axes in EXPECTATION_AXES.items() if 2 in axes
+                "'trials_tapers' (the default)" if name == "trials_tapers" else repr(name)
+                for name in sorted(
+                    (name for name, axes in EXPECTATION_AXES.items() if 2 in axes),
+                    key=lambda name: name != "trials_tapers",
+                )
             )
             msg = (
                 f"global_coherence needs the tapers averaged, but "

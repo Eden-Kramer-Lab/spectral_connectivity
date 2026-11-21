@@ -915,8 +915,10 @@ def test_global_coherence_rejects_an_expectation_that_keeps_the_tapers(expectati
         conn.global_coherence()
     message = str(info.value)
     assert f"expectation_type={expectation_type!r} keeps them as an output axis" in message
-    for supported in _GLOBAL_COHERENCE_KEPT_AXES:
-        assert repr(supported) in message
+    assert (
+        "Use one of 'trials_tapers' (the default), 'tapers', 'time_tapers', "
+        "'time_trials_tapers'"
+    ) in message
     assert (
         "Connectivity.from_transform(transform, expectation_type='trials_tapers')" in message
     )
