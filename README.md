@@ -407,8 +407,9 @@ diagonal, and interpretation, is generated from the code into
 + **Spectra**: power and the cross-spectral density.
 + **Coherence**: coherency, its squared magnitude, phase, and imaginary part,
   and partial coherence.
-+ **Phase synchrony**: the phase-locking value and pairwise phase consistency,
-  and the phase lag index with its weighted and debiased forms.
++ **Phase synchrony**: the phase-locking value and its corrected imaginary
+  form, pairwise phase consistency, and the phase lag index with its weighted
+  and debiased forms.
 + **Between groups of signals**: canonical coherence and coherency, maximized
   imaginary coherency, the multivariate interaction measure, and global
   coherence.
