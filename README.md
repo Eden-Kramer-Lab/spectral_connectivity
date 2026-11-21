@@ -144,14 +144,18 @@ and the
 [group-measures recipe](docs/cookbook.md#group-measures-canonical-coherence-between-areas)).
 
 The `3` above is a common default. To pick values from your recording's length
-and the frequency resolution you need, use `suggest_parameters`:
+and the frequency resolution you need, use `suggest_parameters`, giving it the
+duration of one trial. The window must fit within that duration: a resolution
+that needs a longer window raises a `ValueError`, and a window that would leave
+fewer than three per trial is shortened, keeping the resolution with fewer
+tapers:
 
 ```python
 from spectral_connectivity import suggest_parameters
 
 params = suggest_parameters(
     sampling_frequency=sampling_frequency,
-    signal_duration=10.0,  # seconds
+    signal_duration=time_series.shape[0] / sampling_frequency,  # 10 s per trial
     frequency_resolution=2.0,  # Hz
 )
 # -> time_halfbandwidth_product=3.0, time_window_duration=3.0, n_tapers=5, ...
