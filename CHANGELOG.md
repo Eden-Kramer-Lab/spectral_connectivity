@@ -1395,6 +1395,24 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   8 signals in two groups, and 1 taper). A sweep of every measure whose range is [0, 1] over such inputs
   found no other value above 1, except the magnitude of the complex
   `coherency` by up to 3 ulps (7e-16), the precision of the magnitude itself.
+- Every observation count of the statistics helpers is checked the same way,
+  so the same bad count gets the same message, naming the argument, the
+  counts it takes, and `Connectivity.n_observations`:
+  `coherence_significance_pvalue`, `power_confidence_intervals`, and both
+  counts of `coherence_fisher_z_transform` and `power_fisher_z_transform`
+  now check theirs as `coherence_bias`, `power_bias`, and `power_variance`
+  do. A boolean, a string, or None raises a `TypeError` there too:
+  `power_confidence_intervals(True)` read `True` as 1 observation, and
+  `coherence_significance_pvalue(c, True)` raised a `ValueError` about
+  needing 2. `n_obs2` may be 0 (a one-sample test) as before, and the
+  messages say so ("n_obs2 must be a finite integer >= 2, or 0 for a
+  one-sample test, got 1."). Both counts of the Fisher z-transforms and the
+  count of `power_confidence_intervals` take an array, one count per
+  estimate, where 0 in `n_obs2` means no second sample for that estimate;
+  all but `coherence_fisher_z_transform`'s `n_obs1` raised NumPy's "truth
+  value of an array is ambiguous" for one. `coherence_significance_pvalue`
+  takes a single count, and says so for an array, because its real-valued
+  bins use one count for the call.
 
 ### Performance
 

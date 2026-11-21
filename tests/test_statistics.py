@@ -1,4 +1,5 @@
 import contextlib
+import re
 import subprocess
 import sys
 import warnings
@@ -985,7 +986,7 @@ def test_coherence_significance_pvalue_rejects_small_n_observations(bad_n_obs):
     """n_observations < 2 would give values outside [0, 1]; must raise."""
     with pytest.raises(
         ValueError,
-        match=r"(?s)n_observations must be a finite integer >= 2.*at least 2 observations",
+        match=r"n_observations must be a finite integer >= 2, got .*needs at least 2",
     ):
         coherence_significance_pvalue(np.array([0.5 + 0j]), bad_n_obs)
 
@@ -1109,7 +1110,7 @@ def test_power_fisher_z_transform_rejects_nonfinite_spectrum(bad_spectrum):
 
 @pytest.mark.parametrize("bad_count", [0, -3, np.nan, np.inf, 2.5])
 def test_power_confidence_intervals_rejects_invalid_n_observations(bad_count):
-    with pytest.raises(ValueError, match="n_observations must be a finite positive integer"):
+    with pytest.raises(ValueError, match="n_observations must be a finite integer >= 1"):
         power_confidence_intervals(n_observations=bad_count, power=1.0, ci=0.95)
 
 
@@ -1122,7 +1123,7 @@ def test_coherence_fisher_z_transform_rejects_invalid_n_obs1(bad_n_obs1):
 
 @pytest.mark.parametrize("bad_n_obs2", [1, -2, np.nan, 3.5])
 def test_coherence_fisher_z_transform_rejects_invalid_n_obs2(bad_n_obs2):
-    """n_obs2 must be a finite integer equal to 0 or >= 2."""
+    """n_obs2 must be a finite integer >= 2, or 0 for a one-sample test."""
     with pytest.raises(ValueError, match="n_obs2 must be a finite integer"):
         coherence_fisher_z_transform(
             np.array([0.5 + 0j]),
@@ -1130,6 +1131,121 @@ def test_coherence_fisher_z_transform_rejects_invalid_n_obs2(bad_n_obs2):
             coherency2=np.array([0.3 + 0j]),
             n_obs2=bad_n_obs2,
         )
+
+
+_COHERENCY = np.array([0.5 + 0.1j, 0.3 + 0j])
+_SPECTRUM = np.array([1.5, 0.7])
+# Every count argument of the statistics helpers: (call, its name, the fewest
+# observations it takes, and whether 0 means "no second sample").
+_COUNT_ARGUMENTS = {
+    "coherence_bias": (coherence_bias, "n_observations", 2, False),
+    "power_bias": (power_bias, "n_observations", 1, False),
+    "power_variance": (power_variance, "n_observations", 1, False),
+    "coherence_significance_pvalue": (
+        lambda n: coherence_significance_pvalue(_COHERENCY, n),
+        "n_observations",
+        2,
+        False,
+    ),
+    "power_confidence_intervals": (
+        lambda n: power_confidence_intervals(n, _SPECTRUM),
+        "n_observations",
+        1,
+        False,
+    ),
+    "coherence_fisher_z_transform-n_obs1": (
+        lambda n: coherence_fisher_z_transform(_COHERENCY, n),
+        "n_obs1",
+        2,
+        False,
+    ),
+    "coherence_fisher_z_transform-n_obs2": (
+        lambda n: coherence_fisher_z_transform(_COHERENCY, 10, _COHERENCY / 2, n),
+        "n_obs2",
+        2,
+        True,
+    ),
+    "power_fisher_z_transform-n_obs1": (
+        lambda n: power_fisher_z_transform(_SPECTRUM, n),
+        "n_obs1",
+        1,
+        False,
+    ),
+    "power_fisher_z_transform-n_obs2": (
+        lambda n: power_fisher_z_transform(_SPECTRUM, 10, _SPECTRUM / 2, n),
+        "n_obs2",
+        1,
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("call", "name", "minimum", "zero_ok"),
+    _COUNT_ARGUMENTS.values(),
+    ids=list(_COUNT_ARGUMENTS),
+)
+@pytest.mark.parametrize("bad_count", [2.5, np.nan, np.inf, -1, "below"])
+def test_every_count_argument_rejects_a_bad_count_alike(
+    call, name, minimum, zero_ok, bad_count
+):
+    """The same bad count gets the same message from every helper, naming the
+    argument and the counts it takes."""
+    if bad_count == "below":
+        bad_count = minimum - 1
+        if zero_ok and bad_count == 0:
+            pytest.skip("every count from 0 up is valid; -1 is tested")
+    accepted = f">= {minimum}, or 0 for a one-sample test" if zero_ok else f">= {minimum}"
+    with pytest.raises(
+        ValueError,
+        match="^"
+        + re.escape(f"{name} must be a finite integer {accepted}, got {bad_count!r}.")
+        + r".*Connectivity\.n_observations\.$",
+    ):
+        call(bad_count)
+
+
+@pytest.mark.parametrize(
+    ("call", "name", "minimum", "zero_ok"),
+    _COUNT_ARGUMENTS.values(),
+    ids=list(_COUNT_ARGUMENTS),
+)
+@pytest.mark.parametrize("not_a_count", ["10", None, True])
+def test_every_count_argument_rejects_a_non_number_alike(
+    call, name, minimum, zero_ok, not_a_count
+):
+    """A string, None, or a boolean is not a count, for every helper:
+    power_confidence_intervals(True) read True as 1 observation."""
+    del minimum, zero_ok
+    if not_a_count is None and call is _COUNT_ARGUMENTS["power_confidence_intervals"][0]:
+        pytest.skip("None is its default, read as the missing required count")
+    with pytest.raises(TypeError, match=f"^{name} must be a number"):
+        call(not_a_count)
+
+
+@pytest.mark.parametrize(
+    ("function", "first", "second"),
+    [
+        (coherence_fisher_z_transform, _COHERENCY, _COHERENCY / 2),
+        (power_fisher_z_transform, _SPECTRUM, _SPECTRUM / 2),
+    ],
+)
+def test_fisher_z_transforms_take_one_second_count_per_estimate(function, first, second):
+    """An array n_obs2 is read entry by entry, 0 meaning no second sample there,
+    as the scalar calls read it."""
+    result = function(first, np.array([10, 12]), second, np.array([0, 20]))
+    expected = [
+        function(first[0], 10, second[0], 0),
+        function(first[1], 12, second[1], 20),
+    ]
+    np.testing.assert_allclose(result, expected, rtol=1e-14)
+
+
+def test_coherence_significance_pvalue_takes_one_count():
+    """Its real-valued bins take one count for the call, so an array of counts
+    is rejected, saying so, rather than misaligned."""
+    with pytest.raises(ValueError, match=r"must be a single count .* shape \(2,\)"):
+        coherence_significance_pvalue(_COHERENCY, np.array([5, 6]), real_valued=True)
 
 
 @pytest.mark.parametrize("bad_power", [-1.0, np.nan, np.inf])
@@ -1426,7 +1542,7 @@ def test_jackknife_rejects_unknown_transformation():
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"n_tapers": 0}, "n_observations must be a finite positive integer"),
+        ({"n_tapers": 0}, "n_observations must be a finite integer >= 1"),
         ({"n_tapers": 5, "ci": 1.5}, "Confidence level"),
         ({"n_tapers": 5, "power": -1.0}, "power must be finite"),
     ],
