@@ -608,6 +608,41 @@ def test_mic_and_mim_reduce_to_imaginary_coherency_for_scalar_groups():
     assert np.isnan(mic.squeeze()[0, 0])
 
 
+def test_mim_sums_both_modes_of_a_rank_two_imaginary_coupling():
+    """With two groups of two signals, real within-group spectra W_a and W_b,
+    and cross-spectrum ``i W_a^(1/2) Q_a diag(0.9, 0.8) Q_b^T W_b^(1/2)`` for
+    rotations Q_a and Q_b, the whitened imaginary cross-spectrum has singular
+    values 0.9 and 0.8. MIM is the sum of their squares, 1.45, which exceeds 1
+    and differs from the 0.81 of the strongest mode alone; MIC is 0.9. (A
+    scalar or rank-one coupling cannot tell MIM from MIC squared.)"""
+
+    def rotation(angle):
+        return np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
+
+    def symmetric_root(matrix):
+        values, vectors = np.linalg.eigh(matrix)
+        return vectors @ np.diag(np.sqrt(values)) @ vectors.T
+
+    within_a = np.array([[2.0, 0.5], [0.5, 1.0]])
+    within_b = np.array([[1.5, -0.3], [-0.3, 0.8]])
+    coupling = rotation(0.4) @ np.diag([0.9, 0.8]) @ rotation(-1.1).T
+    cross = 1j * symmetric_root(within_a) @ coupling @ symmetric_root(within_b)
+    spectrum = np.block([[within_a, cross], [cross.conj().T, within_b]])
+    assert np.linalg.eigvalsh(spectrum).min() > 0
+    n_fft = 4
+    connectivity = Connectivity(
+        _fourier_coefficients_with_cross_spectrum(np.broadcast_to(spectrum, (n_fft, 4, 4)))
+    )
+    labels = [0, 0, 1, 1]
+
+    mim, _ = connectivity.multivariate_interaction_measure(labels)
+    mic, _ = connectivity.maximized_imaginary_coherency(labels)
+
+    np.testing.assert_allclose(mim[0, :, 0, 1], 0.9**2 + 0.8**2, rtol=1e-10)
+    np.testing.assert_allclose(mim[0, :, 1, 0], 0.9**2 + 0.8**2, rtol=1e-10)
+    np.testing.assert_allclose(mic[0, :, 0, 1], 0.9, rtol=1e-10)
+
+
 def test_scalar_mic_mim_handle_edge_masked_morlet_data():
     """Edge-masked Morlet data supplies NaN bins; scalar MIC/MIM must mask them
     (as the component-resolved path does) rather than crash the batched SVD."""
