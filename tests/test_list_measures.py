@@ -1,6 +1,7 @@
 """Discovery API for the connectivity measures the wrapper can compute."""
 
 import itertools
+import re
 import warnings
 
 import numpy as np
@@ -325,6 +326,19 @@ def test_wrapper_names_the_time_series_for_a_single_signal(measure):
     assert "fourier_coefficients" not in message
     assert "method='power'" in message
     assert "x[:, [i]] rather than x[:, i]" in message
+
+
+def test_single_signal_message_names_a_few_of_many_measures():
+    """For the default set, the message names three measures and counts the
+    rest rather than listing all of them."""
+    time_series = np.random.default_rng(34).standard_normal((200, 1))
+    pairwise = [name for name in DEFAULT_METHODS if name not in _SINGLE_SIGNAL_MEASURES]
+    expected = (
+        f"The time series has 1 signal, but {', '.join(pairwise[:3])}, and "
+        f"{len(pairwise) - 3} more measures relate pairs of signals and need at least 2."
+    )
+    with pytest.raises(ValueError, match="^" + re.escape(expected)):
+        multitaper_connectivity(time_series, sampling_frequency=100)
 
 
 @pytest.mark.parametrize("measure", list_measures(), ids=lambda measure: measure.name)

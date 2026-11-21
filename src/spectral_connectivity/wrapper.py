@@ -896,10 +896,18 @@ def _require_two_signals(methods: Sequence[str], n_signals: int) -> None:
     ]
     if n_signals >= 2 or not pairwise:
         return
+    shown = 3
+    named = ", ".join(pairwise[:shown])
+    if len(pairwise) > shown:
+        named += f", and {len(pairwise) - shown} more measures"
+    verbs = (
+        "relates pairs of signals and needs"
+        if len(pairwise) == 1
+        else ("relate pairs of signals and need")
+    )
     msg = (
-        f"The time series has {n_signals} signal, but {', '.join(pairwise)} "
-        f"{'relates' if len(pairwise) == 1 else 'relate'} pairs of signals and "
-        "needs at least 2. For the spectrum of one signal use method='power'. "
+        f"The time series has {n_signals} signal, but {named} {verbs} at least "
+        "2. For the spectrum of one signal use method='power'. "
         "When selecting one channel, keep the signal axis: x[:, [i]] rather "
         "than x[:, i] for (n_time_samples, n_signals) input, and x[:, :, [i]] "
         "rather than x[:, :, i] for (n_time_samples, n_trials, n_signals) input."
