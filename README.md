@@ -132,6 +132,21 @@ measures = multitaper_connectivity(
 )
 ```
 
+A few terms used throughout:
+
++ **Taper**: a window function that each stretch of data is multiplied by
+  before its Fourier transform. The multitaper method uses several orthogonal
+  tapers (Slepian sequences, or DPSS) and averages over them, which lowers the
+  variance of the estimate.
++ **Time-halfbandwidth product** (`time_halfbandwidth_product`, NW): sets the
+  frequency resolution, `2 * NW / time_window_duration` Hz (the full DPSS
+  concentration bandwidth: the spectral smoothing, independent of FFT bin
+  spacing and zero-padding), and the number of tapers, `2 * NW - 1` rounded
+  down (5 for NW = 3). Larger NW: smoother, less noisy spectra but coarser
+  frequency resolution.
++ **Observations**: the trials x tapers that each estimate averages over.
+  Normalized measures such as coherence need several of them.
+
 The common multitaper settings, like `time_halfbandwidth_product` here, are
 named arguments: `time_window_duration` (seconds; default the whole trial),
 `time_window_step` (seconds), `time_halfbandwidth_product`, `n_tapers`, and
@@ -251,7 +266,9 @@ m = Multitaper(
 )
 
 # Sets up computing connectivity measures/power from multitaper spectral estimate
-# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.)
+# (`from_multitaper`, its 2.x name, is deprecated and removed in 4.0.) Its
+# expectation_type says which axes the cross-spectrum is averaged over: the
+# default "trials_tapers" keeps one estimate per time window.
 c = Connectivity.from_transform(m)
 
 # Here are a couple of examples. Pairwise measures return NumPy arrays shaped
@@ -283,8 +300,10 @@ as computed over `frequency_range`.
 
 The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
 wavelet transforms. Morlet coefficients are one-sided, so they support
-functional measures but deliberately reject Wilson-factorized directed
-measures:
+functional measures but deliberately reject the directed measures (the
+spectral Granger and transfer-function families), which factor the spectrum
+into a transfer function and noise covariance by Wilson's algorithm and need
+both positive and negative frequencies:
 
 ```python
 from spectral_connectivity import (
