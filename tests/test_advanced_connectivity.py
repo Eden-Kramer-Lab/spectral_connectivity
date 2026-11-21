@@ -1038,8 +1038,14 @@ class TestGroupDelay:
         bandpassed, band_frequencies = conn.coherency(), frequencies
         pairs = np.asarray(list(combinations(range(n_signals), 2)))
         bandpassed = bandpassed[..., pairs[:, 0], pairs[:, 1]]
+        # The same significance filter as group_delay, which tests the bins
+        # whose coefficients are all real (0 Hz and Nyquist) against the real null.
         significant = _find_significant_frequencies(
-            bandpassed, conn.n_observations, step, significance_threshold=0.05
+            bandpassed,
+            conn.n_observations,
+            step,
+            significance_threshold=0.05,
+            real_valued=conn._real_valued_frequency_bins()[:, np.newaxis],
         )
         phase = np.ma.masked_array(np.unwrap(np.angle(bandpassed), axis=-2), mask=~significant)
 
