@@ -17,7 +17,7 @@ import scipy.special
 import scipy.stats
 from numpy.typing import NDArray
 
-from spectral_connectivity.utils import to_numpy, warn_deprecated
+from spectral_connectivity.utils import _validated_flag, to_numpy, warn_deprecated
 
 
 @dataclass(frozen=True)
@@ -799,6 +799,8 @@ def coherence_rate_adjustment(
     spike_power_spectrum: NDArray[np.floating],
     homogeneous_poisson_noise: float = 0,
     dt: float = 1,
+    *,
+    is_one_sided: bool = True,
 ) -> NDArray[np.floating]:
     """Adjust spike-field coherence for different firing rates between conditions.
 
@@ -814,7 +816,11 @@ def coherence_rate_adjustment(
         Average firing rate in second condition (spikes/sec), including any
         spikes counted in ``homogeneous_poisson_noise``.
     spike_power_spectrum : NDArray[floating], shape (n_frequencies,)
-        Power spectrum of spike train in condition 1.
+        Power spectral density of the first condition's spike train, counted
+        in bins of width ``dt``: by default the one-sided density, as
+        :meth:`Connectivity.power
+        <spectral_connectivity.connectivity.Connectivity.power>` returns it
+        (see ``is_one_sided``).
     homogeneous_poisson_noise : float, default=0
         Rate (spikes/sec) of independent homogeneous Poisson spikes added in
         the second condition (beta in the reference). The second condition's
@@ -823,7 +829,17 @@ def coherence_rate_adjustment(
         firing_rate_condition1``. Must be at least 0 and below
         ``firing_rate_condition2``.
     dt : float, default=1
-        Time step size for discretization.
+        Width of the bins the spikes are counted in, in seconds: one over the
+        sampling frequency of the spike train whose spectrum is given.
+    is_one_sided : bool, default=True
+        Whether ``spike_power_spectrum`` is a one-sided density, in which a
+        frequency bin carries the power of both signs of its frequency, as in
+        ``Connectivity.power()``. The adjustment is defined for the two-sided
+        density, which is half of that. Pass ``False`` for a spectrum that is
+        two-sided already, such as ``Connectivity.power(one_sided=False)``.
+        A one-sided density is not doubled at 0 Hz or at the Nyquist
+        frequency, so the adjustment is not valid in those two bins unless the
+        two-sided density is given.
 
     Returns
     -------
@@ -834,16 +850,27 @@ def coherence_rate_adjustment(
     Examples
     --------
     >>> import numpy as np
-    >>> # Simulate power spectrum and firing rates
-    >>> freqs = np.linspace(1, 100, 50)
-    >>> power_spec = 1 / (1 + freqs**2)  # 1/f-like spectrum
     >>> rate1, rate2 = 15.0, 10.0  # firing rate decreases in condition 2
-    >>> adjustment = coherence_rate_adjustment(rate1, rate2, power_spec)
+    >>> dt = 0.002  # spikes counted in 2 ms bins (sampling frequency 500 Hz)
+    >>> freqs = np.linspace(1, 100, 50)
+    >>> # A one-sided spike spectrum: the level of a Poisson train of that rate,
+    >>> # 2 * rate * dt**2, with a peak at 40 Hz.
+    >>> power_spec = 2 * rate1 * dt**2 * (1 + 3 * np.exp(-(((freqs - 40) / 5) ** 2)))
+    >>> adjustment = coherence_rate_adjustment(rate1, rate2, power_spec, dt=dt)
     >>> print(f"Adjustment range: {adjustment.min():.3f} to {adjustment.max():.3f}")
-    Adjustment range: 0.004 to 0.250
+    Adjustment range: 0.816 to 0.942
 
     Notes
     -----
+    The factor multiplies the magnitude of the first condition's coherence
+    (not its square) to give the coherence expected at the second condition's
+    rate if the coupling is unchanged.
+
+    The spectrum a spike train of rate ``mu`` would have without any
+    structure is ``mu * dt**2`` as a two-sided density and twice that as a
+    one-sided one. The adjustment depends on the given spectrum relative to
+    that level, which is why the kind of density matters.
+
     For spike-spike coherence comparisons, apply this adjustment twice,
     once for each spike train.
 
@@ -865,6 +892,7 @@ def coherence_rate_adjustment(
             f"{firing_rate_condition2}."
         )
         raise ValueError(msg)
+    is_one_sided = _validated_flag("is_one_sided", is_one_sided)
     if (
         not np.isfinite(homogeneous_poisson_noise)
         or not 0 <= homogeneous_poisson_noise < firing_rate_condition2
@@ -887,6 +915,9 @@ def coherence_rate_adjustment(
     # Spike power spectral density is non-negative by definition; a non-positive
     # value is invalid input (not just undefined), so it is masked below.
     spike_power = np.asarray(spike_power_spectrum, dtype=float)
+    if is_one_sided:
+        # The reference's spectrum runs over both signs of the frequency.
+        spike_power = spike_power / 2
     # Compute the argument and the adjustment under a scoped errstate: zero
     # spike power makes the division non-finite and a non-positive argument
     # makes the sqrt undefined. Both are handled explicitly below rather than

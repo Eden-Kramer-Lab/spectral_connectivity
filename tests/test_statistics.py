@@ -21,6 +21,7 @@ from spectral_connectivity.statistics import (
     power_fisher_z_transform,
     power_variance,
 )
+from spectral_connectivity.transforms import Multitaper
 from tests._deprecation_helpers import warns_once_at_the_call
 
 # Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
@@ -489,10 +490,11 @@ def test_coherence_rate_adjustment_nonpositive_argument_is_nan():
     assert np.isfinite(adjustment[1])
 
 
+@pytest.mark.parametrize("is_one_sided", [True, False], ids=["one_sided", "two_sided"])
 @pytest.mark.parametrize("dt", [1.0, 0.002])
 @pytest.mark.parametrize("added_poisson_rate", [0.0, 6.0])
 def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_process(
-    added_poisson_rate, dt
+    added_poisson_rate, dt, is_one_sided
 ):
     """The factor equals thinned / full spike-field coherence, from the spectra.
 
@@ -508,7 +510,9 @@ def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_pro
     changes the ratio.
 
     The second rate passed is the second condition's mean rate, kept and
-    added spikes together: ``alpha * rate + beta``.
+    added spikes together: ``alpha * rate + beta``. The spike spectrum is
+    passed either as that two-sided density or, by default, as the one-sided
+    density of an interior frequency bin, which is twice it.
     """
     frequencies = np.linspace(1.0, 100.0, 50)
     rate, alpha = 15.0, 0.4
@@ -531,12 +535,14 @@ def test_coherence_rate_adjustment_is_the_coherence_ratio_of_a_thinned_point_pro
     spike_spectrum, coherence = spectra(1.0, 0.0)
     _, thinned_coherence = spectra(alpha, added_poisson_rate)
 
+    sidedness = {} if is_one_sided else {"is_one_sided": False}
     factor = coherence_rate_adjustment(
         rate,
         alpha * rate + added_poisson_rate,
-        spike_spectrum,
+        2 * spike_spectrum if is_one_sided else spike_spectrum,
         homogeneous_poisson_noise=added_poisson_rate,
         dt=dt,
+        **sidedness,
     )
 
     np.testing.assert_allclose(factor, thinned_coherence / coherence, rtol=1e-12)
@@ -701,6 +707,73 @@ def test_get_normal_distribution_p_values_survival_precision():
     p = get_normal_distribution_p_values(8.3)
     assert p > 0
     assert np.allclose(p, 5.2055697448902465e-17, rtol=1e-6)
+
+
+@pytest.mark.parametrize("added_poisson_rate", [0.0, 20.0])
+@pytest.mark.parametrize("is_one_sided", [True, False], ids=["power", "two_sided_power"])
+def test_coherence_rate_adjustment_predicts_the_coherence_of_a_thinned_spike_train(
+    is_one_sided, added_poisson_rate
+):
+    """Thin a simulated spike train that is coupled to a field, and the
+    spike-field coherence falls by the factor the function gives for the full
+    train's power spectrum: ``Connectivity.power()`` as it is returned, or the
+    two-sided density with ``is_one_sided=False``.
+
+    Spikes are Poisson counts in bins of ``1 / sampling_frequency`` whose rate
+    follows a 40 Hz oscillation shared with the field. Each is kept with
+    probability 0.25, and independent Poisson spikes are added in half the
+    cases, so the second condition's rate is ``0.25 * rate`` plus theirs.
+
+    The limit is five standard errors of the ratio of the two coherence
+    magnitudes, each with the large-sample standard error
+    ``(1 - C**2) / sqrt(2 n)`` for ``n`` observations and taken as
+    independent, which overstates the error of their ratio. Read as the wrong
+    kind of density, the spectrum moves the factor by 0.11 without added
+    spikes.
+    """
+    rng = np.random.default_rng(20261127)
+    sampling_frequency, rate, kept_fraction = 500.0, 100.0, 0.25
+    dt = 1 / sampling_frequency
+    time = np.arange(250)[:, np.newaxis] * dt  # (n_time, 1)
+    oscillation = np.cos(2 * np.pi * 40 * time + rng.uniform(0, 2 * np.pi, (1, 2000)))
+    field = oscillation + 0.5 * rng.standard_normal(oscillation.shape)
+    spikes = rng.poisson(rate * (1 + 0.9 * oscillation) * dt)
+    second_condition = rng.binomial(spikes, kept_fraction) + rng.poisson(
+        added_poisson_rate * dt, spikes.shape
+    )
+    connectivity = Connectivity.from_transform(
+        Multitaper(
+            np.stack([field, spikes, second_condition], axis=-1).astype(float),
+            sampling_frequency=sampling_frequency,
+        )
+    )
+    at_40_hz = np.argmin(np.abs(connectivity.frequencies - 40))
+    coherence = np.abs(connectivity.coherency()[0, at_40_hz])  # (signal, signal)
+    full, second = coherence[0, 1], coherence[0, 2]
+
+    factor = coherence_rate_adjustment(
+        rate,
+        kept_fraction * rate + added_poisson_rate,
+        connectivity.power(one_sided=is_one_sided)[0, [at_40_hz], 1],
+        homogeneous_poisson_noise=added_poisson_rate,
+        dt=dt,
+        is_one_sided=is_one_sided,
+    )[0]
+
+    n_observations = connectivity.n_observations
+    relative_standard_error = np.hypot(
+        (1 - full**2) / full, (1 - second**2) / second
+    ) / np.sqrt(2 * n_observations)
+    limit = 5 * relative_standard_error * second / full
+    assert abs(second / full - factor) < limit
+    # Premise: the limit is small against the effect of the spectrum's convention.
+    assert limit < 0.05
+
+
+@pytest.mark.parametrize("not_a_flag", [0, 1, "False", None])
+def test_coherence_rate_adjustment_one_sided_flag_must_be_a_bool(not_a_flag):
+    with pytest.raises(TypeError, match="is_one_sided must be a bool"):
+        coherence_rate_adjustment(15.0, 10.0, np.array([1.0, 2.0]), is_one_sided=not_a_flag)
 
 
 @pytest.mark.parametrize("noise", [10.0, 12.0, -1.0, np.nan, np.inf])
