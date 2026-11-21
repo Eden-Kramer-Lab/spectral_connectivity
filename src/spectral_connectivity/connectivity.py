@@ -459,12 +459,19 @@ _MIGRATION_GUIDE_URL = (
 # this, so pyproject.toml can filter them by message: a category filter would
 # import the package while pytest reads its configuration, before coverage starts.
 _ORIENTATION_WARNING_PREFIX = "Since spectral_connectivity 3.0, "
-_SILENCE_ORIENTATION_WARNING = (
-    'Silence this warning with warnings.filterwarnings("ignore", '
-    "category=spectral_connectivity.DirectedOrientationWarning). Shown once per "
-    "Python session; to see it at every call: warnings.simplefilter("
-    '"always", spectral_connectivity.DirectedOrientationWarning).'
-)
+
+
+def _silence_hint(category: type[UserWarning]) -> str:
+    """How to silence a migration notice, and to see it at every call."""
+    name = f"spectral_connectivity.{category.__name__}"
+    return (
+        f'Silence this warning with warnings.filterwarnings("ignore", category={name}). '
+        "Shown once per Python session; to see it at every call: "
+        f'warnings.simplefilter("always", {name}).'
+    )
+
+
+_SILENCE_ORIENTATION_WARNING = _silence_hint(DirectedOrientationWarning)
 
 # The methods that returned [..., target, source] arrays in 2.x. The Granger
 # measures added in 3.0 and the lead/lag measures were never target first.
@@ -2720,11 +2727,7 @@ class Connectivity:
                     "two-sided density, half of that. Pass one_sided=True to "
                     "confirm and silence this warning, or one_sided=False for the "
                     f"2.x values. See the migration guide: {_MIGRATION_GUIDE_URL}. "
-                    'Silence this warning with warnings.filterwarnings("ignore", '
-                    "category=spectral_connectivity.PowerSidednessWarning). Shown "
-                    "once per Python session; to see it at every call: "
-                    'warnings.simplefilter("always", '
-                    "spectral_connectivity.PowerSidednessWarning).",
+                    f"{_silence_hint(PowerSidednessWarning)}",
                     PowerSidednessWarning,
                 )
             one_sided = True
