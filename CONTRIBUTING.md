@@ -36,10 +36,10 @@ Code contributions are always welcome, from simple bug fixes to new features. To
      `docs/CONNECTIVITY_METRIC_RANGES.md` (`tests/test_docs.py` fails while
      they are stale);
    - for a measure theoretically bounded in [0, 1], a clamp to that interval
-     after computation, so rounding cannot leave values like 1 + 1e-12.
-     Unbiased estimators such as the pairwise phase consistency and the
-     debiased phase-lag indices must keep their legitimate negative
-     finite-sample values;
+     after computation, so rounding cannot leave values like 1 + 1e-12. Do
+     not clamp unbiased estimators such as the pairwise phase consistency and
+     the debiased phase-lag indices: their negative finite-sample values are
+     legitimate;
    - for a phase-based measure, aggregation over the expectation (observation)
      axes only: trials, tapers, or segments.
 6. Update [CHANGELOG.md](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/CHANGELOG.md) with your changes under the "Unreleased" section.
@@ -51,12 +51,12 @@ If you are fixing a new issue, file an issue and then reference it in the PR.
 
 ### How to build the documentation
 
-1. From the repository root, in a Python >= 3.11 environment (the docs need
-   MyST-Parser >= 5.1, which does not install on 3.10), install the
-   documentation dependencies with `pip install -r docs/requirements-docs.txt`
-   (or run the build with
-   `uv run --with-requirements docs/requirements-docs.txt python -m sphinx -b html docs docs/_build/html`).
-2. Run `make -C docs html` to build the site.
+1. Use Python >= 3.11: the docs need MyST-Parser >= 5.1, which does not
+   install on 3.10. From the repository root, install the documentation
+   dependencies with `pip install -r docs/requirements-docs.txt`.
+2. Run `make -C docs html` to build the site. With uv,
+   `uv run --with-requirements docs/requirements-docs.txt python -m sphinx -b html docs docs/_build/html`
+   does steps 1 and 2 in one command.
 3. Preview `docs/_build/html/index.html`. A commit to the master branch will
    automatically build the docs on Read the Docs.
 

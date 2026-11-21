@@ -136,16 +136,16 @@ measures = multitaper_connectivity(
 
 A few terms used throughout:
 
-+ **Taper**: a window function that each stretch of data is multiplied by
-  before its Fourier transform. The multitaper method uses several orthogonal
-  tapers (Slepian sequences, or DPSS) and averages over them, which lowers the
++ **Taper**: a window function that multiplies each stretch of data before
+  its Fourier transform. The multitaper method uses several orthogonal tapers
+  (Slepian sequences, or DPSS) and averages over them, which lowers the
   variance of the estimate.
-+ **Time-halfbandwidth product** (`time_halfbandwidth_product`, NW): sets the
-  frequency resolution, `2 * NW / time_window_duration` Hz (the full DPSS
-  concentration bandwidth: the spectral smoothing, independent of FFT bin
-  spacing and zero-padding), and the number of tapers, `2 * NW - 1` rounded
-  down (5 for NW = 3). Larger NW: smoother, less noisy spectra but coarser
-  frequency resolution.
++ **Time-halfbandwidth product** (`time_halfbandwidth_product`, NW): sets two
+  things. The frequency resolution is `2 * NW / time_window_duration` Hz: the
+  width of the spectral smoothing (the full DPSS concentration bandwidth),
+  which FFT bin spacing and zero-padding do not change. The number of tapers
+  is `2 * NW - 1`, rounded down (5 for NW = 3). Larger NW gives smoother, less
+  noisy spectra but coarser frequency resolution.
 + **Observations**: the trials x tapers that each estimate averages over.
   Normalized measures such as coherence need several of them.
 
@@ -162,10 +162,11 @@ and the
 
 The `3` above is a common default. To pick values from your recording's length
 and the frequency resolution you need, use `suggest_parameters`, giving it the
-duration of one trial. The window must fit within that duration: a resolution
-that needs a longer window raises a `ValueError`, and a window that would leave
-fewer than three per trial is shortened, keeping the resolution where possible
-at the cost of fewer tapers (it warns when that leaves fewer than two):
+duration of one trial. The window must fit in that duration: if the
+resolution you ask for needs a longer window, it raises a `ValueError`. If
+fewer than three windows would fit per trial, it shortens the window, keeping
+the resolution where possible by using fewer tapers, and warns if that leaves
+fewer than two tapers:
 
 ```python
 from spectral_connectivity import suggest_parameters
@@ -312,10 +313,10 @@ frequency-reduced, so `frequency_bands` and `frequency_decimation` leave them
 as computed over `frequency_range`.
 
 The same connectivity core accepts Hann short-time Fourier, Welch, and Morlet
-wavelet transforms. Morlet coefficients are one-sided, so they support
-functional measures but deliberately reject the directed measures (the
-spectral Granger and transfer-function families), which factor the spectrum
-into a transfer function and noise covariance by Wilson's algorithm and need
+wavelet transforms. Morlet coefficients are one-sided, so they support the
+functional measures but deliberately reject the directed ones (the spectral
+Granger and transfer-function families). Those use Wilson's algorithm to
+factor the spectrum into a transfer function and noise covariance, which needs
 both positive and negative frequencies:
 
 ```python
@@ -378,10 +379,10 @@ one `transform_parameters_json` record of the settings. See the
 [result-schema reference and migration examples](docs/cookbook.md#result-schema-and-transform-bandwidth).
 
 For uncertainty, `Connectivity.jackknife(method)` recomputes a real-valued
-measure leaving out each trial/taper observation in turn and returns a
-bias-corrected estimate, standard error, and confidence interval, applying an
-automatic variance-stabilizing transformation (log for power, `atanh(sqrt(.))`
-for magnitude-squared coherence, and circular for phase).
+measure, leaving out one trial/taper observation at a time. It returns a
+bias-corrected estimate, standard error, and confidence interval, and applies
+a variance-stabilizing transformation automatically: log for power,
+`atanh(sqrt(.))` for magnitude-squared coherence, and circular for phase.
 
 ## Documentation
 

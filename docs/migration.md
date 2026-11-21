@@ -69,9 +69,8 @@ The tables below list every change, including that `Multitaper` now requires
 
 ## Changes for code written against 2.0.1
 
-If your code was written against the 2.0.1 release (or earlier), these are
-the changes that concern you; you can skip the development-builds section
-after them.
+If your code was written against 2.0.1 or earlier, this section covers your
+changes; you can skip the development-builds section after it.
 
 ### Directed measures
 
@@ -149,12 +148,13 @@ Renamed, deprecated, and removed arguments, names, and defaults.
 
 ## Changes to interfaces that existed only in development builds
 
-Users of the 2.0.1 release can skip this section. These rows concern code written against the development branch after 2.0.1:
-those interfaces were renamed before their first release, with no
-compatibility path. Most old spellings fail loudly or are absent; two do not:
-a positional call to `simulate_lagged_broadband` still runs but now returns a
-trial axis, and the `backend` attribute is still present but lowercase, so a
-comparison with `"CPU"` or `"GPU"` is silently false (see their rows).
+Skip this section if you used only the 2.0.1 release. It covers interfaces
+of development builds after 2.0.1 that were renamed before their first
+release, with no compatibility path. Most old spellings raise an error or no
+longer exist. Two fail silently: a positional call to
+`simulate_lagged_broadband` still runs but now returns a trial axis, and the
+`backend` attribute is still present but lowercase, so comparing it with
+`"CPU"` or `"GPU"` is always false (see their rows).
 
 | Previous behavior | New behavior / required action |
 | --- | --- |

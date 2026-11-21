@@ -116,9 +116,9 @@ True
 - **Directed measures need long windows.** They come from a factorization of
   the estimated spectrum. A window shorter than the slowest correlation in the
   data gives unreliable values with no warning, and zero-padding does not
-  repair that. The values also depend slightly on the FFT length; padding
-  (`transform_kwargs={"n_fft_samples": n}`) removes that dependence but, in
-  simulation, not the error against the true values.
+  repair that. The values also depend slightly on the FFT length. Padding
+  (`transform_kwargs={"n_fft_samples": n}`) removes that dependence, but in
+  simulations it did not reduce the error against the true values.
 
 The [Guide for AI coding assistants](llm_guide.md) lists the pitfalls of the
 programming interface (deprecated spellings, group labels, band summaries,

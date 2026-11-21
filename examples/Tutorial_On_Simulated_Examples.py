@@ -16,7 +16,7 @@
 # %% [markdown]
 # # Connectivity measures on simulated signals
 #
-# **Goal:** see what each spectral and connectivity measure shows on signals whose coupling is known: power and spectrograms, coherence and coherograms, the phase-locking and phase-lag measures, group delay and the phase slope index, canonical and global coherence, and the labeled xarray interface.
+# **Goal:** see what each spectral and connectivity measure shows on signals whose coupling is known. The sections cover power and spectrograms, coherence and coherograms, the phase-locking and phase-lag measures, group delay and the phase slope index, canonical and global coherence, and the labeled xarray interface.
 #
 # **You need:** the [getting-started tutorial](Intro_tutorial.ipynb), or the README's quick example.
 #

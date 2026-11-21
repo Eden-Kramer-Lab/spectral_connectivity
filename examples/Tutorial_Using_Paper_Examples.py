@@ -16,7 +16,7 @@
 # %% [markdown]
 # # Directed connectivity on published autoregressive models
 #
-# **Goal:** compare the directed measures (pairwise spectral Granger prediction, the directed transfer function, partial directed coherence and its generalized form, and the direct directed transfer function) on vector autoregressive models from the literature, whose true connections are known from their coefficients.
+# **Goal:** compare directed measures on vector autoregressive models from the literature, whose coefficients give the true connections. The measures are pairwise spectral Granger prediction, the directed transfer function, partial directed coherence and its generalized form, and the direct directed transfer function.
 #
 # **You need:** the [getting-started tutorial](Intro_tutorial.ipynb). Some familiarity with Granger causality helps; each section gives its model's equations.
 #
