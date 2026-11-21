@@ -749,9 +749,10 @@ def _reject_complex_time_series(time_series: Any, transform: str) -> None:
             "non-negative frequencies and assume the negative ones mirror them, "
             "which holds only for a real signal: the negative-frequency content "
             "of a complex signal would be lost, and its positive-frequency "
-            "content double-counted. Pass a real time series (for example the "
-            "real and imaginary parts as separate signals), or compute the "
-            "Fourier coefficients yourself and pass them to Connectivity."
+            "content double-counted. If the imaginary part is zero or negligible "
+            "(as after an inverse FFT), pass np.real(time_series). Otherwise pass "
+            "the real and imaginary parts as separate real signals, or compute "
+            "the Fourier coefficients yourself and pass them to Connectivity."
         )
         raise TypeError(msg)
 
@@ -2096,7 +2097,9 @@ class Multitaper(_WindowedFourierTransform):
         # <w_k, w_l> / (|w_k| |w_l|). Orthogonal tapers computed in floating
         # point leave that at rounding level; sqrt(eps) admits orthogonal
         # tapers computed elsewhere to a lower precision.
-        gram = xp.matmul(self._tapers.T, self._tapers)
+        # Custom tapers may be integers (a boxcar of ones, say).
+        tapers = self._tapers.astype(xp.result_type(self._tapers.dtype, xp.float32))
+        gram = xp.matmul(tapers.T, tapers)
         norms = xp.sqrt(xp.diagonal(gram))
         correlation = xp.abs(gram) / (norms[:, xp.newaxis] * norms[xp.newaxis, :])
         off_diagonal = ~xp.eye(gram.shape[0], dtype=bool)

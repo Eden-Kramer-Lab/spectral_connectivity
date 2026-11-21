@@ -312,8 +312,18 @@ def _sine_tapers(n_samples, n_tapers):
         (np.hanning(200)[:, np.newaxis], True),
         (np.repeat(_sine_tapers(200, 1), 4, axis=1), False),
         (_sine_tapers(200, 3) + 0.05 * _sine_tapers(200, 1), False),
+        (np.ones((200, 1), dtype=int), True),
+        (np.ones((200, 2), dtype=int), False),
     ],
-    ids=["dpss", "orthogonal_sine", "single_hann", "duplicated", "overlapping"],
+    ids=[
+        "dpss",
+        "orthogonal_sine",
+        "single_hann",
+        "duplicated",
+        "overlapping",
+        "integer_boxcar",
+        "integer_duplicated",
+    ],
 )
 def test_multitaper_counts_custom_tapers_as_independent_only_when_orthogonal(
     tapers, independent
