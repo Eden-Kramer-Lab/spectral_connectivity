@@ -388,34 +388,25 @@ For a canonical reference of connectivity metric value ranges, see [Connectivity
 
 ### Implemented Measures
 
-Functional
+The complete list, with each measure's `method` name, value range, units,
+diagonal, and interpretation, is generated from the code into
+[Connectivity Metric Ranges](docs/CONNECTIVITY_METRIC_RANGES.md);
+`list_measures()` returns the same records in Python. By family:
 
-1. coherency
-2. cross_spectral_density
-3. magnitude_squared_coherence and coherence_phase
-4. imaginary_coherence and signed imaginary_coherency
-5. partial_coherence
-6. canonical_coherence and exact complex canonical_coherency (CaCoh)
-7. maximized_imaginary_coherency (score-only or component-resolved) and multivariate_interaction_measure
-8. phase_locking_value and corrected_imaginary_phase_locking_value
-9. phase_lag_index, directed_phase_lag_index, and weighted_phase_lag_index
-10. debiased_squared_phase_lag_index
-11. debiased_squared_weighted_phase_lag_index
-12. pairwise_phase_consistency
-13. global_coherence
-
-Directed
-
-1. directed_transfer_function
-2. directed_coherence
-3. partial_directed_coherence
-4. generalized_partial_directed_coherence
-5. direct_directed_transfer_function
-6. group_delay
-7. pairwise_spectral_granger_prediction
-8. conditional_spectral_granger_prediction
-9. blockwise_spectral_granger_prediction
-10. time_reversed_spectral_granger_prediction
++ **Spectra**: power and the cross-spectral density.
++ **Coherence**: coherency, its squared magnitude, phase, and imaginary part,
+  and partial coherence.
++ **Phase synchrony**: the phase-locking value and pairwise phase consistency,
+  and the phase lag index with its weighted and debiased forms.
++ **Between groups of signals**: canonical coherence and coherency, maximized
+  imaginary coherency, the multivariate interaction measure, and global
+  coherence.
++ **Directed influence**: spectral Granger prediction (pairwise, subset,
+  conditional, blockwise, time-reversed) and the transfer-function family
+  (directed transfer function, directed coherence, partial directed coherence
+  and its generalized form, direct directed transfer function).
++ **Lead and lag**: the phase slope index, group delay, delay, and the directed
+  phase lag index.
 
 ### Package Dependencies
 
