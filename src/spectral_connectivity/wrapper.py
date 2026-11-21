@@ -34,6 +34,7 @@ from spectral_connectivity._measure_registry import (
     _MEASURE_SPECS,
     _SINGLE_SIGNAL_MEASURES,
     _consumes_frequency_range,
+    _format_value_range,
     _is_group_measure,
     _measure_description,
     _reduces_frequency,
@@ -102,8 +103,10 @@ DEFAULT_METHODS: tuple[str, ...] = tuple(
 class MeasureInfo:
     """A single connectivity measure the high-level wrapper can compute.
 
-    Its repr shows only ``name``, ``category``, ``value_range``, and
-    ``units``, so ``list_measures()`` prints one line per measure; read any
+    Its repr shows only ``name``, ``category``, ``value_range``,
+    ``is_directed`` (when true), and ``description``, so ``list_measures()``
+    prints one line per measure. ``description`` is the one-line summary of
+    the measure; ``interpretation`` says how to read its values. Read any
     field below as an attribute, or all of them with ``dataclasses.asdict``.
 
     Attributes
@@ -190,17 +193,19 @@ class MeasureInfo:
     formula: str | None
 
     def __repr__(self) -> str:
-        """Name, category, range, and units on one line; ``...`` marks the rest.
+        """Name, category, range, and description on one line; ``...`` marks the rest.
 
         ``list_measures()`` in a notebook prints every record's repr, so the
-        full one of 18 fields made a wall of text. Each field is still an
-        attribute (``measure.interpretation``), and ``dataclasses.asdict``
-        returns them all.
+        full one of 18 fields made a wall of text. ``is_directed=True`` is
+        shown for the directed measures. Each field is still an attribute
+        (``measure.interpretation``), and ``dataclasses.asdict`` returns them
+        all.
         """
-        lower, upper = self.value_range
+        directed = ", is_directed=True" if self.is_directed else ""
         return (
             f"MeasureInfo(name={self.name!r}, category={self.category!r}, "
-            f"value_range=({lower:g}, {upper:g}), units={self.units!r}, ...)"
+            f"value_range={_format_value_range(*self.value_range)}{directed}, "
+            f"description={self.description!r}, ...)"
         )
 
 
@@ -238,7 +243,9 @@ def list_measures(
     Returns
     -------
     measures : list of MeasureInfo
-        One record per measure, in the wrapper's canonical order.
+        One record per measure, in the wrapper's canonical order. Each
+        prints as one line; ``m.description`` is the one-line summary and
+        ``m.interpretation`` says how to read the values.
 
     Examples
     --------

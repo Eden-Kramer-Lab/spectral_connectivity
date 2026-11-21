@@ -139,7 +139,9 @@ coherence = multitaper_connectivity(
 
 Not sure which `method` names are valid? `list_measures()` enumerates every
 supported measure with its output category and a one-line description, and an
-unknown `method` name raises an error that suggests the closest matches:
+unknown `method` name raises an error that suggests the closest matches. For a
+measure `m`, `m.description` is that one-liner and `m.interpretation` says how
+to read its values:
 
 ```python
 from spectral_connectivity import list_measures
