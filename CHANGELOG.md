@@ -366,7 +366,10 @@ their rows).
   scalar group measures, a `MultivariateConnectivityResult` from
   `canonical_coherency` and `maximized_imaginary_coherency_components`, and
   two arrays from `global_coherence`, whose frequency axis (unlike the other
-  measures') holds every FFT bin.
+  measures') holds every FFT bin: `[..., :len(conn.frequencies), :]` keeps the
+  non-negative ones. `global_coherence` documents that it ignores
+  `expectation_type` (every trial and taper of a window is decomposed) and
+  names its second return value `vectors`.
 - `Multitaper.frequencies` (and `ShortTimeFourierTransform`'s and `Welch`'s)
   says that it labels the two-sided FFT bins of `fft()` and that
   `Connectivity.frequencies`, the non-negative bins, labels results; the

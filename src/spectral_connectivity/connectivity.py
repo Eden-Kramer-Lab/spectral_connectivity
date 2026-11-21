@@ -1052,9 +1052,12 @@ class Connectivity:
       rather than unpacking it.
     - ``global_coherence`` (which takes no groups) returns two arrays,
       ``fractions, vectors = conn.global_coherence()``. Unlike every other
-      measure, its frequency axis holds all ``n_fft_samples`` FFT bins,
-      negative frequencies included: ``fractions[:, :len(conn.frequencies)]``
-      lines up with :attr:`frequencies`.
+      measure, its frequency axis holds all ``n_fft_samples`` FFT bins in FFT
+      order, labelled by :attr:`all_frequencies`; the first
+      ``len(conn.frequencies)`` are the non-negative ones, so
+      ``fractions[..., :len(conn.frequencies), :]`` and
+      ``vectors[..., :len(conn.frequencies), :, :]`` line up with
+      :attr:`frequencies` (the wrappers return them trimmed so).
 
     ``group_delay`` returns ``(delay, slope, r_value)`` and :meth:`jackknife` a
     :class:`~spectral_connectivity.statistics.JackknifeResult`. The labeled
@@ -1075,6 +1078,9 @@ class Connectivity:
     >>> fractions, vectors = conn.global_coherence()
     >>> fractions.shape, vectors.shape  # 64 FFT bins: all of them, not 33
     ((1, 64, 1), (1, 64, 4, 1))
+    >>> n_frequencies = len(conn.frequencies)
+    >>> fractions[..., :n_frequencies, :].shape  # aligned with conn.frequencies
+    (1, 33, 1)
 
     **Coefficients of a complex signal**: the transforms take only real time
     series, whose negative frequencies mirror the positive ones. Two-sided
@@ -4121,16 +4127,26 @@ class Connectivity:
             The fraction of total coherent power captured by each component
             (eigenvalue of the cross-spectral matrix divided by the sum of all
             eigenvalues), ordered strongest component first.
-        unnormalized_global_coherence : ndarray
+        vectors : ndarray
             Shape (n_time_windows, n_fft_samples, n_signals, n_components).
-            The global coherence vectors (left singular vectors).
+            Each component's unit-norm weights over the signals (the left
+            singular vectors of the coefficient matrix), in the same order;
+            the wrappers call them ``global_coherence_vectors``.
 
         Notes
         -----
         **Frequency axis**: unlike every other public measure, which returns
         only the non-negative frequencies, this method returns all
-        ``n_fft_samples`` bins of the (two-sided) transform in FFT order;
-        index it with ``all_frequencies`` rather than ``frequencies``.
+        ``n_fft_samples`` bins of the (two-sided) transform in FFT order,
+        labelled by :attr:`all_frequencies`. The first ``len(frequencies)``
+        of them are the non-negative bins, so
+        ``global_coherence[..., :len(conn.frequencies), :]`` and
+        ``vectors[..., :len(conn.frequencies), :, :]`` line up with
+        :attr:`frequencies`; the wrappers return them trimmed so.
+
+        **Observations**: it does not follow ``expectation_type``. Each time
+        window is decomposed from all of its trials and tapers, so the
+        leading axis is always ``n_time_windows``.
 
         **Range**: [0, 1]. Each value is the fraction of total coherent power
         in that component, so the components sum to at most 1 and rescaling
