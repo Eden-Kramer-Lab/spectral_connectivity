@@ -209,7 +209,7 @@ directed = [m.name for m in list_measures(directed=True)]
 | Your question | Start with | Watch out for |
 | --- | --- | --- |
 | Are two signals coupled? | `magnitude_squared_coherence`, `phase_locking_value`, `pairwise_phase_consistency` | Few trials x tapers bias coherence and phase locking upward; one gives 1 for any data. |
-| Could it be volume conduction (zero-lag mixing)? | `imaginary_coherence`, `weighted_phase_lag_index`, `debiased_squared_weighted_phase_lag_index` | They also ignore genuine zero-lag coupling. |
+| Could it be volume conduction (zero-lag mixing)? | `imaginary_coherence`, `weighted_phase_lag_index`, `debiased_squared_weighted_phase_lag_index` | They also ignore genuine zero-lag and anti-phase coupling. |
 | Which signal leads? | `phase_slope_index`, `pairwise_spectral_granger_prediction`, `conditional_spectral_granger_prediction` | Granger measures need long windows and a two-sided transform. |
 | How are two groups of signals coupled? | `canonical_coherence`, `blockwise_spectral_granger_prediction` | Pass `group_labels`, one label per signal. |
 
