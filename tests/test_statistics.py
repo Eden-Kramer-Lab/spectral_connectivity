@@ -5,6 +5,7 @@ import warnings
 import numpy as np
 import pytest
 
+from spectral_connectivity.connectivity import Connectivity
 from spectral_connectivity.statistics import (
     Benjamini_Hochberg_procedure,
     Bonferroni_correction,
@@ -21,6 +22,19 @@ from spectral_connectivity.statistics import (
     power_variance,
 )
 from tests._deprecation_helpers import warns_once_at_the_call
+
+# Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
+# Student t with n - 1 degrees of freedom for n = 3, 4, and 5 leave-one-out
+# replicates, t.ppf(0.975, df), to double precision (computed with mpmath).
+_Z_975 = 1.959963984540054
+_T_975_DF2 = 4.302652729749464
+_T_975_DF3 = 3.1824463052837096
+_T_975_DF4 = 2.7764451051977944
+# SciPy's t.ppf differs from the exact quantile by up to ~1e-11 relative before
+# SciPy 1.16 (the version installed with Python 3.10). Bounds that scale with a
+# t quantile are compared at this tolerance, which still separates t from the
+# normal quantile by orders of magnitude.
+_T_QUANTILE_RTOL = 1e-9
 
 
 @pytest.mark.parametrize("correction", [Benjamini_Hochberg_procedure, Bonferroni_correction])
@@ -90,6 +104,140 @@ def test_fisher_z_transform_two_sample_matches_analytic():
         coherence_fisher_z_transform(coherency1, n_obs1, coherency2=coherency1, n_obs2=n_obs1),
         0.0,
         atol=1e-12,
+    )
+
+
+def _coherent_gaussian_coefficients(rng, coherence, n_replicates, n_trials, n_tapers=1):
+    """Complex Gaussian pairs with a known coherency, one replicate per time window.
+
+    x = z1 and y = coherence * z1 + sqrt(1 - coherence**2) * z2 for independent
+    standard complex normal z1 and z2, so the coherency of x with y is
+    ``coherence`` and its magnitude squared is ``coherence**2``. Shape
+    (n_replicates, n_trials, n_tapers, 1, 2): the default expectation averages
+    trials and tapers, so each time window is one independent dataset of
+    n_trials * n_tapers observations.
+    """
+    shape = (n_replicates, n_trials, n_tapers, 1)
+
+    def standard_complex_normal():
+        return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / np.sqrt(2)
+
+    first = standard_complex_normal()
+    second = coherence * first + np.sqrt(1 - coherence**2) * standard_complex_normal()
+    return np.stack([first, second], axis=-1)
+
+
+def _sample_coherence_density(squared_coherence, n_observations, true_squared_coherence):
+    """Density of the magnitude-squared sample coherence of ``n_observations``
+    complex Gaussian pairs with the given true value."""
+    from scipy.special import hyp2f1
+
+    return (
+        (n_observations - 1)
+        * (1 - true_squared_coherence) ** n_observations
+        * (1 - squared_coherence) ** (n_observations - 2)
+        * hyp2f1(n_observations, n_observations, 1, true_squared_coherence * squared_coherence)
+    )
+
+
+def _exact_two_sample_z_distribution(true_coherence, n_observations):
+    """Mean, variance and two-sided 5% rejection rate of the two-sample statistic
+    ``(atanh|C1| - b1 - atanh|C2| + b2) / sqrt(b1 + b2)``, ``b = 1 / (2 n - 2)``,
+    for two independent samples of equal true coherence, by quadrature of the
+    density of each sample coherence."""
+    from scipy.integrate import quad
+
+    def integral(function, n, upper=1.0):
+        return quad(
+            lambda u: function(u) * _sample_coherence_density(u, n, true_coherence**2),
+            0,
+            upper,
+            epsabs=1e-13,
+            epsrel=1e-13,
+            limit=400,
+        )[0]
+
+    def transformed(u):
+        return np.arctanh(np.sqrt(u))
+
+    bias = [1 / (2 * n - 2) for n in n_observations]
+    scale = np.sqrt(sum(bias))
+    means, variances = [], []
+    for n in n_observations:
+        np.testing.assert_allclose(integral(lambda u: 1.0, n), 1, rtol=0, atol=1e-10)
+        means.append(integral(transformed, n))
+        variances.append(integral(lambda u: transformed(u) ** 2, n) - means[-1] ** 2)
+    mean = ((means[0] - bias[0]) - (means[1] - bias[1])) / scale
+    variance = sum(variances) / scale**2
+
+    def second_is_below(value):
+        """P(atanh|C2| <= value)."""
+        return (
+            integral(lambda u: 1.0, n_observations[1], np.tanh(value) ** 2)
+            if value > 0
+            else 0.0
+        )
+
+    def rejected_given_first(u):
+        centre = transformed(u) - bias[0] + bias[1]
+        return (
+            second_is_below(centre - _Z_975 * scale)
+            + 1
+            - second_is_below(centre + _Z_975 * scale)
+        )
+
+    return mean, variance, integral(rejected_given_first, n_observations[0])
+
+
+def test_two_sample_coherence_z_statistic_is_standard_normal_for_equal_high_coherence():
+    """Two samples with the same high true coherence give z close to N(0, 1),
+    and the statistic has the mean, variance and 5% rejection rate that its
+    formula implies.
+
+    For n complex Gaussian observations and a high coherence, atanh of the
+    sample coherence magnitude has mean atanh|C| + 1 / (2 n - 2) and variance
+    1 / (2 n - 2) to a good approximation (Enochson & Goodman 1965). The
+    density of the sample coherence gives the mean, variance and rejection
+    rate of the statistic with that correction exactly, so two things are
+    asserted without mixing them. The exact values, which do not involve the
+    package, are close to those of N(0, 1) at a
+    coherence of 0.9 with 10 and 20 observations (within 0.002, 0.002 and 0.1
+    percentage points; they are 0.0007, 0.0003 and 0.05 points away). And the
+    statistic computed from simulated data has those exact values, within
+    five Monte Carlo standard errors and no further allowance, which is
+    precise enough to tell 1 / (2 n - 2) from its neighbours: 1 / (2 n - 1) in
+    its place changes the variance by 4.6%, against a limit of 2.2%.
+
+    The statistic is not calibrated at low coherence, which is not tested
+    here. The observations are spread over trials and tapers, so the count to
+    pass is ``n_observations`` (trials x tapers).
+    """
+    rng = np.random.default_rng(20261124)
+    coherence, n_replicates = 0.9, 100_000
+    first = Connectivity(
+        _coherent_gaussian_coefficients(rng, coherence, n_replicates, n_trials=5, n_tapers=2)
+    )
+    second = Connectivity(
+        _coherent_gaussian_coefficients(rng, coherence, n_replicates, n_trials=4, n_tapers=5)
+    )
+    assert (first.n_observations, second.n_observations) == (10, 20)
+
+    z = coherence_fisher_z_transform(
+        first.coherency()[:, 0, 0, 1],
+        first.n_observations,
+        second.coherency()[:, 0, 0, 1],
+        second.n_observations,
+    )
+    rejection_rate = np.mean(np.abs(z) > _Z_975)
+
+    mean, variance, rejection = _exact_two_sample_z_distribution(coherence, (10, 20))
+    assert abs(mean) < 0.002
+    assert abs(variance - 1) < 0.002
+    assert abs(rejection - 0.05) < 0.001
+    assert abs(z.mean() - mean) < 5 * np.sqrt(variance / n_replicates)
+    assert abs(z.var(ddof=1) - variance) < 5 * variance * np.sqrt(2 / (n_replicates - 1))
+    assert abs(rejection_rate - rejection) < 5 * np.sqrt(
+        rejection * (1 - rejection) / n_replicates
     )
 
 
@@ -640,20 +788,6 @@ def test_power_confidence_intervals_rejects_invalid_power(bad_power):
         power_confidence_intervals(n_observations=5, power=bad_power, ci=0.95)
 
 
-# Two-sided 95% critical values: the standard normal, norm.ppf(0.975), and
-# Student t with n - 1 degrees of freedom for n = 3, 4, and 5 leave-one-out
-# replicates, t.ppf(0.975, df), to double precision (computed with mpmath).
-_Z_975 = 1.959963984540054
-_T_975_DF2 = 4.302652729749464
-_T_975_DF3 = 3.1824463052837096
-_T_975_DF4 = 2.7764451051977944
-# SciPy's t.ppf differs from the exact quantile by up to ~1e-11 relative before
-# SciPy 1.16 (the version installed with Python 3.10). Bounds that scale with a
-# t quantile are compared at this tolerance, which still separates t from the
-# normal quantile by orders of magnitude.
-_T_QUANTILE_RTOL = 1e-9
-
-
 def test_jackknife_confidence_interval_matches_mean_example():
     """Identity transform: estimate +/- t_{n-1} * jackknife SE.
 
@@ -716,6 +850,43 @@ def test_jackknife_interval_coverage_for_gaussian_mean():
     lower, upper = result.confidence_interval
     coverage = np.mean((lower <= 0.0) & (upper >= 0.0))
     assert 0.92 <= coverage <= 0.98
+
+
+def test_jackknife_interval_covers_a_known_magnitude_squared_coherence():
+    """A nominal 95% interval contains the true coherence in about 95% of datasets.
+
+    Each time window is one dataset of 8 complex Gaussian observations with a
+    true coherence magnitude of 0.6; ``Connectivity.jackknife`` leaves out one
+    trial at a time within every window, so one call gives every dataset's
+    interval. This is an end-to-end statement about the default interval of a
+    real measure, not a guard on its arithmetic, which the exact jackknife
+    tests cover: the interval is formed on the atanh(sqrt(.)) scale with a
+    Student t critical value on 7 degrees of freedom, and a normal critical
+    value would cover under 91%.
+
+    The target is the true magnitude-squared coherence, 0.36, not the mean of
+    its estimate. The estimate is biased upward by 0.056, a third of its
+    standard deviation, and the interval is not corrected for it, so its
+    coverage is somewhat under the nominal level (94.6%).
+    """
+    rng = np.random.default_rng(20261125)
+    coherence, n_observations, n_replicates = 0.6, 8, 160_000
+    connectivity = Connectivity(
+        _coherent_gaussian_coefficients(rng, coherence, n_replicates, n_trials=n_observations)
+    )
+
+    result = connectivity.jackknife("magnitude_squared_coherence", confidence_level=0.95)
+
+    lower = result.confidence_interval[0][:, 0, 0, 1]
+    upper = result.confidence_interval[1][:, 0, 0, 1]
+    coverage = np.mean((lower <= coherence**2) & (coherence**2 <= upper))
+    # 5 Monte Carlo standard errors of a proportion near 0.95, plus 0.75
+    # percentage points for the bias of the estimate and for the jackknife and
+    # Student t approximations.
+    limit = 5 * np.sqrt(0.95 * 0.05 / n_replicates) + 0.0075
+    assert result.transformation == "fisher_squared"
+    assert result.n_observations == n_observations
+    assert abs(coverage - 0.95) < limit
 
 
 def test_jackknife_log_and_circular_transforms_return_original_scale():
