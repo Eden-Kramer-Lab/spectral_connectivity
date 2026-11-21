@@ -37,7 +37,8 @@ directly with results from 2.x.
 
 The migration guide for code written against 2.x is
 [its own page in the documentation](https://spectral-connectivity.readthedocs.io/en/latest/migration.html)
-(`docs/migration.md` in the repository).
+(`docs/migration.md` in the repository). The `DirectedOrientationWarning` and
+`PowerSidednessWarning` messages link to that page.
 
 ### Added
 
