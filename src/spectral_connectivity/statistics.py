@@ -7,6 +7,7 @@ and non-parametric approaches for statistical inference in frequency domain
 connectivity analysis.
 """
 
+import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -420,7 +421,7 @@ def _warn_all_p_values_nonfinite(procedure_name: str) -> None:
         "all-False; check your inputs rather than reading this as 'no "
         "significant effects'.",
         UserWarning,
-        stacklevel=3,
+        stacklevel=stacklevel_outside_package(),
     )
 
 
@@ -464,7 +465,8 @@ def Benjamini_Hochberg_procedure(
     involves a dead channel) a ``UserWarning`` is emitted, because the all-False
     result would otherwise be indistinguishable from a valid family with no true
     effects. All input dimensions are pooled into a single family (the array is
-    raveled); the result has the input shape. Delegates to
+    raveled); the result has the input shape. For a family per slice (per time
+    window, say), use :func:`adjust_for_multiple_comparisons` with ``axis``. Delegates to
     :func:`scipy.stats.false_discovery_control` (SciPy >= 1.11; a clear
     ``RuntimeError`` is raised on older SciPy), which rejects finite p-values
     outside ``[0, 1]``.
@@ -567,6 +569,8 @@ def adjust_for_multiple_comparisons(
     method: Literal[
         "Benjamini_Hochberg_procedure", "Bonferroni_correction"
     ] = "Benjamini_Hochberg_procedure",
+    *,
+    axis: int | tuple[int, ...] | None = None,
 ) -> NDArray[np.bool_]:
     """Apply multiple comparison correction to p-values.
 
@@ -582,6 +586,13 @@ def adjust_for_multiple_comparisons(
     method : {"Benjamini_Hochberg_procedure", "Bonferroni_correction"},
         default="Benjamini_Hochberg_procedure"
         Multiple comparison correction method to apply.
+    axis : int or tuple of int or None, default=None
+        The axes whose tests form one family, as in
+        :func:`scipy.stats.false_discovery_control`: each slice along the
+        remaining axes is corrected on its own. ``None`` (the default) pools
+        every p-value into a single family. For p-values shaped
+        ``(n_time_windows, n_frequencies)``, ``axis=-1`` corrects across
+        frequencies separately in each time window.
 
     Returns
     -------
@@ -598,19 +609,72 @@ def adjust_for_multiple_comparisons(
     >>> bonf_sig = adjust_for_multiple_comparisons(
     ...     p_vals, method="Bonferroni_correction"
     ... )
+
+    One family per row (say, per time window) instead of one for the whole
+    array. The second row's 0.015 passes Bonferroni among its own three tests
+    (0.05 / 3) but not among all six (0.05 / 6):
+
+    >>> p_vals = np.array([[0.001, 0.2, 0.5], [0.015, 0.6, 0.9]])
+    >>> adjust_for_multiple_comparisons(p_vals, method="Bonferroni_correction")
+    array([[ True, False, False],
+           [False, False, False]])
+    >>> adjust_for_multiple_comparisons(p_vals, method="Bonferroni_correction", axis=-1)
+    array([[ True, False, False],
+           [ True, False, False]])
     """
-    # Note: This function treats all p-values as a single family of tests by
-    # flattening the input array. This is the standard approach for multiple
-    # comparison correction. An axis parameter could be added in the future if
-    # there's a need to correct along specific dimensions independently, but
-    # current use cases don't require this functionality.
     try:
         correction = MULTIPLE_COMPARISONS[method]
     except KeyError as exc:
         choices = ", ".join(sorted(MULTIPLE_COMPARISONS))
         msg = f"Unknown multiple-comparisons method {method!r}; choose one of: {choices}."
         raise ValueError(msg) from exc
-    return correction(p_values, alpha=alpha)
+    if axis is None:
+        return correction(p_values, alpha=alpha)
+    _validate_alpha(alpha)
+    p_values = np.asarray(p_values, dtype=float)
+    family_axes = _normalized_axes(axis, p_values.ndim)
+    other_axes = tuple(dim for dim in range(p_values.ndim) if dim not in family_axes)
+    order = (*other_axes, *family_axes)
+    # (..., family): one row per family, each corrected by the one-family procedure.
+    moved = np.transpose(p_values, order)
+    n_families = math.prod(moved.shape[: len(other_axes)])
+    families = moved.reshape(n_families, math.prod(moved.shape[len(other_axes) :]))
+    is_significant = np.zeros(families.shape, dtype=bool)
+    # A family with no finite p-value has no test to correct; it stays
+    # all-False and is reported once below, not once per family.
+    defined = np.isfinite(families).any(axis=-1)
+    for index in np.flatnonzero(defined):
+        is_significant[index] = correction(families[index], alpha=alpha)
+    n_undefined = int(np.count_nonzero(~defined)) if families.shape[-1] else 0
+    if n_undefined:
+        warnings.warn(
+            f"adjust_for_multiple_comparisons: {n_undefined} of {n_families} families "
+            f"(the slices along axis={axis!r}) have no finite p-value (all NaN/inf), "
+            "so they hold no defined test and are returned all-False. This usually "
+            "means their tests involve a dead/zero-power channel; check your inputs "
+            "rather than reading them as 'no significant effects'.",
+            UserWarning,
+            stacklevel=stacklevel_outside_package(),
+        )
+    return np.transpose(is_significant.reshape(moved.shape), np.argsort(order))
+
+
+def _normalized_axes(axis: int | tuple[int, ...], ndim: int) -> tuple[int, ...]:
+    """``axis`` as distinct non-negative axes of an ``ndim``-dimensional array."""
+    axes = (axis,) if not isinstance(axis, tuple) else axis
+    normalized = []
+    for value in axes:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+            msg = f"axis must be an int, a tuple of ints, or None, got {axis!r}."
+            raise TypeError(msg)
+        if not -ndim <= value < ndim:
+            msg = f"axis {value} is out of bounds for p_values with {ndim} dimension(s)."
+            raise ValueError(msg)
+        normalized.append(int(value) % ndim)
+    if len(set(normalized)) != len(normalized):
+        msg = f"axis {axis!r} names the same axis more than once."
+        raise ValueError(msg)
+    return tuple(normalized)
 
 
 def coherence_fisher_z_transform(
@@ -889,7 +953,8 @@ def coherence_significance_pvalue(
     >>> p_values.shape
     (4, 126, 2, 2)
     >>> # Select the pair first: a signal's coherence with itself is 1 (p = 0)
-    >>> # and does not belong in the family. One family: every window and bin.
+    >>> # and does not belong in the family. One family: every window and bin
+    >>> # (axis=-1 would instead correct each window's bins on their own).
     >>> significant = adjust_for_multiple_comparisons(p_values[..., 0, 1], alpha=0.05)
     >>> significant.shape  # (n_time_windows, n_frequencies)
     (4, 126)
