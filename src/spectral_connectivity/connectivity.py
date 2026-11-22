@@ -1857,26 +1857,26 @@ class Connectivity:
         remedies.append("fewer signals")
         if n_observations == 1:
             floor = (
-                "is computed from a single observation (n_observations == 1), so "
-                "the cross-spectral matrix has rank one: its first component holds "
-                "all of the power, and global coherence is forced to 1 regardless "
-                "of the data, and the result carries no information"
+                "is computed from a single observation (n_observations == 1). The "
+                "cross-spectral matrix then has rank one, so its first component "
+                "holds all of the power. Global coherence is forced to 1 whatever "
+                "the data, and the result carries no information"
             )
         else:
             floor = (
                 f"pools n_observations == {n_observations} observations (the "
-                f"averaged {' x '.join(averaged)}) for {n_signals} signals, so the "
-                f"cross-spectral matrix has rank at most {n_observations} and "
+                f"averaged {' x '.join(averaged)}) for {n_signals} signals. The "
+                f"cross-spectral matrix then has rank at most {n_observations}, so "
                 f"global coherence is at least 1/{n_observations} = "
-                f"{1 / n_observations:.3g} regardless of the data"
+                f"{1 / n_observations:.3g} whatever the data"
             )
         warnings.warn(
-            f"global_coherence {floor}. Independent signals of equal power have a "
-            f"global coherence of 1/n_signals = {1 / n_signals:.3g}, which fewer "
-            "observations than signals cannot give, and even with more the "
-            "estimate is biased above it unless the observations far outnumber "
-            "the signals, so compare values only at matched numbers of "
-            f"observations and signals. Use {', or '.join(remedies)}.",
+            f"global_coherence {floor}. Independent signals of equal power have "
+            f"1/n_signals = {1 / n_signals:.3g}, which fewer observations than "
+            "signals cannot give. Even with more observations, the estimate stays "
+            "above that unless they far outnumber the signals. Compare values only "
+            "at matched numbers of observations and signals. "
+            f"Use {', or '.join(remedies)}.",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )

@@ -1,5 +1,6 @@
 """Tests for advanced connectivity measures: canonical_coherence, global_coherence, group_delay."""
 
+import re
 import warnings
 
 import numpy as np
@@ -960,8 +961,13 @@ def test_global_coherence_warns_when_fewer_observations_than_signals(
     ) in message
     assert f"at least 1/{n_observations} = {1 / n_observations:.3g}" in message
     assert f"1/n_signals = {1 / n_signals:.3g}" in message
-    assert "compare values only at matched numbers of observations and signals" in message
+    assert "Compare values only at matched numbers of observations and signals." in message
     assert "fewer signals" in message
+    # Short sentences: none of the statements runs past 30 words (the last,
+    # the list of remedies, is exempt).
+    *statements, _ = re.split(r"(?<=[a-z0-9)])\. (?=[A-Z])", message)
+    assert len(statements) >= 4
+    assert max(len(statement.split()) for statement in statements) <= 30
     assert ("more trials" in message) == ("trials" in expectation_type)
     assert ("more time windows" in message) == ("time" in expectation_type)
     # The floor the message states holds for independent noise.
