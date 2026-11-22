@@ -2144,7 +2144,7 @@ class Connectivity:
         frequency_axis = 3
         # Frequency and any extra batch axes (axes 3 to signal_axis - 1) stay.
         batch_axes = list(range(frequency_axis, signal_axis))
-        kept_axes = [axis for axis in range(frequency_axis) if axis not in average_axes]
+        kept_axes = self._kept_observation_axes
         # Reorder to (kept leading axes..., frequency, batch..., averaged axes...,
         # signals) so the averaged axes collapse into a single observation axis
         # adjacent to signals, ready for a batched matmul.
@@ -2321,7 +2321,7 @@ class Connectivity:
         if self._observation_weights is None:
             return True
         weights = self._observation_weights[..., 0]
-        kept_axes = [axis for axis in range(3) if axis not in self._expectation_axes]
+        kept_axes = self._kept_observation_axes
         order = [*kept_axes, 3, *self._expectation_axes]
         reordered = xp.transpose(weights, order)
         flattened = reordered.reshape((*reordered.shape[: len(kept_axes) + 1], -1))
@@ -2333,6 +2333,14 @@ class Connectivity:
     def _expectation_axes(self) -> tuple[int, ...]:
         """Observation axes reduced by the configured expectation."""
         return EXPECTATION_AXES[self.expectation_type]
+
+    @property
+    def _kept_observation_axes(self) -> tuple[int, ...]:
+        """Observation axes the expectation keeps, in (time, trials, tapers) order.
+
+        They lead every measure's result in this order.
+        """
+        return tuple(axis for axis in range(3) if axis not in self._expectation_axes)
 
     @property
     def n_observations(self) -> int:
@@ -4446,7 +4454,7 @@ class Connectivity:
         # for a real signal S(-f) = conj(S(f)), and the negative bins have the
         # same fractions and conjugated vectors.
         coefficient_shape = self._fourier_coefficients.shape
-        kept_axes = [axis for axis in range(3) if axis not in pooled_axes]
+        kept_axes = self._kept_observation_axes
         kept_shape = tuple(coefficient_shape[axis] for axis in kept_axes)
         n_nonnegative = self._nonnegative_frequency_count(coefficient_shape[3])
         pooled_layout = (
