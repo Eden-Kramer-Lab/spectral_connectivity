@@ -4115,7 +4115,9 @@ class Connectivity:
         the observations ``expectation_type`` averages.
 
         This is a frequency domain analog of PCA over signals at a given
-        frequency (and time window, for the default expectation).
+        frequency (and time window, for the default expectation). Global
+        coherence [1]_ is the leading component's fraction: the largest
+        eigenvalue of the cross-spectral matrix divided by its trace.
 
         Parameters
         ----------
@@ -4276,7 +4278,8 @@ class Connectivity:
                Salazar-Gomez, A.F., Harrell, P.G., Tavares-Stoeckel, C.,
                Habeeb, K., and Brown, E.N. (2011). Tracking brain states under
                general anesthesia by using global coherence analysis.
-               Proceedings of the National Academy of Sciences 108, 8832-8837.
+               Proceedings of the National Academy of Sciences 108(21),
+               8832-8837. https://doi.org/10.1073/pnas.1017041108
         .. [2] Purdon, P.L., Pierce, E.T., Mukamel, E.A., Prerau, M.J., Walsh,
                J.L., Wong, K.F.K., Salazar-Gomez, A.F., Harrell, P.G., Sampson,
                A.L., Cimenser, A., et al. (2013). Electroencephalogram
