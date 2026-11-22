@@ -491,13 +491,12 @@ _ORIENTATION_CHANGED_MEASURES = frozenset(
     }
 )
 
-# False while the labeled wrapper or a jackknife replicate runs a measure: the
-# wrapper warns about its source/target labels instead (and a labeled power
-# result states its sidedness), and a jackknife warns once, for its full
-# estimate.
-_warn_orientation_change: ContextVar[bool] = ContextVar(
-    "_warn_orientation_change", default=True
-)
+# Whether a measure emits its per-call 3.x migration notices
+# (DirectedOrientationWarning, SidednessWarning). False while the labeled
+# wrapper or a jackknife replicate runs a measure: the wrapper warns about its
+# source/target labels instead (and its labeled results state their
+# sidedness), and a jackknife warns once, for its full estimate.
+_emit_migration_notices: ContextVar[bool] = ContextVar("_emit_migration_notices", default=True)
 
 
 def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P, _R]:
@@ -510,7 +509,7 @@ def _orientation_changed(connectivity_measure: Callable[_P, _R]) -> Callable[_P,
     @wraps(connectivity_measure)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         result = connectivity_measure(*args, **kwargs)
-        if _warn_orientation_change.get():
+        if _emit_migration_notices.get():
             warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}{connectivity_measure.__name__} "
                 "returns [..., source, target]: [..., i, j] is i -> j. 2.x "
@@ -1858,7 +1857,7 @@ class Connectivity:
         # False while a labelled wrapper runs the measure (global_coherence has
         # no jackknife): its expectation_type is fixed at "trials_tapers", so
         # name the call that pools the windows instead, when there are any.
-        if not _warn_orientation_change.get():
+        if not _emit_migration_notices.get():
             if self._fourier_coefficients.shape[0] > 1:
                 remedies.append(
                     "Connectivity.from_transform(transform, "
@@ -2637,11 +2636,11 @@ class Connectivity:
                 observations_are_independent=self._observations_are_independent,
                 _adopt_fourier_coefficients=True,
             )
-            token = _warn_orientation_change.set(False)
+            token = _emit_migration_notices.set(False)
             try:
                 replicate = getattr(replicate_connectivity, method)(**method_kwargs)
             finally:
-                _warn_orientation_change.reset(token)
+                _emit_migration_notices.reset(token)
             if isinstance(replicate, tuple) or np.iscomplexobj(replicate):
                 msg = f"jackknife requires a real array result from {method!r}."
                 raise TypeError(msg)
@@ -2773,7 +2772,7 @@ class Connectivity:
         True
         """
         if one_sided is None:
-            if not self._is_one_sided and _warn_orientation_change.get():
+            if not self._is_one_sided and _emit_migration_notices.get():
                 # Remove in 3.2, with DirectedOrientationWarning (issue #98).
                 warn_migration(
                     f"{_ORIENTATION_WARNING_PREFIX}Connectivity.power returns the "
@@ -4489,7 +4488,7 @@ class Connectivity:
                 stacklevel=stacklevel_outside_package(),
             )
 
-        if not self._is_one_sided and _warn_orientation_change.get():
+        if not self._is_one_sided and _emit_migration_notices.get():
             # Remove in 3.2, with DirectedOrientationWarning (issue #98).
             warn_migration(
                 f"{_ORIENTATION_WARNING_PREFIX}Connectivity.global_coherence returns "

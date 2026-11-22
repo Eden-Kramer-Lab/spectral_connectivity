@@ -18,8 +18,8 @@ from spectral_connectivity._provenance import _canonical_json, _store_provenance
 from spectral_connectivity.connectivity import (
     Connectivity,
     MultivariateConnectivityResult,
+    _emit_migration_notices,
     _FrequencySelection,
-    _warn_orientation_change,
 )
 from spectral_connectivity.utils import (
     close_names,
@@ -170,11 +170,11 @@ def _connectivity_result_to_xarray(
     measure = getattr(connectivity, method)
     # The labeled result's source/target coordinates state its orientation, so
     # the wrapper warns about those labels instead of the array (see wrapper.py).
-    token = _warn_orientation_change.set(False)
+    token = _emit_migration_notices.set(False)
     try:
         numerical_result = measure(**kwargs)
     finally:
-        _warn_orientation_change.reset(token)
+        _emit_migration_notices.reset(token)
 
     pairwise_shape = (
         len(connectivity.time),
