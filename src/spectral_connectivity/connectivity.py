@@ -1651,13 +1651,30 @@ class Connectivity:
                 raise
             raise ValueError(_nonfinite_decomposition_message(measure, error)) from error
 
+    @cached_property
+    def _nonfinite_coefficients_are_weighted(self) -> bool:
+        """Whether some NaN or Inf coefficient has a nonzero observation weight.
+
+        Coefficients that are not finite only where zero weights omit them
+        never reach a weighted decomposition.
+        """
+        if self._coefficients_are_finite:
+            return False
+        if self._observation_weights is None:
+            return True
+        omitted = xp.broadcast_to(
+            self._observation_weights == 0, self._fourier_coefficients.shape
+        )
+        return not bool(xp.all(xp.isfinite(self._fourier_coefficients) | omitted))
+
     def _require_finite_decomposition(self, measure: str, values: BackendArray) -> None:
         """Raise, as :meth:`_decomposition_of_nonfinite_coefficients` does,
         when NaN or Inf coefficients left ``values`` (a decomposition's output,
         before any deliberate NaN) not finite: the backend returned NaN rather
         than raising. Coefficients that are not finite only where zero weights
-        omit them give finite values and pass."""
-        if not self._coefficients_are_finite and not bool(xp.all(xp.isfinite(values))):
+        omit them pass: a bin left with no weighted observation is NaN from
+        zero power, as for finite coefficients."""
+        if self._nonfinite_coefficients_are_weighted and not bool(xp.all(xp.isfinite(values))):
             raise ValueError(_nonfinite_decomposition_message(measure))
 
     def _validate_multiple_signals(self) -> None:

@@ -1443,6 +1443,10 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   both the number of signals and of observations exceed 64) raised ARPACK's
   `ArpackError` there instead, with LAPACK printing "ZLASCL ... illegal
   value" to stderr; it skips such bins and raises the same `ValueError`.
+  NaN or Inf coefficients that zero weights omit do not raise: a bin of
+  `canonical_coherence` or `global_coherence` left with no weighted
+  observation is NaN with the zero-power warning, as for finite
+  coefficients.
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0

@@ -1053,6 +1053,52 @@ def test_global_coherence_ignores_nonfinite_negative_frequency_bins():
     assert np.all(np.isfinite(vectors))
 
 
+@pytest.mark.parametrize("expectation_type", ["tapers", "trials_tapers"])
+def test_global_coherence_of_a_bin_whose_weights_omit_its_nan_is_nan_not_an_error(
+    expectation_type,
+):
+    """NaN coefficients whose observation weights are all zero are omitted, so
+    a bin left with no weighted observation has zero power: NaN with the
+    zero-power warning, as for finite coefficients, not the NaN-or-Inf error.
+    The other bins are unaffected."""
+    rng = np.random.default_rng(39)
+    shape = (1, 2, 3, 8, 3)  # (time, trials, tapers, frequency, signals)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = np.ones((*shape[:-1], 1))
+    coefficients[0, 1, :, 2, 0] = np.nan  # every taper of trial 1 at bin 2
+    weights[0, 1, :, 2] = 0
+    if expectation_type == "trials_tapers":
+        coefficients[0, 0, :, 2, 0] = np.nan  # and trial 0, so the bin is empty
+        weights[0, 0, :, 2] = 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # the NaN warning
+        connectivity = Connectivity(
+            coefficients, expectation_type=expectation_type, observation_weights=weights
+        )
+    with pytest.warns(UserWarning, match="zero total power"):
+        fractions, _ = connectivity.global_coherence()
+    empty = (0, 1, 2) if expectation_type == "tapers" else (0, 2)  # (time, [trial,] bin)
+    assert np.all(np.isnan(fractions[empty]))
+    assert np.isfinite(fractions).sum() == fractions.size - fractions[empty].size
+
+
+def test_global_coherence_of_weighted_nan_still_raises():
+    """A NaN coefficient with a nonzero weight still raises."""
+    rng = np.random.default_rng(40)
+    shape = (1, 2, 3, 8, 3)
+    coefficients = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    weights = np.ones((*shape[:-1], 1))
+    coefficients[0, 1, :, 2, 0] = np.nan
+    weights[0, 1, 1:, 2] = 0  # one of its tapers keeps its weight
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        connectivity = Connectivity(
+            coefficients, expectation_type="tapers", observation_weights=weights
+        )
+    with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+        connectivity.global_coherence()
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
