@@ -3,6 +3,7 @@
 import contextlib
 import warnings
 from collections.abc import Iterator
+from dataclasses import dataclass
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -15,6 +16,7 @@ from typing import (
 )
 
 import numpy as np
+import scipy.stats
 from numpy.typing import NDArray
 from scipy.signal.windows import dpss as scipy_dpss
 from scipy.signal.windows import hann as scipy_hann
@@ -134,6 +136,52 @@ class MultitaperParameters(TypedDict):
     frequency_resolution: float
     n_time_windows: int
     nyquist_frequency: float
+
+
+@dataclass(frozen=True)
+class HarmonicFTestResult:
+    """Thomson's harmonic F-test for a sinusoid at each frequency.
+
+    Returned by :meth:`Multitaper.harmonic_f_test`. The array attributes have
+    shape ``(n_time_windows, n_trials, n_frequencies, n_signals)``, over the
+    non-negative frequencies ``frequencies``; they are NaN at frequencies
+    within ``half_bandwidth`` of 0 Hz or the Nyquist frequency, where the test
+    is not defined (see :meth:`Multitaper.harmonic_f_test`).
+
+    Attributes
+    ----------
+    frequencies : ndarray, shape (n_frequencies,)
+        The non-negative FFT bin frequencies, in Hz.
+    time : ndarray, shape (n_time_windows,)
+        Center time of each window, in seconds, as :attr:`Multitaper.time`.
+    f_statistic : ndarray
+        Thomson's F statistic for a sinusoid at each frequency.
+    p_value : ndarray
+        Probability of an F statistic at least this large when there is no
+        sinusoid, from the F distribution with ``degrees_of_freedom``.
+    amplitude : ndarray
+        Amplitude ``A`` of the fitted sinusoid
+        ``A * cos(2 * pi * f * (t - t_center) + phase)``, in the units of the
+        time series.
+    phase : ndarray
+        Phase of the fitted sinusoid at each window's center time, in
+        radians, in ``(-pi, pi]``.
+    degrees_of_freedom : tuple of int
+        ``(2, 2 * n_tapers - 2)``, the F distribution's degrees of freedom
+        when there is no sinusoid.
+    half_bandwidth : float
+        The tapers' half-bandwidth ``W`` in Hz,
+        ``time_halfbandwidth_product / time_window_duration``.
+    """
+
+    frequencies: NDArray[np.floating]
+    time: NDArray[np.floating]
+    f_statistic: NDArray[np.floating]
+    p_value: NDArray[np.floating]
+    amplitude: NDArray[np.floating]
+    phase: NDArray[np.floating]
+    degrees_of_freedom: tuple[int, int]
+    half_bandwidth: float
 
 
 @reject_sampling_frequency_aliases
@@ -1565,6 +1613,27 @@ Frequency Analysis
 
         """
         logger.info(self)
+        coefficients, time_series = self._unweighted_fft()
+        # NaN or Inf input was reported at construction (see _unweighted_fft).
+        with (
+            contextlib.nullcontext()
+            if self._time_series_is_finite
+            else np.errstate(invalid="ignore")
+        ):
+            return self._weight_taper_coefficients(coefficients, time_series)
+
+    def _unweighted_fft(
+        self,
+    ) -> tuple[NDArray[np.complexfloating], NDArray[np.floating]]:
+        """The tapered coefficients of every window before taper weighting.
+
+        Returns
+        -------
+        coefficients : array, shape (n_time_windows, n_trials, n_tapers, n_fft_samples, n_signals)
+            One coefficient per taper, each taper given equal weight.
+        windows : array, shape (n_time_windows, n_trials, n_signals, n_time_samples_per_window)
+            The detrended windows the coefficients were computed from.
+        """
         time_series = _sliding_window(
             self._time_series,
             window_size=self.n_time_samples_per_window,
@@ -1589,7 +1658,7 @@ Frequency Analysis
                 self.sampling_frequency,
                 workers=self.fft_workers,
             ).swapaxes(2, -1)
-            return self._weight_taper_coefficients(coefficients, time_series)
+        return coefficients, time_series
 
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
@@ -2315,6 +2384,160 @@ class Multitaper(_WindowedFourierTransform):
         """
         return estimate_frequency_resolution(
             self.sampling_frequency, self.time_window_duration, self.time_halfbandwidth_product
+        )
+
+    def harmonic_f_test(self) -> HarmonicFTestResult:
+        """Test each frequency for a sinusoid with Thomson's harmonic F-test.
+
+        A sinusoid at frequency ``f`` gives every taper's coefficient at ``f``
+        the same complex amplitude times that taper's sum, whereas noise gives
+        them independent values. The test fits that amplitude by least
+        squares across the tapers and compares the power it explains with the
+        power left over (Thomson 1982, section XIII). It separates a line
+        that keeps its phase across a window (line noise, a stimulation
+        artifact) from broadband activity at the same frequency.
+
+        Each window, trial, and signal is tested on its own.
+
+        Returns
+        -------
+        HarmonicFTestResult
+            The F statistic, its p-value, and the fitted amplitude and phase,
+            each of shape ``(n_time_windows, n_trials, n_frequencies,
+            n_signals)`` over the non-negative frequencies.
+
+        Raises
+        ------
+        ValueError
+            If the tapers are custom (the test's null distribution is that of
+            orthonormal DPSS tapers with a known bandwidth) or there are fewer
+            than two tapers (no degrees of freedom are left for the noise).
+
+        Notes
+        -----
+        With ``K`` tapers ``v_k``, coefficients ``y_k(f)``, and taper sums
+        ``U_k = sum_t v_k(t)`` (on the coefficients' scale), the fitted complex
+        amplitude is ``mu(f) = sum_k U_k y_k(f) / sum_k U_k ** 2`` and
+
+        ``F(f) = (K - 1) |mu(f)| ** 2 sum_k U_k ** 2 / sum_k |y_k(f) - mu(f) U_k| ** 2``.
+
+        With no sinusoid at ``f`` and a background spectrum that is roughly
+        flat over ``f +/- W`` (the tapers' half-bandwidth), ``F`` follows the
+        F distribution with ``(2, 2K - 2)`` degrees of freedom. The fitted
+        sinusoid is ``A cos(2 pi f (t - t_center) + phase)`` with
+        ``A = 2 |mu|``, where ``t_center`` is the window's center time.
+
+        - **Edges**: a real signal's line at ``f`` has a mirror image at
+          ``-f``. Within ``W`` of 0 Hz or of the Nyquist frequency the two
+          overlap within the tapers' bandwidth, so the test does not hold
+          there and those frequencies are NaN.
+        - **The line must be stable** in amplitude and frequency over each
+          window; a line that drifts is spread over neighboring frequencies.
+        - **Between bins**: the test at a bin detects a line within about
+          ``W`` of it, but less powerfully the further off the bin it lies.
+          Zero-padding (``n_fft_samples``) gives a finer grid without changing
+          ``W``.
+        - **Many tests**: every frequency is a test, so about a fraction
+          ``alpha`` of the frequencies without a line fall below ``alpha``.
+          Thomson's rule takes a line as detected when its p-value is below
+          ``1 / n_fft_samples``; for an error rate over the frequencies use
+          :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`
+          with ``axis`` the frequency axis (``axis=2``).
+        - The coefficients are those of equally weighted tapers, whatever
+          ``taper_weighting`` is: the test is defined for them.
+
+        References
+        ----------
+        .. [1] Thomson, D. J. (1982). Spectrum estimation and harmonic analysis.
+               Proceedings of the IEEE, 70(9), 1055-1096.
+        .. [2] Percival, D. B., & Walden, A. T. (1993). Spectral Analysis for
+               Physical Applications, chapter 10. Cambridge University Press.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from spectral_connectivity import Multitaper
+        >>> rng = np.random.default_rng(0)
+        >>> sampling_frequency = 1000
+        >>> time = np.arange(2000) / sampling_frequency
+        >>> # A 60 Hz line of amplitude 1 and phase 1 rad at t = 0 in
+        >>> # unit-variance noise, in signal 0 only
+        >>> signals = rng.standard_normal((2000, 1, 2))
+        >>> signals[:, 0, 0] += np.cos(2 * np.pi * 60 * time + 1.0)
+        >>> multitaper = Multitaper(
+        ...     signals, sampling_frequency, time_window_duration=1.0,
+        ...     time_halfbandwidth_product=4,
+        ... )
+        >>> result = multitaper.harmonic_f_test()
+        >>> result.f_statistic.shape  # (n_time_windows, n_trials, n_frequencies, n_signals)
+        (2, 1, 501, 2)
+        >>> at_60 = result.frequencies == 60.0
+        >>> bool((result.p_value[:, 0, at_60, 0] < 1e-6).all())  # the line, in both windows
+        True
+        >>> bool((result.p_value[:, 0, at_60, 1] > 1e-3).all())  # no line in signal 1
+        True
+        >>> bool(np.allclose(result.amplitude[:, 0, at_60, 0], 1.0, atol=0.1))
+        True
+        >>> # The phase is the line's at each window's center time
+        >>> expected = np.angle(np.exp(1j * (2 * np.pi * 60 * result.time + 1.0)))
+        >>> bool(np.allclose(result.phase[:, 0, at_60, 0].ravel(), expected, atol=0.1))
+        True
+        """
+        if self._taper_eigenvalues is None:
+            msg = (
+                "harmonic_f_test needs DPSS tapers: its null distribution assumes "
+                "orthonormal tapers concentrated in a known bandwidth, which "
+                "custom tapers need not be. Build the Multitaper without tapers=."
+            )
+            raise ValueError(msg)
+        n_tapers = self.n_tapers
+        if n_tapers < 2:
+            msg = (
+                f"harmonic_f_test needs at least 2 tapers, got {n_tapers}: with one "
+                "taper no degrees of freedom are left for the noise. Use a larger "
+                "time_halfbandwidth_product or n_tapers."
+            )
+            raise ValueError(msg)
+        coefficients, _ = self._unweighted_fft()
+        n_frequencies = self.n_fft_samples // 2 + 1
+        # (window, trial, taper, frequency, signal), non-negative frequencies.
+        coefficients = coefficients[:, :, :, :n_frequencies, :]
+        # Each taper's sum, on the coefficients' scale: _multitaper_fft divides
+        # the FFT of the tapered window by the sampling frequency.
+        taper_sums = xp.sum(self._tapers, axis=0) / self.sampling_frequency
+        taper_power = xp.sum(taper_sums**2)
+        weights = taper_sums[xp.newaxis, xp.newaxis, :, xp.newaxis, xp.newaxis]
+        amplitude = xp.sum(weights * coefficients, axis=2) / taper_power
+        residual_power = xp.sum(
+            xp.abs(coefficients - amplitude[:, :, xp.newaxis] * weights) ** 2, axis=2
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            f_statistic = to_numpy(
+                (n_tapers - 1) * xp.abs(amplitude) ** 2 * taper_power / residual_power
+            )
+        frequencies = np.fft.rfftfreq(self.n_fft_samples, d=1.0 / self.sampling_frequency)
+        half_bandwidth = self.time_halfbandwidth_product / self.time_window_duration
+        undefined = (frequencies < half_bandwidth) | (
+            frequencies > self.sampling_frequency / 2 - half_bandwidth
+        )
+        degrees_of_freedom = (2, 2 * n_tapers - 2)
+        # The amplitude is referred to each window's first sample; refer it to
+        # the window's center, the time Multitaper labels the window by.
+        center = (self.n_time_samples_per_window - 1) / (2 * self.sampling_frequency)
+        complex_amplitude = to_numpy(amplitude) * np.exp(
+            2j * np.pi * frequencies[:, np.newaxis] * center
+        )
+        mask = undefined[:, np.newaxis]
+        f_statistic = np.where(mask, np.nan, f_statistic)
+        return HarmonicFTestResult(
+            frequencies=frequencies,
+            time=to_numpy(self.time),
+            f_statistic=f_statistic,
+            p_value=scipy.stats.f.sf(f_statistic, *degrees_of_freedom),
+            amplitude=np.where(mask, np.nan, 2 * np.abs(complex_amplitude)),
+            phase=np.where(mask, np.nan, np.angle(complex_amplitude)),
+            degrees_of_freedom=degrees_of_freedom,
+            half_bandwidth=float(half_bandwidth),
         )
 
     @property

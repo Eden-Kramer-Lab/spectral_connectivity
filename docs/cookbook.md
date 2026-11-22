@@ -573,6 +573,49 @@ the Nyquist frequency the factor is valid only with a two-sided spectrum:
 `connectivity.power(one_sided=False)` with `is_one_sided=False`. Without
 `is_one_sided` the function assumes a one-sided spectrum and warns.
 
+## Find line noise with the harmonic F-test
+
+`Multitaper.harmonic_f_test()` tests every frequency of every window, trial,
+and signal for a sinusoid that keeps its phase across the window (Thomson's
+harmonic F-test), such as line noise or a stimulation artifact, and fits its
+amplitude and phase. Each frequency is a test, so judge the p-values against
+the number of tests: Thomson's rule takes a line as detected below
+`1 / n_fft_samples` in a window, and a line present throughout the recording
+should be detected in every window.
+
+```python
+>>> from spectral_connectivity import Multitaper
+>>> sampling_frequency = 1000
+>>> time = np.arange(4000) / sampling_frequency
+>>> recording = rng.standard_normal((4000, 1, 2))  # (time, trials, signals)
+>>> # 60 Hz line noise and its harmonic, in signal 0 only
+>>> recording[:, 0, 0] += 0.5 * np.cos(2 * np.pi * 60 * time)
+>>> recording[:, 0, 0] += 0.5 * np.cos(2 * np.pi * 120 * time + 0.5)
+>>> multitaper = Multitaper(
+...     recording, sampling_frequency, time_window_duration=1.0,
+...     time_halfbandwidth_product=4,
+... )
+>>> lines = multitaper.harmonic_f_test()
+>>> lines.p_value.shape  # (n_time_windows, n_trials, n_frequencies, n_signals)
+(4, 1, 501, 2)
+>>> detected = lines.p_value < 1 / multitaper.n_fft_samples
+>>> [lines.frequencies[detected.all(axis=(0, 1))[:, signal]].tolist() for signal in range(2)]
+[[60.0, 120.0], []]
+>>> # Detected in *any* window, the rule also admits a few frequencies by chance
+>>> int(detected.any(axis=(0, 1)).sum()) > 2
+True
+>>> at_lines = np.isin(lines.frequencies, [60.0, 120.0])
+>>> np.round(np.median(lines.amplitude[:, 0, at_lines, 0], axis=0), 1).tolist()
+[0.5, 0.5]
+
+```
+
+Frequencies within the tapers' half-bandwidth (`lines.half_bandwidth`) of
+0 Hz and Nyquist are NaN: there a line overlaps its mirror image. A line
+between FFT bins is detected less strongly; zero-padding with
+`n_fft_samples` tests a finer grid. For an error rate over frequencies, pass
+the p-values to `adjust_for_multiple_comparisons` with `axis=2`.
+
 ## Bring your own Fourier coefficients
 
 If you already have Fourier coefficients (e.g. from a wavelet transform), skip

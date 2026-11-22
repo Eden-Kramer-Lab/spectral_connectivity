@@ -63,6 +63,12 @@ The migration guide for code written against 2.x is
   `group_labels="region"`, whose values then label the signals. A string
   given with a plain array, or to `connectivity_to_xarray`, now raises
   `TypeError` saying so, where it raised a shape `ValueError`.
+- `Multitaper.harmonic_f_test()`: Thomson's harmonic F-test for a sinusoid at
+  each frequency of every window, trial, and signal, returning a
+  `HarmonicFTestResult` with the F statistic, its p-value under
+  F(2, 2K - 2), and the fitted line's amplitude and phase (at each window's
+  center). Frequencies within the tapers' half-bandwidth of 0 Hz and Nyquist,
+  where the test does not hold, are NaN.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

@@ -39,6 +39,7 @@ from spectral_connectivity.statistics import (
     jackknife_confidence_interval,
 )
 from spectral_connectivity.transforms import (
+    HarmonicFTestResult,
     MorletWavelet,
     Multitaper,
     MultitaperParameters,
@@ -74,6 +75,7 @@ __all__ = [
     "DEFAULT_METHODS",
     "Connectivity",
     "DirectedOrientationWarning",
+    "HarmonicFTestResult",
     "JackknifeResult",
     "MeasureInfo",
     "MorletWavelet",
