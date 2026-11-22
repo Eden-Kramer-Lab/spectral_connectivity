@@ -657,21 +657,15 @@ setting:
 
 ```
 
-Name the lines the previous recipe finds. The fit also takes about
-`1 / n_tapers` of the noise power within the half-bandwidth of each named
-frequency, so the cleaned spectrum shows a shallow notch there. For the same
-reason, a test there that counts `n_observations` (such as
-`coherence_significance_pvalue`) is too liberal; use
-`n_observations - n_trials` within the half-bandwidth of a removed line.
-
-To subtract a line only where it is present, add
-`line_significance_threshold`: a line is then removed only in the windows,
-trials, and signals where its F-test is below that level. The test is made in
-each of them, so a strict level such as `1e-3` keeps chance removals rare; a
-frequency where the line is never significant warns. With a threshold, the
-named lines must be at least the half-bandwidth apart. A line must also lie
-close to its named frequency: `Multitaper`'s `line_frequencies` gives how much
-of a slightly mistuned line is left.
+Name the lines the previous recipe finds. Three things to know, with their
+sizes in the `line_frequencies` docs of `Multitaper`: a line must lie close to
+its named frequency; the fit also takes about `1 / n_tapers` of the noise near
+each line (a shallow notch in the spectrum); and a test there that counts
+`n_observations`, such as `coherence_significance_pvalue`, is then too liberal,
+so count `n_observations - n_trials` within the half-bandwidth of a removed
+line. To subtract a line only where it is present, add
+`line_significance_threshold` (a strict level such as `1e-3`, since each
+window, trial, and signal is a test).
 
 ## Bring your own Fourier coefficients
 

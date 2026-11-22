@@ -34,6 +34,7 @@ from spectral_connectivity._backend import (
     xp,
 )
 from spectral_connectivity._backend import detrend as _backend_detrend
+from spectral_connectivity.statistics import _validate_alpha
 from spectral_connectivity.utils import (
     TIME_SERIES_RAGGED_FIX,
     BackendArray,
@@ -1132,7 +1133,8 @@ class _WindowedFourierTransform:
     - the public ``observations_are_independent``, ``summarize_parameters()``
       (built with :meth:`_summary`), and ``__repr__`` (which :meth:`fft` logs);
     - optionally :meth:`_weight_taper_coefficients`, which reweights the
-      coefficients of each taper.
+      coefficients of each taper, and :meth:`_remove_lines`, which cleans
+      the detrended windows before they are tapered.
     """
 
     #: The transform returns the full two-sided FFT spectrum (both positive and
@@ -1708,32 +1710,31 @@ Frequency Analysis
 class _LineFit(NamedTuple):
     """Data-independent tables of the joint line fit, on the host.
 
-    ``carriers`` is ``exp(2 pi i f_l t)`` and ``sinusoids`` its detrended form
-    ``s_l``, each ``(n_lines, n_time_samples_per_window)``. ``direct[l, m]``
-    and ``mirror[l, m]`` are the tapers' coefficients ``(n_tapers,)`` of
-    ``s_m`` and ``conj(s_m)`` at line ``l``'s frequency; ``regressors`` is
-    ``direct[l, l]``. ``system`` is the ``(2 n_lines, 2 n_lines)`` real matrix
-    of the fit's equations in ``(Re mu, Im mu)``.
+    ``direct[l, m]`` and ``mirror[l, m]`` are the tapers' coefficients
+    ``(n_tapers,)`` of line ``m``'s sinusoid ``s_m`` (the line's complex
+    exponential as detrending leaves it) and of ``conj(s_m)``, at line
+    ``l``'s frequency; ``regressors[l]`` is ``direct[l, l]``. ``system`` is the
+    ``(2 n_lines, 2 n_lines)`` real matrix of the fit's equations in
+    ``(Re mu, Im mu)``. ``kernel`` (``(n_time, 2 n_lines n_tapers)``) maps a
+    window to the real and imaginary parts of every line's coefficients, and
+    ``synthesis`` (``(2 n_lines, n_time)``) maps ``(Re mu, Im mu)`` to the
+    fitted ``sum_l 2 Re(mu_l s_l)``.
     """
 
-    carriers: NDArray[np.complexfloating]
-    sinusoids: NDArray[np.complexfloating]
     direct: NDArray[np.complexfloating]
     mirror: NDArray[np.complexfloating]
     regressors: NDArray[np.complexfloating]
     system: NDArray[np.floating]
+    kernel: NDArray[np.floating]
+    synthesis: NDArray[np.floating]
 
 
 def _validated_line_frequencies(line_frequencies: Any) -> NDArray[np.floating]:
     """``line_frequencies`` (a number or sequence of numbers, or None) as floats."""
     if line_frequencies is None:
         return np.zeros(0)
-    values = np.atleast_1d(np.asarray(to_numpy(line_frequencies)))
-    if (
-        values.ndim != 1
-        or values.dtype.kind not in "iuf"
-        or not np.isfinite(values.astype(float)).all()
-    ):
+    values = np.atleast_1d(to_numpy(line_frequencies))
+    if values.ndim != 1 or values.dtype.kind not in "iuf" or not np.isfinite(values).all():
         msg = (
             "line_frequencies must be a number or a 1-D sequence of finite numbers "
             f"in Hz, e.g. [60, 120]; got {line_frequencies!r}."
@@ -1742,42 +1743,39 @@ def _validated_line_frequencies(line_frequencies: Any) -> NDArray[np.floating]:
     return values.astype(float)
 
 
-def _detrended_host(values: NDArray[Any], detrend_type: str | None) -> NDArray[Any]:
-    """``values`` (``(..., n_time)``) least-squares detrended as ``detrend`` does."""
-    if detrend_type is None:
-        return values
-    if detrend_type == "constant":
-        detrended: NDArray[Any] = values - values.mean(axis=-1, keepdims=True)
-        return detrended
-    n_time = values.shape[-1]
-    basis = np.stack([np.ones(n_time), np.arange(n_time) / n_time], axis=-1)
-    coefficients = np.linalg.lstsq(basis, values.T, rcond=None)[0]
-    return np.asarray(values - (basis @ coefficients).T)
-
-
 def _line_fit(
     frequencies: NDArray[np.floating],
     tapers: NDArray[np.floating],
     sampling_frequency: float,
     detrend_type: str | None,
 ) -> _LineFit:
-    """Tables of the joint fit of lines at ``frequencies`` (see Multitaper._remove_lines)."""
-    time = np.arange(tapers.shape[0]) / sampling_frequency
-    carriers = np.exp(2j * np.pi * frequencies[:, np.newaxis] * time)
-    sinusoids = _detrended_host(carriers, detrend_type)
-    demodulated = np.conj(carriers)[:, np.newaxis, :]  # (line l, 1, time)
-    direct = (sinusoids[np.newaxis] * demodulated) @ tapers / sampling_frequency
-    mirror = (np.conj(sinusoids)[np.newaxis] * demodulated) @ tapers / sampling_frequency
+    """Tables of the joint fit of lines at ``frequencies`` (see Multitaper._remove_lines).
+
+    ``tapers`` is ``(n_time, n_tapers)``, on the host.
+    """
+    n_time = tapers.shape[0]
+    time = np.arange(n_time) / sampling_frequency
+    carriers = np.exp(2j * np.pi * frequencies[:, np.newaxis] * time)  # (line, time)
+    if detrend_type is None:
+        sinusoids = carriers
+    else:
+        # The windows' own detrend, applied to each part (it is linear).
+        sinusoids = to_numpy(detrend(xp.asarray(carriers.real), type=detrend_type)) + 1j * (
+            to_numpy(detrend(xp.asarray(carriers.imag), type=detrend_type))
+        )
+    # (line l, time, taper): the tapers demodulated at line l's frequency
+    demodulated = np.conj(carriers)[:, :, np.newaxis] * tapers / sampling_frequency
+    direct = np.einsum("mt,ltk->lmk", sinusoids, demodulated)
+    mirror = np.einsum("mt,ltk->lmk", np.conj(sinusoids), demodulated)
     regressors = np.einsum("llk->lk", direct)
     gram = np.einsum("lk,lmk->lm", np.conj(regressors), direct)
     mirror_gram = np.einsum("lk,lmk->lm", np.conj(regressors), mirror)
-    system = np.block(
-        [
-            [np.real(gram + mirror_gram), -np.imag(gram - mirror_gram)],
-            [np.imag(gram + mirror_gram), np.real(gram - mirror_gram)],
-        ]
-    )
-    return _LineFit(carriers, sinusoids, direct, mirror, regressors, system)
+    plus, minus = gram + mirror_gram, gram - mirror_gram
+    system = np.block([[plus.real, -minus.imag], [plus.imag, minus.real]])
+    by_time = demodulated.transpose(1, 0, 2).reshape(n_time, -1)  # (time, line x taper)
+    kernel = np.concatenate([by_time.real, by_time.imag], axis=1)
+    synthesis = np.concatenate([2 * sinusoids.real, -2 * sinusoids.imag], axis=0)
+    return _LineFit(direct, mirror, regressors, system, kernel, synthesis)
 
 
 def _solve_line_amplitudes(
@@ -2318,32 +2316,26 @@ class Multitaper(_WindowedFourierTransform):
             # announced where it was made.
             with _transposed_layout_hint(self._time_series):
                 self._tapers, self._taper_eigenvalues = self._dpss_tapers()
-        # Warned only once every check has passed, so an invalid Multitaper
-        # (a transposed array among them) only raises.
-        # Line frequencies whose never-significant warning was shown.
-        self._warned_missed_lines: set[float] = set()
         self.line_frequencies, self.line_significance_threshold = (
             self._validated_line_settings(line_frequencies, line_significance_threshold)
         )
+        # Line frequencies whose never-significant warning was shown.
+        self._warned_missed_lines: set[float] = set()
+        # Warned only once every check has passed, so an invalid Multitaper
+        # (a transposed array among them) only raises.
         self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
         object.__setattr__(self, "_initialized", True)
 
     def _validated_line_settings(
         self, line_frequencies: Any, line_significance_threshold: Any
     ) -> tuple[NDArray[np.floating], float | None]:
-        """The line frequencies as a read-only float array, and the threshold."""
+        """The line frequencies as a read-only host array, and the threshold."""
         threshold = line_significance_threshold
-        if threshold is not None and (
-            isinstance(threshold, (bool, np.bool_))
-            or not isinstance(threshold, (int, float, np.integer, np.floating))
-            or not 0 < threshold < 1
-        ):
-            msg = (
-                "line_significance_threshold must be a number strictly between 0 and "
-                f"1, or None to remove the lines everywhere; got {threshold!r}."
-            )
-            raise ValueError(msg)
+        if threshold is not None:
+            _validate_alpha(threshold, "line_significance_threshold")
+            threshold = float(threshold)
         frequencies = _validated_line_frequencies(line_frequencies)
+        frequencies.setflags(write=False)
         if threshold is not None and not frequencies.size:
             msg = (
                 "line_significance_threshold was given without line_frequencies, so "
@@ -2351,8 +2343,14 @@ class Multitaper(_WindowedFourierTransform):
                 "line_frequencies=[60, 120], or drop the threshold."
             )
             raise ValueError(msg)
-        if not frequencies.size:
-            return _immutable_array_snapshot(frequencies), None
+        if frequencies.size:
+            self._check_line_frequencies(frequencies, threshold)
+        return frequencies, threshold
+
+    def _check_line_frequencies(
+        self, frequencies: NDArray[np.floating], threshold: float | None
+    ) -> None:
+        """Raise unless the lines at ``frequencies`` can be fitted (and tested)."""
         if self._taper_eigenvalues is None:
             msg = (
                 "line_frequencies needs DPSS tapers: the line fit is Thomson's "
@@ -2378,38 +2376,27 @@ class Multitaper(_WindowedFourierTransform):
         if np.unique(frequencies).size != frequencies.size:
             msg = f"line_frequencies lists a frequency more than once: {frequencies.tolist()}."
             raise ValueError(msg)
-        if threshold is not None:
-            if self.n_tapers < 2:
-                msg = (
-                    "line_significance_threshold tests each line with the harmonic "
-                    f"F-test, which needs at least 2 tapers, got {self.n_tapers}."
-                )
-                raise ValueError(msg)
-            ordered = np.sort(frequencies)
-            close = np.flatnonzero(np.diff(ordered) < half_bandwidth)
-            if close.size:
-                pairs = [(float(ordered[i]), float(ordered[i + 1])) for i in close]
-                msg = (
-                    f"line_frequencies {pairs} are closer than the tapers' "
-                    f"half-bandwidth W = {half_bandwidth:g} Hz, where each line's F-test "
-                    "is confounded by the other (an absent line next to a strong one "
-                    "tests as present). Drop line_significance_threshold to remove "
-                    "them everywhere (their joint fit is exact at any spacing), or "
-                    "name one of each pair."
-                )
-                raise ValueError(msg)
-        return _immutable_array_snapshot(frequencies), (
-            None if threshold is None else float(threshold)
-        )
-
-    def _line_fit(self) -> _LineFit:
-        """The data-independent tables of the joint line fit (see :func:`_line_fit`)."""
-        return _line_fit(
-            self.line_frequencies,
-            to_numpy(self._tapers_for_fft()),
-            self.sampling_frequency,
-            self.detrend_type,
-        )
+        if threshold is None:
+            return
+        if self.n_tapers < 2:
+            msg = (
+                "line_significance_threshold tests each line with the harmonic "
+                f"F-test, which needs at least 2 tapers, got {self.n_tapers}."
+            )
+            raise ValueError(msg)
+        ordered = np.sort(frequencies)
+        close = np.flatnonzero(np.diff(ordered) < half_bandwidth)
+        if close.size:
+            pairs = [(float(ordered[i]), float(ordered[i + 1])) for i in close]
+            msg = (
+                f"line_frequencies {pairs} are closer than the tapers' "
+                f"half-bandwidth W = {half_bandwidth:g} Hz, where each line's F-test "
+                "is confounded by the other (an absent line next to a strong one "
+                "tests as present). Drop line_significance_threshold to remove "
+                "them everywhere (their joint fit is exact at any spacing), or "
+                "name one of each pair."
+            )
+            raise ValueError(msg)
 
     def _remove_lines(self, windows: NDArray[np.floating]) -> NDArray[np.floating]:
         """Subtract the named lines, fitted jointly at their exact frequencies.
@@ -2432,44 +2419,41 @@ class Multitaper(_WindowedFourierTransform):
         """
         if not self.line_frequencies.size:
             return windows
-        fit = self._line_fit()
-        tapers = self._tapers_for_fft()  # (n_time_samples_per_window, n_tapers)
-        n_lines, n_tapers = fit.regressors.shape
-        carriers = xp.asarray(fit.carriers)
-        # (window, trial, signal, line, taper): each line's coefficients at exactly f0
-        coefficients = xp.stack(
-            [
-                xp.matmul(windows * xp.conj(carriers[line]), tapers) / self.sampling_frequency
-                for line in range(n_lines)
-            ],
-            axis=-2,
+        fit = _line_fit(
+            self.line_frequencies,
+            to_numpy(self._tapers_for_fft()),
+            self.sampling_frequency,
+            self.detrend_type,
         )
-        projections = to_numpy(
-            xp.sum(coefficients * xp.asarray(np.conj(fit.regressors)), axis=-1)
-        )  # (window, trial, signal, line): <A_l, c_l>
-        batch_shape = projections.shape[:-1]
-        projections = projections.reshape(-1, n_lines)
+        n_lines, n_tapers = fit.regressors.shape
+        # One real matmul gives every line's coefficients at exactly its
+        # frequency (a complex kernel would cast the windows to complex).
+        parts = to_numpy(xp.matmul(windows, xp.asarray(fit.kernel)))
+        coefficients = (
+            parts[..., : n_lines * n_tapers] + 1j * parts[..., n_lines * n_tapers :]
+        ).reshape(-1, n_lines, n_tapers)
+        projections = np.sum(coefficients * np.conj(fit.regressors), axis=-1)  # <A_l, c_l>
         amplitudes = _solve_line_amplitudes(fit.system, projections)
         if self.line_significance_threshold is not None:
-            significant = self._significant_lines(
-                fit, to_numpy(coefficients).reshape(-1, n_lines, n_tapers), amplitudes
-            )
+            significant = self._significant_lines(fit, coefficients, amplitudes)
             amplitudes = np.zeros_like(amplitudes)
             # Refit each pattern of kept lines jointly, without the others.
             patterns, pattern_of = np.unique(significant, axis=0, return_inverse=True)
+            pattern_of = pattern_of.ravel()
             for index, kept in enumerate(patterns):
                 if kept.any():
-                    rows = np.flatnonzero(pattern_of.ravel() == index)
-                    amplitudes[np.ix_(rows, np.flatnonzero(kept))] = _solve_line_amplitudes(
+                    rows = pattern_of == index
+                    amplitudes[np.ix_(rows, kept)] = _solve_line_amplitudes(
                         fit.system, projections[rows], kept
                     )
-        fitted = 2 * xp.real(
-            xp.matmul(
-                xp.asarray(amplitudes.reshape(*batch_shape, n_lines)),
-                xp.asarray(fit.sinusoids),
-            )
+        weights = np.concatenate([amplitudes.real, amplitudes.imag], axis=-1).reshape(
+            *windows.shape[:-1], 2 * n_lines
         )
-        cleaned: NDArray[np.floating] = windows - fitted
+        # sum_l 2 Re(mu_l s_l), then the windows less it, in that fresh array
+        cleaned: NDArray[np.floating] = xp.matmul(
+            xp.asarray(weights), xp.asarray(fit.synthesis)
+        )
+        xp.subtract(windows, cleaned, out=cleaned)
         return cleaned
 
     def _significant_lines(
@@ -2486,16 +2470,15 @@ class Multitaper(_WindowedFourierTransform):
         fitted contributions removed. A frequency where its line is never
         significant warns, once per transform.
         """
-        n_tapers = fit.regressors.shape[1]
-        # (n, line, taper): every line's fitted contribution at line l's
-        # frequency, then the share of the lines other than l
-        everything = np.einsum("nm,lmk->nlk", amplitudes, fit.direct) + np.einsum(
-            "nm,lmk->nlk", np.conj(amplitudes), fit.mirror
+        n_tapers = self.n_tapers
+        # (n, line, taper): line l's coefficients less the fitted contributions
+        # of the other lines at its frequency
+        others = ~np.eye(fit.regressors.shape[0], dtype=bool)[..., np.newaxis]
+        cleaned = (
+            coefficients
+            - np.einsum("nm,lmk->nlk", amplitudes, fit.direct * others)
+            - np.einsum("nm,lmk->nlk", np.conj(amplitudes), fit.mirror * others)
         )
-        own = amplitudes[..., np.newaxis] * fit.regressors + np.conj(amplitudes)[
-            ..., np.newaxis
-        ] * np.einsum("llk->lk", fit.mirror)
-        cleaned = coefficients - (everything - own)
         regressor_power = np.sum(np.abs(fit.regressors) ** 2, axis=-1)
         own_fit = np.sum(cleaned * np.conj(fit.regressors), axis=-1) / regressor_power
         misfit = cleaned - own_fit[..., np.newaxis] * fit.regressors
@@ -2507,6 +2490,7 @@ class Multitaper(_WindowedFourierTransform):
                 / np.sum(np.abs(misfit) ** 2, axis=-1)
             )
         threshold = self.line_significance_threshold
+        assert threshold is not None  # called only with a threshold
         significant: NDArray[np.bool_] = (
             scipy.stats.f.sf(f_statistic, 2, 2 * n_tapers - 2) < threshold
         )

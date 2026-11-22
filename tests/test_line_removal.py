@@ -39,8 +39,8 @@ def _lines(time, *lines):
 def test_removes_noise_free_lines(lines, window_settings, detrend_type):
     """Lines at their named frequencies leave essentially nothing, on or off
     the FFT grid, in overlapping windows, for lines closer than the bandwidth
-    (fitted jointly by repeated passes), and whatever the detrending (the fit
-    is of the line as detrending leaves it)."""
+    (fitted jointly), and whatever the detrending (the fit is of the line as
+    detrending leaves it)."""
     time = np.arange(3000) / _SAMPLING_FREQUENCY
     signals = _lines(time, *lines)[:, np.newaxis, np.newaxis]
     settings = {**_SETTINGS, **window_settings, "detrend_type": detrend_type}
@@ -227,11 +227,12 @@ def test_rejects_invalid_line_settings(settings, match):
         Multitaper(np.zeros((1000, 1, 1)), _SAMPLING_FREQUENCY, **settings)
 
 
-@pytest.mark.parametrize("detrend_type", ["constant", "linear"])
+@pytest.mark.parametrize("detrend_type", ["constant", "linear", "c", "l"])
 def test_a_low_frequency_line_is_removed_whatever_the_detrending(detrend_type):
     """A line near the bandwidth from 0 Hz has a large window mean and trend,
     which detrending removes from the data; fitting the plain sinusoid would
-    leave about 0.1% (constant) to 0.8% (linear) of a 4.3 Hz line."""
+    leave about 0.1% (constant) to 0.8% (linear) of a 4.3 Hz line. The
+    short spellings of the detrend types fit the same way."""
     time = np.arange(1000) / _SAMPLING_FREQUENCY
     signals = _lines(time, (1.0, 4.3, 1.1))[:, np.newaxis, np.newaxis]
     settings = {"time_halfbandwidth_product": 4, "detrend_type": detrend_type}
