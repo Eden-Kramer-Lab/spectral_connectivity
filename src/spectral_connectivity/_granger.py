@@ -458,7 +458,7 @@ def _warn_nan_granger_pairs(
         "observations (trials x tapers) for the spectrum to have full rank, so "
         "check those channels and the number of observations. If the channels "
         "are valid but highly correlated, a larger "
-        "minimum_phase_max_iterations (a Connectivity argument) may let the "
+        "minimum_phase_max_iterations (an argument of Connectivity and of the wrappers) may let the "
         "factorization converge.",
         UserWarning,
         stacklevel=stacklevel_outside_package(),

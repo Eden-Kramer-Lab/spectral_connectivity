@@ -3772,6 +3772,98 @@ def test_fourier_connectivity_two_sided_check_tolerates_single_precision():
         )
 
 
+_CONNECTIVITY_SETTINGS = [
+    ("magnitude_squared_coherence", {"dtype": np.complex64}),
+    ("pairwise_spectral_granger_prediction", {"minimum_phase_tolerance": 0.5}),
+    ("pairwise_spectral_granger_prediction", {"minimum_phase_max_iterations": 1}),
+]
+
+
+@pytest.mark.parametrize("wrapper", ["multitaper_connectivity", "connectivity_to_xarray"])
+@pytest.mark.parametrize(("method", "setting"), _CONNECTIVITY_SETTINGS, ids=str)
+def test_wrappers_forward_connectivity_settings(wrapper, method, setting):
+    """multitaper_connectivity and connectivity_to_xarray build the Connectivity
+    with the given precision and Wilson settings, as fourier_connectivity does:
+    the result is the one from_transform computes with them, which differs from
+    the default's."""
+    rng = np.random.default_rng(330)
+    time_series = rng.standard_normal((400, 4, 2))
+    multitaper = Multitaper(time_series, sampling_frequency=200, time_halfbandwidth_product=3)
+
+    def run(**settings):
+        with warnings.catch_warnings():
+            # Stopping the factorization early is the point; it warns.
+            warnings.simplefilter("ignore")
+            if wrapper == "multitaper_connectivity":
+                result = multitaper_connectivity(
+                    time_series,
+                    sampling_frequency=200,
+                    time_halfbandwidth_product=3,
+                    method=method,
+                    **settings,
+                )
+            else:
+                result = connectivity_to_xarray(multitaper, method, **settings)
+            expected = getattr(Connectivity.from_transform(multitaper, **settings), method)()
+        return result.values, to_host(expected)
+
+    values, expected = run(**setting)
+    np.testing.assert_array_equal(values, expected)
+    default_values, _ = run()
+    assert not np.array_equal(values, default_values, equal_nan=True)
+
+
+@pytest.mark.parametrize("setting", ["dtype", "minimum_phase_max_iterations"])
+@pytest.mark.parametrize("wrapper", ["multitaper_connectivity", "connectivity_to_xarray"])
+def test_connectivity_setting_in_connectivity_kwargs_names_its_argument(wrapper, setting):
+    """A Connectivity setting put in connectivity_kwargs fails before any work,
+    saying it is a named argument of the wrapper, instead of reporting that the
+    measure does not take it."""
+    time_series = np.random.default_rng(331).standard_normal((200, 2, 2))
+    value = {"dtype": np.complex64, "minimum_phase_max_iterations": 5}[setting]
+    message = rf"{setting} was given inside connectivity_kwargs.*named argument of {wrapper}"
+    if wrapper == "multitaper_connectivity":
+
+        def call():
+            return multitaper_connectivity(
+                time_series, sampling_frequency=100, connectivity_kwargs={setting: value}
+            )
+    else:
+
+        def call():
+            return connectivity_to_xarray(
+                Multitaper(time_series, sampling_frequency=100),
+                connectivity_kwargs={setting: value},
+            )
+
+    with pytest.raises(ValueError, match=message):
+        call()
+
+
+def test_connectivity_setting_in_transform_kwargs_names_its_argument():
+    """dtype is not a Multitaper setting; in transform_kwargs it is rejected as
+    a named argument of multitaper_connectivity."""
+    time_series = np.random.default_rng(332).standard_normal((200, 2, 2))
+    with pytest.raises(ValueError, match="dtype was given inside transform_kwargs"):
+        multitaper_connectivity(
+            time_series, sampling_frequency=100, transform_kwargs={"dtype": np.complex64}
+        )
+
+
+def test_misspelled_wilson_setting_suggests_the_named_argument():
+    """A misspelled Wilson setting is matched against the Connectivity settings
+    too, not only against Multitaper's adaptive_max_iterations."""
+    time_series = np.random.default_rng(333).standard_normal((200, 2, 2))
+    with pytest.raises(
+        TypeError,
+        match=r"Did you mean 'minimum_phase_max_iterations'.*"
+        r"are named arguments of multitaper_connectivity",
+    ):
+        multitaper_connectivity(
+            time_series, sampling_frequency=100, minimum_phase_max_iteration=5
+        )
+
+
 def test_fourier_connectivity_allows_unlabeled_undirected_measure():
     coefficients = np.random.default_rng(314).standard_normal(
         (4, 8, 2)
