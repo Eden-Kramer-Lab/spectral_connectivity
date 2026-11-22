@@ -230,7 +230,9 @@ covering functional and directed connectivity, reading the labeled output,
 frequency bands, and using your own Fourier coefficients. To check a recording
 for line noise first, `Multitaper.harmonic_f_test()` tests every frequency for
 a sinusoid
-([recipe](docs/cookbook.md#find-line-noise-with-the-harmonic-f-test)).
+([recipe](docs/cookbook.md#find-line-noise-with-the-harmonic-f-test)), and
+`line_frequencies` removes the lines
+([recipe](docs/cookbook.md#remove-line-noise-before-computing-connectivity)).
 
 Crop, decimate, or aggregate the frequency coordinate without losing labels:
 

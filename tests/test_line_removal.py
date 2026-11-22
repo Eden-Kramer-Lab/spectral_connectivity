@@ -1,11 +1,13 @@
-"""Line removal in Multitaper (line_frequencies, line_p_value)."""
+"""Line removal in Multitaper (line_frequencies, line_significance_threshold)."""
 
 import json
+import warnings
 
 import numpy as np
 import pytest
 
 from spectral_connectivity import Connectivity, Multitaper, multitaper_connectivity
+from spectral_connectivity.statistics import coherence_significance_pvalue
 from tests._backend_helpers import to_host
 
 _SAMPLING_FREQUENCY = 1000.0
@@ -80,7 +82,7 @@ def test_removing_where_there_is_no_line_takes_one_taper_share_of_the_noise():
 
 
 def test_a_threshold_removes_a_line_only_where_it_is_significant():
-    """With line_p_value, a window whose F-test at the named frequency is not
+    """With line_significance_threshold, a window whose F-test at the named frequency is not
     significant keeps its coefficients exactly; one with the line is cleaned."""
     time = np.arange(2000) / _SAMPLING_FREQUENCY
     rng = np.random.default_rng(321)
@@ -88,7 +90,11 @@ def test_a_threshold_removes_a_line_only_where_it_is_significant():
     signals[1000:, 0, 0] += _lines(time[1000:], (3.0, 60.0, 0.5))  # the second window only
     raw = Multitaper(signals, _SAMPLING_FREQUENCY, **_SETTINGS)
     cleaned = Multitaper(
-        signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], line_p_value=1e-3, **_SETTINGS
+        signals,
+        _SAMPLING_FREQUENCY,
+        line_frequencies=[60.0],
+        line_significance_threshold=1e-3,
+        **_SETTINGS,
     )
     raw_coefficients, cleaned_coefficients = to_host(raw.fft()), to_host(cleaned.fft())
     np.testing.assert_array_equal(cleaned_coefficients[0], raw_coefficients[0])
@@ -103,24 +109,33 @@ def test_a_threshold_removes_a_line_only_where_it_is_significant():
 def test_a_line_never_significant_warns():
     signals = np.random.default_rng(322).standard_normal((2000, 1, 1))
     multitaper = Multitaper(
-        signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], line_p_value=1e-6, **_SETTINGS
+        signals,
+        _SAMPLING_FREQUENCY,
+        line_frequencies=[60.0],
+        line_significance_threshold=1e-6,
+        **_SETTINGS,
     )
     with pytest.warns(UserWarning, match=r"line_frequencies \[60.0\] Hz: the line was not"):
         multitaper.fft()
+    # Shown once per transform, however often the coefficients are recomputed.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        multitaper.fft()
+        multitaper.harmonic_f_test()
 
 
 def test_harmonic_f_test_of_a_cleaned_transform_sees_the_cleaned_data():
     time = np.arange(2000) / _SAMPLING_FREQUENCY
     signals = np.random.default_rng(323).standard_normal((2000, 2, 1))
-    signals += _lines(time, (1.0, 60.0, 0.5))[:, np.newaxis, np.newaxis]
+    signals += _lines(time, (1.0, 60.25, 0.5))[:, np.newaxis, np.newaxis]
     raw = Multitaper(signals, _SAMPLING_FREQUENCY, **_SETTINGS).harmonic_f_test()
     cleaned = Multitaper(
-        signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], **_SETTINGS
+        signals, _SAMPLING_FREQUENCY, line_frequencies=[60.25], **_SETTINGS
     ).harmonic_f_test()
-    at_60 = raw.frequencies == 60.0
-    assert (raw.p_value[:, :, at_60, 0] < 1e-6).all()
-    # Removed at exactly 60 Hz: nothing of a line is left there.
-    assert (cleaned.amplitude[:, :, at_60, 0] < 1e-6).all()
+    at_line = raw.frequencies == 60.25  # a bin of the padded grid, off the window's
+    assert (raw.p_value[:, :, at_line, 0] < 1e-6).all()
+    # Removed at exactly 60.25 Hz: nothing of a line is left there.
+    assert (cleaned.amplitude[:, :, at_line, 0] < 1e-6).all()
 
 
 def test_the_settings_are_recorded_and_reach_the_wrappers():
@@ -131,14 +146,19 @@ def test_the_settings_are_recorded_and_reach_the_wrappers():
         signals,
         _SAMPLING_FREQUENCY,
         line_frequencies=(60, 120),
-        line_p_value=0.01,
+        line_significance_threshold=0.01,
         **_SETTINGS,
     )
     assert multitaper.line_frequencies.tolist() == [60.0, 120.0]
-    assert multitaper.line_p_value == 0.01
+    assert multitaper.line_significance_threshold == 0.01
     with pytest.raises(AttributeError, match="immutable"):
-        multitaper.line_p_value = 0.5
-    assert "line_frequencies=[60.0, 120.0], line_p_value=0.01" in repr(multitaper)
+        multitaper.line_significance_threshold = 0.5
+    assert "line_frequencies=[60.0, 120.0], line_significance_threshold=0.01" in repr(
+        multitaper
+    )
+    assert "Lines removed:                 60, 120 Hz (where F-test p < 0.01)" in (
+        multitaper.summarize_parameters()
+    )
 
     missed_120 = r"\[120.0\] Hz: the line was not"
     with pytest.warns(UserWarning, match=missed_120):
@@ -146,14 +166,17 @@ def test_the_settings_are_recorded_and_reach_the_wrappers():
             signals,
             sampling_frequency=_SAMPLING_FREQUENCY,
             method="power",
-            transform_kwargs={"line_frequencies": [60, 120], "line_p_value": 0.01},
+            transform_kwargs={
+                "line_frequencies": [60, 120],
+                "line_significance_threshold": 0.01,
+            },
             **_SETTINGS,
         )
-    with pytest.warns(UserWarning, match=missed_120):  # the coefficients again
+    with pytest.warns(UserWarning, match=missed_120):  # this Multitaper's first fit
         expected = Connectivity.from_transform(multitaper).power(one_sided=True)
     estimator = json.loads(result.attrs["transform_parameters_json"])["estimator"]
     assert estimator["line_frequencies"] == [60.0, 120.0]
-    assert estimator["line_p_value"] == 0.01
+    assert estimator["line_significance_threshold"] == 0.01
     np.testing.assert_allclose(result.values, to_host(expected), rtol=1e-12)
 
 
@@ -163,22 +186,36 @@ def test_without_lines_the_transform_is_unchanged():
     empty = Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=[], **_SETTINGS)
     np.testing.assert_array_equal(to_host(empty.fft()), to_host(plain.fft()))
     assert plain.line_frequencies.size == 0
-    assert plain.line_p_value is None
+    assert plain.line_significance_threshold is None
     assert "line_frequencies" not in repr(plain)
 
 
 @pytest.mark.parametrize(
     ("settings", "match"),
     [
-        ({"line_frequencies": [2.0]}, r"within the tapers' half-bandwidth \(4 Hz\)"),
+        ({"line_frequencies": [2.0]}, r"half-bandwidth W = 4 Hz of 0 Hz.*lower the first"),
         ({"line_frequencies": [498.0]}, "within the tapers' half-bandwidth"),
-        ({"line_frequencies": [np.nan]}, "or are not finite"),
+        ({"line_frequencies": [np.nan]}, "1-D sequence of finite numbers"),
+        ({"line_frequencies": [True]}, "1-D sequence of finite numbers"),
+        ({"line_frequencies": ["60"]}, "1-D sequence of finite numbers"),
+        ({"line_frequencies": [[60.0, 120.0]]}, "1-D sequence of finite numbers"),
+        ({"line_significance_threshold": 0.01}, "without line_frequencies"),
+        (
+            {"line_frequencies": [60.0, 62.0], "line_significance_threshold": 0.01},
+            r"\[\(60.0, 62.0\)\] are closer than the tapers' half-bandwidth W = 4 Hz",
+        ),
         ({"line_frequencies": [60.0, 60.0]}, "more than once"),
-        ({"line_frequencies": [60.0], "line_p_value": 0.0}, "strictly between 0 and 1"),
-        ({"line_frequencies": [60.0], "line_p_value": True}, "strictly between 0 and 1"),
+        (
+            {"line_frequencies": [60.0], "line_significance_threshold": 0.0},
+            "strictly between 0 and 1",
+        ),
+        (
+            {"line_frequencies": [60.0], "line_significance_threshold": True},
+            "strictly between 0 and 1",
+        ),
         ({"line_frequencies": [60.0], "tapers": np.ones((1000, 2))}, "needs DPSS tapers"),
         (
-            {"line_frequencies": [60.0], "line_p_value": 0.01, "n_tapers": 1},
+            {"line_frequencies": [60.0], "line_significance_threshold": 0.01, "n_tapers": 1},
             "needs at least 2 tapers",
         ),
     ],
@@ -201,3 +238,121 @@ def test_a_low_frequency_line_is_removed_whatever_the_detrending(detrend_type):
     raw = Multitaper(signals, _SAMPLING_FREQUENCY, **settings)
     cleaned = Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=[4.3], **settings)
     assert _power(cleaned) < 1e-9 * _power(raw)
+
+
+def test_two_strong_lines_w_apart_are_both_removed_with_a_threshold():
+    """Each line's F-test is of its own regression with the other's fitted
+    contribution removed, so neither hides the other."""
+    time = np.arange(1000) / _SAMPLING_FREQUENCY
+    rng = np.random.default_rng(326)
+    signals = rng.standard_normal((1000, 50, 1))
+    signals += _lines(time, (3.0, 60.0, 0.4), (3.0, 64.0, 2.0))[:, np.newaxis, np.newaxis]
+    noise_only = Multitaper(
+        signals - _lines(time, (3.0, 60.0, 0.4), (3.0, 64.0, 2.0))[:, np.newaxis, np.newaxis],
+        _SAMPLING_FREQUENCY,
+        time_halfbandwidth_product=4,
+        line_frequencies=[60.0, 64.0],
+    )
+    cleaned = Multitaper(
+        signals,
+        _SAMPLING_FREQUENCY,
+        time_halfbandwidth_product=4,
+        line_frequencies=[60.0, 64.0],
+        line_significance_threshold=1e-3,
+    )
+    # Removed in every trial: what is left is the noise, cleaned the same way.
+    np.testing.assert_allclose(
+        to_host(cleaned.fft()), to_host(noise_only.fft()), rtol=0, atol=1e-10
+    )
+
+
+def test_an_absent_line_w_from_a_strong_one_is_removed_at_the_nominal_rate():
+    """Without a line at 64 Hz, its F-test (after the 60 Hz line's fit is taken
+    out) is significant in a fraction ``line_significance_threshold`` of the
+    trials, within five binomial standard errors. A trial where it is not
+    keeps exactly the coefficients of removing the 60 Hz line alone."""
+    n_trials, threshold = 3000, 0.05
+    time = np.arange(1000) / _SAMPLING_FREQUENCY
+    rng = np.random.default_rng(327)
+    signals = rng.standard_normal((1000, n_trials, 1))
+    signals += _lines(time, (3.0, 60.0, 0.4))[:, np.newaxis, np.newaxis]
+    settings = {"time_halfbandwidth_product": 4, "line_significance_threshold": threshold}
+    both = to_host(
+        Multitaper(
+            signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0, 64.0], **settings
+        ).fft()
+    )
+    alone = to_host(
+        Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], **settings).fft()
+    )
+    removed_64 = ~np.all(np.isclose(both, alone, rtol=0, atol=1e-12), axis=(0, 2, 3, 4))
+    standard_error = np.sqrt(threshold * (1 - threshold) / n_trials)
+    assert abs(removed_64.mean() - threshold) < 5 * standard_error, removed_64.mean()
+
+
+def test_a_threshold_works_per_trial_and_signal():
+    """In overlapping windows with an offset start, a line in one trial and
+    signal only is removed there, and the others keep their coefficients."""
+    time = 2.5 + np.arange(2000) / _SAMPLING_FREQUENCY
+    rng = np.random.default_rng(328)
+    signals = rng.standard_normal((2000, 3, 2))
+    signals[:, 1, 0] += _lines(time, (3.0, 120.0, 1.0))
+    settings = {
+        **_SETTINGS,
+        "time_window_step": 0.5,
+        "start_time": 2.5,
+        "line_frequencies": [120.0],
+        "line_significance_threshold": 1e-4,
+    }
+    plain = {key: value for key, value in settings.items() if not key.startswith("line_")}
+    raw = to_host(Multitaper(signals, _SAMPLING_FREQUENCY, **plain).fft())
+    cleaned = to_host(Multitaper(signals, _SAMPLING_FREQUENCY, **settings).fft())
+    without_line = np.ones((3, 2), dtype=bool)
+    without_line[1, 0] = False
+    np.testing.assert_array_equal(
+        cleaned[:, without_line.nonzero()[0], ..., without_line.nonzero()[1]],
+        raw[:, without_line.nonzero()[0], ..., without_line.nonzero()[1]],
+    )
+    at_120 = np.argmin(
+        np.abs(Multitaper(signals, _SAMPLING_FREQUENCY, **plain).frequencies - 120)
+    )
+    assert np.sum(np.abs(cleaned[:, 1, :, at_120, 0]) ** 2) < 0.01 * np.sum(
+        np.abs(raw[:, 1, :, at_120, 0]) ** 2
+    )
+
+
+def test_a_single_frequency_and_float32_input():
+    time = np.arange(1000) / _SAMPLING_FREQUENCY
+    signals = np.random.default_rng(329).standard_normal((1000, 2, 1))
+    signals += _lines(time, (1.0, 60.0, 0.3))[:, np.newaxis, np.newaxis]
+    scalar = Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=60, **_SETTINGS)
+    listed = Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], **_SETTINGS)
+    np.testing.assert_array_equal(to_host(scalar.fft()), to_host(listed.fft()))
+    single = Multitaper(
+        signals.astype(np.float32), _SAMPLING_FREQUENCY, line_frequencies=60, **_SETTINGS
+    )
+    np.testing.assert_allclose(to_host(single.fft()), to_host(listed.fft()), rtol=0, atol=1e-6)
+    with pytest.raises(ValueError, match="read-only"):
+        listed.line_frequencies[0] = 50.0
+
+
+def test_coherence_tests_count_one_taper_fewer_per_trial_near_a_removed_line():
+    """Removal takes one of the K tapers' degrees of freedom per trial within W
+    of the line, so the zero-coherence test is liberal there with
+    n_observations (one 5-trial x 7-taper dataset in 13 was significant at
+    0.05 in simulation) and calibrated with n_observations - n_trials, as the
+    docs advise. Replicate datasets are time windows."""
+    n_windows, n_trials, level = 3000, 5, 0.05
+    rng = np.random.default_rng(330)
+    signals = rng.standard_normal((1000 * n_windows, n_trials, 2))
+    multitaper = Multitaper(signals, _SAMPLING_FREQUENCY, line_frequencies=[60.0], **_SETTINGS)
+    connectivity = Connectivity.from_transform(multitaper)
+    near = np.abs(connectivity.frequencies - 60.0) < 3.5  # within W = 4 Hz
+    coherency = connectivity.coherency()[:, near, 0, 1]
+    standard_error = np.sqrt(level * (1 - level) / coherency.size)
+    counted = coherence_significance_pvalue(coherency, connectivity.n_observations)
+    corrected = coherence_significance_pvalue(
+        coherency, connectivity.n_observations - n_trials
+    )
+    assert np.mean(counted < level) - level > 5 * standard_error
+    assert abs(np.mean(corrected < level) - level) < 5 * standard_error

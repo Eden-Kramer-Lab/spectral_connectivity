@@ -244,7 +244,7 @@ def test_only_released_multitaper_attributes_are_compatibility_copies(data):
             "detrend_type": None,
             "is_low_bias": True,
             "line_frequencies": [],
-            "line_p_value": None,
+            "line_significance_threshold": None,
             "n_fft_samples": 32,
             "n_tapers": 3,
             "n_time_samples_per_step": 32,
