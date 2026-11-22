@@ -993,9 +993,7 @@ def test_labelled_global_coherence_with_few_observations_names_the_pooling_route
                 time_halfbandwidth_product=2,
                 **window,
             )
-        return next(
-            str(w.message) for w in record if "fewer observations" in str(w.message)
-        )
+        return next(str(w.message) for w in record if "fewer observations" in str(w.message))
 
     route = (
         "Connectivity.from_transform(transform, "
