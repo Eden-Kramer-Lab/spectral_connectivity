@@ -665,19 +665,14 @@ def _estimate_global_coherence(
     # extreme-magnitude coefficients would underflow (e.g. ~1e-200 -> 0, a false
     # zero-power bin) or overflow (~1e200 -> inf) and return NaN.
     max_magnitude = float(xp.max(xp.abs(fourier_coefficients)))
-    if not np.isfinite(max_magnitude):
-        # NaN or Inf coefficients: svds raises ARPACK's error (and LAPACK
-        # prints to stderr) rather than LinAlgError. Return NaN without
-        # decomposing; Connectivity.global_coherence reports it in the
+    if max_magnitude == 0 or not np.isfinite(max_magnitude):
+        # A genuinely zero-power bin (e.g. a dead/flat channel) has global
+        # coherence 0/0, undefined: return NaN rather than silently
+        # substituting 0, mirroring coherency() / imaginary_coherence(); the
+        # caller warns once. NaN or Inf coefficients are not decomposed either
+        # (svds would raise ARPACK's error, and LAPACK print to stderr): NaN
+        # is returned and Connectivity.global_coherence reports it in the
         # user's terms (see its _require_finite_decomposition).
-        return (
-            xp.full(max_rank, xp.nan),
-            xp.full((n_signals, max_rank), xp.nan, dtype=xp.complex128),
-        )
-    if max_magnitude == 0:
-        # Genuinely zero-power bin (e.g. a dead/flat channel): global coherence
-        # is 0/0 and undefined. Return NaN rather than silently substituting 0,
-        # mirroring coherency() / imaginary_coherence(); the caller warns once.
         return (
             xp.full(max_rank, xp.nan),
             xp.full((n_signals, max_rank), xp.nan, dtype=xp.complex128),

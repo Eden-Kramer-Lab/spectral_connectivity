@@ -4378,15 +4378,14 @@ class Connectivity:
         True
         """
         self._validate_multiple_signals()
-        pooled_axes = list(self._expectation_axes)
+        pooled_axes = self._expectation_axes
         if 2 not in pooled_axes:
-            supported = ", ".join(
-                "'trials_tapers' (the default)" if name == "trials_tapers" else repr(name)
-                for name in sorted(
-                    (name for name, axes in EXPECTATION_AXES.items() if 2 in axes),
-                    key=lambda name: name != "trials_tapers",
-                )
-            )
+            others = [
+                repr(name)
+                for name, axes in EXPECTATION_AXES.items()
+                if 2 in axes and name != "trials_tapers"
+            ]
+            supported = ", ".join(["'trials_tapers' (the default)", *others])
             msg = (
                 f"global_coherence needs the tapers averaged, but "
                 f"expectation_type={self.expectation_type!r} keeps them as an "
@@ -4398,12 +4397,13 @@ class Connectivity:
                 "conn.expectation_type = 'trials_tapers' on this instance."
             )
             raise ValueError(msg)
-        n_signals = self.n_signals
-        n_observations = self.n_observations
         self._warn_few_global_coherence_observations()
         if 0 in pooled_axes:
             # Overlapping windows share data, so pooling them adds fewer
-            # effective observations than their count.
+            # effective observations than their count. Only when time is
+            # pooled: correlated trial/taper observations alone (Morlet
+            # smoothing, overlapping Welch segments) are left to the Notes, so
+            # the default use of those transforms does not start warning.
             self._warn_correlated_observations(
                 "global_coherence",
                 "Its bias above the 1/n_signals of independent signals, and its "
@@ -4419,7 +4419,7 @@ class Connectivity:
         # components. Requesting more than that would crash svds or (in the
         # dense branch) broadcast a single component into duplicates, so clamp
         # the requested rank to what is realizable.
-        max_available_rank = min(n_signals, n_observations)
+        max_available_rank = min(self.n_signals, self.n_observations)
         if max_rank > max_available_rank:
             warnings.warn(
                 f"max_rank={max_rank} exceeds the number of available "
