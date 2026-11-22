@@ -580,7 +580,7 @@ and signal for a sinusoid that keeps its phase across the window (Thomson's
 harmonic F-test), such as line noise or a stimulation artifact, and fits its
 amplitude and phase. Each frequency is a test: Thomson's rule takes a line as
 detected where the p-value is below `1 / n_time_samples_per_window`, which
-admits about one frequency per window and signal by chance. A line present
+also admits a frequency or two per window and signal by chance. A line present
 throughout the recording is detected in most windows; a chance detection is
 not.
 

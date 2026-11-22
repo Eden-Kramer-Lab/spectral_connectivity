@@ -2462,7 +2462,8 @@ class Multitaper(_WindowedFourierTransform):
           in the odd tapers, which the fit counts as noise. On the unpadded
           grid of a 1 s window with ``NW = 4``, a line half a bin from the
           nearest one was missed at ``p < 0.001`` in simulation, with its
-          amplitude a third too low; it can never exceed ``F = 4.9``. The
+          amplitude a third too low: as the signal-to-noise ratio grows, its
+          ``F`` tends to a ceiling of about 4.9. The
           default fourfold padding leaves a line at most an eighth of the
           window's bin from a test frequency, which keeps 98% of its
           amplitude. Padding does not change ``W``, so the bins around a line,
@@ -2470,22 +2471,27 @@ class Multitaper(_WindowedFourierTransform):
           frequency at the local maximum of ``F``.
         - **A narrow background peak** violates the flat-background
           assumption: a rhythm narrower than about ``2W`` (a spindle, say)
-          tests as line-like. For an AR(2) resonance with a half-width of
-          1.6 Hz and no sinusoid, ``p < 0.05`` held at 6% of the frequencies
-          near the peak with ``NW = 3``, 9% with ``NW = 4``, and 23% with
-          ``NW = 8``. Use a small ``NW`` there, or read the test as a screen.
+          tests as line-like. For an AR(2) resonance with a full width at half
+          maximum of 1.6 Hz and no sinusoid, ``p < 0.05`` held at 8% of the
+          frequencies within 3 Hz of the peak with ``NW = 3``, 12% with
+          ``NW = 4``, and 26% with ``NW = 8`` (1 s windows). Use a small
+          ``NW`` there, or read the test as a screen.
         - **Many tests**: every frequency is a test, so about a fraction
           ``alpha`` of the frequencies without a line fall below ``alpha``.
           Thomson's rule takes a line as detected when its p-value is below
-          ``1 / n_time_samples_per_window``, about one chance detection per
-          window and signal. For an error rate over the frequencies of each
+          ``1 / n_time_samples_per_window``. That admits frequencies by chance:
+          for white noise and ``NW = 4``, about two per window and signal on
+          the default grid (about 1.5 separate peaks, in 77% of windows),
+          half a frequency on the unpadded grid. For an error rate over the frequencies of each
           window, trial, and signal, use
           :func:`spectral_connectivity.statistics.adjust_for_multiple_comparisons`
           with ``axis=2``.
         - The coefficients are those of equally weighted tapers, whatever
           ``taper_weighting`` is: the test is defined for them. Keep the
-          default tapers: tapers beyond ``2 NW - 1``, poorly concentrated in
-          the bandwidth, make the test conservative.
+          default tapers: tapers beyond ``2 NW - 1`` are poorly concentrated
+          in the bandwidth, and with a steep background spectrum they make the
+          test conservative (10 tapers at ``NW = 4`` rejected at 1.5% instead
+          of 5% for AR(1) noise with coefficient 0.999).
 
         References
         ----------
