@@ -698,7 +698,8 @@ def connectivity_to_xarray(
     group_labels : sequence, optional
         One label per signal naming its group, required by the group measures
         (see :func:`multitaper_connectivity`). It may instead be given in
-        ``connectivity_kwargs``, but not both.
+        ``connectivity_kwargs``, but not both. A coordinate name is not
+        accepted here: ``m`` keeps no coordinates.
     frequency_range : (float, float), optional
         Frequency interval ``(low, high)``, both endpoints included, as in
         :func:`multitaper_connectivity`: ``delay``, ``group_delay``, and
@@ -772,6 +773,15 @@ def connectivity_to_xarray(
         measure_settings["frequency_range"] = frequency_range
     group_labels, measure_settings, group_methods = _resolve_group_labels(
         [method], measure_settings, group_labels
+    )
+    group_labels = _group_labels_from_coordinate(
+        group_labels,
+        None,
+        no_coordinates=(
+            "connectivity_to_xarray takes a transform, which keeps no coordinates: "
+            f"pass the coordinate's values, da.coords[{group_labels!r}].values, or "
+            "call multitaper_connectivity with the DataArray"
+        ),
     )
     connectivity = Connectivity.from_transform(
         m,
@@ -942,6 +952,46 @@ def _resolve_group_labels(
         )
         raise ValueError(msg)
     return group_labels, label_free_kwargs, frozenset(group_methods)
+
+
+def _group_labels_from_coordinate(
+    group_labels: Sequence[Hashable] | NDArray[Any] | str | None,
+    signal_metadata: _SignalMetadata | None,
+    *,
+    no_coordinates: str,
+) -> Sequence[Hashable] | NDArray[Any] | None:
+    """The labels ``group_labels`` gives, reading a string as a coordinate name.
+
+    A string names a 1-D coordinate along the input DataArray's signal
+    dimension (e.g. ``"region"``), whose values label the signals. Other
+    values are returned unchanged. ``no_coordinates`` says why the input has
+    no such coordinate when ``signal_metadata`` is ``None``.
+    """
+    if not isinstance(group_labels, str):
+        return group_labels
+    if signal_metadata is None:
+        msg = f"group_labels={group_labels!r} names a coordinate, but {no_coordinates}."
+        raise TypeError(msg)
+    coordinates = signal_metadata.coordinates
+    if group_labels not in coordinates:
+        dimension = signal_metadata.signal_dimension
+        available = (
+            f"those it has are {', '.join(repr(name) for name in coordinates)}"
+            if coordinates
+            else "it has none"
+        )
+        msg = (
+            f"group_labels={group_labels!r} names no 1-D coordinate along the signal "
+            f"dimension {dimension!r} other than its index; {available}. Name one of "
+            "them, or pass one label per signal, e.g. group_labels=['CA1', 'CA1', "
+            "'PFC', 'PFC']."
+        )
+        if group_labels == dimension:
+            msg += (
+                f" {dimension!r} itself labels each signal, which would make one group each."
+            )
+        raise ValueError(msg)
+    return coordinates[group_labels][0]
 
 
 # How to keep the signal axis when selecting one channel, for the layouts
@@ -1193,7 +1243,7 @@ def multitaper_connectivity(
     n_tapers: int | None = None,
     detrend_type: str | None = "constant",
     transform_kwargs: Mapping[str, Any] | None = None,
-    group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
+    group_labels: Sequence[Hashable] | NDArray[Any] | str | None = None,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
@@ -1339,7 +1389,7 @@ def multitaper_connectivity(
         ``TypeError``). The common settings above are named arguments of this
         function and cannot also be given here (``ValueError``), so each
         setting has one value.
-    group_labels : sequence, optional
+    group_labels : sequence or str, optional
         One label per signal naming the group it belongs to; labels are scalars
         such as integers or area names (``"CA1"``), and missing values
         (``None``, NaN) are rejected. Required by
@@ -1349,6 +1399,9 @@ def multitaper_connectivity(
         ``maximized_imaginary_coherency_components``); an error is raised if no
         requested measure takes it (labels are passed only to the measures that
         do). It may instead be given in ``connectivity_kwargs``, but not both.
+        A single string, rather than a sequence, names a coordinate along the
+        input DataArray's signal dimension whose values are the labels, e.g.
+        ``group_labels="region"`` for a ``region`` coordinate on ``channel``.
     frequency_range : (float, float), optional
         Frequency interval ``(low, high)``, both endpoints included; a bin lies
         on a bound when they differ by at most one part in a million of the
@@ -1626,6 +1679,14 @@ def multitaper_connectivity(
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         method, connectivity_kwargs, group_labels
     )
+    group_labels = _group_labels_from_coordinate(
+        group_labels,
+        signal_metadata,
+        no_coordinates=(
+            "time_series is not an xarray.DataArray, so it has none: pass one label "
+            "per signal, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC']"
+        ),
+    )
     if time_series_data.ndim not in (2, 3):
         # Said here, in this function's layouts: Multitaper's message speaks
         # of its own 3-D input and prepare_time_series.
@@ -1778,7 +1839,7 @@ def fourier_connectivity(
     squeeze: bool = False,
     connectivity_kwargs: dict[str, Any] | None = None,
     is_one_sided: bool | None = None,
-    group_labels: Sequence[Hashable] | NDArray[Any] | None = None,
+    group_labels: Sequence[Hashable] | NDArray[Any] | str | None = None,
     frequency_range: tuple[float, float] | None = None,
     frequency_decimation: int = 1,
     frequency_bands: Mapping[str, tuple[float, float]] | None = None,
@@ -1855,7 +1916,7 @@ def fourier_connectivity(
         warns, and refuses those measures because the assumption cannot be
         checked. With a frequency coordinate it is inferred from
         ``frequencies``.
-    group_labels : sequence, optional
+    group_labels : sequence or str, optional
         One label per signal naming the group it belongs to; labels are scalars
         such as integers or area names (``"CA1"``), and missing values
         (``None``, NaN) are rejected. Required by
@@ -1865,6 +1926,9 @@ def fourier_connectivity(
         ``maximized_imaginary_coherency_components``); an error is raised if no
         requested measure takes it (labels are passed only to the measures that
         do).
+        A single string, rather than a sequence, names a coordinate along the
+        input DataArray's signal dimension whose values are the labels, e.g.
+        ``group_labels="region"`` for a ``region`` coordinate on ``channel``.
     frequency_range : (float, float), optional
         ``(low, high)`` bounds, in the units of the frequency coordinate, to
         keep before any decimation or band reduction; both endpoints are
@@ -1973,6 +2037,14 @@ def fourier_connectivity(
     )
     group_labels, connectivity_kwargs, group_methods = _resolve_group_labels(
         methods, connectivity_kwargs, group_labels
+    )
+    group_labels = _group_labels_from_coordinate(
+        group_labels,
+        signal_metadata if isinstance(fourier_coefficients, xr.DataArray) else None,
+        no_coordinates=(
+            "fourier_coefficients is not an xarray.DataArray, so it has none: pass "
+            "one label per signal, e.g. group_labels=['CA1', 'CA1', 'PFC', 'PFC']"
+        ),
     )
     connectivity = Connectivity(
         coefficient_data,

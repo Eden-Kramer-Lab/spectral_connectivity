@@ -58,6 +58,11 @@ The migration guide for code written against 2.x is
   one family, as in `scipy.stats.false_discovery_control`, so each slice
   along the other axes (each time window, say) is corrected on its own. The
   default, `axis=None`, still pools every p-value into one family.
+- `group_labels` of `multitaper_connectivity` and `fourier_connectivity` can be
+  the name of a coordinate along the input DataArray's signal dimension, e.g.
+  `group_labels="region"`, whose values then label the signals. A string
+  given with a plain array, or to `connectivity_to_xarray`, now raises
+  `TypeError` saying so, where it raised a shape `ValueError`.
 - `Connectivity.power(one_sided=False)` returns the two-sided power spectral
   density at the non-negative frequencies (no bin doubled), which is what
   `power()` returned in 2.x and what formulas written for a two-sided

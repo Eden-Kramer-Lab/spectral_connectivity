@@ -68,6 +68,8 @@ class _SignalMetadata(NamedTuple):
     # Number of trials, when the input's layout or labels say an axis is trials;
     # None when unknown.
     n_trials: int | None = None
+    # The input DataArray's signal dimension; None for a plain array.
+    signal_dimension: Hashable | None = None
 
 
 class _UnwrappedInput(NamedTuple):
@@ -794,6 +796,7 @@ def _unwrap_xarray_input(
             coordinates=_signal_coordinates_from_dataarray(time_series, signal_dimension),
             units=_stated_units(time_series.attrs.get("units")),
             recording_coordinates=_scalar_coordinates_from_dataarray(time_series),
+            signal_dimension=signal_dimension,
         ),
     )
 
@@ -1040,6 +1043,7 @@ def _unwrap_fourier_input(
         )
     # Coefficient units are not time-series units, so no density units follow.
     signal_metadata = _SignalMetadata(
+        signal_dimension=role_to_dimension["signal"],
         coordinates=_signal_coordinates_from_dataarray(
             coefficient_array, role_to_dimension["signal"]
         ),
