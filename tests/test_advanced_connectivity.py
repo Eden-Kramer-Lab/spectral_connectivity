@@ -1066,6 +1066,9 @@ def test_global_coherence_warns_when_it_pools_overlapping_windows(expectation_ty
     assert f"expectation_type={expectation_type!r} averages over time bins" in message
     assert "time_bins_are_independent is False" in message
     assert f"n_observations == {overlapping.n_observations} overstates" in message
+    # Overlap up to half does not trigger it, but it is not free either.
+    assert "Non-overlapping windows are the clean case" in message
+    assert "even 50% overlap leaves about half the nominal count" in message
 
     for silent in (connectivity(0.1, "trials_tapers"), connectivity(0.4, expectation_type)):
         with warnings.catch_warnings():

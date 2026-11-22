@@ -1742,7 +1742,9 @@ class Connectivity:
             "independent sample",
         )
 
-    def _warn_correlated_observations(self, measure: str, assumption: str) -> None:
+    def _warn_correlated_observations(
+        self, measure: str, assumption: str, advice: str = ""
+    ) -> None:
         """Warn once that ``measure`` counts correlated observations as independent.
 
         ``n_observations`` is a raw count of the averaged observations. When
@@ -1754,7 +1756,8 @@ class Connectivity:
         windows or closely spaced Morlet samples), that count overstates the
         effective sample size, biasing every consumer that uses it as a
         degrees-of-freedom or bias-correction factor. ``assumption`` states
-        what ``measure`` uses the count for so the message is actionable.
+        what ``measure`` uses the count for so the message is actionable;
+        ``advice``, when given, is appended as a last sentence.
         """
         averages_correlated_time_bins = (
             not self._time_bins_are_independent and 0 in self._expectation_axes
@@ -1784,7 +1787,7 @@ class Connectivity:
             f"{measure} assumes independent observations, but "
             f"{' and '.join(reasons)}. {assumption}, so n_observations == "
             f"{self.n_observations} overstates the effective sample size and the "
-            f"result is biased.",
+            f"result is biased.{' ' + advice if advice else ''}",
             UserWarning,
             stacklevel=stacklevel_outside_package(),
         )
@@ -4225,9 +4228,13 @@ class Connectivity:
           (trial counts, rejected epochs, and removed channels all change
           them), or against a null simulated at the same ``n`` and ``p``.
         - *Effective observations*: correlated observations (overlapping
-          windows, ``time_bins_are_independent=False``; overlapping Welch
-          segments or Morlet smoothing, ``observations_are_independent=False``)
-          count fewer than ``n``, so the bias is larger than ``n`` suggests.
+          windows; overlapping Welch segments or Morlet smoothing,
+          ``observations_are_independent=False``) count fewer than ``n``, so
+          the bias is larger than ``n`` suggests. Pool non-overlapping windows:
+          with a full taper set, 50% overlap, which does not yet set
+          ``time_bins_are_independent=False`` or warn, still leaves about half
+          the nominal count (by Monte Carlo, 7 tapers: about 39 effective of
+          70), and halving the step over the same span adds almost nothing.
         - *Pooling time*: pooling windows whose coherent pattern changes
           lowers the value, so a smaller value after longer pooling is not by
           itself evidence of weaker coherence.
@@ -4366,6 +4373,9 @@ class Connectivity:
                 "Its bias above the 1/n_signals of independent signals, and its "
                 "floor of 1/min(n_observations, n_signals), are set by the number "
                 "of independent observations pooled",
+                "Non-overlapping windows are the clean case: with a full taper set, "
+                "even 50% overlap leaves about half the nominal count of effective "
+                "observations.",
             )
 
         # A rank-r decomposition of the (n_signals, n_observations) coefficient
