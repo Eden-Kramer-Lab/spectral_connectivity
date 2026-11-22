@@ -418,8 +418,9 @@ diagonal, and interpretation, is generated from the code into
   form, pairwise phase consistency, and the phase lag index with its weighted
   and debiased forms.
 + **Between groups of signals**: canonical coherence and coherency, maximized
-  imaginary coherency, the multivariate interaction measure, and global
-  coherence.
+  imaginary coherency, and the multivariate interaction measure.
++ **Across all signals at once**: global coherence, the share of the total
+  power in the strongest coherent component.
 + **Directed influence**: spectral Granger prediction (pairwise, subset,
   conditional, blockwise, time-reversed) and the transfer-function family
   (directed transfer function, directed coherence, partial directed coherence
