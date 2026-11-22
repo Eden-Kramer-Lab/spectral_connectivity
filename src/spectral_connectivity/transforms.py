@@ -2,7 +2,7 @@
 
 import contextlib
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from logging import getLogger
 from typing import (
@@ -140,6 +140,11 @@ class MultitaperParameters(TypedDict):
 
 # The harmonic F-test pads each window to this many times its length by default.
 _HARMONIC_F_TEST_PADDING = 4
+# Passes over the named lines in line removal. Lines closer than the
+# bandwidth overlap; repeated passes converge to their joint fit (of a pair
+# of lines 1 Hz apart with W = 4 Hz, one pass leaves 4e-4 of their power,
+# two 2.5e-10, three 1.5e-16).
+_LINE_FIT_SWEEPS = 3
 
 
 @dataclass(frozen=True)
@@ -1660,6 +1665,7 @@ Frequency Analysis
         ):
             if self.detrend_type is not None:
                 time_series = detrend(time_series, type=self.detrend_type)
+            time_series = self._remove_lines(time_series)
 
             coefficients = _multitaper_fft(
                 self._tapers_for_fft(),
@@ -1676,6 +1682,15 @@ Frequency Analysis
     def _tapers_for_fft(self) -> NDArray[np.floating]:
         """Return the internal taper snapshot, ``(n_time_samples_per_window, n_tapers)``."""
         raise NotImplementedError
+
+    def _remove_lines(self, windows: NDArray[np.floating]) -> NDArray[np.floating]:
+        """The detrended windows with any line removal applied; unchanged by default.
+
+        ``windows`` has shape ``(n_time_windows, n_trials, n_signals,
+        n_time_samples_per_window)`` and may be a read-only view of the input,
+        so an override returns a new array.
+        """
+        return windows
 
     def _weight_taper_coefficients(
         self,
@@ -1836,6 +1851,31 @@ class Multitaper(_WindowedFourierTransform):
         Iteration ceiling for Thomson adaptive weighting.
     adaptive_tolerance : float, default=1e-8
         Relative convergence tolerance for the adaptive spectrum estimate.
+    line_frequencies : sequence of float, optional
+        Frequencies in Hz of sinusoidal lines (line noise and its harmonics,
+        a stimulation artifact) to remove before the coefficients are
+        computed, e.g. ``[60, 120, 180]``. In each window, trial, and signal,
+        the lines are fitted by Thomson's harmonic regression at exactly
+        these frequencies (see :meth:`harmonic_f_test`), jointly where they
+        lie within the bandwidth of each other and as detrending leaves
+        them, and are subtracted from the detrended window. Every measure
+        computed from this transform, and its :meth:`harmonic_f_test`, sees
+        the cleaned data. A line must be stable over each window and lie
+        close to its named frequency: of a line off it by a fraction of a
+        frequency bin (``1 / time_window_duration``), 0.7% of its power is
+        left at 0.05 bin, 3% at 0.1 bin, and 17% at a quarter bin
+        (``NW = 4``), so mains drift of 0.02 Hz matters for windows of
+        several seconds. Each frequency must lie at least the half-bandwidth
+        ``W`` from 0 Hz and the Nyquist frequency, and DPSS tapers are
+        required.
+    line_p_value : float, optional
+        Subtract a line only in the windows, trials, and signals where its
+        harmonic F-test p-value at its frequency is below this level. ``None``
+        (the default) subtracts it everywhere. Subtracting where there is no
+        line removes a little noise power near that frequency (a share
+        ``1 / n_tapers`` of it, on average); a threshold avoids that, at the
+        risk of leaving a weak line. A frequency where the line is never
+        significant warns.
 
     Attributes
     ----------
@@ -1927,6 +1967,8 @@ class Multitaper(_WindowedFourierTransform):
             "taper_weighting",
             "adaptive_max_iterations",
             "adaptive_tolerance",
+            "line_frequencies",
+            "line_p_value",
         }
     )
     _PROVENANCE_FIELDS: tuple[str, ...] = (
@@ -1938,6 +1980,8 @@ class Multitaper(_WindowedFourierTransform):
         "adaptive_max_iterations",
         "adaptive_tolerance",
         "time_halfbandwidth_product",
+        "line_frequencies",
+        "line_p_value",
     )
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -1970,6 +2014,8 @@ class Multitaper(_WindowedFourierTransform):
         taper_weighting: Literal["uniform", "eigen", "adaptive"] = "uniform",
         adaptive_max_iterations: int = 50,
         adaptive_tolerance: float = 1e-8,
+        line_frequencies: Sequence[float] | NDArray[np.floating] | None = None,
+        line_p_value: float | None = None,
     ) -> None:
         object.__setattr__(self, "_initialized", False)
         time_series = _validated_time_series(time_series, type(self).__name__)
@@ -2164,8 +2210,142 @@ class Multitaper(_WindowedFourierTransform):
                 self._tapers, self._taper_eigenvalues = self._dpss_tapers()
         # Warned only once every check has passed, so an invalid Multitaper
         # (a transposed array among them) only raises.
+        self.line_frequencies, self.line_p_value = self._validated_line_settings(
+            line_frequencies, line_p_value
+        )
         self._time_series_is_finite = _warn_about_unusual_time_series(self._time_series)
         object.__setattr__(self, "_initialized", True)
+
+    def _validated_line_settings(
+        self, line_frequencies: Any, line_p_value: Any
+    ) -> tuple[NDArray[np.floating], float | None]:
+        """The line frequencies as a read-only float array, and the threshold."""
+        if line_p_value is not None and (
+            isinstance(line_p_value, (bool, np.bool_))
+            or not isinstance(line_p_value, (int, float, np.integer, np.floating))
+            or not 0 < line_p_value < 1
+        ):
+            msg = (
+                f"line_p_value must be a number strictly between 0 and 1, or None "
+                f"to remove the lines everywhere; got {line_p_value!r}."
+            )
+            raise ValueError(msg)
+        frequencies = np.asarray(
+            [] if line_frequencies is None else to_numpy(line_frequencies), dtype=float
+        ).ravel()
+        if frequencies.size and self._taper_eigenvalues is None:
+            msg = (
+                "line_frequencies needs DPSS tapers: the line fit is Thomson's "
+                "harmonic regression on them. Build the Multitaper without tapers=."
+            )
+            raise ValueError(msg)
+        half_bandwidth = self.frequency_resolution / 2
+        nyquist = self.sampling_frequency / 2
+        outside = frequencies[
+            ~np.isfinite(frequencies)
+            | (frequencies < half_bandwidth)
+            | (frequencies > nyquist - half_bandwidth)
+        ]
+        if outside.size:
+            msg = (
+                f"line_frequencies {outside.tolist()} lie within the tapers' "
+                f"half-bandwidth ({half_bandwidth:g} Hz) of 0 Hz or the Nyquist "
+                f"frequency ({nyquist:g} Hz), or are not finite: a line there "
+                "overlaps its mirror image and cannot be fitted. Each must lie "
+                f"in [{half_bandwidth:g}, {nyquist - half_bandwidth:g}] Hz."
+            )
+            raise ValueError(msg)
+        if np.unique(frequencies).size != frequencies.size:
+            msg = f"line_frequencies lists a frequency more than once: {frequencies.tolist()}."
+            raise ValueError(msg)
+        if line_p_value is not None and frequencies.size and self.n_tapers < 2:
+            msg = (
+                "line_p_value tests each line with the harmonic F-test, which needs "
+                f"at least 2 tapers, got {self.n_tapers}."
+            )
+            raise ValueError(msg)
+        return (
+            _immutable_array_snapshot(frequencies),
+            None if line_p_value is None else float(line_p_value),
+        )
+
+    def _remove_lines(self, windows: NDArray[np.floating]) -> NDArray[np.floating]:
+        """Subtract the named lines, fitted jointly at their exact frequencies.
+
+        For each frequency ``f0`` in turn, the tapers' coefficients at ``f0``
+        are computed by a direct Fourier sum over the window and fitted on the
+        tapers' sums as in :meth:`harmonic_f_test`, and the fitted sinusoid
+        ``2 Re(mu exp(2 pi i f0 t))`` is subtracted. Lines closer than the
+        bandwidth overlap, so one pass over them leaves a little of each; the
+        passes are repeated (:data:`_LINE_FIT_SWEEPS` in all), which converges
+        to their joint least-squares fit. With ``line_p_value``, whether a
+        line is removed in a window is decided by its F-test in the first
+        pass; later passes refit only the lines kept.
+        """
+        if not self.line_frequencies.size:
+            return windows
+        tapers = self._tapers_for_fft()  # (n_time_samples_per_window, n_tapers)
+        n_tapers = tapers.shape[1]
+        time = xp.arange(tapers.shape[0]) / self.sampling_frequency
+        # Per line: exp(2 pi i f0 t) to demodulate a window at f0, the line's
+        # complex sinusoid as detrending leaves it (detrending is linear, so a
+        # detrended line is 2 Re(mu * that)), and that sinusoid's coefficients
+        # at f0 on the tapers, the regressor the fit uses: without detrending,
+        # the tapers' sums (as in harmonic_f_test).
+        lines = []
+        for frequency in self.line_frequencies.tolist():
+            carrier = xp.exp(2j * np.pi * frequency * time)
+            sinusoid = (
+                carrier
+                if self.detrend_type is None
+                else detrend(carrier, type=self.detrend_type)
+            )
+            regressor = (
+                xp.matmul(sinusoid * xp.conj(carrier), tapers) / self.sampling_frequency
+            )
+            lines.append((frequency, carrier, sinusoid, regressor))
+        residual = xp.array(windows, dtype=xp.result_type(windows.dtype, xp.float64))
+        kept: list[BackendArray | None] = [None] * len(lines)
+        missed = []
+        for sweep in range(_LINE_FIT_SWEEPS):
+            for index, (frequency, carrier, sinusoid, regressor) in enumerate(lines):
+                # (window, trial, signal, taper): the coefficients at exactly f0
+                coefficients = (
+                    xp.matmul(residual * xp.conj(carrier), tapers) / self.sampling_frequency
+                )
+                regressor_power = xp.sum(regressor.real**2 + regressor.imag**2)
+                mu = xp.matmul(coefficients, xp.conj(regressor)) / regressor_power
+                if self.line_p_value is not None and sweep == 0:
+                    misfit = coefficients - mu[..., xp.newaxis] * regressor
+                    residual_power = xp.sum(misfit.real**2 + misfit.imag**2, axis=-1)
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        f_statistic = to_numpy(
+                            (n_tapers - 1)
+                            * (mu.real**2 + mu.imag**2)
+                            * regressor_power
+                            / residual_power
+                        )
+                    significant = (
+                        scipy.stats.f.sf(f_statistic, 2, 2 * n_tapers - 2) < self.line_p_value
+                    )
+                    if not significant.any():
+                        missed.append(frequency)
+                    kept[index] = xp.asarray(significant)
+                mask = kept[index]
+                if mask is not None:
+                    mu = xp.where(mask, mu, 0)
+                residual = residual - 2 * xp.real(mu[..., xp.newaxis] * sinusoid)
+        if missed:
+            warnings.warn(
+                f"line_frequencies {missed} Hz: the line was not significant at "
+                f"p < line_p_value ({self.line_p_value:g}) in any window, trial, or "
+                "signal, so nothing was removed there. Check the frequency (a line "
+                "slightly off it fits poorly; harmonic_f_test shows where the lines "
+                "are) or remove line_p_value to subtract it everywhere.",
+                UserWarning,
+                stacklevel=stacklevel_outside_package(),
+            )
+        return residual
 
     @property
     def _n_tapers_to_generate(self) -> int:
@@ -2234,7 +2414,13 @@ class Multitaper(_WindowedFourierTransform):
             f"           detrend_type={self.detrend_type!r}, "
             f"start_time={self.start_time}, "
             f"n_tapers={self.n_tapers}"
-            ")"
+            + (
+                f",\n           line_frequencies={self.line_frequencies.tolist()!r}, "
+                f"line_p_value={self.line_p_value!r}"
+                if self.line_frequencies.size
+                else ""
+            )
+            + ")"
         )
 
     def _spectral_bandwidth_metadata(self) -> dict[str, Any]:

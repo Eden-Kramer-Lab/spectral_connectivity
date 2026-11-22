@@ -627,6 +627,42 @@ A narrow rhythm in the background also tests as line-like. The Notes of
 discovery rate over the frequencies of each window, trial, and signal, pass
 the p-values to `adjust_for_multiple_comparisons` with `axis=2`.
 
+## Remove line noise before computing connectivity
+
+`line_frequencies` makes the transform fit the named lines in every window,
+trial, and signal (at exactly those frequencies, by the same harmonic
+regression) and subtract them before the coefficients are computed, so every
+measure uses the cleaned data. Through the wrappers it is a `transform_kwargs`
+setting:
+
+```python
+>>> settings = dict(
+...     sampling_frequency=sampling_frequency, time_window_duration=1.0,
+...     time_halfbandwidth_product=4, method="power",
+... )
+>>> raw = multitaper_connectivity(recording, **settings)
+>>> cleaned = multitaper_connectivity(
+...     recording, transform_kwargs={"line_frequencies": [60, 120]}, **settings
+... )
+>>> def power_at(result, frequency):
+...     return float(result.sel(frequency=frequency).isel(source=0).mean())
+>>> # Before, 60 and 120 Hz stand far above the noise (at 90 Hz); after, they do not
+>>> [power_at(raw, f) > 5 * power_at(raw, 90) for f in (60, 120)]
+[True, True]
+>>> [power_at(cleaned, f) < 1.5 * power_at(cleaned, 90) for f in (60, 120)]
+[True, True]
+>>> cleaned.attrs["mt_n_tapers"], "line_frequencies" in cleaned.attrs["transform_parameters_json"]
+(7, True)
+
+```
+
+The fit takes the noise's share along with the line: about `1 / n_tapers` of
+the noise power at each named frequency. To subtract a line only where it is
+present, pass `line_p_value` as well: a line is then removed only in the
+windows, trials, and signals where its F-test is significant at that level,
+and a frequency where it never is warns. A line must lie close to its named
+frequency (see `Multitaper`'s `line_frequencies`).
+
 ## Bring your own Fourier coefficients
 
 If you already have Fourier coefficients (e.g. from a wavelet transform), skip
