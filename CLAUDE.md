@@ -96,10 +96,11 @@ rm -rf build/ dist/ *.egg-info/
 Set environment variable `SPECTRAL_CONNECTIVITY_ENABLE_GPU=true` to enable GPU acceleration via CuPy.
 
 ### Dependencies
-- Core: numpy, scipy, xarray, matplotlib
+- Core: numpy, scipy, xarray
+- Optional plotting (`plot` extra, for the README example and tutorials): matplotlib
 - Dev tools (the `dev` extra and `dev` dependency group in `pyproject.toml`; keep
   the two lists identical): pytest, pytest-cov, syrupy, nitime, ruff, mypy,
-  scipy-stubs, numpydoc, netCDF4, h5netcdf, h5py
+  scipy-stubs, numpydoc, matplotlib, netCDF4, h5netcdf, h5py
 - Optional GPU: cupy-cuda12x
 
 ## Testing Strategy

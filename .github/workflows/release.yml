@@ -140,11 +140,12 @@ jobs:
         # resolves. Install everything in ONE resolver invocation so a later
         # dependency (nitime, pytest, ...) cannot silently upgrade a pinned floor
         # -- a conflict fails the job instead. nitime requires numpy>=1.24, so it
-        # stays on the 1.24.0 floor.
+        # stays on the 1.24.0 floor. matplotlib is pinned to the `plot` extra's
+        # floor (nitime also needs it).
         run: |
           pip install \
             numpy==1.24.0 scipy==1.11.1 xarray==2023.1.0 matplotlib==3.7.0 \
-            -e . pytest pytest-cov nitime
+            -e ".[plot]" pytest pytest-cov nitime
           pip check
       - name: Assert the pinned floors were not upgraded
         run: |

@@ -70,11 +70,15 @@ Requires Python >= 3.10.
 pip install spectral_connectivity
 ```
 
-or
+or with conda:
 
 ```bash
 conda install -c edeno spectral_connectivity
 ```
+
+The package does not need matplotlib, but the example below and the tutorials
+plot with it: `pip install "spectral-connectivity[plot]"` installs it too; with
+conda, `conda install matplotlib`.
 
 GPU acceleration is optional; see [GPU Acceleration](#gpu-acceleration) to set
 it up. To contribute, see [Developer Installation](#developer-installation).
@@ -434,9 +438,11 @@ diagonal, and interpretation, is generated from the code into
 
 + python
 + numpy
-+ matplotlib
 + scipy
 + xarray
+
+matplotlib is optional: only the examples and tutorials plot (see
+[Installation](#installation)).
 
 See [pyproject.toml](https://github.com/Eden-Kramer-Lab/spectral_connectivity/blob/master/pyproject.toml) for the authoritative list of dependencies and their minimum versions.
 

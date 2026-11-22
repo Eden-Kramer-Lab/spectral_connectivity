@@ -440,6 +440,9 @@ The migration guide for code written against 2.x is
 
 ### Changed
 
+- matplotlib is no longer a required dependency; the package never imported
+  it. Install it to run the README example and the tutorials, for example with
+  the new `plot` extra: `pip install "spectral-connectivity[plot]"`.
 - `Connectivity.global_coherence` returns only the non-negative frequencies,
   labelled by `Connectivity.frequencies`, like every other measure; 2.x
   returned every bin of the two-sided transform, labelled by
