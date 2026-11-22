@@ -618,16 +618,14 @@ not.
 ```
 
 The test pads each window to four times its length (`lines.frequencies` is
-spaced 0.25 Hz here, against the window's 1 Hz bins): a line between the
-window's bins puts part of its power in the odd tapers, which the test counts
-as noise, and half a bin off it would be missed with its amplitude read a third
-too low. `harmonic_f_test(n_fft_samples=...)` sets another grid.
-Frequencies within the half-bandwidth (`lines.half_bandwidth`) of 0 Hz and
-Nyquist are NaN: there a line overlaps its mirror image. A narrow rhythm in the background (narrower
-than about twice the half-bandwidth) also tests as line-like, more so the
-larger `time_halfbandwidth_product`. For a false discovery rate over the
-frequencies of each window, trial, and signal, pass the p-values to
-`adjust_for_multiple_comparisons` with `axis=2`.
+spaced 0.25 Hz here, against the window's 1 Hz bins), since a line between the
+window's own bins can be missed; `harmonic_f_test(n_fft_samples=...)` sets
+another grid. Frequencies within the half-bandwidth (`lines.half_bandwidth`)
+of 0 Hz and Nyquist are NaN, because there a line overlaps its mirror image.
+A narrow rhythm in the background also tests as line-like. The Notes of
+`Multitaper.harmonic_f_test` give the sizes of these effects. For a false
+discovery rate over the frequencies of each window, trial, and signal, pass
+the p-values to `adjust_for_multiple_comparisons` with `axis=2`.
 
 ## Bring your own Fourier coefficients
 

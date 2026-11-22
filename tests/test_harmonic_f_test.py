@@ -17,6 +17,20 @@ def _line(time, amplitude, frequency, phase):
     return amplitude * np.cos(2 * np.pi * frequency * time + phase)
 
 
+def _assert_null_p_values_uniform(result, levels=(0.05,)):
+    """The fraction of p-values below each level is that level, within five
+    binomial standard errors, at defined bins at least 2W apart (nearly
+    independent within a trial)."""
+    spacing = int(np.ceil(2 * result.half_bandwidth / result.frequencies[1]))
+    defined = np.flatnonzero(np.isfinite(result.p_value[0, 0, :, 0]))
+    p_values = result.p_value[:, :, defined[::spacing], :].ravel()
+    assert p_values.size > 10_000
+    for level in levels:
+        fraction = np.mean(p_values < level)
+        standard_error = np.sqrt(level * (1 - level) / p_values.size)
+        assert abs(fraction - level) < 5 * standard_error, (level, fraction)
+
+
 @pytest.mark.parametrize("start_time", [0.0, 7.3])
 def test_complex_amplitude_is_the_line_at_each_window_center(start_time):
     """The fitted complex amplitude is linear in the data, so over noise
@@ -69,15 +83,7 @@ def test_p_values_are_uniform_without_a_line():
         _SAMPLING_FREQUENCY,
         time_halfbandwidth_product=4,
     )
-    result = multitaper.harmonic_f_test()
-    spacing = int(np.ceil(2 * result.half_bandwidth / result.frequencies[1]))
-    defined = np.flatnonzero(np.isfinite(result.p_value[0, 0, :, 0]))
-    p_values = result.p_value[:, :, defined[::spacing], :].ravel()
-    assert p_values.size > 10_000
-    for level in (0.01, 0.05, 0.5):
-        fraction = np.mean(p_values < level)
-        standard_error = np.sqrt(level * (1 - level) / p_values.size)
-        assert abs(fraction - level) < 5 * standard_error, (level, fraction)
+    _assert_null_p_values_uniform(multitaper.harmonic_f_test(), levels=(0.01, 0.05, 0.5))
 
 
 def test_matches_a_least_squares_fit_of_the_taper_sums():
@@ -158,29 +164,22 @@ def test_result_describes_its_axes_and_null_distribution():
             assert type(value) is np.ndarray, field.name
 
 
-@pytest.mark.parametrize(
-    ("settings", "n_tapers"),
-    [
-        ({"time_halfbandwidth_product": 1.5}, 2),
-        ({"time_halfbandwidth_product": 4, "n_tapers": 7, "is_low_bias": False}, 7),
-    ],
-    ids=["two_tapers", "no_low_bias_filtering"],
-)
-def test_degrees_of_freedom_follow_the_tapers_used(settings, n_tapers):
-    """With no line the p-values are uniform for any number of tapers, which
-    holds only if the degrees of freedom count the tapers actually used."""
+def test_degrees_of_freedom_follow_the_tapers_used():
+    """With no line the p-values are uniform however many tapers are used,
+    which holds only if the degrees of freedom count them: two tapers at
+    NW = 1.5, and seven of eight requested once low-bias filtering drops one."""
     rng = np.random.default_rng(306)
-    multitaper = Multitaper(
-        rng.standard_normal((1000, 400, 1)), _SAMPLING_FREQUENCY, **settings
-    )
-    result = multitaper.harmonic_f_test()
-    assert multitaper.n_tapers == n_tapers
-    assert result.degrees_of_freedom == (2, 2 * n_tapers - 2)
-    spacing = int(np.ceil(2 * result.half_bandwidth / result.frequencies[1]))
-    defined = np.flatnonzero(np.isfinite(result.p_value[0, 0, :, 0]))
-    p_values = result.p_value[:, :, defined[::spacing], :].ravel()
-    fraction = np.mean(p_values < 0.05)
-    assert abs(fraction - 0.05) < 5 * np.sqrt(0.05 * 0.95 / p_values.size), fraction
+    noise = rng.standard_normal((1000, 400, 1))
+    two_tapers = Multitaper(noise, _SAMPLING_FREQUENCY, time_halfbandwidth_product=1.5)
+    with pytest.warns(UserWarning, match="using 7 of the 8 DPSS tapers"):
+        filtered = Multitaper(
+            noise, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4, n_tapers=8
+        )
+    for multitaper, n_tapers in [(two_tapers, 2), (filtered, 7)]:
+        assert multitaper.n_tapers == n_tapers
+        result = multitaper.harmonic_f_test()
+        assert result.degrees_of_freedom == (2, 2 * n_tapers - 2)
+        _assert_null_p_values_uniform(result)
 
 
 def test_default_padding_recovers_a_line_between_the_windows_bins():
@@ -193,8 +192,9 @@ def test_default_padding_recovers_a_line_between_the_windows_bins():
     signals = rng.standard_normal((n_time, n_trials, 1))
     signals += amplitude * np.cos(2 * np.pi * frequency * time)[:, np.newaxis, np.newaxis]
 
+    multitaper = Multitaper(signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4)
+
     def amplitude_at_nearest_bin(**settings):
-        multitaper = Multitaper(signals, _SAMPLING_FREQUENCY, time_halfbandwidth_product=4)
         result = multitaper.harmonic_f_test(**settings)
         nearest = np.argmin(np.abs(result.frequencies - frequency))
         return result.amplitude[0, :, nearest, 0]
