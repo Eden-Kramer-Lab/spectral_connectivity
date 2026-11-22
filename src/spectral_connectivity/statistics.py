@@ -599,6 +599,44 @@ def adjust_for_multiple_comparisons(
     is_significant : NDArray[bool], shape (...,)
         Boolean array indicating which tests remain significant after correction.
 
+    Notes
+    -----
+    **A family per slice controls errors only within each slice.** With
+    ``axis``, the false discovery rate (or family-wise error rate) is held at
+    ``alpha`` in each family separately, not across them: for null p-values
+    shaped ``(100, 126)`` (time windows, frequencies), ``axis=-1`` gives at
+    least one false rejection somewhere in 99% of simulated datasets, against
+    5% when pooled. Choose the families before looking at the results, to
+    match the claims you will make: one per slice when each slice is a separate
+    question, the pooled default when results across slices are reported
+    together. Keeping only the slices with a discovery and then reporting
+    results within them is a selection that needs its own adjustment
+    (Benjamini and Bogomolov [1]_).
+
+    **Test each pair once.** A matrix of p-values over ``(source, target)``
+    holds a signal's coherence with itself (``p = 0``) on its diagonal and every
+    undirected pair twice. The diagonal's sure rejections loosen the
+    Benjamini-Hochberg threshold for the real pairs: with 16 signals and no
+    coupling, some pair is declared significant in 35% of simulated datasets,
+    against 6% for the upper triangle alone. Pass the pairs once, e.g.
+    ``p_values[(..., *np.triu_indices(n_signals, 1))]``, with the pair axis in
+    the family.
+
+    **Dependence.** P-values at neighboring frequencies (within the taper
+    bandwidth), in overlapping windows, and of pairs sharing a signal are
+    positively correlated. Bonferroni holds under any dependence, at the cost
+    of power; Benjamini-Hochberg is guaranteed for independent or positively
+    regression-dependent tests (Benjamini and Yekutieli [2]_).
+
+    References
+    ----------
+    .. [1] Benjamini, Y., and Bogomolov, M. (2014). Selective inference on
+           multiple families of hypotheses. Journal of the Royal Statistical
+           Society: Series B 76, 297-318.
+    .. [2] Benjamini, Y., and Yekutieli, D. (2001). The control of the false
+           discovery rate in multiple testing under dependency. The Annals of
+           Statistics 29, 1165-1188.
+
     Examples
     --------
     >>> import numpy as np
@@ -954,7 +992,8 @@ def coherence_significance_pvalue(
     (4, 126, 2, 2)
     >>> # Select the pair first: a signal's coherence with itself is 1 (p = 0)
     >>> # and does not belong in the family. One family: every window and bin
-    >>> # (axis=-1 would instead correct each window's bins on their own).
+    >>> # (axis=-1 would instead correct each window's bins on their own,
+    >>> # controlling errors only within each window).
     >>> significant = adjust_for_multiple_comparisons(p_values[..., 0, 1], alpha=0.05)
     >>> significant.shape  # (n_time_windows, n_frequencies)
     (4, 126)
