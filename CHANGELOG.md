@@ -1445,8 +1445,8 @@ builds after 2.0.1, or in features 2.0.1 did not have: nothing computed with
   value" to stderr; it skips such bins and raises the same `ValueError`.
   NaN or Inf coefficients that zero weights omit do not raise: a bin of
   `canonical_coherence` or `global_coherence` left with no weighted
-  observation is NaN with the zero-power warning, as for finite
-  coefficients.
+  observation is NaN, as for finite coefficients (with `global_coherence`'s
+  zero-power warning).
 - `Connectivity.group_delay` and `Connectivity.delay` raise a `ValueError`
   naming `significance_threshold` when it is not a number strictly between 0
   and 1 (e.g. 0.05), before any computation. 2.0.1 accepted any value: 1.0
