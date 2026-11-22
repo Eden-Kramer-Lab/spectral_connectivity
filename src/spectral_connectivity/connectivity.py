@@ -4195,11 +4195,20 @@ class Connectivity:
         ------
         ValueError
             If ``expectation_type`` keeps the tapers as an output axis
-            (``"time"``, ``"trials"``, ``"time_trials"``), or if the Fourier
-            coefficients contain NaN or Inf (where weights do not omit them).
+            (``"time"``, ``"trials"``, ``"time_trials"``), if
+            ``max_workspace_elements`` is not a positive integer, or if the
+            Fourier coefficients contain NaN or Inf (where weights do not omit
+            them).
 
         Warns
         -----
+        UserWarning
+            If ``max_rank`` exceeds ``min(n_signals, n_observations)``, the
+            number of components there are; it is clamped to that.
+        UserWarning
+            If some bins have (near-)zero total power, such as a flat channel,
+            all-zero input, or a bin whose observation weights are all zero:
+            those bins are NaN.
         UserWarning
             If the pooled observations are fewer than the signals
             (``n_observations < n_signals``): the value is then at least
