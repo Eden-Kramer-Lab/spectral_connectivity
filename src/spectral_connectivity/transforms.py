@@ -142,6 +142,10 @@ class MultitaperParameters(TypedDict):
 
 # The harmonic F-test pads each window to this many times its length by default.
 _HARMONIC_F_TEST_PADDING = 4
+# Largest condition number of the joint line fit accepted: lines closer than
+# about 1e-4 of a frequency bin (1 Hz windows: 1e-4 Hz) exceed it, and the
+# fit's rounding error grows as the condition number times machine epsilon.
+_LINE_FIT_MAX_CONDITION = 1e8
 
 
 @dataclass(frozen=True)
@@ -1944,7 +1948,8 @@ class Multitaper(_WindowedFourierTransform):
         a stimulation artifact) to remove before the coefficients are
         computed, e.g. ``[60, 120, 180]``. Every measure computed from this
         transform, and its :meth:`harmonic_f_test`, then sees the cleaned
-        data (the F-test at a removed frequency is 0 by construction). In
+        data (the F-test at a removed frequency is essentially 0 where the line
+        was subtracted). In
         each window, trial, and signal, the lines are fitted at exactly these
         frequencies by Thomson's harmonic regression (see
         :meth:`harmonic_f_test`), jointly, and as detrending leaves them, and
@@ -1980,8 +1985,10 @@ class Multitaper(_WindowedFourierTransform):
         test is per window, trial, and signal, so at 0.05 a twentieth of
         those without a line still lose a little noise; a stricter level
         (e.g. ``1e-3``) keeps that rare but may leave a weak line. Named lines
-        must then be at least ``W`` apart, where each line's test is not
-        confounded by the other (without a threshold any spacing works). A
+        must then be at least ``W`` apart, where each line's test is
+        approximately calibrated despite the other (6% at nominal 5% exactly
+        ``W`` apart, nominal further; without a threshold any spacing to about
+        1e-4 of a bin works). A
         frequency where the line is never significant warns, once per
         transform.
 
@@ -2376,14 +2383,32 @@ class Multitaper(_WindowedFourierTransform):
         if np.unique(frequencies).size != frequencies.size:
             msg = f"line_frequencies lists a frequency more than once: {frequencies.tolist()}."
             raise ValueError(msg)
-        if threshold is None:
-            return
         if self.n_tapers < 2:
             msg = (
-                "line_significance_threshold tests each line with the harmonic "
-                f"F-test, which needs at least 2 tapers, got {self.n_tapers}."
+                f"line_frequencies needs at least 2 tapers, got {self.n_tapers}: with "
+                "one, the fit takes all of the coefficient at each named frequency. "
+                "Request more with n_tapers, or a time_halfbandwidth_product of at "
+                "least 1.5."
             )
             raise ValueError(msg)
+        fit = _line_fit(
+            frequencies,
+            to_numpy(self._tapers_for_fft()),
+            self.sampling_frequency,
+            self.detrend_type,
+        )
+        if np.linalg.cond(fit.system) > _LINE_FIT_MAX_CONDITION:
+            ordered = np.sort(frequencies)
+            closest = int(np.argmin(np.diff(ordered)))
+            msg = (
+                f"line_frequencies {float(ordered[closest])} and "
+                f"{float(ordered[closest + 1])} Hz are too close to fit separately in "
+                f"a {self.time_window_duration:g} s window; name one frequency for "
+                "the line."
+            )
+            raise ValueError(msg)
+        if threshold is None:
+            return
         ordered = np.sort(frequencies)
         close = np.flatnonzero(np.diff(ordered) < half_bandwidth)
         if close.size:
@@ -2852,7 +2877,7 @@ class Multitaper(_WindowedFourierTransform):
         - **Removing the lines found**: ``Multitaper(...,
           line_frequencies=[...])`` subtracts them before the coefficients
           are computed; this test on that transform then shows what is left
-          (0 at the removed frequencies by construction).
+          (essentially 0 at a removed frequency, where it was subtracted).
         - The coefficients are those of equally weighted tapers, whatever
           ``taper_weighting`` is: the test is defined for them. Keep the
           default tapers: tapers beyond ``2 NW - 1`` are poorly concentrated

@@ -303,6 +303,8 @@ def test_stft_has_no_multitaper_only_settings(data):
         "taper_eigenvalues",
         "taper_weighting",
         "is_low_bias",
+        "line_frequencies",
+        "line_significance_threshold",
         "adaptive_max_iterations",
         "adaptive_tolerance",
     }

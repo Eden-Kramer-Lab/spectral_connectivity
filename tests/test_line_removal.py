@@ -214,10 +214,8 @@ def test_without_lines_the_transform_is_unchanged():
             "strictly between 0 and 1",
         ),
         ({"line_frequencies": [60.0], "tapers": np.ones((1000, 2))}, "needs DPSS tapers"),
-        (
-            {"line_frequencies": [60.0], "line_significance_threshold": 0.01, "n_tapers": 1},
-            "needs at least 2 tapers",
-        ),
+        ({"line_frequencies": [60.0], "n_tapers": 1}, "needs at least 2 tapers"),
+        ({"line_frequencies": [60.0, 60.0 + 1e-9]}, "too close to fit separately"),
     ],
     ids=str,
 )
