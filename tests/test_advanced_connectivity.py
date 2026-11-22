@@ -974,6 +974,56 @@ def test_global_coherence_warns_when_fewer_observations_than_signals(
     assert np.all(fractions >= 1 / n_observations - 1e-12)
 
 
+def test_labelled_global_coherence_with_few_observations_names_the_pooling_route():
+    """The wrappers fix expectation_type to "trials_tapers", so their small-n
+    warning names the route that pools time windows instead of an
+    expectation_type the caller cannot pass, and only when there are windows
+    to pool."""
+    from spectral_connectivity import multitaper_connectivity
+
+    time_series = np.random.default_rng(37).standard_normal((1000, 1, 8))
+
+    def labelled_message(**window):
+        with pytest.warns(UserWarning, match="fewer observations than signals") as record:
+            multitaper_connectivity(
+                time_series,
+                sampling_frequency=500,
+                method="global_coherence",
+                time_halfbandwidth_product=2,
+                **window,
+            )
+        return next(
+            str(w.message) for w in record if "fewer observations" in str(w.message)
+        )
+
+    route = (
+        "Connectivity.from_transform(transform, "
+        "expectation_type='time_trials_tapers').global_coherence() to pool the "
+        "time windows"
+    )
+    message = labelled_message(time_window_duration=0.4, time_window_step=0.4)
+    assert route in message
+    assert "an expectation_type that averages more axes" not in message
+    assert "more trials" in message
+    assert route not in labelled_message()  # one window: nothing to pool
+
+    # The route the message names works and pools the five windows.
+    multitaper = Multitaper(
+        time_series,
+        sampling_frequency=500,
+        time_halfbandwidth_product=2,
+        time_window_duration=0.4,
+        time_window_step=0.4,
+    )
+    pooled = Connectivity.from_transform(multitaper, expectation_type="time_trials_tapers")
+    assert pooled.n_observations == 5 * multitaper.n_tapers
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warnings.filterwarnings("ignore", category=SidednessWarning)
+        fractions, _ = pooled.global_coherence()
+    assert fractions.shape == (pooled.frequencies.size, 1)
+
+
 def test_global_coherence_with_as_many_observations_as_signals_does_not_warn():
     """n = p no longer bounds the value away from 1/p, and the default use,
     many trials of few signals, stays silent."""

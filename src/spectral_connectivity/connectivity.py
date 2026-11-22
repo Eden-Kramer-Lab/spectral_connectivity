@@ -1850,7 +1850,18 @@ class Connectivity:
         averaged = self.expectation_type.split("_")
         # Offer only what raises the count: the axes it is taken over.
         remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
-        if len(averaged) < len(_MORE_OBSERVATIONS):
+        # False while a labelled wrapper runs the measure (global_coherence has
+        # no jackknife): its expectation_type is fixed at "trials_tapers", so
+        # name the call that pools the windows instead, when there are any.
+        if not _warn_orientation_change.get():
+            if self._fourier_coefficients.shape[0] > 1:
+                remedies.append(
+                    "Connectivity.from_transform(transform, "
+                    "expectation_type='time_trials_tapers').global_coherence() to "
+                    "pool the time windows (Connectivity(fourier_coefficients, "
+                    "expectation_type='time_trials_tapers') for coefficients)"
+                )
+        elif len(averaged) < len(_MORE_OBSERVATIONS):
             remedies.append(
                 f"an expectation_type that averages more axes than {self.expectation_type!r}"
             )
