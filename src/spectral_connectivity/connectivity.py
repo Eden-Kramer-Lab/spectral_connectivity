@@ -1798,6 +1798,17 @@ class Connectivity:
             stacklevel=stacklevel_outside_package(),
         )
 
+    def _more_observations_remedies(self, *, other_expectations: bool = True) -> list[str]:
+        """What raises :attr:`n_observations`: more of each averaged axis, and
+        (if ``other_expectations``) an expectation_type that averages more."""
+        averaged = self.expectation_type.split("_")
+        remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
+        if other_expectations and len(averaged) < len(_MORE_OBSERVATIONS):
+            remedies.append(
+                f"an expectation_type that averages more axes than {self.expectation_type!r}"
+            )
+        return remedies
+
     def _warn_single_observation_degenerate(
         self,
         measure: str,
@@ -1822,15 +1833,8 @@ class Connectivity:
         information. This is a silent-failure trap rather than an error, so it
         warns instead of raising.
         """
-        averaged = self.expectation_type.split("_")
         if self.n_observations < 2:
-            # Offer only what raises this count: the axes it is taken over.
-            remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
-            if len(averaged) < len(_MORE_OBSERVATIONS):
-                remedies.append(
-                    "an expectation_type that averages more axes than "
-                    f"{self.expectation_type!r}"
-                )
+            remedies = self._more_observations_remedies()
             warnings.warn(
                 f"{measure} is computed from a single observation "
                 f"(n_observations == 1), so {consequence} "
@@ -1859,21 +1863,16 @@ class Connectivity:
         if n_observations >= n_signals:
             return
         averaged = self.expectation_type.split("_")
-        # Offer only what raises the count: the axes it is taken over.
-        remedies = [_MORE_OBSERVATIONS[axis] for axis in averaged]
         # A labelled wrapper fixed expectation_type at "trials_tapers": name the
         # call that pools the windows instead, when there are any.
-        if _expectation_fixed_by_wrapper.get():
-            if self._fourier_coefficients.shape[0] > 1:
-                remedies.append(
-                    "Connectivity.from_transform(transform, "
-                    "expectation_type='time_trials_tapers').global_coherence() to "
-                    "pool the time windows (Connectivity(fourier_coefficients, "
-                    "expectation_type='time_trials_tapers') for coefficients)"
-                )
-        elif len(averaged) < len(_MORE_OBSERVATIONS):
+        fixed_expectation = _expectation_fixed_by_wrapper.get()
+        remedies = self._more_observations_remedies(other_expectations=not fixed_expectation)
+        if fixed_expectation and self._fourier_coefficients.shape[0] > 1:
             remedies.append(
-                f"an expectation_type that averages more axes than {self.expectation_type!r}"
+                "Connectivity.from_transform(transform, "
+                "expectation_type='time_trials_tapers').global_coherence() to "
+                "pool the time windows (Connectivity(fourier_coefficients, "
+                "expectation_type='time_trials_tapers') for coefficients)"
             )
         remedies.append("fewer signals")
         if n_observations == 1:
