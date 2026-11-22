@@ -131,26 +131,37 @@ rm -rf ./conda-builds
 conda build purge
 ```
 
-**For conda-forge submission (future enhancement):**
+**conda-forge (submit with the 3.0 release):**
 
-This package is not currently on conda-forge. To add it:
+`conda-forge/recipe.yaml` is a ready recipe for
+[conda-forge/staged-recipes](https://github.com/conda-forge/staged-recipes) in
+the current (rattler-build, v1) format, under the conda-forge name
+`spectral-connectivity`. It passes `conda-smithy recipe-lint --conda-forge`
+and builds and tests (imports and `pip check` on the minimum and the newest
+Python, plus a coherence run) from an sdist that has matplotlib optional.
+It needs a PyPI release that includes that change (3.0): an earlier sdist
+still requires matplotlib, which the recipe does not list, so `pip check`
+fails.
 
-1. **Prepare for submission:**
-   - Ensure package has stable releases and good maintenance
-   - Recipe should be well-tested with the conda-recipe/ directory
+1. **After the release is on PyPI**, set `version` in `conda-forge/recipe.yaml`
+   and replace the `sha256` placeholder with the SHA-256 of the PyPI sdist.
+2. **Optionally build it locally** with rattler-build (for example from
+   `conda create -p ./rb -c conda-forge rattler-build`), giving the
+   `python_min` that conda-forge's global pinning supplies:
 
-2. **Submit to conda-forge:**
-   - Fork https://github.com/conda-forge/staged-recipes
-   - Copy `conda-recipe/meta.yaml` to `recipes/spectral_connectivity/meta.yaml`
-   - Submit PR to conda-forge staged-recipes
-   - Respond to reviewer feedback
-
-3. **After acceptance:**
-   - conda-forge creates automated feedstock
-   - Maintainers get notifications for new releases
-   - Users can install with: `conda install -c conda-forge spectral_connectivity`
-
-4. Release on github.
+   ```bash
+   printf 'python_min:\n  - "3.10"\n' > variants.yaml
+   rattler-build build --recipe conda-forge/recipe.yaml -m variants.yaml -c conda-forge
+   ```
+3. **Submit**: fork conda-forge/staged-recipes, copy the file to
+   `recipes/spectral-connectivity/recipe.yaml`, and open a pull request; every
+   listed recipe maintainer must confirm in the PR that they agree to maintain
+   it. Respond to the reviewers there.
+4. **Once the feedstock exists**, its bot opens a pull request for each new
+   PyPI release. Then delete `conda-forge/` and `conda-recipe/` (the personal
+   `edeno` channel build above), and change the README's install instructions
+   and "Not yet on conda-forge?" note to
+   `conda install -c conda-forge spectral-connectivity`.
 
 ### Version Numbering
 

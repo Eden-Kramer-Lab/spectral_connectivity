@@ -1,0 +1,79 @@
+# conda-forge recipe (rattler-build v1 format) for submission to
+# https://github.com/conda-forge/staged-recipes as
+# recipes/spectral-connectivity/recipe.yaml. It is not used by this
+# repository's CI or releases; see "Conda packages" in CONTRIBUTING.md for
+# when and how to submit it. Once the feedstock exists, its bot opens a PR for
+# every new PyPI release, and this file is no longer needed.
+schema_version: 1
+
+context:
+  name: spectral-connectivity
+  version: "3.0.0"
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://pypi.org/packages/source/s/spectral_connectivity/spectral_connectivity-${{ version }}.tar.gz
+  # SHA-256 of the PyPI sdist for this version, from the release's "Download
+  # files" page or `openssl dgst -sha256 spectral_connectivity-X.Y.Z.tar.gz`.
+  sha256: REPLACE_WITH_THE_SDIST_SHA256_AT_RELEASE
+
+build:
+  number: 0
+  noarch: python
+  script: ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+
+requirements:
+  host:
+    - python ${{ python_min }}.*
+    - pip
+    - hatchling >=1.27
+    - hatch-vcs
+  run:
+    - python >=${{ python_min }}
+    - numpy >=1.24,<3.0
+    - scipy >=1.11.1
+    - xarray >=2023.1
+  run_constraints:
+    # Optional GPU backend (the `gpu` extra): CuPy 13 added
+    # cupyx.scipy.signal.detrend, which transforms.detrend delegates to.
+    - cupy >=13.0
+
+tests:
+  - python:
+      imports:
+        - spectral_connectivity
+        - spectral_connectivity.connectivity
+        - spectral_connectivity.transforms
+        - spectral_connectivity.wrapper
+        - spectral_connectivity.statistics
+      pip_check: true
+      # python_min comes from conda-forge's global pinning; it must not fall
+      # below pyproject.toml's requires-python (>= 3.10).
+      python_version:
+        - ${{ python_min }}.*
+        - "*"
+  - script:
+      - python -c "import numpy as np; from spectral_connectivity import multitaper_connectivity; x = np.random.default_rng(0).standard_normal((1000, 3, 2)); r = multitaper_connectivity(x, sampling_frequency=500, method='magnitude_squared_coherence'); assert r.shape[-2:] == (2, 2); print(r.dims)"
+    requirements:
+      run:
+        - python ${{ python_min }}.*
+
+about:
+  homepage: https://github.com/Eden-Kramer-Lab/spectral_connectivity
+  summary: Frequency domain functional and directed connectivity analysis tools for electrophysiological data
+  description: |
+    spectral_connectivity computes multitaper spectral estimates and
+    frequency-domain brain connectivity measures such as coherence, spectral
+    Granger causality, and the phase lag index, with optional GPU acceleration
+    through CuPy.
+  license: GPL-3.0-only
+  license_file: LICENSE
+  documentation: https://spectral-connectivity.readthedocs.io/
+  repository: https://github.com/Eden-Kramer-Lab/spectral_connectivity
+
+extra:
+  recipe-maintainers:
+    - edeno
