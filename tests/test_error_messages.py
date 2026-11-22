@@ -1099,6 +1099,33 @@ def test_global_coherence_of_weighted_nan_still_raises():
         connectivity.global_coherence()
 
 
+@pytest.mark.parametrize("route", ["multitaper_connectivity", "connectivity_to_xarray"])
+def test_wrapper_flags_are_restored_after_a_measure_raises(route):
+    """The wrappers clear the migration-notice flag and set the fixed-expectation
+    flag while a measure runs; a measure that raises must leave both as they
+    were, or later direct calls would lose their notices and advice."""
+    from spectral_connectivity.connectivity import (
+        _emit_migration_notices,
+        _expectation_fixed_by_wrapper,
+    )
+
+    series = _series_with_nan()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the NaN warnings
+        if route == "multitaper_connectivity":
+            compute = functools.partial(
+                multitaper_connectivity, series, 500, method="global_coherence"
+            )
+        else:
+            compute = functools.partial(
+                connectivity_to_xarray, Multitaper(series, 500), "global_coherence"
+            )
+        with pytest.raises(ValueError, match=r"^global_coherence cannot be computed"):
+            compute()
+    assert _emit_migration_notices.get() is True
+    assert _expectation_fixed_by_wrapper.get() is False
+
+
 def _nan_instead_of_raising(kernel):
     """``kernel`` as a backend that returns NaN rather than raising on NaN or
     Inf input (CuPy's decompositions): run on finite stand-ins, then NaN."""
